@@ -1582,13 +1582,13 @@ static func _compute_new_salary(player: PSPlayer, record: PSPlayerSeasonRecord, 
 	return clampi(new_salary, min_sal, SALARY_MAX)
 
 
-static func _rand_ability(center: int, variance: int = 12, min_value: int = 25, max_value: int = 88) -> int:
-	var value: int = Rng.range_int(center - variance, center + variance)
-	return int(clamp(value, min_value, max_value))
-
-
 static func _rand_z(center: int, variance: int = 12, min_value: int = 25, max_value: int = 88) -> float:
-	return PSAbilityScale.display_to_z(_rand_ability(center, variance, min_value, max_value))
+	# center/variance/min/max は 1-100 の talent authoring 入力。生成される能力値そのものは
+	# z 空間で直接抽選し、1-100 の中間能力値を作らない (シミュは z 能力のみ使用)。
+	var center_z: float = PSAbilityScale.display_to_z(center)
+	var variance_z: float = float(variance) / PSAbilityScale.DISPLAY_STDEV
+	var value_z: float = center_z + (Rng.roll_float() * 2.0 - 1.0) * variance_z
+	return clampf(value_z, PSAbilityScale.display_to_z(min_value), PSAbilityScale.display_to_z(max_value))
 
 
 static func _range_float(min_value: float, max_value: float) -> float:

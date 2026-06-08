@@ -257,29 +257,13 @@ func is_starter_pitcher() -> bool:
 	return is_pitcher() and z_ability("Pit_Stamina", 0.0) >= STARTER_STAMINA_Z_THRESHOLD
 
 
-# 特例: bunt は z 合成、max_velocity は raw 値。
-func bunt_display() -> int:
-	return _bunt_display_value(null)
-
-
+# 特例: max_velocity は raw 値。
 func max_velocity_display() -> int:
 	return _max_velocity_display_value(0)
 
 
 func raw_ability(key: String, default_value: float = 0.0) -> float:
 	return float(raw_abilities_snapshot.get(key, default_value))
-
-
-func _bunt_display_value(default_value: Variant) -> int:
-	if z_abilities_snapshot.is_empty():
-		return 50 if default_value == null else int(default_value)
-	var z_value: float = 0.0
-	for key_variant in PSPlayer.BUNT_Z_WEIGHTS.keys():
-		var key: String = str(key_variant)
-		var weight: float = float(PSPlayer.BUNT_Z_WEIGHTS[key_variant])
-		z_value += float(z_abilities_snapshot.get(key, 0.0)) * weight
-	# bunt 値もシミュ計算で使われるため線形マッピング。
-	return PSAbilityScale.z_to_display(z_value)
 
 
 func _max_velocity_display_value(default_value: Variant) -> int:

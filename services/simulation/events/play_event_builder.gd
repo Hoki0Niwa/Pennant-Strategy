@@ -286,7 +286,7 @@ static func _pitch_summary(
 				min_pitches = 1
 				max_pitches = 5
 
-	# File 2 §9: z_abilities ベース。欠落時は旧キーで fallback。
+	# File 2 §9: z_abilities ベース (欠落キーは 0.0=平均で補完)。
 	# 打者の選球眼・三振回避、投手の制球・球威の z。球数の微調整に使う。
 	var eye: float = _ability(batter, "Bat_BBCreate")
 	var avoid_k: float = _ability(batter, "Bat_KAvoid")
@@ -341,7 +341,7 @@ static func _pitch_summary(
 	var called_strikes: int = int(max(0, strikes - whiffs))
 	var in_zone: int = _deterministic_int([event_index, pitches, 83], int(ceil(float(pitches) * 0.38)), int(ceil(float(pitches) * 0.68)))
 	in_zone = int(clamp(in_zone, 0, pitches))
-	var first_pitch_strike: bool = _deterministic_unit([event_index, pitches, 89]) < (0.58 + float(control - 50) * 0.002)
+	var first_pitch_strike: bool = _deterministic_unit([event_index, pitches, 89]) < (0.58 + control * 0.025)
 	return {
 		"pitches": pitches,
 		"balls": balls,

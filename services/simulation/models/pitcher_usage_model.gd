@@ -22,6 +22,11 @@ const RELIEVER_EMERGENCY_FATIGUE_LIMIT: int = 188
 const INJURY_RETURN_HARD_REST_DAYS: int = 1
 const INJURY_RETURN_SOFT_REST_DAYS: int = 3
 
+# ピッチグレードは z スケール (リーグ平均 0)。display 45 相当 = z -0.4 を「実戦級」の閾値とする。
+const EFFECTIVE_PITCH_Z: float = -0.4
+# 第3球種が存在しないことを表すセンチネル (どの実 z より十分低い)。
+const NO_THIRD_PITCH: float = -99.0
+
 const PRIMARY_PITCH_WEIGHTS := {
 	"Pit_KCreate": 0.44,
 	"Pit_EdgeRate": 0.18,
@@ -95,33 +100,27 @@ const ARSENAL_DEPTH_WEIGHTS := {
 
 
 static func starter_target_pitches(record: PSPlayerSeasonRecord) -> int:
-	var stamina: int = _ability(record, "Pit_Stamina")
-	var starter_aptitude: int = 70
-	var recovery: int = _ability(record, "Pit_FatigueResist")
+	var stamina: float = _ability(record, "Pit_Stamina")
+	var recovery: float = _ability(record, "Pit_FatigueResist")
 	var target: float = 100.0
-	target += float(stamina - 70) * 1.65
-	target += float(starter_aptitude - 70) * 0.08
-	target += float(recovery - 60) * 0.04
+	target += (stamina - 1.5) * 20.0
+	target += recovery * 6.0
 	return int(clamp(round(target), STARTER_TARGET_MIN, STARTER_TARGET_MAX))
 
 
 static func short_relief_target_pitches(record: PSPlayerSeasonRecord) -> int:
-	var stamina: int = _ability(record, "Pit_Stamina")
-	var reliever_aptitude: int = 60
+	var stamina: float = _ability(record, "Pit_Stamina")
 	var target: float = 22.0
-	target += float(stamina - 50) * 0.16
-	target += float(reliever_aptitude - 60) * 0.06
+	target += stamina * 2.0
 	return int(clamp(round(target), SHORT_RELIEF_TARGET_MIN, SHORT_RELIEF_TARGET_MAX))
 
 
 static func long_relief_target_pitches(record: PSPlayerSeasonRecord) -> int:
-	var stamina: int = _ability(record, "Pit_Stamina")
-	var starter_aptitude: int = 50
-	var recovery: int = _ability(record, "Pit_FatigueResist")
+	var stamina: float = _ability(record, "Pit_Stamina")
+	var recovery: float = _ability(record, "Pit_FatigueResist")
 	var target: float = 54.0
-	target += float(stamina - 60) * 0.58
-	target += float(starter_aptitude - 50) * 0.14
-	target += float(recovery - 60) * 0.06
+	target += (stamina - 1.0) * 7.0
+	target += recovery * 1.0
 	return int(clamp(round(target), LONG_RELIEF_TARGET_MIN, LONG_RELIEF_TARGET_MAX))
 
 
@@ -180,7 +179,7 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 		"pitcher_meltdown": trouble >= MELTDOWN_THRESHOLD,
 		"pitcher_arsenal_pitch_count": int(arsenal.get("pitch_count", 0)),
 		"pitcher_arsenal_effective_count": int(arsenal.get("effective_pitch_count", 0)),
-		"pitcher_arsenal_top_two": float(arsenal.get("top_two_average", 50.0)),
+		"pitcher_arsenal_top_two": float(arsenal.get("top_two_average", 0.0)),
 		"pitcher_arsenal_third": int(arsenal.get("third_pitch", 0)),
 	}
 
@@ -222,8 +221,8 @@ static func times_through_order_penalty(record: PSPlayerSeasonRecord, usage: Dic
 		penalty += 5.5
 	if times_seen >= 3:
 		penalty += float(times_seen - 2) * 7.0
-	penalty -= max(0.0, depth_rating - 65.0) / 7.0
-	penalty += max(0.0, 55.0 - depth_rating) / 8.0
+	penalty -= max(0.0, depth_rating - 1.2) * 1.7857
+	penalty += max(0.0, 0.4 - depth_rating) * 1.5625
 	return int(clamp(round(penalty), 0.0, 18.0))
 
 
@@ -437,12 +436,12 @@ static func post_game_fatigue_gain(record: PSPlayerSeasonRecord, usage: Dictiona
 static func daily_recovery_amount(record: PSPlayerSeasonRecord) -> int:
 	if record == null:
 		return 0
-	var recovery: int = _ability(record, "Pit_FatigueResist")
-	var stamina: int = _ability(record, "Pit_Stamina")
+	var recovery: float = _ability(record, "Pit_FatigueResist")
+	var stamina: float = _ability(record, "Pit_Stamina")
 	if _role_from_record(record) == ROLE_STARTER:
-		var starter_recovery: float = 17.0 + float(recovery - 60) * 0.13 + float(stamina - 70) * 0.04
+		var starter_recovery: float = 17.0 + recovery * 1.6 + stamina * 0.5
 		return int(clamp(round(starter_recovery), 12.0, 25.0))
-	var reliever_recovery: float = 16.0 + float(recovery - 60) * 0.18 + float(stamina - 55) * 0.05
+	var reliever_recovery: float = 16.0 + recovery * 2.25 + stamina * 0.6
 	return int(clamp(round(reliever_recovery), 10.0, 29.0))
 
 
@@ -465,17 +464,16 @@ static func reliever_selection_score(
 	if recently_returned_from_injury(record, current_day, INJURY_RETURN_SOFT_REST_DAYS):
 		score -= 90.0
 	if prefer_long:
-		score += float(_ability(record, "Pit_Stamina")) * 2.0
-		score += float(_ability(record, "Pit_FatigueResist")) * 0.65
-		score += starter_depth_rating(arsenal) * 1.05
+		score += _ability(record, "Pit_Stamina") * 25.0
+		score += _ability(record, "Pit_FatigueResist") * 8.0
+		score += starter_depth_rating(arsenal) * 13.0
 		score += float(arsenal.get("effective_pitch_count", 0)) * 18.0
 		if record.role == "closer":
 			score -= 125.0
 	else:
-		score += float(60) * 1.6
-		score += reliever_finish_rating(arsenal) * 1.2
+		score += reliever_finish_rating(arsenal) * 15.0
 		if close_game:
-			score += float(_ability(record, "Pit_BBPrevent")) * 0.35
+			score += _ability(record, "Pit_BBPrevent") * 4.4
 		if inning >= 9 and record.role == "closer":
 			score += 55.0
 	return score
@@ -554,10 +552,10 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 		return {
 			"pitch_count": 0,
 			"effective_pitch_count": 0,
-			"top_pitch": 50,
-			"second_pitch": 45,
-			"third_pitch": 0,
-			"top_two_average": 47.5,
+			"top_pitch": 0.0,
+			"second_pitch": -0.4,
+			"third_pitch": NO_THIRD_PITCH,
+			"top_two_average": -0.2,
 			"pitch_values": [],
 		}
 	var profile: Dictionary = pitcher_profile(record)
@@ -567,18 +565,18 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 	var pitch_count: int = values.size()
 	var effective_count: int = 0
 	for value in values:
-		if int(value) >= 45:
+		if float(value) >= EFFECTIVE_PITCH_Z:
 			effective_count += 1
-	var top_pitch: int = int(values[0]) if values.size() >= 1 else 50
-	var second_pitch: int = int(values[1]) if values.size() >= 2 else int(max(35, top_pitch - 15))
-	var third_pitch: int = int(values[2]) if values.size() >= 3 else 0
+	var top_pitch: float = float(values[0]) if values.size() >= 1 else 0.0
+	var second_pitch: float = float(values[1]) if values.size() >= 2 else maxf(-1.2, top_pitch - 1.2)
+	var third_pitch: float = float(values[2]) if values.size() >= 3 else NO_THIRD_PITCH
 	var result: Dictionary = {
 		"pitch_count": pitch_count,
 		"effective_pitch_count": effective_count,
 		"top_pitch": top_pitch,
 		"second_pitch": second_pitch,
 		"third_pitch": third_pitch,
-		"top_two_average": float(top_pitch + second_pitch) / 2.0,
+		"top_two_average": (top_pitch + second_pitch) / 2.0,
 		"pitch_values": values,
 	}
 	for key_value in profile.keys():
@@ -591,24 +589,24 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 static func pitcher_profile(record: PSPlayerSeasonRecord) -> Dictionary:
 	if record == null:
 		return {
-			"arsenal_depth": 50,
-			"primary_pitch": 50,
-			"secondary_pitch": 45,
-			"command_profile": 50,
-			"miss_bat_profile": 50,
-			"contact_suppress_profile": 50,
-			"stamina_profile": 50,
-			"recovery_profile": 50,
+			"arsenal_depth": 0.0,
+			"primary_pitch": 0.0,
+			"secondary_pitch": -0.4,
+			"command_profile": 0.0,
+			"miss_bat_profile": 0.0,
+			"contact_suppress_profile": 0.0,
+			"stamina_profile": 0.0,
+			"recovery_profile": 0.0,
 			"pitch_values": [],
 		}
-	var primary: int = _profile_grade(record, PRIMARY_PITCH_WEIGHTS)
-	var secondary: int = _profile_grade(record, SECONDARY_PITCH_WEIGHTS)
-	var command: int = _profile_grade(record, COMMAND_PROFILE_WEIGHTS)
-	var miss_bat: int = _profile_grade(record, MISS_BAT_PROFILE_WEIGHTS)
-	var contact_suppress: int = _profile_grade(record, CONTACT_SUPPRESS_PROFILE_WEIGHTS)
-	var stamina: int = _profile_grade(record, STAMINA_PROFILE_WEIGHTS)
-	var recovery: int = _profile_grade(record, RECOVERY_PROFILE_WEIGHTS)
-	var depth: int = _profile_grade(record, ARSENAL_DEPTH_WEIGHTS)
+	var primary: float = _profile_grade(record, PRIMARY_PITCH_WEIGHTS)
+	var secondary: float = _profile_grade(record, SECONDARY_PITCH_WEIGHTS)
+	var command: float = _profile_grade(record, COMMAND_PROFILE_WEIGHTS)
+	var miss_bat: float = _profile_grade(record, MISS_BAT_PROFILE_WEIGHTS)
+	var contact_suppress: float = _profile_grade(record, CONTACT_SUPPRESS_PROFILE_WEIGHTS)
+	var stamina: float = _profile_grade(record, STAMINA_PROFILE_WEIGHTS)
+	var recovery: float = _profile_grade(record, RECOVERY_PROFILE_WEIGHTS)
+	var depth: float = _profile_grade(record, ARSENAL_DEPTH_WEIGHTS)
 	var profile: Dictionary = {
 		"arsenal_depth": depth,
 		"primary_pitch": primary,
@@ -625,55 +623,55 @@ static func pitcher_profile(record: PSPlayerSeasonRecord) -> Dictionary:
 
 static func starter_depth_rating(arsenal: Dictionary) -> float:
 	var effective_count: int = int(arsenal.get("effective_pitch_count", 0))
-	var top_pitch: int = int(arsenal.get("top_pitch", 50))
-	var second_pitch: int = int(arsenal.get("second_pitch", 45))
-	var third_pitch: int = int(arsenal.get("third_pitch", 0))
-	if third_pitch <= 0:
-		return float(min(top_pitch, second_pitch)) - 12.0
-	var top_three_average: float = float(top_pitch + second_pitch + third_pitch) / 3.0
-	return top_three_average + float(max(0, effective_count - 3)) * 5.0
+	var top_pitch: float = float(arsenal.get("top_pitch", 0.0))
+	var second_pitch: float = float(arsenal.get("second_pitch", -0.4))
+	var third_pitch: float = float(arsenal.get("third_pitch", NO_THIRD_PITCH))
+	if third_pitch <= NO_THIRD_PITCH + 1.0:
+		return minf(top_pitch, second_pitch) - 0.96
+	var top_three_average: float = (top_pitch + second_pitch + third_pitch) / 3.0
+	return top_three_average + float(max(0, effective_count - 3)) * 0.4
 
 
 static func reliever_finish_rating(arsenal: Dictionary) -> float:
-	var top_two: float = float(arsenal.get("top_two_average", 50.0))
-	var top_pitch: int = int(arsenal.get("top_pitch", 50))
-	return top_two * 0.75 + float(top_pitch) * 0.25
+	var top_two: float = float(arsenal.get("top_two_average", 0.0))
+	var top_pitch: float = float(arsenal.get("top_pitch", 0.0))
+	return top_two * 0.75 + top_pitch * 0.25
 
 
 static func role_arsenal_bonus(role: String, arsenal: Dictionary) -> int:
 	if _normalized_role(role) == ROLE_STARTER:
 		var depth: float = starter_depth_rating(arsenal)
-		return int(clamp(round((depth - 58.0) / 7.5), -5.0, 7.0))
+		return int(clamp(round((depth - 0.64) * 1.6667), -5.0, 7.0))
 	var finish: float = reliever_finish_rating(arsenal)
-	return int(clamp(round((finish - 58.0) / 6.5), -5.0, 8.0))
+	return int(clamp(round((finish - 0.64) * 1.9231), -5.0, 8.0))
 
 
 static func _pitch_values_from_profile(record: PSPlayerSeasonRecord, profile: Dictionary) -> Array:
-	var primary: float = float(profile.get("primary_pitch", 50))
-	var secondary: float = float(profile.get("secondary_pitch", 50))
-	var command: float = float(profile.get("command_profile", 50))
-	var miss_bat: float = float(profile.get("miss_bat_profile", 50))
-	var contact_suppress: float = float(profile.get("contact_suppress_profile", 50))
-	var stamina: float = float(profile.get("stamina_profile", 50))
-	var recovery: float = float(profile.get("recovery_profile", 50))
-	var depth: float = float(profile.get("arsenal_depth", 50))
+	var primary: float = float(profile.get("primary_pitch", 0.0))
+	var secondary: float = float(profile.get("secondary_pitch", 0.0))
+	var command: float = float(profile.get("command_profile", 0.0))
+	var miss_bat: float = float(profile.get("miss_bat_profile", 0.0))
+	var contact_suppress: float = float(profile.get("contact_suppress_profile", 0.0))
+	var stamina: float = float(profile.get("stamina_profile", 0.0))
+	var recovery: float = float(profile.get("recovery_profile", 0.0))
+	var depth: float = float(profile.get("arsenal_depth", 0.0))
 	var is_starter: bool = _role_from_record(record) == ROLE_STARTER
 
 	var values: Array = []
-	values.append(_pitch_grade(primary * 0.54 + miss_bat * 0.24 + command * 0.12 + contact_suppress * 0.10 + (1.5 if not is_starter else 0.0)))
-	values.append(_pitch_grade(secondary * 0.48 + contact_suppress * 0.24 + command * 0.16 + miss_bat * 0.12 - 2.0))
+	values.append(_pitch_grade(primary * 0.54 + miss_bat * 0.24 + command * 0.12 + contact_suppress * 0.10 + (0.12 if not is_starter else 0.0)))
+	values.append(_pitch_grade(secondary * 0.48 + contact_suppress * 0.24 + command * 0.16 + miss_bat * 0.12 - 0.16))
 
-	if is_starter or depth >= 57.0:
-		values.append(_pitch_grade(command * 0.34 + contact_suppress * 0.22 + stamina * 0.18 + secondary * 0.16 + recovery * 0.10 - 4.0))
-	if is_starter and depth >= 60.0:
-		values.append(_pitch_grade(depth * 0.32 + recovery * 0.22 + stamina * 0.20 + command * 0.14 + contact_suppress * 0.12 - 7.0))
-	if is_starter and depth >= 76.0:
-		values.append(_pitch_grade(depth * 0.34 + stamina * 0.24 + recovery * 0.18 + secondary * 0.14 + command * 0.10 - 10.0))
+	if is_starter or depth >= 0.56:
+		values.append(_pitch_grade(command * 0.34 + contact_suppress * 0.22 + stamina * 0.18 + secondary * 0.16 + recovery * 0.10 - 0.32))
+	if is_starter and depth >= 0.8:
+		values.append(_pitch_grade(depth * 0.32 + recovery * 0.22 + stamina * 0.20 + command * 0.14 + contact_suppress * 0.12 - 0.56))
+	if is_starter and depth >= 2.08:
+		values.append(_pitch_grade(depth * 0.34 + stamina * 0.24 + recovery * 0.18 + secondary * 0.14 + command * 0.10 - 0.80))
 	return values
 
 
-static func _profile_grade(record: PSPlayerSeasonRecord, weights: Dictionary) -> int:
-	return clampi(PSAbilityScale.z_to_display(_weighted_z(record, weights)), 1, 100)
+static func _profile_grade(record: PSPlayerSeasonRecord, weights: Dictionary) -> float:
+	return clampf(_weighted_z(record, weights), -4.0, 4.0)
 
 
 static func _weighted_z(record: PSPlayerSeasonRecord, weights: Dictionary) -> float:
@@ -691,8 +689,8 @@ static func _weighted_z(record: PSPlayerSeasonRecord, weights: Dictionary) -> fl
 	return weighted_sum / total_weight
 
 
-static func _pitch_grade(value: float) -> int:
-	return clampi(int(round(value)), 25, 85)
+static func _pitch_grade(value: float) -> float:
+	return clampf(value, -2.0, 2.8)
 
 
 static func _role_from_record(record: PSPlayerSeasonRecord) -> String:
@@ -723,7 +721,7 @@ static func _runner_count(bases: Array) -> int:
 	return count
 
 
-static func _ability(record: PSPlayerSeasonRecord, key: String, default_value: int = 50) -> int:
+static func _ability(record: PSPlayerSeasonRecord, key: String, default_value: float = 0.0) -> float:
 	if record == null:
 		return default_value
-	return record.z_display(key)
+	return record.z_ability(key, default_value)

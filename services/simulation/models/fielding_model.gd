@@ -2,7 +2,7 @@ extends RefCounted
 class_name FieldingModel
 
 const EVENT_TYPE_FIELDING: String = "fielding_event"
-const LEAGUE_AVERAGE_FIELDING: float = 60.0
+const LEAGUE_AVERAGE_FIELDING: float = 0.0
 
 # UZR converts plays above average into runs. FanGraphs' public primer gives
 # roughly .83 runs for the gap between a typical hit and a batted-ball out.
@@ -16,28 +16,25 @@ const ERROR_OUT_PROBABILITY_BY_TYPE: Dictionary = {
 	"outfield_misplay": 0.80,
 }
 const NEUTRAL_CATCH_PROBABILITY_CALIBRATION: float = 0.006
-const OUT_TO_SINGLE_EXPECTED_OUT_LEAKAGE_WEIGHT: float = 0.50
-# play_resolver.gd の OUT_TO_SINGLE_CHANCE と意味を共有する値（旧 simulation_tuning.tres 由来）。変えるなら両方を合わせる。現状0=無効。
-const OUT_TO_SINGLE_CHANCE: float = 0.0
 const METRIC_OPPORTUNITY_SCALE: float = 0.35
 const METRIC_ZONE_SCALE_BY_OAA_ZONE: Dictionary = {
 	"infield": 1.00,
 	"outfield": 1.05,
 }
 
-# Position-average display score used for reporting defender probability.
-# 守備位置難易度 (順位 SS>CF>2B>3B>RF>LF>1B、捕手は順位対象外)。野手7ポジ合計は 453.5 で
-# リーグ平均は不変。play_resolver.gd POSITION_AVG_DEFENSE_SCORE と同値で同期させること。
+# Position-average fielding score (raw z スケール, リーグ平均 0) used for reporting defender probability.
+# 守備位置難易度 (順位 SS>CF>2B>3B>RF>LF>1B、捕手は順位対象外)。
+# play_resolver.gd POSITION_AVG_DEFENSE_SCORE_Z と同値で同期させること。
 const POSITION_AVG_ABILITY_SCORE: Dictionary = {
-	1: 60.0,
-	2: 68.0,
-	3: 52.5,
-	4: 70.0,
-	5: 64.0,
-	6: 77.0,
-	7: 56.0,
-	8: 74.0,
-	9: 60.0,
+	1: 0.80,
+	2: 1.44,
+	3: 0.20,
+	4: 1.60,
+	5: 1.12,
+	6: 2.16,
+	7: 0.48,
+	8: 1.92,
+	9: 0.80,
 }
 
 
@@ -332,11 +329,10 @@ static func _weighted_score_z(record: PSPlayerSeasonRecord, weights: Array) -> f
 		var weight: float = float(row[1])
 		var contribution: float
 		if record.z_abilities_snapshot.has(z_key):
-			# fielding_score_for_position は display スケール (LEAGUE_AVERAGE_FIELDING=60 等)
-			# を想定するため線形マッピング (UI 非線形シフトとは別経路)。
-			contribution = float(PSAbilityScale.z_to_display(record.z_ability(z_key, 0.0)))
+			# fielding_score は raw z スケール (リーグ平均 0)。欠落キーは平均 0 で補完。
+			contribution = record.z_ability(z_key, 0.0)
 		else:
-			contribution = float(LEAGUE_AVERAGE_FIELDING)
+			contribution = LEAGUE_AVERAGE_FIELDING
 		total += contribution * weight
 		weight_total += weight
 	if weight_total <= 0.0:
@@ -365,7 +361,6 @@ static func _average_out_probability(
 		return clamp(max(probability, floor), 0.0, 0.98)
 	if category == "double_play" or category == "sacrifice_fly":
 		return clamp(probability, 0.0, 1.0)
-	probability -= OUT_TO_SINGLE_CHANCE * OUT_TO_SINGLE_EXPECTED_OUT_LEAKAGE_WEIGHT
 	return clamp(probability, 0.0, 1.0)
 
 
@@ -397,7 +392,7 @@ static func _neutral_catch_probability(actual_out: bool, difficulty: float) -> f
 
 
 static func _defender_catch_probability(neutral_probability: float, ability_score: float) -> float:
-	var ability_adjustment: float = (ability_score - LEAGUE_AVERAGE_FIELDING) * 0.0035
+	var ability_adjustment: float = (ability_score - LEAGUE_AVERAGE_FIELDING) * 0.04375
 	return clamp(neutral_probability + ability_adjustment, 0.0, 1.0)
 
 

@@ -12,9 +12,8 @@ const ZERO_APTITUDE_SCORE: int = -999999
 # 難易度は FieldingModel.POSITION_AVG_ABILITY_SCORE から導出 (_position_difficulty)。
 const MAX_OFF_POSITION_PENALTY: float = 22.0   # 難易度 1.0 (CF) ・適性 0 で最大
 const MIN_OFF_POSITION_PENALTY: float = 6.0    # 易しいポジ (1B) でも適性 0 なら最低これだけ減点
-const POSITION_DIFFICULTY_MIN_AVG: float = 52.5   # POSITION_AVG_ABILITY_SCORE の最小 (1B)
-const POSITION_DIFFICULTY_MAX_AVG: float = 77.0   # POSITION_AVG_ABILITY_SCORE の最大 (SS)
-const STARTER_VALUE_WEIGHTS_PATH: String = "res://data/tuning/starter_value_weights.json"
+const POSITION_DIFFICULTY_MIN_AVG: float = 0.20   # POSITION_AVG_ABILITY_SCORE の最小 (1B, z)
+const POSITION_DIFFICULTY_MAX_AVG: float = 2.16   # POSITION_AVG_ABILITY_SCORE の最大 (SS, z)
 
 # スタメン選出 (starter_assignment_score) で使う打撃/守備のブレンド比率。
 # fallback は全体集計の 76/24。守備位置ごとの評価では下の position 別比率を使う。
@@ -43,9 +42,6 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 	8: "center",
 	9: "right",
 }
-
-static var _starter_weights_loaded: bool = false
-static var _starter_offense_weight_by_position: Dictionary = {}
 
 
 static func overall_score(record: PSPlayerSeasonRecord) -> int:
@@ -87,20 +83,21 @@ static func batting_score(record: PSPlayerSeasonRecord) -> int:
 static func _batting_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: bool) -> int:
 	if record == null:
 		return 0
-	var fatigue_penalty: int = int(record.fatigue / 5) if apply_fatigue_penalty else 0
-	var contact: int = max(1, _batting(record, "contact") - fatigue_penalty)
-	var eye: int = max(1, _batting(record, "eye") - fatigue_penalty)
-	var avoid_k: int = max(1, record.z_display("Bat_KAvoid") - fatigue_penalty)
-	var gap_power: int = max(1, _batting(record, "gap_power") - fatigue_penalty)
-	var home_run_power: int = max(1, _batting(record, "home_run_power") - fatigue_penalty)
-	var speed: int = max(1, record.z_display("Run_Speed") - fatigue_penalty)
+	# fatigue は display 点で減点していた値を z 換算 (÷12.5)。能力下限は display 1 = z -3.92。
+	var fatigue_penalty: float = ((float(record.fatigue) / 5.0) / 12.5) if apply_fatigue_penalty else 0.0
+	var contact: float = max(-3.92, _batting(record, "contact") - fatigue_penalty)
+	var eye: float = max(-3.92, _batting(record, "eye") - fatigue_penalty)
+	var avoid_k: float = max(-3.92, record.z_ability("Bat_KAvoid", 0.0) - fatigue_penalty)
+	var gap_power: float = max(-3.92, _batting(record, "gap_power") - fatigue_penalty)
+	var home_run_power: float = max(-3.92, _batting(record, "home_run_power") - fatigue_penalty)
+	var speed: float = max(-3.92, record.z_ability("Run_Speed", 0.0) - fatigue_penalty)
 
-	var contact_curve: float = _ability_curve(float(contact), 55.0, 20.0)
-	var eye_curve: float = _ability_curve(float(eye), 55.0, 18.0)
-	var avoid_k_curve: float = _ability_curve(float(avoid_k), 55.0, 18.0)
-	var gap_curve: float = _ability_curve(float(gap_power), 55.0, 20.0)
-	var home_run_curve: float = _ability_curve(float(home_run_power), 55.0, 20.0)
-	var speed_curve: float = _ability_curve(float(speed), 55.0, 20.0)
+	var contact_curve: float = _ability_curve(contact, 0.4, 1.6)
+	var eye_curve: float = _ability_curve(eye, 0.4, 1.44)
+	var avoid_k_curve: float = _ability_curve(avoid_k, 0.4, 1.44)
+	var gap_curve: float = _ability_curve(gap_power, 0.4, 1.6)
+	var home_run_curve: float = _ability_curve(home_run_power, 0.4, 1.6)
+	var speed_curve: float = _ability_curve(speed, 0.4, 1.6)
 
 	var score: float = 50.0
 	score += contact_curve * 18.0
@@ -125,18 +122,21 @@ static func pitching_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
 static func _pitching_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: bool) -> int:
 	if record == null:
 		return 0
+	# breaking(45-160) と velocity(球速) は例外スケールのため display 点の fatigue を維持。
+	# z 能力には z 換算 (÷12.5) の penalty を使う。能力下限は display 1 = z -3.92。
 	var fatigue_penalty: int = int(record.fatigue / 4) if apply_fatigue_penalty else 0
-	var control: int = max(1, record.z_display("Pit_BBPrevent") - fatigue_penalty)
-	var stuff: int = max(1, record.z_display("Pit_KCreate") - fatigue_penalty)
-	var movement: int = max(1, record.z_display("Pit_LoftControl") - fatigue_penalty)
-	var stamina: int = max(1, record.z_display("Pit_Stamina") - fatigue_penalty)
+	var fatigue_penalty_z: float = float(fatigue_penalty) / 12.5
+	var control: float = max(-3.92, record.z_ability("Pit_BBPrevent", 0.0) - fatigue_penalty_z)
+	var stuff: float = max(-3.92, record.z_ability("Pit_KCreate", 0.0) - fatigue_penalty_z)
+	var movement: float = max(-3.92, record.z_ability("Pit_LoftControl", 0.0) - fatigue_penalty_z)
+	var stamina: float = max(-3.92, record.z_ability("Pit_Stamina", 0.0) - fatigue_penalty_z)
 	var velocity: int = _max_velocity(record)
 	var breaking: int = max(1, record.breaking_score() - fatigue_penalty * 3)
 
-	var control_curve: float = _ability_curve(float(control), 55.0, 19.0)
-	var stuff_curve: float = _ability_curve(float(stuff), 55.0, 20.0)
-	var movement_curve: float = _ability_curve(float(movement), 55.0, 20.0)
-	var stamina_curve: float = _ability_curve(float(stamina), 55.0, 20.0)
+	var control_curve: float = _ability_curve(control, 0.4, 1.52)
+	var stuff_curve: float = _ability_curve(stuff, 0.4, 1.6)
+	var movement_curve: float = _ability_curve(movement, 0.4, 1.6)
+	var stamina_curve: float = _ability_curve(stamina, 0.4, 1.6)
 	var velocity_curve: float = _ability_curve(float(velocity), 145.0, 8.0)
 	var breaking_curve: float = _ability_curve(float(breaking), 105.0, 28.0)
 
@@ -155,7 +155,8 @@ static func defensive_score_for_position(record: PSPlayerSeasonRecord, position:
 		return 0
 	var skill: float = FieldingModel.fielding_score_for_position(record, position)
 	var average: float = FieldingModel.position_average_ability_score(position)
-	var score: float = 50.0 + (skill - average) * 0.85
+	# skill/average は raw z スケール。出力 rating(≈50基準) を保つため係数を ×12.5 (0.85→10.625)。
+	var score: float = 50.0 + (skill - average) * 10.625
 	if position >= 2 and position <= 9:
 		# 適性 100 でのみ無ペナルティ。未満は適性ギャップ × ポジション難易度に比例して減点。
 		var aptitude: int = position_aptitude(record, position)
@@ -235,47 +236,13 @@ static func starter_assignment_score(
 
 
 static func starter_offense_weight_for_position(position: int) -> float:
-	var calibrated: Dictionary = _calibrated_starter_offense_weights()
-	var key: String = str(position)
-	if calibrated.has(key):
-		return clamp(float(calibrated.get(key, STARTER_OFFENSE_WEIGHT)), 0.0, 1.0)
-	if calibrated.has(position):
-		return clamp(float(calibrated.get(position, STARTER_OFFENSE_WEIGHT)), 0.0, 1.0)
 	return clamp(float(STARTER_OFFENSE_WEIGHT_BY_POSITION.get(position, STARTER_OFFENSE_WEIGHT)), 0.0, 1.0)
 
 
 static func starter_defense_weight_for_position(position: int) -> float:
-	var calibrated: Dictionary = _calibrated_starter_offense_weights()
-	if calibrated.has(str(position)) or calibrated.has(position) or STARTER_OFFENSE_WEIGHT_BY_POSITION.has(position):
+	if STARTER_OFFENSE_WEIGHT_BY_POSITION.has(position):
 		return 1.0 - starter_offense_weight_for_position(position)
 	return STARTER_DEFENSE_WEIGHT
-
-
-static func _calibrated_starter_offense_weights() -> Dictionary:
-	if _starter_weights_loaded:
-		return _starter_offense_weight_by_position
-	_starter_weights_loaded = true
-	_starter_offense_weight_by_position = {}
-	if not FileAccess.file_exists(STARTER_VALUE_WEIGHTS_PATH):
-		return _starter_offense_weight_by_position
-	var file: FileAccess = FileAccess.open(STARTER_VALUE_WEIGHTS_PATH, FileAccess.READ)
-	if file == null:
-		return _starter_offense_weight_by_position
-	var parsed: Variant = JSON.parse_string(file.get_as_text())
-	if not (parsed is Dictionary):
-		return _starter_offense_weight_by_position
-	var data: Dictionary = parsed as Dictionary
-	if data.has("offense_weight_by_position"):
-		_starter_offense_weight_by_position = (data.get("offense_weight_by_position", {}) as Dictionary).duplicate(true)
-		return _starter_offense_weight_by_position
-	var rows: Array = data.get("positions", []) as Array
-	for row_value in rows:
-		var row: Dictionary = row_value as Dictionary
-		var row_position: int = int(row.get("position", 0))
-		if row_position <= 0:
-			continue
-		_starter_offense_weight_by_position[str(row_position)] = clamp(float(row.get("suggested_offense_weight", STARTER_OFFENSE_WEIGHT)), 0.0, 1.0)
-	return _starter_offense_weight_by_position
 
 
 static func best_defensive_fit(record: PSPlayerSeasonRecord) -> Dictionary:
@@ -308,18 +275,18 @@ static func position_aptitude(record: PSPlayerSeasonRecord, position: int) -> in
 	return int(record.position_aptitudes_snapshot.get(key, 0))
 
 
-static func _batting(record: PSPlayerSeasonRecord, key: String, default_value: int = 50) -> int:
+static func _batting(record: PSPlayerSeasonRecord, key: String, default_value: float = 0.0) -> float:
 	if record == null:
 		return default_value
 	match key:
 		"contact":
-			return record.z_display("Bat_Barrel")
+			return record.z_ability("Bat_Barrel", 0.0)
 		"eye":
-			return record.z_display("Bat_BBCreate")
+			return record.z_ability("Bat_BBCreate", 0.0)
 		"gap_power":
-			return record.z_display("Bat_Impact")
+			return record.z_ability("Bat_Impact", 0.0)
 		"home_run_power":
-			return record.z_display("Bat_Impact")
+			return record.z_ability("Bat_Impact", 0.0)
 	return default_value
 
 
@@ -336,6 +303,6 @@ static func _visible_score(value: float) -> int:
 	return int(clamp(round(value), float(MIN_VISIBLE_SCORE), float(MAX_VISIBLE_SCORE)))
 
 
-static func _ability_curve(value: float, center: float = 55.0, width: float = 20.0) -> float:
+static func _ability_curve(value: float, center: float = 0.4, width: float = 1.6) -> float:
 	var x: float = clamp((value - center) / max(1.0, width), -4.0, 4.0)
 	return 2.0 / (1.0 + exp(-2.0 * x)) - 1.0

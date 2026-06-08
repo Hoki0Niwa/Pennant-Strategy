@@ -32,12 +32,12 @@ func _test_real_data_profiles(season: PSSeason) -> Array:
 	var short_profiles: int = 0
 	var ineffective_profiles: int = 0
 	var signatures: Dictionary = {}
-	var primary_min: int = 101
-	var primary_max: int = 0
+	var primary_min: float = 999.0
+	var primary_max: float = -999.0
 	var high_k_record: PSPlayerSeasonRecord = null
 	var low_k_record: PSPlayerSeasonRecord = null
-	var high_k: int = -999
-	var low_k: int = 999
+	var high_k: float = -999.0
+	var low_k: float = 999.0
 
 	for record_value in pitchers:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
@@ -46,7 +46,7 @@ func _test_real_data_profiles(season: PSSeason) -> Array:
 		var values: Array = profile.get("pitch_values", []) as Array
 		if values.size() < 2:
 			short_profiles += 1
-		if values.size() == 1 and int(values[0]) == 50:
+		if values.size() == 1 and is_zero_approx(float(values[0])):
 			fixed_single_values += 1
 		if int(summary.get("effective_pitch_count", 0)) <= 0:
 			ineffective_profiles += 1
@@ -54,10 +54,10 @@ func _test_real_data_profiles(season: PSSeason) -> Array:
 		sorted_values.sort()
 		sorted_values.reverse()
 		signatures[JSON.stringify(sorted_values)] = true
-		var primary: int = int(profile.get("primary_pitch", 0))
+		var primary: float = float(profile.get("primary_pitch", 0.0))
 		primary_min = min(primary_min, primary)
 		primary_max = max(primary_max, primary)
-		var k_create: int = record.z_display("Pit_KCreate")
+		var k_create: float = record.z_ability("Pit_KCreate", 0.0)
 		if k_create > high_k:
 			high_k = k_create
 			high_k_record = record
@@ -73,22 +73,22 @@ func _test_real_data_profiles(season: PSSeason) -> Array:
 		failures.append("pitchers with no effective profile pitches: %d" % ineffective_profiles)
 	if signatures.size() < 8:
 		failures.append("pitch profile signatures too narrow: %d" % signatures.size())
-	if primary_max - primary_min < 8:
-		failures.append("primary pitch range too narrow: %d..%d" % [primary_min, primary_max])
+	if primary_max - primary_min < 0.64:
+		failures.append("primary pitch range too narrow: %.2f..%.2f" % [primary_min, primary_max])
 
 	if high_k_record != null and low_k_record != null:
 		var high_profile: Dictionary = PSPitcherUsageModel.pitcher_profile(high_k_record)
 		var low_profile: Dictionary = PSPitcherUsageModel.pitcher_profile(low_k_record)
-		var high_primary: int = int(high_profile.get("primary_pitch", 0))
-		var low_primary: int = int(low_profile.get("primary_pitch", 0))
-		var high_miss: int = int(high_profile.get("miss_bat_profile", 0))
-		var low_miss: int = int(low_profile.get("miss_bat_profile", 0))
-		if high_primary <= low_primary + 5:
-			failures.append("high-K primary=%d low-K primary=%d" % [high_primary, low_primary])
-		if high_miss <= low_miss + 8:
-			failures.append("high-K miss_bat=%d low-K miss_bat=%d" % [high_miss, low_miss])
+		var high_primary: float = float(high_profile.get("primary_pitch", 0.0))
+		var low_primary: float = float(low_profile.get("primary_pitch", 0.0))
+		var high_miss: float = float(high_profile.get("miss_bat_profile", 0.0))
+		var low_miss: float = float(low_profile.get("miss_bat_profile", 0.0))
+		if high_primary <= low_primary + 0.4:
+			failures.append("high-K primary=%.2f low-K primary=%.2f" % [high_primary, low_primary])
+		if high_miss <= low_miss + 0.64:
+			failures.append("high-K miss_bat=%.2f low-K miss_bat=%.2f" % [high_miss, low_miss])
 
-	print("[pitcher_profile] real_data pitchers=%d signatures=%d primary=%d..%d highK=%d lowK=%d" % [
+	print("[pitcher_profile] real_data pitchers=%d signatures=%d primary=%.2f..%.2f highK=%.2f lowK=%.2f" % [
 		pitchers.size(),
 		signatures.size(),
 		primary_min,
@@ -154,12 +154,12 @@ func _test_synthetic_profiles() -> Array:
 		failures.append("weak starter should still expose a starter mix")
 	if (short_profile.get("pitch_values", []) as Array).size() > 3:
 		failures.append("short power reliever should not gain starter depth")
-	if int(ace_profile.get("primary_pitch", 0)) <= int(weak_profile.get("primary_pitch", 0)) + 15:
+	if float(ace_profile.get("primary_pitch", 0.0)) <= float(weak_profile.get("primary_pitch", 0.0)) + 1.2:
 		failures.append("ace primary did not separate from weak starter")
-	if ace_depth <= weak_depth + 10.0:
-		failures.append("starter depth did not separate: ace=%.1f weak=%.1f" % [ace_depth, weak_depth])
-	if short_finish <= float(int(weak_profile.get("primary_pitch", 0))) + 10.0:
-		failures.append("short power reliever finish too low: %.1f" % short_finish)
+	if ace_depth <= weak_depth + 0.8:
+		failures.append("starter depth did not separate: ace=%.2f weak=%.2f" % [ace_depth, weak_depth])
+	if short_finish <= float(weak_profile.get("primary_pitch", 0.0)) + 0.8:
+		failures.append("short power reliever finish too low: %.2f" % short_finish)
 
 	print("[pitcher_profile] synthetic ace=%s weak=%s short=%s depth=%.1f/%.1f finish=%.1f" % [
 		JSON.stringify(ace_summary.get("pitch_values", [])),

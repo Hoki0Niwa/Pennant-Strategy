@@ -18,9 +18,7 @@ const FIELDER_ABILITY_CACHE_KEY: String = "_pa_fielder_ability_cache"
 
 # --- 調整係数（旧 simulation_tuning.tres から移設。打率・本塁打をここで直接調整する） ---
 const HR_DISTANCE_SCALE: float = 1.09    # 本塁打フェンスまでの距離の乗算。1未満で本塁打が増える。
-const OUT_TO_SINGLE_CHANCE: float = 0.0  # 捕球成功アウトをこの確率でシングルへ反転(2B/3B/HRは不変)。上げると打率が増える。現状0=無効。
 const SINGLE_TO_OUT_CHANCE: float = 0.27 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
-# ※ OUT_TO_SINGLE_CHANCE は fielding_model.gd の同名 const と意味を共有するため、変えるなら両方を合わせる。
 
 const FIELD_NAMES: Dictionary = {
 	1: "pitcher",
@@ -445,12 +443,6 @@ static func resolve(
 			_apply_sacrifice_fly_context(sacrifice_fly_outcome, sacrifice_fly_probability, distance, hang_time, ability_arm)
 			_apply_sacrifice_fly_advancements(sacrifice_fly_outcome, bases, distance, hang_time, position, ability_arm)
 			return _enrich(sacrifice_fly_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
-		# 通常 out。OUT_TO_SINGLE_CHANCE > 0 のとき確率的にラッキー・シングルへ反転する。
-		# 2B/3B/HR は不変。BABIP/AVG のみ底上げするための knob。
-		if OUT_TO_SINGLE_CHANCE > 0.0 and Rng.roll_float() < OUT_TO_SINGLE_CHANCE:
-			var lucky_outcome: Dictionary = _forced_single_outcome(batter, bases, outs, physics, position, ability_arm, trajectory)
-			_apply_double_play_context(lucky_outcome, double_play_opportunity, double_play_probability)
-			return _enrich(lucky_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 		var fielded_outcome: Dictionary = _out_outcome(trajectory, position)
 		_apply_double_play_context(fielded_outcome, double_play_opportunity, double_play_probability)
 		return _enrich(fielded_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)

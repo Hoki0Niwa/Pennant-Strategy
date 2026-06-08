@@ -650,76 +650,88 @@ static func defense_only_score(record: PSPlayerSeasonRecord, position: int) -> i
 	match position:
 		2:
 			return int(round(
-				float(record.z_display("C_FieldSecure")) * 1.4
-				+ float(record.z_display("C_Throw")) * 1.2
-				+ float(record.z_display("C_Blocking"))
-				+ float(record.z_display("C_Framing")) * 0.8
+				record.z_ability("C_FieldSecure", 0.0) * 17.5
+				+ record.z_ability("C_Throw", 0.0) * 15.0
+				+ record.z_ability("C_Blocking", 0.0) * 12.5
+				+ record.z_ability("C_Framing", 0.0) * 10.0
 				+ float(aptitude) * 1.1
 			))
 		3:
 			return int(round(
-				float(record.z_display("IF_Secure")) * 1.6
-				+ float(record.z_display("IF_Reach")) * 0.8
-				+ float(record.z_display("IF_ThrowPower")) * 0.5
+				record.z_ability("IF_Secure", 0.0) * 20.0
+				+ record.z_ability("IF_Reach", 0.0) * 10.0
+				+ record.z_ability("IF_ThrowPower", 0.0) * 6.25
 				+ float(aptitude) * 1.2
-				+ float(record.z_display("Run_Speed")) * 0.15
+				+ record.z_ability("Run_Speed", 0.0) * 1.875
 			))
 		4:
 			return int(round(
-				float(record.z_display("IF_Secure")) * 1.5
-				+ float(record.z_display("IF_Reach")) * 1.3
-				+ float(record.z_display("IF_ThrowPower")) * 0.7
-				+ float(record.z_display("IF_Exchange"))
+				record.z_ability("IF_Secure", 0.0) * 18.75
+				+ record.z_ability("IF_Reach", 0.0) * 16.25
+				+ record.z_ability("IF_ThrowPower", 0.0) * 8.75
+				+ record.z_ability("IF_Exchange", 0.0) * 12.5
 				+ float(aptitude) * 1.2
-				+ float(record.z_display("Run_Speed")) * 0.25
+				+ record.z_ability("Run_Speed", 0.0) * 3.125
 			))
 		5:
 			return int(round(
-				float(record.z_display("IF_Secure")) * 1.4
-				+ float(record.z_display("IF_Reach"))
-				+ float(record.z_display("IF_ThrowPower")) * 1.2
-				+ float(record.z_display("IF_Exchange")) * 0.4
+				record.z_ability("IF_Secure", 0.0) * 17.5
+				+ record.z_ability("IF_Reach", 0.0) * 12.5
+				+ record.z_ability("IF_ThrowPower", 0.0) * 15.0
+				+ record.z_ability("IF_Exchange", 0.0) * 5.0
 				+ float(aptitude) * 1.2
-				+ float(record.z_display("Run_Speed")) * 0.2
+				+ record.z_ability("Run_Speed", 0.0) * 2.5
 			))
 		6:
 			return int(round(
-				float(record.z_display("IF_Secure")) * 1.5
-				+ float(record.z_display("IF_Reach")) * 1.5
-				+ float(record.z_display("IF_ThrowPower"))
-				+ float(record.z_display("IF_Exchange")) * 0.8
+				record.z_ability("IF_Secure", 0.0) * 18.75
+				+ record.z_ability("IF_Reach", 0.0) * 18.75
+				+ record.z_ability("IF_ThrowPower", 0.0) * 12.5
+				+ record.z_ability("IF_Exchange", 0.0) * 10.0
 				+ float(aptitude) * 1.2
-				+ float(record.z_display("Run_Speed")) * 0.3
+				+ record.z_ability("Run_Speed", 0.0) * 3.75
 			))
 		7, 9:
 			return int(round(
-				float(record.z_display("OF_Secure")) * 1.2
-				+ float(record.z_display("OF_Reach")) * 1.35
-				+ float(record.z_display("OF_ArmPower")) * 0.9
+				record.z_ability("OF_Secure", 0.0) * 15.0
+				+ record.z_ability("OF_Reach", 0.0) * 16.875
+				+ record.z_ability("OF_ArmPower", 0.0) * 11.25
 				+ float(aptitude) * 1.2
-				+ float(record.z_display("Run_Speed")) * 0.25
+				+ record.z_ability("Run_Speed", 0.0) * 3.125
 			))
 		8:
 			return int(round(
-				float(record.z_display("OF_Secure")) * 1.2
-				+ float(record.z_display("OF_Reach")) * 1.65
-				+ float(record.z_display("OF_ArmPower")) * 0.9
+				record.z_ability("OF_Secure", 0.0) * 15.0
+				+ record.z_ability("OF_Reach", 0.0) * 20.625
+				+ record.z_ability("OF_ArmPower", 0.0) * 11.25
 				+ float(aptitude) * 1.2
-				+ float(record.z_display("Run_Speed")) * 0.35
+				+ record.z_ability("Run_Speed", 0.0) * 4.375
 			))
 	return 0
 
 
+# 閾値は z 化後のスケール。各ポジションで「リーグ平均能力 (z=0) の選手」が旧 display 式と
+# 同じ pass/fail 境界になるよう、旧閾値から 50·Σ(能力 weight) を引いた値。適性項は据え置き。
 static func minimum_trusted_defense_score(position: int) -> int:
 	match position:
 		2:
-			return 365
-		6, 8:
-			return 380
-		4, 5, 9:
-			return 355
+			return 145
+		3:
+			return 188
+		4:
+			return 118
+		5:
+			return 145
+		6:
+			return 125
+		7:
+			return 155
+		8:
+			return 175
+		9:
+			return 170
 		_:
-			return 340
+			return 145
 
 
 static func remove_from_bench(setup: Dictionary, record: PSPlayerSeasonRecord) -> void:

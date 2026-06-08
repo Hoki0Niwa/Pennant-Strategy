@@ -376,7 +376,8 @@ func _test_off_position_penalty() -> Array:
 	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
 		var key: String = str(PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS.get(pos, ""))
 		var actual: int = _def_score(pos, key, 100)
-		var expected: int = clampi(int(round(50.0 + (60.0 - FieldingModel.position_average_ability_score(pos)) * 0.85)), 1, 99)
+		# neutral skill = 空 z = LEAGUE_AVERAGE_FIELDING(0.0)。z スケール係数は 10.625 (旧 0.85×12.5)。
+		var expected: int = clampi(int(round(50.0 + (FieldingModel.LEAGUE_AVERAGE_FIELDING - FieldingModel.position_average_ability_score(pos)) * 10.625)), 1, 99)
 		if actual != expected:
 			fails.append("penalty: aptitude 100 should be unpenalized at pos %d (got %d expected %d)" % [pos, actual, expected])
 

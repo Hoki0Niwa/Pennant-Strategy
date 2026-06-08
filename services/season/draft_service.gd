@@ -974,36 +974,36 @@ static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> v
 		return
 
 	for key in ["Bat_KAvoid", "Bat_BBCreate", "Bat_Barrel", "Bat_Spray"]:
-		_shift_z_display(z, key, -3, 20, 90)
+		_shift_z(z, key, -0.24, -2.4, 3.2)
 	for key in ["Run_Speed", "Run_Judgment", "Run_Steal"]:
-		_shift_z_display(z, key, -2, 20, 90)
+		_shift_z(z, key, -0.16, -2.4, 3.2)
 	for key in [
 		"C_Framing", "C_Blocking", "C_Throw", "C_GameCall", "C_FieldSecure",
 		"IF_Reach", "IF_Secure", "IF_ThrowPower", "IF_ThrowAccuracy", "IF_Exchange", "IF_PositionFit",
 		"OF_Reach", "OF_Route", "OF_Secure", "OF_ArmPower", "OF_ArmAccuracy", "OF_Release", "OF_PositionFit",
 	]:
-		_shift_z_display(z, key, -3, 20, 90)
+		_shift_z(z, key, -0.24, -2.4, 3.2)
 
-	var impact: int = _z_display(z, "Bat_Impact")
-	var loft: int = _z_display(z, "Bat_Loft")
-	var power_center: int = int(round((float(impact) * 0.62 + float(loft) * 0.38)))
+	var impact: float = _z_value(z, "Bat_Impact")
+	var loft: float = _z_value(z, "Bat_Loft")
+	var power_center: float = impact * 0.62 + loft * 0.38
 	var roll: int = Rng.roll_percent()
 	if roll <= 22:
-		power_center += Rng.range_int(6, 13)
-		_set_z_display(z, "Bat_Impact", power_center + Rng.range_int(0, 5), 25, 92)
-		_set_z_display(z, "Bat_Loft", power_center + Rng.range_int(-2, 5), 25, 92)
-		_shift_z_display(z, "Bat_KAvoid", -3, 20, 90)
-		_shift_z_display(z, "Run_Speed", -2, 20, 90)
+		power_center += _rng_delta_z(6, 13)
+		_set_z(z, "Bat_Impact", power_center + _rng_delta_z(0, 5), -2.0, 3.36)
+		_set_z(z, "Bat_Loft", power_center + _rng_delta_z(-2, 5), -2.0, 3.36)
+		_shift_z(z, "Bat_KAvoid", -0.24, -2.4, 3.2)
+		_shift_z(z, "Run_Speed", -0.16, -2.4, 3.2)
 	elif roll <= 70:
-		power_center += Rng.range_int(0, 5)
-		_set_z_display(z, "Bat_Impact", power_center + Rng.range_int(-2, 3), 25, 90)
-		_set_z_display(z, "Bat_Loft", power_center + Rng.range_int(-3, 3), 25, 90)
+		power_center += _rng_delta_z(0, 5)
+		_set_z(z, "Bat_Impact", power_center + _rng_delta_z(-2, 3), -2.0, 3.2)
+		_set_z(z, "Bat_Loft", power_center + _rng_delta_z(-3, 3), -2.0, 3.2)
 	else:
-		power_center -= Rng.range_int(9, 17)
-		_set_z_display(z, "Bat_Impact", power_center + Rng.range_int(-4, 2), 20, 84)
-		_set_z_display(z, "Bat_Loft", power_center + Rng.range_int(-5, 1), 20, 84)
-		_shift_z_display(z, "Bat_Barrel", 2, 20, 90)
-		_shift_z_display(z, "Run_Speed", 2, 20, 90)
+		power_center -= _rng_delta_z(9, 17)
+		_set_z(z, "Bat_Impact", power_center + _rng_delta_z(-4, 2), -2.4, 2.72)
+		_set_z(z, "Bat_Loft", power_center + _rng_delta_z(-5, 1), -2.4, 2.72)
+		_shift_z(z, "Bat_Barrel", 0.16, -2.4, 3.2)
+		_shift_z(z, "Run_Speed", 0.16, -2.4, 3.2)
 
 	_apply_position_ability_bias(z, position)
 
@@ -1016,13 +1016,14 @@ static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> v
 # 打撃の振り幅より大きくなる (= 守備型は守備を大きく+、打撃型は守備を大きく-)。
 # 振り幅は no-bias 時の本職ポジ別 mean overall (≒39) に各ポジが戻るよう実測で較正。
 # 三塁(5)・右翼(9) はユーザーの 2 リストに無いため中庸 (バイアス無し)。
+# 旧 1-100 点デルタを z 換算 (÷12.5)。bat ±2→±0.16、def は 22/18/24/13/-32/-20 → ÷12.5。
 const POSITION_ABILITY_BIAS: Dictionary = {
-	2: {"bat": -2, "def": 22},   # 捕手 (守備型)
-	4: {"bat": -2, "def": 18},   # 二塁 (守備型)
-	6: {"bat": -2, "def": 24},   # 遊撃 (守備型)
-	8: {"bat": -2, "def": 13},   # 中堅 (守備型)
-	3: {"bat": 2, "def": -32},   # 一塁 (打撃型)
-	7: {"bat": 2, "def": -20},   # 左翼 (打撃型)
+	2: {"bat": -0.16, "def": 1.76},   # 捕手 (守備型)
+	4: {"bat": -0.16, "def": 1.44},   # 二塁 (守備型)
+	6: {"bat": -0.16, "def": 1.92},   # 遊撃 (守備型)
+	8: {"bat": -0.16, "def": 1.04},   # 中堅 (守備型)
+	3: {"bat": 0.16, "def": -2.56},   # 一塁 (打撃型)
+	7: {"bat": 0.16, "def": -1.60},   # 左翼 (打撃型)
 }
 
 
@@ -1030,14 +1031,14 @@ static func _apply_position_ability_bias(z: Dictionary, position: int) -> void:
 	if not POSITION_ABILITY_BIAS.has(position):
 		return
 	var cfg: Dictionary = POSITION_ABILITY_BIAS[position] as Dictionary
-	var bat_shift: int = int(cfg.get("bat", 0))
-	var def_shift: int = int(cfg.get("def", 0))
-	if bat_shift != 0:
+	var bat_shift: float = float(cfg.get("bat", 0.0))
+	var def_shift: float = float(cfg.get("def", 0.0))
+	if not is_zero_approx(bat_shift):
 		for key in ["Bat_KAvoid", "Bat_BBCreate", "Bat_Barrel", "Bat_Spray", "Bat_Impact", "Bat_Loft"]:
-			_shift_z_display(z, key, bat_shift, 20, 92)
-	if def_shift != 0:
+			_shift_z(z, key, bat_shift, -2.4, 3.36)
+	if not is_zero_approx(def_shift):
 		for key in _defense_keys_for_position(position):
-			_shift_z_display(z, key, def_shift, 20, 92)
+			_shift_z(z, key, def_shift, -2.4, 3.36)
 
 
 static func _defense_keys_for_position(position: int) -> Array:
@@ -1048,16 +1049,21 @@ static func _defense_keys_for_position(position: int) -> Array:
 	return ["OF_Reach", "OF_Route", "OF_Secure", "OF_ArmPower", "OF_ArmAccuracy", "OF_Release", "OF_PositionFit"]
 
 
-static func _z_display(z: Dictionary, key: String) -> int:
-	return PSAbilityScale.z_to_display(float(z.get(key, 0.0)))
+static func _z_value(z: Dictionary, key: String) -> float:
+	return float(z.get(key, 0.0))
 
 
-static func _shift_z_display(z: Dictionary, key: String, delta: int, min_display: int, max_display: int) -> void:
-	_set_z_display(z, key, _z_display(z, key) + delta, min_display, max_display)
+static func _shift_z(z: Dictionary, key: String, delta_z: float, min_z: float, max_z: float) -> void:
+	_set_z(z, key, _z_value(z, key) + delta_z, min_z, max_z)
 
 
-static func _set_z_display(z: Dictionary, key: String, display_value: int, min_display: int, max_display: int) -> void:
-	z[key] = PSAbilityScale.display_to_z(clampi(display_value, min_display, max_display))
+static func _set_z(z: Dictionary, key: String, z_value: float, min_z: float, max_z: float) -> void:
+	z[key] = clampf(z_value, min_z, max_z)
+
+
+# 旧 Rng.range_int(lo, hi) (1-100 点) を z 換算した乱数デルタ。整数抽選の挙動は保ちつつ z で扱う。
+static func _rng_delta_z(lo: int, hi: int) -> float:
+	return float(Rng.range_int(lo, hi)) / PSAbilityScale.DISPLAY_STDEV
 
 
 static func _player_data_from_candidate(candidate: Dictionary, player_id: int, team_id: int, round_no: int, pick: Dictionary, draft_year: int) -> Dictionary:

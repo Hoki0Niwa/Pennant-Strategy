@@ -99,15 +99,6 @@ const Z_ABILITY_GROUPS = {
 # 旧 ability キー → z-key の対応表 (LEGACY_KEY_TO_Z) と ability()/ability_value() は撤去した。
 # ゲーム本体は z 能力 (z_ability / z_display) のみを使う。
 
-# bunt は z 近似式: 0.5*Bat_Spray + 0.3*Bat_KAvoid - 0.4*Bat_Impact - 0.2*Bat_Barrel
-# (plate_appearance_coordinator._bunt_skill_z と同じ)
-const BUNT_Z_WEIGHTS = {
-	"Bat_Spray": 0.5,
-	"Bat_KAvoid": 0.3,
-	"Bat_Impact": -0.4,
-	"Bat_Barrel": -0.2,
-}
-
 # max_velocity は raw_abilities["max_velocity"] に生値(km/h)で保持する。
 
 # File 1 §6.5: 調子段階（-2:絶不調 〜 +2:絶好調）
@@ -362,11 +353,7 @@ func is_starter_pitcher() -> bool:
 	return is_pitcher() and z_ability("Pit_Stamina", 0.0) >= STARTER_STAMINA_Z_THRESHOLD
 
 
-# 特例: bunt は z 合成、max_velocity は raw 値 or Pit_KCreate proxy。
-func bunt_display() -> int:
-	return _bunt_display_value(null)
-
-
+# 特例: max_velocity は raw 値 or Pit_KCreate proxy。
 func max_velocity_display() -> int:
 	return _max_velocity_display_value(0)
 
@@ -381,19 +368,6 @@ static func _normalize_slot_array(source: Variant) -> Array[int]:
 		if slot >= 1 and slot <= 9 and not result.has(slot):
 			result.append(slot)
 	return result
-
-
-func _bunt_display_value(default_value: Variant) -> int:
-	# bunt_z = 0.5*Bat_Spray + 0.3*Bat_KAvoid - 0.4*Bat_Impact - 0.2*Bat_Barrel
-	if z_abilities.is_empty():
-		return 50 if default_value == null else int(default_value)
-	var z_value: float = 0.0
-	for key_variant in BUNT_Z_WEIGHTS.keys():
-		var key: String = str(key_variant)
-		var weight: float = float(BUNT_Z_WEIGHTS[key_variant])
-		z_value += float(z_abilities.get(key, 0.0)) * weight
-	# bunt 値もシミュ計算で使われるため線形マッピング。
-	return PSAbilityScale.z_to_display(z_value)
 
 
 func _max_velocity_display_value(default_value: Variant) -> int:
