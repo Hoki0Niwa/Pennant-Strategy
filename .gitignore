@@ -1,0 +1,29 @@
+# Godot 4+ specific ignores
+.godot/
+.godot_user/
+/android/
+
+# Local assistant/session files
+.codex/
+.claude/settings.local.json
+AGENTS.md
+
+# Build/export outputs
+/build/
+/exports/
+
+# Project notes, tools, and generated reports kept out of public source
+ROADMAP.md
+/docs/
+/reports/
+
+# Logs
+*.log
+
+# Local database (runtime save data)
+*.sqlite
+/data/state_store.db/
+
+# Python build/cache artifacts
+__pycache__/
+*.pyc

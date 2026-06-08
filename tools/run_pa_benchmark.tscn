@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/run_pa_benchmark.gd" id="1_run_pa_benchmark"]
+
+[node name="RunPABenchmark" type="Node"]
+script = ExtResource("1_run_pa_benchmark")

@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://b8warxsmokeut"]
+
+[ext_resource type="Script" path="res://tools/run_war_smoke.gd" id="1_war"]
+
+[node name="Root" type="Node"]
+script = ExtResource("1_war")

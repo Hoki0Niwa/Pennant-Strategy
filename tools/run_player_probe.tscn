@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://player_probe_runner_scene"]
+
+[ext_resource type="Script" path="res://tools/run_player_probe.gd" id="1_player_probe"]
+
+[node name="RunPlayerProbe" type="Node"]
+script = ExtResource("1_player_probe")

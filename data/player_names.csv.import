@@ -1,0 +1,9 @@
+[remap]
+
+importer="keep"
+type="File"
+uid="uid://d3vn6vk30inox"
+
+[deps]
+
+source_file="res://data/player_names.csv"

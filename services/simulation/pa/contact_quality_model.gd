@@ -1,0 +1,359 @@
+extends RefCounted
+class_name PSContactQualityModel
+
+const PSBalanceProfile = preload("res://services/simulation/pa/balance_profile.gd")
+
+# 投球がインプレー(BIP)になった後に、打球の質(初速・角度・方向)を生成するモデル。
+# 飛距離・滞空時間・守備・最終結果は後段の別モデルが解決する。
+
+# 打球初速(EV)の基準値と、能力・球速・状況による各種補正の重み。
+const EV_BASE: float = 91.0                  # 打球初速の基準値(mph)。
+const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
+const EV_HOME_RUN_POWER_WEIGHT: float = 0.9375 # 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
+const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
+const EV_STUFF_WEIGHT: float = 1.5           # 投手の球威 z が中立点から 1.0 高いごとに EV を下げる量(mph)。
+const EV_FATIGUE_WEIGHT: float = 0.035
+const EV_CHASE_PENALTY: float = 3.50
+const EV_TWO_STRIKE_PENALTY: float = 1.25
+const EV_PROTECTIVE_AVOID_K_PENALTY: float = 2.60
+const EV_FORCED_PROTECTIVE_OUT_PENALTY: float = 8.0
+const EV_RANDOM_SPREAD: float = 9.5
+const EV_MIN: float = 48.0
+const EV_MAX: float = 119.0
+# 全打球の初速(EV)へ一律加算するリーグ補正。上げると打率・長打が増える。
+const CONTACT_EV_BIAS: float = 0.45
+
+# 芯で捉えた打球(perfect contact)の発生率と、その際のEV上昇・角度をバレル角へ寄せる強さ。
+const PERFECT_CONTACT_BASE_RATE: float = 0.048
+const PERFECT_CONTACT_EV_BOOST: float = 8.5
+const PERFECT_CONTACT_LA_PULL_TO_BARREL: float = 0.10
+
+# ギャップを破るライナーの目標角度と、そこへ角度を寄せる強さ。
+const GAP_LINER_TARGET_LA: float = 16.0
+const GAP_LINER_LA_PULL: float = 0.34
+
+# 本塁打向きの理想打球角(ideal power)の発生率・目標角・EV上乗せ・飛距離ボーナス。
+const POWER_IDEAL_LA_BASE_RATE: float = 0.045
+const POWER_IDEAL_LA_PULL: float = 0.52
+const POWER_IDEAL_LA_TARGET: float = 28.0
+const POWER_IDEAL_LA_EV_BOOST: float = 1.4
+const POWER_IDEAL_LA_EXTRA_EV: float = 1.1
+const POWER_IDEAL_CARRY_BONUS: float = 0.035
+
+# 詰まり/芯外し(mishit)の発生率と、その際のEV低下・角度の散らばり。
+const MISHIT_BASE_RATE: float = 0.13
+const MISHIT_EV_PENALTY: float = 7.5
+const MISHIT_LA_SCATTER: float = 7.0
+
+# 投手の球威(stuff)が EV・芯・詰まり・理想角の各判定に効く重み。
+const STUFF_EV_WEIGHT: float = 0.45
+const STUFF_PERFECT_LOGIT_WEIGHT: float = 0.45
+const STUFF_MISHIT_LOGIT_WEIGHT: float = 0.35
+const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 0.50
+
+# 打球角度(LA)の基準値・投球コース別オフセット・ばらつき範囲とクランプ。
+const LA_BASE: float = 11.5
+const LA_HEIGHT_LOW_OFFSET: float = -7.0
+const LA_HEIGHT_MIDDLE_OFFSET: float = 1.0
+const LA_HEIGHT_HIGH_OFFSET: float = 8.0
+const LA_RANDOM_SPREAD: float = 10.5
+const LA_CHASE_NOISE_BOOST: float = 2.75
+const LA_MIN: float = -42.0
+const LA_MAX: float = 78.0
+
+# 打球方向(spray角)の基準・プル/流しの振り分け・ギャップ狙い・ばらつきの各係数。
+const SPRAY_BASE: float = 0.0
+const SPRAY_PULL_BASE: float = 22.0
+const SPRAY_OPPOSITE_BASE: float = 14.0
+const SPRAY_PULL_PROBABILITY_BASE: float = 0.50
+const SPRAY_PULL_INSIDE_BIAS: float = 0.20
+const SPRAY_PULL_OUTSIDE_BIAS: float = -0.18
+const SPRAY_PULL_TENDENCY_WEIGHT: float = 0.15
+const SPRAY_GAP_TARGET_ANGLE: float = 18.0
+const SPRAY_GAP_INTENT_BASE: float = 0.20
+const SPRAY_GAP_INTENT_WEIGHT: float = 0.26
+const SPRAY_GAP_ALIGNMENT_WEIGHT: float = 0.32
+const SPRAY_GAP_NOISE_REDUCTION: float = 0.22
+const SPRAY_RANDOM_SPREAD: float = 8.5
+const SPRAY_CHASE_RANDOM_BOOST: float = 4.0
+const SPRAY_MIN: float = -52.0
+const SPRAY_MAX: float = 52.0
+
+# 球速補正の基準球速(km/h)。これより速い球ほど EV が上がる。
+const PITCH_VELOCITY_BASE: float = 145.0
+
+# 能力値(z-score)を計算へ投入するための変換定数。
+# 各能力カーブ/EV補正の「中立点(=平均選手の z)」。能力ごとに分布平均が違うため別々に持つ。
+# 値は現データの平均（野手 or 投手）。中立点を上げるとその能力で平均扱いされる選手が増える。
+const BAT_CONTACT_Z_NEUTRAL: float = 0.65 # 芯(Bat_Barrel)の野手平均。これを基準に巧打/拙打を判定。
+const BAT_GAP_Z_NEUTRAL: float = 1.18     # ギャップ長打(Bat_Impact)の野手平均。
+const BAT_HR_Z_NEUTRAL: float = 1.71      # 本塁打パワー(Bat_Impact+0.5*Bat_Loft)の野手平均。
+const BAT_AVOID_K_Z_NEUTRAL: float = 0.33 # 三振回避(Bat_KAvoid)の野手平均。
+const PIT_STUFF_Z_NEUTRAL: float = 1.14   # 球威(Pit_BarrelDeny+0.5*Pit_ImpactLimit)の投手平均。
+const CURVE_WIDTH_Z: float = 1.6          # 能力カーブの標準的な幅（z スケール）。
+const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭めの幅。
+
+
+static func generate(
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	pitch_outcome: Dictionary,
+	state: Dictionary,
+	precomp: Dictionary = {}
+) -> Dictionary:
+	# 打者・投手の能力(z)と打者疲労・投手の被弾傾向などを precomp から取り出す。
+	var batter_hr_z: float = float(precomp.get("batter_hr_z", 0.0))
+	var pitcher_stuff_z: float = float(precomp.get("pitcher_stuff_z", 0.0))
+	var batter_fatigue: int = int(precomp.get("batter_fatigue", 0))
+	var batter_is_pitcher: bool = bool(precomp.get("batter_is_pitcher", false))
+	var pitcher_contact_damage: float = float(precomp.get("pitcher_contact_damage", 0.0))
+	# 各能力 z を [-1, 1] のカーブへ変換する（接触/ギャップ/本塁打/三振回避/球威）。
+	var contact_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_contact_z", 0.0)), BAT_CONTACT_Z_NEUTRAL, CURVE_WIDTH_Z)
+	var gap_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_gap_z", 0.0)), BAT_GAP_Z_NEUTRAL, CURVE_WIDTH_Z)
+	var home_run_curve: float = PSBalanceProfile.ability_curve_z(batter_hr_z, BAT_HR_Z_NEUTRAL, CURVE_WIDTH_Z)
+	var avoid_k_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_avoid_k_z", 0.0)), BAT_AVOID_K_Z_NEUTRAL, AVOID_K_CURVE_WIDTH_Z)
+	var stuff_curve: float = PSBalanceProfile.ability_curve_z(pitcher_stuff_z, PIT_STUFF_Z_NEUTRAL, CURVE_WIDTH_Z)
+
+	# 投球結果(球速・コース・ゾーン内外・2ストライク防御・強制アウト)を取り出す。
+	var pitch_velocity: int = int(pitch_outcome.get("pitch_velocity", 142))
+	var in_zone: bool = bool(pitch_outcome.get("in_zone", true))
+	var location_height: String = str(pitch_outcome.get("location_height", "middle"))
+	var two_strike: bool = bool(pitch_outcome.get("two_strike_protective", false))
+	var protective_out: bool = bool(pitch_outcome.get("protective_out", false))
+	# ゾーン外の球を打った場合は「追いかけ(chase)」とみなす。
+	var chase: bool = not in_zone
+	# 打球のばらつき倍率（現在は常に 1.0）。
+	var variance_multiplier: float = 1.0
+
+	# EV(打球初速)を基準値から組み立てる。
+	var ev: float = EV_BASE
+	# 打者の長打力・球速で EV を上げ、投手の球威・打者疲労で下げ、投手の被弾傾向で上げる。
+	ev += (batter_hr_z - BAT_HR_Z_NEUTRAL) * EV_HOME_RUN_POWER_WEIGHT
+	ev += (float(pitch_velocity) - PITCH_VELOCITY_BASE) * EV_PITCH_VELOCITY_WEIGHT
+	ev -= (pitcher_stuff_z - PIT_STUFF_Z_NEUTRAL) * EV_STUFF_WEIGHT
+	ev -= stuff_curve * STUFF_EV_WEIGHT
+	ev -= float(batter_fatigue) * EV_FATIGUE_WEIGHT
+	ev += pitcher_contact_damage * 1.35
+	# 追いかけ・2ストライク防御・強制アウト・投手打者の各状況で EV を減らす。
+	if chase:
+		ev -= EV_CHASE_PENALTY
+	if two_strike:
+		ev -= EV_TWO_STRIKE_PENALTY
+		ev -= max(0.0, avoid_k_curve) * EV_PROTECTIVE_AVOID_K_PENALTY
+	if protective_out:
+		ev -= EV_FORCED_PROTECTIVE_OUT_PENALTY
+	if batter_is_pitcher:
+		ev -= 4.0
+	# 接触能力が低い(マイナス側)ほど EV を下げる。
+	var contact_weakness: float = max(0.0, -contact_curve)
+	ev -= contact_weakness * EV_CONTACT_WEAK_PENALTY
+	# ギャップ能力に応じて、後で打球角度をライナーへ寄せる量を先に算出しておく。
+	var gap_liner_pull: float = clamp(max(0.0, gap_curve) * GAP_LINER_LA_PULL, 0.0, 0.42)
+	# リーグ補正を加え、最後に正規乱数で EV を散らばらせる。
+	ev += CONTACT_EV_BIAS
+	ev += _gaussian(EV_RANDOM_SPREAD * variance_multiplier)
+
+	# LA(打球角度)を基準値から組み立て、投球コースの高さでオフセットを加える。
+	var la: float = LA_BASE
+	match location_height:
+		"low":
+			la += LA_HEIGHT_LOW_OFFSET
+		"middle":
+			la += LA_HEIGHT_MIDDLE_OFFSET
+		"high":
+			la += LA_HEIGHT_HIGH_OFFSET
+	# 接触能力が高いほど角度のばらつきを抑え、低い・追いかけ・2ストライク・強制アウトで広げる。
+	var la_spread: float = LA_RANDOM_SPREAD
+	la_spread *= 1.0 - max(0.0, contact_curve) * 0.32 + contact_weakness * 0.20
+	if chase:
+		la_spread += LA_CHASE_NOISE_BOOST
+	if two_strike:
+		la_spread += max(0.0, avoid_k_curve) * 1.8
+	if protective_out:
+		la_spread += 4.0
+	# 乱数で角度を散らばらせ、ライナー帯(8〜24度)ならギャップ狙いの角度へ寄せる。
+	la += _gaussian(la_spread * variance_multiplier)
+	if gap_liner_pull > 0.0 and la >= 8.0 and la <= 24.0:
+		la = lerp(la, GAP_LINER_TARGET_LA, gap_liner_pull)
+
+	# 芯で捉える確率(perfect)を、基準率＋接触能力・球威・状況のロジットから算出する。
+	var perfect_logit: float = PSBalanceProfile.logit(PERFECT_CONTACT_BASE_RATE)
+	perfect_logit += contact_curve * 1.00
+	perfect_logit -= stuff_curve * STUFF_PERFECT_LOGIT_WEIGHT
+	perfect_logit += pitcher_contact_damage * 0.10
+	if two_strike:
+		perfect_logit -= 0.35
+	if chase:
+		perfect_logit -= 0.25
+	var perfect_chance: float = clamp(PSBalanceProfile.sigmoid(perfect_logit), 0.015, 0.22)
+
+	# 詰まり/芯外し(mishit)の確率を、同様にロジットから算出する。
+	var mishit_logit: float = PSBalanceProfile.logit(MISHIT_BASE_RATE)
+	mishit_logit -= contact_curve * 0.95
+	mishit_logit += stuff_curve * STUFF_MISHIT_LOGIT_WEIGHT
+	mishit_logit -= pitcher_contact_damage * 0.08
+	if two_strike:
+		mishit_logit += 0.28
+		mishit_logit += max(0.0, avoid_k_curve) * 0.20
+	if protective_out:
+		mishit_logit += 1.10
+	if chase:
+		mishit_logit += 0.42
+	var mishit_chance: float = clamp(PSBalanceProfile.sigmoid(mishit_logit), 0.025, 0.30)
+
+	# 1回の抽選で perfect / mishit / 通常 を判定し、EV と角度を補正する。
+	var was_mishit: bool = false
+	var quality_roll: float = Rng.roll_float()
+	if quality_roll < perfect_chance:
+		ev += PERFECT_CONTACT_EV_BOOST
+		var barrel_angle: float = 18.0
+		la = lerp(la, barrel_angle, PERFECT_CONTACT_LA_PULL_TO_BARREL)
+	elif quality_roll < perfect_chance + mishit_chance:
+		was_mishit = true
+		ev -= MISHIT_EV_PENALTY
+		la += _gaussian(MISHIT_LA_SCATTER * variance_multiplier)
+
+	# 本塁打向きの理想角(ideal power)を引く確率を、長打力・球威・状況から算出する。
+	var ideal_power_logit: float = PSBalanceProfile.logit(POWER_IDEAL_LA_BASE_RATE)
+	ideal_power_logit += home_run_curve * 1.20
+	ideal_power_logit -= stuff_curve * STUFF_IDEAL_POWER_LOGIT_WEIGHT
+	ideal_power_logit += pitcher_contact_damage * 0.08
+	if chase:
+		ideal_power_logit -= 0.38
+	if two_strike:
+		ideal_power_logit -= 0.22
+	if was_mishit:
+		ideal_power_logit -= 1.25
+	var ideal_power_chance: float = clamp(PSBalanceProfile.sigmoid(ideal_power_logit), 0.006, 0.26)
+	# 理想角を引いたら EV を上乗せし、角度を理想角へ寄せる。
+	var ideal_power_launch: bool = Rng.roll_float() < ideal_power_chance
+	if ideal_power_launch:
+		ev += POWER_IDEAL_LA_EV_BOOST + max(0.0, home_run_curve) * POWER_IDEAL_LA_EXTRA_EV
+		var ideal_angle: float = POWER_IDEAL_LA_TARGET
+		la = lerp(la, ideal_angle, POWER_IDEAL_LA_PULL)
+
+	# EV と LA を物理的に妥当な範囲へクランプする。
+	ev = clamp(ev, EV_MIN, EV_MAX)
+	la = clamp(la, LA_MIN, LA_MAX)
+
+	# 打球方向(spray角)を生成し、理想角ヒット時は飛距離(carry)を伸ばす。
+	var spray_gap_curve: float = gap_curve if la >= 8.0 and la <= 24.0 else min(0.0, gap_curve)
+	var spray: float = _generate_spray(batter, pitcher, location_height, spray_gap_curve, chase, variance_multiplier)
+	var carry_multiplier: float = 1.0
+	if ideal_power_launch:
+		carry_multiplier += POWER_IDEAL_CARRY_BONUS + max(0.0, home_run_curve) * 0.050
+
+	# 確定した打球の質(EV/LA/spray/carry と状況フラグ)を辞書で返す。
+	return {
+		"exit_velocity": _round_float(ev, 2),
+		"launch_angle": _round_float(la, 2),
+		"spray_angle": _round_float(spray, 2),
+		"carry_multiplier": _round_float(clamp(carry_multiplier, 0.76, 1.10), 3),
+		"gap_liner_pull": _round_float(gap_liner_pull, 3),
+		"ideal_power_launch": ideal_power_launch,
+		"protective_out": protective_out,
+		"in_zone": in_zone,
+		"chase": chase,
+		"two_strike": two_strike,
+		"location_height": location_height,
+		"pitch_velocity": pitch_velocity,
+	}
+
+
+# 打球方向(spray角)を、打者の利き・投球コース・プル傾向・ギャップ狙い・乱数から生成する。
+static func _generate_spray(
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	location_height: String,
+	gap_curve: float,
+	chase: bool,
+	variance_multiplier: float
+) -> float:
+	# プル(引っ張り)になる確率を基準値から組み立てる。
+	var pull_chance: float = SPRAY_PULL_PROBABILITY_BASE
+
+	# 内角ならプルしやすく、外角ならしにくく、ギャップ能力でも増減させる。
+	var batting_side: int = _batting_side(batter)
+	var inside_to_batter: bool = _is_inside_pitch(location_height, batting_side, pitcher)
+	if inside_to_batter:
+		pull_chance += SPRAY_PULL_INSIDE_BIAS
+	else:
+		pull_chance += SPRAY_PULL_OUTSIDE_BIAS
+	pull_chance += clamp(gap_curve, -1.0, 1.0) * SPRAY_PULL_TENDENCY_WEIGHT
+	pull_chance = clamp(pull_chance, 0.10, 0.92)
+
+	# プルするか・ギャップを狙うかを抽選し、打球方向の大きさ(magnitude)を決める。
+	var pulling: bool = Rng.roll_float() < pull_chance
+	var gap_intent_chance: float = SPRAY_GAP_INTENT_BASE + max(0.0, gap_curve) * SPRAY_GAP_INTENT_WEIGHT
+	if chase:
+		gap_intent_chance -= 0.08
+	gap_intent_chance = clamp(gap_intent_chance, 0.06, 0.52)
+	var gap_intent: bool = Rng.roll_float() < gap_intent_chance
+	var magnitude: float
+	if gap_intent:
+		magnitude = SPRAY_GAP_TARGET_ANGLE + _gaussian(2.0 * variance_multiplier)
+	else:
+		magnitude = SPRAY_PULL_BASE if pulling else SPRAY_OPPOSITE_BASE
+	# プルなら左方向(負)、流しなら右方向(正)に向け、打者の左右・スイッチで符号を反転する。
+	var sign: float = -1.0 if pulling else 1.0
+	var spray: float = SPRAY_BASE + sign * magnitude
+	if batting_side == 2:
+		spray = -spray
+	if batting_side == 3 and _throwing_hand(pitcher) == 2:
+		spray = -spray
+
+	# 乱数で方向を散らばらせ（ギャップ能力が高いほど抑制）、ギャップ狙い分だけ目標角へ寄せてクランプする。
+	var noise_spread: float = SPRAY_RANDOM_SPREAD + (SPRAY_CHASE_RANDOM_BOOST if chase else 0.0)
+	noise_spread *= 1.0 - max(0.0, gap_curve) * SPRAY_GAP_NOISE_REDUCTION
+	spray += _gaussian(noise_spread * variance_multiplier)
+	var gap_alignment: float = max(0.0, gap_curve) * SPRAY_GAP_ALIGNMENT_WEIGHT
+	if gap_alignment > 0.0:
+		var spray_sign: float = -1.0 if spray < 0.0 else 1.0
+		var aligned_abs: float = lerp(absf(spray), SPRAY_GAP_TARGET_ANGLE, clamp(gap_alignment, 0.0, 0.45))
+		spray = spray_sign * aligned_abs
+	return clamp(spray, SPRAY_MIN, SPRAY_MAX)
+
+
+# 投球が打者にとって内角かどうかを、コースの高さと投打の左右関係から判定する。
+static func _is_inside_pitch(location_height: String, batting_side: int, pitcher: PSPlayerSeasonRecord) -> bool:
+	if location_height == "high":
+		return true
+	if location_height == "low":
+		return false
+	var same_side: bool = _throwing_hand(pitcher) == batting_side or batting_side == 3
+	return not same_side
+
+
+# 打者の打席左右を数値化する（右=1 / 左=2 / スイッチ=3）。
+static func _batting_side(record: PSPlayerSeasonRecord) -> int:
+	if record == null:
+		return 1
+	match record.batting_side:
+		"L":
+			return 2
+		"S":
+			return 3
+	return 1
+
+
+# 投手の利き腕を数値化する（右=1 / 左=2）。
+static func _throwing_hand(record: PSPlayerSeasonRecord) -> int:
+	if record == null:
+		return 1
+	return 2 if record.throwing_hand == "L" else 1
+
+
+# 一様乱数4つの和を中心化した擬似正規乱数を、指定の広がり(spread)で返す。
+static func _gaussian(spread: float) -> float:
+	if spread <= 0.0:
+		return 0.0
+	var total: float = 0.0
+	for _i in range(4):
+		total += Rng.roll_float()
+	return (total - 2.0) * spread
+
+
+# 値を指定した小数桁で四捨五入する。
+static func _round_float(value: float, digits: int) -> float:
+	var scale: float = pow(10.0, float(digits))
+	return round(value * scale) / scale

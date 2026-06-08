@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_error_recording_smoke.gd" id="1_smoke"]
+
+[node name="Root" type="Node"]
+script = ExtResource("1_smoke")

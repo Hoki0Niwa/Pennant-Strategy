@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cem7ky4ibl80v"]
+
+[ext_resource type="Script" path="res://tools/run_draft_war_need_smoke.gd" id="1_draft"]
+
+[node name="Root" type="Node"]
+script = ExtResource("1_draft")

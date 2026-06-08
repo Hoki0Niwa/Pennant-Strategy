@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://b2x8a7adv8st1"]
+
+[ext_resource type="Script" path="res://tools/run_advanced_stats_persistence_smoke.gd" id="1_smoke"]
+
+[node name="Root" type="Node"]
+script = ExtResource("1_smoke")

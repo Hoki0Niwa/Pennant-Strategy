@@ -1,0 +1,13 @@
+id,name,short_name,league,color,previous_rank,funds,auto_lineup
+1,旭川アトミックス,A,central,10e080,1,1250000,true
+2,備前ブラスターズ,B,central,c02050,2,1180000,true
+3,茅ヶ崎クルセイダーズ,C,central,a09040,3,1110000,true
+4,出羽ダークデビルズ,D,central,b040f0,4,1090000,true
+5,愛媛エレファンツ,E,central,9090a0,5,1030000,true
+6,福井ファルコンズ,F,central,3070f0,6,1000000,true
+7,岐阜ゲームコックス,G,pacific,f06010,1,1340000,true
+8,八王子ホーネッツ,H,pacific,e0f080,2,1170000,true
+9,上越ジェスターズ,J,pacific,f050e0,3,1140000,true
+10,京都キーストーンズ,K,pacific,d0e0f0,4,1100000,true
+11,琉球ライトニング,L,pacific,30f0f0,5,1050000,true
+12,宮崎メープルズ,M,pacific,90f020,6,1010000,true

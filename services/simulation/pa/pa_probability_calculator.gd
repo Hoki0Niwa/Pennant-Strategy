@@ -1,0 +1,126 @@
+extends RefCounted
+class_name PSPaProbabilityCalculator
+
+# File 2 §8: PA 結果カテゴリ (K/BB/HBP/BIP) を z-score 能力 + 本ファイルの調整係数(const) から softmax 抽選する。
+# 入力 precomp は PSPlateAppearanceCoordinator._build_precomp の戻り値（疲労/TTO drops 適用後）。
+
+const PSBalanceProfile = preload("res://services/simulation/pa/balance_profile.gd")
+
+const OUTCOME_STRIKEOUT: String = "k"
+const OUTCOME_WALK: String = "bb"
+const OUTCOME_HIT_BY_PITCH: String = "hbp"
+const OUTCOME_BIP: String = "bip"
+
+const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY_PITCH, OUTCOME_BIP]
+
+# --- 調整係数（旧 simulation_tuning.tres から移設。ここを直接書き換えて K/BB をチューニングする） ---
+# リーグベースライン: 能力差ゼロの平均的対戦での各カテゴリ初期 logit。softmax で相対比較される。
+const LEAGUE_K_BASE: float = 0.25    # 三振の基準率。上げるとリーグ全体の三振が増える。
+const LEAGUE_BB_BASE: float = 0.35   # 四球の基準率。上げるとリーグ全体の四球が増える。
+const LEAGUE_HBP_BASE: float = 0.01  # 死球の基準率。通常はほぼ触らない。
+const LEAGUE_BIP_BASE: float = 0.69  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
+# K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。
+const K_CREATE_WEIGHT: float = 0.60       # 投手の奪三振力が三振を増やす強さ。
+const K_AVOID_WEIGHT: float = 0.60        # 打者の三振回避力が三振を減らす強さ。
+const ARSENAL_K_BONUS_WEIGHT: float = 0.2 # 投手の球威/制球の鋭さ(EdgeRate)による追加奪三振。
+const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たストライクが三振を押し上げる係数。
+const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
+const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
+const HIGH_K_RELIEF_WEIGHT: float = 0.20  # 三振回避が極端に低い打者へ閾値超の分だけ与える三振軽減。
+const HIGH_K_RELIEF_CEILING: float = 0.08 # 三振軽減が効き始める KAvoid z（野手 KAvoid 平均 0.33 − 0.25）。これ未満の打者を救済。
+# BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
+const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
+const BB_PREVENT_WEIGHT: float = 0.7 # 投手の制球が四球を減らす強さ。
+const FRAMING_BB_COEF: float = 1.0    # フレーミングで得たストライクが四球を押し下げる係数。
+const GAMECALL_BB_COEF: float = 0.03  # 捕手の配球が四球に効く係数。
+const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増える量。
+# 左右(プラトーン)相性が三振 logit に効く強さ。
+const PLATOON_WEIGHT: float = 0.3
+
+
+# {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
+# precomp は以下のキーを持つ想定（PlateAppearanceCoordinator が組み立てる）:
+#   batter_z: Dictionary{Bat_KAvoid, Bat_BBCreate, Bat_Platoon, ...}
+#   pitcher_z: Dictionary{Pit_KCreate, Pit_BBPrevent, Pit_EdgeRate, ...} (fatigue/TTO 後)
+#   catcher_z: Dictionary{C_Framing, ...}
+#   platoon_sign: float (+1 同利き腕 / -1 逆利き腕)
+#   tto_round_weight: float (coordinator の TTO_PENALTY_PER_ROUND[round])
+#   framing_strikes: float (C_Framing * coordinator の FRAMING_SCALE)
+static func build_weights(precomp: Dictionary) -> Dictionary:
+	var batter_z: Dictionary = precomp.get("batter_z", {}) as Dictionary
+	var pitcher_z: Dictionary = precomp.get("pitcher_z", {}) as Dictionary
+	var platoon_sign: float = float(precomp.get("platoon_sign", 0.0))
+	var tto_round_weight: float = float(precomp.get("tto_round_weight", 0.0))
+	var framing_strikes: float = float(precomp.get("framing_strikes", 0.0))
+	var command_leak: float = float(precomp.get("pitcher_command_leak", 0.0))
+	var catcher_z: Dictionary = precomp.get("catcher_z", {}) as Dictionary
+
+	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
+	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0))
+	var bat_platoon: float = float(batter_z.get("Bat_Platoon", 0.0))
+	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0))
+	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0))
+	var pit_edge_rate: float = float(pitcher_z.get("Pit_EdgeRate", 0.0))
+	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
+
+	var platoon_term: float = bat_platoon * platoon_sign * PLATOON_WEIGHT
+
+	var k_logit: float = PSBalanceProfile.logit(LEAGUE_K_BASE)
+	k_logit += pit_k_create * K_CREATE_WEIGHT
+	k_logit -= bat_k_avoid * K_AVOID_WEIGHT
+	k_logit += pit_edge_rate * ARSENAL_K_BONUS_WEIGHT
+	k_logit += framing_strikes * FRAMING_K_COEF
+	k_logit += c_game_call * GAMECALL_K_COEF
+	k_logit -= tto_round_weight * TTO_K_DROP
+	k_logit -= platoon_term
+	# 三振回避が平均より 0.25 以上低い打者ほど三振を軽減する（HIGH_K_RELIEF_CEILING = 野手 KAvoid 平均 0.33 − 0.25）。
+	k_logit -= max(0.0, HIGH_K_RELIEF_CEILING - bat_k_avoid) * HIGH_K_RELIEF_WEIGHT
+
+	var bb_logit: float = PSBalanceProfile.logit(LEAGUE_BB_BASE)
+	bb_logit += bat_bb_create * BB_CREATE_WEIGHT
+	bb_logit -= pit_bb_prevent * BB_PREVENT_WEIGHT
+	bb_logit -= framing_strikes * FRAMING_BB_COEF
+	bb_logit -= c_game_call * GAMECALL_BB_COEF
+	bb_logit -= tto_round_weight * TTO_BB_DROP
+	bb_logit += command_leak * 0.10
+
+	var hbp_logit: float = PSBalanceProfile.logit(LEAGUE_HBP_BASE)
+	hbp_logit -= pit_bb_prevent * 0.30
+	hbp_logit += command_leak * 0.06
+
+	var bip_logit: float = PSBalanceProfile.logit(LEAGUE_BIP_BASE)
+
+	return {
+		OUTCOME_STRIKEOUT: k_logit,
+		OUTCOME_WALK: bb_logit,
+		OUTCOME_HIT_BY_PITCH: hbp_logit,
+		OUTCOME_BIP: bip_logit,
+	}
+
+
+# softmax で 1 カテゴリを抽選する。
+static func pick(weights: Dictionary) -> String:
+	var rows: Array = []
+	for outcome in OUTCOMES:
+		rows.append({"result": outcome, "logit": float(weights.get(outcome, 0.0))})
+	var picked: Dictionary = PSBalanceProfile.weighted_softmax_pick(rows)
+	return str(picked.get("result", OUTCOME_BIP))
+
+
+# weights を確率分布に正規化したコピーを返す（テスト/レポート用）。
+static func probabilities(weights: Dictionary) -> Dictionary:
+	var max_logit: float = -INF
+	for outcome in OUTCOMES:
+		max_logit = max(max_logit, float(weights.get(outcome, 0.0)))
+	var exp_values: Dictionary = {}
+	var total: float = 0.0
+	for outcome in OUTCOMES:
+		var v: float = exp(clamp(float(weights.get(outcome, 0.0)) - max_logit, -30.0, 30.0))
+		exp_values[outcome] = v
+		total += v
+	if total <= 0.0:
+		return {OUTCOME_BIP: 1.0}
+	var probs: Dictionary = {}
+	for outcome in OUTCOMES:
+		probs[outcome] = float(exp_values[outcome]) / total
+	return probs
