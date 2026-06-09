@@ -208,7 +208,7 @@ static func _plate_event(
 		"is_sacrifice_fly": category == "sacrifice_fly",
 		"is_reached_on_error": category == "error",
 		"is_fielders_choice": category == "fielders_choice",
-		"rbi": 0,
+		"rbi": int(outcome.get("rbi", 0)),
 		"pitches": int(pitch_summary.get("pitches", 0)),
 	}
 

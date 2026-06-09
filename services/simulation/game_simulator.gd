@@ -1,6 +1,8 @@
 extends RefCounted
 class_name GameSimulator
 
+const GameLogService = preload("res://services/storage/game_log_service.gd")
+
 const REGULATION_INNINGS: int = 9
 const MAX_INNINGS: int = 12
 const STARTER_EXTEND_START_INNING: int = 7   # 続投判定を始める回 (= 6回終了後)
@@ -489,6 +491,7 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	game["innings"] = result.get("innings", [])
 	game["result"] = result
 	season.schedule[game_index] = game
+	GameLogService.write_game_log(season, game_index, result)
 
 	PSGameDecisions.apply_game_decisions(season, away_team_id, home_team_id, result)
 	var game_day: int = int(game.get("day", season.current_day))

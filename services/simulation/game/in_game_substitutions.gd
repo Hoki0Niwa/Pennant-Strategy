@@ -320,10 +320,12 @@ static func reserve_defensive_substitution(
 	setup["reserved_fielder_ids"] = reserved_ids
 
 
-static func apply_pending_defensive_subs(setup: Dictionary) -> void:
+# 適用した(代打に伴う繰越)守備交代の配列を返す (呼び出し側が交代ログに使う)。
+static func apply_pending_defensive_subs(setup: Dictionary) -> Array:
 	var pending: Array = setup.get("pending_defensive_subs", []) as Array
 	if pending.is_empty():
-		return
+		return []
+	var applied: Array = []
 	for row in pending:
 		var substitution: Dictionary = row as Dictionary
 		var replacement: PSPlayerSeasonRecord = substitution.get("replacement", null) as PSPlayerSeasonRecord
@@ -338,8 +340,10 @@ static func apply_pending_defensive_subs(setup: Dictionary) -> void:
 			setup["batters"] = batters
 		replace_fielder(setup, int(substitution.get("outgoing_player_id", 0)), replacement, position)
 		mark_substitute_appeared(setup, replacement)
+		applied.append(substitution)
 	setup["pending_defensive_subs"] = []
 	setup["reserved_fielder_ids"] = {}
+	return applied
 
 
 static func best_defensive_reservation_for_position(setup: Dictionary, position: int, excluded_player_id: int = 0) -> PSPlayerSeasonRecord:
@@ -413,26 +417,30 @@ static func mark_substitute_appeared(setup: Dictionary, substitute: PSPlayerSeas
 	setup["substitute_ids"] = appeared
 
 
-static func maybe_apply_defensive_replacements(setup: Dictionary, inning: int, half: String, game_result: Dictionary) -> void:
+# 適用した守備固めの option 配列を返す (呼び出し側が交代ログに使う)。
+static func maybe_apply_defensive_replacements(setup: Dictionary, inning: int, half: String, game_result: Dictionary) -> Array:
 	if inning < GameSimulator.DEFENSIVE_REPLACEMENT_START_INNING:
-		return
+		return []
 	var margin: int = score_margin_for_setup(setup, game_result)
 	if margin <= 0 or margin > GameSimulator.FINAL_DEFENSE_MAX_LEAD:
-		return
+		return []
 	var expected_plate_appearances: int = expected_remaining_plate_appearances_for_defensive_team(setup, inning, half, game_result)
 	if expected_plate_appearances >= 9:
-		return
+		return []
 	var reserve: int = 0 if expected_plate_appearances == 0 or inning >= GameSimulator.REGULATION_INNINGS else 1
 	var max_replacements: int = 2 if expected_plate_appearances == 0 else 1
+	var applied: Array = []
 	var made: int = 0
 	while made < max_replacements:
 		if available_bench_fielder_count(setup) <= reserve:
-			return
+			break
 		var option: Dictionary = defensive_replacement_option(setup, expected_plate_appearances)
 		if option.is_empty():
-			return
+			break
 		apply_defensive_replacement(setup, option)
+		applied.append(option)
 		made += 1
+	return applied
 
 
 static func defensive_replacement_option(setup: Dictionary, expected_plate_appearances: int) -> Dictionary:

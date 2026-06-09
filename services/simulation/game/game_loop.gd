@@ -18,6 +18,7 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 		"home_pitcher_id": home_pitcher.player_id,
 		"play_events": [],
 		"pitcher_outings": [],
+		"substitutions": [],
 		"next_play_event_index": 0,
 		"advanced_stats": PSAdvancedStatReducer.empty_advanced_stats(),
 		"walkoff": false,
@@ -25,13 +26,20 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 
 	PSBullpenManager.mark_games_started(away_setup)
 	PSBullpenManager.mark_games_started(home_setup)
+	result["lineups"] = {
+		"away": _capture_lineup(away_setup),
+		"home": _capture_lineup(home_setup),
+	}
 
 	var inning: int = 1
 	while inning <= GameSimulator.MAX_INNINGS:
-		PSInGameSubstitutions.apply_pending_defensive_subs(home_setup)
-		PSInGameSubstitutions.maybe_apply_defensive_replacements(home_setup, inning, "top", result)
+		var home_team_id: int = int(home_setup.get("team_id", 0))
+		_log_defensive_subs(result, PSInGameSubstitutions.apply_pending_defensive_subs(home_setup), inning, "top", home_team_id)
+		_log_defensive_subs(result, PSInGameSubstitutions.maybe_apply_defensive_replacements(home_setup, inning, "top", result), inning, "top", home_team_id)
+		var home_prev_pitcher_id: int = int((home_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 		PSBullpenManager.substitute_reliever(home_setup, inning, result)
 		var home_inning_pitcher_id: int = int((home_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
+		_record_substitution(result, inning, "top", home_team_id, "pitching", home_prev_pitcher_id, home_inning_pitcher_id, 1, -1)
 		var away_runs: int = simulate_half_inning(away_setup, home_setup, inning, result, inning, "top")
 		result["away_score"] = int(result["away_score"]) + away_runs
 
@@ -39,10 +47,13 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 		var away_inning_pitcher_id: int = 0
 		var skip_home_half: bool = inning >= GameSimulator.REGULATION_INNINGS and int(result["home_score"]) > int(result["away_score"])
 		if not skip_home_half:
-			PSInGameSubstitutions.apply_pending_defensive_subs(away_setup)
-			PSInGameSubstitutions.maybe_apply_defensive_replacements(away_setup, inning, "bottom", result)
+			var away_team_id_sub: int = int(away_setup.get("team_id", 0))
+			_log_defensive_subs(result, PSInGameSubstitutions.apply_pending_defensive_subs(away_setup), inning, "bottom", away_team_id_sub)
+			_log_defensive_subs(result, PSInGameSubstitutions.maybe_apply_defensive_replacements(away_setup, inning, "bottom", result), inning, "bottom", away_team_id_sub)
+			var away_prev_pitcher_id: int = int((away_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 			PSBullpenManager.substitute_reliever(away_setup, inning, result)
 			away_inning_pitcher_id = int((away_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
+			_record_substitution(result, inning, "bottom", away_team_id_sub, "pitching", away_prev_pitcher_id, away_inning_pitcher_id, 1, -1)
 			var home_run_limit: int = bottom_half_walkoff_run_limit(result, inning)
 			home_runs = simulate_half_inning(home_setup, away_setup, inning + 1, result, inning, "bottom", home_run_limit)
 			result["home_score"] = int(result["home_score"]) + home_runs
@@ -82,6 +93,52 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 	PSBullpenManager.finalize_pitcher_usage(away_setup)
 	PSBullpenManager.finalize_pitcher_usage(home_setup)
 	return result
+
+
+# 試合開始時の先発オーダー(打順スロット+守備位置)を捕捉。ボックススコアの行構成に使う。
+static func _capture_lineup(setup: Dictionary) -> Dictionary:
+	var pitcher: PSPlayerSeasonRecord = setup.get("pitcher", null) as PSPlayerSeasonRecord
+	var dh: bool = bool(setup.get("dh_enabled", false))
+	var lineup: Dictionary = PSTeamSetupBuilder.setup_to_lineup_dict(setup, dh, pitcher)
+	return {
+		"team_id": int(setup.get("team_id", 0)),
+		"dh": dh,
+		"slots": lineup.get("batting_order", []),
+	}
+
+
+# 交代ログ。result["substitutions"] に 1 件追記する (out_id==in_id は無視)。
+static func _record_substitution(result: Dictionary, inning: int, half: String, team_id: int, kind: String, out_id: int, in_id: int, position: int, slot: int) -> void:
+	if out_id == in_id or in_id <= 0:
+		return
+	var subs: Array = result.get("substitutions", []) as Array
+	subs.append({
+		"inning": inning,
+		"half": half,
+		"team_id": team_id,
+		"kind": kind,
+		"out_id": out_id,
+		"in_id": in_id,
+		"position": position,
+		"slot": slot,
+	})
+	result["substitutions"] = subs
+
+
+# apply_pending_defensive_subs / maybe_apply_defensive_replacements が返す option 配列を交代ログ化。
+# option の形が 2 種あるため両対応 (outgoing record か outgoing_player_id)。
+static func _log_defensive_subs(result: Dictionary, applied: Array, inning: int, half: String, team_id: int) -> void:
+	for option_row in applied:
+		var option: Dictionary = option_row as Dictionary
+		var out_id: int = 0
+		if option.has("outgoing"):
+			var outgoing: PSPlayerSeasonRecord = option.get("outgoing", null) as PSPlayerSeasonRecord
+			out_id = 0 if outgoing == null else outgoing.player_id
+		else:
+			out_id = int(option.get("outgoing_player_id", 0))
+		var replacement: PSPlayerSeasonRecord = option.get("replacement", null) as PSPlayerSeasonRecord
+		var in_id: int = 0 if replacement == null else replacement.player_id
+		_record_substitution(result, inning, half, team_id, "defense", out_id, in_id, int(option.get("position", 0)), int(option.get("lineup_slot", -1)))
 
 
 static func simulate_half_inning(
@@ -189,6 +246,8 @@ static func simulate_half_inning(
 			runs
 		)
 		offense["batting_index"] = batting_index + 1
+		if batter != null and scheduled_batter != null and batter.player_id != scheduled_batter.player_id:
+			_record_substitution(game_result, inning, half, int(offense.get("team_id", 0)), "pinch_hit", scheduled_batter.player_id, batter.player_id, 0, batting_slot)
 
 		var bases_before: Array = bases.duplicate()
 		var outs_before: int = outs
@@ -198,6 +257,7 @@ static func simulate_half_inning(
 		var pitch_summary: Dictionary = outcome.get("pitch_summary", {}) as Dictionary
 		if pitch_summary.is_empty():
 			pitch_summary = PSPlayEventBuilder.pitch_summary_for_play(event_index, batter, pitcher, outcome)
+		var batter_rbi_before: int = 0 if batter == null else batter.batter_stats.runs_batted_in
 		var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, pitcher, bases, outs, outcome, {
 			PSPlateEventReducer.OPTION_PITCH_SUMMARY: pitch_summary,
 		})
@@ -258,6 +318,10 @@ static func simulate_half_inning(
 			if runner_rbi > 0:
 				batter.batter_stats.runs_batted_in += runner_rbi
 
+		# この打席で打者に計上された打点(正確値) = 打席処理前後の runs_batted_in 差分。
+		# 失策得点や走者の自力得点(盗塁本盗等)は打点に入らない。
+		if batter != null:
+			outcome["rbi"] = batter.batter_stats.runs_batted_in - batter_rbi_before
 		append_play_event(
 			game_result,
 			inning,
@@ -501,6 +565,7 @@ static func maybe_change_pitcher_after_pa(
 		return
 	finish_active_pitcher_outing(defense, game_result, inning, half, current_half_runs)
 	ensure_pitcher_outing(defense, game_result, inning, half, bases, current_half_runs)
+	_record_substitution(game_result, inning, half, int(defense.get("team_id", 0)), "pitching", old_pitcher.player_id, int((defense.get("pitcher", null) as PSPlayerSeasonRecord).player_id), 1, -1)
 
 
 static func defensive_score_state(defense: Dictionary, game_result: Dictionary, half: String, current_half_runs: int) -> Dictionary:

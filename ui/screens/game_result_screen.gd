@@ -5,6 +5,9 @@ const FILTER_RECENT_10: int = 1
 const FILTER_RECENT_30_DAYS: int = 2
 
 const SortableTable = preload("res://ui/components/sortable_table.gd")
+const GameLogService = preload("res://services/storage/game_log_service.gd")
+const BoxScoreTable = preload("res://ui/components/box_score_table.gd")
+const BoxScoreBuilder = preload("res://services/reports/box_score_builder.gd")
 
 const GAME_LIST_COLUMNS: Array = [
 	{"title": "日", "key": "day", "width": 56, "type": "number", "format": "int"},
@@ -16,13 +19,57 @@ const GAME_LIST_COLUMNS: Array = [
 	{"title": "スコア", "key": "score", "width": 130, "type": "string", "format": "string"},
 ]
 
+const SUB_COLUMNS: Array = [
+	{"title": "回", "key": "inn", "width": 52, "type": "string", "format": "string"},
+	{"title": "チーム", "key": "team", "width": 56, "type": "string", "format": "string"},
+	{"title": "種別", "key": "kind", "width": 72, "type": "string", "format": "string"},
+	{"title": "OUT", "key": "out", "width": 96, "type": "string", "format": "string"},
+	{"title": "IN", "key": "in", "width": 96, "type": "string", "format": "string"},
+	{"title": "守備", "key": "pos", "width": 44, "type": "string", "format": "string"},
+]
+
+const PITCHING_COLUMNS: Array = [
+	{"title": "チーム", "key": "team", "width": 56, "type": "string", "format": "string"},
+	{"title": "", "key": "mark", "width": 28, "type": "string", "format": "string"},
+	{"title": "投手", "key": "name", "width": 96, "type": "string", "format": "string"},
+	{"title": "", "key": "throws", "width": 30, "type": "string", "format": "string"},
+	{"title": "勝", "key": "w", "width": 34, "type": "number", "format": "int"},
+	{"title": "敗", "key": "l", "width": 34, "type": "number", "format": "int"},
+	{"title": "S", "key": "s", "width": 30, "type": "number", "format": "int"},
+	{"title": "試合", "key": "g", "width": 42, "type": "number", "format": "int"},
+	{"title": "回数", "key": "ip", "width": 46, "type": "string", "format": "string"},
+	{"title": "打者", "key": "bf", "width": 42, "type": "number", "format": "int"},
+	{"title": "球数", "key": "pitches", "width": 44, "type": "number", "format": "int"},
+	{"title": "安打", "key": "h", "width": 42, "type": "number", "format": "int"},
+	{"title": "三振", "key": "k", "width": 42, "type": "number", "format": "int"},
+	{"title": "四球", "key": "bb", "width": 42, "type": "number", "format": "int"},
+	{"title": "死球", "key": "hbp", "width": 42, "type": "number", "format": "int"},
+	{"title": "失点", "key": "r", "width": 42, "type": "number", "format": "int"},
+	{"title": "自責", "key": "er", "width": 42, "type": "number", "format": "int"},
+	{"title": "防御率", "key": "era", "width": 56, "type": "number", "format": "float2"},
+]
+
+const POSITION_LABELS: Dictionary = {
+	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右",
+}
+
+const SUB_KIND_LABELS: Dictionary = {
+	"pitching": "投手交代", "pinch_hit": "代打", "defense": "守備固め",
+}
+
 var team_select: OptionButton
 var filter_select: OptionButton
 var game_list: Tree
 var line_score_table: Tree
 var detail_text: RichTextLabel
+var box_table: Tree
+var box_team_select: OptionButton
+var pitching_table: Tree
+var sub_table: Tree
 var status_label: Label
 var team_options: Array = []
+var _current_log: Dictionary = {}
+var _current_game: Dictionary = {}
 
 
 func _ready() -> void:
@@ -94,11 +141,46 @@ func _build() -> void:
 	line_score_table.custom_minimum_size = Vector2(0, 96)
 	detail_panel.add_child(line_score_table)
 
+	var tabs: TabContainer = TabContainer.new()
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_panel.add_child(tabs)
+
 	detail_text = RichTextLabel.new()
+	detail_text.name = "サマリー"
 	detail_text.bbcode_enabled = false
 	detail_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	detail_panel.add_child(detail_text)
+	tabs.add_child(detail_text)
+
+	var box_panel: VBoxContainer = VBoxContainer.new()
+	box_panel.name = "打席結果"
+	box_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box_panel.add_theme_constant_override("separation", 4)
+	tabs.add_child(box_panel)
+
+	box_team_select = OptionButton.new()
+	box_team_select.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	box_panel.add_child(box_team_select)
+	box_team_select.item_selected.connect(func(_i: int) -> void: _render_box_for_selected_team())
+
+	box_table = BoxScoreTable.new()
+	box_panel.add_child(box_table)
+
+	pitching_table = SortableTable.new()
+	pitching_table.name = "投手成績"
+	pitching_table.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pitching_table.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(pitching_table)
+	pitching_table.configure(PITCHING_COLUMNS, false)
+
+	sub_table = SortableTable.new()
+	sub_table.name = "交代"
+	sub_table.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sub_table.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(sub_table)
+	sub_table.configure(SUB_COLUMNS, false)
 
 	_refresh_games()
 
@@ -124,6 +206,16 @@ func _refresh_games() -> void:
 	game_list.set_rows([])
 	detail_text.text = ""
 	line_score_table.set_rows([])
+	if box_table != null:
+		box_table.clear_box_score()
+	if box_team_select != null:
+		box_team_select.clear()
+	if pitching_table != null:
+		pitching_table.set_rows([])
+	if sub_table != null:
+		sub_table.set_rows([])
+	_current_log = {}
+	_current_game = {}
 
 	var season: PSSeason = AppState.current_season
 	if season == null:
@@ -221,6 +313,7 @@ func _show_game_detail(schedule_index: int) -> void:
 	var game: Dictionary = season.schedule[schedule_index] as Dictionary
 	_populate_line_score(game)
 	detail_text.text = _format_game_detail(game)
+	_populate_detail_tables(season, schedule_index, game)
 
 
 func _game_row(team_id: int, game: Dictionary) -> Dictionary:
@@ -389,3 +482,109 @@ func _team_short(team_id: int) -> String:
 	if team == null:
 		return "-"
 	return team.short_name
+
+
+func _populate_detail_tables(season: PSSeason, schedule_index: int, game: Dictionary) -> void:
+	_current_game = game
+	_current_log = _game_log_for(season, schedule_index, game)
+	_populate_box_team_select(game)
+	_render_box_for_selected_team()
+	_populate_pitching_table()
+	_populate_sub_table(_current_log.get("substitutions", []) as Array)
+	detail_text.text += _format_records(BoxScoreBuilder.build_records(_current_log, season))
+
+
+# メモリ上の完全結果(今セッション分)を優先、無ければ年別ログファイルから読む。
+func _game_log_for(season: PSSeason, schedule_index: int, game: Dictionary) -> Dictionary:
+	var result: Dictionary = game.get("result", {}) as Dictionary
+	var play_events: Array = result.get("play_events", []) as Array
+	if not play_events.is_empty():
+		return {
+			"pa_log": GameLogService.build_pa_log(result, season),
+			"substitutions": result.get("substitutions", []) as Array,
+			"lineups": result.get("lineups", {}) as Dictionary,
+			"pitcher_outings": result.get("pitcher_outings", []) as Array,
+			"errors": GameLogService.build_error_log(result),
+			"decisions": {
+				"winning_pitcher_id": int(result.get("winning_pitcher_id", 0)),
+				"losing_pitcher_id": int(result.get("losing_pitcher_id", 0)),
+				"save_pitcher_id": int(result.get("save_pitcher_id", 0)),
+				"hold_pitcher_ids": result.get("hold_pitcher_ids", []) as Array,
+			},
+		}
+	return GameLogService.read_game_log(season, schedule_index)
+
+
+func _populate_pitching_table() -> void:
+	if pitching_table == null:
+		return
+	var data: Dictionary = BoxScoreBuilder.build_pitching(_current_log, AppState.current_season)
+	var rows: Array = []
+	for row_value in (data.get("rows", []) as Array):
+		var r: Dictionary = (row_value as Dictionary).duplicate()
+		r["team"] = _team_short(int(r.get("team_id", 0)))
+		var throws: String = str(r.get("throws", ""))
+		r["throws"] = "(%s)" % throws if not throws.is_empty() else ""
+		rows.append(r)
+	pitching_table.set_rows(rows)
+
+
+func _format_records(records: Dictionary) -> String:
+	var hr: Array = records.get("hr", []) as Array
+	var errors: Array = records.get("errors", []) as Array
+	var lines: Array = []
+	if not hr.is_empty():
+		lines.append("")
+		lines.append("◇本塁打  " + "　".join(hr))
+	if not errors.is_empty():
+		lines.append("")
+		lines.append("◇失策  " + "　".join(errors))
+	return "\n".join(lines)
+
+
+func _populate_box_team_select(game: Dictionary) -> void:
+	box_team_select.clear()
+	var away_id: int = int(game.get("away_team_id", 0))
+	var home_id: int = int(game.get("home_team_id", 0))
+	box_team_select.add_item("%s (ビジター)" % _team_short(away_id), away_id)
+	box_team_select.add_item("%s (ホーム)" % _team_short(home_id), home_id)
+	box_team_select.select(1 if _selected_team_id() == home_id else 0)
+
+
+func _render_box_for_selected_team() -> void:
+	if box_table == null or box_team_select == null or box_team_select.item_count == 0:
+		return
+	var data: Dictionary = BoxScoreBuilder.build(_current_log, box_team_select.get_selected_id(), AppState.current_season)
+	box_table.set_box_score(data)
+
+
+func _populate_sub_table(subs: Array) -> void:
+	var rows: Array = []
+	for entry_row in subs:
+		var entry: Dictionary = entry_row as Dictionary
+		var pos: int = int(entry.get("position", 0))
+		rows.append({
+			"inn": _half_label(int(entry.get("inning", 0)), str(entry.get("half", ""))),
+			"team": _team_short(int(entry.get("team_id", 0))),
+			"kind": str(SUB_KIND_LABELS.get(str(entry.get("kind", "")), str(entry.get("kind", "")))),
+			"out": _player_name(int(entry.get("out_id", 0))),
+			"in": _player_name(int(entry.get("in_id", 0))),
+			"pos": str(POSITION_LABELS.get(pos, "")) if pos > 0 else "",
+		})
+	sub_table.set_rows(rows)
+
+
+func _half_label(inning: int, half: String) -> String:
+	return "%d%s" % [inning, "表" if half == "top" else "裏"]
+
+
+func _player_name(player_id: int) -> String:
+	if player_id <= 0:
+		return "-"
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return "-"
+	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
+	if record == null:
+		return "#%d" % player_id
+	return record.name

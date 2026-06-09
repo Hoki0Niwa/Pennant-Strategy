@@ -7,6 +7,7 @@ const OffseasonService = preload("res://services/season/offseason_service.gd")
 const FaMarketService = preload("res://services/season/fa_market_service.gd")
 const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
+const GameLogService = preload("res://services/storage/game_log_service.gd")
 
 const VERSION: int = 2
 const DEFAULT_SEASONS: int = 40
@@ -88,7 +89,9 @@ func run(options: Dictionary = {}) -> Dictionary:
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 
 		var roster_before: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
+		GameLogService.enabled = false  # 長期レポートは試合ログを書かない (大量ファイル回避)
 		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(season, false)
+		GameLogService.enabled = true
 		if not bool(simulation_result.get("ok", false)):
 			errors.append({
 				"year": season.year,
@@ -220,9 +223,11 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 				var effective_total: int = max(1, total)
 				var scaled_done: int = progress_base + int(round(float(done) / float(effective_total) * float(season_total_games)))
 				outer_progress_cb.call(scaled_done, total_progress_units, season_label)
+		GameLogService.enabled = false  # 長期レポートは試合ログを書かない (大量ファイル回避)
 		var simulation_result: Dictionary = await GameSimulator.simulate_remaining_season_async(
 			season, false, {}, tree, inner_cb, cancel_token
 		)
+		GameLogService.enabled = true
 		if bool(simulation_result.get("cancelled", false)) or _is_cancelled(cancel_token):
 			break
 		if not bool(simulation_result.get("ok", false)):
