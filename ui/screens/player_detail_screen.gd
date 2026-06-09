@@ -315,7 +315,9 @@ func _format_detail(record: PSPlayerSeasonRecord) -> String:
 
 	lines.append("== 能力 ==")
 	lines.append(PlayerVisibleRatings.summary_line(record))
-	if not record.is_pitcher():
+	if record.is_pitcher():
+		lines.append("球種: %s" % _arsenal_summary_line(record))
+	else:
 		lines.append("位置適性: %s" % _aptitude_summary(record))
 	lines.append("")
 
@@ -418,6 +420,12 @@ func _aptitude_summary(record: PSPlayerSeasonRecord) -> String:
 	if parts.is_empty():
 		return "適性なし"
 	return " / ".join(parts)
+
+
+# 投手の変化球アーセナルを「球種名 完成度(S〜D)」で mastery 降順に並べて返す。
+func _arsenal_summary_line(record: PSPlayerSeasonRecord) -> String:
+	var line: String = PSPitchTypes.arsenal_line(record.arsenal_or_derived())
+	return line if not line.is_empty() else "データなし"
 
 
 func _position_aptitude(record: PSPlayerSeasonRecord, position: int) -> int:

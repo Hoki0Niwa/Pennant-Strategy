@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/run_pitch_arsenal_smoke.gd" id="1_pitch_arsenal_smoke"]
+
+[node name="RunPitchArsenalSmoke" type="Node"]
+script = ExtResource("1_pitch_arsenal_smoke")

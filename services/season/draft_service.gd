@@ -966,6 +966,7 @@ static func _candidate_player_data(candidate_id: int, name: String, age: int, po
 		"injury_days": 0,
 		"z_abilities": z_abilities,
 		"raw_abilities": raw_abilities,
+		"arsenal": Offseason.generated_arsenal(position, z_abilities),
 	}
 
 

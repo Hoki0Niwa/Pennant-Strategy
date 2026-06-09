@@ -157,6 +157,9 @@ var source_data: Dictionary = {}
 # display スケールが必要なシミュ/UI 計算式は z_display() を使う。
 var z_abilities: Dictionary = {}
 var raw_abilities: Dictionary = {}
+# 変化球(球種)アーセナル: [{ "type": <String>, "mastery": <float z> }, ...]。
+# 空の場合は record 側 arsenal_or_derived() が z から派生する (後方互換)。詳細 PSPitchTypes。
+var arsenal: Array = []
 var fatigue: int
 var injury_days: int
 # File 1 §4.1, §6.5: 当日状態 + 打順制約
@@ -198,6 +201,7 @@ func apply_dict(data: Dictionary) -> void:
 	source_data = (data.get("source_data", {}) as Dictionary).duplicate(true)
 	z_abilities = (data.get("z_abilities", {}) as Dictionary).duplicate(true)
 	raw_abilities = (data.get("raw_abilities", {}) as Dictionary).duplicate(true)
+	arsenal = (data.get("arsenal", []) as Array).duplicate(true)
 	fatigue = int(data.get("fatigue", 0))
 	injury_days = int(data.get("injury_days", 0))
 	condition = clampi(int(data.get("condition", 0)), CONDITION_MIN, CONDITION_MAX)
@@ -323,6 +327,7 @@ func to_dict() -> Dictionary:
 		"source_data": source_data,
 		"z_abilities": z_abilities,
 		"raw_abilities": raw_abilities,
+		"arsenal": arsenal.duplicate(true),
 		"fatigue": fatigue,
 		"injury_days": injury_days,
 		"condition": condition,

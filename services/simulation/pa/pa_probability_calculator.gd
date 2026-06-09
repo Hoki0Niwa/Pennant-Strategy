@@ -23,6 +23,9 @@ const LEAGUE_BIP_BASE: float = 0.69  # インプレー(打球)の基準率。上
 const K_CREATE_WEIGHT: float = 0.60       # 投手の奪三振力が三振を増やす強さ。
 const K_AVOID_WEIGHT: float = 0.60        # 打者の三振回避力が三振を減らす強さ。
 const ARSENAL_K_BONUS_WEIGHT: float = 0.2 # 投手の球威/制球の鋭さ(EdgeRate)による追加奪三振。
+# 球種構成のK寄り傾向(集計済み・中心化済み)による追加奪三振。**微差**(K_CREATE_WEIGHT=0.60 比で十分小さい)。
+# 球種差はわずかに留める方針。較正フェーズで強める前提。
+const ARSENAL_TENDENCY_K_WEIGHT: float = 0.06
 const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たストライクが三振を押し上げる係数。
 const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
 const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
@@ -53,6 +56,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	var tto_round_weight: float = float(precomp.get("tto_round_weight", 0.0))
 	var framing_strikes: float = float(precomp.get("framing_strikes", 0.0))
 	var command_leak: float = float(precomp.get("pitcher_command_leak", 0.0))
+	var arsenal_k_bias: float = float(precomp.get("arsenal_k_bias", 0.0))
 	var catcher_z: Dictionary = precomp.get("catcher_z", {}) as Dictionary
 
 	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
@@ -69,6 +73,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	k_logit += pit_k_create * K_CREATE_WEIGHT
 	k_logit -= bat_k_avoid * K_AVOID_WEIGHT
 	k_logit += pit_edge_rate * ARSENAL_K_BONUS_WEIGHT
+	k_logit += arsenal_k_bias * ARSENAL_TENDENCY_K_WEIGHT  # 球種構成のK寄り傾向(微差)。
 	k_logit += framing_strikes * FRAMING_K_COEF
 	k_logit += c_game_call * GAMECALL_K_COEF
 	k_logit -= tto_round_weight * TTO_K_DROP

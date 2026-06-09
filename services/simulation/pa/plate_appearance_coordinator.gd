@@ -343,6 +343,10 @@ static func _build_precomp(
 	var arsenal_bonus: int = int(pitching_context.get("pitcher_arsenal_bonus", 0))
 	var command_leak: float = float(pitching_context.get("pitcher_command_leak", 0.0))
 	var contact_damage: float = float(pitching_context.get("pitcher_contact_damage", 0.0))
+	# 球種傾向(微差): K寄り/ゴロ寄り/被弾の集計スカラー。
+	var arsenal_k_bias: float = float(pitching_context.get("pitcher_arsenal_k_bias", 0.0))
+	var arsenal_gb_bias: float = float(pitching_context.get("pitcher_arsenal_gb_bias", 0.0))
+	var arsenal_hr_bias: float = float(pitching_context.get("pitcher_arsenal_hr_bias", 0.0))
 	var tto_array: Array = TTO_PENALTY_PER_ROUND
 	var tto_round_weight: float = 0.0
 	if tto_round >= 0 and tto_round < tto_array.size():
@@ -387,6 +391,10 @@ static func _build_precomp(
 		"platoon_sign": platoon_sign,
 		"framing_strikes": framing_strikes,
 		"pitcher_command_leak": command_leak,
+		# 球種傾向(微差) — pa_probability_calculator(K) / contact_quality_model(LA,被弾) が読む。
+		"arsenal_k_bias": arsenal_k_bias,
+		"pitcher_gb_bias": arsenal_gb_bias,
+		"pitcher_hr_bias": arsenal_hr_bias,
 		# pitcher 派生（合成 pitch_outcome / ContactQualityModel が読む）
 		"pitch_velocity_proxy": pitch_velocity_proxy,
 		"pitcher_contact_damage": contact_damage,

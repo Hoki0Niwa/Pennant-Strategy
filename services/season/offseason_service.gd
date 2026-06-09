@@ -889,6 +889,36 @@ static func generated_raw_abilities(position: int, z_abilities: Dictionary) -> D
 	return raw
 
 
+# 投手の変化球アーセナルを生成する。[{ "type": <String>, "mastery": <float z> }, ...]。
+#  - 球種数: スタミナ(=先発度)が高いほど多い (3〜6本)。
+#  - 直球を必ず1本含み、残りは投手リーン(K vs ムーブ)に応じた変化球から割当 (PSPitchTypes.assign_types)。
+#  - mastery は投手の stuff 系 z (KCreate/BarrelDeny/EdgeRate) にアンカーしノイズを足す
+#    (→ エースは良い球種を持ちやすく z と矛盾しない)。スケールは synth mastery と同じ [-2.0, 2.8]。
+static func generated_arsenal(position: int, z_abilities: Dictionary) -> Array:
+	if position != 1:
+		return []
+	var k: float = float(z_abilities.get("Pit_KCreate", 0.0))
+	var move: float = float(z_abilities.get("Pit_LoftControl", 0.0))
+	var barrel_deny: float = float(z_abilities.get("Pit_BarrelDeny", 0.0))
+	var edge: float = float(z_abilities.get("Pit_EdgeRate", 0.0))
+	var stamina: float = float(z_abilities.get("Pit_Stamina", 0.0))
+	# 球種数: スタミナ連動 (z 0 で約4本、先発級で5〜6、短いリリーフで3) + 軽いジッター。
+	var pitch_count: int = clampi(int(round(4.0 + stamina * 0.7 + float(Rng.range_int(-1, 1)))), 3, 6)
+	var lean: float = k - move
+	var types: Array = PSPitchTypes.assign_types(pitch_count, lean, Rng.range_int(0, 1000000))
+	# 出し球(0本目)を最良に、以降は逓減。mastery は stuff 系 z にアンカー。
+	var anchor: float = k * 0.5 + barrel_deny * 0.3 + edge * 0.2
+	var arsenal: Array = []
+	for i in range(pitch_count):
+		var noise: float = (Rng.roll_float() - 0.5) * 0.9
+		var mastery: float = anchor + 0.35 - float(i) * 0.5 + noise
+		arsenal.append({
+			"type": str(types[i]) if i < types.size() else PSPitchTypes.FOUR_SEAM,
+			"mastery": clampf(mastery, -2.0, 2.8),
+		})
+	return arsenal
+
+
 # --- STEP 2: Growth / Decay ---
 
 # 全選手を成長/衰え mutate する。集計 (changes/kind_counts/growers/decayers/pitchers/fielders) は

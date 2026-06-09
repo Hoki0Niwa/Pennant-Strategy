@@ -61,6 +61,11 @@ const LA_CHASE_NOISE_BOOST: float = 2.75
 const LA_MIN: float = -42.0
 const LA_MAX: float = 78.0
 
+# 球種構成の傾向(集計済み・中心化済み)による打球補正。**いずれも微差**(較正フェーズで強める前提)。
+const LA_GB_WEIGHT: float = 1.2          # ゴロ寄り球種ほど打球角度(LA)をわずかに下げ、フライ率を下げる。
+const ARSENAL_HR_PERFECT_WEIGHT: float = 0.05 # 被弾寄り球種でわずかに芯(perfect)を許す。
+const ARSENAL_HR_IDEAL_WEIGHT: float = 0.06   # 被弾寄り球種でわずかに本塁打向き理想角を許す。
+
 # 打球方向(spray角)の基準・プル/流しの振り分け・ギャップ狙い・ばらつきの各係数。
 const SPRAY_BASE: float = 0.0
 const SPRAY_PULL_BASE: float = 22.0
@@ -107,6 +112,9 @@ static func generate(
 	var batter_fatigue: int = int(precomp.get("batter_fatigue", 0))
 	var batter_is_pitcher: bool = bool(precomp.get("batter_is_pitcher", false))
 	var pitcher_contact_damage: float = float(precomp.get("pitcher_contact_damage", 0.0))
+	# 球種傾向(微差): ゴロ寄り→LA微減 / 被弾寄り→芯・理想角を微増。
+	var arsenal_gb_bias: float = float(precomp.get("pitcher_gb_bias", 0.0))
+	var arsenal_hr_bias: float = float(precomp.get("pitcher_hr_bias", 0.0))
 	# 各能力 z を [-1, 1] のカーブへ変換する（接触/ギャップ/本塁打/三振回避/球威）。
 	var contact_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_contact_z", 0.0)), BAT_CONTACT_Z_NEUTRAL, CURVE_WIDTH_Z)
 	var gap_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_gap_z", 0.0)), BAT_GAP_Z_NEUTRAL, CURVE_WIDTH_Z)
@@ -162,6 +170,8 @@ static func generate(
 			la += LA_HEIGHT_MIDDLE_OFFSET
 		"high":
 			la += LA_HEIGHT_HIGH_OFFSET
+	# 球種のゴロ寄り傾向で打球角度をわずかに下げる(微差)。
+	la -= arsenal_gb_bias * LA_GB_WEIGHT
 	# 接触能力が高いほど角度のばらつきを抑え、低い・追いかけ・2ストライク・強制アウトで広げる。
 	var la_spread: float = LA_RANDOM_SPREAD
 	la_spread *= 1.0 - max(0.0, contact_curve) * 0.32 + contact_weakness * 0.20
@@ -181,6 +191,7 @@ static func generate(
 	perfect_logit += contact_curve * 1.00
 	perfect_logit -= stuff_curve * STUFF_PERFECT_LOGIT_WEIGHT
 	perfect_logit += pitcher_contact_damage * 0.10
+	perfect_logit += arsenal_hr_bias * ARSENAL_HR_PERFECT_WEIGHT  # 被弾寄り球種で芯を微増(微差)。
 	if two_strike:
 		perfect_logit -= 0.35
 	if chase:
@@ -218,6 +229,7 @@ static func generate(
 	ideal_power_logit += home_run_curve * 1.20
 	ideal_power_logit -= stuff_curve * STUFF_IDEAL_POWER_LOGIT_WEIGHT
 	ideal_power_logit += pitcher_contact_damage * 0.08
+	ideal_power_logit += arsenal_hr_bias * ARSENAL_HR_IDEAL_WEIGHT  # 被弾寄り球種で理想角を微増(微差)。
 	if chase:
 		ideal_power_logit -= 0.38
 	if two_strike:

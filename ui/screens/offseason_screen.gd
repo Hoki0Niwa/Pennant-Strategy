@@ -1308,7 +1308,13 @@ func _format_candidate_details(candidate: Dictionary) -> String:
 	visible_template["role"] = "starter" if position == 1 else "fielder"
 	lines.append("能力")
 	lines.append(PlayerVisibleRatings.summary_line_for_player_data(visible_template))
-	if position != 1:
+	if position == 1:
+		var arsenal_text: String = PSPitchTypes.arsenal_line(template.get("arsenal", []) as Array)
+		if not arsenal_text.is_empty():
+			lines.append("")
+			lines.append("球種")
+			lines.append(arsenal_text)
+	else:
 		lines.append("")
 		lines.append("守備位置適性")
 		lines.append(_aptitude_line(aptitudes))
@@ -1555,6 +1561,12 @@ func _format_foreign_details(candidate: Dictionary) -> String:
 	lines.append("")
 	lines.append("能力")
 	lines.append(PlayerVisibleRatings.summary_line_for_player_data(template))
+	if int(candidate.get("position", 0)) == 1:
+		var arsenal_text: String = PSPitchTypes.arsenal_line(template.get("arsenal", []) as Array)
+		if not arsenal_text.is_empty():
+			lines.append("")
+			lines.append("球種")
+			lines.append(arsenal_text)
 	if team != null and budget_room < 0:
 		lines.append("")
 		lines.append("予算超過見込みです。CPU評価では獲得優先度が下がります。")

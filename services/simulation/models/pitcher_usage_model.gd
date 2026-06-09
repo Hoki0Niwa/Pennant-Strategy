@@ -162,6 +162,8 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 	var usage_penalty: int = in_game_usage_penalty(record, usage)
 	var tto_penalty: int = times_through_order_penalty(record, usage)
 	var arsenal_bonus: int = role_arsenal_bonus(role, arsenal)
+	# 球種構成の傾向(微差)。type 別 K寄り/ゴロ寄り/被弾を mastery 加重で集計し中心化済み。
+	var arsenal_biases: Dictionary = PSPitchTypes.aggregate_biases(arsenal.get("arsenal", []) as Array)
 	var trouble: float = float(usage.get("trouble_score", 0.0))
 	var command_leak: float = clamp(max(0.0, trouble - 3.0) * 0.55 + max(0.0, ratio - 0.92) * 3.0, 0.0, 5.0)
 	var contact_damage: float = clamp(max(0.0, trouble - 3.5) * 0.48 + max(0.0, ratio - 1.0) * 3.6, 0.0, 5.0)
@@ -181,6 +183,9 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 		"pitcher_arsenal_effective_count": int(arsenal.get("effective_pitch_count", 0)),
 		"pitcher_arsenal_top_two": float(arsenal.get("top_two_average", 0.0)),
 		"pitcher_arsenal_third": int(arsenal.get("third_pitch", 0)),
+		"pitcher_arsenal_k_bias": float(arsenal_biases.get("k_bias", 0.0)),
+		"pitcher_arsenal_gb_bias": float(arsenal_biases.get("gb_bias", 0.0)),
+		"pitcher_arsenal_hr_bias": float(arsenal_biases.get("hr_bias", 0.0)),
 	}
 
 
@@ -547,6 +552,14 @@ static func recently_returned_from_injury(record: PSPlayerSeasonRecord, current_
 	return days_since_return >= 0 and days_since_return <= rest_days
 
 
+# z から合成した mastery 値 (降順前のプロファイル順) を返す。PSPitchTypes.derive_from_z が
+# arsenal 未保持の投手のアーセナルを派生するときの単一ソース。従来の _pitch_values_from_profile を踏襲。
+static func synth_mastery_values(record: PSPlayerSeasonRecord) -> Array:
+	if record == null:
+		return []
+	return (pitcher_profile(record).get("pitch_values", []) as Array).duplicate()
+
+
 static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 	if record == null:
 		return {
@@ -559,7 +572,14 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 			"pitch_values": [],
 		}
 	var profile: Dictionary = pitcher_profile(record)
-	var values: Array = (profile.get("pitch_values", []) as Array).duplicate()
+	# 実 arsenal (保存済み or z 派生) の mastery を pitch_values として採用する。
+	# derive-on-read は synth_mastery_values と同値なので、従来の役割適性挙動を保つ。
+	var arsenal_entries: Array = record.arsenal_or_derived()
+	var values: Array = []
+	for entry_value in arsenal_entries:
+		var entry: Dictionary = entry_value as Dictionary
+		if entry != null:
+			values.append(float(entry.get("mastery", 0.0)))
 	values.sort()
 	values.reverse()
 	var pitch_count: int = values.size()
@@ -578,6 +598,7 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 		"third_pitch": third_pitch,
 		"top_two_average": (top_pitch + second_pitch) / 2.0,
 		"pitch_values": values,
+		"arsenal": arsenal_entries,
 	}
 	for key_value in profile.keys():
 		var key: String = str(key_value)

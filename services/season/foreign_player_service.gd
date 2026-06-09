@@ -288,6 +288,7 @@ static func _generate_candidate(candidate_id: int, year: int) -> Dictionary:
 		"injury_days": 0,
 		"z_abilities": z_abilities,
 		"raw_abilities": OffseasonService.generated_raw_abilities(position, z_abilities),
+		"arsenal": OffseasonService.generated_arsenal(position, z_abilities),
 	}
 	var player: PSPlayer = PSPlayer.from_dict(data)
 	return {

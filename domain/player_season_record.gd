@@ -45,6 +45,9 @@ var source_data: Dictionary = {}
 # display スケールが必要な計算式は z_display() を使う（旧 ability() は撤去済み）。
 var z_abilities_snapshot: Dictionary = {}
 var raw_abilities_snapshot: Dictionary = {}
+# 変化球アーセナルのスナップショット: [{ "type": <String>, "mastery": <float z> }, ...]。
+# 空なら arsenal_or_derived() が z から派生 (既存セーブ/シードの後方互換)。
+var arsenal_snapshot: Array = []
 var batter_stats: PSBatterStats = PSBatterStats.new()
 var pitcher_stats: PSPitcherStats = PSPitcherStats.new()
 # 高度統計のシーズン累積。1 試合ごとに game_result.advanced_stats からマージされる。
@@ -88,6 +91,7 @@ static func from_player(player: PSPlayer, year: int, season_number: int) -> PSPl
 	record.source_data = player.source_data.duplicate(true)
 	record.z_abilities_snapshot = player.z_abilities.duplicate(true)
 	record.raw_abilities_snapshot = player.raw_abilities.duplicate(true)
+	record.arsenal_snapshot = player.arsenal.duplicate(true)
 	return record
 
 
@@ -129,6 +133,7 @@ static func from_dict(data: Dictionary) -> PSPlayerSeasonRecord:
 		record.fa_eligible_years = PSPlayer.default_fa_eligible_years(record.foreign_player, record.age, record.years, record.source_data)
 	record.z_abilities_snapshot = (data.get("z_abilities_snapshot", {}) as Dictionary).duplicate(true)
 	record.raw_abilities_snapshot = (data.get("raw_abilities_snapshot", {}) as Dictionary).duplicate(true)
+	record.arsenal_snapshot = (data.get("arsenal_snapshot", []) as Array).duplicate(true)
 	record.batter_stats = PSBatterStats.from_dict(data.get("batter_stats", {}) as Dictionary)
 	record.pitcher_stats = PSPitcherStats.from_dict(data.get("pitcher_stats", {}) as Dictionary)
 	var advanced_payload: Dictionary = data.get("advanced_stats", {}) as Dictionary
@@ -168,6 +173,14 @@ func fielding_ability_category() -> String:
 func breaking_score() -> int:
 	# pitch_values は廃止（常に空）。投球 z があれば z 由来、無ければ既定 50。
 	return _z_breaking_score() if _has_pitching_z() else 50
+
+
+# 変化球アーセナルを返す。保存済みがあればそれを、無ければ z から派生 (後方互換)。
+# derive_from_z は決定論的なので呼ぶたびに同じ結果になる (role 適性が安定する)。
+func arsenal_or_derived() -> Array:
+	if not arsenal_snapshot.is_empty():
+		return arsenal_snapshot
+	return PSPitchTypes.derive_from_z(self)
 
 
 func _max_velocity() -> int:
@@ -225,6 +238,7 @@ func to_dict() -> Dictionary:
 		"source_data": source_data,
 		"z_abilities_snapshot": z_abilities_snapshot,
 		"raw_abilities_snapshot": raw_abilities_snapshot,
+		"arsenal_snapshot": arsenal_snapshot.duplicate(true),
 		"batter_stats": batter_stats.to_dict(),
 		"pitcher_stats": pitcher_stats.to_dict(),
 		"advanced_stats": advanced_stats.to_dict() if advanced_stats != null else {},
