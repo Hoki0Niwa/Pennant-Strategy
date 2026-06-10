@@ -71,7 +71,8 @@ const PLAYER_SEASON_COLUMNS: Array = [
 	"registered_roster", "contract_status", "foreign_player",
 	"fa_eligible_years",
 	"fatigue", "injury_days", "season_injury_days",
-	"injury_return_day", "consecutive_appearances", "last_pitched_team_game",
+	"injury_return_day", "injury_type", "injury_severity",
+	"consecutive_appearances", "last_pitched_team_game",
 	"position_aptitudes_snapshot_json", "position_experience_snapshot_json",
 	"source_data_json", "z_abilities_snapshot_json", "raw_abilities_snapshot_json",
 	"advanced_stats_json",
@@ -454,7 +455,7 @@ static func _player_season_value(record: Dictionary, column: String) -> Variant:
 			return JSON.stringify(record.get("raw_abilities_snapshot", {}))
 		"advanced_stats_json":
 			return JSON.stringify(record.get("advanced_stats", {}))
-		"name", "role", "throwing_hand", "batting_side", "hometown", "registered_roster", "contract_status":
+		"name", "role", "throwing_hand", "batting_side", "hometown", "registered_roster", "contract_status", "injury_type":
 			return str(record.get(column, ""))
 		_:
 			return int(record.get(column, 0))
@@ -514,6 +515,8 @@ static func _normalized_player_season_dict(row: Dictionary) -> Dictionary:
 		"injury_days": int(row.get("injury_days", 0)),
 		"season_injury_days": int(row.get("season_injury_days", 0)),
 		"injury_return_day": int(row.get("injury_return_day", 0)),
+		"injury_type": str(row.get("injury_type", "")),
+		"injury_severity": int(row.get("injury_severity", 0)),
 		"consecutive_appearances": int(row.get("consecutive_appearances", 0)),
 		"last_pitched_team_game": int(row.get("last_pitched_team_game", 0)),
 		"position_aptitudes_snapshot": _parse_json_dict(str(row.get("position_aptitudes_snapshot_json", "{}"))),
@@ -699,6 +702,8 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			injury_days INTEGER NOT NULL DEFAULT 0,
 			season_injury_days INTEGER NOT NULL DEFAULT 0,
 			injury_return_day INTEGER NOT NULL DEFAULT 0,
+			injury_type TEXT NOT NULL DEFAULT '',
+			injury_severity INTEGER NOT NULL DEFAULT 0,
 			consecutive_appearances INTEGER NOT NULL DEFAULT 0,
 			last_pitched_team_game INTEGER NOT NULL DEFAULT 0,
 			position_aptitudes_snapshot_json TEXT NOT NULL DEFAULT '{}',
@@ -785,6 +790,10 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 		return false
 	if not _ensure_player_season_injury_return_day_column(db):
 		return false
+	if not _ensure_player_season_injury_type_column(db):
+		return false
+	if not _ensure_player_season_injury_severity_column(db):
+		return false
 	if not _ensure_player_season_fa_eligible_years_column(db):
 		return false
 	return true
@@ -833,6 +842,24 @@ static func _ensure_player_season_injury_return_day_column(db: Object) -> bool:
 		if str(col.get("name", "")) == "injury_return_day":
 			return true
 	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_return_day INTEGER NOT NULL DEFAULT 0")
+
+
+static func _ensure_player_season_injury_type_column(db: Object) -> bool:
+	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
+	for col_value in cols:
+		var col: Dictionary = col_value as Dictionary
+		if str(col.get("name", "")) == "injury_type":
+			return true
+	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_type TEXT NOT NULL DEFAULT ''")
+
+
+static func _ensure_player_season_injury_severity_column(db: Object) -> bool:
+	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
+	for col_value in cols:
+		var col: Dictionary = col_value as Dictionary
+		if str(col.get("name", "")) == "injury_severity":
+			return true
+	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_severity INTEGER NOT NULL DEFAULT 0")
 
 
 # PRAGMA user_version を読む (= 既に適用済のスキーマ世代)。

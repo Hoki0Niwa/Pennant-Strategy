@@ -36,6 +36,10 @@ var injury_days: int
 var season_injury_days: int = 0
 # 怪我日数が 0 に戻った日。投手の怪我明け登板制限に使う。
 var injury_return_day: int = 0
+# 怪我の種類(部位/病名ラベル)と重症度ティア(0=軽傷..3=重大手術)。PSInjuryModel が発生時に設定し、
+# from_player で持続 player から引き継ぐ (長期離脱のシーズン跨ぎ表示用)。
+var injury_type: String = ""
+var injury_severity: int = 0
 var consecutive_appearances: int = 0
 var last_pitched_team_game: int = 0
 var position_aptitudes_snapshot: Dictionary = {}
@@ -84,6 +88,8 @@ static func from_player(player: PSPlayer, year: int, season_number: int) -> PSPl
 	record.injury_days = player.injury_days
 	record.season_injury_days = 0
 	record.injury_return_day = 0
+	record.injury_type = player.injury_type
+	record.injury_severity = player.injury_severity
 	record.consecutive_appearances = 0
 	record.last_pitched_team_game = 0
 	record.position_aptitudes_snapshot = player.position_aptitudes.duplicate(true)
@@ -123,6 +129,8 @@ static func from_dict(data: Dictionary) -> PSPlayerSeasonRecord:
 	record.injury_days = int(data.get("injury_days", 0))
 	record.season_injury_days = int(data.get("season_injury_days", 0))
 	record.injury_return_day = int(data.get("injury_return_day", 0))
+	record.injury_type = str(data.get("injury_type", ""))
+	record.injury_severity = int(data.get("injury_severity", 0))
 	record.consecutive_appearances = int(data.get("consecutive_appearances", 0))
 	record.last_pitched_team_game = int(data.get("last_pitched_team_game", 0))
 	record.position_aptitudes_snapshot = (data.get("position_aptitudes_snapshot", {}) as Dictionary).duplicate(true)
@@ -183,6 +191,12 @@ func arsenal_or_derived() -> Array:
 	return PSPitchTypes.derive_from_z(self)
 
 
+# 怪我の表示ラベル ("部位名(重症度)")。健康なら空文字。
+# 旧セーブ (type/severity 無し・injury_days>0) は日数からティアを推定する (PSInjuryModel)。
+func injury_display_label() -> String:
+	return PSInjuryModel.display_label(injury_type, injury_severity, injury_days)
+
+
 func _max_velocity() -> int:
 	var max_velocity: int = max_velocity_display()
 	if max_velocity > 0:
@@ -231,6 +245,8 @@ func to_dict() -> Dictionary:
 		"injury_days": injury_days,
 		"season_injury_days": season_injury_days,
 		"injury_return_day": injury_return_day,
+		"injury_type": injury_type,
+		"injury_severity": injury_severity,
 		"consecutive_appearances": consecutive_appearances,
 		"last_pitched_team_game": last_pitched_team_game,
 		"position_aptitudes_snapshot": position_aptitudes_snapshot,

@@ -312,6 +312,8 @@ func advance_offseason() -> Dictionary:
 				step_result = {"title": "外国人補強", "foreign_in_progress": true}
 		6:
 			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
+			# 長期離脱の越冬回復＋翌季への持ち越し (roadmap #6)。
+			OffseasonService.process_injury_carryover(GameDb.players, current_season)
 			step_result["title"] = "成長 / 衰え"
 		7:
 			step_result = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, current_season)

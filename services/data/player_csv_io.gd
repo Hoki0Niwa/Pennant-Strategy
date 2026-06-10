@@ -15,12 +15,13 @@ const META_ORDER: Array = [
 	"id", "name", "team_id", "position", "role", "age", "years", "bats", "throws",
 	"height", "weight", "salary", "draft_round", "jersey_number", "sensyu_num",
 	"development_player", "foreign_player", "hometown", "registered_roster",
-	"contract_status", "fatigue", "injury_days", "condition", "fixed_slot",
+	"contract_status", "fatigue", "injury_days", "injury_type", "injury_severity",
+	"condition", "fixed_slot",
 ]
 const META_INT_FIELDS: Array = [
 	"id", "team_id", "position", "age", "years", "height", "weight", "salary",
 	"draft_round", "jersey_number", "sensyu_num", "fatigue", "injury_days",
-	"condition", "fixed_slot",
+	"injury_severity", "condition", "fixed_slot",
 ]
 const META_BOOL_FIELDS: Array = ["development_player", "foreign_player"]
 const ARRAY_FIELDS: Array = ["allowed_slots", "preferred_slots"]

@@ -98,6 +98,10 @@ const GROWTH_DELTA_SCALE: float = 1.8
 const Z_ABILITY_MIN: float = -4.0
 const Z_ABILITY_MAX: float = 4.0
 
+# 越冬 (シーズン終了〜翌春キャンプ) で回復する怪我日数。長期離脱 (トミー・ジョン等) を
+# 翌季へ正しく持ち越すための減算量。tunable (較正フェーズで調整)。詳細 [[project_injury_system]]。
+const OFFSEASON_RECOVERY_DAYS: int = 120
+
 # 守備適性のオフシーズン成長 (apply_position_aptitude_growth)。上限 100。
 # 本職: 毎オフ一定値だけ習熟 (70→100 ≒6年, 85→100 ≒3年)。
 # 別ポジ: そのシーズンに守った守備イニングに比例 (フル1シーズン専念 ≒ +15)。
@@ -917,6 +921,35 @@ static func generated_arsenal(position: int, z_abilities: Dictionary) -> Array:
 			"mastery": clampf(mastery, -2.0, 2.8),
 		})
 	return arsenal
+
+
+# --- 怪我の繰り越し (越冬回復) ---
+
+# オフシーズンの怪我繰り越し: 当季終了時点の record.injury_days から越冬回復分 (OFFSEASON_RECOVERY_DAYS)
+# を引き、残りを持続 player へ書き戻す。翌季の PSPlayerSeasonRecord.from_player が
+# injury_days / injury_type / injury_severity をシードするので、長期離脱が翌季へ持ち越される。
+# 恒久能力低下は発生時 (PSInjuryModel) に適用済みのため、ここは怪我状態の簿記のみ。
+static func process_injury_carryover(players: Array, season: PSSeason) -> Dictionary:
+	if season == null:
+		return {"carried": 0}
+	var carried: int = 0
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.is_retired() or player.is_manager_candidate():
+			continue
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		var current_days: int = record.injury_days if record != null else player.injury_days
+		var remaining: int = maxi(0, current_days - OFFSEASON_RECOVERY_DAYS)
+		player.injury_days = remaining
+		if remaining > 0:
+			carried += 1
+			if record != null:
+				player.injury_type = record.injury_type
+				player.injury_severity = record.injury_severity
+		else:
+			player.injury_type = ""
+			player.injury_severity = 0
+	return {"carried": carried}
 
 
 # --- STEP 2: Growth / Decay ---

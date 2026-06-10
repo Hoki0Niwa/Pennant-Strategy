@@ -41,6 +41,7 @@ const UPCOMING_COLUMNS: Array = [
 const INJURY_COLUMNS: Array = [
 	{"title": "位置", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "故障内容", "key": "label", "width": 200, "type": "string", "format": "string"},
 	{"title": "残り日", "key": "days", "width": 64, "type": "number", "format": "int"},
 ]
 
@@ -451,17 +452,18 @@ func _add_injuries_section(parent: Control) -> void:
 	)
 
 	var table: Tree = SortableTable.new()
-	table.custom_minimum_size = Vector2(500, 100)
+	table.custom_minimum_size = Vector2(640, 100)
 	table.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	parent.add_child(table)
 	table.configure(INJURY_COLUMNS)
-	table.set_default_sort(2, false)  # 残り日 降順
+	table.set_default_sort(3, false)  # 残り日 降順
 	var rows: Array = []
 	for record_row in injured:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		rows.append({
 			"pos": str(PSPlayer.POSITION_NAMES.get(record.position, "?")),
 			"name": record.name,
+			"label": record.injury_display_label(),
 			"days": record.injury_days,
 		})
 	table.set_rows(rows)

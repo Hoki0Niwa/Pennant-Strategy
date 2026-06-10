@@ -311,6 +311,8 @@ func _format_detail(record: PSPlayerSeasonRecord) -> String:
 	lines.append(_contract_line(record))
 	lines.append(_evaluation_line(record))
 	lines.append("疲労 %d  怪我 %d日  評価 %d" % [record.fatigue, record.injury_days, PlayerValueEvaluator.overall_score(record)])
+	if record.injury_days > 0:
+		lines.append("故障: %s" % record.injury_display_label())
 	lines.append("")
 
 	lines.append("== 能力 ==")

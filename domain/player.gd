@@ -162,6 +162,9 @@ var raw_abilities: Dictionary = {}
 var arsenal: Array = []
 var fatigue: int
 var injury_days: int
+# 怪我の種類(部位/病名ラベル)と重症度ティア(0=軽傷..3=重大手術)。injury_days>0 のとき有効。PSInjuryModel が設定。
+var injury_type: String = ""
+var injury_severity: int = 0
 # File 1 §4.1, §6.5: 当日状態 + 打順制約
 var condition: int = 0
 var fixed_slot: int = 0
@@ -204,6 +207,8 @@ func apply_dict(data: Dictionary) -> void:
 	arsenal = (data.get("arsenal", []) as Array).duplicate(true)
 	fatigue = int(data.get("fatigue", 0))
 	injury_days = int(data.get("injury_days", 0))
+	injury_type = str(data.get("injury_type", ""))
+	injury_severity = int(data.get("injury_severity", 0))
 	condition = clampi(int(data.get("condition", 0)), CONDITION_MIN, CONDITION_MAX)
 	fixed_slot = int(data.get("fixed_slot", 0))
 	allowed_slots = _normalize_slot_array(data.get("allowed_slots", []))
@@ -330,6 +335,8 @@ func to_dict() -> Dictionary:
 		"arsenal": arsenal.duplicate(true),
 		"fatigue": fatigue,
 		"injury_days": injury_days,
+		"injury_type": injury_type,
+		"injury_severity": injury_severity,
 		"condition": condition,
 		"fixed_slot": fixed_slot,
 		"allowed_slots": allowed_slots.duplicate(),
