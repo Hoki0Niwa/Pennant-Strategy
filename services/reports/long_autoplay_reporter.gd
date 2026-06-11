@@ -6,6 +6,7 @@ const DraftService = preload("res://services/season/draft_service.gd")
 const OffseasonService = preload("res://services/season/offseason_service.gd")
 const FaMarketService = preload("res://services/season/fa_market_service.gd")
 const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
+const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 
@@ -407,13 +408,18 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, season)
 	GameDb.rebuild_player_indices()
 
-	# R4 調整: 順番は 戦力外 → ドラフト → FA → 外国人 → 成長。
+	# R4/R5 調整: 順番は 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長。
 	# 戦力外: 先に外国人 (別基準: 4枠 + 能力バー) を確定し、その後日本人を外国人込み総数 60 まで詰める
 	# (残す外国人が多いほど日本人を多く切る)。
 	var foreign_release_result: Dictionary = OffseasonService.process_foreign_releases(GameDb.players, GameDb.teams, season)
 	GameDb.rebuild_player_indices()
 	var release_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, 0, season)
 	GameDb.rebuild_player_indices()
+	var merged_release_result: Dictionary = release_result.duplicate(true)
+	var merged_released: Array = []
+	merged_released.append_array(release_result.get("released", []) as Array)
+	merged_released.append_array(foreign_release_result.get("released", []) as Array)
+	merged_release_result["released"] = merged_released
 
 	# ドラフト (日本人 66 枠まで 6〜7 人補充)。
 	var draft_state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, season, selected_team_id)
@@ -424,7 +430,13 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		draft_result = DraftService.finalize_draft(draft_state, GameDb.players)
 	GameDb.rebuild_player_indices()
 
-	# FA市場 (ドラフト後)。team_id が動くので再構築。
+	# 戦力外獲得 (ドラフト後FA前)。team_id が動くので再構築。
+	var released_market_result: Dictionary = ReleasedMarketService.process_released_market(
+		GameDb.players, GameDb.teams, season, merged_release_result, 0
+	)
+	GameDb.rebuild_player_indices()
+
+	# FA市場 (戦力外獲得後)。team_id が動くので再構築。
 	var fa_result: Dictionary = FaMarketService.process_fa_market(GameDb.players, GameDb.teams, season, 0)
 	GameDb.rebuild_player_indices()
 
@@ -453,6 +465,8 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"over_budget_count": int(contract_result.get("over_budget_count", 0)),
 		"fa_moved_count": int(fa_result.get("moved_count", 0)),
 		"fa_declared_count": int(fa_result.get("declared_count", 0)),
+		"released_signed_count": int(released_market_result.get("signed_count", 0)),
+		"released_candidates_count": int(released_market_result.get("candidates_count", 0)),
 		"foreign_signed_count": int(foreign_result.get("signed_count", 0)),
 		"foreign_released_count": int(foreign_release_result.get("released_count", 0)),
 	}

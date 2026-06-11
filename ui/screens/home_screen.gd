@@ -8,7 +8,7 @@ const TeamFinance = preload("res://services/season/team_finance.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 
 # オフシーズン処理の総ステップ数 (offseason_screen.gd の TOTAL_STEPS と一致させる)
-const OFFSEASON_TOTAL_STEPS: int = 7
+const OFFSEASON_TOTAL_STEPS: int = 8
 
 const LEAGUES: Array = [
 	{"key": "central", "label": "第1リーグ"},

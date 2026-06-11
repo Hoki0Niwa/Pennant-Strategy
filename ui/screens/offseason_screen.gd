@@ -5,9 +5,10 @@ const FaMarketService = preload("res://services/season/fa_market_service.gd")
 const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
 const Offseason = preload("res://services/season/offseason_service.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
+const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const TeamFinance = preload("res://services/season/team_finance.gd")
-const TOTAL_STEPS: int = 7
+const TOTAL_STEPS: int = 8
 
 # 戦力外通告リストの列。先頭は選択チェック表示。
 const RELEASE_COLUMNS: Array = [
@@ -113,6 +114,27 @@ const FA_CANDIDATE_COLUMNS: Array = [
 	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
 ]
 
+const RELEASED_MOVE_COLUMNS: Array = [
+	{"title": "元", "key": "from", "width": 64, "type": "string", "format": "string"},
+	{"title": "→", "key": "arrow", "width": 28, "type": "string", "format": "string"},
+	{"title": "先", "key": "to", "width": 64, "type": "string", "format": "string"},
+	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
+	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
+]
+
+const RELEASED_CANDIDATE_COLUMNS: Array = [
+	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "元", "key": "from", "width": 64, "type": "string", "format": "string"},
+	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
+	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
+	{"title": "総合", "key": "value", "width": 56, "type": "number", "format": "int"},
+	{"title": "WAR", "key": "war", "width": 56, "type": "number", "format": "float1"},
+	{"title": "需要", "key": "need", "width": 56, "type": "number", "format": "float1"},
+	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
+]
+
 # R4 Step3: 外国人補強テーブルの列定義。
 const FOREIGN_COLUMNS: Array = [
 	{"title": "獲得", "key": "to", "width": 64, "type": "string", "format": "string"},
@@ -207,7 +229,19 @@ var draft_auto_all_button: Button
 var selected_draft_candidate_id: int = 0
 var _suppress_candidate_select: bool = false
 
-# step 4 FA widgets
+# step 4 released market widgets
+var released_market_panel: VBoxContainer
+var released_market_status_label: Label
+var released_market_candidate_list: Tree
+var released_market_detail_text: RichTextLabel
+var released_market_submit_button: Button
+var released_market_skip_button: Button
+var released_market_auto_button: Button
+var released_market_auto_all_button: Button
+var selected_released_candidate_id: int = 0
+var _suppress_released_select: bool = false
+
+# step 5 FA widgets
 var fa_panel: VBoxContainer
 var fa_status_label: Label
 var fa_candidate_list: Tree
@@ -219,7 +253,7 @@ var fa_auto_all_button: Button
 var selected_fa_candidate_id: int = 0
 var _suppress_fa_select: bool = false
 
-# step 5 foreign widgets
+# step 6 foreign widgets
 var foreign_panel: VBoxContainer
 var foreign_status_label: Label
 var foreign_candidate_list: Tree
@@ -277,6 +311,9 @@ func _build() -> void:
 
 	draft_panel = _build_draft_panel()
 	root.add_child(draft_panel)
+
+	released_market_panel = _build_released_market_panel()
+	root.add_child(released_market_panel)
 
 	fa_panel = _build_fa_panel()
 	root.add_child(fa_panel)
@@ -476,6 +513,88 @@ func _build_draft_panel() -> VBoxContainer:
 	return panel
 
 
+func _build_released_market_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_theme_constant_override("separation", 8)
+
+	var control_row: HBoxContainer = HBoxContainer.new()
+	control_row.add_theme_constant_override("separation", 8)
+	panel.add_child(control_row)
+
+	released_market_status_label = Label.new()
+	released_market_status_label.add_theme_font_size_override("font_size", 16)
+	released_market_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	control_row.add_child(released_market_status_label)
+
+	released_market_submit_button = Button.new()
+	released_market_submit_button.text = "獲得する"
+	released_market_submit_button.custom_minimum_size = Vector2(110, 32)
+	released_market_submit_button.pressed.connect(_on_released_submit_pressed)
+	control_row.add_child(released_market_submit_button)
+
+	released_market_skip_button = Button.new()
+	released_market_skip_button.text = "見送る"
+	released_market_skip_button.custom_minimum_size = Vector2(100, 32)
+	released_market_skip_button.pressed.connect(_on_released_skip_pressed)
+	control_row.add_child(released_market_skip_button)
+
+	released_market_auto_button = Button.new()
+	released_market_auto_button.text = "この判断を自動"
+	released_market_auto_button.custom_minimum_size = Vector2(140, 32)
+	released_market_auto_button.pressed.connect(_on_released_auto_pressed)
+	control_row.add_child(released_market_auto_button)
+
+	released_market_auto_all_button = Button.new()
+	released_market_auto_all_button.text = "残りを自動進行"
+	released_market_auto_all_button.custom_minimum_size = Vector2(150, 32)
+	released_market_auto_all_button.pressed.connect(_on_released_auto_all_pressed)
+	control_row.add_child(released_market_auto_all_button)
+
+	var body_row: HBoxContainer = HBoxContainer.new()
+	body_row.add_theme_constant_override("separation", 8)
+	body_row.custom_minimum_size = Vector2(0, 460)
+	body_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_child(body_row)
+
+	var list_box: VBoxContainer = VBoxContainer.new()
+	list_box.custom_minimum_size = Vector2(760, 0)
+	list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_row.add_child(list_box)
+
+	var title: Label = Label.new()
+	title.text = "自由契約候補"
+	title.add_theme_font_size_override("font_size", 16)
+	list_box.add_child(title)
+
+	released_market_candidate_list = SortableTable.new()
+	released_market_candidate_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	list_box.add_child(released_market_candidate_list)
+	released_market_candidate_list.configure(RELEASED_CANDIDATE_COLUMNS)
+	released_market_candidate_list.item_selected.connect(_on_released_candidate_selected)
+
+	var detail_box: VBoxContainer = VBoxContainer.new()
+	detail_box.custom_minimum_size = Vector2(460, 0)
+	detail_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_row.add_child(detail_box)
+
+	var detail_title: Label = Label.new()
+	detail_title.text = "候補詳細"
+	detail_title.add_theme_font_size_override("font_size", 16)
+	detail_box.add_child(detail_title)
+
+	released_market_detail_text = RichTextLabel.new()
+	released_market_detail_text.bbcode_enabled = false
+	released_market_detail_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	released_market_detail_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_box.add_child(released_market_detail_text)
+	return panel
+
+
 func _build_fa_panel() -> VBoxContainer:
 	var panel: VBoxContainer = VBoxContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -648,6 +767,7 @@ func _refresh() -> void:
 		status_label.text = "オフシーズンが開始されていません"
 		release_panel.visible = false
 		draft_panel.visible = false
+		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = false
 		_clear_content()
@@ -659,6 +779,7 @@ func _refresh() -> void:
 		# Release editor mode (step 1 = 戦力外通告エディタ)
 		release_panel.visible = true
 		draft_panel.visible = false
+		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = false
 		_clear_content()
@@ -672,6 +793,7 @@ func _refresh() -> void:
 	if step == 3 and not AppState.draft_state.is_empty() and not bool(AppState.draft_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = true
+		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = false
 		_clear_content()
@@ -681,9 +803,23 @@ func _refresh() -> void:
 		_populate_draft_panel()
 		return
 
-	if step == 4 and not AppState.fa_state.is_empty() and not bool(AppState.fa_state.get("complete", false)):
+	if step == 4 and not AppState.released_market_state.is_empty() and not bool(AppState.released_market_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = false
+		released_market_panel.visible = true
+		fa_panel.visible = false
+		foreign_panel.visible = false
+		_clear_content()
+		next_button.disabled = true
+		finalize_button.disabled = true
+		status_label.text = "戦力外獲得"
+		_populate_released_market_panel()
+		return
+
+	if step == 5 and not AppState.fa_state.is_empty() and not bool(AppState.fa_state.get("complete", false)):
+		release_panel.visible = false
+		draft_panel.visible = false
+		released_market_panel.visible = false
 		fa_panel.visible = true
 		foreign_panel.visible = false
 		_clear_content()
@@ -693,9 +829,10 @@ func _refresh() -> void:
 		_populate_fa_panel()
 		return
 
-	if step == 5 and not AppState.foreign_state.is_empty() and not bool(AppState.foreign_state.get("complete", false)):
+	if step == 6 and not AppState.foreign_state.is_empty() and not bool(AppState.foreign_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = false
+		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = true
 		_clear_content()
@@ -707,6 +844,7 @@ func _refresh() -> void:
 
 	release_panel.visible = false
 	draft_panel.visible = false
+	released_market_panel.visible = false
 	fa_panel.visible = false
 	foreign_panel.visible = false
 	next_button.disabled = step >= TOTAL_STEPS
@@ -770,12 +908,14 @@ func _render_step_content(step: int, result: Dictionary) -> void:
 			else:
 				_render_rookies(result)
 		4:
-			_render_fa_market(result)
+			_render_released_market(result)
 		5:
-			_render_foreign_market(result)
+			_render_fa_market(result)
 		6:
-			_render_growth(result)
+			_render_foreign_market(result)
 		7:
+			_render_growth(result)
+		8:
 			_render_contract_update(result)
 		_:
 			pass
@@ -843,6 +983,32 @@ func _render_rookies(result: Dictionary) -> void:
 			"overall": int(entry.get("overall", 0)),
 		})
 	_add_content_table(ROOKIE_COLUMNS, rows, 360)
+
+
+func _render_released_market(result: Dictionary) -> void:
+	var candidates_count: int = int(result.get("candidates_count", 0))
+	var signed_count: int = int(result.get("signed_count", 0))
+	var remaining_count: int = int(result.get("remaining_count", 0))
+	_add_content_heading("戦力外獲得: 候補 %d人 / 獲得 %d人 / 未獲得 %d人" % [
+		candidates_count, signed_count, remaining_count,
+	], 18)
+	var signings: Array = result.get("signings", []) as Array
+	if signings.is_empty():
+		_set_content_message_after("今オフは戦力外からの獲得がありませんでした。")
+		return
+	var rows: Array = []
+	for s_row in signings:
+		var s: Dictionary = s_row as Dictionary
+		rows.append({
+			"from": _team_short(int(s.get("from_team", 0))),
+			"arrow": "→",
+			"to": _team_short(int(s.get("to_team", 0))),
+			"name": str(s.get("name", "")),
+			"age": int(s.get("age", 0)),
+			"pos": _position_name(int(s.get("position", 0))),
+			"salary": int(s.get("salary", 0)),
+		})
+	_add_content_table(RELEASED_MOVE_COLUMNS, rows, 360)
 
 
 # R4 Step2: FA市場ステップ (自由契約宣言 + 移籍)。
@@ -1380,6 +1546,116 @@ func _format_lottery_log(log: Dictionary) -> String:
 # FA / 外国人パネル
 # ---------------------------------------------------------------------------
 
+func _populate_released_market_panel() -> void:
+	var state: Dictionary = AppState.released_market_state
+	var candidates: Array = ReleasedMarketService.available_user_candidates(state, GameDb.players, GameDb.teams)
+	var signings: Array = state.get("signings", []) as Array
+	var user_signings: int = 0
+	for row in signings:
+		if int((row as Dictionary).get("to_team", 0)) == AppState.selected_team_id:
+			user_signings += 1
+	released_market_status_label.text = "戦力外獲得: 候補%d人 / 自軍獲得%d人 / 残り候補%d人" % [
+		(state.get("candidates", []) as Array).size(),
+		user_signings,
+		candidates.size(),
+	]
+	var rows: Array = []
+	for candidate_row in candidates:
+		var c: Dictionary = candidate_row as Dictionary
+		rows.append({
+			"name": str(c.get("name", "")),
+			"from": _team_short(int(c.get("from_team", 0))),
+			"age": int(c.get("age", 0)),
+			"pos": _position_name(int(c.get("position", 0))),
+			"value": int(c.get("value", 0)),
+			"war": float(c.get("war", 0.0)),
+			"need": float(c.get("need", 0.0)),
+			"salary": int(c.get("salary", 0)),
+			"__meta": int(c.get("player_id", 0)),
+		})
+	_suppress_released_select = true
+	released_market_candidate_list.set_rows(rows)
+	if selected_released_candidate_id > 0 and _released_candidate_by_id(candidates, selected_released_candidate_id).is_empty():
+		selected_released_candidate_id = 0
+	if selected_released_candidate_id <= 0:
+		var first_meta: Variant = released_market_candidate_list.get_first_meta()
+		if first_meta != null:
+			selected_released_candidate_id = int(first_meta)
+	released_market_candidate_list.select_meta(selected_released_candidate_id)
+	_suppress_released_select = false
+	released_market_detail_text.text = _format_released_details(_released_candidate_by_id(candidates, selected_released_candidate_id))
+	var has_candidate: bool = selected_released_candidate_id > 0
+	released_market_submit_button.disabled = not has_candidate
+	released_market_skip_button.disabled = not has_candidate
+	released_market_auto_button.disabled = candidates.is_empty()
+
+
+func _released_candidate_by_id(candidates: Array, player_id: int) -> Dictionary:
+	for row in candidates:
+		var c: Dictionary = row as Dictionary
+		if int(c.get("player_id", 0)) == player_id:
+			return c
+	return {}
+
+
+func _format_released_details(candidate: Dictionary) -> String:
+	if candidate.is_empty():
+		return "自由契約候補を選択してください。"
+	var team_id: int = AppState.selected_team_id
+	var active_roster: int = _active_roster_count(team_id)
+	var remaining_roster: int = max(0, ReleasedMarketService.ROSTER_LIMIT - active_roster)
+	var salary: int = int(candidate.get("salary", 0))
+	var team: PSTeam = GameDb.get_team(team_id)
+	var budget_room: int = 0
+	if team != null:
+		budget_room = team.funds - TeamFinance.team_payroll(GameDb.players, team_id) - salary
+	var lines: Array = []
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
+	lines.append("%d歳  元%s  年俸%d万" % [
+		int(candidate.get("age", 0)),
+		_team_short(int(candidate.get("from_team", 0))),
+		salary,
+	])
+	lines.append("総合 %d  WAR %+0.1f  自軍需要 %+0.1f" % [
+		int(candidate.get("value", 0)),
+		float(candidate.get("war", 0.0)),
+		float(candidate.get("need", 0.0)),
+	])
+	lines.append("枠: 支配下 %d/%d (残り%d)" % [
+		active_roster,
+		ReleasedMarketService.ROSTER_LIMIT,
+		remaining_roster,
+	])
+	if team != null:
+		lines.append("予算: 契約後余力 %+d万" % budget_room)
+	if int(candidate.get("plate_appearances", 0)) > 0:
+		lines.append("今季: %d試合 %d打席" % [int(candidate.get("games", 0)), int(candidate.get("plate_appearances", 0))])
+	elif int(candidate.get("starts", 0)) > 0 or int(candidate.get("relief_appearances", 0)) > 0:
+		lines.append("今季: 登板%d 先発%d 救援%d" % [
+			int(candidate.get("games", 0)),
+			int(candidate.get("starts", 0)),
+			int(candidate.get("relief_appearances", 0)),
+		])
+	if team != null and budget_room < 0:
+		lines.append("")
+		lines.append("予算超過見込みです。CPU評価では獲得優先度が下がります。")
+	if not bool(candidate.get("can_sign", true)):
+		lines.append("")
+		lines.append("支配下枠が不足しているため獲得できません。")
+	return "\n".join(lines)
+
+
+func _on_released_candidate_selected() -> void:
+	if _suppress_released_select:
+		return
+	var meta: Variant = released_market_candidate_list.get_selected_meta()
+	if meta == null:
+		return
+	selected_released_candidate_id = int(meta)
+	var candidates: Array = ReleasedMarketService.available_user_candidates(AppState.released_market_state, GameDb.players, GameDb.teams)
+	released_market_detail_text.text = _format_released_details(_released_candidate_by_id(candidates, selected_released_candidate_id))
+
+
 func _populate_fa_panel() -> void:
 	var state: Dictionary = AppState.fa_state
 	var candidates: Array = FaMarketService.available_user_candidates(state, GameDb.players, GameDb.teams)
@@ -1836,6 +2112,56 @@ func _on_draft_auto_all_pressed() -> void:
 		status_label.text = str(result.get("message", "自動進行に失敗しました。"))
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_released_submit_pressed() -> void:
+	if selected_released_candidate_id <= 0:
+		status_label.text = "自由契約候補を選択してください。"
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	var result: Dictionary = AppState.submit_released_candidate(selected_released_candidate_id)
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "戦力外獲得に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_released_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_released_skip_pressed() -> void:
+	if selected_released_candidate_id <= 0:
+		return
+	var result: Dictionary = AppState.skip_released_candidate(selected_released_candidate_id)
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "自由契約候補の見送りに失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_released_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_released_auto_pressed() -> void:
+	var result: Dictionary = AppState.auto_released_user_pick()
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "戦力外獲得の自動判断に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_released_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_released_auto_all_pressed() -> void:
+	var result: Dictionary = AppState.complete_released_market_automatically()
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "戦力外獲得市場の自動進行に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_released_candidate_id = 0
 	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	_refresh()
 

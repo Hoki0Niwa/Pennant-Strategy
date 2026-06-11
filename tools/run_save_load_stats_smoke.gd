@@ -24,6 +24,7 @@ func _ready() -> void:
 	AppState.offseason_step = 0
 	AppState.offseason_results = {}
 	AppState.draft_state = {}
+	AppState.released_market_state = {}
 	AppState.fa_state = {}
 	AppState.foreign_state = {}
 	AppState.offseason_active = false
@@ -202,6 +203,7 @@ func _app_snapshot() -> Dictionary:
 		"offseason_step": AppState.offseason_step,
 		"offseason_results": AppState.offseason_results.duplicate(true),
 		"draft_state": AppState.draft_state.duplicate(true),
+		"released_market_state": AppState.released_market_state.duplicate(true),
 		"fa_state": AppState.fa_state.duplicate(true),
 		"foreign_state": AppState.foreign_state.duplicate(true),
 		"offseason_active": AppState.offseason_active,
@@ -225,6 +227,7 @@ func _restore_app_snapshot(snapshot: Dictionary) -> void:
 	AppState.offseason_step = int(snapshot.get("offseason_step", 0))
 	AppState.offseason_results = (snapshot.get("offseason_results", {}) as Dictionary).duplicate(true)
 	AppState.draft_state = (snapshot.get("draft_state", {}) as Dictionary).duplicate(true)
+	AppState.released_market_state = (snapshot.get("released_market_state", {}) as Dictionary).duplicate(true)
 	AppState.fa_state = (snapshot.get("fa_state", {}) as Dictionary).duplicate(true)
 	AppState.foreign_state = (snapshot.get("foreign_state", {}) as Dictionary).duplicate(true)
 	AppState.offseason_active = bool(snapshot.get("offseason_active", false))
@@ -251,6 +254,7 @@ func _clear_app_state_for_reload() -> void:
 	AppState.offseason_step = 0
 	AppState.offseason_results = {}
 	AppState.draft_state = {}
+	AppState.released_market_state = {}
 	AppState.fa_state = {}
 	AppState.foreign_state = {}
 	AppState.offseason_active = false
