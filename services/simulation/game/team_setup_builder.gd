@@ -12,7 +12,7 @@ const MIN_ACTIVE_CATCHERS: int = 2
 
 
 static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
-	var prepared: Dictionary = prepare_team_setup(season, team_id)
+	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled)
 	if not bool(prepared.get("ok", false)):
 		return prepared
 
@@ -58,7 +58,7 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -
 
 
 static func preview_lineup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
-	var prepared: Dictionary = prepare_team_setup(season, team_id)
+	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled)
 	if not bool(prepared.get("ok", false)):
 		return prepared
 
@@ -113,7 +113,7 @@ static func resolve_rotation_order(season: PSSeason, team_id: int) -> Array:
 	return PSRotationPlanner.resolve_rotation_order_from_saved(season.get_rotation(team_id), starter_pitchers)
 
 
-static func preview_active_roster(season: PSSeason, team_id: int) -> Dictionary:
+static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bool = true) -> Dictionary:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	if all_records.is_empty():
 		return {"ok": false, "message": "%sの選手データがありません" % GameSimulator._team_name(team_id)}
@@ -211,7 +211,7 @@ static func preview_active_roster(season: PSSeason, team_id: int) -> Dictionary:
 			"summary": summarize_active_roster_ids(player_ids, all_records),
 		}
 
-	if not _records_can_field_game(season, team_id, selected):
+	if not _records_can_field_game(season, team_id, selected, dh_enabled):
 		return {
 			"ok": false,
 			"message": "%sは健康な支配下選手だけでは試合可能な1軍を組めません" % GameSimulator._team_name(team_id),
@@ -379,7 +379,11 @@ static func _record_ids(records: Array) -> Array:
 	return ids
 
 
-static func _records_can_field_game(season: PSSeason, team_id: int, records: Array) -> bool:
+static func _minimum_fielders_for_game(dh_enabled: bool) -> int:
+	return GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size() + (1 if dh_enabled else 0)
+
+
+static func _records_can_field_game(season: PSSeason, team_id: int, records: Array, dh_enabled: bool = true) -> bool:
 	var pitchers: Array = []
 	var fielders: Array = []
 	for record_row in records:
@@ -393,8 +397,9 @@ static func _records_can_field_game(season: PSSeason, team_id: int, records: Arr
 	var starter_pitchers: Array = eligible_or_fallback(starter_pitcher_candidates(pitchers), 1)
 	if starter_pitchers.is_empty():
 		return false
-	var available_fielders: Array = eligible_or_fallback(fielders, GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size())
-	if available_fielders.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
+	var required_fielders: int = _minimum_fielders_for_game(dh_enabled)
+	var available_fielders: Array = eligible_or_fallback(fielders, required_fielders)
+	if available_fielders.size() < required_fielders:
 		return false
 	var profile: PSDefenseAlignmentProfile = DefenseAlignmentProfile.load_for_team(team_id)
 	var usage_settings: Dictionary = season.get_fielder_usage(team_id) if season != null else {}
@@ -405,7 +410,7 @@ static func _records_can_field_game(season: PSSeason, team_id: int, records: Arr
 	return slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size()
 
 
-static func prepare_team_setup(season: PSSeason, team_id: int) -> Dictionary:
+static func prepare_team_setup(season: PSSeason, team_id: int, dh_enabled: bool = true) -> Dictionary:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	var active_records: Array = filter_by_active_roster(season, team_id, all_records)
 	var active_needs_repair: bool = active_records.is_empty()
@@ -413,12 +418,12 @@ static func prepare_team_setup(season: PSSeason, team_id: int) -> Dictionary:
 		var required_catchers: int = _required_active_catcher_count(all_records)
 		active_needs_repair = _healthy_catcher_count_in_records(active_records) < required_catchers
 	if not active_needs_repair:
-		active_needs_repair = not _records_can_field_game(season, team_id, active_records)
+		active_needs_repair = not _records_can_field_game(season, team_id, active_records, dh_enabled)
 	if active_needs_repair:
-		var preview: Dictionary = preview_active_roster(season, team_id)
+		var preview: Dictionary = preview_active_roster(season, team_id, dh_enabled)
 		if bool(preview.get("ok", false)):
 			var preview_records: Array = _records_for_ids(all_records, preview.get("player_ids", []) as Array)
-			if not preview_records.is_empty() and _records_can_field_game(season, team_id, preview_records):
+			if not preview_records.is_empty() and _records_can_field_game(season, team_id, preview_records, dh_enabled):
 				active_records = preview_records
 				season.set_active_roster(team_id, {"player_ids": _record_ids(active_records)})
 			else:
@@ -436,9 +441,10 @@ static func prepare_team_setup(season: PSSeason, team_id: int) -> Dictionary:
 
 	var starter_pitchers: Array = starter_pitcher_candidates(pitchers)
 	starter_pitchers = eligible_or_fallback(starter_pitchers, 1)
-	var available_fielders: Array = eligible_or_fallback(fielders, GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size())
+	var required_fielders: int = _minimum_fielders_for_game(dh_enabled)
+	var available_fielders: Array = eligible_or_fallback(fielders, required_fielders)
 
-	if (starter_pitchers.is_empty() or available_fielders.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size()) and not active_records.is_empty():
+	if (starter_pitchers.is_empty() or available_fielders.size() < required_fielders) and not active_records.is_empty():
 		pitchers = []
 		fielders = []
 		for record_row in all_records:
@@ -449,12 +455,12 @@ static func prepare_team_setup(season: PSSeason, team_id: int) -> Dictionary:
 				fielders.append(record)
 		starter_pitchers = starter_pitcher_candidates(pitchers)
 		starter_pitchers = eligible_or_fallback(starter_pitchers, 1)
-		available_fielders = eligible_or_fallback(fielders, GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size())
+		available_fielders = eligible_or_fallback(fielders, required_fielders)
 
 	if starter_pitchers.is_empty():
 		return {"ok": false, "message": "%sに先発適正が中継適正を上回る投手がいません" % GameSimulator._team_name(team_id)}
-	if available_fielders.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
-		return {"ok": false, "message": "%sの守備要員が%d人未満です" % [GameSimulator._team_name(team_id), GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size()]}
+	if available_fielders.size() < required_fielders:
+		return {"ok": false, "message": "%sの野手が%d人未満です" % [GameSimulator._team_name(team_id), required_fielders]}
 
 	starter_pitchers.sort_custom(func(a, b) -> bool:
 		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
@@ -499,6 +505,8 @@ static func build_setup_from_auto(
 	var batting_order: Array = records_from_fielding_slots(fielding_slots)
 	if dh_enabled:
 		var designated_hitter: PSPlayerSeasonRecord = select_designated_hitter(available_fielders, fielding_slots, rested_fielder_ids)
+		if designated_hitter == null and not rested_fielder_ids.is_empty():
+			designated_hitter = select_designated_hitter(available_fielders, fielding_slots)
 		if designated_hitter == null:
 			return {"ok": false, "message": "%sにDH候補がいません" % GameSimulator._team_name(team_id)}
 		batting_order.append(designated_hitter)

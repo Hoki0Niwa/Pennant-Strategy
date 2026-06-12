@@ -96,13 +96,46 @@ func get_active_roster(team_id: int) -> Dictionary:
 
 
 func set_active_roster(team_id: int, roster: Dictionary) -> void:
+	accrue_active_roster_days(team_id, current_day)
+	var previous: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	var stored: Dictionary = roster.duplicate(true)
+	if not stored.has("fa_active_days"):
+		stored["fa_active_days"] = (previous.get("fa_active_days", {}) as Dictionary).duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_active_rosters[str(team_id)] = stored
 
 
 func clear_active_roster(team_id: int) -> void:
+	accrue_active_roster_days(team_id, current_day)
 	team_active_rosters.erase(str(team_id))
+
+
+func accrue_active_roster_days(team_id: int, to_day: int) -> void:
+	var key: String = str(team_id)
+	var roster: Dictionary = team_active_rosters.get(key, {}) as Dictionary
+	if roster.is_empty():
+		return
+	var from_day: int = int(roster.get("updated_at_day", 1))
+	var elapsed_days: int = max(0, to_day - from_day)
+	if elapsed_days > 0:
+		var days_by_player: Dictionary = (roster.get("fa_active_days", {}) as Dictionary).duplicate(true)
+		for id_value in roster.get("player_ids", []) as Array:
+			var player_key: String = str(int(id_value))
+			days_by_player[player_key] = int(days_by_player.get(player_key, 0)) + elapsed_days
+		roster["fa_active_days"] = days_by_player
+	roster["updated_at_day"] = to_day
+	team_active_rosters[key] = roster
+
+
+func accrue_all_active_roster_days(team_ids: Array, to_day: int) -> void:
+	for team_id_value in team_ids:
+		accrue_active_roster_days(int(team_id_value), to_day)
+
+
+func get_active_roster_days(team_id: int, player_id: int) -> int:
+	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	var days_by_player: Dictionary = roster.get("fa_active_days", {}) as Dictionary
+	return int(days_by_player.get(str(player_id), 0))
 
 
 # --- 一二軍 自動入替 用ヘルパ ------------------------------------------------

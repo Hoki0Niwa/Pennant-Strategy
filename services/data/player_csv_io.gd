@@ -37,6 +37,48 @@ const TEAM_META_ORDER: Array = [
 
 # ---- Players ----
 
+static func normalize_initial_seed_players(player_dicts: Array, initial_year: int) -> Array:
+	var rows: Array = []
+	for row_value in player_dicts:
+		rows.append(normalize_initial_seed_player(row_value as Dictionary, initial_year))
+	return rows
+
+
+static func normalize_initial_seed_player(row: Dictionary, initial_year: int) -> Dictionary:
+	var out: Dictionary = row.duplicate(true)
+	var source: Dictionary = (out.get("source_data", {}) as Dictionary).duplicate(true)
+	var fa_years: int = int(out.get("fa_eligible_years", 0))
+	if fa_years <= 0:
+		fa_years = PSPlayer.default_fa_eligible_years(
+			bool(out.get("foreign_player", false)),
+			int(out.get("age", 18)),
+			int(out.get("years", 1)),
+			source
+		)
+	var required_days: int = maxi(1, fa_years) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	var service_days: int = maxi(0, int(source.get("fa_nissuu", int(out.get("years", 0)) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR)))
+	var is_fa: bool = str(out.get("contract_status", "通常")) == "FA可能" or service_days >= required_days
+
+	if is_fa:
+		var inferred_pass_count: int = int(floor(float(maxi(0, service_days - required_days)) / float(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)))
+		var pass_count: int = maxi(0, int(source.get("fa_pass_count", inferred_pass_count)))
+		source["fa_pass_count"] = pass_count
+		var eligible_year: int = int(source.get("fa_eligible_year", 0))
+		if eligible_year <= 0 or eligible_year > initial_year:
+			source["fa_eligible_year"] = initial_year - pass_count
+	elif int(source.get("fa_eligible_year", 0)) > initial_year:
+		source.erase("fa_eligible_year")
+		source.erase("fa_pass_count")
+
+	if int(source.get("fa_signed_year", 0)) > initial_year:
+		source.erase("fa_signed_year")
+		source.erase("fa_contract_salary")
+	if int(source.get("fa_days_accrued_year", 0)) > initial_year:
+		source.erase("fa_days_accrued_year")
+		source.erase("fa_active_days_last_season")
+	out["source_data"] = source
+	return out
+
 static func write_players(path: String, player_dicts: Array) -> bool:
 	var flat_keys: Dictionary = _collect_flat_keys(player_dicts)
 	var columns: Array = _player_columns(flat_keys)

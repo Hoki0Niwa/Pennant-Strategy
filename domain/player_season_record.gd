@@ -25,7 +25,7 @@ var hometown: String
 var registered_roster: String
 var contract_status: String
 var foreign_player: bool
-# R4 Step1: FA権を得る在籍年数 (8=高卒 / 7=その他) のスナップショット。
+# R4 Step1: FA権を得る1軍登録年数相当 (8=高卒 / 7=その他) のスナップショット。
 var fa_eligible_years: int = 0
 # Phase 2 §10: 累積疲労 (post_game_fatigue_gain で球数比例的に加算、daily_recovery_amount で day-off に減衰)。
 # 0=元気, 200=飽和。PSFatigueCalculator は当試合の outing pitches を別途参照する。
@@ -261,14 +261,25 @@ func to_dict() -> Dictionary:
 	}
 
 
-# R4 Step1: FA権取得までの残り在籍年数 (0 = 取得済み = 保有権消滅)。
+# R4 Step1: FA権取得までの残り年数相当 (0 = 取得済み = 保有権消滅)。
 func fa_remaining_years() -> int:
-	return maxi(0, fa_eligible_years - years)
+	var remaining_days: int = maxi(0, fa_service_days_required() - fa_service_days())
+	return int(ceil(float(remaining_days) / float(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)))
 
 
-# 在籍年数が閾値に達し、自由移籍可能 (FA権取得済み) か。
+# 1軍登録日数が閾値に達し、自由移籍可能 (FA権取得済み) か。
 func is_fa_eligible() -> bool:
-	return years >= fa_eligible_years
+	return fa_service_days() >= fa_service_days_required()
+
+
+func fa_service_days_required() -> int:
+	return maxi(1, fa_eligible_years) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+
+
+func fa_service_days() -> int:
+	if source_data.has("fa_nissuu"):
+		return maxi(0, int(source_data.get("fa_nissuu", 0)))
+	return maxi(0, years) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
 
 
 # File 2 §5: z-score 内部能力値の読み取り（リーグ平均=0.0）

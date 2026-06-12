@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://c0postseasonstatssmoke"]
+
+[ext_resource type="Script" path="res://tools/run_postseason_stats_smoke.gd" id="1_smoke"]
+
+[node name="RunPostseasonStatsSmoke" type="Node"]
+script = ExtResource("1_smoke")

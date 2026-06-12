@@ -17,6 +17,25 @@ const GAME_COLUMNS: Array = [
 	{"title": "ホーム", "key": "home", "width": 72, "type": "string", "format": "string"},
 	{"title": "", "key": "note", "width": 32, "type": "string", "format": "string"},
 ]
+const BATTER_COLUMNS: Array = [
+	{"title": "選手", "key": "name", "width": 110, "type": "string", "format": "string"},
+	{"title": "球団", "key": "team", "width": 64, "type": "string", "format": "string"},
+	{"title": "PA", "key": "pa", "width": 44, "type": "number", "format": "int", "align": "right"},
+	{"title": "H", "key": "hits", "width": 40, "type": "number", "format": "int", "align": "right"},
+	{"title": "HR", "key": "hr", "width": 44, "type": "number", "format": "int", "align": "right"},
+	{"title": "打点", "key": "rbi", "width": 48, "type": "number", "format": "int", "align": "right"},
+	{"title": "打率", "key": "avg", "width": 58, "type": "number", "format": "rate", "align": "right"},
+]
+const PITCHER_COLUMNS: Array = [
+	{"title": "選手", "key": "name", "width": 110, "type": "string", "format": "string"},
+	{"title": "球団", "key": "team", "width": 64, "type": "string", "format": "string"},
+	{"title": "IP", "key": "ip", "sort_key": "outs", "width": 52, "type": "number", "format": "string", "align": "right"},
+	{"title": "K", "key": "k", "width": 40, "type": "number", "format": "int", "align": "right"},
+	{"title": "ERA", "key": "era", "width": 58, "type": "number", "format": "float2", "align": "right"},
+	{"title": "W", "key": "wins", "width": 36, "type": "number", "format": "int", "align": "right"},
+	{"title": "L", "key": "losses", "width": 36, "type": "number", "format": "int", "align": "right"},
+	{"title": "S", "key": "saves", "width": 36, "type": "number", "format": "int", "align": "right"},
+]
 
 var status_label: Label
 var advance_button: Button
@@ -163,6 +182,7 @@ func _build_stage_panel(stage_key: String, series: Dictionary) -> PanelContainer
 					"note": "△" if bool(game.get("draw", false)) else "",
 				})
 			table.set_rows(rows)
+		_add_postseason_stats_tables(box, series)
 	else:
 		var advantage: int = int(series.get("advantage_wins", 0))
 		var target: int = int(series.get("win_target", 4))
@@ -176,6 +196,106 @@ func _build_stage_panel(stage_key: String, series: Dictionary) -> PanelContainer
 		box.add_child(pending_msg)
 
 	return panel
+
+
+func _add_postseason_stats_tables(box: VBoxContainer, series: Dictionary) -> void:
+	var stats: Dictionary = series.get("postseason_stats", {}) as Dictionary
+	var players: Dictionary = stats.get("players", {}) as Dictionary
+	if players.is_empty():
+		return
+
+	var batter_rows: Array = _top_postseason_batter_rows(players)
+	var pitcher_rows: Array = _top_postseason_pitcher_rows(players)
+	if batter_rows.is_empty() and pitcher_rows.is_empty():
+		return
+
+	var label: Label = Label.new()
+	label.text = "シリーズ個人成績"
+	label.add_theme_font_size_override("font_size", 14)
+	box.add_child(label)
+
+	if not batter_rows.is_empty():
+		var batter_table: Tree = SortableTable.new()
+		batter_table.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		batter_table.custom_minimum_size = Vector2(0, (batter_rows.size() + 2) * 24)
+		box.add_child(batter_table)
+		batter_table.configure(BATTER_COLUMNS, true)
+		batter_table.set_default_sort(2, false)
+		batter_table.set_rows(batter_rows)
+
+	if not pitcher_rows.is_empty():
+		var pitcher_table: Tree = SortableTable.new()
+		pitcher_table.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		pitcher_table.custom_minimum_size = Vector2(0, (pitcher_rows.size() + 2) * 24)
+		box.add_child(pitcher_table)
+		pitcher_table.configure(PITCHER_COLUMNS, true)
+		pitcher_table.set_default_sort(2, false)
+		pitcher_table.set_rows(pitcher_rows)
+
+
+func _top_postseason_batter_rows(players: Dictionary) -> Array:
+	var rows: Array = []
+	for value in players.values():
+		var player: Dictionary = value as Dictionary
+		var stats: Dictionary = player.get("batter_stats", {}) as Dictionary
+		var pa: int = int(stats.get("plate_appearances", 0))
+		if pa <= 0:
+			continue
+		var at_bats: int = int(stats.get("at_bats", 0))
+		var hits: int = int(stats.get("hits", 0))
+		rows.append({
+			"name": str(player.get("name", "")),
+			"team": _team_short(int(player.get("team_id", 0))),
+			"pa": pa,
+			"hits": hits,
+			"hr": int(stats.get("home_runs", 0)),
+			"rbi": int(stats.get("runs_batted_in", 0)),
+			"avg": float(hits) / float(at_bats) if at_bats > 0 else 0.0,
+		})
+	rows.sort_custom(func(a, b) -> bool:
+		var left: Dictionary = a as Dictionary
+		var right: Dictionary = b as Dictionary
+		if int(left.get("pa", 0)) == int(right.get("pa", 0)):
+			return int(left.get("hits", 0)) > int(right.get("hits", 0))
+		return int(left.get("pa", 0)) > int(right.get("pa", 0))
+	)
+	return _first_rows(rows, 5)
+
+
+func _top_postseason_pitcher_rows(players: Dictionary) -> Array:
+	var rows: Array = []
+	for value in players.values():
+		var player: Dictionary = value as Dictionary
+		var stats: Dictionary = player.get("pitcher_stats", {}) as Dictionary
+		var outs: int = int(stats.get("outs_pitched", 0))
+		if outs <= 0 and int(stats.get("games", 0)) <= 0:
+			continue
+		rows.append({
+			"name": str(player.get("name", "")),
+			"team": _team_short(int(player.get("team_id", 0))),
+			"ip": "%d.%d" % [int(outs / 3), outs % 3],
+			"outs": outs,
+			"k": int(stats.get("strikeouts", 0)),
+			"era": float(int(stats.get("earned_runs", 0))) * 27.0 / float(outs) if outs > 0 else 0.0,
+			"wins": int(stats.get("wins", 0)),
+			"losses": int(stats.get("losses", 0)),
+			"saves": int(stats.get("saves", 0)),
+		})
+	rows.sort_custom(func(a, b) -> bool:
+		var left: Dictionary = a as Dictionary
+		var right: Dictionary = b as Dictionary
+		if int(left.get("outs", 0)) == int(right.get("outs", 0)):
+			return int(left.get("k", 0)) > int(right.get("k", 0))
+		return int(left.get("outs", 0)) > int(right.get("outs", 0))
+	)
+	return _first_rows(rows, 5)
+
+
+func _first_rows(rows: Array, count: int) -> Array:
+	var out: Array = []
+	for i in range(min(count, rows.size())):
+		out.append(rows[i])
+	return out
 
 
 func _on_advance_pressed() -> void:

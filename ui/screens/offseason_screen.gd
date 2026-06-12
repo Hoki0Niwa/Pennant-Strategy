@@ -80,7 +80,8 @@ const FA_COLUMNS: Array = [
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
 	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "在籍", "key": "years", "width": 56, "type": "number", "format": "int", "align": "right"},
-	{"title": "FA年", "key": "fa", "width": 56, "type": "number", "format": "int", "align": "right"},
+	{"title": "FA日数", "key": "fa_days", "width": 72, "type": "number", "format": "int", "align": "right"},
+	{"title": "必要", "key": "fa_required", "width": 72, "type": "number", "format": "int", "align": "right"},
 ]
 
 const BUDGET_COLUMNS: Array = [
@@ -97,21 +98,27 @@ const FA_MOVE_COLUMNS: Array = [
 	{"title": "→", "key": "arrow", "width": 28, "type": "string", "format": "string"},
 	{"title": "先", "key": "to", "width": 64, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "ランク", "key": "rank", "width": 56, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
 	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
+	{"title": "補償", "key": "compensation", "width": 80, "type": "number", "format": "int", "align": "right"},
 ]
 
 const FA_CANDIDATE_COLUMNS: Array = [
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "元", "key": "from", "width": 64, "type": "string", "format": "string"},
+	{"title": "ランク", "key": "rank", "width": 56, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
 	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
 	{"title": "総合", "key": "value", "width": 56, "type": "number", "format": "int"},
 	{"title": "WAR", "key": "war", "width": 56, "type": "number", "format": "float1"},
 	{"title": "需要", "key": "need", "width": 56, "type": "number", "format": "float1"},
 	{"title": "成功", "key": "chance", "width": 56, "type": "number", "format": "pct1"},
-	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
+	{"title": "宣言", "key": "declare", "width": 56, "type": "number", "format": "pct1"},
+	{"title": "FA日数", "key": "fa_days", "width": 72, "type": "number", "format": "int", "align": "right"},
+	{"title": "提示", "key": "offer", "width": 80, "type": "number", "format": "int", "align": "right"},
+	{"title": "補償", "key": "compensation", "width": 80, "type": "number", "format": "int", "align": "right"},
 ]
 
 const RELEASED_MOVE_COLUMNS: Array = [
@@ -1004,9 +1011,11 @@ func _render_released_market(result: Dictionary) -> void:
 			"arrow": "→",
 			"to": _team_short(int(s.get("to_team", 0))),
 			"name": str(s.get("name", "")),
+			"rank": str(s.get("fa_rank", "C")),
 			"age": int(s.get("age", 0)),
 			"pos": _position_name(int(s.get("position", 0))),
-			"salary": int(s.get("salary", 0)),
+			"salary": int(s.get("offer_salary", s.get("salary", 0))),
+			"compensation": int(s.get("compensation_money", 0)),
 		})
 	_add_content_table(RELEASED_MOVE_COLUMNS, rows, 360)
 
@@ -1105,7 +1114,8 @@ func _render_contract_update(result: Dictionary) -> void:
 				"age": int(fa.get("age", 0)),
 				"pos": _position_name(int(fa.get("position", 0))),
 				"years": int(fa.get("years", 0)),
-				"fa": int(fa.get("fa_eligible_years", 0)),
+				"fa_days": int(fa.get("fa_nissuu", 0)),
+				"fa_required": int(fa.get("fa_eligible_years", 0)) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR,
 			})
 		_add_content_heading("新規FA権取得 %d人" % new_fa.size(), 16)
 		_add_content_table(FA_COLUMNS, fa_rows, 240)
@@ -1675,13 +1685,17 @@ func _populate_fa_panel() -> void:
 		rows.append({
 			"name": str(c.get("name", "")),
 			"from": _team_short(int(c.get("from_team", 0))),
+			"rank": str(c.get("fa_rank", "C")),
 			"age": int(c.get("age", 0)),
 			"pos": _position_name(int(c.get("position", 0))),
 			"value": int(c.get("value", 0)),
 			"war": float(c.get("war", 0.0)),
 			"need": float(c.get("need", 0.0)),
 			"chance": float(c.get("success_chance", 0.0)),
-			"salary": int(c.get("salary", 0)),
+			"declare": float(c.get("declaration_chance", 0.0)),
+			"fa_days": int(c.get("fa_nissuu", 0)),
+			"offer": int(c.get("offer_salary", c.get("salary", 0))),
+			"compensation": int(c.get("compensation_money", 0)),
 			"__meta": int(c.get("player_id", 0)),
 		})
 	_suppress_fa_select = true
@@ -1714,9 +1728,10 @@ func _format_fa_details(candidate: Dictionary) -> String:
 		return "FA候補を選択してください。"
 	var lines: Array = []
 	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
-	lines.append("%d歳  元%s  年俸%d万" % [
+	lines.append("%d歳  元%s  ランク%s  年俸%d万" % [
 		int(candidate.get("age", 0)),
 		_team_short(int(candidate.get("from_team", 0))),
+		str(candidate.get("fa_rank", "C")),
 		int(candidate.get("salary", 0)),
 	])
 	lines.append("総合 %d  WAR %+0.1f  自軍需要 %+0.1f" % [
@@ -1725,6 +1740,17 @@ func _format_fa_details(candidate: Dictionary) -> String:
 		float(candidate.get("need", 0.0)),
 	])
 	lines.append("交渉成功率 %d%%" % int(round(float(candidate.get("success_chance", 0.0)) * 100.0)))
+	lines.append("宣言率 %d%%  提示年俸%d万  金銭補償%d万" % [
+		int(round(float(candidate.get("declaration_chance", 0.0)) * 100.0)),
+		int(candidate.get("offer_salary", candidate.get("salary", 0))),
+		int(candidate.get("compensation_money", 0)),
+	])
+	lines.append("FA権取得年 %d  見送り%d回  FA日数 %d/%d" % [
+		int(candidate.get("fa_eligible_year", 0)),
+		int(candidate.get("fa_pass_count", 0)),
+		int(candidate.get("fa_nissuu", 0)),
+		int(candidate.get("fa_required_days", 0)),
+	])
 	if int(candidate.get("plate_appearances", 0)) > 0:
 		lines.append("今季: %d試合 %d打席" % [int(candidate.get("games", 0)), int(candidate.get("plate_appearances", 0))])
 	elif int(candidate.get("starts", 0)) > 0 or int(candidate.get("relief_appearances", 0)) > 0:

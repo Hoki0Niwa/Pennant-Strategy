@@ -1422,13 +1422,12 @@ static func _empty_growth_kind_counts() -> Dictionary:
 # 在籍年数モデルでは固定複数年契約の年俸ロックは持たず、毎オフの再査定で十分。
 # このステップで以下を一括処理する:
 #   (1) 年俸の再査定 (_compute_new_salary)
-#   (2) FA権/保有権の contract_status 遷移 (years vs fa_eligible_years)
+#   (2) FA権/保有権の contract_status 遷移 (1軍登録日数 vs fa_eligible_years * 145)
 #   (3) チーム予算 (funds) に対する年俸総額の会計サマリ
 # Step1 では FA権取得選手もそのまま球団に残す (auto-retain)。放出先は Step2 設計のみ。
 #
-# タイミング注意: このステップは finalize 前 (years 加算前) に走るため、years は
-# 「今季終了時点」の在籍年数。FA権は years >= fa_eligible_years で判定する
-# (= 閾値年を満了した選手が翌季から FA可能)。境界は run_contract_fa_smoke で固定。
+# タイミング注意: このステップは finalize 前 (years 加算前) に走る。FA権はこの年の
+# 1軍登録日数を source_data.fa_nissuu に加算してから判定する。
 static func process_contract_update(players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var changes: Array = []
 	var new_fa: Array = []
@@ -1436,6 +1435,14 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	var year: int = season.year if season != null else 0
+	if season != null and teams != null:
+		var team_ids: Array = []
+		for team_row in teams:
+			var team_for_days: PSTeam = team_row as PSTeam
+			if team_for_days != null:
+				team_ids.append(team_for_days.id)
+		season.accrue_all_active_roster_days(team_ids, season.current_day)
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired() or player.is_manager_candidate():
@@ -1444,27 +1451,32 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		_apply_fa_service_days(player, record, season)
 		var war: float = _season_war(record, league_ctx)
 		var old_salary: int = player.salary
-		var new_salary: int = _compute_new_salary(player, record, war)
-		if new_salary != old_salary:
-			player.salary = new_salary
-			changes.append({
-				"player_id": player.id,
-				"name": player.name,
-				"age": player.age,
-				"team_id": player.team_id,
-				"position": player.position,
-				"old_salary": old_salary,
-				"new_salary": new_salary,
-				"delta": new_salary - old_salary,
-			})
+		var skip_salary_update: bool = year > 0 and int(player.source_data.get("fa_signed_year", 0)) == year and player.source_data.has("fa_contract_salary")
+		if not skip_salary_update:
+			var new_salary: int = _compute_new_salary(player, record, war)
+			if new_salary != old_salary:
+				player.salary = new_salary
+				changes.append({
+					"player_id": player.id,
+					"name": player.name,
+					"age": player.age,
+					"team_id": player.team_id,
+					"position": player.position,
+					"old_salary": old_salary,
+					"new_salary": new_salary,
+					"delta": new_salary - old_salary,
+				})
 		# (2) FA権/保有権の contract_status 遷移
 		var was_fa: bool = player.contract_status == "FA可能"
 		var new_status: String = _contract_status_for(player)
 		if new_status != player.contract_status:
 			player.contract_status = new_status
 		if new_status == "FA可能" and not was_fa:
+			player.source_data["fa_eligible_year"] = year
+			player.source_data["fa_pass_count"] = 0
 			new_fa.append({
 				"player_id": player.id,
 				"name": player.name,
@@ -1473,7 +1485,12 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 				"position": player.position,
 				"years": player.years,
 				"fa_eligible_years": player.fa_eligible_years,
+				"fa_nissuu": player.fa_service_days(),
 			})
+		elif new_status == "FA可能" and not player.source_data.has("fa_eligible_year"):
+			var years_since_eligible: int = int(floor(float(maxi(0, player.fa_service_days() - player.fa_service_days_required())) / float(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)))
+			player.source_data["fa_eligible_year"] = year - years_since_eligible
+			player.source_data["fa_pass_count"] = maxi(0, years_since_eligible)
 
 	var raises: Array = []
 	var cuts: Array = []
@@ -1534,16 +1551,41 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 	}
 
 
-# 在籍年数と FA閾値から contract_status を決める。
-#   years >= fa_eligible_years     → "FA可能" (FA権取得済み = 保有権消滅)
-#   fa_remaining == 1              → "FA権間近" (延長交渉の起点)
-#   それ以外                        → "通常"
+# 1軍登録日数と FA閾値から contract_status を決める。
+#   fa_nissuu >= fa_eligible_years*145 → "FA可能" (FA権取得済み = 保有権消滅)
+#   残り1年相当以下                    → "FA権間近" (延長交渉の起点)
+#   それ以外                           → "通常"
 static func _contract_status_for(player: PSPlayer) -> String:
 	if player.is_fa_eligible():
 		return "FA可能"
 	if player.fa_remaining_years() == 1:
 		return "FA権間近"
 	return "通常"
+
+
+static func _apply_fa_service_days(player: PSPlayer, record: PSPlayerSeasonRecord, season: PSSeason) -> void:
+	if player == null:
+		return
+	if not player.source_data.has("fa_nissuu"):
+		var completed_years_estimate: int = maxi(0, player.years)
+		if season != null:
+			completed_years_estimate = maxi(0, player.years - 1)
+		player.source_data["fa_nissuu"] = completed_years_estimate * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	if season == null or season.year <= 0:
+		return
+	if int(player.source_data.get("fa_days_accrued_year", 0)) == season.year:
+		return
+	var service_team_id: int = player.team_id
+	if record != null and record.team_id > 0:
+		service_team_id = record.team_id
+	if service_team_id <= 0:
+		player.source_data["fa_days_accrued_year"] = season.year
+		player.source_data["fa_active_days_last_season"] = 0
+		return
+	var season_days: int = season.get_active_roster_days(service_team_id, player.id)
+	player.source_data["fa_nissuu"] = int(player.source_data.get("fa_nissuu", 0)) + season_days
+	player.source_data["fa_days_accrued_year"] = season.year
+	player.source_data["fa_active_days_last_season"] = season_days
 
 
 # --- 年俸モデル (R4 調整): WAR + 出場試合数ベースの裁定型、現実的スケール (万円) ---

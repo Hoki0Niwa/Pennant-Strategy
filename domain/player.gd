@@ -14,10 +14,11 @@ const POSITION_NAMES = {
 	10: "DH",
 }
 
-# R4 Step1: FA権/保有権。在籍年数 (years) が閾値に達するまで球団が保有権を持つ。
-# 高卒は8年、その他 (大学/社会人/独立/外国人) は7年 (NPB 国内FA 準拠の簡易値)。
+# R4 Step1: FA権/保有権。1軍登録日数が閾値に達するまで球団が保有権を持つ。
+# 高卒は8年相当、その他 (大学/社会人/独立/外国人) は7年相当 (NPB 国内FA 準拠の簡易値)。
 const FA_ELIGIBLE_YEARS_HIGH_SCHOOL: int = 8
 const FA_ELIGIBLE_YEARS_OTHER: int = 7
+const FA_SERVICE_DAYS_PER_YEAR: int = 145
 # 高卒のデビュー年齢 (これ以下なら高卒出身と推定)。初期シード選手は draft_source 列が無いため。
 const HIGH_SCHOOL_DEBUT_AGE: int = 18
 
@@ -254,14 +255,25 @@ static func default_fa_eligible_years(is_foreign: bool, player_age: int, service
 	return FA_ELIGIBLE_YEARS_OTHER
 
 
-# FA権取得までの残り在籍年数 (0 = 既に取得済み = 保有権消滅)。
+# FA権取得までの残り年数相当 (0 = 既に取得済み = 保有権消滅)。
 func fa_remaining_years() -> int:
-	return maxi(0, fa_eligible_years - years)
+	var remaining_days: int = maxi(0, fa_service_days_required() - fa_service_days())
+	return int(ceil(float(remaining_days) / float(FA_SERVICE_DAYS_PER_YEAR)))
 
 
-# 在籍年数が閾値に達し、自由移籍可能 (FA権取得済み) か。
+# 1軍登録日数が閾値に達し、自由移籍可能 (FA権取得済み) か。
 func is_fa_eligible() -> bool:
-	return years >= fa_eligible_years
+	return fa_service_days() >= fa_service_days_required()
+
+
+func fa_service_days_required() -> int:
+	return maxi(1, fa_eligible_years) * FA_SERVICE_DAYS_PER_YEAR
+
+
+func fa_service_days() -> int:
+	if source_data.has("fa_nissuu"):
+		return maxi(0, int(source_data.get("fa_nissuu", 0)))
+	return maxi(0, years) * FA_SERVICE_DAYS_PER_YEAR
 
 
 static func fielding_ability_category_for_position(position_id: int) -> String:

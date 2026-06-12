@@ -20,6 +20,7 @@ const SCREEN_PATHS: Array = [
 	"res://ui/screens/game_result_screen.gd",
 	"res://ui/screens/postseason_screen.gd",
 	"res://ui/screens/offseason_screen.gd",
+	"res://ui/screens/options_screen.gd",
 ]
 
 

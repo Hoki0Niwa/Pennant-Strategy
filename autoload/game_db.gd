@@ -97,7 +97,10 @@ func _load_initial_data_from_csv() -> bool:
 	if not (FileAccess.file_exists(CSV_PLAYER_PATH) and FileAccess.file_exists(CSV_TEAM_PATH)):
 		return false
 	var team_rows: Array = PSPlayerCsvIo.read_teams(CSV_TEAM_PATH)
-	var player_rows: Array = PSPlayerCsvIo.read_players(CSV_PLAYER_PATH)
+	var player_rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(
+		PSPlayerCsvIo.read_players(CSV_PLAYER_PATH),
+		SeasonService.DEFAULT_START_YEAR
+	)
 	if team_rows.is_empty() or player_rows.is_empty():
 		return false
 

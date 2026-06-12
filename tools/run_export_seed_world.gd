@@ -43,7 +43,10 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 
-	var player_dicts: Array = _active_player_dicts()
+	var player_dicts: Array = PSPlayerCsvIo.normalize_initial_seed_players(
+		_active_player_dicts(),
+		SeasonService.DEFAULT_START_YEAR
+	)
 	var team_dicts: Array = _team_dicts()
 
 	var players_ok: bool = PSPlayerCsvIo.write_players(players_path, player_dicts)

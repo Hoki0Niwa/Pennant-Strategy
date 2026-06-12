@@ -241,7 +241,10 @@ func _on_regenerate_initial_players() -> void:
 		regen_button.disabled = false
 		return
 
-	var players: Array = _active_player_dicts()
+	var players: Array = PSPlayerCsvIo.normalize_initial_seed_players(
+		_active_player_dicts(),
+		SeasonService.DEFAULT_START_YEAR
+	)
 	var teams: Array = _team_dicts()
 	var ok_players: bool = PSPlayerCsvIo.write_players(SEED_PLAYERS_PATH, players)
 	var ok_teams: bool = PSPlayerCsvIo.write_teams(SEED_TEAMS_PATH, teams)

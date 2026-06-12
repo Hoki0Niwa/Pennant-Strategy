@@ -17,6 +17,19 @@ func _ready() -> void:
 		print("FAIL: no rows read from %s" % players_path)
 		get_tree().quit(1)
 		return
+	var normalized_rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(rows, SeasonService.DEFAULT_START_YEAR)
+	var future_fa_year_rows: int = 0
+	var future_signed_year_rows: int = 0
+	var future_accrued_year_rows: int = 0
+	for normalized_value in normalized_rows:
+		var normalized: Dictionary = normalized_value as Dictionary
+		var source: Dictionary = normalized.get("source_data", {}) as Dictionary
+		if int(source.get("fa_eligible_year", 0)) > SeasonService.DEFAULT_START_YEAR:
+			future_fa_year_rows += 1
+		if int(source.get("fa_signed_year", 0)) > SeasonService.DEFAULT_START_YEAR:
+			future_signed_year_rows += 1
+		if int(source.get("fa_days_accrued_year", 0)) > SeasonService.DEFAULT_START_YEAR:
+			future_accrued_year_rows += 1
 
 	# CSV → PSPlayer → to_dict → CSV(再出力) で 2 回目以降が安定（冪等）であることを確認する。
 	var players: Array = []
@@ -57,11 +70,16 @@ func _ready() -> void:
 	print("Seed CSV roundtrip smoke: rows=%d stable=%s z_match=%s checked_z_keys=%d sample=%s pos=%d" % [
 		rows.size(), str(stable), str(z_match), checked_keys, sample.name, sample.position,
 	])
+	print("  normalized future FA years: eligible=%d signed=%d accrued=%d" % [
+		future_fa_year_rows,
+		future_signed_year_rows,
+		future_accrued_year_rows,
+	])
 	print("  sample raw_abilities=%s position_aptitudes_keys=%d source_data_keys=%d" % [
 		JSON.stringify(sample.raw_abilities),
 		(sample.position_aptitudes as Dictionary).size(),
 		(sample.source_data as Dictionary).size(),
 	])
 
-	var ok: bool = stable and z_match and checked_keys > 0
+	var ok: bool = stable and z_match and checked_keys > 0 and future_fa_year_rows == 0 and future_signed_year_rows == 0 and future_accrued_year_rows == 0
 	get_tree().quit(0 if ok else 1)

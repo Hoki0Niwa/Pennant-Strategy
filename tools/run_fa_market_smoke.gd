@@ -2,6 +2,8 @@ extends Node
 
 # R4: 簡易FA / 自由契約市場のスモークテスト。
 #  - FA宣言はレギュラー級に限定され、年間10人前後に絞られる。
+#  - 新規FA権取得者は宣言しやすく、見送り回数が増えると宣言率が下がる。
+#  - A/B/Cランクと金銭補償が設定され、補償率はFA回数にかかわらず固定。
 #  - 自軍がFA候補と交渉でき、成否は確率で決まる。
 #  - 能力・成績が良いFAほど契約成功率が低い。
 #  - 未獲得FAは元チームに残留し、孤立free_agentが残らない。
@@ -19,6 +21,8 @@ func _ready() -> void:
 
 	ok = _test_regular_declaration_target() and ok
 	ok = _test_fifteen_year_declaration_average() and ok
+	ok = _test_fa_rank_and_money_compensation() and ok
+	ok = _test_declaration_chance_and_pass_count() and ok
 	ok = _test_contract_chance_inverse_to_quality() and ok
 	ok = _test_user_manual_signing() and ok
 	ok = _test_unsigned_returns() and ok
@@ -35,9 +39,9 @@ func _test_regular_declaration_target() -> bool:
 	for t in range(1, 13):
 		teams.append(_team(t, 100000))
 		# 各球団にFA権持ち主力2人 + 控え1人。控えは宣言対象外。
-		players.append(_make_player(_id(), 6, 76, 8, t))
-		players.append(_make_player(_id(), 1, 74, 8, t))
-		players.append(_make_player(_id(), 7, 45, 8, t))
+		players.append(_mark_fa_tracking(_make_player(_id(), 6, 76, 8, t), 2026, 0))
+		players.append(_mark_fa_tracking(_make_player(_id(), 1, 74, 8, t), 2026, 0))
+		players.append(_mark_fa_tracking(_make_player(_id(), 7, 45, 8, t), 2026, 0))
 	var state: Dictionary = FaMarket.create_fa_market_state(players, teams, _season(2026), 1)
 	var declared: Array = state.get("declared", []) as Array
 	ok = _expect(declared.size() <= FaMarket.TARGET_DECLARATIONS, "declared capped near target (got %d)" % declared.size(), ok)
@@ -55,9 +59,9 @@ func _test_fifteen_year_declaration_average() -> bool:
 		var players: Array = []
 		for t in range(1, 13):
 			teams.append(_team(t, 100000))
-			players.append(_make_player(_id(), 6, 76, 8, t))
-			players.append(_make_player(_id(), 1, 74, 8, t))
-			players.append(_make_player(_id(), 7, 45, 8, t))
+			players.append(_mark_fa_tracking(_make_player(_id(), 6, 76, 8, t), 2026 + y, 0))
+			players.append(_mark_fa_tracking(_make_player(_id(), 1, 74, 8, t), 2026 + y, 0))
+			players.append(_mark_fa_tracking(_make_player(_id(), 7, 45, 8, t), 2026 + y, 0))
 		var state: Dictionary = FaMarket.create_fa_market_state(players, teams, _season(2026 + y), 0)
 		total_declared += (state.get("declared", []) as Array).size()
 	var average: float = float(total_declared) / 15.0
@@ -65,12 +69,52 @@ func _test_fifteen_year_declaration_average() -> bool:
 	return ok
 
 
+func _test_fa_rank_and_money_compensation() -> bool:
+	var ok: bool = true
+	var players: Array = []
+	var salaries: Array = [20000, 18000, 16000, 14000, 12000, 10000, 9000, 8000, 7000, 6000, 5000]
+	for i in range(salaries.size()):
+		var p: PSPlayer = _make_player(_id(), 6, 76 if i in [0, 4, 10] else 55, 8, 1)
+		p.salary = int(salaries[i])
+		p.source_data["fa_nissuu"] = 1000 - i
+		players.append(p)
+	var rank_by_id: Dictionary = FaMarket._build_fa_rank_by_player_id(players)
+	ok = _expect(FaMarket._fa_rank_for_salary_rank(int(rank_by_id.get((players[0] as PSPlayer).id, 0))) == "A", "salary rank 1 is A", ok)
+	ok = _expect(FaMarket._fa_rank_for_salary_rank(int(rank_by_id.get((players[4] as PSPlayer).id, 0))) == "B", "salary rank 5 is B", ok)
+	ok = _expect(FaMarket._fa_rank_for_salary_rank(int(rank_by_id.get((players[10] as PSPlayer).id, 0))) == "C", "salary rank 11 is C", ok)
+	ok = _expect(FaMarket._compensation_money("A", 10000) == 8000, "A rank compensation is fixed 80%", ok)
+	ok = _expect(FaMarket._compensation_money("B", 10000) == 6000, "B rank compensation is fixed 60%", ok)
+	ok = _expect(FaMarket._compensation_money("C", 10000) == 0, "C rank compensation is zero", ok)
+	ok = _expect(FaMarket._compensation_money("A", 10000) == FaMarket._compensation_money("A", 10000), "compensation does not depend on FA move count", ok)
+	return ok
+
+
+func _test_declaration_chance_and_pass_count() -> bool:
+	var ok: bool = true
+	var new_fa: PSPlayer = _mark_fa_tracking(_make_player(_id(), 6, 76, 8, 1), 2026, 0)
+	var old_fa: PSPlayer = _mark_fa_tracking(_make_player(_id(), 6, 76, 8, 1), 2024, 2)
+	var new_chance: float = FaMarket._declaration_chance(new_fa, 2026)
+	var old_chance: float = FaMarket._declaration_chance(old_fa, 2026)
+	ok = _expect(new_chance > old_chance, "new FA eligible player has higher declaration chance", ok)
+
+	var teams: Array = [_team(1, 100000)]
+	var pass_player: PSPlayer = _make_player(_id(), 7, 45, 8, 1)
+	_mark_fa_tracking(pass_player, 2026, 0)
+	var players: Array = [pass_player]
+	var state: Dictionary = FaMarket.create_fa_market_state(players, teams, _season(2026), 0)
+	FaMarket.finalize_fa_market(state, players, _season(2026))
+	ok = _expect(int(pass_player.source_data.get("fa_pass_count", 0)) == 1, "non-declared FA pass count increments", ok)
+	var after_pass_chance: float = FaMarket._declaration_chance(pass_player, 2027)
+	ok = _expect(after_pass_chance < new_chance, "declaration chance decreases after pass", ok)
+	return ok
+
+
 func _test_user_manual_signing() -> bool:
 	var ok: bool = true
 	var teams: Array = [_team(1, 100000), _team(2, 100000)]
 	var players: Array = []
-	players.append(_make_player(_id(), 6, 76, 8, 1))
-	players.append(_make_player(_id(), 1, 74, 8, 1))
+	players.append(_mark_fa_tracking(_make_player(_id(), 6, 76, 8, 1), 2026, 0))
+	players.append(_mark_fa_tracking(_make_player(_id(), 1, 74, 8, 1), 2026, 0))
 	players.append(_make_player(_id(), 6, 40, 3, 2))
 	for pos in [2, 3, 4, 5, 7, 8, 9, 1]:
 		players.append(_make_player(_id(), pos, 55, 3, 1))
@@ -88,6 +132,7 @@ func _test_user_manual_signing() -> bool:
 	if bool(result.get("acquired", false)):
 		ok = _expect(target != null and target.team_id == 2, "successful FA negotiation moved to user team", ok)
 		ok = _expect(target != null and not bool(target.source_data.get("free_agent", false)), "free_agent flag cleared on success", ok)
+		ok = _expect(target != null and int(target.source_data.get("fa_contract_salary", 0)) == target.salary, "FA contract salary recorded on success", ok)
 	else:
 		var failures: Array = state.get("failed_negotiations", []) as Array
 		ok = _expect(not failures.is_empty(), "failed FA negotiation recorded", ok)
@@ -126,7 +171,7 @@ func _test_unsigned_returns() -> bool:
 	var ok: bool = true
 	var teams: Array = [_team(1, 100000), _team(2, 100000)]
 	var players: Array = []
-	var fa_player: PSPlayer = _make_player(_id(), 6, 76, 8, 1)
+	var fa_player: PSPlayer = _mark_fa_tracking(_make_player(_id(), 6, 76, 8, 1), 2026, 0)
 	var fa_id: int = fa_player.id
 	players.append(fa_player)
 	players.append(_make_player(_id(), 6, 74, 3, 2))
@@ -137,6 +182,7 @@ func _test_unsigned_returns() -> bool:
 	var final_result: Dictionary = FaMarket.finalize_fa_market(state, players, _season(2026))
 	var found: PSPlayer = _find(players, fa_id)
 	ok = _expect(found != null and found.team_id == 1, "unsigned FA returned to original team", ok)
+	ok = _expect(found != null and int(found.source_data.get("fa_contract_salary", 0)) == found.salary, "FA contract salary recorded on return", ok)
 	ok = _expect(int(final_result.get("returned_count", 0)) >= 1, "returned count recorded", ok)
 	ok = _expect(_count_orphans(players) == 0, "no orphan free agents left", ok)
 	return ok
@@ -147,9 +193,14 @@ func _test_roundtrip() -> bool:
 	var p: PSPlayer = _make_player(_id(), 6, 70, 8, 5)
 	p.source_data["fa_from_team"] = 3
 	p.source_data["fa_signed_year"] = 2026
+	p.source_data["fa_contract_salary"] = 4200
+	p.source_data["fa_eligible_year"] = 2026
+	p.source_data["fa_pass_count"] = 0
 	var p2: PSPlayer = PSPlayer.from_dict(p.to_dict())
 	ok = _expect(p2.team_id == 5, "team_id roundtrip", ok)
 	ok = _expect(int(p2.source_data.get("fa_signed_year", 0)) == 2026, "fa_signed_year roundtrip", ok)
+	ok = _expect(int(p2.source_data.get("fa_contract_salary", 0)) == 4200, "fa_contract_salary roundtrip", ok)
+	ok = _expect(int(p2.source_data.get("fa_eligible_year", 0)) == 2026, "fa_eligible_year roundtrip", ok)
 	ok = _expect(int(p2.source_data.get("fa_from_team", 0)) == 3, "fa_from_team roundtrip", ok)
 	return ok
 
@@ -194,6 +245,12 @@ func _make_player(player_id: int, position: int, center: int, fa_years: int, tea
 		"fatigue": 0,
 		"injury_days": 0,
 	})
+
+
+func _mark_fa_tracking(player: PSPlayer, eligible_year: int, pass_count: int) -> PSPlayer:
+	player.source_data["fa_eligible_year"] = eligible_year
+	player.source_data["fa_pass_count"] = pass_count
+	return player
 
 
 func _find(players: Array, player_id: int) -> PSPlayer:

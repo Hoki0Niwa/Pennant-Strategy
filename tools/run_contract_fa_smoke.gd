@@ -8,6 +8,7 @@ extends Node
 
 const Offseason = preload("res://services/season/offseason_service.gd")
 const TeamFinance = preload("res://services/season/team_finance.gd")
+const PSPlayerCsvIo = preload("res://services/data/player_csv_io.gd")
 
 
 func _ready() -> void:
@@ -17,6 +18,8 @@ func _ready() -> void:
 	ok = _test_fa_threshold() and ok
 	ok = _test_retention_boundary() and ok
 	ok = _test_contract_update() and ok
+	ok = _test_fa_service_days_accrual() and ok
+	ok = _test_initial_seed_fa_year_normalization() and ok
 	ok = _test_roundtrip() and ok
 
 	print("Contract/FA smoke: %s" % ["ALL OK" if ok else "FAILED"])
@@ -75,6 +78,11 @@ func _test_retention_boundary() -> bool:
 	ok = _expect(y8.fa_remaining_years() == 0 and y8.is_fa_eligible(), "HS years8 → 残0 FA可能", ok)
 	ok = _expect(Offseason._contract_status_for(y8) == "FA可能", "HS years8 → FA可能", ok)
 
+	var short_days: PSPlayer = _make_player(14, 26, 8, 5, {"draft_source": "high_school"})
+	short_days.source_data["fa_nissuu"] = short_days.fa_service_days_required() - 1
+	ok = _expect(short_days.fa_remaining_years() == 1 and not short_days.is_fa_eligible(), "HS service days short by 1 → 残1 非FA", ok)
+	ok = _expect(Offseason._contract_status_for(short_days) == "FA権間近", "HS service days short by 1 → FA権間近", ok)
+
 	# その他 (閾値7): years=7 → FA可能
 	var u7: PSPlayer = _make_player(13, 29, 7, 5, {"draft_source": "university"})
 	ok = _expect(u7.is_fa_eligible(), "univ years7 → FA可能", ok)
@@ -131,6 +139,88 @@ func _test_contract_update() -> bool:
 	# 2回目実行では new_fa は出ない (既に FA可能)
 	var result2: Dictionary = Offseason.process_contract_update(players, teams, null)
 	ok = _expect(int(result2.get("new_fa_count", 0)) == 0, "second run new_fa_count == 0 (got %d)" % int(result2.get("new_fa_count", 0)), ok)
+
+	RecordStore.player_records.clear()
+	return ok
+
+
+func _test_initial_seed_fa_year_normalization() -> bool:
+	var ok: bool = true
+	var start_year: int = 2026
+	var eligible: Dictionary = _player_data(45, 30, 5, 10, {
+		"draft_source": "high_school",
+		"fa_nissuu": 12 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR,
+		"fa_eligible_year": 2035,
+		"fa_pass_count": 4,
+		"fa_signed_year": 2035,
+		"fa_days_accrued_year": 2035,
+		"fa_active_days_last_season": 145,
+	}, false, {"contract_status": "FA可能"})
+	var normalized: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(eligible, start_year)
+	var source: Dictionary = normalized.get("source_data", {}) as Dictionary
+	ok = _expect(int(source.get("fa_eligible_year", 0)) == 2022, "initial seed future fa_eligible_year rebased to 2022", ok)
+	ok = _expect(int(source.get("fa_pass_count", -1)) == 4, "initial seed fa_pass_count preserved", ok)
+	ok = _expect(not source.has("fa_signed_year"), "initial seed future fa_signed_year removed", ok)
+	ok = _expect(not source.has("fa_contract_salary"), "initial seed stale fa_contract_salary removed", ok)
+	ok = _expect(not source.has("fa_days_accrued_year"), "initial seed future fa_days_accrued_year removed", ok)
+	ok = _expect(not source.has("fa_active_days_last_season"), "initial seed stale fa_active_days_last_season removed", ok)
+	var player: PSPlayer = PSPlayer.from_dict(normalized)
+	ok = _expect(player.is_fa_eligible(), "normalized initial seed player remains FA eligible", ok)
+
+	var inferred: Dictionary = _player_data(46, 29, 5, 9, {
+		"draft_source": "university",
+		"fa_nissuu": 9 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR,
+		"fa_eligible_year": 2034,
+	}, false, {"contract_status": "FA可能"})
+	var inferred_normalized: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(inferred, start_year)
+	var inferred_source: Dictionary = inferred_normalized.get("source_data", {}) as Dictionary
+	ok = _expect(int(inferred_source.get("fa_pass_count", -1)) == 2, "initial seed inferred pass_count == 2", ok)
+	ok = _expect(int(inferred_source.get("fa_eligible_year", 0)) == 2024, "initial seed inferred fa_eligible_year == 2024", ok)
+
+	var noneligible: Dictionary = _player_data(47, 23, 5, 3, {
+		"draft_source": "high_school",
+		"fa_nissuu": 3 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR,
+		"fa_eligible_year": 2030,
+		"fa_pass_count": 1,
+	}, false, {"contract_status": "通常"})
+	var noneligible_normalized: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(noneligible, start_year)
+	var noneligible_source: Dictionary = noneligible_normalized.get("source_data", {}) as Dictionary
+	ok = _expect(not noneligible_source.has("fa_eligible_year"), "non-eligible initial seed future fa_eligible_year removed", ok)
+	ok = _expect(not noneligible_source.has("fa_pass_count"), "non-eligible initial seed stale fa_pass_count removed", ok)
+	return ok
+
+
+func _test_fa_service_days_accrual() -> bool:
+	var ok: bool = true
+	RecordStore.player_records.clear()
+
+	var team: PSTeam = PSTeam.from_dict({"id": 77, "name": "Smoke", "short_name": "SMK", "league": "central", "funds": 120000})
+	var season: PSSeason = PSSeason.new()
+	season.year = 2030
+	season.season_number = 1
+	season.current_day = 1
+
+	var active: PSPlayer = _make_player(40, 26, 8, 5, {"draft_source": "high_school"})
+	active.source_data["fa_nissuu"] = active.fa_service_days_required() - 100
+	var inactive: PSPlayer = _make_player(41, 26, 8, 5, {"draft_source": "high_school"})
+	inactive.source_data["fa_nissuu"] = inactive.fa_service_days_required() - 100
+	var players: Array = [active, inactive]
+
+	season.set_active_roster(77, {"player_ids": [active.id]})
+	season.current_day = 101
+	var result: Dictionary = Offseason.process_contract_update(players, [team], season)
+	ok = _expect(active.is_fa_eligible(), "active player gained 100 FA days and became eligible", ok)
+	ok = _expect(active.contract_status == "FA可能", "active service-days player → FA可能", ok)
+	ok = _expect(int(active.source_data.get("fa_active_days_last_season", 0)) == 100, "active FA days last season == 100", ok)
+	ok = _expect(not inactive.is_fa_eligible(), "inactive player did not gain FA days", ok)
+	ok = _expect(inactive.contract_status == "FA権間近", "inactive service-days player remains FA権間近", ok)
+	ok = _expect(int(inactive.source_data.get("fa_active_days_last_season", -1)) == 0, "inactive FA days last season == 0", ok)
+	ok = _expect(int(result.get("new_fa_count", 0)) == 1, "service-days new_fa_count == 1", ok)
+
+	var nissuu_after_first: int = int(active.source_data.get("fa_nissuu", 0))
+	var result2: Dictionary = Offseason.process_contract_update(players, [team], season)
+	ok = _expect(int(active.source_data.get("fa_nissuu", 0)) == nissuu_after_first, "FA days not double-counted on second contract update", ok)
+	ok = _expect(int(result2.get("new_fa_count", 0)) == 0, "second service-days new_fa_count == 0", ok)
 
 	RecordStore.player_records.clear()
 	return ok
