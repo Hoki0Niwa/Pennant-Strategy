@@ -5,8 +5,6 @@ class_name FaMarketService
 # 自軍だけ手動選択できるよう、ドラフトと同じ「state生成 -> 自軍選択 -> 残り自動 -> 確定」
 # の形にする。process_fa_market は長期検証/CPU用の完全自動ラッパーとして残す。
 
-const OffseasonService = preload("res://services/season/offseason_service.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const ROSTER_LIMIT: int = 70
@@ -288,7 +286,7 @@ static func available_user_candidates(state: Dictionary, players: Array, teams: 
 	return rows
 
 
-static func _select_declarers(players: Array, teams: Array, season: PSSeason, year: int) -> Array:
+static func _select_declarers(players: Array, _teams: Array, season: PSSeason, year: int) -> Array:
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
@@ -398,7 +396,7 @@ static func _declaration_entry(
 	}
 
 
-static func _is_regular_class(player: PSPlayer, record: PSPlayerSeasonRecord, value: int, war: float) -> bool:
+static func _is_regular_class(_player: PSPlayer, record: PSPlayerSeasonRecord, value: int, war: float) -> bool:
 	if value >= REGULAR_OVERALL and war >= 0.0:
 		return true
 	if war >= REGULAR_WAR:
@@ -537,7 +535,7 @@ static func _increment_non_declared_fa_passes(players: Array, year: int, declare
 	return count
 
 
-static func _apply_signing(state: Dictionary, players: Array, teams: Array, season: PSSeason, entry: Dictionary, to_team_id: int, method: String, success_chance: float = 1.0) -> void:
+static func _apply_signing(state: Dictionary, players: Array, _teams: Array, season: PSSeason, entry: Dictionary, to_team_id: int, method: String, success_chance: float = 1.0) -> void:
 	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 	if player == null:
 		return

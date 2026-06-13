@@ -1,7 +1,6 @@
 extends RefCounted
 class_name PSDraftGrowthCurveReporter
 
-const DraftService = preload("res://services/season/draft_service.gd")
 const Offseason = preload("res://services/season/offseason_service.gd")
 
 const VERSION: int = 4
@@ -35,11 +34,11 @@ const PLAYER_GROUP_ORDER: Array = ["all", "pitcher", "fielder"]
 
 
 func run(options: Dictionary = {}) -> Dictionary:
-	var seed: int = int(options.get("seed", DEFAULT_SEED))
+	var seed_value: int = int(options.get("seed", DEFAULT_SEED))
 	var samples: int = max(1, int(options.get("samples", DEFAULT_SAMPLES)))
 	var min_age: int = clampi(int(options.get("min_age", DEFAULT_MIN_AGE)), 1, 99)
 	var max_age: int = clampi(int(options.get("max_age", DEFAULT_MAX_AGE)), min_age, 99)
-	Rng.set_seed_value(seed)
+	Rng.set_seed_value(seed_value)
 
 	var groups: Dictionary = {}
 	var split_groups: Dictionary = {}
@@ -64,7 +63,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	return {
 		"ok": true,
 		"version": VERSION,
-		"seed": seed,
+		"seed": seed_value,
 		"samples_requested": samples,
 		"candidates_generated": candidates.size(),
 		"min_age": min_age,
@@ -78,7 +77,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 
 
 func run_async(options: Dictionary = {}) -> Dictionary:
-	var seed: int = int(options.get("seed", DEFAULT_SEED))
+	var seed_value: int = int(options.get("seed", DEFAULT_SEED))
 	var samples: int = max(1, int(options.get("samples", DEFAULT_SAMPLES)))
 	var min_age: int = clampi(int(options.get("min_age", DEFAULT_MIN_AGE)), 1, 99)
 	var max_age: int = clampi(int(options.get("max_age", DEFAULT_MAX_AGE)), min_age, 99)
@@ -89,7 +88,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 
 	var original_rng_seed: int = Rng.current_seed
 	var original_rng_state: int = Rng.generator.state
-	Rng.set_seed_value(seed)
+	Rng.set_seed_value(seed_value)
 
 	var groups: Dictionary = {}
 	var split_groups: Dictionary = {}
@@ -127,7 +126,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"ok": not cancelled,
 		"cancelled": cancelled,
 		"version": VERSION,
-		"seed": seed,
+		"seed": seed_value,
 		"samples_requested": samples,
 		"candidates_generated": generated,
 		"min_age": min_age,

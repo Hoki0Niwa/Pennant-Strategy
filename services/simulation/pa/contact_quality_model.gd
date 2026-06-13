@@ -1,7 +1,6 @@
 extends RefCounted
 class_name PSContactQualityModel
 
-const PSBalanceProfile = preload("res://services/simulation/pa/balance_profile.gd")
 
 # 投球がインプレー(BIP)になった後に、打球の質(初速・角度・方向)を生成するモデル。
 # 飛距離・滞空時間・守備・最終結果は後段の別モデルが解決する。
@@ -103,7 +102,7 @@ static func generate(
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
 	pitch_outcome: Dictionary,
-	state: Dictionary,
+	_state: Dictionary,
 	precomp: Dictionary = {}
 ) -> Dictionary:
 	# 打者・投手の能力(z)と打者疲労・投手の被弾傾向などを precomp から取り出す。
@@ -307,8 +306,8 @@ static func _generate_spray(
 	else:
 		magnitude = SPRAY_PULL_BASE if pulling else SPRAY_OPPOSITE_BASE
 	# プルなら左方向(負)、流しなら右方向(正)に向け、打者の左右・スイッチで符号を反転する。
-	var sign: float = -1.0 if pulling else 1.0
-	var spray: float = SPRAY_BASE + sign * magnitude
+	var sign_dir: float = -1.0 if pulling else 1.0
+	var spray: float = SPRAY_BASE + sign_dir * magnitude
 	if batting_side == 2:
 		spray = -spray
 	if batting_side == 3 and _throwing_hand(pitcher) == 2:

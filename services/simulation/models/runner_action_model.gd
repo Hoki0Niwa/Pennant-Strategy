@@ -243,7 +243,7 @@ static func _pickoff_or_balk_events(
 
 
 static func _balk_events(
-	event_index: int,
+	_event_index: int,
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
 	defense: Dictionary,
@@ -415,7 +415,7 @@ static func _steal_intent(
 
 
 static func _make_intent(
-	event_index: int,
+	_event_index: int,
 	from_base: int,
 	to_base: int,
 	runner: PSPlayerSeasonRecord,
@@ -717,7 +717,7 @@ static func _batted_ball_extra_base_events(
 
 
 static func _already_applied_advancement_events(
-	event_index: int,
+	_event_index: int,
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
 	defense: Dictionary,
@@ -957,10 +957,10 @@ static func _weighted_z(values: Array, weights: Array) -> float:
 
 
 static func _deterministic_unit(values: Array) -> float:
-	var seed: int = 811
+	var seed_value: int = 811
 	for value in values:
-		seed = int(abs((seed * 1103515245 + int(value) * 12345 + 1013904223) % 2147483647))
-	return float(seed % 10000) / 10000.0
+		seed_value = int(abs((seed_value * 1103515245 + int(value) * 12345 + 1013904223) % 2147483647))
+	return float(seed_value % 10000) / 10000.0
 
 
 static func _hash_string(value: String) -> int:

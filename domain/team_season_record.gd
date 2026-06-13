@@ -9,11 +9,11 @@ var league: String
 var stats: PSStats = PSStats.new()
 
 
-static func from_team(team: PSTeam, year: int, season_number: int) -> PSTeamSeasonRecord:
+static func from_team(team: PSTeam, p_year: int, p_season_number: int) -> PSTeamSeasonRecord:
 	var record: PSTeamSeasonRecord = PSTeamSeasonRecord.new()
 	record.team_id = team.id
-	record.year = year
-	record.season_number = season_number
+	record.year = p_year
+	record.season_number = p_season_number
 	record.name = team.name
 	record.league = team.league
 	return record

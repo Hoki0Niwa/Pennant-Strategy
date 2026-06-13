@@ -243,11 +243,13 @@ static func _pick_mvp(records: Array, qualifier_pa: int, qualifier_outs: int, wa
 static func _mvp_score(record: PSPlayerSeasonRecord, qualifier_pa: int, qualifier_outs: int, war_ctx: Dictionary) -> float:
 	if record.is_pitcher():
 		var ps: PSPitcherStats = record.pitcher_stats
+		@warning_ignore("integer_division")
 		if ps.outs_pitched < qualifier_outs / 2:
 			return -1e8
 		var war_row: Dictionary = WarCalculator.season_war(record, war_ctx)
 		return float(war_row.get("war", 0.0))
 	var bs: PSBatterStats = record.batter_stats
+	@warning_ignore("integer_division")
 	if bs.plate_appearances < qualifier_pa / 2:
 		return -1e8
 	var war_row_b: Dictionary = WarCalculator.season_war(record, war_ctx)

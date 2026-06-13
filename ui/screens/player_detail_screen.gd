@@ -466,6 +466,7 @@ func _format_float(value: float, digits: int) -> String:
 
 
 func _format_innings(outs: int) -> String:
+	@warning_ignore("integer_division")
 	return "%d.%d" % [int(outs / 3), outs % 3]
 
 

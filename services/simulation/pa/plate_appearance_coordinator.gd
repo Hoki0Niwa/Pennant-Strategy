@@ -98,7 +98,7 @@ static func _resolve_bip(
 # 集計値から決定論的に合成する。pitch_velocity は precomp の proxy を使う。
 static func _synthesize_contact_pitch_outcome(precomp: Dictionary, pitch_summary: Dictionary) -> Dictionary:
 	var pitches: int = int(pitch_summary.get("pitches", 1))
-	var balls: int = int(pitch_summary.get("balls", 0))
+	var _balls: int = int(pitch_summary.get("balls", 0))
 	var strikes: int = int(pitch_summary.get("strikes", 0))
 	var in_zone_pitches: int = int(pitch_summary.get("in_zone_pitches", 0))
 	var in_zone: bool = in_zone_pitches >= (pitches - in_zone_pitches)  # 多数派ゾーン

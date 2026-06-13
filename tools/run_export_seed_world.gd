@@ -11,7 +11,6 @@ extends Node
 #   data/initial_players.csv / data/initial_teams.csv（既定）
 
 const ReporterScript = preload("res://services/reports/long_autoplay_reporter.gd")
-const PSPlayerCsvIo = preload("res://services/data/player_csv_io.gd")
 
 const DEFAULT_PLAYERS_PATH: String = "res://data/initial_players.csv"
 const DEFAULT_TEAMS_PATH: String = "res://data/initial_teams.csv"

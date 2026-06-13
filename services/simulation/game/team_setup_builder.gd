@@ -899,7 +899,7 @@ static func _best_sub_for_position(available_fielders: Array, starter_ids: Dicti
 	return best
 
 
-static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, position: int) -> int:
+static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, _position: int) -> int:
 	if starter == null or sub == null:
 		return 0
 	var gap: int = max(0, PlayerValueEvaluator.overall_score(starter) - PlayerValueEvaluator.overall_score(sub))

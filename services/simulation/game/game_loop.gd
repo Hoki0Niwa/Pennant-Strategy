@@ -153,7 +153,7 @@ static func simulate_half_inning(
 	var bases: Array = [null, null, null]
 	var outs: int = 0
 	var runs: int = 0
-	var earned_runs: int = 0
+	var _earned_runs: int = 0
 	var earned_outs: int = 0
 	var runner_responsibility: Dictionary = {}
 	var pitcher: PSPlayerSeasonRecord = defense["pitcher"] as PSPlayerSeasonRecord
@@ -189,7 +189,7 @@ static func simulate_half_inning(
 			runs += int(pre_applied.get("runs", 0))
 			var pre_charges: Array = run_charges_for_runner_events(pre_runner_events, runner_responsibility, pitcher, earned_outs)
 			var pre_charge_totals: Dictionary = charge_pitcher_run_charges(pre_charges, pitcher, defense, game_result, inning, half, runs)
-			earned_runs += int(pre_charge_totals.get("total_earned_runs", 0))
+			_earned_runs += int(pre_charge_totals.get("total_earned_runs", 0))
 			earned_outs = advance_earned_outs_for_runner_events(earned_outs, pre_runner_events, int(pre_applied.get("outs", 0)))
 			apply_pitcher_outs(pitcher, int(pre_applied.get("outs", 0)))
 			PSPitcherUsageModel.record_runner_event_result(pitcher_usage, int(pre_applied.get("outs", 0)), int(pre_applied.get("runs", 0)), int(pre_charge_totals.get("current_earned_runs", 0)))
@@ -276,7 +276,7 @@ static func simulate_half_inning(
 			int(applied.get("outs", 0))
 		)
 		var plate_charge_totals: Dictionary = charge_pitcher_run_charges(plate_charges, pitcher, defense, game_result, inning, half, runs)
-		earned_runs += int(plate_charge_totals.get("total_earned_runs", 0))
+		_earned_runs += int(plate_charge_totals.get("total_earned_runs", 0))
 		assign_batter_responsibility_after_plate(runner_responsibility, batter, pitcher, outcome, bases, earned_outs, int(applied.get("outs", 0)))
 		mark_unearned_plate_error_advances(runner_responsibility, outcome, bases_before, bases)
 		earned_outs = advance_earned_outs_for_plate(earned_outs, outcome, int(applied.get("outs", 0)))
@@ -306,7 +306,7 @@ static func simulate_half_inning(
 			runs += int(runner_applied.get("runs", 0))
 			post_runner_charges = run_charges_for_runner_events(runner_events, runner_responsibility, pitcher, earned_outs)
 			var runner_charge_totals: Dictionary = charge_pitcher_run_charges(post_runner_charges, pitcher, defense, game_result, inning, half, runs)
-			earned_runs += int(runner_charge_totals.get("total_earned_runs", 0))
+			_earned_runs += int(runner_charge_totals.get("total_earned_runs", 0))
 			earned_outs = advance_earned_outs_for_runner_events(earned_outs, runner_events, int(runner_applied.get("outs", 0)))
 			post_runner_current_runs = int(runner_charge_totals.get("current_runs", 0))
 			post_runner_current_earned_runs = int(runner_charge_totals.get("current_earned_runs", 0))
@@ -570,7 +570,7 @@ static func maybe_change_pitcher_after_pa(
 
 static func defensive_score_state(defense: Dictionary, game_result: Dictionary, half: String, current_half_runs: int) -> Dictionary:
 	var away_team_id: int = int(game_result.get("away_team_id", 0))
-	var home_team_id: int = int(game_result.get("home_team_id", 0))
+	var _home_team_id: int = int(game_result.get("home_team_id", 0))
 	var away_score: int = int(game_result.get("away_score", 0))
 	var home_score: int = int(game_result.get("home_score", 0))
 	if half == "top":
@@ -966,7 +966,7 @@ static func add_run_to_pitcher_outing(
 	earned_runs: int,
 	inning: int,
 	half: String,
-	current_half_runs: int
+	_current_half_runs: int
 ) -> void:
 	if game_result.is_empty() or pitcher_id <= 0:
 		return

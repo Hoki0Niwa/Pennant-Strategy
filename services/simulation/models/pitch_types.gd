@@ -108,8 +108,8 @@ static func derive_from_z(record: PSPlayerSeasonRecord) -> Array:
 	sorted_masteries.sort()
 	sorted_masteries.reverse()
 	var lean: float = record.z_ability("Pit_KCreate", 0.0) - record.z_ability("Pit_LoftControl", 0.0)
-	var seed: int = absi(hash(record.player_id))
-	var types: Array = assign_types(sorted_masteries.size(), lean, seed)
+	var seed_value: int = absi(hash(record.player_id))
+	var types: Array = assign_types(sorted_masteries.size(), lean, seed_value)
 	var arsenal: Array = []
 	for i in range(sorted_masteries.size()):
 		arsenal.append({
@@ -119,9 +119,9 @@ static func derive_from_z(record: PSPlayerSeasonRecord) -> Array:
 	return arsenal
 
 
-# 球種数・投手リーン・seed から、降順 mastery に対応する type 列を返す。直球を必ず1本含む。
+# 球種数・投手リーン・seed_value から、降順 mastery に対応する type 列を返す。直球を必ず1本含む。
 # lean>0: 奪三振タイプ(power)。lean<0: ゴロ/ムーブ系(movement)。derive_from_z と生成の双方が使う。
-static func assign_types(count: int, lean: float, seed: int) -> Array:
+static func assign_types(count: int, lean: float, seed_value: int) -> Array:
 	if count <= 0:
 		return []
 	var fastball: String = SINKER if lean <= -0.45 else FOUR_SEAM
@@ -132,8 +132,8 @@ static func assign_types(count: int, lean: float, seed: int) -> Array:
 		breaking = [TWO_SEAM, CHANGEUP, CURVE, SINKER, SLIDER, CUTTER]
 	else:
 		breaking = [SLIDER, CHANGEUP, CURVE, CUTTER, FORK, TWO_SEAM]
-	# seed で先頭を回転させ、投手ごとに球種構成を散らす。
-	var rot: int = seed % maxi(1, breaking.size())
+	# seed_value で先頭を回転させ、投手ごとに球種構成を散らす。
+	var rot: int = seed_value % maxi(1, breaking.size())
 	breaking = breaking.slice(rot) + breaking.slice(0, rot)
 	# 直球と重複する候補は除く (シンカー直球のとき breaking のシンカーを除外など)。
 	var filtered: Array = []

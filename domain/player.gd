@@ -284,11 +284,11 @@ static func position_experience_key(position_id: int) -> String:
 	return str(POSITION_EXPERIENCE_KEYS.get(position_id, ""))
 
 
-static func default_position_experience(position_id: int = 0, position_aptitudes: Dictionary = {}) -> Dictionary:
+static func default_position_experience(position_id: int = 0, p_position_aptitudes: Dictionary = {}) -> Dictionary:
 	var experience: Dictionary = {}
 	for key_value in POSITION_EXPERIENCE_KEYS.values():
 		var key: String = str(key_value)
-		experience[key] = int(position_aptitudes.get(key, 0))
+		experience[key] = int(p_position_aptitudes.get(key, 0))
 
 	var primary_key: String = position_experience_key(position_id)
 	if not primary_key.is_empty() and int(experience.get(primary_key, 0)) <= 0:
@@ -296,8 +296,8 @@ static func default_position_experience(position_id: int = 0, position_aptitudes
 	return experience
 
 
-static func normalized_position_experience(source: Dictionary, position_id: int = 0, position_aptitudes: Dictionary = {}) -> Dictionary:
-	var experience: Dictionary = default_position_experience(position_id, position_aptitudes)
+static func normalized_position_experience(source: Dictionary, position_id: int = 0, p_position_aptitudes: Dictionary = {}) -> Dictionary:
+	var experience: Dictionary = default_position_experience(position_id, p_position_aptitudes)
 	for key_value in source.keys():
 		var key: String = str(key_value)
 		if POSITION_EXPERIENCE_KEYS.values().has(key):

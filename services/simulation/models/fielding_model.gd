@@ -188,7 +188,7 @@ static func _probe_fielder(player_id: int, position: int, value: int) -> PSPlaye
 	record.role = "fielder"
 	# _probe_fielder は smoke_test_fielding_ability_gap でしか使われない。
 	# 入力の display 値も「シミュ式が想定する 1-100 スケール」なので線形逆変換。
-	var z_value: float = PSAbilityScale.display_to_z(float(value))
+	var z_value: float = PSAbilityScale.display_to_z(value)
 	record.z_abilities_snapshot = {
 		"IF_Reach": z_value,
 		"IF_Secure": z_value,
@@ -357,8 +357,8 @@ static func _average_out_probability(
 		# 失策を一律「95%アウトにできた打球」とせず、種別ごとの基準で評価する。
 		# 送球失策や外野後逸は難度が高く、ErrR(UZR)で過剰に罰しないよう下限を下げる。
 		var error_type: String = str(outcome.get("error_type", "fielding"))
-		var floor: float = float(ERROR_OUT_PROBABILITY_BY_TYPE.get(error_type, ERROR_OUT_PROBABILITY))
-		return clamp(max(probability, floor), 0.0, 0.98)
+		var floor_prob: float = float(ERROR_OUT_PROBABILITY_BY_TYPE.get(error_type, ERROR_OUT_PROBABILITY))
+		return clamp(max(probability, floor_prob), 0.0, 0.98)
 	if category == "double_play" or category == "sacrifice_fly":
 		return clamp(probability, 0.0, 1.0)
 	return clamp(probability, 0.0, 1.0)
@@ -462,7 +462,7 @@ static func _runner_outs_from_outcome(outcome: Dictionary, category: String = ""
 	return count
 
 
-static func _batter_out_on_play(category: String, result: String, outcome: Dictionary) -> bool:
+static func _batter_out_on_play(category: String, result: String, _outcome: Dictionary) -> bool:
 	if result.contains("home_run"):
 		return false
 	if category == "double_play":

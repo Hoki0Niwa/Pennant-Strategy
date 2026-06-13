@@ -26,26 +26,26 @@ const RESOURCE_DIR: String = "res://data/teams/"
 static var _cache: Dictionary = {}
 
 
-static func load_for_team(team_id: int, dh: bool) -> PSBattingOrderProfile:
-	var key: String = _cache_key(team_id, dh)
+static func load_for_team(p_team_id: int, dh: bool) -> PSBattingOrderProfile:
+	var key: String = _cache_key(p_team_id, dh)
 	if _cache.has(key):
 		return _cache[key] as PSBattingOrderProfile
 
-	var path: String = _path_for(team_id, dh)
+	var path: String = _path_for(p_team_id, dh)
 	var profile: PSBattingOrderProfile = null
 	if ResourceLoader.exists(path):
 		var loaded: Resource = load(path)
 		if loaded is PSBattingOrderProfile:
 			profile = loaded as PSBattingOrderProfile
 	if profile == null:
-		profile = build_default(team_id, dh)
+		profile = build_default(p_team_id, dh)
 	_cache[key] = profile
 	return profile
 
 
-static func build_default(team_id: int, dh: bool) -> PSBattingOrderProfile:
+static func build_default(p_team_id: int, dh: bool) -> PSBattingOrderProfile:
 	var profile: PSBattingOrderProfile = PSBattingOrderProfile.new()
-	profile.team_id = team_id
+	profile.team_id = p_team_id
 	profile.dh_enabled = dh
 	profile.profile_name = "default_%s" % ("dh" if dh else "nodh")
 	return profile
@@ -55,10 +55,10 @@ static func reset_cache() -> void:
 	_cache.clear()
 
 
-static func _cache_key(team_id: int, dh: bool) -> String:
-	return "%d_%d" % [team_id, 1 if dh else 0]
+static func _cache_key(p_team_id: int, dh: bool) -> String:
+	return "%d_%d" % [p_team_id, 1 if dh else 0]
 
 
-static func _path_for(team_id: int, dh: bool) -> String:
+static func _path_for(p_team_id: int, dh: bool) -> String:
 	var suffix: String = "dh" if dh else "nodh"
-	return "%s%d/batting_order_profile_%s.tres" % [RESOURCE_DIR, team_id, suffix]
+	return "%s%d/batting_order_profile_%s.tres" % [RESOURCE_DIR, p_team_id, suffix]

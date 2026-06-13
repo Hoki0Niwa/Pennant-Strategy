@@ -348,8 +348,8 @@ func _format_game_detail(game: Dictionary) -> String:
 	var home_id: int = int(game.get("home_team_id", 0))
 	var away_name: String = _team_short(away_id)
 	var home_name: String = _team_short(home_id)
-	var away_score: int = int(game.get("away_score", 0))
-	var home_score: int = int(game.get("home_score", 0))
+	var _away_score: int = int(game.get("away_score", 0))
+	var _home_score: int = int(game.get("home_score", 0))
 	var innings: Array = game.get("innings", []) as Array
 	var result_dict: Dictionary = game.get("result", {}) as Dictionary
 	var lines: Array = []

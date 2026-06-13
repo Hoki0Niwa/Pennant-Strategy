@@ -1,8 +1,6 @@
 extends RefCounted
 class_name CampService
 
-const FieldingModel = preload("res://services/simulation/models/fielding_model.gd")
-const OffseasonService = preload("res://services/season/offseason_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
@@ -157,7 +155,7 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 static func complete_camp_automatically(
 	state: Dictionary,
 	players: Array,
-	teams: Array,
+	_teams: Array,
 	season: PSSeason,
 	user_team_id: int = 0,
 	include_user_team: bool = false
@@ -420,11 +418,11 @@ static func _fielder_candidates(player: PSPlayer, profile: Dictionary, season: P
 			var convert_need: float = _primary_need_score(profile, position) + position_need * 0.5
 			var expected_convert: float = convert_need + float(current_aptitude - 55) * 0.18 + float(ability_bonus) * 1.2
 			if convert_need > 0.0 or current_aptitude >= 82:
-				var convert: Dictionary = _candidate_base(player, TRAIN_POSITION_CONVERT, expected_convert, _position_convert_success_chance(record, position, current_aptitude, ability_bonus), "本職不足 %.1f / 現適性 %d / 適性補正 %+d" % [convert_need, current_aptitude, ability_bonus])
-				convert["target_position"] = position
-				convert["target_position_name"] = _position_label(position)
-				convert["projected_aptitude"] = _target_aptitude(record, position, true)
-				rows.append(convert)
+				var convert_entry: Dictionary = _candidate_base(player, TRAIN_POSITION_CONVERT, expected_convert, _position_convert_success_chance(record, position, current_aptitude, ability_bonus), "本職不足 %.1f / 現適性 %d / 適性補正 %+d" % [convert_need, current_aptitude, ability_bonus])
+				convert_entry["target_position"] = position
+				convert_entry["target_position_name"] = _position_label(position)
+				convert_entry["projected_aptitude"] = _target_aptitude(record, position, true)
+				rows.append(convert_entry)
 	return rows
 
 
@@ -497,17 +495,17 @@ static func _build_user_training_entry(player: PSPlayer, season: PSSeason, train
 	if training_type == TRAIN_POSITION_CONVERT:
 		if current_aptitude <= 0:
 			return {}
-		var convert: Dictionary = _candidate_base(
+		var convert_entry: Dictionary = _candidate_base(
 			player,
 			TRAIN_POSITION_CONVERT,
 			0.0,
 			_position_convert_success_chance(record, target_position, current_aptitude, ability_bonus),
 			"選手指定: 既存サブポジから本職変更"
 		)
-		convert["target_position"] = target_position
-		convert["target_position_name"] = _position_label(target_position)
-		convert["projected_aptitude"] = _target_aptitude(record, target_position, true)
-		return convert
+		convert_entry["target_position"] = target_position
+		convert_entry["target_position_name"] = _position_label(target_position)
+		convert_entry["projected_aptitude"] = _target_aptitude(record, target_position, true)
+		return convert_entry
 	return {}
 
 

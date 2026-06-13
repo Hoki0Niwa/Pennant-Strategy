@@ -2,7 +2,6 @@ extends Control
 
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
 const LongAutoplayReporterScript = preload("res://services/reports/long_autoplay_reporter.gd")
-const PSPlayerCsvIo = preload("res://services/data/player_csv_io.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 
 const SEED_PLAYERS_PATH: String = "res://data/initial_players.csv"

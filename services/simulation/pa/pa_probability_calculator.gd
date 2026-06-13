@@ -4,7 +4,6 @@ class_name PSPaProbabilityCalculator
 # File 2 §8: PA 結果カテゴリ (K/BB/HBP/BIP) を z-score 能力 + 本ファイルの調整係数(const) から softmax 抽選する。
 # 入力 precomp は PSPlateAppearanceCoordinator._build_precomp の戻り値（疲労/TTO drops 適用後）。
 
-const PSBalanceProfile = preload("res://services/simulation/pa/balance_profile.gd")
 
 const OUTCOME_STRIKEOUT: String = "k"
 const OUTCOME_WALK: String = "bb"

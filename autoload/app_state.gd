@@ -4,10 +4,6 @@ signal screen_change_requested(screen_name: String)
 signal selected_team_changed(team_id: int)
 signal season_started(season: PSSeason)
 
-const DraftService = preload("res://services/season/draft_service.gd")
-const FaMarketService = preload("res://services/season/fa_market_service.gd")
-const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
-const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
 const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
 
 var current_screen: String = "start"

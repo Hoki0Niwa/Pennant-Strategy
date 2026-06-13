@@ -2,7 +2,6 @@ extends RefCounted
 class_name PSPlayEventBuilder
 
 const RunnerActionModel = preload("res://services/simulation/models/runner_action_model.gd")
-const FieldingModel = preload("res://services/simulation/models/fielding_model.gd")
 
 const EVENT_TYPE_PLAY: String = "play"
 const EVENT_TYPE_PLATE_APPEARANCE: String = "plate_appearance"
@@ -85,8 +84,8 @@ static func build_runner_event_play(
 	half: String,
 	offense: Dictionary,
 	defense: Dictionary,
-	batter: PSPlayerSeasonRecord,
-	pitcher: PSPlayerSeasonRecord,
+	_batter: PSPlayerSeasonRecord,
+	_pitcher: PSPlayerSeasonRecord,
 	bases_before: Array,
 	outs_before: int,
 	bases_after: Array,
@@ -214,7 +213,7 @@ static func _plate_event(
 
 
 static func _batted_ball_event(
-	event_index: int,
+	_event_index: int,
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
 	defense: Dictionary,
@@ -536,10 +535,10 @@ static func _ability(record: PSPlayerSeasonRecord, key: String, default_value: f
 
 
 static func _deterministic_unit(values: Array) -> float:
-	var seed: int = 1729
+	var seed_value: int = 1729
 	for value in values:
-		seed = int(abs((seed * 1103515245 + int(value) * 12345 + 1013904223) % 2147483647))
-	return float(seed % 10000) / 10000.0
+		seed_value = int(abs((seed_value * 1103515245 + int(value) * 12345 + 1013904223) % 2147483647))
+	return float(seed_value % 10000) / 10000.0
 
 
 static func _deterministic_int(values: Array, min_value: int, max_value: int) -> int:

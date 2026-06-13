@@ -1087,7 +1087,7 @@ static func _player_data_from_candidate(candidate: Dictionary, player_id: int, t
 	return data
 
 
-static func _candidate_quality(source_type: String, age: int) -> Dictionary:
+static func _candidate_quality(_source_type: String, age: int) -> Dictionary:
 	var roll: int = Rng.roll_percent()
 	var center: int = 50
 	var potential_bonus: int = 12

@@ -222,6 +222,7 @@ func get_player_stat_snapshot_at_or_before(player_id: int, target_day: int) -> D
 #   source = "current_month" / "previous_month" / "first_month_partial"
 func get_monthly_stats(player_id: int, current_batter: PSBatterStats, current_pitcher: PSPitcherStats) -> Dictionary:
 	var day: int = current_day
+	@warning_ignore("integer_division")
 	var current_month_index: int = max(0, (day - 1) / MONTH_LENGTH_DAYS)
 	# 今月の開始前日 (= 先月最終日)
 	var prev_month_end_day: int = current_month_index * MONTH_LENGTH_DAYS

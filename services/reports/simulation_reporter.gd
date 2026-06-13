@@ -49,7 +49,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var first_team: PSTeam = GameDb.teams[0] as PSTeam
 		selected_team_id = first_team.id
 	var start_year: int = int(options.get("start_year", DEFAULT_START_YEAR))
-	var seed: int = int(options.get("seed", -1))
+	var seed_value: int = int(options.get("seed", -1))
 	var dh_by_league: Dictionary = _dh_settings_from_options(options)
 
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
@@ -58,8 +58,8 @@ func run(options: Dictionary = {}) -> Dictionary:
 	# 永続化レイヤ v1: レポート中は RecordStore の中間状態 (各シーズン分の clear/再構築)
 	# を新テーブルへ漏らさないため persistence を suspend する。
 	RecordStore.suspend_persistence()
-	if seed >= 0:
-		Rng.set_seed_value(seed)
+	if seed_value >= 0:
+		Rng.set_seed_value(seed_value)
 
 	var aggregate_batting: PSBatterStats = PSBatterStats.new()
 	var aggregate_pitching: PSPitcherStats = PSPitcherStats.new()
@@ -120,7 +120,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"seasons_completed": completed_seasons,
 		"selected_team_id": selected_team_id,
 		"start_year": start_year,
-		"seed": seed,
+		"seed": seed_value,
 		"league_dh_enabled": dh_by_league.duplicate(true),
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
@@ -160,7 +160,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var first_team: PSTeam = GameDb.teams[0] as PSTeam
 		selected_team_id = first_team.id
 	var start_year: int = int(options.get("start_year", DEFAULT_START_YEAR))
-	var seed: int = int(options.get("seed", -1))
+	var seed_value: int = int(options.get("seed", -1))
 	var dh_by_league: Dictionary = _dh_settings_from_options(options)
 
 	var tree: SceneTree = options.get("scene_tree") as SceneTree
@@ -172,8 +172,8 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var original_rng_state: int = Rng.generator.state
 	# 永続化レイヤ v1: レポート中は RecordStore の中間状態を新テーブルへ漏らさない。
 	RecordStore.suspend_persistence()
-	if seed >= 0:
-		Rng.set_seed_value(seed)
+	if seed_value >= 0:
+		Rng.set_seed_value(seed_value)
 
 	var aggregate_batting: PSBatterStats = PSBatterStats.new()
 	var aggregate_pitching: PSPitcherStats = PSPitcherStats.new()
@@ -248,7 +248,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"cancelled": cancelled,
 		"selected_team_id": selected_team_id,
 		"start_year": start_year,
-		"seed": seed,
+		"seed": seed_value,
 		"league_dh_enabled": dh_by_league.duplicate(true),
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
@@ -294,6 +294,7 @@ func _season_report(season: PSSeason) -> Dictionary:
 		total_runs += team_record.stats.runs_scored
 		team_rows.append(_team_report_row(team_record, team_batting, team_pitching))
 
+	@warning_ignore("integer_division")
 	var total_games: int = int(total_team_games / 2)
 	var batted_ball_raw: Dictionary = _batted_ball_aggregate_for_season(season)
 	var advanced_raw: Dictionary = _advanced_aggregate_for_season(season)

@@ -2,11 +2,6 @@ extends RefCounted
 class_name PSLongAutoplayReporter
 
 const SimulationReporterScript = preload("res://services/reports/simulation_reporter.gd")
-const DraftService = preload("res://services/season/draft_service.gd")
-const OffseasonService = preload("res://services/season/offseason_service.gd")
-const FaMarketService = preload("res://services/season/fa_market_service.gd")
-const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
-const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
 const CampServiceRef = preload("res://services/season/camp_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
@@ -63,7 +58,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var first_team: PSTeam = GameDb.teams[0] as PSTeam
 		selected_team_id = first_team.id
 	var start_year: int = int(options.get("start_year", DEFAULT_START_YEAR))
-	var seed: int = int(options.get("seed", DEFAULT_SEED))
+	var seed_value: int = int(options.get("seed", DEFAULT_SEED))
 	var dh_by_league: Dictionary = _dh_settings_from_options(options)
 	# keep_world=true のとき、進化後の GameDb（最終年ロスター）を復元せずに残す。
 	# シード生成ツール (run_export_seed_world) が最終状態を CSV へ書き出すために使う。
@@ -76,7 +71,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	var seed_cohort_ids: Dictionary = _active_player_id_set(GameDb.players)
 
 	RecordStore.suspend_persistence()
-	Rng.set_seed_value(seed)
+	Rng.set_seed_value(seed_value)
 
 	var simulation_reporter: Object = SimulationReporterScript.new()
 	var yearly_rows: Array = []
@@ -152,7 +147,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"selected_team_id": selected_team_id,
 		"start_year": start_year,
 		"end_year": start_year + max(0, completed_seasons - 1),
-		"seed": seed,
+		"seed": seed_value,
 		"league_dh_enabled": dh_by_league.duplicate(true),
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
@@ -183,7 +178,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var first_team: PSTeam = GameDb.teams[0] as PSTeam
 		selected_team_id = first_team.id
 	var start_year: int = int(options.get("start_year", DEFAULT_START_YEAR))
-	var seed: int = int(options.get("seed", DEFAULT_SEED))
+	var seed_value: int = int(options.get("seed", DEFAULT_SEED))
 	var dh_by_league: Dictionary = _dh_settings_from_options(options)
 	var tree: SceneTree = options.get("scene_tree") as SceneTree
 	var outer_progress_cb: Callable = options.get("progress_callback", Callable())
@@ -198,7 +193,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var seed_cohort_ids: Dictionary = _active_player_id_set(GameDb.players)
 
 	RecordStore.suspend_persistence()
-	Rng.set_seed_value(seed)
+	Rng.set_seed_value(seed_value)
 
 	var simulation_reporter: Object = SimulationReporterScript.new()
 	var yearly_rows: Array = []
@@ -298,7 +293,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"selected_team_id": selected_team_id,
 		"start_year": start_year,
 		"end_year": start_year + max(0, completed_seasons - 1),
-		"seed": seed,
+		"seed": seed_value,
 		"league_dh_enabled": dh_by_league.duplicate(true),
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),

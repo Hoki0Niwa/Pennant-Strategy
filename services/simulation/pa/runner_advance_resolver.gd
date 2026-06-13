@@ -176,7 +176,7 @@ static func _triple_chance(
 
 
 static func _runner_advancements(
-	batter: PSPlayerSeasonRecord,
+	_batter: PSPlayerSeasonRecord,
 	bases_before: Array,
 	outs_before: int,
 	physics: Dictionary,

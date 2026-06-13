@@ -5,9 +5,6 @@ class_name ForeignPlayerService
 # FAと同じく state 型にし、自軍だけ手動で複数獲得できるようにする。完全自動の
 # process_foreign_market は長期検証/CPU用ラッパーとして維持する。
 
-const OffseasonService = preload("res://services/season/offseason_service.gd")
-const FaMarketService = preload("res://services/season/fa_market_service.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 const NamePoolRef = preload("res://services/data/name_pool.gd")
 
 const ROSTER_LIMIT: int = 70
@@ -224,7 +221,7 @@ static func _advance_foreign_state_if_done(state: Dictionary, players: Array, te
 	complete_foreign_market_automatically(state, players, teams, season, int(state.get("user_team_id", 0)))
 
 
-static func _can_team_sign_foreign(players: Array, state: Dictionary, team_id: int) -> bool:
+static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: int) -> bool:
 	if team_id <= 0:
 		return false
 	var active: int = _active_count_for_team(players, team_id)

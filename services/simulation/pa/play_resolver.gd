@@ -1,7 +1,6 @@
 extends RefCounted
 class_name PSPlayResolver
 
-const PSRunnerAdvanceResolver = preload("res://services/simulation/pa/runner_advance_resolver.gd")
 
 # Resolves a physical batted ball into a baseball play.
 # Inputs must already include EV/LA/spray/distance/hang time/trajectory.
@@ -310,7 +309,7 @@ const DOUBLE_PLAY_TEAMWORK_REFERENCE_Z: float = 0.8
 
 static func resolve(
 	batter: PSPlayerSeasonRecord,
-	pitcher: PSPlayerSeasonRecord,
+	_pitcher: PSPlayerSeasonRecord,
 	defense: Dictionary,
 	bases: Array,
 	outs: int,
@@ -1132,7 +1131,7 @@ static func _groundout_first_to_second_probability(
 	runner: PSPlayerSeasonRecord,
 	position: int,
 	ev: float,
-	spray: float,
+	_spray: float,
 	distance: float
 ) -> float:
 	if runner == null:

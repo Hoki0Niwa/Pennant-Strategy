@@ -2,7 +2,6 @@ extends RefCounted
 class_name OffseasonService
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 # 引退判定:
@@ -809,7 +808,7 @@ static func development_kind_label(kind: String) -> String:
 	return str(GROWTH_KIND_LABELS.get(kind, kind))
 
 
-static func expected_development_score_bonus(age: int, horizon: int = 6, position: int = 0) -> float:
+static func expected_development_score_bonus(age: int, horizon: int = 6, _position: int = 0) -> float:
 	var total: float = 0.0
 	var future_weight: float = 1.0
 	for offset in range(max(0, horizon)):

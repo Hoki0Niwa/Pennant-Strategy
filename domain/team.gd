@@ -37,6 +37,7 @@ func overall() -> int:
 	var total: int = 0
 	for value in ratings.values():
 		total += int(value)
+	@warning_ignore("integer_division")
 	return int(total / ratings.size())
 
 

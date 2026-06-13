@@ -9,7 +9,6 @@ const SQLITE_DATA_PATH = "res://data/pennant_strategy.sqlite"
 const CSV_PLAYER_PATH = "res://data/initial_players.csv"
 const CSV_TEAM_PATH = "res://data/initial_teams.csv"
 
-const PSPlayerCsvIo = preload("res://services/data/player_csv_io.gd")
 
 var data_loaded_ok: bool = false
 var data_source: String = "json"

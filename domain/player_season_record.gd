@@ -59,14 +59,14 @@ var pitcher_stats: PSPitcherStats = PSPitcherStats.new()
 var advanced_stats: PSAdvancedStats = PSAdvancedStats.new()
 
 
-static func from_player(player: PSPlayer, year: int, season_number: int) -> PSPlayerSeasonRecord:
+static func from_player(player: PSPlayer, p_year: int, p_season_number: int) -> PSPlayerSeasonRecord:
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
 	record.player_id = player.id
 	record.sensyu_num = player.sensyu_num
 	record.jersey_number = player.jersey_number
 	record.development_player = player.development_player
-	record.year = year
-	record.season_number = season_number
+	record.year = p_year
+	record.season_number = p_season_number
 	record.team_id = player.team_id
 	record.name = player.name
 	record.age = player.age

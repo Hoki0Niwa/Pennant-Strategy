@@ -63,9 +63,9 @@ func run(options: Dictionary = {}) -> Dictionary:
 
 	var original_rng_seed: int = Rng.current_seed
 	var original_rng_state: int = Rng.generator.state
-	var seed: int = int(normalized.get("seed", -1))
-	if seed >= 0:
-		Rng.set_seed_value(seed)
+	var seed_value: int = int(normalized.get("seed", -1))
+	if seed_value >= 0:
+		Rng.set_seed_value(seed_value)
 
 	_apply_set_overrides(base_subject, normalized.get("set_overrides", {}) as Dictionary)
 	var sweep_ability: String = str(normalized.get("sweep_ability", ""))
@@ -80,7 +80,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	if sweep_ability.is_empty():
 		var runs: Array = []
 		for iteration in range(iterations):
-			var run_seed: int = _run_seed(seed, 0, iteration)
+			var run_seed: int = _run_seed(seed_value, 0, iteration)
 			runs.append(_run_single(base_subject, normalized, "", 0, run_seed))
 		var summary: Dictionary = _average_summaries(runs)
 		rows.append({
@@ -97,7 +97,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 			var ability_value: float = float(sweep_values[value_index])
 			var runs_for_value: Array = []
 			for iteration in range(iterations):
-				var run_seed: int = _run_seed(seed, value_index, iteration)
+				var run_seed: int = _run_seed(seed_value, value_index, iteration)
 				runs_for_value.append(_run_single(base_subject, normalized, sweep_ability, ability_value, run_seed))
 			var value_summary: Dictionary = _average_summaries(runs_for_value)
 			rows.append({
@@ -119,7 +119,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"tool": "player_probe",
 		"ok": errors.is_empty(),
 		"mode": mode,
-		"seed": seed,
+		"seed": seed_value,
 		"data_source": GameDb.data_source,
 		"subject": _record_subject_row(base_subject, subject_player),
 		"base_abilities": _record_ability_row(base_subject),
@@ -174,9 +174,9 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 
 	var original_rng_seed: int = Rng.current_seed
 	var original_rng_state: int = Rng.generator.state
-	var seed: int = int(normalized.get("seed", -1))
-	if seed >= 0:
-		Rng.set_seed_value(seed)
+	var seed_value: int = int(normalized.get("seed", -1))
+	if seed_value >= 0:
+		Rng.set_seed_value(seed_value)
 
 	_apply_set_overrides(base_subject, normalized.get("set_overrides", {}) as Dictionary)
 	var sweep_ability: String = str(normalized.get("sweep_ability", ""))
@@ -211,7 +211,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		for iteration in range(iterations):
 			if _is_cancelled(cancel_token):
 				break
-			var run_seed: int = _run_seed(seed, 0, iteration)
+			var run_seed: int = _run_seed(seed_value, 0, iteration)
 			var single: Dictionary = await _run_single_async(base_subject, normalized, "", 0, run_seed, async_ctx, done_units)
 			runs.append(single)
 			done_units += int(single.get("_units_this_run", 0))
@@ -234,7 +234,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			for iteration in range(iterations):
 				if _is_cancelled(cancel_token):
 					break
-				var run_seed: int = _run_seed(seed, value_index, iteration)
+				var run_seed: int = _run_seed(seed_value, value_index, iteration)
 				var single: Dictionary = await _run_single_async(base_subject, normalized, sweep_ability, ability_value, run_seed, async_ctx, done_units)
 				runs_for_value.append(single)
 				done_units += int(single.get("_units_this_run", 0))
@@ -262,7 +262,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"ok": errors.is_empty(),
 		"cancelled": cancelled,
 		"mode": mode,
-		"seed": seed,
+		"seed": seed_value,
 		"data_source": GameDb.data_source,
 		"subject": _record_subject_row(base_subject, subject_player),
 		"base_abilities": _record_ability_row(base_subject),
@@ -310,7 +310,9 @@ func _run_single_async(
 		var pitcher_summary: Dictionary = _pitcher_summary(subject.pitcher_stats)
 		pitcher_summary.merge(run_meta, true)
 		pitcher_summary["seed"] = run_seed
-		pitcher_summary["ability_value"] = ability_value if not sweep_ability.is_empty() else null
+		pitcher_summary["ability_value"] = null
+		if not sweep_ability.is_empty():
+			pitcher_summary["ability_value"] = ability_value
 		pitcher_summary["_units_this_run"] = units_done_in_run
 		return pitcher_summary
 	var batter_meta: Dictionary = await _simulate_batter_async(subject, options, async_ctx, progress_baseline)
@@ -318,7 +320,9 @@ func _run_single_async(
 	var batter_summary: Dictionary = _batter_summary(subject.batter_stats)
 	batter_summary.merge(batter_meta, true)
 	batter_summary["seed"] = run_seed
-	batter_summary["ability_value"] = ability_value if not sweep_ability.is_empty() else null
+	batter_summary["ability_value"] = null
+	if not sweep_ability.is_empty():
+		batter_summary["ability_value"] = ability_value
 	batter_summary["_units_this_run"] = units_done_in_run
 	return batter_summary
 
@@ -621,13 +625,17 @@ func _run_single(base_subject: PSPlayerSeasonRecord, options: Dictionary, sweep_
 		var pitcher_summary: Dictionary = _pitcher_summary(subject.pitcher_stats)
 		pitcher_summary.merge(run_meta, true)
 		pitcher_summary["seed"] = run_seed
-		pitcher_summary["ability_value"] = ability_value if not sweep_ability.is_empty() else null
+		pitcher_summary["ability_value"] = null
+		if not sweep_ability.is_empty():
+			pitcher_summary["ability_value"] = ability_value
 		return pitcher_summary
 	var batter_meta: Dictionary = _simulate_batter(subject, options)
 	var batter_summary: Dictionary = _batter_summary(subject.batter_stats)
 	batter_summary.merge(batter_meta, true)
 	batter_summary["seed"] = run_seed
-	batter_summary["ability_value"] = ability_value if not sweep_ability.is_empty() else null
+	batter_summary["ability_value"] = null
+	if not sweep_ability.is_empty():
+		batter_summary["ability_value"] = ability_value
 	return batter_summary
 
 
@@ -1094,8 +1102,6 @@ func _default_z_abilities() -> Dictionary:
 	var z60: float = PSAbilityScale.display_to_z(60)
 	var z50: float = 0.0
 	var z70: float = PSAbilityScale.display_to_z(70)
-	var z40: float = PSAbilityScale.display_to_z(40)
-	var z80: float = PSAbilityScale.display_to_z(80)
 	return {
 		# Batting (旧 contact/gap_power/home_run_power/eye/avoid_k=60, bunt=40 相当)
 		"Bat_Barrel": z60,
@@ -1298,10 +1304,10 @@ func _average_summaries(runs: Array) -> Dictionary:
 	var totals: Dictionary = {}
 	var counts: Dictionary = {}
 	for run_value in runs:
-		var run: Dictionary = run_value as Dictionary
-		for key_value in run.keys():
+		var run_dict: Dictionary = run_value as Dictionary
+		for key_value in run_dict.keys():
 			var key: String = str(key_value)
-			var value: Variant = run.get(key_value)
+			var value: Variant = run_dict.get(key_value)
 			if value is int or value is float:
 				totals[key] = float(totals.get(key, 0.0)) + float(value)
 				counts[key] = int(counts.get(key, 0)) + 1

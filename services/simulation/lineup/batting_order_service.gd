@@ -144,7 +144,7 @@ static func _role_score(record: PSPlayerSeasonRecord, role: String) -> int:
 	var k_avoid: float = float(z.get("Bat_KAvoid", 0.0))
 	var bb_create: float = float(z.get("Bat_BBCreate", 0.0))
 	var impact: float = float(z.get("Bat_Impact", 0.0))
-	var loft: float = float(z.get("Bat_Loft", 0.0))
+	var _loft: float = float(z.get("Bat_Loft", 0.0))
 	var barrel: float = float(z.get("Bat_Barrel", 0.0))
 	var speed: float = float(z.get("Run_Speed", 0.0))
 	var pitcher_penalty: float = 1.0 if record.is_pitcher() else 0.0
@@ -170,6 +170,7 @@ static func _condition_bonus(_record: PSPlayerSeasonRecord) -> int:
 
 static func _fatigue_penalty(record: PSPlayerSeasonRecord) -> int:
 	# 仕様書 §6.6 のテーブルは fatigue 0-100 想定。内部 fatigue は 0-200 なので半分にスケール。
+	@warning_ignore("integer_division")
 	var f: int = clampi(record.fatigue / 2, 0, 100)
 	if f <= 30:
 		return 0

@@ -3,8 +3,6 @@ class_name ReleasedMarketService
 # 戦力外獲得市場。
 # 戦力外通告済みの team_id=0 / retired 扱い選手を、ドラフト後FA前に再契約できる。
 
-const OffseasonService = preload("res://services/season/offseason_service.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const ROSTER_LIMIT: int = 70

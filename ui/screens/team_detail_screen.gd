@@ -2,7 +2,6 @@ extends Control
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 
 const POSITION_LABELS_WAR: Dictionary = {
 	1: "投手", 2: "捕手", 3: "一塁", 4: "二塁", 5: "三塁",

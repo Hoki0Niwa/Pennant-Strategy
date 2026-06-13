@@ -270,10 +270,12 @@ func _top_postseason_pitcher_rows(players: Dictionary) -> Array:
 		var outs: int = int(stats.get("outs_pitched", 0))
 		if outs <= 0 and int(stats.get("games", 0)) <= 0:
 			continue
+		@warning_ignore("integer_division")
+		var innings_whole: int = int(outs / 3)
 		rows.append({
 			"name": str(player.get("name", "")),
 			"team": _team_short(int(player.get("team_id", 0))),
-			"ip": "%d.%d" % [int(outs / 3), outs % 3],
+			"ip": "%d.%d" % [innings_whole, outs % 3],
 			"outs": outs,
 			"k": int(stats.get("strikeouts", 0)),
 			"era": float(int(stats.get("earned_runs", 0))) * 27.0 / float(outs) if outs > 0 else 0.0,

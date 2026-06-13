@@ -233,12 +233,12 @@ static func times_through_order_penalty(record: PSPlayerSeasonRecord, usage: Dic
 
 static func record_plate_appearance(
 	usage: Dictionary,
-	record: PSPlayerSeasonRecord,
+	_record: PSPlayerSeasonRecord,
 	outcome: Dictionary,
 	pitch_summary: Dictionary,
 	applied: Dictionary,
 	bases_before: Array,
-	outs_before: int
+	_outs_before: int
 ) -> void:
 	if usage.is_empty():
 		return

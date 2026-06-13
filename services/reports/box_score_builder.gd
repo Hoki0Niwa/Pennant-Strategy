@@ -12,10 +12,10 @@ const POSITION_CHARS: Dictionary = {
 
 # 戻り値: {rows: Array[Dictionary], totals: Dictionary, inning_count: int}
 # row: {pos, name, bats, ab, h, rbi, gidp, avg, hr, cells:[{text,is_hit}]}
-static func build(log: Dictionary, team_id: int, season: PSSeason) -> Dictionary:
-	var pa_log: Array = log.get("pa_log", []) as Array
-	var subs: Array = log.get("substitutions", []) as Array
-	var lineup: Dictionary = _lineup_for_team(log, team_id)
+static func build(log_data: Dictionary, team_id: int, season: PSSeason) -> Dictionary:
+	var pa_log: Array = log_data.get("pa_log", []) as Array
+	var subs: Array = log_data.get("substitutions", []) as Array
+	var lineup: Dictionary = _lineup_for_team(log_data, team_id)
 	var inning_count: int = _inning_count(pa_log)
 
 	var team_pas: Array = []
@@ -65,8 +65,8 @@ static func build(log: Dictionary, team_id: int, season: PSSeason) -> Dictionary
 	return {"rows": rows, "totals": _totals(team_pas), "inning_count": inning_count}
 
 
-static func _lineup_for_team(log: Dictionary, team_id: int) -> Dictionary:
-	var lineups: Dictionary = log.get("lineups", {}) as Dictionary
+static func _lineup_for_team(log_data: Dictionary, team_id: int) -> Dictionary:
+	var lineups: Dictionary = log_data.get("lineups", {}) as Dictionary
 	for key in ["away", "home"]:
 		var l: Dictionary = lineups.get(key, {}) as Dictionary
 		if int(l.get("team_id", -1)) == team_id:
@@ -211,20 +211,20 @@ static func _totals(team_pas: Array) -> Dictionary:
 	}
 
 
-# 投手成績(両チームを1表)。log の pitcher_outings/decisions/pa_log を使う。
+# 投手成績(両チームを1表)。log_data の pitcher_outings/decisions/pa_log を使う。
 # 戻り値 {rows:[{mark,name,throws,w,l,s,g,ip,bf,pitches,h,k,bb,hbp,r,er,era}]}
-static func build_pitching(log: Dictionary, season: PSSeason) -> Dictionary:
-	var decisions: Dictionary = log.get("decisions", {}) as Dictionary
+static func build_pitching(log_data: Dictionary, season: PSSeason) -> Dictionary:
+	var decisions: Dictionary = log_data.get("decisions", {}) as Dictionary
 	var win_id: int = int(decisions.get("winning_pitcher_id", 0))
 	var loss_id: int = int(decisions.get("losing_pitcher_id", 0))
 	var save_id: int = int(decisions.get("save_pitcher_id", 0))
 	var holds: Array = decisions.get("hold_pitcher_ids", []) as Array
-	var tallies: Dictionary = _pitcher_pa_tallies(log.get("pa_log", []) as Array)
+	var tallies: Dictionary = _pitcher_pa_tallies(log_data.get("pa_log", []) as Array)
 
 	# チーム別グループ(配列の出現順=away→home, 各チーム内は登板順)
 	var by_team: Dictionary = {}
 	var team_order: Array = []
-	for outing_row in (log.get("pitcher_outings", []) as Array):
+	for outing_row in (log_data.get("pitcher_outings", []) as Array):
 		var outing: Dictionary = outing_row as Dictionary
 		var tid: int = int(outing.get("team_id", 0))
 		if not by_team.has(tid):
@@ -301,15 +301,16 @@ static func _throws_label(record: PSPlayerSeasonRecord) -> String:
 
 
 static func _ip_str(outs: int) -> String:
+	@warning_ignore("integer_division")
 	var full: int = outs / 3
 	var rem: int = outs % 3
 	return str(full) if rem == 0 else "%d.%d" % [full, rem]
 
 
 # 各種記録。{hr: Array[String], errors: Array[String]}
-static func build_records(log: Dictionary, season: PSSeason) -> Dictionary:
+static func build_records(log_data: Dictionary, season: PSSeason) -> Dictionary:
 	var hr: Array = []
-	for row_value in (log.get("pa_log", []) as Array):
+	for row_value in (log_data.get("pa_log", []) as Array):
 		var pa: Dictionary = row_value as Dictionary
 		if str(pa.get("category", "")) != "hit" or int(pa.get("bases", 0)) < 4:
 			continue
@@ -322,7 +323,7 @@ static func build_records(log: Dictionary, season: PSSeason) -> Dictionary:
 			pitcher.name if pitcher != null else "?",
 		])
 	var errors: Array = []
-	for e_row in (log.get("errors", []) as Array):
+	for e_row in (log_data.get("errors", []) as Array):
 		var e: Dictionary = e_row as Dictionary
 		var fielder: PSPlayerSeasonRecord = _record(int(e.get("fielder_id", 0)), season)
 		errors.append("%s(%d回)" % [fielder.name if fielder != null else "-", int(e.get("inning", 0))])

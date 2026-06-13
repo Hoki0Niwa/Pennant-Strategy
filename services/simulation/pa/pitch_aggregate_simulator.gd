@@ -160,6 +160,7 @@ static func _foul_count_for(category: String, pitches: int) -> int:
 			slack = 0
 		_:
 			slack = pitches - 1
+	@warning_ignore("integer_division")
 	return int(clamp(slack / 2, 0, 4))
 
 

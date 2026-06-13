@@ -3,7 +3,7 @@ class_name PSDefenseAlignmentProfile
 
 # Phase 4: チーム別の守備配置テンプレート。
 # 12 球団分 .tres は commit せず lazy default (starting_positions 空 → 初回 fallback)。
-# Phase 3 PSBattingOrderProfile と同形パターン。DH の概念は守備に無関係なので team_id のみキャッシュキー。
+# Phase 3 PSBattingOrderProfile と同形パターン。DH の概念は守備に無関係なので p_team_id のみキャッシュキー。
 
 const RESOURCE_DIR: String = "res://data/teams/"
 
@@ -19,26 +19,26 @@ const RESOURCE_DIR: String = "res://data/teams/"
 static var _cache: Dictionary = {}
 
 
-static func load_for_team(team_id: int) -> PSDefenseAlignmentProfile:
-	var key: String = str(team_id)
+static func load_for_team(p_team_id: int) -> PSDefenseAlignmentProfile:
+	var key: String = str(p_team_id)
 	if _cache.has(key):
 		return _cache[key] as PSDefenseAlignmentProfile
 
-	var path: String = _path_for(team_id)
+	var path: String = _path_for(p_team_id)
 	var profile: PSDefenseAlignmentProfile = null
 	if ResourceLoader.exists(path):
 		var loaded: Resource = load(path)
 		if loaded is PSDefenseAlignmentProfile:
 			profile = loaded as PSDefenseAlignmentProfile
 	if profile == null:
-		profile = build_default(team_id)
+		profile = build_default(p_team_id)
 	_cache[key] = profile
 	return profile
 
 
-static func build_default(team_id: int) -> PSDefenseAlignmentProfile:
+static func build_default(p_team_id: int) -> PSDefenseAlignmentProfile:
 	var profile: PSDefenseAlignmentProfile = PSDefenseAlignmentProfile.new()
-	profile.team_id = team_id
+	profile.team_id = p_team_id
 	profile.profile_name = "default"
 	return profile
 
@@ -47,5 +47,5 @@ static func reset_cache() -> void:
 	_cache.clear()
 
 
-static func _path_for(team_id: int) -> String:
-	return "%s%d/defense_alignment.tres" % [RESOURCE_DIR, team_id]
+static func _path_for(p_team_id: int) -> String:
+	return "%s%d/defense_alignment.tres" % [RESOURCE_DIR, p_team_id]

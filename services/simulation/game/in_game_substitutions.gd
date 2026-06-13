@@ -478,6 +478,7 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 			var defense_gain: int = defense_only_score(candidate, position) - outgoing_defense
 			if defense_gain < GameSimulator.DEFENSIVE_REPLACEMENT_MIN_GAIN:
 				continue
+			@warning_ignore("integer_division")
 			var candidate_value: float = float(defense_gain * 3 + batting_score - pinch_hit_batting_score(candidate) / 2)
 			if best_option.is_empty() or candidate_value > best_value:
 				best_value = candidate_value

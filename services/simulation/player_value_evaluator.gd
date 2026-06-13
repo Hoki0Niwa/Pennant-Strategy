@@ -1,7 +1,6 @@
 extends RefCounted
 class_name PSPlayerValueEvaluator
 
-const FieldingModel = preload("res://services/simulation/models/fielding_model.gd")
 
 const MIN_VISIBLE_SCORE: int = 1
 const MAX_VISIBLE_SCORE: int = 99
@@ -124,6 +123,7 @@ static func _pitching_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty:
 		return 0
 	# breaking(45-160) と velocity(球速) は例外スケールのため display 点の fatigue を維持。
 	# z 能力には z 換算 (÷12.5) の penalty を使う。能力下限は display 1 = z -3.92。
+	@warning_ignore("integer_division")
 	var fatigue_penalty: int = int(record.fatigue / 4) if apply_fatigue_penalty else 0
 	var fatigue_penalty_z: float = float(fatigue_penalty) / 12.5
 	var control: float = max(-3.92, record.z_ability("Pit_BBPrevent", 0.0) - fatigue_penalty_z)

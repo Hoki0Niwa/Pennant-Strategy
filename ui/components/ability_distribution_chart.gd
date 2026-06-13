@@ -28,6 +28,7 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.09, 0.10, 0.13))
 	for i in range(distributions.size()):
 		var col: int = i % COLS
+		@warning_ignore("integer_division")
 		var row: int = int(i / COLS)
 		var ox: float = PAD + float(col) * CELL_W
 		var oy: float = PAD + float(row) * CELL_H

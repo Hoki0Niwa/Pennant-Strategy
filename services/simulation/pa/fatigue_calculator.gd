@@ -66,7 +66,6 @@ static func apply_drops(pitcher_z: Dictionary, fatigue_factor: float) -> Diction
 	return adjusted
 
 
-const PSBalanceProfile = preload("res://services/simulation/pa/balance_profile.gd")
 
 
 static func _drop(target: Dictionary, key: String, delta: float) -> void:

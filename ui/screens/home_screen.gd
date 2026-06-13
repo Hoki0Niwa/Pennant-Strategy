@@ -4,7 +4,6 @@ const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 
 # オフシーズン処理の総ステップ数 (offseason_screen.gd の TOTAL_STEPS と一致させる)
@@ -919,6 +918,7 @@ func _batter_stats_rate_line(stats: PSBatterStats) -> String:
 
 
 func _format_innings(outs: int) -> String:
+	@warning_ignore("integer_division")
 	return "%d.%d" % [int(outs / 3), outs % 3]
 
 
