@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://c0sortabletablesmoke"]
-
-[ext_resource type="Script" path="res://tools/run_sortable_table_smoke.gd" id="1_smoke"]
-
-[node name="RunSortableTableSmoke" type="Node"]
-script = ExtResource("1_smoke")

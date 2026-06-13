@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3]
-
-[ext_resource type="Script" path="res://tools/run_game_log_smoke.gd" id="1_game_log_smoke"]
-
-[node name="RunGameLogSmoke" type="Node"]
-script = ExtResource("1_game_log_smoke")

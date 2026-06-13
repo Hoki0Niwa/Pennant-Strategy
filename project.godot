@@ -22,6 +22,10 @@ GameDb="*res://autoload/game_db.gd"
 AppState="*res://autoload/app_state.gd"
 RecordStore="*res://autoload/record_store.gd"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gdUnit4/plugin.cfg")
+
 [display]
 
 window/size/viewport_width=1920

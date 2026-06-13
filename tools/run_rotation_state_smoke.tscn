@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3]
-
-[ext_resource type="Script" path="res://tools/run_rotation_state_smoke.gd" id="1_rotation_state"]
-
-[node name="RunRotationStateSmoke" type="Node"]
-script = ExtResource("1_rotation_state")
