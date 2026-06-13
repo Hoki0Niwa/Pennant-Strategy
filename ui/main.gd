@@ -16,7 +16,7 @@ const ActiveRosterScreen = preload("res://ui/screens/active_roster_screen.gd")
 const TeamDetailScreen = preload("res://ui/screens/team_detail_screen.gd")
 const OptionsScreen = preload("res://ui/screens/options_screen.gd")
 const SkipOptionsScreen = preload("res://ui/screens/skip_options_screen.gd")
-const OffseasonScreen = preload("res://ui/screens/offseason_screen.gd")
+const OFFSEASON_SCREEN_PATH: String = "res://ui/screens/offseason_screen.gd"
 const PostseasonScreen = preload("res://ui/screens/postseason_screen.gd")
 const AwardsScreen = preload("res://ui/screens/awards_screen.gd")
 const HistoryScreen = preload("res://ui/screens/history_screen.gd")
@@ -150,7 +150,7 @@ func _show_screen(screen_name: String) -> void:
 		"skip_options":
 			screen = SkipOptionsScreen.new()
 		"offseason":
-			screen = OffseasonScreen.new()
+			screen = (load(OFFSEASON_SCREEN_PATH) as GDScript).new()
 		"postseason":
 			screen = PostseasonScreen.new()
 		"awards":

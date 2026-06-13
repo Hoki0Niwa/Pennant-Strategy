@@ -7,6 +7,7 @@ const OffseasonService = preload("res://services/season/offseason_service.gd")
 const FaMarketService = preload("res://services/season/fa_market_service.gd")
 const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
 const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
+const CampServiceRef = preload("res://services/season/camp_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 
@@ -320,7 +321,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,retired,released,draft_picks,rookies,growers,decayers,post_active_players,post_draft_generated_ratio,post_seed_cohort_ratio")
+	lines.append("season_index,year,active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,retired,released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_draft_generated_ratio,post_seed_cohort_ratio")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -331,7 +332,7 @@ func csv_text(report: Dictionary) -> String:
 		var post_roster: Dictionary = row.get("roster_after_offseason_next_year", {}) as Dictionary
 		var leaderboards: Dictionary = row.get("leaderboards", {}) as Dictionary
 		var age_bands: Dictionary = roster.get("age_bands", {}) as Dictionary
-		lines.append("%d,%d,%d,%d,%.4f,%d,%d,%.4f,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.2f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%s,%.3f,%s,%.3f,%s,%.2f,%s,%.0f,%s,%d,%d,%d,%d,%d,%d,%d,%.4f,%.4f" % [
+		lines.append("%d,%d,%d,%d,%.4f,%d,%d,%.4f,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.2f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%s,%.3f,%s,%.3f,%s,%.2f,%s,%.0f,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.4f,%.4f" % [
 			int(row.get("season_index", 0)),
 			int(row.get("year", 0)),
 			int(roster.get("active_players", 0)),
@@ -397,6 +398,8 @@ func csv_text(report: Dictionary) -> String:
 			int(offseason.get("rookies_count", 0)),
 			int(offseason.get("growers_count", 0)),
 			int(offseason.get("decayers_count", 0)),
+			int(offseason.get("camp_actions_count", 0)),
+			int(offseason.get("camp_pitch_learning_count", 0)),
 			int(post_roster.get("active_players", 0)),
 			float(post_roster.get("draft_generated_ratio", 0.0)),
 			float(post_roster.get("seed_cohort_ratio", 0.0)),
@@ -408,7 +411,7 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, season)
 	GameDb.rebuild_player_indices()
 
-	# R4/R5 調整: 順番は 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長。
+	# R4/R5/R7 調整: 順番は 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → キャンプ → 成長。
 	# 戦力外: 先に外国人 (別基準: 4枠 + 能力バー) を確定し、その後日本人を外国人込み総数 60 まで詰める
 	# (残す外国人が多いほど日本人を多く切る)。
 	var foreign_release_result: Dictionary = OffseasonService.process_foreign_releases(GameDb.players, GameDb.teams, season)
@@ -444,6 +447,9 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var foreign_result: Dictionary = ForeignPlayerService.process_foreign_market(GameDb.players, GameDb.teams, season, 0)
 	GameDb.rebuild_player_indices()
 
+	var camp_result: Dictionary = CampServiceRef.process_camp(GameDb.players, GameDb.teams, season, 0)
+	GameDb.rebuild_player_indices()
+
 	var growth_result: Dictionary = OffseasonService.process_growth_decay(GameDb.players)
 	GameDb.rebuild_player_indices()
 
@@ -469,6 +475,8 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"released_candidates_count": int(released_market_result.get("candidates_count", 0)),
 		"foreign_signed_count": int(foreign_result.get("signed_count", 0)),
 		"foreign_released_count": int(foreign_release_result.get("released_count", 0)),
+		"camp_actions_count": int(camp_result.get("actions_count", 0)),
+		"camp_pitch_learning_count": int(camp_result.get("normal_pitch_learning_count", 0)),
 	}
 
 

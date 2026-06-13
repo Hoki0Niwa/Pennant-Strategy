@@ -313,10 +313,7 @@ static func _is_low_usage_foreign(player: PSPlayer, record: PSPlayerSeasonRecord
 	if record == null:
 		return false
 	if record.is_pitcher():
-		var role: String = str(record.role)
-		if role.is_empty():
-			role = player.role
-		if role == "starter":
+		if record.is_starter_pitcher():
 			return record.pitcher_stats.starts <= FOREIGN_RELEASE_STARTER_MAX_STARTS
 		return record.pitcher_stats.relief_appearances <= FOREIGN_RELEASE_RELIEVER_MAX_APPEARANCES
 	return record.batter_stats.plate_appearances <= FOREIGN_RELEASE_FIELDER_MAX_PA

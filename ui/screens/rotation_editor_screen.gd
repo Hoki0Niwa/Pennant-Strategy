@@ -179,7 +179,7 @@ func _load_pitcher_pool(team_id: int) -> void:
 	pitcher_records.sort_custom(func(a, b) -> bool:
 		var record_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 		var record_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return PlayerValueEvaluator.pitching_score(record_a) > PlayerValueEvaluator.pitching_score(record_b)
+		return PSPitcherRoleModel.starter_order_score(record_a) > PSPitcherRoleModel.starter_order_score(record_b)
 	)
 
 

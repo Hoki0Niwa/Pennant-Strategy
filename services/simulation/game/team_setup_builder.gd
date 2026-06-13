@@ -465,7 +465,7 @@ static func prepare_team_setup(season: PSSeason, team_id: int, dh_enabled: bool 
 	starter_pitchers.sort_custom(func(a, b) -> bool:
 		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return PSScoringHelpers.pitcher_order_score(pitcher_a) > PSScoringHelpers.pitcher_order_score(pitcher_b)
+		return PSPitcherRoleModel.starter_order_score(pitcher_a) > PSPitcherRoleModel.starter_order_score(pitcher_b)
 	)
 
 	var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(team_id, season.year, season.season_number)
@@ -1027,7 +1027,6 @@ static func reliever_pool_candidates(pitchers: Array) -> Array:
 	return candidates
 
 
-# 先発/リリーフは Pit_Stamina z で分類する（record.role は生成時に全投手 starter で区別不能だった）。
 static func _is_starter_role(record: PSPlayerSeasonRecord) -> bool:
 	if record == null:
 		return false

@@ -8,6 +8,7 @@ const DraftService = preload("res://services/season/draft_service.gd")
 const FaMarketService = preload("res://services/season/fa_market_service.gd")
 const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
 const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
+const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
 
 var current_screen: String = "start"
 var selected_team_id: int = 0
@@ -20,6 +21,7 @@ var draft_state: Dictionary = {}
 var released_market_state: Dictionary = {}
 var fa_state: Dictionary = {}
 var foreign_state: Dictionary = {}
+var camp_state: Dictionary = {}
 var offseason_active: bool = false
 var postseason_active: bool = false
 var current_postseason: PSPostseasonResult = null
@@ -34,6 +36,10 @@ var league_dh_enabled: Dictionary = {
 	"central": true,
 	"pacific": true,
 }
+
+
+func _camp_service() -> GDScript:
+	return load(CAMP_SERVICE_PATH) as GDScript
 
 
 # 自動セーブが有効なときだけ SaveService.save_state を呼ぶラッパー。
@@ -91,6 +97,7 @@ func start_new_season() -> bool:
 	released_market_state = {}
 	fa_state = {}
 	foreign_state = {}
+	camp_state = {}
 	request_screen("home")
 	season_started.emit(current_season)
 	return true
@@ -114,6 +121,7 @@ func start_next_season() -> bool:
 	released_market_state = {}
 	fa_state = {}
 	foreign_state = {}
+	camp_state = {}
 	offseason_active = false
 	postseason_active = false
 	current_postseason = null
@@ -220,6 +228,7 @@ func start_offseason() -> Dictionary:
 	released_market_state = {}
 	fa_state = {}
 	foreign_state = {}
+	camp_state = {}
 	offseason_active = true
 	last_status_message = str(retirement_result.get("title", ""))
 	_save_if_enabled()
@@ -284,7 +293,9 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "FA市場が進行中です。先に完了してください"}
 	if offseason_step == 6 and not _is_foreign_complete():
 		return {"ok": false, "message": "外国人補強が進行中です。先に完了してください"}
-	if offseason_step >= 8:
+	if offseason_step == 7 and not _is_camp_complete():
+		return {"ok": false, "message": "キャンプが進行中です。先に完了してください"}
+	if offseason_step >= 9:
 		return {"ok": false, "message": "オフシーズン処理は完了しています。「翌年開始」で次シーズンへ進んでください"}
 
 	var next_step: int = offseason_step + 1
@@ -330,11 +341,15 @@ func advance_offseason() -> Dictionary:
 			else:
 				step_result = {"title": "外国人補強", "foreign_in_progress": true}
 		7:
-			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
-			# 長期離脱の越冬回復＋翌季への持ち越し (roadmap #6)。
-			OffseasonService.process_injury_carryover(GameDb.players, current_season)
-			step_result["title"] = "成長 / 衰え"
+			camp_state = _camp_service().create_camp_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
+			if _is_camp_complete():
+				step_result = _finalize_camp_if_complete()
+			else:
+				step_result = {"title": "キャンプ", "camp_in_progress": true}
 		8:
+			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
+			step_result["title"] = "成長 / 衰え"
+		9:
 			step_result = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, current_season)
 			step_result["title"] = "契約更新"
 		_:
@@ -630,8 +645,75 @@ func _finalize_foreign_if_complete() -> Dictionary:
 	return result
 
 
+func submit_camp_candidate(candidate_id: int) -> Dictionary:
+	return _submit_camp_decision(candidate_id, "train")
+
+
+func skip_camp_candidate(candidate_id: int) -> Dictionary:
+	return _submit_camp_decision(candidate_id, "skip")
+
+
+func _submit_camp_decision(candidate_id: int, action: String) -> Dictionary:
+	if not offseason_active or offseason_step != 7:
+		return {"ok": false, "message": "キャンプは現在有効ではありません"}
+	if camp_state.is_empty():
+		return {"ok": false, "message": "キャンプが初期化されていません"}
+	var result: Dictionary = _camp_service().submit_user_camp_action(camp_state, GameDb.players, GameDb.teams, current_season, candidate_id, action)
+	camp_state = result.get("state", camp_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	if _is_camp_complete():
+		_finalize_camp_if_complete()
+	_save_if_enabled()
+	return {"ok": true, "state": camp_state}
+
+
+func auto_camp_user_pick() -> Dictionary:
+	if not offseason_active or offseason_step != 7:
+		return {"ok": false, "message": "キャンプは現在有効ではありません"}
+	if camp_state.is_empty():
+		return {"ok": false, "message": "キャンプが初期化されていません"}
+	var result: Dictionary = _camp_service().auto_pick_for_user(camp_state, GameDb.players, GameDb.teams, current_season)
+	camp_state = result.get("state", camp_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	if _is_camp_complete():
+		_finalize_camp_if_complete()
+	_save_if_enabled()
+	return {"ok": true, "state": camp_state}
+
+
+func finish_camp() -> Dictionary:
+	if not offseason_active or offseason_step != 7:
+		return {"ok": false, "message": "キャンプは現在有効ではありません"}
+	if camp_state.is_empty():
+		return {"ok": false, "message": "キャンプが初期化されていません"}
+	var result: Dictionary = _camp_service().finish_user_camp(camp_state, GameDb.players, GameDb.teams, current_season)
+	camp_state = result.get("state", camp_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	_finalize_camp_if_complete()
+	_save_if_enabled()
+	return {"ok": true, "state": camp_state}
+
+
+func _is_camp_complete() -> bool:
+	return not camp_state.is_empty() and bool(camp_state.get("complete", false))
+
+
+func _finalize_camp_if_complete() -> Dictionary:
+	if not _is_camp_complete():
+		return {"title": "キャンプ", "camp_in_progress": true}
+	var result: Dictionary = _camp_service().finalize_camp(camp_state, GameDb.players, current_season)
+	GameDb.rebuild_player_indices()
+	result["title"] = "キャンプ"
+	offseason_results["step_7"] = result
+	last_status_message = "キャンプ"
+	return result
+
+
 func finalize_offseason() -> bool:
-	if offseason_step < 8:
+	if offseason_step < 9:
 		push_warning("Offseason not fully processed before finalize")
 	return start_next_season()
 
@@ -841,6 +923,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	released_market_state = (data.get("released_market_state", {}) as Dictionary).duplicate(true)
 	fa_state = (data.get("fa_state", {}) as Dictionary).duplicate(true)
 	foreign_state = (data.get("foreign_state", {}) as Dictionary).duplicate(true)
+	camp_state = (data.get("camp_state", {}) as Dictionary).duplicate(true)
 	offseason_active = bool(data.get("offseason_active", false))
 	postseason_active = bool(data.get("postseason_active", false))
 	auto_roster_swap_for_user_team = bool(data.get("auto_roster_swap_for_user_team", false))

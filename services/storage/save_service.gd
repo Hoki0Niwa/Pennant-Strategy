@@ -30,6 +30,7 @@ static func save_state(app_state) -> bool:
 		"released_market_state": app_state.released_market_state,
 		"fa_state": app_state.fa_state,
 		"foreign_state": app_state.foreign_state,
+		"camp_state": app_state.camp_state,
 		"offseason_active": app_state.offseason_active,
 		"postseason_active": app_state.postseason_active,
 		"current_postseason": app_state.current_postseason.to_dict() if app_state.current_postseason != null else {},

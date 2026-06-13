@@ -9,7 +9,7 @@ static func batter_order_score(record: PSPlayerSeasonRecord) -> int:
 
 
 static func pitcher_order_score(record: PSPlayerSeasonRecord) -> int:
-	return PlayerValueEvaluator.pitching_score(record)
+	return int(round(PSPitcherRoleModel.starter_order_score(record)))
 
 
 static func maybe_injure(record: PSPlayerSeasonRecord, is_pitcher: bool, exposure: float = 1.0) -> void:

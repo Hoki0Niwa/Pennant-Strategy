@@ -292,10 +292,9 @@ func z_display(key: String, default_z: float = 0.0) -> int:
 	return PSAbilityScale.z_to_display(z_ability(key, default_z))
 
 
-# 先発/リリーフ判定: スタミナ z (Pit_Stamina) が閾値以上の投手を先発とする（閾値は調整可能）。
-const STARTER_STAMINA_Z_THRESHOLD: float = 1.0
 func is_starter_pitcher() -> bool:
-	return is_pitcher() and z_ability("Pit_Stamina", 0.0) >= STARTER_STAMINA_Z_THRESHOLD
+	var model: GDScript = load("res://services/simulation/models/pitcher_role_model.gd") as GDScript
+	return model.is_starter_record(self)
 
 
 # 特例: max_velocity は raw 値。

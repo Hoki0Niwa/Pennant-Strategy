@@ -22,7 +22,7 @@ func _ready() -> void:
 	AppState.current_season = SeasonService.create_new_season(GameDb.teams, AppState.selected_team_id, 2026)
 	AppState.current_screen = "team_select"
 	AppState.offseason_active = true
-	AppState.offseason_step = 8
+	AppState.offseason_step = 9
 	var advanced: bool = AppState.start_next_season()
 	ok = _expect(advanced, "start_next_season succeeds", ok)
 	ok = _expect(AppState.current_screen == "home", "next season starts on home screen (got %s)" % AppState.current_screen, ok)

@@ -3,12 +3,13 @@ extends Control
 const DraftService = preload("res://services/season/draft_service.gd")
 const FaMarketService = preload("res://services/season/fa_market_service.gd")
 const ForeignPlayerService = preload("res://services/season/foreign_player_service.gd")
+const CampServiceRef = preload("res://services/season/camp_service.gd")
 const Offseason = preload("res://services/season/offseason_service.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const TeamFinance = preload("res://services/season/team_finance.gd")
-const TOTAL_STEPS: int = 8
+const TOTAL_STEPS: int = 9
 
 # 戦力外通告リストの列。先頭は選択チェック表示。
 const RELEASE_COLUMNS: Array = [
@@ -162,6 +163,35 @@ const FOREIGN_CANDIDATE_COLUMNS: Array = [
 	{"title": "年俸", "key": "salary", "width": 88, "type": "number", "format": "int", "align": "right"},
 ]
 
+const CAMP_CANDIDATE_COLUMNS: Array = [
+	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
+	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
+	{"title": "練習", "key": "training", "width": 120, "type": "string", "format": "string"},
+	{"title": "対象", "key": "target", "width": 80, "type": "string", "format": "string"},
+	{"title": "成功", "key": "chance", "width": 62, "type": "number", "format": "pct1"},
+	{"title": "期待", "key": "value", "width": 64, "type": "number", "format": "float1"},
+	{"title": "理由", "key": "reason", "width": 280, "type": "string", "format": "string"},
+]
+
+const CAMP_RESULT_COLUMNS: Array = [
+	{"title": "チーム", "key": "team", "width": 72, "type": "string", "format": "string"},
+	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "練習", "key": "training", "width": 120, "type": "string", "format": "string"},
+	{"title": "成否", "key": "result", "width": 64, "type": "string", "format": "string"},
+	{"title": "対象", "key": "target", "width": 80, "type": "string", "format": "string"},
+	{"title": "変化", "key": "change", "width": 180, "type": "string", "format": "string"},
+	{"title": "総合", "key": "overall", "width": 84, "type": "string", "format": "string"},
+]
+
+const CAMP_PITCH_COLUMNS: Array = [
+	{"title": "チーム", "key": "team", "width": 72, "type": "string", "format": "string"},
+	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
+	{"title": "習得球種", "key": "pitch", "width": 110, "type": "string", "format": "string"},
+	{"title": "完成度", "key": "grade", "width": 64, "type": "string", "format": "string"},
+]
+
 # 成長結果テーブル: 投手 (左)。総合・表示能力 (球速/球質/制球/スタミナ) を同じ "66(+6)" 形式
 # (変化後の値(+増減)) で見せる。総合列は表示は文字列だが sort_key=delta で数値ソートできる。
 const PITCHER_GROWTH_COLUMNS: Array = [
@@ -272,6 +302,18 @@ var foreign_auto_all_button: Button
 var selected_foreign_candidate_id: int = 0
 var _suppress_foreign_select: bool = false
 
+# step 7 camp widgets
+var camp_panel: VBoxContainer
+var camp_status_label: Label
+var camp_candidate_list: Tree
+var camp_detail_text: RichTextLabel
+var camp_submit_button: Button
+var camp_skip_button: Button
+var camp_auto_button: Button
+var camp_finish_button: Button
+var selected_camp_candidate_id: int = 0
+var _suppress_camp_select: bool = false
+
 
 func _ready() -> void:
 	_build()
@@ -327,6 +369,9 @@ func _build() -> void:
 
 	foreign_panel = _build_foreign_panel()
 	root.add_child(foreign_panel)
+
+	camp_panel = _build_camp_panel()
+	root.add_child(camp_panel)
 
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -766,6 +811,88 @@ func _build_foreign_panel() -> VBoxContainer:
 	return panel
 
 
+func _build_camp_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_theme_constant_override("separation", 8)
+
+	var control_row: HBoxContainer = HBoxContainer.new()
+	control_row.add_theme_constant_override("separation", 8)
+	panel.add_child(control_row)
+
+	camp_status_label = Label.new()
+	camp_status_label.add_theme_font_size_override("font_size", 16)
+	camp_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	control_row.add_child(camp_status_label)
+
+	camp_submit_button = Button.new()
+	camp_submit_button.text = "実行"
+	camp_submit_button.custom_minimum_size = Vector2(100, 32)
+	camp_submit_button.pressed.connect(_on_camp_submit_pressed)
+	control_row.add_child(camp_submit_button)
+
+	camp_skip_button = Button.new()
+	camp_skip_button.text = "見送る"
+	camp_skip_button.custom_minimum_size = Vector2(100, 32)
+	camp_skip_button.pressed.connect(_on_camp_skip_pressed)
+	control_row.add_child(camp_skip_button)
+
+	camp_auto_button = Button.new()
+	camp_auto_button.text = "自軍をAIに任せる"
+	camp_auto_button.custom_minimum_size = Vector2(160, 32)
+	camp_auto_button.pressed.connect(_on_camp_auto_pressed)
+	control_row.add_child(camp_auto_button)
+
+	camp_finish_button = Button.new()
+	camp_finish_button.text = "キャンプ終了"
+	camp_finish_button.custom_minimum_size = Vector2(130, 32)
+	camp_finish_button.pressed.connect(_on_camp_finish_pressed)
+	control_row.add_child(camp_finish_button)
+
+	var body_row: HBoxContainer = HBoxContainer.new()
+	body_row.add_theme_constant_override("separation", 8)
+	body_row.custom_minimum_size = Vector2(0, 460)
+	body_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_child(body_row)
+
+	var list_box: VBoxContainer = VBoxContainer.new()
+	list_box.custom_minimum_size = Vector2(760, 0)
+	list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_row.add_child(list_box)
+
+	var title: Label = Label.new()
+	title.text = "特別練習候補"
+	title.add_theme_font_size_override("font_size", 16)
+	list_box.add_child(title)
+
+	camp_candidate_list = SortableTable.new()
+	camp_candidate_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	list_box.add_child(camp_candidate_list)
+	camp_candidate_list.configure(CAMP_CANDIDATE_COLUMNS)
+	camp_candidate_list.item_selected.connect(_on_camp_candidate_selected)
+
+	var detail_box: VBoxContainer = VBoxContainer.new()
+	detail_box.custom_minimum_size = Vector2(460, 0)
+	detail_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_row.add_child(detail_box)
+
+	var detail_title: Label = Label.new()
+	detail_title.text = "候補詳細"
+	detail_title.add_theme_font_size_override("font_size", 16)
+	detail_box.add_child(detail_title)
+
+	camp_detail_text = RichTextLabel.new()
+	camp_detail_text.bbcode_enabled = false
+	camp_detail_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	camp_detail_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_box.add_child(camp_detail_text)
+	return panel
+
+
 func _refresh() -> void:
 	var step: int = AppState.offseason_step
 	step_indicator.text = "ステップ%d / %d" % [step + 1, TOTAL_STEPS + 1]
@@ -777,6 +904,7 @@ func _refresh() -> void:
 		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = false
+		camp_panel.visible = false
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
@@ -789,6 +917,7 @@ func _refresh() -> void:
 		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = false
+		camp_panel.visible = false
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
@@ -803,6 +932,7 @@ func _refresh() -> void:
 		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = false
+		camp_panel.visible = false
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
@@ -816,6 +946,7 @@ func _refresh() -> void:
 		released_market_panel.visible = true
 		fa_panel.visible = false
 		foreign_panel.visible = false
+		camp_panel.visible = false
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
@@ -829,6 +960,7 @@ func _refresh() -> void:
 		released_market_panel.visible = false
 		fa_panel.visible = true
 		foreign_panel.visible = false
+		camp_panel.visible = false
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
@@ -842,6 +974,7 @@ func _refresh() -> void:
 		released_market_panel.visible = false
 		fa_panel.visible = false
 		foreign_panel.visible = true
+		camp_panel.visible = false
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
@@ -849,11 +982,26 @@ func _refresh() -> void:
 		_populate_foreign_panel()
 		return
 
+	if step == 7 and not AppState.camp_state.is_empty() and not bool(AppState.camp_state.get("complete", false)):
+		release_panel.visible = false
+		draft_panel.visible = false
+		released_market_panel.visible = false
+		fa_panel.visible = false
+		foreign_panel.visible = false
+		camp_panel.visible = true
+		_clear_content()
+		next_button.disabled = true
+		finalize_button.disabled = true
+		status_label.text = "キャンプ"
+		_populate_camp_panel()
+		return
+
 	release_panel.visible = false
 	draft_panel.visible = false
 	released_market_panel.visible = false
 	fa_panel.visible = false
 	foreign_panel.visible = false
+	camp_panel.visible = false
 	next_button.disabled = step >= TOTAL_STEPS
 	finalize_button.disabled = step < TOTAL_STEPS
 
@@ -921,8 +1069,10 @@ func _render_step_content(step: int, result: Dictionary) -> void:
 		6:
 			_render_foreign_market(result)
 		7:
-			_render_growth(result)
+			_render_camp(result)
 		8:
+			_render_growth(result)
+		9:
 			_render_contract_update(result)
 		_:
 			pass
@@ -1074,6 +1224,88 @@ func _render_foreign_market(result: Dictionary) -> void:
 		})
 	_add_content_heading("外国人獲得 %d人" % signings.size(), 16)
 	_add_content_table(FOREIGN_COLUMNS, rows, 360)
+
+
+func _render_camp(result: Dictionary) -> void:
+	var actions_count: int = int(result.get("actions_count", 0))
+	var success_count: int = int(result.get("success_count", 0))
+	var pitch_count: int = int(result.get("normal_pitch_learning_count", 0))
+	_add_content_heading("キャンプ: 特別練習 %d件 / 成功 %d件 / 通常キャンプ球種習得 %d人" % [
+		actions_count, success_count, pitch_count,
+	], 18)
+	var actions: Array = result.get("actions", []) as Array
+	if actions.is_empty():
+		_set_content_message_after("今オフは特別練習がありませんでした。")
+	else:
+		var rows: Array = []
+		for action_row in actions:
+			var action: Dictionary = action_row as Dictionary
+			rows.append({
+				"team": _team_short(int(action.get("team_id", 0))),
+				"name": str(action.get("name", "")),
+				"training": str(action.get("training_label", "")),
+				"result": "成功" if bool(action.get("success", false)) else ("失敗*" if bool(action.get("penalty", false)) else "失敗"),
+				"target": _camp_action_target(action),
+				"change": _camp_action_change(action),
+				"overall": "%d→%d" % [int(action.get("before", 0)), int(action.get("after", 0))],
+			})
+		_add_content_table(CAMP_RESULT_COLUMNS, rows, 360)
+
+	var pitch_learning: Array = result.get("normal_pitch_learning", []) as Array
+	if not pitch_learning.is_empty():
+		var pitch_rows: Array = []
+		for pitch_row in pitch_learning:
+			var pitch: Dictionary = pitch_row as Dictionary
+			pitch_rows.append({
+				"team": _team_short(int(pitch.get("team_id", 0))),
+				"name": str(pitch.get("name", "")),
+				"age": int(pitch.get("age", 0)),
+				"pitch": str(pitch.get("pitch_name", "")),
+				"grade": str(pitch.get("mastery_grade", "")),
+			})
+		_add_content_heading("通常キャンプでの変化球習得", 16)
+		_add_content_table(CAMP_PITCH_COLUMNS, pitch_rows, 220)
+
+
+func _camp_action_target(action: Dictionary) -> String:
+	var target_position: int = int(action.get("target_position", 0))
+	if target_position > 0:
+		return _position_name(target_position)
+	var new_role: String = str(action.get("new_role", ""))
+	if new_role == "starter":
+		return "先発"
+	if new_role == "reliever":
+		return "リリーフ"
+	return ""
+
+
+func _camp_action_change(action: Dictionary) -> String:
+	var target_position: int = int(action.get("target_position", 0))
+	if target_position > 0:
+		var apt_before: int = int(action.get("aptitude_before", 0))
+		var apt_after: int = int(action.get("aptitude_after", 0))
+		var old_pos: int = int(action.get("old_position", 0))
+		var new_pos: int = int(action.get("new_position", 0))
+		if old_pos != new_pos:
+			return "%s→%s / 適性%d→%d" % [_position_name(old_pos), _position_name(new_pos), apt_before, apt_after]
+		return "適性%d→%d" % [apt_before, apt_after]
+	var old_role: String = str(action.get("old_role", ""))
+	var new_role: String = str(action.get("new_role", ""))
+	if old_role != new_role:
+		return "%s→%s" % [_role_label(old_role), _role_label(new_role)]
+	return _role_label(new_role)
+
+
+func _role_label(role: String) -> String:
+	match role:
+		"starter":
+			return "先発"
+		"reliever":
+			return "リリーフ"
+		"closer":
+			return "抑え"
+		_:
+			return role
 
 
 # R4 Step1: 契約更新ステップ (年俸再査定 + FA権遷移 + 予算会計)。
@@ -1889,6 +2121,131 @@ func _on_foreign_candidate_selected() -> void:
 	foreign_detail_text.text = _format_foreign_details(_foreign_candidate_by_id(candidates, selected_foreign_candidate_id))
 
 
+func _populate_camp_panel() -> void:
+	var state: Dictionary = AppState.camp_state
+	var candidates: Array = CampServiceRef.available_user_candidates(state)
+	var actions: Array = state.get("actions", []) as Array
+	var user_actions: int = 0
+	for row in actions:
+		if int((row as Dictionary).get("team_id", 0)) == AppState.selected_team_id:
+			user_actions += 1
+	camp_status_label.text = "キャンプ: 自軍特別練習 %d/%d件 / 候補%d人" % [
+		user_actions,
+		CampServiceRef.MAX_SPECIAL_TRAININGS_PER_TEAM,
+		candidates.size(),
+	]
+	var rows: Array = []
+	for candidate_row in candidates:
+		var c: Dictionary = candidate_row as Dictionary
+		rows.append({
+			"name": str(c.get("name", "")),
+			"age": int(c.get("age", 0)),
+			"pos": _position_name(int(c.get("position", 0))),
+			"training": str(c.get("training_label", "")),
+			"target": _camp_candidate_target(c),
+			"chance": float(c.get("success_chance", 0.0)),
+			"value": float(c.get("expected_value", 0.0)),
+			"reason": str(c.get("reason", "")),
+			"__meta": int(c.get("candidate_id", 0)),
+		})
+	_suppress_camp_select = true
+	camp_candidate_list.set_rows(rows)
+	if selected_camp_candidate_id > 0 and _camp_candidate_by_id(candidates, selected_camp_candidate_id).is_empty():
+		selected_camp_candidate_id = 0
+	if selected_camp_candidate_id <= 0:
+		var first_meta: Variant = camp_candidate_list.get_first_meta()
+		if first_meta != null:
+			selected_camp_candidate_id = int(first_meta)
+	camp_candidate_list.select_meta(selected_camp_candidate_id)
+	_suppress_camp_select = false
+	camp_detail_text.text = _format_camp_details(_camp_candidate_by_id(candidates, selected_camp_candidate_id))
+	var has_candidate: bool = selected_camp_candidate_id > 0
+	camp_submit_button.disabled = not has_candidate
+	camp_skip_button.disabled = not has_candidate
+	camp_auto_button.disabled = bool(state.get("complete", false))
+	camp_finish_button.disabled = bool(state.get("complete", false))
+
+
+func _camp_candidate_by_id(candidates: Array, candidate_id: int) -> Dictionary:
+	for row in candidates:
+		var c: Dictionary = row as Dictionary
+		if int(c.get("candidate_id", 0)) == candidate_id:
+			return c
+	return {}
+
+
+func _camp_candidate_target(candidate: Dictionary) -> String:
+	var target_position: int = int(candidate.get("target_position", 0))
+	if target_position > 0:
+		return _position_name(target_position)
+	var training_type: String = str(candidate.get("training_type", ""))
+	if training_type == CampServiceRef.TRAIN_STARTER:
+		return "先発"
+	if training_type == CampServiceRef.TRAIN_RELIEVER:
+		return "リリーフ"
+	return ""
+
+
+func _format_camp_details(candidate: Dictionary) -> String:
+	if candidate.is_empty():
+		return "特別練習候補を選択してください。"
+	var player: PSPlayer = GameDb.get_player(int(candidate.get("player_id", 0)))
+	var target_position: int = int(candidate.get("target_position", 0))
+	var lines: Array = []
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
+	lines.append("%d歳  %s → %s" % [
+		int(candidate.get("age", 0)),
+		str(candidate.get("training_label", "")),
+		_camp_candidate_target(candidate),
+	])
+	lines.append("成功率 %0.1f%%  リスク %s  期待値 %+0.1f" % [
+		float(candidate.get("success_chance", 0.0)) * 100.0,
+		str(candidate.get("risk_label", "中")),
+		float(candidate.get("expected_value", 0.0)),
+	])
+	lines.append("理由: %s" % str(candidate.get("reason", "")))
+	if target_position > 0:
+		var current: int = _player_position_aptitude_for_ui(player, target_position)
+		lines.append("対象適性: %s %d → 成功時 %d" % [
+			_position_name(target_position),
+			current,
+			int(candidate.get("projected_aptitude", 0)),
+		])
+	if player != null:
+		lines.append("")
+		lines.append("能力")
+		lines.append(PlayerVisibleRatings.summary_line_for_player_data(player.to_dict()))
+		if player.is_pitcher():
+			var arsenal_text: String = PSPitchTypes.arsenal_line(player.arsenal)
+			if not arsenal_text.is_empty():
+				lines.append("")
+				lines.append("球種")
+				lines.append(arsenal_text)
+	return "\n".join(lines)
+
+
+func _player_position_aptitude_for_ui(player: PSPlayer, position: int) -> int:
+	if player == null or position < 3 or position > 9:
+		return 0
+	var key: String = PSPlayer.position_experience_key(position)
+	if key.is_empty():
+		return 0
+	if player.position_aptitudes.is_empty():
+		return 100 if player.position == position else 0
+	return int(player.position_aptitudes.get(key, 0))
+
+
+func _on_camp_candidate_selected() -> void:
+	if _suppress_camp_select:
+		return
+	var meta: Variant = camp_candidate_list.get_selected_meta()
+	if meta == null:
+		return
+	selected_camp_candidate_id = int(meta)
+	var candidates: Array = CampServiceRef.available_user_candidates(AppState.camp_state)
+	camp_detail_text.text = _format_camp_details(_camp_candidate_by_id(candidates, selected_camp_candidate_id))
+
+
 func _active_foreign_count(team_id: int) -> int:
 	var count: int = 0
 	for player_row in GameDb.players:
@@ -2295,6 +2652,56 @@ func _on_foreign_auto_all_pressed() -> void:
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
 	selected_foreign_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_camp_submit_pressed() -> void:
+	if selected_camp_candidate_id <= 0:
+		status_label.text = "特別練習候補を選択してください。"
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	var result: Dictionary = AppState.submit_camp_candidate(selected_camp_candidate_id)
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "特別練習の実行に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_camp_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_camp_skip_pressed() -> void:
+	if selected_camp_candidate_id <= 0:
+		return
+	var result: Dictionary = AppState.skip_camp_candidate(selected_camp_candidate_id)
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "特別練習の見送りに失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_camp_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_camp_auto_pressed() -> void:
+	var result: Dictionary = AppState.auto_camp_user_pick()
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "キャンプ自動判断に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_camp_candidate_id = 0
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_camp_finish_pressed() -> void:
+	var result: Dictionary = AppState.finish_camp()
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "キャンプ終了に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	selected_camp_candidate_id = 0
 	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	_refresh()
 
