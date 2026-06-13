@@ -325,10 +325,10 @@ func _game_row(team_id: int, game: Dictionary) -> Dictionary:
 	var home_name: String = _team_short(home_id)
 	var result_dict: Dictionary = game.get("result", {}) as Dictionary
 	var winning_team_id: int = int(result_dict.get("winning_team_id", 0))
-	var draw: bool = bool(result_dict.get("draw", false))
+	var is_draw: bool = bool(result_dict.get("draw", false))
 
 	var marker: String = "△"
-	if not draw:
+	if not is_draw:
 		marker = "○" if winning_team_id == team_id else "●"
 
 	var dh_label: String = "  DH" if bool(game.get("dh_enabled", false)) else ""

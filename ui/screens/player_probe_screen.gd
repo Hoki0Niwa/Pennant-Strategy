@@ -893,7 +893,7 @@ func _oaa_zone_label(zone: String) -> String:
 
 
 # UZR / RngR / ErrR / DPR の集計対象ポジション (1-9) を "P1"-"P9" に変換。
-func _uzr_position_label(position: int) -> String:
-	if position <= 0 or position > 9:
+func _uzr_position_label(pos: int) -> String:
+	if pos <= 0 or pos > 9:
 		return "-"
-	return "P%d" % position
+	return "P%d" % pos

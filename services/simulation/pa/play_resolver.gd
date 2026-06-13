@@ -692,11 +692,11 @@ static func _catch_probability_used(
 	position: int,
 	trajectory: String
 ) -> float:
-	var reference: float = float(POSITION_AVG_DEFENSE_SCORE_Z.get(position, DEFAULT_FIELDING_AXIS_Z))
+	var baseline: float = float(POSITION_AVG_DEFENSE_SCORE_Z.get(position, DEFAULT_FIELDING_AXIS_Z))
 	var weight: float = float(POSITION_CATCH_CONVERSION_WEIGHT_Z.get(position, 0.035))
 	var trajectory_multiplier: float = _trajectory_position_multiplier(trajectory, position)
 	var catch_score: float = _catch_axis_score(ability_profile, trajectory)
-	var adjustment: float = (catch_score - reference) * weight * trajectory_multiplier
+	var adjustment: float = (catch_score - baseline) * weight * trajectory_multiplier
 	return clamp(neutral + adjustment, 0.04, 0.985)
 
 

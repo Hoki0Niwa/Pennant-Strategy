@@ -9,6 +9,7 @@ const PlayerVisibleRatings = preload("res://services/simulation/player_visible_r
 const ReleasedMarketService = preload("res://services/season/released_market_service.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const TeamFinance = preload("res://services/season/team_finance.gd")
+const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const TOTAL_STEPS: int = 9
 
 # 戦力外通告リストの列。先頭は選択チェック表示。
@@ -163,15 +164,12 @@ const FOREIGN_CANDIDATE_COLUMNS: Array = [
 	{"title": "年俸", "key": "salary", "width": 88, "type": "number", "format": "int", "align": "right"},
 ]
 
-const CAMP_CANDIDATE_COLUMNS: Array = [
+const CAMP_ROSTER_COLUMNS: Array = [
+	{"title": "背", "key": "jersey", "width": 44, "type": "string", "format": "string"},
+	{"title": "守備", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
-	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
-	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
-	{"title": "練習", "key": "training", "width": 120, "type": "string", "format": "string"},
-	{"title": "対象", "key": "target", "width": 80, "type": "string", "format": "string"},
-	{"title": "成功", "key": "chance", "width": 62, "type": "number", "format": "pct1"},
-	{"title": "期待", "key": "value", "width": 64, "type": "number", "format": "float1"},
-	{"title": "理由", "key": "reason", "width": 280, "type": "string", "format": "string"},
+	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
+	{"title": "評価", "key": "eval", "width": 56, "type": "number", "format": "int"},
 ]
 
 const CAMP_RESULT_COLUMNS: Array = [
@@ -305,14 +303,18 @@ var _suppress_foreign_select: bool = false
 # step 7 camp widgets
 var camp_panel: VBoxContainer
 var camp_status_label: Label
-var camp_candidate_list: Tree
+var camp_player_list: Tree
+var camp_training_select: OptionButton
+var camp_position_select: OptionButton
 var camp_detail_text: RichTextLabel
 var camp_submit_button: Button
-var camp_skip_button: Button
 var camp_auto_button: Button
 var camp_finish_button: Button
-var selected_camp_candidate_id: int = 0
+var selected_camp_player_id: int = 0
+var selected_camp_training_type: String = ""
+var selected_camp_target_position: int = 0
 var _suppress_camp_select: bool = false
+var _suppress_camp_training_select: bool = false
 
 
 func _ready() -> void:
@@ -832,12 +834,6 @@ func _build_camp_panel() -> VBoxContainer:
 	camp_submit_button.pressed.connect(_on_camp_submit_pressed)
 	control_row.add_child(camp_submit_button)
 
-	camp_skip_button = Button.new()
-	camp_skip_button.text = "見送る"
-	camp_skip_button.custom_minimum_size = Vector2(100, 32)
-	camp_skip_button.pressed.connect(_on_camp_skip_pressed)
-	control_row.add_child(camp_skip_button)
-
 	camp_auto_button = Button.new()
 	camp_auto_button.text = "自軍をAIに任せる"
 	camp_auto_button.custom_minimum_size = Vector2(160, 32)
@@ -858,21 +854,22 @@ func _build_camp_panel() -> VBoxContainer:
 	panel.add_child(body_row)
 
 	var list_box: VBoxContainer = VBoxContainer.new()
-	list_box.custom_minimum_size = Vector2(760, 0)
+	list_box.custom_minimum_size = Vector2(560, 0)
 	list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	list_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body_row.add_child(list_box)
 
 	var title: Label = Label.new()
-	title.text = "特別練習候補"
+	title.text = "選手一覧"
 	title.add_theme_font_size_override("font_size", 16)
 	list_box.add_child(title)
 
-	camp_candidate_list = SortableTable.new()
-	camp_candidate_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	list_box.add_child(camp_candidate_list)
-	camp_candidate_list.configure(CAMP_CANDIDATE_COLUMNS)
-	camp_candidate_list.item_selected.connect(_on_camp_candidate_selected)
+	camp_player_list = SortableTable.new()
+	camp_player_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	list_box.add_child(camp_player_list)
+	camp_player_list.configure(CAMP_ROSTER_COLUMNS)
+	camp_player_list.set_default_sort(4, false)
+	camp_player_list.item_selected.connect(_on_camp_player_selected)
 
 	var detail_box: VBoxContainer = VBoxContainer.new()
 	detail_box.custom_minimum_size = Vector2(460, 0)
@@ -881,9 +878,25 @@ func _build_camp_panel() -> VBoxContainer:
 	body_row.add_child(detail_box)
 
 	var detail_title: Label = Label.new()
-	detail_title.text = "候補詳細"
+	detail_title.text = "特別練習"
 	detail_title.add_theme_font_size_override("font_size", 16)
 	detail_box.add_child(detail_title)
+
+	var training_row: HBoxContainer = HBoxContainer.new()
+	training_row.add_theme_constant_override("separation", 8)
+	detail_box.add_child(training_row)
+
+	camp_training_select = OptionButton.new()
+	camp_training_select.custom_minimum_size = Vector2(190, 32)
+	camp_training_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	camp_training_select.item_selected.connect(_on_camp_training_selected)
+	training_row.add_child(camp_training_select)
+
+	camp_position_select = OptionButton.new()
+	camp_position_select.custom_minimum_size = Vector2(150, 32)
+	camp_position_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	camp_position_select.item_selected.connect(_on_camp_target_selected)
+	training_row.add_child(camp_position_select)
 
 	camp_detail_text = RichTextLabel.new()
 	camp_detail_text.bbcode_enabled = false
@@ -1625,20 +1638,20 @@ func _update_draft_position_summary(state: Dictionary) -> void:
 	var holders: Dictionary = profile.get("position_holders", {}) as Dictionary
 	var top: Dictionary = profile.get("position_top_overall", {}) as Dictionary
 	var parts: Array = []
-	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
-		var primary_count: int = _profile_count(primary, position)
-		var holder_count: int = _profile_count(holders, position)
-		var top_overall: int = _profile_count(top, position)
+	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
+		var primary_count: int = _profile_count(primary, pos)
+		var holder_count: int = _profile_count(holders, pos)
+		var top_overall: int = _profile_count(top, pos)
 		var overall_text: String = str(top_overall) if top_overall > 0 else "—"
-		parts.append("%s 本職%d 守備可%d 主力%s" % [_position_char(position), primary_count, holder_count, overall_text])
+		parts.append("%s 本職%d 守備可%d 主力%s" % [_position_char(pos), primary_count, holder_count, overall_text])
 	draft_position_summary_label.text = "自球団 " + _team_short(AppState.selected_team_id) + " ：  " + "   ｜  ".join(parts)
 
 
 # team_profiles の position 別 Dictionary から値を取得 (保存/復元で int キーが文字列化する場合に両対応)。
-func _profile_count(source: Dictionary, position: int) -> int:
-	if source.has(position):
-		return int(source.get(position, 0))
-	return int(source.get(str(position), 0))
+func _profile_count(source: Dictionary, pos: int) -> int:
+	if source.has(pos):
+		return int(source.get(pos, 0))
+	return int(source.get(str(pos), 0))
 
 
 func _populate_candidate_table(table: Tree, candidates: Array) -> void:
@@ -1697,9 +1710,9 @@ func _format_candidate_details(candidate: Dictionary) -> String:
 		return "候補を選択してください。"
 	var template: Dictionary = candidate.get("player_template", {}) as Dictionary
 	var aptitudes: Dictionary = template.get("position_aptitudes", {}) as Dictionary
-	var position: int = int(candidate.get("position", 0))
+	var pos: int = int(candidate.get("position", 0))
 	var lines: Array = []
-	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(position)])
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(pos)])
 	lines.append("%d歳  %s  指名優先#%d" % [
 		int(candidate.get("age", 0)),
 		_source_label(str(candidate.get("source_type", ""))),
@@ -1712,11 +1725,11 @@ func _format_candidate_details(candidate: Dictionary) -> String:
 	])
 	lines.append("")
 	var visible_template: Dictionary = template.duplicate(true)
-	visible_template["position"] = position
-	visible_template["role"] = "starter" if position == 1 else "fielder"
+	visible_template["position"] = pos
+	visible_template["role"] = "starter" if pos == 1 else "fielder"
 	lines.append("能力")
 	lines.append(PlayerVisibleRatings.summary_line_for_player_data(visible_template))
-	if position == 1:
+	if pos == 1:
 		var arsenal_text: String = PSPitchTypes.arsenal_line(template.get("arsenal", []) as Array)
 		if not arsenal_text.is_empty():
 			lines.append("")
@@ -2123,58 +2136,206 @@ func _on_foreign_candidate_selected() -> void:
 
 func _populate_camp_panel() -> void:
 	var state: Dictionary = AppState.camp_state
-	var candidates: Array = CampServiceRef.available_user_candidates(state)
 	var actions: Array = state.get("actions", []) as Array
 	var user_actions: int = 0
 	for row in actions:
 		if int((row as Dictionary).get("team_id", 0)) == AppState.selected_team_id:
 			user_actions += 1
-	camp_status_label.text = "キャンプ: 自軍特別練習 %d/%d件 / 候補%d人" % [
+	var roster_players: Array = _camp_roster_players()
+	camp_status_label.text = "キャンプ: 自軍特別練習 %d/%d件 / 選手%d人" % [
 		user_actions,
 		CampServiceRef.MAX_SPECIAL_TRAININGS_PER_TEAM,
-		candidates.size(),
+		roster_players.size(),
 	]
 	var rows: Array = []
-	for candidate_row in candidates:
-		var c: Dictionary = candidate_row as Dictionary
-		rows.append({
-			"name": str(c.get("name", "")),
-			"age": int(c.get("age", 0)),
-			"pos": _position_name(int(c.get("position", 0))),
-			"training": str(c.get("training_label", "")),
-			"target": _camp_candidate_target(c),
-			"chance": float(c.get("success_chance", 0.0)),
-			"value": float(c.get("expected_value", 0.0)),
-			"reason": str(c.get("reason", "")),
-			"__meta": int(c.get("candidate_id", 0)),
-		})
+	var trained: Dictionary = _camp_trained_player_set(state)
+	var roster_ids: Dictionary = {}
+	for player_row in roster_players:
+		var roster_player: PSPlayer = player_row as PSPlayer
+		roster_ids[roster_player.id] = true
+		rows.append(_camp_roster_row(roster_player, trained))
 	_suppress_camp_select = true
-	camp_candidate_list.set_rows(rows)
-	if selected_camp_candidate_id > 0 and _camp_candidate_by_id(candidates, selected_camp_candidate_id).is_empty():
-		selected_camp_candidate_id = 0
-	if selected_camp_candidate_id <= 0:
-		var first_meta: Variant = camp_candidate_list.get_first_meta()
+	camp_player_list.set_rows(rows)
+	if selected_camp_player_id > 0 and not roster_ids.has(selected_camp_player_id):
+		selected_camp_player_id = 0
+	if selected_camp_player_id <= 0:
+		var first_meta: Variant = camp_player_list.get_first_meta()
 		if first_meta != null:
-			selected_camp_candidate_id = int(first_meta)
-	camp_candidate_list.select_meta(selected_camp_candidate_id)
+			selected_camp_player_id = int(first_meta)
+	camp_player_list.select_meta(selected_camp_player_id)
 	_suppress_camp_select = false
-	camp_detail_text.text = _format_camp_details(_camp_candidate_by_id(candidates, selected_camp_candidate_id))
-	var has_candidate: bool = selected_camp_candidate_id > 0
-	camp_submit_button.disabled = not has_candidate
-	camp_skip_button.disabled = not has_candidate
 	camp_auto_button.disabled = bool(state.get("complete", false))
 	camp_finish_button.disabled = bool(state.get("complete", false))
+	_refresh_camp_training_controls()
 
 
-func _camp_candidate_by_id(candidates: Array, candidate_id: int) -> Dictionary:
-	for row in candidates:
-		var c: Dictionary = row as Dictionary
-		if int(c.get("candidate_id", 0)) == candidate_id:
-			return c
+func _camp_roster_players() -> Array:
+	var rows: Array = []
+	var team_id: int = AppState.selected_team_id
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if player.is_retired() or player.is_manager_candidate():
+			continue
+		rows.append(player)
+	return rows
+
+
+func _camp_roster_row(player: PSPlayer, trained: Dictionary) -> Dictionary:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		player,
+		AppState.current_season.year if AppState.current_season != null else 0,
+		AppState.current_season.season_number if AppState.current_season != null else 0
+	)
+	var row: Dictionary = {
+		"jersey": _camp_jersey_text(player),
+		"pos": _position_name(player.position),
+		"name": player.name,
+		"age": player.age,
+		"eval": PlayerValueEvaluator.overall_score(record),
+		"__meta": player.id,
+	}
+	if trained.has(player.id):
+		row["__color"] = Color(0.55, 0.78, 1.0)
+	return row
+
+
+func _camp_jersey_text(player: PSPlayer) -> String:
+	if player.jersey_number > 0:
+		return str(player.jersey_number)
+	if player.team_id > 0 or player.sensyu_num > 0:
+		return "0"
+	return "-"
+
+
+func _camp_trained_player_set(state: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for id_value in state.get("trained_player_ids", []) as Array:
+		out[int(id_value)] = true
+	return out
+
+
+func _refresh_camp_training_controls() -> void:
+	if camp_training_select == null or camp_position_select == null:
+		return
+	var options: Array = CampServiceRef.user_training_options_for_player(
+		AppState.camp_state,
+		GameDb.players,
+		AppState.current_season,
+		selected_camp_player_id
+	)
+	_suppress_camp_training_select = true
+	camp_training_select.clear()
+	camp_position_select.clear()
+	if selected_camp_player_id <= 0:
+		selected_camp_training_type = ""
+		selected_camp_target_position = 0
+		camp_training_select.disabled = true
+		camp_position_select.disabled = true
+		camp_submit_button.disabled = true
+		camp_detail_text.text = "選手を選択してください。"
+		_suppress_camp_training_select = false
+		return
+	if options.is_empty():
+		selected_camp_training_type = ""
+		selected_camp_target_position = 0
+		camp_training_select.disabled = true
+		camp_position_select.disabled = true
+		camp_submit_button.disabled = true
+		camp_detail_text.text = _format_camp_unavailable_player(selected_camp_player_id)
+		_suppress_camp_training_select = false
+		return
+
+	var type_indices: Dictionary = {}
+	for option_row in options:
+		var option: Dictionary = option_row as Dictionary
+		var training_type: String = str(option.get("training_type", ""))
+		if type_indices.has(training_type):
+			continue
+		var idx: int = camp_training_select.get_item_count()
+		camp_training_select.add_item(str(option.get("training_label", "")))
+		camp_training_select.set_item_metadata(idx, training_type)
+		type_indices[training_type] = idx
+	var selected_type_index: int = int(type_indices.get(selected_camp_training_type, 0))
+	camp_training_select.disabled = false
+	camp_training_select.select(selected_type_index)
+	selected_camp_training_type = str(camp_training_select.get_item_metadata(selected_type_index))
+	_populate_camp_target_select(options)
+	var selected_option: Dictionary = _selected_camp_option(options)
+	camp_submit_button.disabled = selected_option.is_empty()
+	camp_detail_text.text = _format_camp_details(selected_option)
+	_suppress_camp_training_select = false
+
+
+func _populate_camp_target_select(options: Array) -> void:
+	camp_position_select.clear()
+	var matching: Array = []
+	for option_row in options:
+		var option: Dictionary = option_row as Dictionary
+		if str(option.get("training_type", "")) == selected_camp_training_type:
+			matching.append(option)
+	if matching.is_empty():
+		selected_camp_target_position = 0
+		camp_position_select.disabled = true
+		return
+	var has_position_target: bool = false
+	for option_row in matching:
+		if int((option_row as Dictionary).get("target_position", 0)) > 0:
+			has_position_target = true
+			break
+	if not has_position_target:
+		selected_camp_target_position = 0
+		camp_position_select.disabled = true
+		return
+	camp_position_select.disabled = false
+	var selected_index: int = 0
+	for option_row in matching:
+		var option: Dictionary = option_row as Dictionary
+		var pos: int = int(option.get("target_position", 0))
+		if pos <= 0:
+			continue
+		var idx: int = camp_position_select.get_item_count()
+		camp_position_select.add_item(str(option.get("target_position_name", _position_name(pos))))
+		camp_position_select.set_item_metadata(idx, option.duplicate(true))
+		if pos == selected_camp_target_position:
+			selected_index = idx
+	camp_position_select.select(selected_index)
+	var selected_meta: Variant = camp_position_select.get_item_metadata(selected_index)
+	var selected_option: Dictionary = selected_meta as Dictionary
+	selected_camp_target_position = int(selected_option.get("target_position", 0))
+
+
+func _selected_camp_option(options: Array) -> Dictionary:
+	for option_row in options:
+		var option: Dictionary = option_row as Dictionary
+		if str(option.get("training_type", "")) != selected_camp_training_type:
+			continue
+		var target_position: int = int(option.get("target_position", 0))
+		if target_position == selected_camp_target_position:
+			return option
 	return {}
 
 
-func _camp_candidate_target(candidate: Dictionary) -> String:
+func _format_camp_unavailable_player(player_id: int) -> String:
+	var player: PSPlayer = GameDb.get_player(player_id)
+	if player == null:
+		return "選手を選択してください。"
+	var lines: Array = []
+	lines.append("%s  %s" % [player.name, _position_name(player.position)])
+	if _camp_trained_player_set(AppState.camp_state).has(player.id):
+		lines.append("この選手は今オフに特別練習済みです。")
+	elif player.injury_days > 0:
+		lines.append("怪我のため今オフの特別練習は選択できません。")
+	else:
+		lines.append("選択できる特別練習がありません。")
+	lines.append("")
+	lines.append("能力")
+	lines.append(PlayerVisibleRatings.summary_line_for_player_data(player.to_dict()))
+	return "\n".join(lines)
+
+
+func _camp_training_target(candidate: Dictionary) -> String:
 	var target_position: int = int(candidate.get("target_position", 0))
 	if target_position > 0:
 		return _position_name(target_position)
@@ -2188,7 +2349,7 @@ func _camp_candidate_target(candidate: Dictionary) -> String:
 
 func _format_camp_details(candidate: Dictionary) -> String:
 	if candidate.is_empty():
-		return "特別練習候補を選択してください。"
+		return "選手を選択し、特別練習を指定してください。"
 	var player: PSPlayer = GameDb.get_player(int(candidate.get("player_id", 0)))
 	var target_position: int = int(candidate.get("target_position", 0))
 	var lines: Array = []
@@ -2196,12 +2357,11 @@ func _format_camp_details(candidate: Dictionary) -> String:
 	lines.append("%d歳  %s → %s" % [
 		int(candidate.get("age", 0)),
 		str(candidate.get("training_label", "")),
-		_camp_candidate_target(candidate),
+		_camp_training_target(candidate),
 	])
-	lines.append("成功率 %0.1f%%  リスク %s  期待値 %+0.1f" % [
+	lines.append("成功率 %0.1f%%  リスク %s" % [
 		float(candidate.get("success_chance", 0.0)) * 100.0,
 		str(candidate.get("risk_label", "中")),
-		float(candidate.get("expected_value", 0.0)),
 	])
 	lines.append("理由: %s" % str(candidate.get("reason", "")))
 	if target_position > 0:
@@ -2224,26 +2384,57 @@ func _format_camp_details(candidate: Dictionary) -> String:
 	return "\n".join(lines)
 
 
-func _player_position_aptitude_for_ui(player: PSPlayer, position: int) -> int:
-	if player == null or position < 3 or position > 9:
+func _player_position_aptitude_for_ui(player: PSPlayer, pos: int) -> int:
+	if player == null or pos < 3 or pos > 9:
 		return 0
-	var key: String = PSPlayer.position_experience_key(position)
+	var key: String = PSPlayer.position_experience_key(pos)
 	if key.is_empty():
 		return 0
 	if player.position_aptitudes.is_empty():
-		return 100 if player.position == position else 0
+		return 100 if player.position == pos else 0
 	return int(player.position_aptitudes.get(key, 0))
 
 
-func _on_camp_candidate_selected() -> void:
+func _on_camp_player_selected() -> void:
 	if _suppress_camp_select:
 		return
-	var meta: Variant = camp_candidate_list.get_selected_meta()
+	var meta: Variant = camp_player_list.get_selected_meta()
 	if meta == null:
 		return
-	selected_camp_candidate_id = int(meta)
-	var candidates: Array = CampServiceRef.available_user_candidates(AppState.camp_state)
-	camp_detail_text.text = _format_camp_details(_camp_candidate_by_id(candidates, selected_camp_candidate_id))
+	selected_camp_player_id = int(meta)
+	selected_camp_training_type = ""
+	selected_camp_target_position = 0
+	_refresh_camp_training_controls()
+
+
+func _on_camp_training_selected(_index: int) -> void:
+	if _suppress_camp_training_select:
+		return
+	var selected_index: int = camp_training_select.selected
+	if selected_index < 0:
+		return
+	selected_camp_training_type = str(camp_training_select.get_item_metadata(selected_index))
+	selected_camp_target_position = 0
+	_refresh_camp_training_controls()
+
+
+func _on_camp_target_selected(_index: int) -> void:
+	if _suppress_camp_training_select:
+		return
+	var selected_index: int = camp_position_select.selected
+	if selected_index >= 0:
+		var selected_meta: Variant = camp_position_select.get_item_metadata(selected_index)
+		var selected_option: Dictionary = selected_meta as Dictionary
+		selected_camp_target_position = int(selected_option.get("target_position", 0))
+	var options: Array = CampServiceRef.user_training_options_for_player(
+		AppState.camp_state,
+		GameDb.players,
+		AppState.current_season,
+		selected_camp_player_id
+	)
+	var selected_option: Dictionary = _selected_camp_option(options)
+	camp_submit_button.disabled = selected_option.is_empty()
+	camp_detail_text.text = _format_camp_details(selected_option)
 
 
 func _active_foreign_count(team_id: int) -> int:
@@ -2657,29 +2848,19 @@ func _on_foreign_auto_all_pressed() -> void:
 
 
 func _on_camp_submit_pressed() -> void:
-	if selected_camp_candidate_id <= 0:
-		status_label.text = "特別練習候補を選択してください。"
+	if selected_camp_player_id <= 0 or selected_camp_training_type.is_empty():
+		status_label.text = "選手と特別練習を選択してください。"
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
-	var result: Dictionary = AppState.submit_camp_candidate(selected_camp_candidate_id)
+	var result: Dictionary = AppState.submit_camp_player_training(
+		selected_camp_player_id,
+		selected_camp_training_type,
+		selected_camp_target_position
+	)
 	if not bool(result.get("ok", false)):
 		status_label.text = str(result.get("message", "特別練習の実行に失敗しました。"))
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
-	selected_camp_candidate_id = 0
-	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
-	_refresh()
-
-
-func _on_camp_skip_pressed() -> void:
-	if selected_camp_candidate_id <= 0:
-		return
-	var result: Dictionary = AppState.skip_camp_candidate(selected_camp_candidate_id)
-	if not bool(result.get("ok", false)):
-		status_label.text = str(result.get("message", "特別練習の見送りに失敗しました。"))
-		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
-		return
-	selected_camp_candidate_id = 0
 	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	_refresh()
 
@@ -2690,7 +2871,9 @@ func _on_camp_auto_pressed() -> void:
 		status_label.text = str(result.get("message", "キャンプ自動判断に失敗しました。"))
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
-	selected_camp_candidate_id = 0
+	selected_camp_player_id = 0
+	selected_camp_training_type = ""
+	selected_camp_target_position = 0
 	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	_refresh()
 
@@ -2701,7 +2884,9 @@ func _on_camp_finish_pressed() -> void:
 		status_label.text = str(result.get("message", "キャンプ終了に失敗しました。"))
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
-	selected_camp_candidate_id = 0
+	selected_camp_player_id = 0
+	selected_camp_training_type = ""
+	selected_camp_target_position = 0
 	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	_refresh()
 
@@ -2737,9 +2922,9 @@ func _team_short(team_id: int) -> String:
 	return team.short_name
 
 
-func _position_name(position: int) -> String:
-	return str(PSPlayer.POSITION_NAMES.get(position, "?"))
+func _position_name(pos: int) -> String:
+	return str(PSPlayer.POSITION_NAMES.get(pos, "?"))
 
 
-func _position_char(position: int) -> String:
-	return str(POSITION_CHARS.get(position, "?"))
+func _position_char(pos: int) -> String:
+	return str(POSITION_CHARS.get(pos, "?"))

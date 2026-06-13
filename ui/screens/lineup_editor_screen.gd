@@ -308,10 +308,10 @@ func _populate_roster_panel() -> void:
 	for record_row in fielder_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		var aptitude_parts: Array = []
-		for position in [2, 3, 4, 5, 6, 7, 8, 9]:
-			var apt: int = _position_aptitude(record, position)
+		for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
+			var apt: int = _position_aptitude(record, pos)
 			if apt > 0:
-				aptitude_parts.append("%s%d" % [_short_position_name(position), apt])
+				aptitude_parts.append("%s%d" % [_short_position_name(pos), apt])
 		var aptitude_text: String = " / ".join(aptitude_parts) if not aptitude_parts.is_empty() else "適性無し"
 		rows.append({
 			"name": record.name,
@@ -345,32 +345,32 @@ func _populate_fielder_usage_panel() -> void:
 	_add_usage_header("頻度", fielder_usage_grid)
 
 	for position_row in FIELDER_USAGE_POSITIONS:
-		var position: int = int(position_row)
-		var slot: Dictionary = _usage_slot(position_slots, position)
-		var starter_id: int = int(lineup_starters.get(position, int(slot.get("starter_id", 0))))
+		var pos: int = int(position_row)
+		var slot: Dictionary = _usage_slot(position_slots, pos)
+		var starter_id: int = int(lineup_starters.get(pos, int(slot.get("starter_id", 0))))
 		var pos_label: Label = Label.new()
-		pos_label.text = str(PSPlayer.POSITION_NAMES.get(position, "?"))
+		pos_label.text = str(PSPlayer.POSITION_NAMES.get(pos, "?"))
 		pos_label.custom_minimum_size = Vector2(48, 28)
 		fielder_usage_grid.add_child(pos_label)
 
 		var starter_button: OptionButton = OptionButton.new()
 		starter_button.custom_minimum_size = Vector2(180, 28)
-		_populate_usage_player_options(starter_button, position, starter_id)
+		_populate_usage_player_options(starter_button, pos, starter_id)
 		starter_button.disabled = true
 		fielder_usage_grid.add_child(starter_button)
-		usage_starter_buttons[position] = starter_button
+		usage_starter_buttons[pos] = starter_button
 
 		var sub_button: OptionButton = OptionButton.new()
 		sub_button.custom_minimum_size = Vector2(180, 28)
-		_populate_usage_player_options(sub_button, position, int(slot.get("sub_id", 0)), lineup_starter_ids)
+		_populate_usage_player_options(sub_button, pos, int(slot.get("sub_id", 0)), lineup_starter_ids)
 		fielder_usage_grid.add_child(sub_button)
-		usage_sub_buttons[position] = sub_button
+		usage_sub_buttons[pos] = sub_button
 
 		var interval_button: OptionButton = OptionButton.new()
 		interval_button.custom_minimum_size = Vector2(110, 28)
 		_populate_interval_options(interval_button, int(slot.get("sub_start_interval", 0)))
 		fielder_usage_grid.add_child(interval_button)
-		usage_interval_buttons[position] = interval_button
+		usage_interval_buttons[pos] = interval_button
 
 
 func _refresh_fielder_usage_panel() -> void:
@@ -382,28 +382,28 @@ func _import_current_lineup_to_usage_buttons() -> void:
 	var starter_by_position: Dictionary = _lineup_starter_id_by_position()
 	var lineup_starter_ids: Dictionary = _lineup_starter_id_set(starter_by_position)
 	for position_value in starter_by_position.keys():
-		var position: int = int(position_value)
+		var pos: int = int(position_value)
 		var starter_id: int = int(starter_by_position[position_value])
-		var starter_button: OptionButton = usage_starter_buttons.get(position, null) as OptionButton
+		var starter_button: OptionButton = usage_starter_buttons.get(pos, null) as OptionButton
 		if starter_button == null:
 			continue
 		_select_option_by_id(starter_button, starter_id)
 		starter_button.disabled = true
-		var sub_button: OptionButton = usage_sub_buttons.get(position, null) as OptionButton
+		var sub_button: OptionButton = usage_sub_buttons.get(pos, null) as OptionButton
 		if sub_button != null:
 			var current_sub_id: int = sub_button.get_selected_id()
 			if lineup_starter_ids.has(current_sub_id):
 				current_sub_id = 0
-			_populate_usage_player_options(sub_button, position, current_sub_id, lineup_starter_ids)
+			_populate_usage_player_options(sub_button, pos, current_sub_id, lineup_starter_ids)
 
 
 func _lineup_starter_id_by_position() -> Dictionary:
 	var starter_by_position: Dictionary = {}
 	for i in range(slot_positions.size()):
-		var position: int = int(slot_positions[i])
+		var pos: int = int(slot_positions[i])
 		var player_id: int = int(slot_player_ids[i])
-		if position >= 2 and position <= 9 and player_id > 0:
-			starter_by_position[position] = player_id
+		if pos >= 2 and pos <= 9 and player_id > 0:
+			starter_by_position[pos] = player_id
 	return starter_by_position
 
 
@@ -430,16 +430,16 @@ func _add_usage_header(text: String, grid: GridContainer) -> void:
 	grid.add_child(label)
 
 
-func _usage_slot(position_slots: Dictionary, position: int) -> Dictionary:
-	var key: String = str(position)
+func _usage_slot(position_slots: Dictionary, pos: int) -> Dictionary:
+	var key: String = str(pos)
 	if position_slots.has(key):
 		return position_slots.get(key, {}) as Dictionary
-	if position_slots.has(position):
-		return position_slots.get(position, {}) as Dictionary
+	if position_slots.has(pos):
+		return position_slots.get(pos, {}) as Dictionary
 	return {}
 
 
-func _populate_usage_player_options(button: OptionButton, position: int, current_player_id: int, excluded_player_ids: Dictionary = {}) -> void:
+func _populate_usage_player_options(button: OptionButton, pos: int, current_player_id: int, excluded_player_ids: Dictionary = {}) -> void:
 	button.clear()
 	button.add_item("(自動)", 0)
 	var select_index: int = 0
@@ -448,7 +448,7 @@ func _populate_usage_player_options(button: OptionButton, position: int, current
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if excluded_player_ids.has(record.player_id):
 			continue
-		var aptitude: int = _position_aptitude(record, position)
+		var aptitude: int = _position_aptitude(record, pos)
 		if aptitude <= 0:
 			continue
 		var label: String = "%s (適%d 評%d)" % [
@@ -602,13 +602,13 @@ func _populate_position_options(button: OptionButton, player_id: int, current_po
 	var record: PSPlayerSeasonRecord = _find_fielder(player_id)
 	var select_index: int = 0
 	for i in range(allowed.size()):
-		var position: int = int(allowed[i])
-		var label: String = str(PSPlayer.POSITION_NAMES.get(position, "?"))
-		if record != null and position >= 2 and position <= 9:
-			label = "%s (適性%d)" % [label, _position_aptitude(record, position)]
-			label = "%s Def%d" % [label, PlayerValueEvaluator.defensive_score_for_position(record, position)]
-		button.add_item(label, position)
-		if position == current_position:
+		var pos: int = int(allowed[i])
+		var label: String = str(PSPlayer.POSITION_NAMES.get(pos, "?"))
+		if record != null and pos >= 2 and pos <= 9:
+			label = "%s (適性%d)" % [label, _position_aptitude(record, pos)]
+			label = "%s Def%d" % [label, PlayerValueEvaluator.defensive_score_for_position(record, pos)]
+		button.add_item(label, pos)
+		if pos == current_position:
 			select_index = i + 1
 	if button.item_count > 0:
 		button.select(select_index)
@@ -661,11 +661,11 @@ func _clear_player_from_other_slots(player_id: int, exclude_slot: int) -> void:
 			slot_positions[i] = other_position_button.get_selected_id()
 
 
-func _clear_position_from_other_slots(position: int, exclude_slot: int) -> void:
+func _clear_position_from_other_slots(pos: int, exclude_slot: int) -> void:
 	for i in range(slot_positions.size()):
 		if i == exclude_slot:
 			continue
-		if int(slot_positions[i]) != position:
+		if int(slot_positions[i]) != pos:
 			continue
 		slot_positions[i] = 0
 		var other_button: OptionButton = slot_position_buttons[i] as OptionButton
@@ -682,11 +682,11 @@ func _suggest_position_for_player(record: PSPlayerSeasonRecord, current_position
 		return record.position
 	var best_position: int = 0
 	var best_apt: int = 0
-	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
-		var apt: int = _position_aptitude(record, position)
+	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
+		var apt: int = _position_aptitude(record, pos)
 		if apt > best_apt:
 			best_apt = apt
-			best_position = position
+			best_position = pos
 	return best_position if best_position > 0 else current_position
 
 
@@ -801,17 +801,17 @@ func _collect_fielder_usage() -> Dictionary:
 	var position_slots: Dictionary = {}
 	var lineup_starters: Dictionary = _lineup_starter_id_by_position()
 	for position_row in FIELDER_USAGE_POSITIONS:
-		var position: int = int(position_row)
-		var starter_button: OptionButton = usage_starter_buttons.get(position, null) as OptionButton
-		var sub_button: OptionButton = usage_sub_buttons.get(position, null) as OptionButton
-		var interval_button: OptionButton = usage_interval_buttons.get(position, null) as OptionButton
-		var starter_id: int = int(lineup_starters.get(position, 0))
+		var pos: int = int(position_row)
+		var starter_button: OptionButton = usage_starter_buttons.get(pos, null) as OptionButton
+		var sub_button: OptionButton = usage_sub_buttons.get(pos, null) as OptionButton
+		var interval_button: OptionButton = usage_interval_buttons.get(pos, null) as OptionButton
+		var starter_id: int = int(lineup_starters.get(pos, 0))
 		if starter_id <= 0 and starter_button != null:
 			starter_id = starter_button.get_selected_id()
 		var sub_id: int = 0 if sub_button == null else sub_button.get_selected_id()
 		var interval: int = 0 if interval_button == null else interval_button.get_selected_id()
 		if starter_id > 0 or sub_id > 0 or interval != 0:
-			position_slots[str(position)] = {
+			position_slots[str(pos)] = {
 				"starter_id": starter_id,
 				"sub_id": sub_id,
 				"sub_start_interval": interval,
@@ -827,15 +827,15 @@ func _validate_fielder_usage(usage: Dictionary) -> Array:
 	var position_slots: Dictionary = usage.get("position_slots", {}) as Dictionary
 	var starter_ids: Dictionary = {}
 	for position_row in FIELDER_USAGE_POSITIONS:
-		var position: int = int(position_row)
-		var slot: Dictionary = _usage_slot(position_slots, position)
+		var pos: int = int(position_row)
+		var slot: Dictionary = _usage_slot(position_slots, pos)
 		var starter_id: int = int(slot.get("starter_id", 0))
 		if starter_id > 0:
 			starter_ids[starter_id] = true
 	var starter_seen: Dictionary = {}
 	for position_row in FIELDER_USAGE_POSITIONS:
-		var position: int = int(position_row)
-		var slot: Dictionary = _usage_slot(position_slots, position)
+		var pos: int = int(position_row)
+		var slot: Dictionary = _usage_slot(position_slots, pos)
 		if slot.is_empty():
 			continue
 		var starter_id: int = int(slot.get("starter_id", 0))
@@ -843,35 +843,35 @@ func _validate_fielder_usage(usage: Dictionary) -> Array:
 		var interval: int = int(slot.get("sub_start_interval", 0))
 		if starter_id > 0:
 			var starter: PSPlayerSeasonRecord = _find_fielder(starter_id)
-			if starter == null or _position_aptitude(starter, position) <= 0:
-				errors.append("%sのスタメン適性がありません" % str(PSPlayer.POSITION_NAMES.get(position, "?")))
+			if starter == null or _position_aptitude(starter, pos) <= 0:
+				errors.append("%sのスタメン適性がありません" % str(PSPlayer.POSITION_NAMES.get(pos, "?")))
 			if starter_seen.has(starter_id):
 				errors.append("%sが複数ポジションのスタメンです" % _player_name(starter_id))
 			starter_seen[starter_id] = true
 		if sub_id > 0:
 			var sub: PSPlayerSeasonRecord = _find_fielder(sub_id)
-			if sub == null or _position_aptitude(sub, position) <= 0:
-				errors.append("%sのサブ適性がありません" % str(PSPlayer.POSITION_NAMES.get(position, "?")))
+			if sub == null or _position_aptitude(sub, pos) <= 0:
+				errors.append("%sのサブ適性がありません" % str(PSPlayer.POSITION_NAMES.get(pos, "?")))
 		if starter_id > 0 and starter_id == sub_id:
-			errors.append("%sのスタメンとサブが同じ選手です" % str(PSPlayer.POSITION_NAMES.get(position, "?")))
+			errors.append("%sのスタメンとサブが同じ選手です" % str(PSPlayer.POSITION_NAMES.get(pos, "?")))
 		elif sub_id > 0 and starter_ids.has(sub_id):
 			errors.append("%sはスタメン選手なのでサブに設定できません" % _player_name(sub_id))
 		if interval != 0 and sub_id <= 0:
-			errors.append("%sの頻度設定にサブ選手が必要です" % str(PSPlayer.POSITION_NAMES.get(position, "?")))
+			errors.append("%sの頻度設定にサブ選手が必要です" % str(PSPlayer.POSITION_NAMES.get(pos, "?")))
 	return errors
 
 
 func _collect_lineup() -> Dictionary:
 	var batting_order: Array = []
 	for i in range(9):
-		var position: int = int(slot_positions[i])
+		var pos: int = int(slot_positions[i])
 		var player_id: int = int(slot_player_ids[i])
 		if not dh_enabled and i == PITCHER_SLOT_INDEX:
-			position = 1
+			pos = 1
 			player_id = 0
 		batting_order.append({
 			"slot": i + 1,
-			"position": position,
+			"position": pos,
 			"player_id": player_id,
 		})
 	return {"batting_order": batting_order}
@@ -886,17 +886,17 @@ func _validate(lineup: Dictionary) -> Array:
 
 	for entry_row in batting_order:
 		var entry: Dictionary = entry_row as Dictionary
-		var position: int = int(entry.get("position", 0))
+		var pos: int = int(entry.get("position", 0))
 		var player_id: int = int(entry.get("player_id", 0))
 
-		if position == 1:
+		if pos == 1:
 			continue
 
-		if positions_seen.has(position):
-			errors.append("ポジション %s が重複しています" % str(PSPlayer.POSITION_NAMES.get(position, "?")))
-		positions_seen[position] = true
+		if positions_seen.has(pos):
+			errors.append("ポジション %s が重複しています" % str(PSPlayer.POSITION_NAMES.get(pos, "?")))
+		positions_seen[pos] = true
 
-		if position == 10:
+		if pos == 10:
 			dh_slot_count += 1
 		if player_id > 0:
 			if players_seen.has(player_id):
@@ -906,9 +906,9 @@ func _validate(lineup: Dictionary) -> Array:
 	if dh_enabled and dh_slot_count != 1:
 		errors.append("DHスロットが%d個あります (1個必要)" % dh_slot_count)
 
-	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
-		if not positions_seen.has(position):
-			errors.append("守備位置 %s が含まれていません" % str(PSPlayer.POSITION_NAMES.get(position, "?")))
+	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
+		if not positions_seen.has(pos):
+			errors.append("守備位置 %s が含まれていません" % str(PSPlayer.POSITION_NAMES.get(pos, "?")))
 
 	return errors
 
@@ -928,17 +928,17 @@ func _set_status(text: String, is_error: bool) -> void:
 		status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 
 
-func _position_aptitude(record: PSPlayerSeasonRecord, position: int) -> int:
-	var key: String = str(POSITION_APTITUDE_KEYS.get(position, ""))
+func _position_aptitude(record: PSPlayerSeasonRecord, pos: int) -> int:
+	var key: String = str(POSITION_APTITUDE_KEYS.get(pos, ""))
 	if key.is_empty():
 		return 0
 	if record.position_aptitudes_snapshot.is_empty():
-		return 100 if record.position == position else 0
+		return 100 if record.position == pos else 0
 	return int(record.position_aptitudes_snapshot.get(key, 0))
 
 
-func _short_position_name(position: int) -> String:
-	match position:
+func _short_position_name(pos: int) -> String:
+	match pos:
 		1: return "投"
 		2: return "捕"
 		3: return "一"

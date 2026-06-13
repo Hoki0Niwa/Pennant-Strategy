@@ -415,10 +415,10 @@ func _evaluation_line(record: PSPlayerSeasonRecord) -> String:
 
 func _aptitude_summary(record: PSPlayerSeasonRecord) -> String:
 	var parts: Array = []
-	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
-		var apt: int = _position_aptitude(record, position)
+	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
+		var apt: int = _position_aptitude(record, pos)
 		if apt > 0:
-			parts.append("%s%d" % [_short_position_name(position), apt])
+			parts.append("%s%d" % [_short_position_name(pos), apt])
 	if parts.is_empty():
 		return "適性なし"
 	return " / ".join(parts)
@@ -430,12 +430,12 @@ func _arsenal_summary_line(record: PSPlayerSeasonRecord) -> String:
 	return line if not line.is_empty() else "データなし"
 
 
-func _position_aptitude(record: PSPlayerSeasonRecord, position: int) -> int:
-	var key: String = str(POSITION_APTITUDE_KEYS.get(position, ""))
+func _position_aptitude(record: PSPlayerSeasonRecord, pos: int) -> int:
+	var key: String = str(POSITION_APTITUDE_KEYS.get(pos, ""))
 	if key.is_empty():
 		return 0
 	if record.position_aptitudes_snapshot.is_empty():
-		return 100 if record.position == position else 0
+		return 100 if record.position == pos else 0
 	return int(record.position_aptitudes_snapshot.get(key, 0))
 
 
@@ -469,8 +469,8 @@ func _format_innings(outs: int) -> String:
 	return "%d.%d" % [int(outs / 3), outs % 3]
 
 
-func _short_position_name(position: int) -> String:
-	match position:
+func _short_position_name(pos: int) -> String:
+	match pos:
 		1: return "投"
 		2: return "捕"
 		3: return "一"

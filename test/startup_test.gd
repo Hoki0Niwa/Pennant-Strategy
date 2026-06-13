@@ -7,6 +7,7 @@ extends GdUnitTestSuite
 func test_core_scripts_load() -> void:
 	assert_object(load("res://ui/main.gd")).is_not_null()
 	assert_object(load("res://ui/screens/home_screen.gd")).is_not_null()
+	assert_object(load("res://ui/screens/offseason_screen.gd")).is_not_null()
 
 
 func test_autoloads_registered() -> void:

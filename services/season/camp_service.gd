@@ -93,11 +93,12 @@ static func create_camp_state(players: Array, teams: Array, season: PSSeason, us
 			return int(da.get("candidate_id", 0)) < int(db.get("candidate_id", 0))
 		return float(da.get("expected_value", 0.0)) > float(db.get("expected_value", 0.0))
 	)
+	var has_user_choices: bool = user_team_id > 0 and _has_user_trainable_players(players, season, user_team_id)
 	return {
 		"version": 1,
 		"year": year,
 		"user_team_id": user_team_id,
-		"complete": candidates.is_empty(),
+		"complete": candidates.is_empty() and not has_user_choices,
 		"finalized": false,
 		"candidates": candidates,
 		"actions": [],
@@ -275,6 +276,52 @@ static func process_normal_pitch_learning(
 	return learned
 
 
+static func user_training_options_for_player(state: Dictionary, players: Array, season: PSSeason, player_id: int) -> Array:
+	var rows: Array = []
+	if bool(state.get("complete", false)):
+		return rows
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if user_team_id <= 0 or _team_action_count(state, user_team_id) >= MAX_SPECIAL_TRAININGS_PER_TEAM:
+		return rows
+	var player: PSPlayer = _find_player_by_id(players, player_id)
+	if player == null or player.team_id != user_team_id:
+		return rows
+	if not _player_can_train(player):
+		return rows
+	if _trained_player_set(state).has(player.id):
+		return rows
+	return _user_training_options(player, season)
+
+
+static func submit_user_player_training(
+	state: Dictionary,
+	players: Array,
+	teams: Array,
+	season: PSSeason,
+	player_id: int,
+	training_type: String,
+	target_position: int = 0
+) -> Dictionary:
+	if bool(state.get("complete", false)):
+		return {"ok": false, "message": "キャンプは既に完了しています。", "state": state}
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if user_team_id <= 0:
+		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+	var player: PSPlayer = _find_player_by_id(players, player_id)
+	if player == null or player.team_id != user_team_id:
+		return {"ok": false, "message": "自球団の選手を選択してください。", "state": state}
+	if not _player_can_train(player):
+		return {"ok": false, "message": "この選手は今オフの特別練習を選択できません。", "state": state}
+	var entry: Dictionary = _build_user_training_entry(player, season, training_type, target_position)
+	if entry.is_empty():
+		return {"ok": false, "message": "この選手には選択できない特別練習です。", "state": state}
+	if not _can_apply_entry(state, entry):
+		return {"ok": false, "message": "この球団または選手は今オフの特別練習上限に達しています。", "state": state}
+	_apply_training(state, players, season, entry, "user")
+	_advance_user_training_state_if_done(state, players, teams, season)
+	return {"ok": true, "state": state}
+
+
 static func available_user_candidates(state: Dictionary) -> Array:
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var rows: Array = []
@@ -379,6 +426,89 @@ static func _fielder_candidates(player: PSPlayer, profile: Dictionary, season: P
 				convert["projected_aptitude"] = _target_aptitude(record, position, true)
 				rows.append(convert)
 	return rows
+
+
+static func _user_training_options(player: PSPlayer, season: PSSeason) -> Array:
+	var rows: Array = []
+	if not _player_can_train(player):
+		return rows
+	if player.is_pitcher():
+		var record: PSPlayerSeasonRecord = _record_for_player(player, season)
+		var training_type: String = TRAIN_RELIEVER if PSPitcherRoleModel.is_starter_record(record) else TRAIN_STARTER
+		var pitcher_entry: Dictionary = _build_user_training_entry(player, season, training_type, 0)
+		if not pitcher_entry.is_empty():
+			rows.append(pitcher_entry)
+		return rows
+
+	for position in DEFENSIVE_POSITIONS:
+		if position == player.position:
+			continue
+		if _player_position_aptitude(player, position) > 0:
+			var convert_entry: Dictionary = _build_user_training_entry(player, season, TRAIN_POSITION_CONVERT, position)
+			if not convert_entry.is_empty():
+				rows.append(convert_entry)
+
+	for position in DEFENSIVE_POSITIONS:
+		if position == player.position:
+			continue
+		if _player_position_aptitude(player, position) <= 0:
+			var learn_entry: Dictionary = _build_user_training_entry(player, season, TRAIN_POSITION_LEARN, position)
+			if not learn_entry.is_empty():
+				rows.append(learn_entry)
+	return rows
+
+
+static func _build_user_training_entry(player: PSPlayer, season: PSSeason, training_type: String, target_position: int) -> Dictionary:
+	if player == null:
+		return {}
+	var record: PSPlayerSeasonRecord = _record_for_player(player, season)
+	if player.is_pitcher():
+		var is_starter: bool = PSPitcherRoleModel.is_starter_record(record)
+		if training_type == TRAIN_STARTER:
+			if is_starter:
+				return {}
+			return _candidate_base(player, TRAIN_STARTER, 0.0, _starter_success_chance(record), "選手指定: 先発転向")
+		if training_type == TRAIN_RELIEVER:
+			if not is_starter:
+				return {}
+			return _candidate_base(player, TRAIN_RELIEVER, 0.0, _reliever_success_chance(record), "選手指定: リリーフ転向")
+		return {}
+
+	if target_position < 3 or target_position > 9 or not DEFENSIVE_POSITIONS.has(target_position):
+		return {}
+	if target_position == player.position:
+		return {}
+	var current_aptitude: int = _player_position_aptitude(player, target_position)
+	var ability_bonus: int = _position_ability_bonus(record, target_position)
+	if training_type == TRAIN_POSITION_LEARN:
+		if current_aptitude > 0:
+			return {}
+		var learn: Dictionary = _candidate_base(
+			player,
+			TRAIN_POSITION_LEARN,
+			0.0,
+			_position_learn_success_chance(record, target_position, ability_bonus),
+			"選手指定: 守備位置獲得"
+		)
+		learn["target_position"] = target_position
+		learn["target_position_name"] = _position_label(target_position)
+		learn["projected_aptitude"] = _target_aptitude(record, target_position, false)
+		return learn
+	if training_type == TRAIN_POSITION_CONVERT:
+		if current_aptitude <= 0:
+			return {}
+		var convert: Dictionary = _candidate_base(
+			player,
+			TRAIN_POSITION_CONVERT,
+			0.0,
+			_position_convert_success_chance(record, target_position, current_aptitude, ability_bonus),
+			"選手指定: 既存サブポジから本職変更"
+		)
+		convert["target_position"] = target_position
+		convert["target_position_name"] = _position_label(target_position)
+		convert["projected_aptitude"] = _target_aptitude(record, target_position, true)
+		return convert
+	return {}
 
 
 static func _candidate_base(player: PSPlayer, training_type: String, expected_value: float, success_chance: float, reason: String) -> Dictionary:
@@ -781,9 +911,50 @@ static func _mark_player_candidates_unavailable(state: Dictionary, player_id: in
 
 
 static func _advance_user_state_if_done(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> void:
-	if available_user_candidates(state).is_empty():
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if available_user_candidates(state).is_empty() and not _has_available_user_training_options(state, players, season, user_team_id):
 		state["user_finished"] = true
 		complete_camp_automatically(state, players, teams, season, int(state.get("user_team_id", 0)), false)
+
+
+static func _advance_user_training_state_if_done(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> void:
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if _team_action_count(state, user_team_id) >= MAX_SPECIAL_TRAININGS_PER_TEAM or not _has_available_user_training_options(state, players, season, user_team_id):
+		state["user_finished"] = true
+		complete_camp_automatically(state, players, teams, season, user_team_id, false)
+
+
+static func _has_user_trainable_players(players: Array, season: PSSeason, user_team_id: int) -> bool:
+	if user_team_id <= 0:
+		return false
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player != null and player.team_id == user_team_id and not _user_training_options(player, season).is_empty():
+			return true
+	return false
+
+
+static func _has_available_user_training_options(state: Dictionary, players: Array, season: PSSeason, user_team_id: int) -> bool:
+	if user_team_id <= 0 or _team_action_count(state, user_team_id) >= MAX_SPECIAL_TRAININGS_PER_TEAM:
+		return false
+	var trained: Dictionary = _trained_player_set(state)
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != user_team_id:
+			continue
+		if trained.has(player.id):
+			continue
+		if not _user_training_options(player, season).is_empty():
+			return true
+	return false
+
+
+static func _player_can_train(player: PSPlayer) -> bool:
+	if player == null or player.team_id <= 0:
+		return false
+	if player.is_retired() or player.is_manager_candidate() or player.injury_days > 0:
+		return false
+	return true
 
 
 static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:

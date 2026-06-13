@@ -930,8 +930,8 @@ func _player_rating_label(record: PSPlayerSeasonRecord) -> String:
 	return "Eval %d" % PlayerValueEvaluator.overall_score(record)
 
 
-func _position_name(position: int) -> String:
-	return str(PSPlayer.POSITION_NAMES.get(position, "不明"))
+func _position_name(pos: int) -> String:
+	return str(PSPlayer.POSITION_NAMES.get(pos, "不明"))
 
 
 func _team_short_name(team_id: int) -> String:

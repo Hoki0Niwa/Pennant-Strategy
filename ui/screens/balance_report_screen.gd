@@ -738,10 +738,10 @@ func _oaa_zone_label(zone: String) -> String:
 
 
 # UZR / RngR / ErrR / DPR の集計対象ポジションを表示用に変換。
-func _uzr_position_label(position: int) -> String:
-	if position <= 0 or position > 9:
+func _uzr_position_label(pos: int) -> String:
+	if pos <= 0 or pos > 9:
 		return "-"
-	return "P%d" % position
+	return "P%d" % pos
 
 
 func _add_metric(root: TreeItem, label: String, value: String) -> void:
@@ -880,10 +880,10 @@ func _format_cell(row: Dictionary, column: Dictionary) -> String:
 			return "-"
 		"position":
 			# UZR / RngR / ErrR / DPR はポジション単位の集計値。0 (未集計) は "-"。
-			var position: int = int(row.get(key, 0))
-			if position <= 0 or position > 9:
+			var pos: int = int(row.get(key, 0))
+			if pos <= 0 or pos > 9:
 				return "-"
-			return "P%d" % position
+			return "P%d" % pos
 		_:
 			return str(row.get(key, ""))
 

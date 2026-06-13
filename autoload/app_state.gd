@@ -653,6 +653,29 @@ func skip_camp_candidate(candidate_id: int) -> Dictionary:
 	return _submit_camp_decision(candidate_id, "skip")
 
 
+func submit_camp_player_training(player_id: int, training_type: String, target_position: int = 0) -> Dictionary:
+	if not offseason_active or offseason_step != 7:
+		return {"ok": false, "message": "キャンプは現在有効ではありません"}
+	if camp_state.is_empty():
+		return {"ok": false, "message": "キャンプが初期化されていません"}
+	var result: Dictionary = _camp_service().submit_user_player_training(
+		camp_state,
+		GameDb.players,
+		GameDb.teams,
+		current_season,
+		player_id,
+		training_type,
+		target_position
+	)
+	camp_state = result.get("state", camp_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	if _is_camp_complete():
+		_finalize_camp_if_complete()
+	_save_if_enabled()
+	return {"ok": true, "state": camp_state}
+
+
 func _submit_camp_decision(candidate_id: int, action: String) -> Dictionary:
 	if not offseason_active or offseason_step != 7:
 		return {"ok": false, "message": "キャンプは現在有効ではありません"}

@@ -673,13 +673,13 @@ func _add_label(parent: Control, text: String) -> void:
 	parent.add_child(label)
 
 
-func _spin(min_value: float, max_value: float, step: float, value: float, size: Vector2) -> SpinBox:
+func _spin(min_value: float, max_value: float, step: float, value: float, box_size: Vector2) -> SpinBox:
 	var spin: SpinBox = SpinBox.new()
 	spin.min_value = min_value
 	spin.max_value = max_value
 	spin.step = step
 	spin.value = value
-	spin.custom_minimum_size = size
+	spin.custom_minimum_size = box_size
 	return spin
 
 

@@ -115,9 +115,9 @@ func _show_screen(screen_name: String) -> void:
 
 	if sidebar != null:
 		sidebar.visible = screen_name != "start" and (screen_name != "options" or AppState.current_season != null)
-		for name in sidebar_buttons.keys():
-			var button: Button = sidebar_buttons[name] as Button
-			button.disabled = name == screen_name
+		for screen_key in sidebar_buttons.keys():
+			var button: Button = sidebar_buttons[screen_key] as Button
+			button.disabled = screen_key == screen_name
 
 	var screen: Control
 	match screen_name:
