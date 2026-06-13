@@ -24,6 +24,10 @@ const INTENTIONAL_WALK_BASE_DENOMINATOR: int = 1000
 const TTO_PENALTY_PER_ROUND: Array = [0.0, 0.0, 0.05, 0.10, 0.15]
 const FRAMING_SCALE: float = 0.05         # 捕手フレーミング能力を「奪ったストライク数」へ変換する倍率。
 const GAMECALL_CONTACT_COEF: float = 0.04 # 捕手の配球が打球の質(被コンタクト抑制)に効く係数。
+# 球威合成 z (Pit_BarrelDeny + 0.5*Pit_ImpactLimit, 投手平均 ≈ +1.5) のテール圧縮。
+# ContactQualityModel の EV 線形項が無圧縮だとエースの被打球抑制が K/BB 支配と重なり ERA 0点台を作る。
+const STUFF_TAIL_PIVOT: float = 2.0
+const STUFF_TAIL_SPAN: float = 0.8
 
 
 static func resolve(
@@ -374,7 +378,9 @@ static func _build_precomp(
 	var batter_gap_z: float = float(batter_z.get("Bat_Impact", 0.0))
 	var batter_hr_z: float = float(batter_z.get("Bat_Impact", 0.0)) + 0.5 * float(batter_z.get("Bat_Loft", 0.0))
 	var batter_avoid_k_z: float = float(batter_z.get("Bat_KAvoid", 0.0))
-	var pitcher_stuff_z: float = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + 0.5 * float(pitcher_z.get("Pit_ImpactLimit", 0.0))
+	var pitcher_stuff_z: float = PSBalanceProfile.compress_z_tail(
+		float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + 0.5 * float(pitcher_z.get("Pit_ImpactLimit", 0.0)),
+		STUFF_TAIL_PIVOT, STUFF_TAIL_SPAN)
 
 	# pitcher 派生情報。pitch_velocity は ContactQualityModel の EV 補正で使う球速 proxy(km/h)。
 	var pitch_velocity_proxy: int = 142 + int(round(float(pitcher_z.get("Pit_EdgeRate", 0.0)) * 4.0))

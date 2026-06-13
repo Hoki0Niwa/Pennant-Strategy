@@ -39,6 +39,11 @@ const GAMECALL_BB_COEF: float = 0.03  # 捕手の配球が四球に効く係数�
 const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増える量。
 # 左右(プラトーン)相性が三振 logit に効く強さ。
 const PLATOON_WEIGHT: float = 0.3
+# 投手テール圧縮: 投手集団の KCreate/BBPrevent は平均 ≈ +1.3 / σ ≈ 0.75 で、エースは z+3 超に達する。
+# 生 z を線形に logit へ入れると K%45% / BB%≈0 級の支配(ERA 0点台)が出るため、
+# pivot 超過分を tanh で漸近圧縮する(平均帯の能力差は不変)。打球品質側の ability_curve_z 圧縮と対をなす。
+const PITCHER_TAIL_PIVOT: float = 1.65  # 投手平均 +0.5σ 付近から圧縮開始。
+const PITCHER_TAIL_SPAN: float = 0.6    # 超過分の漸近上限(z)。
 
 
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
@@ -62,8 +67,9 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
 	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0))
 	var bat_platoon: float = float(batter_z.get("Bat_Platoon", 0.0))
-	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0))
-	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0))
+	# 疲労/巡目/usage ペナルティ適用後の z をテール圧縮する(圧縮を最後にしてペナルティは全額効かせる)。
+	var pit_k_create: float = PSBalanceProfile.compress_z_tail(float(pitcher_z.get("Pit_KCreate", 0.0)), PITCHER_TAIL_PIVOT, PITCHER_TAIL_SPAN)
+	var pit_bb_prevent: float = PSBalanceProfile.compress_z_tail(float(pitcher_z.get("Pit_BBPrevent", 0.0)), PITCHER_TAIL_PIVOT, PITCHER_TAIL_SPAN)
 	var pit_edge_rate: float = float(pitcher_z.get("Pit_EdgeRate", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 

@@ -14,6 +14,14 @@ static func ability_curve_z(z: float, center: float = 0.4, width: float = 1.6) -
 	return 2.0 / (1.0 + exp(-2.0 * x)) - 1.0
 
 
+# z の pivot 超過分を tanh で漸近圧縮する。pivot 以下は不変、超過分は span を漸近上限に飽和。
+# 集団平均帯の能力差は保ったまま、テール(エース級)が logit へ線形に効き続けるのを止める用途。
+static func compress_z_tail(z: float, pivot: float, span: float) -> float:
+	if z <= pivot:
+		return z
+	return pivot + span * tanh((z - pivot) / max(0.001, span))
+
+
 static func sigmoid(logit_value: float) -> float:
 	return 1.0 / (1.0 + exp(-clamp(logit_value, -12.0, 12.0)))
 

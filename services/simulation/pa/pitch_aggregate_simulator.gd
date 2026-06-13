@@ -10,16 +10,23 @@ const CATEGORY_K: String = "k"
 const CATEGORY_BB: String = "bb"
 const CATEGORY_HBP: String = "hbp"
 # --- 調整係数（旧 simulation_tuning.tres から移設。球数を直接ここでチューニングする） ---
-# カテゴリ別の基本球数。
-const BASE_PITCHES_K: float = 4.7    # 三振で終わる打席の基本球数。
-const BASE_PITCHES_BB: float = 5.5   # 四球で終わる打席の基本球数。
+# カテゴリ別の基本球数。リーグ平均でおよそ 3.9 球/打席(NPB 実水準)になるよう設定。
+const BASE_PITCHES_K: float = 4.9    # 三振で終わる打席の基本球数。
+const BASE_PITCHES_BB: float = 5.6   # 四球で終わる打席の基本球数。
 const BASE_PITCHES_HBP: float = 3.0  # 死球で終わる打席の基本球数。
-const BASE_PITCHES_BIP: float = 3.2  # インプレーで終わる打席の基本球数。
+const BASE_PITCHES_BIP: float = 3.45 # インプレーで終わる打席の基本球数。
 # 球数を増減させる能力係数。
 const PATIENCE_COEF: float = 0.4            # 打者の選球眼が球数を増やす係数。
 const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減らす係数。
-const EFFICIENCY_COEF: float = 0.5          # 投手の効率(省エネ度)が球数を減らす係数。
+const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が球数を減らす係数。
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
+# 能力 z は集団平均が 0 でない(投手 Pit_Efficiency ≈ +1.0 等)ため、生 z をそのまま係数に掛けると
+# リーグ全体の球数が系統的に沈む(旧実装は実測 3.0 球/打席まで低下し完投過多の温床だった)。
+# 平均的な選手で補正ゼロになるよう、各能力の集団平均(中立点)を引いてから係数を適用する。
+const PATIENCE_Z_NEUTRAL: float = 0.95   # Bat_BBCreate の野手平均。
+const AGGRESSION_Z_NEUTRAL: float = 0.3  # Bat_Aggression の野手平均。
+const EFFICIENCY_Z_NEUTRAL: float = 1.0  # Pit_Efficiency の投手平均。
+const GAMECALL_Z_NEUTRAL: float = 0.75   # C_GameCall の捕手平均。
 const FATIGUE_PITCH_COEF: float = 0.4       # 疲労が球数を増やす係数。
 const PITCH_SIGMA: float = 1.0              # 球数の乱数ばらつき(正規分布の標準偏差)。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
@@ -45,10 +52,10 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 
 	var base_pitches: float = _base_pitches_for_category(category)
 	var pitches_f: float = base_pitches
-	pitches_f += bat_bb_create * PATIENCE_COEF
-	pitches_f -= bat_aggression * AGGRESSION_COEF
-	pitches_f -= pit_efficiency * EFFICIENCY_COEF
-	pitches_f -= c_game_call * GAMECALL_EFFICIENCY_COEF
+	pitches_f += (bat_bb_create - PATIENCE_Z_NEUTRAL) * PATIENCE_COEF
+	pitches_f -= (bat_aggression - AGGRESSION_Z_NEUTRAL) * AGGRESSION_COEF
+	pitches_f -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
+	pitches_f -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
 	pitches_f += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
 	pitches_f += _gauss(precomp) * PITCH_SIGMA
 

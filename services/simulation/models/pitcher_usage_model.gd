@@ -8,7 +8,7 @@ const ROLE_LONG_RELIEF: String = "long_relief"
 const ROLE_SHORT_RELIEF: String = "short_relief"
 
 const STARTER_TARGET_MIN: int = 80
-const STARTER_TARGET_MAX: int = 130
+const STARTER_TARGET_MAX: int = 122  # NPB 現代の先発上限球数(110-125球)に合わせる。
 const SHORT_RELIEF_TARGET_MIN: int = 15
 const SHORT_RELIEF_TARGET_MAX: int = 32
 const LONG_RELIEF_TARGET_MIN: int = 40
@@ -322,21 +322,25 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 	if role == ROLE_STARTER:
 		if inning <= 1:
 			return false
-		if ratio >= 1.08:
+		if ratio >= 1.05:
 			return true
-		if inning >= 6 and ratio >= 0.95:
+		if inning >= 6 and ratio >= 0.92:
 			return true
-		if inning >= 8 and ratio >= 0.80:
+		if inning >= 8 and ratio >= 0.78:
 			return true
-		if inning >= 9 and ratio >= 0.65:
+		# 9回続投(完投挑戦)は「無失点(完封ペース)かつ低球数」のみ許可する。
+		# 旧実装(ratio<0.65なら続投)は球数効率の高いエースがほぼ毎回完投し、リーグ完投率39%・
+		# ホールド消滅を起こした(現実のNPB完投率は2-3%、完投はほぼ完封挑戦時のみ)。
+		# 「1失点以内」緩和ではエースが年15完投してしまうため無失点限定。10回以降は無条件降板。
+		if inning >= 9 and not (runs_allowed == 0 and ratio <= 0.80):
+			return true
+		if inning >= 10:
 			return true
 		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD:
 			return true
 		if inning >= 4 and runs_allowed >= 5:
 			return true
 		if inning >= 7 and runs_allowed > 2:
-			return true
-		if inning >= 10:
 			return true
 		return false
 	if role == ROLE_LONG_RELIEF:

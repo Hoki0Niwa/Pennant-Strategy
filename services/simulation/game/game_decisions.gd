@@ -429,10 +429,14 @@ static func finalize_pitcher_stats(setup: Dictionary, _result: Dictionary) -> vo
 		starter_outs = int(setup.get("game_outs", 0)) if starter_outs_raw < 0 else starter_outs_raw
 	if starter_runs < 0:
 		starter_runs = int(setup.get("game_runs_allowed", 0)) if starter_runs_raw < 0 else starter_runs_raw
-	if starter_outs >= 24:
+	# 完投 = 一度も救援を仰がず試合を終えたこと。アウト数だけで判定すると
+	# 「8回を投げ切って9回頭に降板した先発」(24アウト)が全て完投扱いになり完投率が桁違いに膨らむ。
+	# 24アウト下限は、ビジター先発が8回完了で終わる完投負け(本物の完投)を含めるための保険。
+	var starter_finished: bool = not bool(setup.get("starter_relieved", false))
+	if starter_finished and starter_outs >= 24:
 		starter.pitcher_stats.complete_games += 1
-	if starter_runs == 0 and starter_outs >= 24:
-		starter.pitcher_stats.shutouts += 1
+		if starter_runs == 0:
+			starter.pitcher_stats.shutouts += 1
 	if starter_outs >= 18 and starter_runs <= 3:
 		starter.pitcher_stats.quality_starts += 1
 
