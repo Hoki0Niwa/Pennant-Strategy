@@ -307,7 +307,8 @@ func _format_detail(record: PSPlayerSeasonRecord) -> String:
 		record.year, record.season_number, record.age, record.years,
 		record.height, record.weight, _hand_name(record.throwing_hand), _hand_name(record.batting_side),
 	])
-	lines.append("%s  %s" % [record.registered_roster, record.contract_status])
+	var roster_label: String = "育成" if record.development_player else record.registered_roster
+	lines.append("%s  %s" % [roster_label, record.contract_status])
 	lines.append(_contract_line(record))
 	lines.append(_evaluation_line(record))
 	lines.append("疲労 %d  怪我 %d日  評価 %d" % [record.fatigue, record.injury_days, PlayerValueEvaluator.overall_score(record)])

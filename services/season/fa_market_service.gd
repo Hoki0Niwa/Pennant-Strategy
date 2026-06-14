@@ -710,16 +710,9 @@ static func _on_cooldown(player: PSPlayer, year: int) -> bool:
 	return year > 0 and (year - signed) < FA_RESIGN_COOLDOWN_YEARS
 
 
+# roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
-	var count: int = 0
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id != team_id:
-			continue
-		if player.is_retired() or player.is_manager_candidate():
-			continue
-		count += 1
-	return count
+	return TeamFinance.shienka_count(players, team_id)
 
 
 static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:

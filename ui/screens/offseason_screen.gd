@@ -240,6 +240,8 @@ var release_summary_label: Label
 var commit_release_button: Button
 var team_roster_records: Array = []
 var selected_release_ids: Dictionary = {}
+# roadmap #3: 育成降格に印を付けた選手。戦力外の軟らかい代替 (release せず育成化)。
+var selected_demote_ids: Dictionary = {}
 var last_release_meta: int = 0
 # { player_id: war } 戦力外リスト構築時に season_war_table を 1 回計算してキャッシュ。
 var release_war_by_id: Dictionary = {}
@@ -391,7 +393,7 @@ func _build_release_panel() -> VBoxContainer:
 	panel.add_theme_constant_override("separation", 6)
 
 	var info: Label = Label.new()
-	info.text = "戦力外通告: 行クリックでチェック。Shift+クリックで範囲チェック。列見出しクリックで並べ替え。確定後は戻せません。"
+	info.text = "戦力外通告: 行クリックで 戦力外(✓)→育成降格(育)→解除 を切替。Shift+クリックで範囲戦力外。育成降格は支配下枠を空けつつ org に残します。確定後は戻せません。"
 	info.add_theme_color_override("font_color", Color(0.78, 0.86, 0.92))
 	panel.add_child(info)
 
@@ -1127,8 +1129,16 @@ func _render_release(result: Dictionary) -> void:
 		_add_content_heading("戦力外通告: %d人" % released.size(), 18)
 	if released.is_empty():
 		_set_content_message_after("今オフは戦力外通告がありませんでした。")
-		return
-	_add_content_table(PEOPLE_COLUMNS, _people_rows(released), 360)
+	else:
+		_add_content_table(PEOPLE_COLUMNS, _people_rows(released), 360)
+
+	# roadmap #3: 育成降格 (release ではなく育成化) の結果を続けて表示。
+	var demoted: Array = result.get("demoted", []) as Array
+	if not demoted.is_empty():
+		var user_d: int = int(result.get("user_demoted_count", 0))
+		var cpu_d: int = int(result.get("cpu_demoted_count", 0))
+		_add_content_heading("育成降格: %d人 (自軍%d人 / 他球団 %d人)" % [demoted.size(), user_d, cpu_d], 18)
+		_add_content_table(PEOPLE_COLUMNS, _people_rows(demoted), 240)
 
 
 func _render_rookies(result: Dictionary) -> void:
@@ -2460,6 +2470,7 @@ func _active_roster_count(team_id: int) -> int:
 func _populate_release_list() -> void:
 	team_roster_records = []
 	selected_release_ids = {}
+	selected_demote_ids = {}
 	last_release_meta = 0
 	release_war_by_id = _build_release_war_map()
 	var team_id: int = AppState.selected_team_id
@@ -2503,12 +2514,18 @@ func _rebuild_release_rows() -> void:
 
 
 func _release_row(player: PSPlayer) -> Dictionary:
-	var is_checked: bool = selected_release_ids.has(player.id)
+	var is_release: bool = selected_release_ids.has(player.id)
+	var is_demote: bool = selected_demote_ids.has(player.id)
 	var note_parts: Array = []
 	if player.foreign_player:
 		note_parts.append("外")
+	var check_text: String = ""
+	if is_release:
+		check_text = "✓"
+	elif is_demote:
+		check_text = "育"
 	var row: Dictionary = {
-		"check": "✓" if is_checked else "",
+		"check": check_text,
 		"pos": str(PSPlayer.POSITION_NAMES.get(player.position, "?")),
 		"name": player.name,
 		"age": player.age,
@@ -2520,8 +2537,10 @@ func _release_row(player: PSPlayer) -> Dictionary:
 		"stat": _release_stat_text(player),
 		"__meta": player.id,
 	}
-	if is_checked:
-		row["__color"] = Color(0.55, 0.78, 1.0)
+	if is_release:
+		row["__color"] = Color(0.95, 0.6, 0.55)
+	elif is_demote:
+		row["__color"] = Color(0.6, 0.85, 0.65)
 	return row
 
 
@@ -2588,10 +2607,14 @@ func _on_release_item_selected() -> void:
 			var hi: int = max(i1, i2)
 			for i in range(lo, hi + 1):
 				selected_release_ids[int(metas[i])] = true
+				selected_demote_ids.erase(int(metas[i]))
 	else:
-		# 単発: チェックをトグル。
+		# 単発: 戦力外(✓) → 育成降格(育) → 解除 の 3 状態を巡回。
 		if selected_release_ids.has(pid):
 			selected_release_ids.erase(pid)
+			selected_demote_ids[pid] = true
+		elif selected_demote_ids.has(pid):
+			selected_demote_ids.erase(pid)
 		else:
 			selected_release_ids[pid] = true
 		last_release_meta = pid
@@ -2613,11 +2636,12 @@ func _refresh_release_summary() -> void:
 	var team_id: int = AppState.selected_team_id
 	var roster_count: int = team_roster_records.size()
 	var selected_count: int = selected_release_ids.size()
+	var demote_count: int = selected_demote_ids.size()
 	var team_name: String = ""
 	var team: PSTeam = GameDb.get_team(team_id)
 	if team != null:
 		team_name = team.short_name
-	release_summary_label.text = "[%s] 選択中 %d人 / 自軍%d人" % [team_name, selected_count, roster_count]
+	release_summary_label.text = "[%s] 戦力外 %d人 / 育成降格 %d人 / 自軍%d人" % [team_name, selected_count, demote_count, roster_count]
 
 
 func _on_auto_select_release_pressed() -> void:
@@ -2627,11 +2651,18 @@ func _on_auto_select_release_pressed() -> void:
 		return
 	var candidate_ids: Array = OffseasonService.compute_release_candidates_for_team(GameDb.players, team_id, season, true)
 	selected_release_ids = {}
+	selected_demote_ids = {}
+	# CPU と同じ基準で、若く価値の残る候補は育成降格に振り分けて提示する (確定前に編集可)。
 	for pid_v in candidate_ids:
-		selected_release_ids[int(pid_v)] = true
+		var pid: int = int(pid_v)
+		var player: PSPlayer = GameDb.get_player(pid)
+		if player != null and OffseasonService._should_demote_to_development(player) and TeamFinance.has_development_room(GameDb.players, team_id):
+			selected_demote_ids[pid] = true
+		else:
+			selected_release_ids[pid] = true
 	_rebuild_release_rows()
 	_refresh_release_summary()
-	status_label.text = "自動で候補を選択しました (%d人)。確定前に編集できます。" % candidate_ids.size()
+	status_label.text = "自動で候補を選択しました (戦力外%d / 育成降格%d)。確定前に編集できます。" % [selected_release_ids.size(), selected_demote_ids.size()]
 	status_label.add_theme_color_override("font_color", Color(0.78, 0.86, 0.92))
 
 
@@ -2639,7 +2670,10 @@ func _on_commit_release_pressed() -> void:
 	var selected_ids: Array = []
 	for pid in selected_release_ids.keys():
 		selected_ids.append(int(pid))
-	var result: Dictionary = AppState.commit_release(selected_ids)
+	var demote_ids: Array = []
+	for pid in selected_demote_ids.keys():
+		demote_ids.append(int(pid))
+	var result: Dictionary = AppState.commit_release(selected_ids, demote_ids)
 	if not bool(result.get("ok", false)):
 		status_label.text = str(result.get("message", ""))
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))

@@ -128,6 +128,9 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	var fielders: Array = []
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		# roadmap #3: 育成選手は一軍登録不可 (試合に出場できない)。
+		if record.development_player:
+			continue
 		if record.is_pitcher():
 			if _is_starter_role(record):
 				starters.append(record)
@@ -353,6 +356,8 @@ static func filter_by_active_roster(season: PSSeason, team_id: int, records: Arr
 	var filtered: Array = []
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.development_player:
+			continue
 		if allowed.has(record.player_id):
 			filtered.append(record)
 	return filtered
@@ -1046,6 +1051,6 @@ static func eligible_or_fallback(records: Array, _min_size: int) -> Array:
 	var eligible: Array = []
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record != null and record.injury_days <= 0:
+		if record != null and record.injury_days <= 0 and not record.development_player:
 			eligible.append(record)
 	return eligible

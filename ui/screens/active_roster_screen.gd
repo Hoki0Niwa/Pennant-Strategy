@@ -3,6 +3,7 @@ extends Control
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
+const Offseason = preload("res://services/season/offseason_service.gd")
 
 const ROSTER_COLUMNS: Array = [
 	{"title": "区分", "key": "role", "width": 56, "type": "string", "format": "string"},
@@ -30,9 +31,15 @@ var active_title: Label
 var inactive_title: Label
 var demote_button: Button
 var promote_button: Button
+# roadmap #3: 育成選手リスト + 支配下登録 (昇格)。
+var development_list: Tree
+var development_title: Label
+var promote_to_shienka_button: Button
 
 var all_records: Array = []
 var active_ids: Dictionary = {}
+# 当チームの育成選手 (live GameDb.players が正準)。{player_id: PSPlayer}
+var development_players: Array = []
 
 
 func _ready() -> void:
@@ -97,13 +104,15 @@ func _build() -> void:
 	status_label.text = ""
 	root.add_child(status_label)
 
-	var split: HSplitContainer = HSplitContainer.new()
-	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(split)
+	var columns: HBoxContainer = HBoxContainer.new()
+	columns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	columns.add_theme_constant_override("separation", 8)
+	root.add_child(columns)
 
-	split.add_child(_build_active_panel())
-	split.add_child(_build_inactive_panel())
+	columns.add_child(_build_active_panel())
+	columns.add_child(_build_inactive_panel())
+	columns.add_child(_build_development_panel())
 
 	_load_initial_state()
 
@@ -156,6 +165,30 @@ func _build_inactive_panel() -> VBoxContainer:
 	return panel
 
 
+func _build_development_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_theme_constant_override("separation", 4)
+
+	development_title = Label.new()
+	development_title.add_theme_font_size_override("font_size", 16)
+	panel.add_child(development_title)
+
+	development_list = SortableTable.new()
+	panel.add_child(development_list)
+	development_list.configure(ROSTER_COLUMNS)
+	development_list.set_default_sort(3, false)
+	development_list.row_activated.connect(func(meta: Variant) -> void: _promote_to_shienka(int(meta)))
+
+	promote_to_shienka_button = Button.new()
+	promote_to_shienka_button.text = "支配下登録 ↑"
+	promote_to_shienka_button.custom_minimum_size = Vector2(140, 32)
+	promote_to_shienka_button.pressed.connect(_on_promote_to_shienka_pressed)
+	panel.add_child(promote_to_shienka_button)
+	return panel
+
+
 func _load_initial_state() -> void:
 	var season: PSSeason = AppState.current_season
 	var team_id: int = AppState.selected_team_id
@@ -172,6 +205,20 @@ func _load_initial_state() -> void:
 	all_records = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	all_records.sort_custom(func(a, b) -> bool:
 		return PlayerValueEvaluator.overall_score(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.overall_score(b as PSPlayerSeasonRecord)
+	)
+
+	# roadmap #3: 育成選手は live GameDb.players が正準 (新人は記録が未生成のことがある)。
+	development_players = []
+	for player_row in GameDb.players:
+		var dev: PSPlayer = player_row as PSPlayer
+		if dev == null or dev.team_id != team_id:
+			continue
+		if dev.is_retired() or dev.is_manager_candidate():
+			continue
+		if dev.development_player:
+			development_players.append(dev)
+	development_players.sort_custom(func(a, b) -> bool:
+		return Offseason.player_value_score(a as PSPlayer) > Offseason.player_value_score(b as PSPlayer)
 	)
 
 	active_ids = {}
@@ -198,19 +245,53 @@ func _load_initial_state() -> void:
 
 
 func _render_lists() -> void:
+	var dev_id_set: Dictionary = {}
+	for dev_row in development_players:
+		dev_id_set[(dev_row as PSPlayer).id] = true
+
 	var active_rows: Array = []
 	var inactive_rows: Array = []
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		# 育成選手は 1軍/2軍 ではなく育成リストへ (一軍登録不可)。
+		if dev_id_set.has(record.player_id):
+			continue
 		if active_ids.has(record.player_id):
 			active_rows.append(_player_row(record))
 		else:
 			inactive_rows.append(_player_row(record))
 
+	var development_rows: Array = []
+	for dev_row in development_players:
+		development_rows.append(_development_row(dev_row as PSPlayer))
+
 	active_list.set_rows(active_rows)
 	inactive_list.set_rows(inactive_rows)
+	development_list.set_rows(development_rows)
 
 	_update_summary()
+
+
+# 育成リストの行 (live PSPlayer から構築)。
+func _development_row(player: PSPlayer) -> Dictionary:
+	var role_label: String
+	if player.is_pitcher():
+		role_label = "先発" if player.role == "starter" else "中継"
+	else:
+		role_label = str(PSPlayer.POSITION_NAMES.get(player.position, "?"))
+	var note_parts: Array = []
+	if player.foreign_player:
+		note_parts.append("外")
+	if player.injury_days > 0:
+		note_parts.append("怪我%d日" % player.injury_days)
+	return {
+		"role": role_label,
+		"name": player.name,
+		"age": player.age,
+		"eval": Offseason.player_value_score(player),
+		"note": " ".join(note_parts),
+		"__meta": player.id,
+	}
 
 
 func _player_row(record: PSPlayerSeasonRecord) -> Dictionary:
@@ -243,8 +324,23 @@ func _update_summary() -> void:
 	var catchers: int = int(summary.get("catchers", 0))
 	var foreigners: int = int(summary.get("foreigners", 0))
 
+	var dev_count: int = development_players.size()
+	var shienka_total: int = TeamFinance.shienka_count(GameDb.players, AppState.selected_team_id)
+	# 2軍 = 育成でなく 1軍登録もされていない記録持ち選手 (育成は記録未生成のことがあるため引き算しない)。
+	var dev_id_set: Dictionary = {}
+	for dev_row in development_players:
+		dev_id_set[(dev_row as PSPlayer).id] = true
+	var inactive_count: int = 0
+	for record_row in all_records:
+		var rec: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if dev_id_set.has(rec.player_id):
+			continue
+		if not active_ids.has(rec.player_id):
+			inactive_count += 1
 	active_title.text = "1軍 (%d/%d)" % [total, ROSTER_MAX]
-	inactive_title.text = "2軍 (%d人)" % (all_records.size() - total)
+	inactive_title.text = "2軍 (%d人)" % inactive_count
+	if development_title != null:
+		development_title.text = "育成 (%d人) 支配下 %d/%d" % [dev_count, shienka_total, TeamFinance.SHIENKA_LIMIT]
 
 	var parts: Array = []
 	parts.append("人数 %d/%d" % [total, ROSTER_MAX])
@@ -310,6 +406,38 @@ func _promote(player_id: int) -> void:
 	active_ids[player_id] = true
 	_render_lists()
 	_set_status("選手を1軍に上げました", false)
+
+
+func _on_promote_to_shienka_pressed() -> void:
+	var meta: Variant = development_list.get_selected_meta()
+	if meta == null:
+		_set_status("育成リストから選手を選択してください", true)
+		return
+	_promote_to_shienka(int(meta))
+
+
+# roadmap #3: 育成 → 支配下 昇格。支配下枠 (70) を 1 消費する。即時保存。
+func _promote_to_shienka(player_id: int) -> void:
+	var team_id: int = AppState.selected_team_id
+	var player: PSPlayer = GameDb.get_player(player_id)
+	if player == null or not player.development_player or player.team_id != team_id:
+		return
+	if not TeamFinance.has_shienka_room(GameDb.players, team_id):
+		_set_status("支配下枠が満杯です (最大%d人)。先に支配下選手を整理してください" % TeamFinance.SHIENKA_LIMIT, true)
+		return
+	player.development_player = false
+	player.registered_roster = "支配下"
+	# 記録スナップショットがあれば同期 (表示の整合)。
+	var season: PSSeason = AppState.current_season
+	if season != null:
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
+		if record != null:
+			record.development_player = false
+			record.registered_roster = "支配下"
+	GameDb.rebuild_player_indices()
+	SaveService.save_state(AppState)
+	_load_initial_state()
+	_set_status("%s を支配下登録しました" % player.name, false)
 
 
 func _find_record(player_id: int) -> PSPlayerSeasonRecord:

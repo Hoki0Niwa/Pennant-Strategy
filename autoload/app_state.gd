@@ -234,7 +234,7 @@ func start_offseason() -> Dictionary:
 	return {"ok": true}
 
 
-func commit_release(player_ids: Array) -> Dictionary:
+func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 	if not offseason_active:
@@ -245,6 +245,8 @@ func commit_release(player_ids: Array) -> Dictionary:
 	# R4 Step3: CPU球団の外国人を別基準 (4枠 + 能力バー + 低稼働) で自動戦力外。
 	# 自軍外国人は戦力外エディタの選択だけを尊重し、確定時に裏で追加解雇しない。
 	var foreign_result: Dictionary = OffseasonService.process_foreign_releases(GameDb.players, GameDb.teams, current_season, selected_team_id)
+	# roadmap #3: 自軍の育成降格 (release ではなく育成化) を release より先に適用し支配下枠を空ける。
+	var demote_result: Dictionary = OffseasonService.process_demotion(GameDb.players, selected_team_id, demote_ids)
 	var user_result: Dictionary = OffseasonService.process_release(GameDb.players, selected_team_id, player_ids)
 	var cpu_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, selected_team_id, current_season)
 
@@ -257,6 +259,11 @@ func commit_release(player_ids: Array) -> Dictionary:
 		return int((a as Dictionary)["overall"]) > int((b as Dictionary)["overall"])
 	)
 
+	# 育成降格 (自軍 + CPU 自動) を合算。
+	var merged_demoted: Array = []
+	merged_demoted.append_array(demote_result.get("demoted", []) as Array)
+	merged_demoted.append_array(cpu_result.get("demoted", []) as Array)
+
 	var step_result: Dictionary = {
 		"released": merged_released,
 		"released_count": merged_released.size(),
@@ -264,6 +271,10 @@ func commit_release(player_ids: Array) -> Dictionary:
 		"user_released_count": int(user_result.get("released_count", 0)),
 		"cpu_released_count": int(cpu_result.get("released_count", 0)),
 		"foreign_released_count": int(foreign_result.get("released_count", 0)),
+		"demoted": merged_demoted,
+		"demoted_count": merged_demoted.size(),
+		"user_demoted_count": int(demote_result.get("demoted_count", 0)),
+		"cpu_demoted_count": int(cpu_result.get("demoted_count", 0)),
 	}
 	step_result["title"] = "戦力外通告"
 	offseason_step = 2
@@ -345,6 +356,14 @@ func advance_offseason() -> Dictionary:
 		8:
 			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
 			step_result["title"] = "成長 / 衰え"
+			# roadmap #3: 成長で育った育成選手を CPU 球団は自動で支配下登録 (自軍は手動)。
+			var promo: Dictionary = OffseasonService.process_development_promotions(GameDb.players, GameDb.teams, selected_team_id)
+			step_result["promoted"] = promo.get("promoted", [])
+			step_result["promoted_count"] = int(promo.get("promoted_count", 0))
+			# 続けて CPU 球団の育成を整理 (失敗プロスペクト/枠超過を放出し pipeline を循環)。
+			var dev_rel: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, selected_team_id)
+			step_result["dev_released_count"] = int(dev_rel.get("released_count", 0))
+			GameDb.rebuild_player_indices()
 		9:
 			step_result = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, current_season)
 			step_result["title"] = "契約更新"

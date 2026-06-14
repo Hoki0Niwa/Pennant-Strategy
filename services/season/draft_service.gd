@@ -739,6 +739,9 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired() or player.is_manager_candidate():
 			continue
+		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外する。
+		if player.development_player:
+			continue
 		var key: String = str(player.team_id)
 		if not profiles.has(key):
 			continue
@@ -1075,6 +1078,7 @@ static func _player_data_from_candidate(candidate: Dictionary, player_id: int, t
 	data["salary"] = _salary_for_round(round_no)
 	data["draft_round"] = round_no
 	data["development_player"] = round_no >= 7
+	data["registered_roster"] = "育成" if round_no >= 7 else "支配下"
 	var source: Dictionary = (data.get("source_data", {}) as Dictionary).duplicate(true)
 	source["rookie_year"] = true
 	source["draft_year"] = draft_year

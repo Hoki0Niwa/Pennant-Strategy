@@ -66,6 +66,18 @@ const RELEASE_MIDCAREER_NOSHOW_MAX_AGE: int = 32
 const RELEASE_MIDCAREER_NOSHOW_MAX_OVERALL: int = 55
 const RELEASE_MIDCAREER_NOSHOW_PENALTY: float = 24.0
 
+# roadmap #3 育成降格: 戦力外候補のうち、若く育成価値の残る選手は release ではなく
+# 育成降格 (支配下枠を空けつつ org に残す) に振り分ける。CPU 自動戦力外で適用。
+const DEMOTE_TO_DEV_MAX_AGE: int = 27
+const DEMOTE_TO_DEV_MIN_VALUE: int = 30
+# 育成→支配下 昇格 (CPU 自動): この value 以上に育った育成選手を、支配下に空きがある範囲で昇格。
+const PROMOTE_TO_SHIENKA_MIN_VALUE: int = 48
+# 育成整理 (CPU 自動): 育成を pipeline として循環させ無制限な累積を防ぐ。
+#  - DEV_RELEASE_AGE 以上で未昇格 (value < 昇格閾値) の failed prospect は放出。
+#  - 育成枠 DEVELOPMENT_LIMIT を超える低 value 分も放出。
+# DEMOTE_TO_DEV_MAX_AGE(27) より上に置き、降格直後の選手が同オフに即放出されないようにする。
+const DEV_RELEASE_AGE: int = 29
+
 const POSITION_NAME_BY_ID: Dictionary = {
 	1: "pitcher", 2: "catcher", 3: "first", 4: "second", 5: "third",
 	6: "shortstop", 7: "left", 8: "center", 9: "right",
@@ -162,6 +174,7 @@ static func process_release(players: Array, team_id: int, player_ids: Array) -> 
 # 既存の process_release と同じ mutation を適用し、結果配列を返す(同じ shape)。
 static func process_cpu_releases(players: Array, teams: Array, user_team_id: int, season: PSSeason) -> Dictionary:
 	var released: Array = []
+	var demoted: Array = []
 	var by_team_counts: Dictionary = {}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
@@ -180,9 +193,7 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 				continue
 			if player.is_retired() or player.is_manager_candidate():
 				continue
-			_apply_release_mutation(player)
-			team_released_count += 1
-			released.append({
+			var entry: Dictionary = {
 				"player_id": player.id,
 				"name": player.name,
 				"age": player.age,
@@ -191,7 +202,15 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 				"overall": player_value_score(player),
 				"years": player.years,
 				"salary": player.salary,
-			})
+			}
+			# roadmap #3: 若く価値の残る選手は release ではなく育成降格 (育成枠に空きがある間)。
+			if _should_demote_to_development(player) and TeamFinance.has_development_room(players, team.id):
+				_apply_demotion_to_development(player)
+				demoted.append(entry)
+			else:
+				_apply_release_mutation(player)
+				team_released_count += 1
+				released.append(entry)
 		if team_released_count > 0:
 			by_team_counts[team.id] = team_released_count
 
@@ -202,6 +221,8 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 	return {
 		"released": released,
 		"released_count": released.size(),
+		"demoted": demoted,
+		"demoted_count": demoted.size(),
 		"by_team": by_team_counts,
 	}
 
@@ -339,6 +360,9 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		if player.team_id != team_id:
 			continue
 		if player.is_retired() or player.is_manager_candidate():
+			continue
+		# roadmap #3: 育成選手は支配下枠外。戦力外候補にも 60 目標の母数にも含めない。
+		if player.development_player:
 			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
@@ -727,6 +751,148 @@ static func _apply_release_mutation(player: PSPlayer) -> void:
 	player.source_data["retired"] = true
 	player.source_data["retired_age"] = player.age
 	player.team_id = 0
+
+
+# roadmap #3: 育成降格。release せず育成選手化し、支配下枠を空けつつ org に残す。
+# team_id は維持 (引退/release と異なる)。一軍登録不可・成長/怪我は通常どおり。
+static func _apply_demotion_to_development(player: PSPlayer) -> void:
+	player.development_player = true
+	player.registered_roster = "育成"
+
+
+# CPU 自動: 戦力外候補のうち、若く一定の価値が残る選手を育成降格に回すか判定。
+static func _should_demote_to_development(player: PSPlayer) -> bool:
+	if player == null or player.foreign_player:
+		return false
+	if player.age > DEMOTE_TO_DEV_MAX_AGE:
+		return false
+	return player_value_score(player) >= DEMOTE_TO_DEV_MIN_VALUE
+
+
+# roadmap #3: 支配下登録 (昇格)。育成選手を支配下に戻す。一軍登録可・70枠を消費する。
+static func _apply_promotion_to_shienka(player: PSPlayer) -> void:
+	player.development_player = false
+	player.registered_roster = "支配下"
+
+
+# CPU 自動: 育成選手のうち value が閾値以上の者を、支配下に空きがある範囲で昇格する。
+# excluded_team_id (自軍) は対話プレイではユーザーが手動昇格するため除外する。
+static func process_development_promotions(players: Array, teams: Array, excluded_team_id: int = 0) -> Dictionary:
+	var promoted: Array = []
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null or team.id == excluded_team_id:
+			continue
+		var devs: Array = []
+		for player_row in players:
+			var player: PSPlayer = player_row as PSPlayer
+			if player == null or player.team_id != team.id:
+				continue
+			if player.is_retired() or player.is_manager_candidate() or not player.development_player:
+				continue
+			if player_value_score(player) < PROMOTE_TO_SHIENKA_MIN_VALUE:
+				continue
+			devs.append(player)
+		devs.sort_custom(func(a, b) -> bool:
+			return player_value_score(a as PSPlayer) > player_value_score(b as PSPlayer)
+		)
+		for dev_row in devs:
+			var dev: PSPlayer = dev_row as PSPlayer
+			if not TeamFinance.has_shienka_room(players, team.id):
+				break
+			_apply_promotion_to_shienka(dev)
+			promoted.append({
+				"player_id": dev.id,
+				"name": dev.name,
+				"age": dev.age,
+				"team_id": team.id,
+				"position": dev.position,
+				"overall": player_value_score(dev),
+				"years": dev.years,
+				"salary": dev.salary,
+			})
+	return {
+		"promoted": promoted,
+		"promoted_count": promoted.size(),
+	}
+
+
+# CPU 自動: 育成選手の整理 (pipeline 循環)。失敗プロスペクト (DEV_RELEASE_AGE 以上で未昇格) と
+# 育成枠超過分 (低 value から) を放出する。昇格処理の直後に実行する想定。
+static func process_development_releases(players: Array, teams: Array, excluded_team_id: int = 0) -> Dictionary:
+	var released: Array = []
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null or team.id == excluded_team_id:
+			continue
+		var devs: Array = []
+		for player_row in players:
+			var player: PSPlayer = player_row as PSPlayer
+			if player == null or player.team_id != team.id:
+				continue
+			if player.is_retired() or player.is_manager_candidate() or not player.development_player:
+				continue
+			devs.append(player)
+		devs.sort_custom(func(a, b) -> bool:
+			return player_value_score(a as PSPlayer) > player_value_score(b as PSPlayer)
+		)
+		for i in range(devs.size()):
+			var dev: PSPlayer = devs[i] as PSPlayer
+			var over_cap: bool = i >= TeamFinance.DEVELOPMENT_LIMIT
+			var failed_prospect: bool = dev.age >= DEV_RELEASE_AGE and player_value_score(dev) < PROMOTE_TO_SHIENKA_MIN_VALUE
+			if not over_cap and not failed_prospect:
+				continue
+			_apply_release_mutation(dev)
+			released.append({
+				"player_id": dev.id,
+				"name": dev.name,
+				"age": dev.age,
+				"team_id": team.id,
+				"position": dev.position,
+				"overall": player_value_score(dev),
+				"years": dev.years,
+				"salary": dev.salary,
+			})
+	return {
+		"released": released,
+		"released_count": released.size(),
+	}
+
+
+# 自軍の指定選手を育成降格する (戦力外エディタの「育成降格」選択)。
+# 育成枠 (DEVELOPMENT_LIMIT) に空きがある範囲で適用し、超過分は降格しない。
+static func process_demotion(players: Array, team_id: int, player_ids: Array) -> Dictionary:
+	var demote_set: Dictionary = {}
+	for id_value in player_ids:
+		demote_set[int(id_value)] = true
+
+	var demoted: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if not demote_set.has(player.id):
+			continue
+		if player.team_id != team_id:
+			continue
+		if player.is_retired() or player.is_manager_candidate() or player.development_player:
+			continue
+		if not TeamFinance.has_development_room(players, team_id):
+			break
+		_apply_demotion_to_development(player)
+		demoted.append({
+			"player_id": player.id,
+			"name": player.name,
+			"age": player.age,
+			"team_id": team_id,
+			"position": player.position,
+			"overall": player_value_score(player),
+			"years": player.years,
+			"salary": player.salary,
+		})
+
+	return {
+		"demoted": demoted,
+		"demoted_count": demoted.size(),
+	}
 
 
 # --- 引退 (Step 0): 年齢 + 出場ベース ---

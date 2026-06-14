@@ -161,6 +161,9 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 	var fielders: Array = []
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		# roadmap #3: 育成選手は一軍登録不可 (試合に出場できない)。
+		if record.development_player:
+			continue
 		if record.is_pitcher():
 			if _is_starting_pitcher(record):
 				starters.append(record)
@@ -491,6 +494,9 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 	for record_row in inactive_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.injury_days > 0:
+			continue
+		# roadmap #3: 育成選手は一軍へ昇格できない (支配下登録が必要)。
+		if record.development_player:
 			continue
 		var pid_key: String = str(record.player_id)
 		var last_demote: int = int(demotion_days.get(pid_key, 0))

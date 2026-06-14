@@ -359,6 +359,8 @@ func _batter_row(record: PSPlayerSeasonRecord) -> Dictionary:
 
 func _roster_note(record: PSPlayerSeasonRecord) -> String:
 	var parts: Array = []
+	if record.development_player:
+		parts.append("育成")
 	if record.foreign_player:
 		parts.append("外")
 	if record.injury_days > 0:
