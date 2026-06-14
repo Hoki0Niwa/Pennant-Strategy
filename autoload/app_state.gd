@@ -408,6 +408,20 @@ func auto_draft_user_pick() -> Dictionary:
 	return {"ok": true, "state": draft_state}
 
 
+func skip_draft_pick() -> Dictionary:
+	if not offseason_active or offseason_step != 3:
+		return {"ok": false, "message": "ドラフトは現在有効ではありません"}
+	if draft_state.is_empty():
+		return {"ok": false, "message": "ドラフトが初期化されていません"}
+	var result: Dictionary = DraftService.skip_user_pick(draft_state)
+	draft_state = result.get("state", draft_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	_finalize_draft_if_complete()
+	_save_if_enabled()
+	return {"ok": true, "state": draft_state}
+
+
 func complete_draft_automatically() -> Dictionary:
 	if not offseason_active or offseason_step != 3:
 		return {"ok": false, "message": "ドラフトは現在有効ではありません"}

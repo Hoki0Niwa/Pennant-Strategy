@@ -14,14 +14,16 @@ const FORCED_RETIREMENT_RAMP_START_AGE: int = 40
 const FORCED_RETIREMENT_CERTAIN_AGE: int = 48
 
 # 自動戦力外通告(CPU/自軍ボタン共通)
-# 仕様:
+# 仕様 (2026-06-14 改訂: 固定60へ削る方式を撤廃し need-driven へ):
 #  Phase 1 (常時): age >= PHASE1_AGE かつ少試合 → 優先カット
-#  Phase 2 (60超過時): 段階緩和の tier 表で候補をプール化、複合キーで切り順
-#  Phase 3 (60超過時, フォールバック): age >= AGE_FLOOR で perf 下位を切る
-#  Phase 4 (60超過時, 最終手段): age フロアを撤廃、全選手から perf 下位を切る
-#  プロスペクト保護: years <= ROOKIE_PROTECTION_YEARS (Phase 4 でも保持)
-#  ※ MAX_CUTS 上限は撤廃 (60保証を優先)
-const CPU_RELEASE_TARGET_SIZE: int = 60
+#  Phase 2-4 (ROSTER_MIN 超過時): tier/perf 下位から切るが、**cut_score がキーパー水準
+#   (RELEASE_KEEPER_CUT_SCORE) 以上の選手は切らない**。= 入れ替える価値のある下位選手だけを放出する。
+#   → 弱い選手が多い球団は多く放出、キーパーばかりの球団はほぼ放出しない (放出数が need-driven に変動)。
+#  プロスペクト保護: years <= ROOKIE_PROTECTION_YEARS。床: CPU_ROSTER_MIN 未満には削らない。
+# 放出数の変動はドラフト指名数 (draft_service の need ベース target) に直結する。
+const CPU_ROSTER_MIN: int = 55
+# これ未満の cut_score の非保護選手のみ放出対象 (= 代替が利く控え以下)。以上はキーパーとして残す。
+const RELEASE_KEEPER_CUT_SCORE: float = 36.0
 const CPU_RELEASE_ROOKIE_PROTECTION_YEARS: int = 2
 const CPU_RELEASE_PHASE1_AGE: int = 30
 const CPU_RELEASE_AGE_FLOOR: int = 27
@@ -66,17 +68,46 @@ const RELEASE_MIDCAREER_NOSHOW_MAX_AGE: int = 32
 const RELEASE_MIDCAREER_NOSHOW_MAX_OVERALL: int = 55
 const RELEASE_MIDCAREER_NOSHOW_PENALTY: float = 24.0
 
-# roadmap #3 育成降格: 戦力外候補のうち、若く育成価値の残る選手は release ではなく
-# 育成降格 (支配下枠を空けつつ org に残す) に振り分ける。CPU 自動戦力外で適用。
-const DEMOTE_TO_DEV_MAX_AGE: int = 27
-const DEMOTE_TO_DEV_MIN_VALUE: int = 30
-# 育成→支配下 昇格 (CPU 自動): この value 以上に育った育成選手を、支配下に空きがある範囲で昇格。
+# roadmap #3 育成制度に合わせたロスター判定 (支配下→育成 / 育成→戦力外 / 育成→支配下)。
+# 「今後2〜3年の期待価値」を future_value_score に一本化し、相対値・代替差で段階判定する。
+#
+# 統一スコア future_value_score = 現在能力 (player_value_score)
+#   + 成長期待 (expected_development_score_bonus * FUTURE_GROWTH_WEIGHT) − 故障リスク (injury_value_penalty)。
+# 希少性・編成適合は本職プロテクト (_compute_primary_protected_ids) / draft の need で構造的に担保し、
+# スコアには混ぜない (二重評価回避)。
+const FUTURE_GROWTH_WEIGHT: float = 1.0
+# 故障リスク減点: injury_days 30日ごとに ~1 点、上限 INJURY_PENALTY_CAP。恒久能力低下は既に z へ
+# 反映済みなので二重減点しない (残存離脱日数の機会損失だけを軽く引く)。
+const INJURY_PENALTY_PER_30D: float = 1.0
+const INJURY_PENALTY_CAP: float = 6.0
+
+# --- 支配下→育成 降格 (CPU 自動戦力外で release の代わりに振り分け) ---
+# 戦力外候補 (= 現在価値が支配下水準未満) のうち、将来価値が残るなら育成降格に回す。
+#  類型1 素材保持型: 若く (age≤PROSPECT_MAX) future_value が残り、まだ成長余地がある。
+#  類型2 長期故障/再調整型: 越冬で治らない長期故障 (injury_days≥LONG) で、復帰すれば戦力。
+const DEMOTE_PROSPECT_MAX_AGE: int = 27
+const DEMOTE_MIN_FUTURE_VALUE: float = 34.0
+const DEMOTE_MIN_GROWTH: float = 1.0
+const DEMOTE_INJURY_MAX_AGE: int = 31
+const DEMOTE_INJURY_DAYS_LONG: int = 120
+const DEMOTE_INJURY_MIN_FUTURE_VALUE: float = 40.0
+# 判定のゆらぎ (5〜10%)。future_value 閾値を ±DEMOTE_JITTER 揺らし全球団が同一評価にならないように。
+# marginal 層のみに効くため主力の突発降格は起きない。
+const DEMOTE_JITTER: float = 0.07
+
+# 育成→支配下 昇格 (CPU 自動): この「現在能力」value 以上に育った育成選手を支配下に空きがある範囲で昇格。
+# 昇格は将来性ではなく「支配下で通用する準備度」= 現在能力で判断する。
 const PROMOTE_TO_SHIENKA_MIN_VALUE: int = 48
-# 育成整理 (CPU 自動): 育成を pipeline として循環させ無制限な累積を防ぐ。
-#  - DEV_RELEASE_AGE 以上で未昇格 (value < 昇格閾値) の failed prospect は放出。
-#  - 育成枠 DEVELOPMENT_LIMIT を超える低 value 分も放出。
-# DEMOTE_TO_DEV_MAX_AGE(27) より上に置き、降格直後の選手が同オフに即放出されないようにする。
-const DEV_RELEASE_AGE: int = 29
+
+# --- 育成→戦力外 整理 (CPU 自動): 育成を pipeline として循環させ無制限な累積を防ぐ ---
+# 在籍年数 (player.years を育成年数の代理) と出身 (高卒は猶予長め) で段階化する。
+#  - 1年目 (降格/入団直後): 原則保持。
+#  - 猶予年数未満: 明確に見込み薄 (future_value < FAIL ∧ 成長余地ほぼ無し) のみ放出。
+#  - 猶予年数到達以降: 昇格見込み無し (future_value < PROMOTE_TO_SHIENKA_MIN_VALUE) なら放出 (厳しめ)。
+#  - 育成枠 DEVELOPMENT_LIMIT 超過分: future_value 下位から放出。
+const DEV_RELEASE_GRACE_HS: int = 4
+const DEV_RELEASE_GRACE_OTHER: int = 3
+const DEV_FAIL_FUTURE_VALUE: float = 36.0
 
 const POSITION_NAME_BY_ID: Dictionary = {
 	1: "pitcher", 2: "catcher", 3: "first", 4: "second", 5: "third",
@@ -143,7 +174,7 @@ static func process_release(players: Array, team_id: int, player_ids: Array) -> 
 			continue
 		if player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		var original_team_id: int = player.team_id
 		_apply_release_mutation(player)
@@ -191,7 +222,7 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 				continue
 			if player.team_id != team.id:
 				continue
-			if player.is_retired() or player.is_manager_candidate():
+			if player.is_retired():
 				continue
 			var entry: Dictionary = {
 				"player_id": player.id,
@@ -296,7 +327,7 @@ static func _foreign_release_entries_for_team(players: Array, team_id: int, seas
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id or not player.foreign_player:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
@@ -343,7 +374,7 @@ static func _is_low_usage_foreign(player: PSPlayer, record: PSPlayerSeasonRecord
 # 自軍「自動で決める」ボタンと CPU 自動戦力外 (process_cpu_releases) 共通アルゴリズム。
 #
 # 設計:
-#  - team_count = 球団の合計人数 (retired/manager 除外)。この値が常に「現在のチーム人数」
+#  - team_count = 球団の合計人数 (retired 除外)。この値が常に「現在のチーム人数」
 #  - rookie protection はドラフト入団かつ years <= ROOKIE_PROTECTION_YEARS の選手だけを
 #    カット対象から外す保護フィルタであり、
 #    team_count には含める (チーム合計を正しく反映するため)。これが Phase 2-4 トリガ条件と一致する。
@@ -351,7 +382,7 @@ static func _is_low_usage_foreign(player: PSPlayer, record: PSPlayerSeasonRecord
 # Phase 2 (team_count > 60): tier 候補プール (years > 2) → 複合キーで切る
 # Phase 3 (team_count > 60): age >= 27 (years > 2) で cut_score 下位を切る
 # Phase 4 (team_count > 60): age フロアも撤廃 (years > 2 は維持) で cut_score 下位を切る
-# 保護: is_retired / is_manager_candidate / ドラフト入団 years <= 2 (rookie 流出防止)
+# 保護: is_retired / ドラフト入団 years <= 2 (rookie 流出防止)
 static func compute_release_candidates_for_team(players: Array, team_id: int, season: PSSeason, include_foreign_release_candidates: bool = false) -> Array:
 	# (1) チーム全員 (非引退非マネージャー候補) を集める。rookie protection はここでは適用しない。
 	var roster_records_all: Array = []
@@ -359,7 +390,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		var player: PSPlayer = player_row as PSPlayer
 		if player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		# roadmap #3: 育成選手は支配下枠外。戦力外候補にも 60 目標の母数にも含めない。
 		if player.development_player:
@@ -422,8 +453,8 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		cut_set[player.id] = true
 		team_count -= 1
 
-	# (3) Phase 2: team_count > 60 のとき tier プールから複合キーで切る
-	if team_count > CPU_RELEASE_TARGET_SIZE:
+	# (3) Phase 2: ROSTER_MIN 超過時、tier プールから複合キーで切る (キーパー水準は残す)
+	if team_count > CPU_ROSTER_MIN:
 		var candidates: Array = []
 		for row in roster_records_all:
 			var data: Dictionary = row as Dictionary
@@ -452,9 +483,12 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		candidates.sort_custom(_phase2_sort_cmp)
 
 		for cand_row in candidates:
-			if team_count <= CPU_RELEASE_TARGET_SIZE:
+			if team_count <= CPU_ROSTER_MIN:
 				break
 			var cand: Dictionary = cand_row as Dictionary
+			# キーパー水準 (代替が利かない控え以上) は放出しない。
+			if float(cand["cut_score"]) >= RELEASE_KEEPER_CUT_SCORE:
+				continue
 			var pid: int = int((cand["player"] as PSPlayer).id)
 			if cut_set.has(pid):
 				continue
@@ -462,8 +496,8 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			cut_set[pid] = true
 			team_count -= 1
 
-	# (4) Phase 3 (フォールバック): age >= 27 で perf 下位を切る (years > 2)
-	if team_count > CPU_RELEASE_TARGET_SIZE:
+	# (4) Phase 3 (フォールバック): age >= 27 で perf 下位を切る (years > 2, キーパー水準は残す)
+	if team_count > CPU_ROSTER_MIN:
 		var pool: Array = []
 		for row in roster_records_all:
 			var data: Dictionary = row as Dictionary
@@ -488,9 +522,11 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			return float((a as Dictionary)["score"]) < float((b as Dictionary)["score"])
 		)
 		for cand_row in pool:
-			if team_count <= CPU_RELEASE_TARGET_SIZE:
+			if team_count <= CPU_ROSTER_MIN:
 				break
 			var cand: Dictionary = cand_row as Dictionary
+			if float(cand["score"]) >= RELEASE_KEEPER_CUT_SCORE:
+				break  # 昇順ソート: 以降は全てキーパー水準
 			var pid: int = int((cand["player"] as PSPlayer).id)
 			if cut_set.has(pid):
 				continue
@@ -498,8 +534,8 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			cut_set[pid] = true
 			team_count -= 1
 
-	# (5) Phase 4 (最終手段): age フロアを撤廃 (years > 2 は維持) で perf 下位を切る
-	if team_count > CPU_RELEASE_TARGET_SIZE:
+	# (5) Phase 4 (最終手段): age フロアを撤廃 (years > 2 は維持) で perf 下位を切る (キーパー水準は残す)
+	if team_count > CPU_ROSTER_MIN:
 		var pool: Array = []
 		for row in roster_records_all:
 			var data: Dictionary = row as Dictionary
@@ -522,9 +558,11 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			return float((a as Dictionary)["score"]) < float((b as Dictionary)["score"])
 		)
 		for cand_row in pool:
-			if team_count <= CPU_RELEASE_TARGET_SIZE:
+			if team_count <= CPU_ROSTER_MIN:
 				break
 			var cand: Dictionary = cand_row as Dictionary
+			if float(cand["score"]) >= RELEASE_KEEPER_CUT_SCORE:
+				break  # 昇順ソート: 以降は全てキーパー水準
 			var pid: int = int((cand["player"] as PSPlayer).id)
 			if cut_set.has(pid):
 				continue
@@ -761,12 +799,52 @@ static func _apply_demotion_to_development(player: PSPlayer) -> void:
 
 
 # CPU 自動: 戦力外候補のうち、若く一定の価値が残る選手を育成降格に回すか判定。
+# roadmap #3: 戦力外候補のうち、release ではなく育成降格に回すべきか判定する。
+# 現在価値が支配下水準未満 (= 戦力外候補に挙がっている) 前提で、将来価値が残るなら育成へ。
+# 類型1 素材保持型 / 類型2 長期故障・再調整型。いずれか成立で true。
+# (ベテラン実績者は戦力外プロテクトで候補に来ないため、自然と降格対象から外れる。)
+# 育成枠の空きは呼び出し側 (process_cpu_releases / has_development_room) で確認済み。
 static func _should_demote_to_development(player: PSPlayer) -> bool:
 	if player == null or player.foreign_player:
 		return false
-	if player.age > DEMOTE_TO_DEV_MAX_AGE:
+	var future_value: float = future_value_score(player)
+	# 全球団が同一評価にならないよう、比較閾値を ±DEMOTE_JITTER 揺らす (marginal 層のみ)。
+	var jitter: float = 1.0 + (Rng.roll_float() - 0.5) * 2.0 * DEMOTE_JITTER
+	# 類型1: 素材保持型 (若く・将来価値あり・まだ成長余地)。
+	if player.age <= DEMOTE_PROSPECT_MAX_AGE:
+		if future_value >= DEMOTE_MIN_FUTURE_VALUE * jitter:
+			if expected_development_score_bonus(player.age, 6, player.position) >= DEMOTE_MIN_GROWTH:
+				return true
+	# 類型2: 長期故障 / 再調整型 (越冬で治らない長期故障で、復帰すれば戦力)。
+	if player.age <= DEMOTE_INJURY_MAX_AGE and player.injury_days >= DEMOTE_INJURY_DAYS_LONG:
+		if future_value >= DEMOTE_INJURY_MIN_FUTURE_VALUE * jitter:
+			return true
+	return false
+
+
+# 育成整理での保護判定。「今なお育成保持に値するプロスペクト」なら failed_prospect 放出しない。
+# _should_demote_to_development と同じ基準 (jitter 抜き) を使い、降格した選手が同オフに即放出される
+# のを防ぐ (=「降格年の保持」を構造的に担保)。
+static func _is_viable_development_prospect(player: PSPlayer, fv: float) -> bool:
+	if player == null:
 		return false
-	return player_value_score(player) >= DEMOTE_TO_DEV_MIN_VALUE
+	# 素材保持型: 若く・将来価値があり・まだ成長余地がある。
+	if player.age <= DEMOTE_PROSPECT_MAX_AGE and fv >= DEMOTE_MIN_FUTURE_VALUE:
+		if expected_development_score_bonus(player.age, 6, player.position) >= DEMOTE_MIN_GROWTH:
+			return true
+	# 故障回復待ち: まだ離脱中で復帰すれば戦力。
+	if player.injury_days > 0 and player.age <= DEMOTE_INJURY_MAX_AGE and fv >= DEMOTE_INJURY_MIN_FUTURE_VALUE:
+		return true
+	return false
+
+
+# 出身が高卒か (育成放出の猶予年数を長くする)。生成選手は source_data["draft_source"]、
+# 初期シードはデビュー年齢から PSPlayer.default_fa_eligible_years が推定する (==8 が高卒)。
+static func _is_high_school_origin(player: PSPlayer) -> bool:
+	if player == null:
+		return false
+	var eligible: int = PSPlayer.default_fa_eligible_years(player.foreign_player, player.age, player.years, player.source_data)
+	return eligible == PSPlayer.FA_ELIGIBLE_YEARS_HIGH_SCHOOL
 
 
 # roadmap #3: 支配下登録 (昇格)。育成選手を支配下に戻す。一軍登録可・70枠を消費する。
@@ -788,7 +866,7 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 			var player: PSPlayer = player_row as PSPlayer
 			if player == null or player.team_id != team.id:
 				continue
-			if player.is_retired() or player.is_manager_candidate() or not player.development_player:
+			if player.is_retired() or not player.development_player:
 				continue
 			if player_value_score(player) < PROMOTE_TO_SHIENKA_MIN_VALUE:
 				continue
@@ -817,8 +895,8 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 	}
 
 
-# CPU 自動: 育成選手の整理 (pipeline 循環)。失敗プロスペクト (DEV_RELEASE_AGE 以上で未昇格) と
-# 育成枠超過分 (低 value から) を放出する。昇格処理の直後に実行する想定。
+# CPU 自動: 育成選手の整理 (pipeline 循環)。失敗プロスペクト (在籍年数が出身別猶予を超え昇格見込み無し) と
+# 育成枠超過分 (将来価値下位から) を放出する。1年目と viable な素材/故障回復待ちは保持。昇格処理の直後に実行。
 static func process_development_releases(players: Array, teams: Array, excluded_team_id: int = 0) -> Dictionary:
 	var released: Array = []
 	for team_row in teams:
@@ -830,16 +908,32 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 			var player: PSPlayer = player_row as PSPlayer
 			if player == null or player.team_id != team.id:
 				continue
-			if player.is_retired() or player.is_manager_candidate() or not player.development_player:
+			if player.is_retired() or not player.development_player:
 				continue
 			devs.append(player)
+		# future_value 降順。over_cap の放出は将来価値が最も低い末尾から行う。
 		devs.sort_custom(func(a, b) -> bool:
-			return player_value_score(a as PSPlayer) > player_value_score(b as PSPlayer)
+			return future_value_score(a as PSPlayer) > future_value_score(b as PSPlayer)
 		)
 		for i in range(devs.size()):
 			var dev: PSPlayer = devs[i] as PSPlayer
+			var fv: float = future_value_score(dev)
+			# 育成枠 DEVELOPMENT_LIMIT 超過分は将来価値下位から放出 (pipeline 循環)。
 			var over_cap: bool = i >= TeamFinance.DEVELOPMENT_LIMIT
-			var failed_prospect: bool = dev.age >= DEV_RELEASE_AGE and player_value_score(dev) < PROMOTE_TO_SHIENKA_MIN_VALUE
+			var failed_prospect: bool = false
+			if not _is_viable_development_prospect(dev, fv):
+				# 在籍年数 (育成年数の代理) と出身で猶予を変える。高卒は猶予長め。
+				var grace: int = DEV_RELEASE_GRACE_HS if _is_high_school_origin(dev) else DEV_RELEASE_GRACE_OTHER
+				var growth: float = expected_development_score_bonus(dev.age, 6, dev.position)
+				if dev.years <= 1:
+					# 1年目 (降格/入団直後) は原則保持 (over_cap のみ別途効く)。
+					failed_prospect = false
+				elif dev.years >= grace:
+					# 猶予到達以降: 昇格見込み無しなら放出 (厳しめ)。
+					failed_prospect = fv < float(PROMOTE_TO_SHIENKA_MIN_VALUE)
+				else:
+					# 猶予未満: 明確に見込み薄 (将来価値が下限割れ かつ 成長余地ほぼ無し) のみ放出。
+					failed_prospect = fv < DEV_FAIL_FUTURE_VALUE and growth < DEMOTE_MIN_GROWTH
 			if not over_cap and not failed_prospect:
 				continue
 			_apply_release_mutation(dev)
@@ -873,7 +967,7 @@ static func process_demotion(players: Array, team_id: int, player_ids: Array) ->
 			continue
 		if player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate() or player.development_player:
+		if player.is_retired() or player.development_player:
 			continue
 		if not TeamFinance.has_development_room(players, team_id):
 			break
@@ -903,7 +997,7 @@ static func process_retirement(players: Array, season: PSSeason) -> Dictionary:
 	var retired: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
@@ -968,6 +1062,26 @@ static func player_value_score(player: PSPlayer) -> int:
 		return 0
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
 	return PlayerValueEvaluator.overall_score(record)
+
+
+# 「今後2〜3年の期待価値」を 1 スカラーに統一したスコア。
+# = 現在能力 + 成長期待 (年齢ベース) − 故障リスク。育成降格 / 育成整理の判定軸に使う。
+# 出場ベースの戦力外 *選定* (compute_release_candidates_for_team) はこれを使わず従来どおり
+# (主力を1年の不振で切らない方針を維持)。
+static func future_value_score(player: PSPlayer) -> float:
+	if player == null:
+		return 0.0
+	var current: float = float(player_value_score(player))
+	var growth: float = expected_development_score_bonus(player.age, 6, player.position) * FUTURE_GROWTH_WEIGHT
+	return current + growth - injury_value_penalty(player)
+
+
+# 故障リスク減点。残存離脱日数 (injury_days) 30日ごとに ~1 点、上限 INJURY_PENALTY_CAP。
+# 恒久能力低下は既に z 能力へ反映済みなので二重減点しない。
+static func injury_value_penalty(player: PSPlayer) -> float:
+	if player == null or player.injury_days <= 0:
+		return 0.0
+	return min(float(player.injury_days) / 30.0 * INJURY_PENALTY_PER_30D, INJURY_PENALTY_CAP)
 
 
 static func development_kind_label(kind: String) -> String:
@@ -1097,7 +1211,7 @@ static func process_injury_carryover(players: Array, season: PSSeason) -> Dictio
 	var carried: int = 0
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		var current_days: int = record.injury_days if record != null else player.injury_days
@@ -1126,7 +1240,7 @@ static func process_growth_decay(players: Array, user_team_id: int = 0, season: 
 	var kind_counts: Dictionary = _empty_growth_kind_counts()
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		var aggregated: bool = user_team_id <= 0 or player.team_id == user_team_id
 		var before: int = 0
@@ -1607,7 +1721,7 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 		season.accrue_all_active_roster_days(team_ids, season.current_day)
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		# (1) 年俸再査定: 今季の記録 (WAR + 出場試合数 + 成績) から前年俸を裁定。
 		var record: PSPlayerSeasonRecord = null

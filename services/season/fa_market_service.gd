@@ -297,7 +297,7 @@ static func _select_declarers(players: Array, _teams: Array, season: PSSeason, y
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0:
 			continue
-		if player.is_retired() or player.is_manager_candidate() or player.foreign_player:
+		if player.is_retired() or player.foreign_player:
 			continue
 		if not player.is_fa_eligible() or _on_cooldown(player, year):
 			continue
@@ -424,7 +424,7 @@ static func _build_fa_rank_by_player_id(players: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0:
 			continue
-		if player.is_retired() or player.is_manager_candidate() or player.foreign_player:
+		if player.is_retired() or player.foreign_player:
 			continue
 		if not by_team.has(player.team_id):
 			by_team[player.team_id] = []
@@ -513,7 +513,7 @@ static func _declaration_chance(player: PSPlayer, year: int) -> float:
 static func _is_fa_tracking_candidate(player: PSPlayer, year: int) -> bool:
 	if player == null or player.team_id <= 0:
 		return false
-	if player.is_retired() or player.is_manager_candidate() or player.foreign_player:
+	if player.is_retired() or player.foreign_player:
 		return false
 	if bool(player.source_data.get("free_agent", false)):
 		return false
@@ -677,7 +677,7 @@ static func _build_position_need(players: Array, teams: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		if not best_by_team.has(player.team_id):
 			continue

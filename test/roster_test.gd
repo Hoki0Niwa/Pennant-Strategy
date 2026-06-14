@@ -101,17 +101,94 @@ func test_promotion_excludes_user_team() -> void:
 
 # --- 育成整理 (pipeline 循環) ------------------------------------------------
 
-func test_development_release_cuts_failed_prospect_keeps_young() -> void:
-	var young_weak: PSPlayer = _player_with_z(80, 1, 3, true, -3.0)
-	young_weak.age = 20
-	var aged_weak: PSPlayer = _player_with_z(81, 1, 3, true, -3.0)
-	aged_weak.age = Offseason.DEV_RELEASE_AGE + 1
-	var players: Array = [young_weak, aged_weak]
+func test_development_release_cuts_failed_prospect_keeps_viable_young() -> void:
+	# 若く将来価値のある素材 (viable) は猶予を過ぎても保持。
+	var young_viable: PSPlayer = _player_with_z(80, 1, 3, true, 0.6)
+	young_viable.age = 20
+	young_viable.years = 5
+	# 在籍年数が出身別猶予を超え、昇格見込みも無い (非 viable) 失敗プロスペクトは放出。
+	var aged_weak: PSPlayer = _player_with_z(81, 1, 3, true, -2.0)
+	aged_weak.age = 30
+	aged_weak.years = 3
+	var players: Array = [young_viable, aged_weak]
 	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
 	assert_int(int(result.get("released_count", 0))).is_equal(1)
-	assert_bool(young_weak.is_retired()).is_false()
-	assert_bool(young_weak.development_player).is_true()
-	assert_bool(aged_weak.is_retired()).is_true()  # failed prospect は放出
+	assert_bool(young_viable.is_retired()).is_false()
+	assert_bool(young_viable.development_player).is_true()
+	assert_bool(aged_weak.is_retired()).is_true()
+
+
+func test_development_release_keeps_first_year() -> void:
+	# 1年目 (years<=1) の育成は将来価値が低くても原則保持。
+	var first_year: PSPlayer = _player_with_z(82, 1, 3, true, -2.0)
+	first_year.age = 24
+	first_year.years = 1
+	var tenured: PSPlayer = _player_with_z(83, 1, 3, true, -2.0)
+	tenured.age = 24
+	tenured.years = 5  # 猶予 (大社3) を超え昇格見込み無し → 放出
+	var players: Array = [first_year, tenured]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_bool(first_year.is_retired()).is_false()
+	assert_bool(tenured.is_retired()).is_true()
+
+
+func test_development_release_high_school_longer_grace() -> void:
+	# 同条件 (非 viable・在籍3年) でも高卒は猶予4年で保持、大社は猶予3年で放出。
+	var hs: PSPlayer = _player_with_z(84, 1, 3, true, -2.0)
+	hs.age = 21
+	hs.years = 3
+	hs.source_data = {"draft_source": "high_school"}
+	var college: PSPlayer = _player_with_z(85, 1, 3, true, -2.0)
+	college.age = 21
+	college.years = 3
+	college.source_data = {"draft_source": "university"}
+	var players: Array = [hs, college]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(result.get("released_count", 0))).is_equal(1)
+	assert_bool(hs.is_retired()).is_false()
+	assert_bool(college.is_retired()).is_true()
+
+
+# --- 統一スコア future_value_score / 故障リスク -------------------------------
+
+func test_future_value_score_rewards_youth() -> void:
+	var young: PSPlayer = _player_with_z(90, 1, 3, false, 0.0)
+	young.age = 20
+	var old: PSPlayer = _player_with_z(91, 1, 3, false, 0.0)
+	old.age = 31
+	assert_float(Offseason.future_value_score(young)).is_greater(Offseason.future_value_score(old))
+
+
+func test_injury_value_penalty_scales_and_caps() -> void:
+	var healthy: PSPlayer = _player({"id": 92, "team_id": 1})
+	var hurt: PSPlayer = _player({"id": 93, "team_id": 1, "injury_days": 60})
+	var wrecked: PSPlayer = _player({"id": 94, "team_id": 1, "injury_days": 300})
+	assert_float(Offseason.injury_value_penalty(healthy)).is_equal(0.0)
+	assert_float(Offseason.injury_value_penalty(hurt)).is_equal(2.0)
+	assert_float(Offseason.injury_value_penalty(wrecked)).is_equal(Offseason.INJURY_PENALTY_CAP)
+
+
+# --- 支配下→育成 降格の3類型 -------------------------------------------------
+
+func test_should_demote_prospect_injured_not_veteran() -> void:
+	# 素材保持型: 若く将来価値が残る → 降格
+	var prospect: PSPlayer = _player_with_z(95, 1, 3, false, 0.5)
+	prospect.age = 22
+	assert_bool(Offseason._should_demote_to_development(prospect)).is_true()
+	# 低価値ベテラン (故障なし) → 降格せず (= 戦力外側)
+	var veteran: PSPlayer = _player_with_z(96, 1, 3, false, -0.5)
+	veteran.age = 33
+	assert_bool(Offseason._should_demote_to_development(veteran)).is_false()
+	# 長期故障/再調整型: 復帰すれば戦力 → 降格
+	var injured: PSPlayer = _player_with_z(97, 1, 3, false, 0.5)
+	injured.age = 29
+	injured.injury_days = 150
+	assert_bool(Offseason._should_demote_to_development(injured)).is_true()
+	# 同じ故障でも高齢すぎる (>31) → 降格対象外
+	var injured_old: PSPlayer = _player_with_z(98, 1, 3, false, 0.5)
+	injured_old.age = 34
+	injured_old.injury_days = 150
+	assert_bool(Offseason._should_demote_to_development(injured_old)).is_false()
 
 
 func test_development_release_trims_over_cap_excess() -> void:

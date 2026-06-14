@@ -985,7 +985,7 @@ func _fresh_team_records(team_id: int) -> Array:
 	var players: Array = GameDb.get_players_for_team(team_id)
 	for player_value in players:
 		var player: PSPlayer = player_value as PSPlayer
-		if player == null or player.is_retired() or player.is_manager_candidate():
+		if player == null or player.is_retired():
 			continue
 		records.append(PSPlayerSeasonRecord.from_player(player, DEFAULT_YEAR, DEFAULT_SEASON_NUMBER))
 	return records
@@ -1044,7 +1044,7 @@ func _select_subject_player(options: Dictionary) -> PSPlayer:
 	var mode: String = str(options.get("mode", "batter"))
 	for player_value in GameDb.players:
 		var player: PSPlayer = player_value as PSPlayer
-		if player == null or player.is_retired() or player.is_manager_candidate():
+		if player == null or player.is_retired():
 			continue
 		if mode == "pitcher" and player.is_pitcher():
 			return player

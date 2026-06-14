@@ -240,7 +240,7 @@ static func process_normal_pitch_learning(
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0 or not player.is_pitcher():
 			continue
-		if player.is_retired() or player.is_manager_candidate() or player.injury_days > 0:
+		if player.is_retired() or player.injury_days > 0:
 			continue
 		if trained_player_ids.has(player.id):
 			continue
@@ -359,7 +359,7 @@ static func _build_candidates(players: Array, profiles: Dictionary, season: PSSe
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0:
 			continue
-		if player.is_retired() or player.is_manager_candidate() or player.injury_days > 0:
+		if player.is_retired() or player.injury_days > 0:
 			continue
 		var profile: Dictionary = profiles.get(player.team_id, {}) as Dictionary
 		if player.is_pitcher():
@@ -704,7 +704,7 @@ static func _build_team_profiles(players: Array, teams: Array, season: PSSeason)
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0 or not profiles.has(player.team_id):
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		var profile: Dictionary = profiles[player.team_id] as Dictionary
 		if player.is_pitcher():
@@ -950,7 +950,7 @@ static func _has_available_user_training_options(state: Dictionary, players: Arr
 static func _player_can_train(player: PSPlayer) -> bool:
 	if player == null or player.team_id <= 0:
 		return false
-	if player.is_retired() or player.is_manager_candidate() or player.injury_days > 0:
+	if player.is_retired() or player.injury_days > 0:
 		return false
 	return true
 

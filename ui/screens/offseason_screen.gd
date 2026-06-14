@@ -256,6 +256,7 @@ var draft_pick_list: Tree
 var draft_lottery_text: RichTextLabel
 var draft_detail_text: RichTextLabel
 var draft_submit_button: Button
+var draft_skip_button: Button
 var draft_auto_button: Button
 var draft_auto_all_button: Button
 var selected_draft_candidate_id: int = 0
@@ -444,6 +445,14 @@ func _build_draft_panel() -> VBoxContainer:
 	draft_submit_button.custom_minimum_size = Vector2(120, 32)
 	draft_submit_button.pressed.connect(_on_draft_submit_pressed)
 	control_row.add_child(draft_submit_button)
+
+	# 育成ドラフトで「指名なし」を選ぶための見送りボタン (本指名では非表示)。
+	draft_skip_button = Button.new()
+	draft_skip_button.text = "見送り"
+	draft_skip_button.custom_minimum_size = Vector2(100, 32)
+	draft_skip_button.pressed.connect(_on_draft_skip_pressed)
+	draft_skip_button.visible = false
+	control_row.add_child(draft_skip_button)
 
 	draft_auto_button = Button.new()
 	draft_auto_button.text = "この指名を自動"
@@ -1586,16 +1595,20 @@ func _populate_draft_panel() -> void:
 	var first_round_wave: int = int(state.get("first_round_wave", 1))
 	var current_team_id: int = int(state.get("current_team_id", AppState.selected_team_id))
 	var team_text: String = _team_short(current_team_id)
+	var is_dev_segment: bool = str(state.get("segment", "main")) == "development"
+	var phase_label: String = "育成ドラフト" if is_dev_segment else "本指名"
 	if stage == "first_round_bid":
 		var bid_label: String = "1巡目 入札" if first_round_wave <= 1 else "1巡目 再入札%d回目" % first_round_wave
-		draft_status_label.text = "%s: %s" % [bid_label, _team_short(AppState.selected_team_id)]
+		draft_status_label.text = "%s %s: %s" % [phase_label, bid_label, _team_short(AppState.selected_team_id)]
 		draft_submit_button.text = "入札する"
 	elif stage == "user_pick":
-		draft_status_label.text = "%d巡目 指名: %s" % [round_no, team_text]
+		draft_status_label.text = "%s %d巡目 指名: %s" % [phase_label, round_no, team_text]
 		draft_submit_button.text = "指名する"
 	else:
-		draft_status_label.text = "ドラフト"
+		draft_status_label.text = phase_label
 		draft_submit_button.text = "指名する"
+	# 見送りは育成ドラフトで自軍の指名待ちのときだけ表示。
+	draft_skip_button.visible = is_dev_segment and stage == "user_pick"
 
 	_suppress_candidate_select = true
 	# limit=0 で残り全候補を表示する (打ち切りなし)。
@@ -1698,8 +1711,15 @@ func _pick_row(pick: Dictionary) -> Dictionary:
 		"pos": _position_char(int(pick.get("position", 0))),
 		"overall": int(pick.get("overall", 0)),
 		"source": _source_label(str(pick.get("source_type", ""))),
-		"note": "抽選" if bool(pick.get("lottery", false)) else "",
+		"note": _pick_note(pick),
 	}
+
+
+# 指名履歴の「抽選」列。育成ドラフト指名は「育」、本指名の抽選は「抽選」。
+func _pick_note(pick: Dictionary) -> String:
+	if bool(pick.get("development", false)):
+		return "育"
+	return "抽選" if bool(pick.get("lottery", false)) else ""
 
 
 func _draft_candidate_by_id(state: Dictionary, candidate_id: int) -> Dictionary:
@@ -2181,7 +2201,7 @@ func _camp_roster_players() -> Array:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		rows.append(player)
 	return rows
@@ -2457,7 +2477,7 @@ func _active_roster_count(team_id: int) -> int:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		count += 1
 	return count
@@ -2483,7 +2503,7 @@ func _populate_release_list() -> void:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		if player.is_pitcher():
 			pitchers.append(player)
@@ -2693,6 +2713,16 @@ func _on_draft_submit_pressed() -> void:
 	var result: Dictionary = AppState.submit_draft_candidate(selected_draft_candidate_id)
 	if not bool(result.get("ok", false)):
 		status_label.text = str(result.get("message", "指名に失敗しました。"))
+		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
+		return
+	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
+	_refresh()
+
+
+func _on_draft_skip_pressed() -> void:
+	var result: Dictionary = AppState.skip_draft_pick()
+	if not bool(result.get("ok", false)):
+		status_label.text = str(result.get("message", "見送りに失敗しました。"))
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.55))
 		return
 	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))

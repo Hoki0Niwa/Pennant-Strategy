@@ -31,7 +31,7 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		active_players_by_id[player.id] = player
 		var key: String = _season_key(player.id, season.year, season.season_number)

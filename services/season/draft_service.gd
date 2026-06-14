@@ -39,9 +39,21 @@ const PRIMARY_NEED_WEIGHT_LATER: float = 7.0
 const UTILITY_SUBPOS_WEIGHT: float = 0.6
 
 const ROSTER_LIMIT: int = 70
-# R4 Step3 調整: 1球団の指名は 6〜7 人程度に制限し、FA・外国人補強に枠を残す。
-const MAX_TEAM_PICKS: int = 7
-const MAX_TOTAL_PICKS: int = 120
+# ドラフトは2フェーズ: 本指名 (支配下) → 育成ドラフト (育成枠外)。
+# 本指名: 1球団あたりの指名数は need-driven (下記 _compute_main_draft_targets)。
+#   target = ROSTER_FILL_TARGET − 在籍支配下 − 昇格見込み − FA/外国人予約。基準 ~6、戦力外が多い年は最大9、
+#   キーパーばかりで放出が少ない年は最小 MAIN_DRAFT_MIN_PICKS まで絞る。MAX で頭打ち。
+const MAIN_DRAFT_MAX_PICKS: int = 9
+const MAIN_DRAFT_MIN_PICKS: int = 3
+# 支配下を埋める目標サイズ。70 まで埋め切らず、シーズン中の昇格/再昇格の余地を残す。
+const ROSTER_FILL_TARGET: int = 68
+# FA・外国人・戦力外獲得で埋まる見込みの予約枠 (ドラフトはその分控える)。
+const DRAFT_SIGNING_RESERVE: int = 2
+# 育成→支配下 昇格見込みとしてドラフトから差し引く上限 (これ以上は数えない)。
+const DRAFT_PROMO_RESERVE_CAP: int = 4
+# 育成ドラフト: 1球団 0〜3。CPU は育成枠の空きと球団ごとの appetite で 0 (指名なし) もあり得る。
+const DEV_DRAFT_MAX_PICKS: int = 3
+const MAX_TOTAL_PICKS: int = 200
 const CANDIDATE_POOL_SIZE: int = 320
 const ROOKIE_MIN_AGE: int = 18
 const ROOKIE_MAX_AGE: int = 26
@@ -75,6 +87,8 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		"version": 1,
 		"year": season.year if season != null else 0,
 		"user_team_id": user_team_id,
+		# segment: "main" (本指名=支配下) → "development" (育成ドラフト)。
+		"segment": "main",
 		"stage": "first_round_bid",
 		"round": 1,
 		"round_position": 0,
@@ -86,7 +100,13 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		"teams_order_forward": forward_order,
 		"team_profiles": team_profiles,
 		"team_position_need": team_position_need,
+		# 本指名の球団別目標指名数 (need-driven)。_team_can_pick (本指名) の上限に使う。
+		"team_main_targets": _compute_main_draft_targets(players, team_profiles),
 		"team_pick_counts": _empty_team_counts(teams),
+		# 育成ドラフトの指名数と、segment ごとに「もう指名しない」球団の集合 (segment 開始でリセット)。
+		"team_dev_pick_counts": _empty_team_counts(teams),
+		"team_dev_targets": {},
+		"teams_done": {},
 		"first_round_bids": {},
 		"first_round_unresolved": reverse_order.duplicate(),
 		"first_round_wave": 1,
@@ -202,9 +222,21 @@ static func auto_pick_for_user(state: Dictionary) -> Dictionary:
 	return submit_user_candidate(state, candidate_id)
 
 
+# ユーザーが現在の指名を見送る (主に育成ドラフトで「指名なし」を選ぶ)。
+# 当該 segment ではこれ以上指名しない (teams_done に入れる) ため、以後の巡で自軍はスキップされる。
+static func skip_user_pick(state: Dictionary) -> Dictionary:
+	if bool(state.get("complete", false)):
+		return {"ok": true, "state": state}
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	_mark_team_done(state, user_team_id)
+	_consume_current_slot(state)
+	advance_until_user_turn_or_complete(state)
+	return {"ok": true, "state": state}
+
+
 static func complete_automatically(state: Dictionary) -> Dictionary:
 	var guard: int = 0
-	while not bool(state.get("complete", false)) and guard < 1000:
+	while not bool(state.get("complete", false)) and guard < 2000:
 		guard += 1
 		var stage: String = str(state.get("stage", ""))
 		if stage == "first_round_bid" or stage == "user_pick":
@@ -226,16 +258,18 @@ static func advance_until_user_turn_or_complete(state: Dictionary) -> Dictionary
 		_resolve_first_round(state)
 
 	var guard: int = 0
-	while guard < 1000:
+	while guard < 2000:
 		guard += 1
-		if _draft_should_end(state):
-			_complete_draft(state)
-			return state
+		if _segment_should_end(state):
+			if _enter_next_segment_or_complete(state):
+				return state
+			continue
 
 		var next_team_id: int = _next_selecting_team(state)
 		if next_team_id <= 0:
-			_complete_draft(state)
-			return state
+			if _enter_next_segment_or_complete(state):
+				return state
+			continue
 
 		state["current_team_id"] = next_team_id
 		if next_team_id == user_team_id:
@@ -252,6 +286,49 @@ static func advance_until_user_turn_or_complete(state: Dictionary) -> Dictionary
 
 	_complete_draft(state)
 	return state
+
+
+# 現 segment が終わったとき、本指名なら育成ドラフトへ移行 (false を返す=継続)、
+# 育成ドラフトなら全工程完了 (true を返す=呼び出し側は return)。
+static func _enter_next_segment_or_complete(state: Dictionary) -> bool:
+	if str(state.get("segment", "main")) == "main":
+		_begin_development_segment(state)
+		return false
+	_complete_draft(state)
+	return true
+
+
+# 本指名→育成ドラフトの切替。入札 (1巡目抽選) は本指名のみ。育成はスネーク順のみ。
+static func _begin_development_segment(state: Dictionary) -> void:
+	state["segment"] = "development"
+	state["stage"] = "later_rounds"
+	state["round"] = 1
+	state["round_position"] = 0
+	state["current_team_id"] = 0
+	state["teams_done"] = {}
+	state["team_dev_targets"] = _compute_dev_targets(state)
+	(state.get("logs", []) as Array).append({"type": "segment", "segment": "development"})
+
+
+# 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS)。
+# 育成枠の空き (DEVELOPMENT_LIMIT − dev_initial) でクランプ。CPU は乱数で 0 (指名なし) もあり得る。
+# ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
+static func _compute_dev_targets(state: Dictionary) -> Dictionary:
+	var targets: Dictionary = {}
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
+	for team_id_value in state.get("teams_order_reverse", []) as Array:
+		var tid: int = int(team_id_value)
+		var profile: Dictionary = profiles.get(str(tid), {}) as Dictionary
+		var room: int = TeamFinance.DEVELOPMENT_LIMIT - int(profile.get("dev_initial", 0))
+		if room <= 0:
+			targets[str(tid)] = 0
+			continue
+		if tid == user_team_id:
+			targets[str(tid)] = min(DEV_DRAFT_MAX_PICKS, room)
+		else:
+			targets[str(tid)] = clampi(Rng.range_int(0, DEV_DRAFT_MAX_PICKS), 0, room)
+	return targets
 
 
 static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
@@ -463,6 +540,7 @@ static func _make_pick(state: Dictionary, team_id: int, candidate_id: int, round
 	candidate["picked"] = true
 	candidate["picked_by_team_id"] = team_id
 
+	var is_dev: bool = str(state.get("segment", "main")) == "development"
 	var pick: Dictionary = {
 		"overall_pick": (state.get("picks", []) as Array).size() + 1,
 		"round": round_no,
@@ -478,11 +556,17 @@ static func _make_pick(state: Dictionary, team_id: int, candidate_id: int, round
 		"source_type": str(candidate.get("source_type", "")),
 		"method": method,
 		"lottery": lottery,
+		# 育成ドラフト指名は development=true。本指名は false。finalize_draft で支配下/育成を決める。
+		"development": is_dev,
 	}
 	(state.get("picks", []) as Array).append(pick)
 
-	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
-	counts[str(team_id)] = int(counts.get(str(team_id), 0)) + 1
+	if is_dev:
+		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
+		dev_counts[str(team_id)] = int(dev_counts.get(str(team_id), 0)) + 1
+	else:
+		var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
+		counts[str(team_id)] = int(counts.get(str(team_id), 0)) + 1
 	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	var profile: Dictionary = profiles.get(str(team_id), {}) as Dictionary
 	var group: String = _candidate_group(candidate)
@@ -526,12 +610,27 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 		return false
 	if (state.get("picks", []) as Array).size() >= MAX_TOTAL_PICKS:
 		return false
-	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
+	# segment ごとに「もう指名しない」と決めた球団は対象外。
+	if (state.get("teams_done", {}) as Dictionary).has(str(team_id)):
+		return false
 	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	var profile: Dictionary = profiles.get(str(team_id), {}) as Dictionary
+	if str(state.get("segment", "main")) == "development":
+		# 育成ドラフト: 育成枠 (DEVELOPMENT_LIMIT) の空きと、球団ごとの appetite (team_dev_targets) で制限。
+		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
+		var dev_picked: int = int(dev_counts.get(str(team_id), 0))
+		var dev_initial: int = int(profile.get("dev_initial", 0))
+		var dev_room: int = TeamFinance.DEVELOPMENT_LIMIT - dev_initial - dev_picked
+		var targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
+		var target: int = int(targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
+		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS and dev_room > 0
+	# 本指名: 支配下空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。育成枠は影響しない。
+	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
 	var picked_count: int = int(counts.get(str(team_id), 0))
 	var capacity: int = max(0, ROSTER_LIMIT - int(profile.get("initial_total", profile.get("total", 0))))
-	return picked_count < capacity and picked_count < MAX_TEAM_PICKS
+	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
+	var target: int = int(targets.get(str(team_id), MAIN_DRAFT_MAX_PICKS))
+	return picked_count < target and picked_count < capacity
 
 
 static func _team_has_round_pick(state: Dictionary, team_id: int, round_no: int) -> bool:
@@ -542,12 +641,15 @@ static func _team_has_round_pick(state: Dictionary, team_id: int, round_no: int)
 	return false
 
 
+# 現 segment で当該球団を打ち切る (これ以上指名しない)。segment 開始で teams_done はリセットされる。
 static func _mark_team_done(state: Dictionary, team_id: int) -> void:
-	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
-	counts[str(team_id)] = MAX_TEAM_PICKS
+	var done: Dictionary = state.get("teams_done", {}) as Dictionary
+	done[str(team_id)] = true
+	state["teams_done"] = done
 
 
-static func _draft_should_end(state: Dictionary) -> bool:
+# 現 segment (本指名 or 育成) の指名が出尽くしたか。_team_can_pick が segment を見るので両用。
+static func _segment_should_end(state: Dictionary) -> bool:
 	if (state.get("picks", []) as Array).size() >= MAX_TOTAL_PICKS:
 		return true
 	if available_candidates(state, 1).is_empty():
@@ -569,7 +671,8 @@ static func _choose_cpu_candidate(state: Dictionary, team_id: int, round_no: int
 	var best_score: float = -999999.0
 	var scan_limit: int = 80 if round_no <= 2 else 120
 	var candidates: Array
-	if round_no == 1:
+	# 1巡目の入札 (バケット選択) は本指名のみ。育成ドラフトは全候補からスネーク指名。
+	if round_no == 1 and str(state.get("segment", "main")) == "main":
 		var bucket: String = _choose_first_round_bucket(state, team_id)
 		candidates = available_candidates_for_bucket(state, bucket, 40)
 		if candidates.is_empty():
@@ -718,6 +821,37 @@ static func _bucket_balance_score(profile: Dictionary, bucket: String, round_no:
 	return clamp(pitcher_share - 0.48, -0.18, 0.22) * (30.0 if round_no == 1 else 42.0)
 
 
+# 本指名の球団別目標指名数 (need-driven)。全球団が枠ギリギリまで指名する挙動を排し、
+# 「埋めたい支配下スロット − 他経路 (昇格/FA/外国人) で埋まる見込み」を指名数にする。
+#  - 戦力外が多く在籍支配下が少ない球団 → 目標が大きい (最大9: 大量入れ替え)。
+#  - キーパーばかりで放出が少ない球団 → 目標が小さい (最小 MAIN_DRAFT_MIN_PICKS)。
+#  - 育成からの昇格見込み (value≥昇格閾値) と FA/外国人予約 (DRAFT_SIGNING_RESERVE) を差し引く。
+# profiles は _build_team_profiles 済み (initial_total = 戦力外後の在籍支配下)。
+static func _compute_main_draft_targets(players: Array, profiles: Dictionary) -> Dictionary:
+	# 球団別の昇格見込み数 (育成のうち現在能力が支配下昇格水準のもの)。
+	var promo_by_team: Dictionary = {}
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.is_retired():
+			continue
+		if not player.development_player:
+			continue
+		if Offseason.player_value_score(player) >= Offseason.PROMOTE_TO_SHIENKA_MIN_VALUE:
+			promo_by_team[player.team_id] = int(promo_by_team.get(player.team_id, 0)) + 1
+
+	var targets: Dictionary = {}
+	for key in profiles.keys():
+		var profile: Dictionary = profiles[key] as Dictionary
+		var current: int = int(profile.get("initial_total", profile.get("total", 0)))
+		var team_id: int = int(str(key))
+		var expected_promo: int = min(DRAFT_PROMO_RESERVE_CAP, int(promo_by_team.get(team_id, 0)))
+		var raw: int = ROSTER_FILL_TARGET - current - expected_promo - DRAFT_SIGNING_RESERVE
+		var capacity: int = max(0, ROSTER_LIMIT - current)
+		var target: int = clampi(raw, MAIN_DRAFT_MIN_PICKS, MAIN_DRAFT_MAX_PICKS)
+		targets[key] = min(target, capacity)
+	return targets
+
+
 static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 	var profiles: Dictionary = {}
 	for team_row in teams:
@@ -725,6 +859,8 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		profiles[str(team.id)] = {
 			"total": 0,
 			"initial_total": 0,
+			# 既存の育成選手数 (前年降格/育成指名)。育成ドラフトの空き枠 (DEVELOPMENT_LIMIT − dev_initial) に使う。
+			"dev_initial": 0,
 			"pitcher": 0,
 			"catcher": 0,
 			"infield": 0,
@@ -737,10 +873,15 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		}
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
-		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外する。
+		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外し、
+		# 育成枠の在籍数 (dev_initial) だけ別途数える。
 		if player.development_player:
+			var dev_key: String = str(player.team_id)
+			if profiles.has(dev_key):
+				var dev_profile: Dictionary = profiles[dev_key] as Dictionary
+				dev_profile["dev_initial"] = int(dev_profile.get("dev_initial", 0)) + 1
 			continue
 		var key: String = str(player.team_id)
 		if not profiles.has(key):
@@ -1072,13 +1213,15 @@ static func _rng_delta_z(lo: int, hi: int) -> float:
 
 static func _player_data_from_candidate(candidate: Dictionary, player_id: int, team_id: int, round_no: int, pick: Dictionary, draft_year: int) -> Dictionary:
 	var data: Dictionary = (candidate.get("player_template", {}) as Dictionary).duplicate(true)
+	# 支配下/育成は segment ベースの pick["development"] で決める (旧 round>=7 判定は撤廃)。
+	var is_dev: bool = bool(pick.get("development", false))
 	data["id"] = player_id
 	data["sensyu_num"] = player_id
 	data["team_id"] = team_id
-	data["salary"] = _salary_for_round(round_no)
+	data["salary"] = DEV_DRAFT_SALARY if is_dev else _salary_for_round(round_no)
 	data["draft_round"] = round_no
-	data["development_player"] = round_no >= 7
-	data["registered_roster"] = "育成" if round_no >= 7 else "支配下"
+	data["development_player"] = is_dev
+	data["registered_roster"] = "育成" if is_dev else "支配下"
 	var source: Dictionary = (data.get("source_data", {}) as Dictionary).duplicate(true)
 	source["rookie_year"] = true
 	source["draft_year"] = draft_year
@@ -1272,6 +1415,10 @@ static func _outfield_sub_factor(primary_position: int, key: String) -> Array:
 			return [0.45, 0.65]
 		return [0.55, 0.75]  # 本右翼の中堅は低め
 	return [0.75, 0.95]  # 本左翼⇔右翼 (両翼間) は高め
+
+
+# 育成ドラフト指名の初期年俸 (支配下の本指名より低い。NPB 育成契約相当)。
+const DEV_DRAFT_SALARY: int = 350
 
 
 static func _salary_for_round(round_no: int) -> int:

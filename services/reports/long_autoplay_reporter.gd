@@ -980,7 +980,7 @@ func _is_active_roster_player(player: PSPlayer) -> bool:
 		return false
 	if player.team_id <= 0:
 		return false
-	if player.is_retired() or player.is_manager_candidate():
+	if player.is_retired():
 		return false
 	return true
 

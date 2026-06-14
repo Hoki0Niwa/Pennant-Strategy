@@ -25,7 +25,7 @@ static func shienka_count(players: Array, team_id: int) -> int:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		if player.development_player:
 			continue
@@ -40,7 +40,7 @@ static func development_count(players: Array, team_id: int) -> int:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		if player.development_player:
 			count += 1
@@ -66,7 +66,7 @@ static func team_payroll(players: Array, team_id: int) -> int:
 			continue
 		if player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		total += player.salary
 	return total

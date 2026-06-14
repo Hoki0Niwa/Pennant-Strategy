@@ -316,15 +316,21 @@ func _populate_roster(team_id: int) -> void:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	var pitcher_rows: Array = []
 	var batter_rows: Array = []
+	var pitcher_dev: int = 0
+	var batter_dev: int = 0
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.is_pitcher():
 			pitcher_rows.append(_pitcher_row(record))
+			if record.development_player:
+				pitcher_dev += 1
 		else:
 			batter_rows.append(_batter_row(record))
+			if record.development_player:
+				batter_dev += 1
 
-	_set_panel_title(pitcher_table, "投手", pitcher_rows.size())
-	_set_panel_title(batter_table, "野手", batter_rows.size())
+	_set_panel_title(pitcher_table, "投手", pitcher_rows.size() - pitcher_dev, pitcher_dev)
+	_set_panel_title(batter_table, "野手", batter_rows.size() - batter_dev, batter_dev)
 	pitcher_table.set_rows(pitcher_rows)
 	batter_table.set_rows(batter_rows)
 
@@ -368,10 +374,10 @@ func _roster_note(record: PSPlayerSeasonRecord) -> String:
 	return " ".join(parts)
 
 
-func _set_panel_title(table: Tree, base_text: String, count: int) -> void:
+func _set_panel_title(table: Tree, base_text: String, shienka: int, development: int) -> void:
 	var panel: Node = table.get_parent()
 	if panel == null or not panel.has_meta("title_label"):
 		return
 	var label: Label = panel.get_meta("title_label") as Label
 	if label != null:
-		label.text = "%s (%d人)" % [base_text, count]
+		label.text = "%s (支配下%d / 育成%d)" % [base_text, shienka, development]

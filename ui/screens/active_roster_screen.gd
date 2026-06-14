@@ -213,7 +213,7 @@ func _load_initial_state() -> void:
 		var dev: PSPlayer = player_row as PSPlayer
 		if dev == null or dev.team_id != team_id:
 			continue
-		if dev.is_retired() or dev.is_manager_candidate():
+		if dev.is_retired():
 			continue
 		if dev.development_player:
 			development_players.append(dev)

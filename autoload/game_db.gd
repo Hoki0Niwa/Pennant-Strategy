@@ -276,7 +276,7 @@ func get_player_count() -> int:
 func advance_players_one_year() -> void:
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		player.age += 1
 		player.years += 1

@@ -224,10 +224,6 @@ func is_pitcher() -> bool:
 	return position == 1 or role == "starter" or role == "reliever" or role == "closer"
 
 
-func is_manager_candidate() -> bool:
-	return bool(source_data.get("manager_candidate", false)) or str(source_data.get("personnel_role", "")) == "manager_candidate"
-
-
 func is_retired() -> bool:
 	return bool(source_data.get("retired", false))
 

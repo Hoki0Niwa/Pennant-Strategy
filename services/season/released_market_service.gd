@@ -311,8 +311,6 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 		return false
 	if player.team_id != 0:
 		return false
-	if player.is_manager_candidate():
-		return false
 	# 引退ステップの本物の引退者は retired のみ。戦力外は市場に出すため released も持つ。
 	if player.is_retired() and not bool(player.source_data.get("released", false)):
 		return false
@@ -340,7 +338,7 @@ static func _build_position_need(players: Array, teams: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		if not best_by_team.has(player.team_id):
 			continue

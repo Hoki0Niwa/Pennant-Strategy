@@ -365,7 +365,7 @@ static func _foreign_count_for_team(players: Array, team_id: int) -> int:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		if player.foreign_player:
 			count += 1

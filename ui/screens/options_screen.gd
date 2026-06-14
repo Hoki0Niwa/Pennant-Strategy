@@ -271,7 +271,7 @@ func _active_player_dicts() -> Array:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0:
 			continue
-		if player.is_retired() or player.is_manager_candidate():
+		if player.is_retired():
 			continue
 		rows.append(player.to_dict())
 	rows.sort_custom(func(a: Variant, b: Variant) -> bool:

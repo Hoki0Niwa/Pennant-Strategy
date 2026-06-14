@@ -88,7 +88,10 @@ func _create_team_card(team: PSTeam) -> Control:
 	box.add_child(rating_label)
 
 	var roster_label: Label = Label.new()
-	roster_label.text = "登録選手 %d名" % GameDb.get_players_for_team(team.id).size()
+	roster_label.text = "支配下 %d名 / 育成 %d名" % [
+		TeamFinance.shienka_count(GameDb.players, team.id),
+		TeamFinance.development_count(GameDb.players, team.id),
+	]
 	box.add_child(roster_label)
 
 	var spacer: Control = Control.new()
