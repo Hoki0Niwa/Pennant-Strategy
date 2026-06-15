@@ -4,6 +4,7 @@ class_name PSLongAutoplayReporter
 const SimulationReporterScript = preload("res://services/reports/simulation_reporter.gd")
 const CampServiceRef = preload("res://services/season/camp_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
+const ReportHealth = preload("res://services/reports/report_health.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 
 const VERSION: int = 2
@@ -138,7 +139,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		Rng.generator.seed = original_rng_seed
 		Rng.generator.state = original_rng_state
 
-	return {
+	var report: Dictionary = {
 		"ok": completed_seasons == season_count and errors.is_empty(),
 		"version": VERSION,
 		"method": "Evolve one persistent roster world with fully automatic releases, draft, growth/decay, and age advancement after each simulated season.",
@@ -166,6 +167,9 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"yearly": yearly_rows,
 		"errors": errors,
 	}
+	report["distributions"] = ReportHealth.long_distributions(report)
+	report["health"] = ReportHealth.long_health(report)
+	return report
 
 
 func run_async(options: Dictionary = {}) -> Dictionary:
@@ -283,7 +287,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		Rng.generator.seed = original_rng_seed
 		Rng.generator.state = original_rng_state
 
-	return {
+	var report: Dictionary = {
 		"ok": not cancelled and completed_seasons == season_count and errors.is_empty(),
 		"cancelled": cancelled,
 		"version": VERSION,
@@ -312,11 +316,14 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"yearly": yearly_rows,
 		"errors": errors,
 	}
+	report["distributions"] = ReportHealth.long_distributions(report)
+	report["health"] = ReportHealth.long_health(report)
+	return report
 
 
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,retired,released,demoted,promoted,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_draft_generated_ratio,post_seed_cohort_ratio")
+	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,retired,released,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -327,10 +334,19 @@ func csv_text(report: Dictionary) -> String:
 		var post_roster: Dictionary = row.get("roster_after_offseason_next_year", {}) as Dictionary
 		var leaderboards: Dictionary = row.get("leaderboards", {}) as Dictionary
 		var age_bands: Dictionary = roster.get("age_bands", {}) as Dictionary
-		lines.append("%d,%d,%d,%d,%.4f,%d,%d,%.4f,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.2f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%s,%.3f,%s,%.3f,%s,%.2f,%s,%.0f,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.4f,%.4f" % [
+		var csv_values: Array = [
 			int(row.get("season_index", 0)),
 			int(row.get("year", 0)),
 			int(roster.get("active_players", 0)),
+			int(roster.get("shienka_players", 0)),
+			int(roster.get("development_players", 0)),
+			int(roster.get("foreign_players", 0)),
+			int(roster.get("team_shienka_max", 0)),
+			int(roster.get("team_development_max", 0)),
+			int(roster.get("team_foreign_max", 0)),
+			int(roster.get("free_agent_orphans", 0)),
+			int(roster.get("released_orphans", 0)),
+			int(roster.get("teamless_active_players", 0)),
 			int(roster.get("draft_generated_active_players", 0)),
 			float(roster.get("draft_generated_ratio", 0.0)),
 			int(roster.get("non_draft_active_players", 0)),
@@ -378,19 +394,25 @@ func csv_text(report: Dictionary) -> String:
 			_ability_mean(roster, "pitchers", "Pit_BarrelDeny"),
 			_ability_mean(roster, "pitchers", "Pit_Stamina"),
 			_leader_value(leaderboards, "batting", "home_runs"),
-			_csv_text(_leader_name(leaderboards, "batting", "home_runs")),
+			_leader_name(leaderboards, "batting", "home_runs"),
 			_leader_value(leaderboards, "batting", "average"),
-			_csv_text(_leader_name(leaderboards, "batting", "average")),
+			_leader_name(leaderboards, "batting", "average"),
 			_leader_value(leaderboards, "batting", "ops"),
-			_csv_text(_leader_name(leaderboards, "batting", "ops")),
+			_leader_name(leaderboards, "batting", "ops"),
 			_leader_value(leaderboards, "pitching", "era"),
-			_csv_text(_leader_name(leaderboards, "pitching", "era")),
+			_leader_name(leaderboards, "pitching", "era"),
 			_leader_value(leaderboards, "pitching", "strikeouts"),
-			_csv_text(_leader_name(leaderboards, "pitching", "strikeouts")),
+			_leader_name(leaderboards, "pitching", "strikeouts"),
 			int(offseason.get("retired_count", 0)),
 			int(offseason.get("released_count", 0)),
 			int(offseason.get("demoted_count", 0)),
 			int(offseason.get("promoted_count", 0)),
+			int(offseason.get("dev_released_count", 0)),
+			int(offseason.get("fa_declared_count", 0)),
+			int(offseason.get("fa_moved_count", 0)),
+			int(offseason.get("released_signed_count", 0)),
+			int(offseason.get("foreign_signed_count", 0)),
+			int(offseason.get("foreign_released_count", 0)),
 			int(offseason.get("draft_picks_count", 0)),
 			int(offseason.get("rookies_count", 0)),
 			int(offseason.get("growers_count", 0)),
@@ -398,9 +420,15 @@ func csv_text(report: Dictionary) -> String:
 			int(offseason.get("camp_actions_count", 0)),
 			int(offseason.get("camp_pitch_learning_count", 0)),
 			int(post_roster.get("active_players", 0)),
+			int(post_roster.get("shienka_players", 0)),
+			int(post_roster.get("development_players", 0)),
+			int(post_roster.get("team_shienka_max", 0)),
+			int(post_roster.get("team_development_max", 0)),
+			int(post_roster.get("team_foreign_max", 0)),
 			float(post_roster.get("draft_generated_ratio", 0.0)),
 			float(post_roster.get("seed_cohort_ratio", 0.0)),
-		])
+		]
+		lines.append(_csv_values(csv_values))
 	return "\n".join(lines)
 
 
@@ -703,10 +731,14 @@ func _format_leader_value(metric: String, value: float, is_pitcher: bool) -> Str
 
 func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary = {}) -> Dictionary:
 	var active_players: int = 0
+	var shienka_players: int = 0
+	var development_players: int = 0
+	var foreign_players: int = 0
 	var draft_generated_players: int = 0
 	var seed_cohort_players: int = 0
 	var total_age: int = 0
 	var total_overall: int = 0
+	var salary_values: Array = []
 	var batter_overalls: Array = []
 	var pitcher_overalls: Array = []
 	var batter_abilities: Dictionary = _empty_ability_accumulator(BATTER_ABILITY_KEYS)
@@ -729,20 +761,57 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	var veteran_regular_30s: int = 0
 	var veteran_bench_35_plus: int = 0
 	var by_team: Dictionary = {}
+	var by_team_shienka: Dictionary = {}
+	var by_team_development: Dictionary = {}
+	var by_team_foreign: Dictionary = {}
+	var free_agent_orphans: int = 0
+	var released_orphans: int = 0
+	var teamless_active_players: int = 0
+	var retired_team_players: int = 0
+	var injured_players: int = 0
+	var long_injured_players: int = 0
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		by_team[str(team.id)] = 0
+		by_team_shienka[str(team.id)] = 0
+		by_team_development[str(team.id)] = 0
+		by_team_foreign[str(team.id)] = 0
 
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
+		if player == null:
+			continue
+		if player.team_id <= 0 and not player.is_retired():
+			if bool(player.source_data.get("free_agent", false)):
+				free_agent_orphans += 1
+			elif bool(player.source_data.get("released", false)):
+				released_orphans += 1
+			else:
+				teamless_active_players += 1
+		if player.team_id > 0 and player.is_retired():
+			retired_team_players += 1
 		if not _is_active_roster_player(player):
 			continue
 		active_players += 1
+		if player.development_player:
+			development_players += 1
+			by_team_development[str(player.team_id)] = int(by_team_development.get(str(player.team_id), 0)) + 1
+		else:
+			shienka_players += 1
+			by_team_shienka[str(player.team_id)] = int(by_team_shienka.get(str(player.team_id), 0)) + 1
+		if player.foreign_player:
+			foreign_players += 1
+			by_team_foreign[str(player.team_id)] = int(by_team_foreign.get(str(player.team_id), 0)) + 1
+		if player.injury_days > 0:
+			injured_players += 1
+			if player.injury_days >= 120:
+				long_injured_players += 1
 		total_age += player.age
 		var overall: int = OffseasonService.player_value_score(player)
 		total_overall += overall
 		overall_values.append(overall)
 		age_values.append(player.age)
+		salary_values.append(player.salary)
 		if seed_cohort_ids.has(player.id):
 			seed_cohort_players += 1
 		if player.age <= 23:
@@ -774,13 +843,22 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 			source_counts[source_type] = int(source_counts.get(source_type, 0)) + 1
 
 	var team_counts: Array = []
+	var team_shienka_counts: Array = []
+	var team_development_counts: Array = []
+	var team_foreign_counts: Array = []
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		team_counts.append(int(by_team.get(str(team.id), 0)))
+		team_shienka_counts.append(int(by_team_shienka.get(str(team.id), 0)))
+		team_development_counts.append(int(by_team_development.get(str(team.id), 0)))
+		team_foreign_counts.append(int(by_team_foreign.get(str(team.id), 0)))
 
 	return {
 		"player_rows_total": players.size(),
 		"active_players": active_players,
+		"shienka_players": shienka_players,
+		"development_players": development_players,
+		"foreign_players": foreign_players,
 		"draft_generated_active_players": draft_generated_players,
 		"non_draft_active_players": active_players - draft_generated_players,
 		"draft_generated_ratio": _round_float(_safe_div(draft_generated_players, active_players), 4),
@@ -797,10 +875,29 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		"overall_p10": _round_float(_percentile(overall_values, 0.10), 2),
 		"overall_p50": _round_float(_percentile(overall_values, 0.50), 2),
 		"overall_p90": _round_float(_percentile(overall_values, 0.90), 2),
+		"salary_p50": _round_float(_percentile(salary_values, 0.50), 0),
+		"salary_p90": _round_float(_percentile(salary_values, 0.90), 0),
+		"salary_max": _round_float(_max_value(salary_values), 0),
 		"team_roster_min": int(_min_value(team_counts)),
 		"team_roster_average": _round_float(_mean(team_counts), 2),
 		"team_roster_max": int(_max_value(team_counts)),
+		"team_shienka_min": int(_min_value(team_shienka_counts)),
+		"team_shienka_average": _round_float(_mean(team_shienka_counts), 2),
+		"team_shienka_max": int(_max_value(team_shienka_counts)),
+		"team_development_min": int(_min_value(team_development_counts)),
+		"team_development_average": _round_float(_mean(team_development_counts), 2),
+		"team_development_max": int(_max_value(team_development_counts)),
+		"team_foreign_max": int(_max_value(team_foreign_counts)),
 		"team_rosters": by_team,
+		"team_shienka_rosters": by_team_shienka,
+		"team_development_rosters": by_team_development,
+		"team_foreign_rosters": by_team_foreign,
+		"free_agent_orphans": free_agent_orphans,
+		"released_orphans": released_orphans,
+		"teamless_active_players": teamless_active_players,
+		"retired_team_players": retired_team_players,
+		"injured_players": injured_players,
+		"long_injured_players": long_injured_players,
 		"draft_source_counts": source_counts,
 		"position_counts": position_counts,
 		"age_bands": age_bands,
@@ -866,6 +963,13 @@ func _csv_text(value: String) -> String:
 	return text
 
 
+func _csv_values(values: Array) -> String:
+	var cells: Array = []
+	for value in values:
+		cells.append(_csv_text(str(value)))
+	return ",".join(cells)
+
+
 func _window_summary(rows: Array, year_count: int) -> Dictionary:
 	if rows.is_empty():
 		return {}
@@ -892,6 +996,10 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"start_year": int((rows[0] as Dictionary).get("year", 0)),
 		"end_year": int((rows[rows.size() - 1] as Dictionary).get("year", 0)),
 		"active_players": _round_float(_mean_nested(rows, ["roster_before_season", "active_players"]), 2),
+		"shienka_players": _round_float(_mean_nested(rows, ["roster_before_season", "shienka_players"]), 2),
+		"development_players": _round_float(_mean_nested(rows, ["roster_before_season", "development_players"]), 2),
+		"team_shienka_max": _round_float(_mean_nested(rows, ["roster_before_season", "team_shienka_max"]), 2),
+		"team_development_max": _round_float(_mean_nested(rows, ["roster_before_season", "team_development_max"]), 2),
 		"draft_generated_ratio": _round_float(_mean_nested(rows, ["roster_before_season", "draft_generated_ratio"]), 4),
 		"seed_cohort_ratio": _round_float(_mean_nested(rows, ["roster_before_season", "seed_cohort_ratio"]), 4),
 		"in_run_added_active_players": _round_float(_mean_nested(rows, ["roster_before_season", "in_run_added_active_players"]), 2),

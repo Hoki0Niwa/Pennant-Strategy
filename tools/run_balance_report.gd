@@ -1,6 +1,7 @@
 extends Node
 
 const ReporterScript = preload("res://services/reports/simulation_reporter.gd")
+const ReportHealth = preload("res://services/reports/report_health.gd")
 const DEFAULT_OUTPUT_PATH: String = "res://reports/balance_report_latest.json"
 
 
@@ -12,14 +13,19 @@ func _ready() -> void:
 		return
 
 	var reporter: Object = ReporterScript.new()
-	var report_value: Variant = reporter.call("run", options)
-	var report: Dictionary = report_value as Dictionary
+	var report: Dictionary
+	if options.has("seeds"):
+		report = _run_multi_seed(reporter, options)
+	else:
+		var report_value: Variant = reporter.call("run", options)
+		report = report_value as Dictionary
 	var output_path: String = str(options.get("output", DEFAULT_OUTPUT_PATH))
 	var write_ok: bool = _write_report(output_path, report)
 	_print_summary(report, output_path if write_ok else "")
 
 	var completed: int = int(report.get("seasons_completed", 0))
-	get_tree().quit(0 if write_ok and completed > 0 else 1)
+	var multi_ok: bool = bool(report.get("multi_seed", false)) and int((report.get("seed_runs", []) as Array).size()) > 0
+	get_tree().quit(0 if write_ok and (completed > 0 or multi_ok) else 1)
 
 
 func _parse_args() -> Dictionary:
@@ -49,9 +55,46 @@ func _parse_args() -> Dictionary:
 			options["start_year"] = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--seed="):
 			options["seed"] = int(arg.get_slice("=", 1))
+		elif arg.begins_with("--seeds="):
+			options["seeds"] = _parse_seed_list(arg.get_slice("=", 1))
 		elif arg.begins_with("--output="):
 			options["output"] = arg.get_slice("=", 1)
 	return options
+
+
+func _parse_seed_list(text: String) -> Array:
+	var seeds: Array = []
+	for part in text.split(",", false):
+		var trimmed: String = str(part).strip_edges()
+		if trimmed.is_empty():
+			continue
+		seeds.append(int(trimmed))
+	return seeds
+
+
+func _run_multi_seed(reporter: Object, options: Dictionary) -> Dictionary:
+	var seed_values: Array = options.get("seeds", []) as Array
+	var reports: Array = []
+	for seed_value in seed_values:
+		var run_options: Dictionary = options.duplicate(true)
+		run_options.erase("seeds")
+		run_options["seed"] = int(seed_value)
+		reports.append(reporter.call("run", run_options) as Dictionary)
+	return {
+		"multi_seed": true,
+		"report_type": "balance_report",
+		"seasons_requested": int(options.get("seasons", 0)),
+		"seed_count": seed_values.size(),
+		"seeds": seed_values,
+		"summary": ReportHealth.multi_seed_summary(reports, {
+			"ops": ["batting", "ops"],
+			"era": ["pitching", "era"],
+			"runs_per_team_game": ["run_environment", "runs_per_team_game"],
+			"batter_ops_max": ["distributions", "batters", "ops", "max"],
+			"pitcher_era_min": ["distributions", "pitchers", "era", "min"],
+		}),
+		"seed_runs": reports,
+	}
 
 
 func _write_report(path: String, report: Dictionary) -> bool:
@@ -72,6 +115,9 @@ func _write_report(path: String, report: Dictionary) -> bool:
 
 
 func _print_summary(report: Dictionary, output_path: String) -> void:
+	if bool(report.get("multi_seed", false)):
+		_print_multi_seed_summary(report, output_path)
+		return
 	var run_environment: Dictionary = report.get("run_environment", {}) as Dictionary
 	var batting: Dictionary = report.get("batting", {}) as Dictionary
 	var pitching: Dictionary = report.get("pitching", {}) as Dictionary
@@ -165,6 +211,38 @@ func _print_summary(report: Dictionary, output_path: String) -> void:
 	var errors: Array = report.get("errors", []) as Array
 	if not errors.is_empty():
 		print("Errors: %d" % errors.size())
+	var health: Dictionary = report.get("health", {}) as Dictionary
+	if not health.is_empty():
+		print("Health: %s (fail=%d warn=%d)" % [
+			str(health.get("status", "")),
+			int(health.get("fail_count", 0)),
+			int(health.get("warn_count", 0)),
+		])
+
+
+func _print_multi_seed_summary(report: Dictionary, output_path: String) -> void:
+	var summary: Dictionary = report.get("summary", {}) as Dictionary
+	var statuses: Dictionary = summary.get("statuses", {}) as Dictionary
+	print("Balance report multi-seed: %d seeds x %d seasons" % [
+		int(report.get("seed_count", 0)),
+		int(report.get("seasons_requested", 0)),
+	])
+	print("Health statuses: pass=%d warn=%d fail=%d" % [
+		int(statuses.get("pass", 0)),
+		int(statuses.get("warn", 0)),
+		int(statuses.get("fail", 0)),
+	])
+	var metrics: Dictionary = summary.get("metrics", {}) as Dictionary
+	for key_value in metrics.keys():
+		var metric: Dictionary = metrics[key_value] as Dictionary
+		print("%s: p50 %.3f  min %.3f  max %.3f" % [
+			str(key_value),
+			float(metric.get("p50", 0.0)),
+			float(metric.get("min", 0.0)),
+			float(metric.get("max", 0.0)),
+		])
+	if output_path != "":
+		print("Output: %s" % ProjectSettings.globalize_path(output_path))
 
 
 func _print_usage() -> void:
@@ -175,6 +253,7 @@ func _print_usage() -> void:
 	print("  --selected-team=ID")
 	print("  --start-year=YYYY")
 	print("  --seed=N")
+	print("  --seeds=1,2,3  (multi-seed JSON aggregation)")
 	print("  --output=res://reports/balance_report_latest.json")
 
 

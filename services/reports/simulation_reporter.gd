@@ -4,6 +4,7 @@ class_name SimulationReporter
 const AdvancedStatsRecord = preload("res://services/simulation/reducers/advanced_stats_record.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
+const ReportHealth = preload("res://services/reports/report_health.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const DEFAULT_SEASONS: int = 5
@@ -114,7 +115,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	Rng.generator.seed = original_rng_seed
 	Rng.generator.state = original_rng_state
 
-	return {
+	var report: Dictionary = {
 		"version": 1,
 		"seasons_requested": season_count,
 		"seasons_completed": completed_seasons,
@@ -144,6 +145,9 @@ func run(options: Dictionary = {}) -> Dictionary:
 		},
 		"errors": errors,
 	}
+	report["distributions"] = ReportHealth.balance_distributions(report)
+	report["health"] = ReportHealth.balance_health(report)
+	return report
 
 
 # --- async 版 (UI フリーズ対策) ---
@@ -241,7 +245,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	Rng.generator.state = original_rng_state
 
 	var cancelled: bool = not cancel_token.is_empty() and bool(cancel_token.get("cancelled", false))
-	return {
+	var report: Dictionary = {
 		"version": 1,
 		"seasons_requested": season_count,
 		"seasons_completed": completed_seasons,
@@ -272,6 +276,9 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		},
 		"errors": errors,
 	}
+	report["distributions"] = ReportHealth.balance_distributions(report)
+	report["health"] = ReportHealth.balance_health(report)
+	return report
 
 
 func _season_report(season: PSSeason) -> Dictionary:
@@ -314,6 +321,7 @@ func _season_report(season: PSSeason) -> Dictionary:
 		"advanced": _advanced_summary(advanced_raw),
 		"advanced_raw": advanced_raw,
 		"advanced_records": advanced_records,
+		"injuries": _injury_summary_for_season(season),
 		"batting_stats": batting_total.to_dict(),
 		"pitching_stats": pitching_total.to_dict(),
 		"teams": team_rows,
@@ -331,6 +339,7 @@ func _public_season_summary(season_report: Dictionary) -> Dictionary:
 		"pitching": season_report.get("pitching", {}) as Dictionary,
 		"batted_ball": season_report.get("batted_ball", {}) as Dictionary,
 		"advanced": season_report.get("advanced", {}) as Dictionary,
+		"injuries": season_report.get("injuries", {}) as Dictionary,
 	}
 
 
@@ -383,6 +392,65 @@ func _team_pitcher_stats(team_id: int, year: int, season_number: int) -> PSPitch
 		if record.is_pitcher():
 			stats.add_from(record.pitcher_stats)
 	return stats
+
+
+func _injury_summary_for_season(season: PSSeason) -> Dictionary:
+	var injured_players: int = 0
+	var currently_injured: int = 0
+	var carryover_players: int = 0
+	var total_season_injury_days: int = 0
+	var max_injury_days: int = 0
+	var severity_counts: Dictionary = {
+		"minor": 0,
+		"moderate": 0,
+		"major": 0,
+		"severe": 0,
+		"unknown": 0,
+	}
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if record.year != season.year or record.season_number != season.season_number:
+			continue
+		if record.team_id <= 0:
+			continue
+		var season_days: int = int(record.season_injury_days)
+		if season_days > 0:
+			injured_players += 1
+			total_season_injury_days += season_days
+			max_injury_days = max(max_injury_days, season_days)
+			var severity_key: String = _injury_severity_key(record.injury_severity, season_days)
+			severity_counts[severity_key] = int(severity_counts.get(severity_key, 0)) + 1
+		if record.injury_days > 0:
+			currently_injured += 1
+			if record.injury_days > 120:
+				carryover_players += 1
+	return {
+		"injured_players": injured_players,
+		"currently_injured": currently_injured,
+		"carryover_candidates": carryover_players,
+		"season_injury_days_total": total_season_injury_days,
+		"season_injury_days_max": max_injury_days,
+		"severity_counts": severity_counts,
+	}
+
+
+func _injury_severity_key(severity: int, injury_days: int) -> String:
+	var normalized: int = severity
+	if normalized <= 0 and injury_days > 0:
+		normalized = PSInjuryModel.severity_from_days(injury_days)
+	match normalized:
+		PSInjuryModel.TIER_MINOR:
+			return "minor"
+		PSInjuryModel.TIER_MODERATE:
+			return "moderate"
+		PSInjuryModel.TIER_MAJOR:
+			return "major"
+		PSInjuryModel.TIER_SEVERE:
+			return "severe"
+		_:
+			return "unknown"
 
 
 func _collect_player_stats(

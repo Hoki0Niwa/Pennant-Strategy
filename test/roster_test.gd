@@ -3,6 +3,7 @@ extends GdUnitTestSuite
 # roadmap #3 育成選手制度: 支配下/育成の計数、昇格/降格、一軍出場不可、永続化を検証する。
 
 const Offseason = preload("res://services/season/offseason_service.gd")
+const ReleasedMarket = preload("res://services/season/released_market_service.gd")
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
 
 const ALL_Z_KEYS: Array = [
@@ -33,6 +34,30 @@ func test_room_helpers_track_limits() -> void:
 	# 育成を足しても支配下枠には影響しない。
 	assert_bool(TeamFinance.has_shienka_room(players, 1)).is_false()
 	assert_bool(TeamFinance.has_development_room(players, 1)).is_true()
+
+
+func test_released_market_respects_foreign_held_cap() -> void:
+	var open_team_players: Array = _released_market_foreign_cap_players(3)
+	var open_result: Dictionary = ReleasedMarket.process_released_market(
+		open_team_players,
+		[_team(1), _team(2)],
+		null,
+		{"released": [{"player_id": 9100, "team_id": 1}]},
+		0
+	)
+	assert_int(int(open_result.get("signed_count", 0))).is_equal(1)
+	assert_int((open_team_players[open_team_players.size() - 1] as PSPlayer).team_id).is_equal(2)
+
+	var capped_team_players: Array = _released_market_foreign_cap_players(4)
+	var capped_result: Dictionary = ReleasedMarket.process_released_market(
+		capped_team_players,
+		[_team(1), _team(2)],
+		null,
+		{"released": [{"player_id": 9100, "team_id": 1}]},
+		0
+	)
+	assert_int(int(capped_result.get("signed_count", 0))).is_equal(0)
+	assert_int((capped_team_players[capped_team_players.size() - 1] as PSPlayer).team_id).is_equal(0)
 
 
 # --- 降格 (支配下 → 育成) ----------------------------------------------------
@@ -343,6 +368,25 @@ func _support_players(team_id: int, count: int) -> Array:
 	var players: Array = []
 	for i in range(count):
 		players.append(_player({"id": 1000 + i, "team_id": team_id}))
+	return players
+
+
+func _released_market_foreign_cap_players(team2_foreign_count: int) -> Array:
+	var players: Array = []
+	# team1 の強い一塁手で team2 に明確な補強ニーズを作る。
+	players.append(_player_with_z(9001, 1, 3, false, 2.5))
+	players.append(_player_with_z(9002, 2, 3, false, -2.0))
+	for i in range(team2_foreign_count):
+		players.append(_player({
+			"id": 9050 + i,
+			"team_id": 2,
+			"position": 1 + (i % 9),
+			"foreign_player": true,
+		}))
+	var released_foreign: PSPlayer = _player_with_z(9100, 0, 3, false, 2.5)
+	released_foreign.foreign_player = true
+	released_foreign.source_data = {"released": true}
+	players.append(released_foreign)
 	return players
 
 
