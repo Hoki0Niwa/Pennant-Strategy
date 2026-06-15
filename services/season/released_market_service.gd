@@ -5,7 +5,6 @@ class_name ReleasedMarketService
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-const ROSTER_LIMIT: int = 70
 const MAX_SIGNINGS_PER_TEAM: int = 2
 const MIN_NEED_TO_SIGN: float = 0.5
 const OVER_BUDGET_SCORE_FACTOR: float = 0.7
@@ -299,7 +298,8 @@ static func _signings_for_team(state: Dictionary, team_id: int) -> int:
 
 
 static func _can_team_accept_candidate(players: Array, team_id: int) -> bool:
-	return _active_count_for_team(players, team_id) < ROSTER_LIMIT
+	# オフの補強は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す (hard 上限 70 は別途保証)。
+	return _active_count_for_team(players, team_id) < TeamFinance.SHIENKA_SOFT_TARGET
 
 
 static func _can_sign_entry(players: Array, entry: Dictionary) -> bool:

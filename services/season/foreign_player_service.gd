@@ -7,7 +7,6 @@ class_name ForeignPlayerService
 
 const NamePoolRef = preload("res://services/data/name_pool.gd")
 
-const ROSTER_LIMIT: int = 70
 const FOREIGN_FA_YEARS: int = 7
 const NUM_CANDIDATES: int = 54
 const MAX_FOREIGN_HELD_PER_TEAM: int = 4
@@ -225,7 +224,8 @@ static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: 
 	if team_id <= 0:
 		return false
 	var active: int = _active_count_for_team(players, team_id)
-	if active >= ROSTER_LIMIT:
+	# オフの補強は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す (hard 上限 70 は別途保証)。
+	if active >= TeamFinance.SHIENKA_SOFT_TARGET:
 		return false
 	var foreign_total: int = _foreign_count_for_team(players, team_id)
 	return foreign_total < MAX_FOREIGN_HELD_PER_TEAM

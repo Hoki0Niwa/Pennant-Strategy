@@ -1883,7 +1883,8 @@ func _format_released_details(candidate: Dictionary) -> String:
 		return "自由契約候補を選択してください。"
 	var team_id: int = AppState.selected_team_id
 	var active_roster: int = _active_roster_count(team_id)
-	var remaining_roster: int = max(0, ReleasedMarketService.ROSTER_LIMIT - active_roster)
+	# 補強は支配下 soft 目標 (67) で止め、70 との差はシーズン中の昇格用に空ける。
+	var remaining_roster: int = max(0, TeamFinance.SHIENKA_SOFT_TARGET - active_roster)
 	var salary: int = int(candidate.get("salary", 0))
 	var team: PSTeam = GameDb.get_team(team_id)
 	var budget_room: int = 0
@@ -1901,9 +1902,9 @@ func _format_released_details(candidate: Dictionary) -> String:
 		float(candidate.get("war", 0.0)),
 		float(candidate.get("need", 0.0)),
 	])
-	lines.append("枠: 支配下 %d/%d (残り%d)" % [
+	lines.append("枠: 支配下 %d/%d (補強残り%d)" % [
 		active_roster,
-		ReleasedMarketService.ROSTER_LIMIT,
+		TeamFinance.SHIENKA_LIMIT,
 		remaining_roster,
 	])
 	if team != null:
@@ -2102,7 +2103,8 @@ func _format_foreign_details(candidate: Dictionary) -> String:
 	var team_id: int = AppState.selected_team_id
 	var active_roster: int = _active_roster_count(team_id)
 	var current_foreign: int = _active_foreign_count(team_id)
-	var remaining_roster: int = max(0, ForeignPlayerService.ROSTER_LIMIT - active_roster)
+	# 補強は支配下 soft 目標 (67) で止め、70 との差はシーズン中の昇格用に空ける。
+	var remaining_roster: int = max(0, TeamFinance.SHIENKA_SOFT_TARGET - active_roster)
 	var remaining_foreign: int = max(0, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM - current_foreign)
 	var salary: int = int(candidate.get("salary", 0))
 	var team: PSTeam = GameDb.get_team(team_id)
@@ -2120,9 +2122,9 @@ func _format_foreign_details(candidate: Dictionary) -> String:
 		int(candidate.get("value", 0)),
 		float(candidate.get("need", 0.0)),
 	])
-	lines.append("枠: 支配下 %d/%d (残り%d)  外国人 %d/%d (残り%d)" % [
+	lines.append("枠: 支配下 %d/%d (補強残り%d)  外国人 %d/%d (残り%d)" % [
 		active_roster,
-		ForeignPlayerService.ROSTER_LIMIT,
+		TeamFinance.SHIENKA_LIMIT,
 		remaining_roster,
 		current_foreign,
 		ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM,

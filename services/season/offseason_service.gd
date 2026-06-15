@@ -83,31 +83,43 @@ const INJURY_PENALTY_CAP: float = 6.0
 
 # --- 支配下→育成 降格 (CPU 自動戦力外で release の代わりに振り分け) ---
 # 戦力外候補 (= 現在価値が支配下水準未満) のうち、将来価値が残るなら育成降格に回す。
-#  類型1 素材保持型: 若く (age≤PROSPECT_MAX) future_value が残り、まだ成長余地がある。
-#  類型2 長期故障/再調整型: 越冬で治らない長期故障 (injury_days≥LONG) で、復帰すれば戦力。
-const DEMOTE_PROSPECT_MAX_AGE: int = 27
+#  類型1 素材保持型: 育成は26歳未満の素材向け (age≤PROSPECT_MAX) で future_value が残り、成長余地がある。
+#  類型2 長期故障/再調整型: 越冬で治らない長期故障 (injury_days≥LONG)。29以下は長期故障で可、
+#    **30歳以上は大怪我 (重傷以上) のみ** (それより高齢=SERIOUS_MAX 超は対象外)。
+const DEMOTE_PROSPECT_MAX_AGE: int = 25
 const DEMOTE_MIN_FUTURE_VALUE: float = 34.0
 const DEMOTE_MIN_GROWTH: float = 1.0
-const DEMOTE_INJURY_MAX_AGE: int = 31
+const DEMOTE_INJURY_LONG_MAX_AGE: int = 29
+const DEMOTE_INJURY_SERIOUS_MAX_AGE: int = 31
 const DEMOTE_INJURY_DAYS_LONG: int = 120
 const DEMOTE_INJURY_MIN_FUTURE_VALUE: float = 40.0
 # 判定のゆらぎ (5〜10%)。future_value 閾値を ±DEMOTE_JITTER 揺らし全球団が同一評価にならないように。
 # marginal 層のみに効くため主力の突発降格は起きない。
 const DEMOTE_JITTER: float = 0.07
 
-# 育成→支配下 昇格 (CPU 自動): この「現在能力」value 以上に育った育成選手を支配下に空きがある範囲で昇格。
+# 育成→支配下 昇格 (CPU 自動): 「現在能力」value が即戦力水準に達した育成を支配下に空きがある範囲で昇格。
 # 昇格は将来性ではなく「支配下で通用する準備度」= 現在能力で判断する。
+# 即戦力水準は **絶対値ではなく球団ごとの相対値** (first_team_ready_threshold): 自軍の一軍相当
+# (支配下を value 降順で並べた FIRST_TEAM_SIZE 番目=一軍下位レベル) と比較し、強豪は基準↑/再建は基準↓。
+# PROMOTE_TO_SHIENKA_MIN_VALUE は支配下が居ない時のフォールバック基準値。
 const PROMOTE_TO_SHIENKA_MIN_VALUE: int = 48
+const FIRST_TEAM_SIZE: int = 31   # 一軍登録上限 (active_roster_screen ROSTER_MAX と一致)
+# 相対基準のクランプ (極端化防止)。再建球団でも最低限の質を要求し、強豪でも青天井にしない。
+const PROMOTE_READY_FLOOR: float = 42.0
+const PROMOTE_READY_CEILING: float = 56.0
 
-# --- 育成→戦力外 整理 (CPU 自動): 育成を pipeline として循環させ無制限な累積を防ぐ ---
+# --- 育成→戦力外 整理 (CPU 自動): 育成は人数無制限。抱え込みは枠でなく見込みベースで抑制する ---
 # 在籍年数 (player.years を育成年数の代理) と出身 (高卒は猶予長め) で段階化する。
 #  - 1年目 (降格/入団直後): 原則保持。
 #  - 猶予年数未満: 明確に見込み薄 (future_value < FAIL ∧ 成長余地ほぼ無し) のみ放出。
-#  - 猶予年数到達以降: 昇格見込み無し (future_value < PROMOTE_TO_SHIENKA_MIN_VALUE) なら放出 (厳しめ)。
-#  - 育成枠 DEVELOPMENT_LIMIT 超過分: future_value 下位から放出。
+#  - 猶予年数到達以降: 即戦力に届く見込み無し (future_value < 相対基準) なら放出 (厳しめ)。
+#  - 別途 26歳以上の非即戦力は aged_out で優先放出。枠超過 over_cap は廃止。
 const DEV_RELEASE_GRACE_HS: int = 4
 const DEV_RELEASE_GRACE_OTHER: int = 3
 const DEV_FAIL_FUTURE_VALUE: float = 36.0
+# 育成は26歳未満の素材向け。**26歳以上で当季に支配下昇格が無ければ優先的に戦力外** にする。
+# 例外: 故障リハビリ中 (injury_days≥DEMOTE_INJURY_DAYS_LONG) と、入団/降格1年目 (years<1)。
+const DEV_RELEASE_AGE_LIMIT: int = 26
 
 const POSITION_NAME_BY_ID: Dictionary = {
 	1: "pitcher", 2: "catcher", 3: "first", 4: "second", 5: "third",
@@ -810,16 +822,29 @@ static func _should_demote_to_development(player: PSPlayer) -> bool:
 	var future_value: float = future_value_score(player)
 	# 全球団が同一評価にならないよう、比較閾値を ±DEMOTE_JITTER 揺らす (marginal 層のみ)。
 	var jitter: float = 1.0 + (Rng.roll_float() - 0.5) * 2.0 * DEMOTE_JITTER
-	# 類型1: 素材保持型 (若く・将来価値あり・まだ成長余地)。
+	# 類型1: 素材保持型 (26歳未満・将来価値あり・まだ成長余地)。
 	if player.age <= DEMOTE_PROSPECT_MAX_AGE:
 		if future_value >= DEMOTE_MIN_FUTURE_VALUE * jitter:
 			if expected_development_score_bonus(player.age, 6, player.position) >= DEMOTE_MIN_GROWTH:
 				return true
 	# 類型2: 長期故障 / 再調整型 (越冬で治らない長期故障で、復帰すれば戦力)。
-	if player.age <= DEMOTE_INJURY_MAX_AGE and player.injury_days >= DEMOTE_INJURY_DAYS_LONG:
-		if future_value >= DEMOTE_INJURY_MIN_FUTURE_VALUE * jitter:
+	# 29歳以下は長期故障で降格可。30歳以上は大怪我 (重傷以上) のみ (それ以上の高齢は対象外)。
+	if player.injury_days >= DEMOTE_INJURY_DAYS_LONG and future_value >= DEMOTE_INJURY_MIN_FUTURE_VALUE * jitter:
+		if player.age <= DEMOTE_INJURY_LONG_MAX_AGE:
+			return true
+		if player.age <= DEMOTE_INJURY_SERIOUS_MAX_AGE and _is_serious_injury(player):
 			return true
 	return false
+
+
+# 大怪我 (重傷=シーズン終了級 以上) か。明示 severity が無い旧データは日数から推定する。
+static func _is_serious_injury(player: PSPlayer) -> bool:
+	if player == null or player.injury_days <= 0:
+		return false
+	var severity: int = player.injury_severity
+	if severity <= 0:
+		severity = PSInjuryModel.severity_from_days(player.injury_days)
+	return severity >= PSInjuryModel.TIER_MAJOR
 
 
 # 育成整理での保護判定。「今なお育成保持に値するプロスペクト」なら failed_prospect 放出しない。
@@ -833,7 +858,7 @@ static func _is_viable_development_prospect(player: PSPlayer, fv: float) -> bool
 		if expected_development_score_bonus(player.age, 6, player.position) >= DEMOTE_MIN_GROWTH:
 			return true
 	# 故障回復待ち: まだ離脱中で復帰すれば戦力。
-	if player.injury_days > 0 and player.age <= DEMOTE_INJURY_MAX_AGE and fv >= DEMOTE_INJURY_MIN_FUTURE_VALUE:
+	if player.injury_days > 0 and player.age <= DEMOTE_INJURY_SERIOUS_MAX_AGE and fv >= DEMOTE_INJURY_MIN_FUTURE_VALUE:
 		return true
 	return false
 
@@ -861,6 +886,8 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 		var team: PSTeam = team_row as PSTeam
 		if team == null or team.id == excluded_team_id:
 			continue
+		# 即戦力基準は球団ごとの相対値 (一軍下位レベル)。1度だけ算出して使い回す。
+		var ready_threshold: float = first_team_ready_threshold(players, team.id)
 		var devs: Array = []
 		for player_row in players:
 			var player: PSPlayer = player_row as PSPlayer
@@ -868,7 +895,7 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 				continue
 			if player.is_retired() or not player.development_player:
 				continue
-			if player_value_score(player) < PROMOTE_TO_SHIENKA_MIN_VALUE:
+			if float(player_value_score(player)) < ready_threshold:
 				continue
 			devs.append(player)
 		devs.sort_custom(func(a, b) -> bool:
@@ -876,7 +903,8 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 		)
 		for dev_row in devs:
 			var dev: PSPlayer = dev_row as PSPlayer
-			if not TeamFinance.has_shienka_room(players, team.id):
+			# オフの自動昇格は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す。
+			if not TeamFinance.has_shienka_soft_room(players, team.id):
 				break
 			_apply_promotion_to_shienka(dev)
 			promoted.append({
@@ -895,8 +923,9 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 	}
 
 
-# CPU 自動: 育成選手の整理 (pipeline 循環)。失敗プロスペクト (在籍年数が出身別猶予を超え昇格見込み無し) と
-# 育成枠超過分 (将来価値下位から) を放出する。1年目と viable な素材/故障回復待ちは保持。昇格処理の直後に実行。
+# CPU 自動: 育成選手の整理 (pipeline 循環)。放出 = 26歳以上で当季昇格無し (aged_out) /
+# 失敗プロスペクト (在籍年数が出身別猶予を超え昇格見込み無し)。育成は人数無制限 = 枠超過 over_cap は廃止。
+# 1年目とリハビリ中、26歳未満の viable な素材/故障回復待ち、即戦力は保持。昇格処理の直後に実行。
 static func process_development_releases(players: Array, teams: Array, excluded_team_id: int = 0) -> Dictionary:
 	var released: Array = []
 	for team_row in teams:
@@ -911,30 +940,36 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 			if player.is_retired() or not player.development_player:
 				continue
 			devs.append(player)
-		# future_value 降順。over_cap の放出は将来価値が最も低い末尾から行う。
-		devs.sort_custom(func(a, b) -> bool:
-			return future_value_score(a as PSPlayer) > future_value_score(b as PSPlayer)
-		)
-		for i in range(devs.size()):
-			var dev: PSPlayer = devs[i] as PSPlayer
+		# 即戦力基準は球団ごとの相対値 (一軍下位レベル)。1度だけ算出して使い回す。
+		var ready_threshold: float = first_team_ready_threshold(players, team.id)
+		for dev_row in devs:
+			var dev: PSPlayer = dev_row as PSPlayer
 			var fv: float = future_value_score(dev)
-			# 育成枠 DEVELOPMENT_LIMIT 超過分は将来価値下位から放出 (pipeline 循環)。
-			var over_cap: bool = i >= TeamFinance.DEVELOPMENT_LIMIT
+			# 育成は人数無制限 (枠数による over_cap 整理は廃止)。抱え込みは下記の放出条件で抑制する。
+			# 26歳以上で当季に支配下昇格が無ければ優先放出 (育成は26歳未満の素材向け)。
+			# ただし除外: 入団/降格1年目・リハビリ中・**即戦力 (自軍一軍と比べた相対基準以上)**。
+			# 即戦力の育成は満枠で昇格できなかっただけなので、シーズン中昇格用に保持する (放出しない)。
+			var aged_out: bool = (
+				dev.age >= DEV_RELEASE_AGE_LIMIT
+				and dev.years >= 1
+				and dev.injury_days < DEMOTE_INJURY_DAYS_LONG
+				and float(player_value_score(dev)) < ready_threshold
+			)
 			var failed_prospect: bool = false
-			if not _is_viable_development_prospect(dev, fv):
+			if not aged_out and not _is_viable_development_prospect(dev, fv):
 				# 在籍年数 (育成年数の代理) と出身で猶予を変える。高卒は猶予長め。
 				var grace: int = DEV_RELEASE_GRACE_HS if _is_high_school_origin(dev) else DEV_RELEASE_GRACE_OTHER
 				var growth: float = expected_development_score_bonus(dev.age, 6, dev.position)
 				if dev.years <= 1:
-					# 1年目 (降格/入団直後) は原則保持 (over_cap のみ別途効く)。
+					# 1年目 (降格/入団直後) は原則保持。
 					failed_prospect = false
 				elif dev.years >= grace:
-					# 猶予到達以降: 昇格見込み無しなら放出 (厳しめ)。
-					failed_prospect = fv < float(PROMOTE_TO_SHIENKA_MIN_VALUE)
+					# 猶予到達以降: 即戦力に届く見込み無し (将来価値が相対基準未満) なら放出 (厳しめ)。
+					failed_prospect = fv < ready_threshold
 				else:
 					# 猶予未満: 明確に見込み薄 (将来価値が下限割れ かつ 成長余地ほぼ無し) のみ放出。
 					failed_prospect = fv < DEV_FAIL_FUTURE_VALUE and growth < DEMOTE_MIN_GROWTH
-			if not over_cap and not failed_prospect:
+			if not aged_out and not failed_prospect:
 				continue
 			_apply_release_mutation(dev)
 			released.append({
@@ -953,8 +988,7 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 	}
 
 
-# 自軍の指定選手を育成降格する (戦力外エディタの「育成降格」選択)。
-# 育成枠 (DEVELOPMENT_LIMIT) に空きがある範囲で適用し、超過分は降格しない。
+# 自軍の指定選手を育成降格する (戦力外エディタの「育成降格」選択)。育成は人数無制限なので枠制限なし。
 static func process_demotion(players: Array, team_id: int, player_ids: Array) -> Dictionary:
 	var demote_set: Dictionary = {}
 	for id_value in player_ids:
@@ -969,8 +1003,6 @@ static func process_demotion(players: Array, team_id: int, player_ids: Array) ->
 			continue
 		if player.is_retired() or player.development_player:
 			continue
-		if not TeamFinance.has_development_room(players, team_id):
-			break
 		_apply_demotion_to_development(player)
 		demoted.append({
 			"player_id": player.id,
@@ -1074,6 +1106,27 @@ static func future_value_score(player: PSPlayer) -> float:
 	var current: float = float(player_value_score(player))
 	var growth: float = expected_development_score_bonus(player.age, 6, player.position) * FUTURE_GROWTH_WEIGHT
 	return current + growth - injury_value_penalty(player)
+
+
+# 即戦力 (支配下昇格相当) の球団別**相対**基準。支配下 (非育成・非引退) を value 降順に並べ、
+# 一軍枠 FIRST_TEAM_SIZE 番目 (= 一軍下位レベル) の value を基準にする。育成の value がこれ以上なら
+# 「自軍の一軍選手たちと比べて即戦力」。支配下が枠数未満なら最弱の value。floor/ceiling でクランプ。
+# 同オフの昇格/降格判定中は球団構成がほぼ不変なので、各 process_* で球団ごとに1度算出して使い回す。
+static func first_team_ready_threshold(players: Array, team_id: int) -> float:
+	var values: Array = []
+	for player_row in players:
+		var p: PSPlayer = player_row as PSPlayer
+		if p == null or p.team_id != team_id:
+			continue
+		if p.is_retired() or p.development_player:
+			continue
+		values.append(player_value_score(p))
+	if values.is_empty():
+		return float(PROMOTE_TO_SHIENKA_MIN_VALUE)
+	values.sort()  # 昇順
+	# 上位 FIRST_TEAM_SIZE の最下位 = 昇順 index (size - FIRST_TEAM_SIZE)。
+	var idx: int = max(0, values.size() - FIRST_TEAM_SIZE)
+	return clampf(float(values[idx]), PROMOTE_READY_FLOOR, PROMOTE_READY_CEILING)
 
 
 # 故障リスク減点。残存離脱日数 (injury_days) 30日ごとに ~1 点、上限 INJURY_PENALTY_CAP。

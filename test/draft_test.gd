@@ -18,7 +18,7 @@ func test_main_and_development_segments_split() -> void:
 	_fill_team(players, 1, 55)
 	_fill_team(players, 2, 55)
 	_fill_team(players, 3, 55)
-	_fill_team(players, 4, 68)
+	_fill_team(players, 4, 68)  # soft 目標(67)超 → 本指名 0
 
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1)
 	DraftService.complete_automatically(state)
@@ -38,11 +38,11 @@ func test_main_and_development_segments_split() -> void:
 		else:
 			main_by_team[tid] = int(main_by_team.get(tid, 0)) + 1
 
-	# 本指名: capacity 十分な3球団は上限9、capacity 2 の球団は2。すべて MAIN 上限以下。
+	# 本指名: 在籍55の3球団は上限9、在籍68 (soft目標67超) の球団は0。すべて MAIN 上限以下。
 	assert_int(int(main_by_team.get(1, 0))).is_equal(9)
 	assert_int(int(main_by_team.get(2, 0))).is_equal(9)
 	assert_int(int(main_by_team.get(3, 0))).is_equal(9)
-	assert_int(int(main_by_team.get(4, 0))).is_equal(2)
+	assert_int(int(main_by_team.get(4, 0))).is_equal(0)
 
 	# 育成: 各球団 0〜3。
 	for tid in [1, 2, 3, 4]:
@@ -119,7 +119,7 @@ func test_draft_target_scales_with_roster_need() -> void:
 	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 56)  # 大量放出後 → 空きが多い
-	_fill_team(players, 2, 65)  # ほぼ維持 → 空きが少ない
+	_fill_team(players, 2, 64)  # ほぼ維持 → 空きが少ない (soft目標67まで残り3)
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
 	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
 	assert_int(int(targets.get("1", 0))).is_equal(DraftService.MAIN_DRAFT_MAX_PICKS)

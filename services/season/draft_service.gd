@@ -41,12 +41,11 @@ const UTILITY_SUBPOS_WEIGHT: float = 0.6
 const ROSTER_LIMIT: int = 70
 # ドラフトは2フェーズ: 本指名 (支配下) → 育成ドラフト (育成枠外)。
 # 本指名: 1球団あたりの指名数は need-driven (下記 _compute_main_draft_targets)。
-#   target = ROSTER_FILL_TARGET − 在籍支配下 − 昇格見込み − FA/外国人予約。基準 ~6、戦力外が多い年は最大9、
+#   target = SHIENKA_SOFT_TARGET(67) − 在籍支配下 − 昇格見込み − FA/外国人予約。基準 ~6、戦力外が多い年は最大9、
 #   キーパーばかりで放出が少ない年は最小 MAIN_DRAFT_MIN_PICKS まで絞る。MAX で頭打ち。
+#   支配下は soft 目標 67 までしか埋めず、70 との差をシーズン中の昇格用に空ける (TeamFinance.SHIENKA_SOFT_TARGET)。
 const MAIN_DRAFT_MAX_PICKS: int = 9
 const MAIN_DRAFT_MIN_PICKS: int = 3
-# 支配下を埋める目標サイズ。70 まで埋め切らず、シーズン中の昇格/再昇格の余地を残す。
-const ROSTER_FILL_TARGET: int = 68
 # FA・外国人・戦力外獲得で埋まる見込みの予約枠 (ドラフトはその分控える)。
 const DRAFT_SIGNING_RESERVE: int = 2
 # 育成→支配下 昇格見込みとしてドラフトから差し引く上限 (これ以上は数えない)。
@@ -310,24 +309,17 @@ static func _begin_development_segment(state: Dictionary) -> void:
 	(state.get("logs", []) as Array).append({"type": "segment", "segment": "development"})
 
 
-# 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS)。
-# 育成枠の空き (DEVELOPMENT_LIMIT − dev_initial) でクランプ。CPU は乱数で 0 (指名なし) もあり得る。
-# ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
+# 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS)。育成は人数無制限なので枠でなく appetite だけで決める。
+# CPU は乱数で 0 (指名なし) もあり得る。ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
 static func _compute_dev_targets(state: Dictionary) -> Dictionary:
 	var targets: Dictionary = {}
 	var user_team_id: int = int(state.get("user_team_id", 0))
-	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	for team_id_value in state.get("teams_order_reverse", []) as Array:
 		var tid: int = int(team_id_value)
-		var profile: Dictionary = profiles.get(str(tid), {}) as Dictionary
-		var room: int = TeamFinance.DEVELOPMENT_LIMIT - int(profile.get("dev_initial", 0))
-		if room <= 0:
-			targets[str(tid)] = 0
-			continue
 		if tid == user_team_id:
-			targets[str(tid)] = min(DEV_DRAFT_MAX_PICKS, room)
+			targets[str(tid)] = DEV_DRAFT_MAX_PICKS
 		else:
-			targets[str(tid)] = clampi(Rng.range_int(0, DEV_DRAFT_MAX_PICKS), 0, room)
+			targets[str(tid)] = Rng.range_int(0, DEV_DRAFT_MAX_PICKS)
 	return targets
 
 
@@ -616,14 +608,12 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	var profile: Dictionary = profiles.get(str(team_id), {}) as Dictionary
 	if str(state.get("segment", "main")) == "development":
-		# 育成ドラフト: 育成枠 (DEVELOPMENT_LIMIT) の空きと、球団ごとの appetite (team_dev_targets) で制限。
+		# 育成ドラフト: 育成は人数無制限なので、球団ごとの appetite (team_dev_targets) と上限のみで制限。
 		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
 		var dev_picked: int = int(dev_counts.get(str(team_id), 0))
-		var dev_initial: int = int(profile.get("dev_initial", 0))
-		var dev_room: int = TeamFinance.DEVELOPMENT_LIMIT - dev_initial - dev_picked
 		var targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
 		var target: int = int(targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
-		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS and dev_room > 0
+		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS
 	# 本指名: 支配下空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。育成枠は影響しない。
 	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
 	var picked_count: int = int(counts.get(str(team_id), 0))
@@ -828,7 +818,13 @@ static func _bucket_balance_score(profile: Dictionary, bucket: String, round_no:
 #  - 育成からの昇格見込み (value≥昇格閾値) と FA/外国人予約 (DRAFT_SIGNING_RESERVE) を差し引く。
 # profiles は _build_team_profiles 済み (initial_total = 戦力外後の在籍支配下)。
 static func _compute_main_draft_targets(players: Array, profiles: Dictionary) -> Dictionary:
-	# 球団別の昇格見込み数 (育成のうち現在能力が支配下昇格水準のもの)。
+	# 球団別の即戦力基準 (一軍下位レベルの相対値) を先に算出。
+	var ready_threshold_by_team: Dictionary = {}
+	for key in profiles.keys():
+		var tid: int = int(str(key))
+		ready_threshold_by_team[tid] = Offseason.first_team_ready_threshold(players, tid)
+
+	# 球団別の昇格見込み数 (育成のうち現在能力が**自軍の即戦力基準**以上のもの)。
 	var promo_by_team: Dictionary = {}
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -836,7 +832,8 @@ static func _compute_main_draft_targets(players: Array, profiles: Dictionary) ->
 			continue
 		if not player.development_player:
 			continue
-		if Offseason.player_value_score(player) >= Offseason.PROMOTE_TO_SHIENKA_MIN_VALUE:
+		var threshold: float = float(ready_threshold_by_team.get(player.team_id, Offseason.PROMOTE_TO_SHIENKA_MIN_VALUE))
+		if float(Offseason.player_value_score(player)) >= threshold:
 			promo_by_team[player.team_id] = int(promo_by_team.get(player.team_id, 0)) + 1
 
 	var targets: Dictionary = {}
@@ -845,8 +842,9 @@ static func _compute_main_draft_targets(players: Array, profiles: Dictionary) ->
 		var current: int = int(profile.get("initial_total", profile.get("total", 0)))
 		var team_id: int = int(str(key))
 		var expected_promo: int = min(DRAFT_PROMO_RESERVE_CAP, int(promo_by_team.get(team_id, 0)))
-		var raw: int = ROSTER_FILL_TARGET - current - expected_promo - DRAFT_SIGNING_RESERVE
-		var capacity: int = max(0, ROSTER_LIMIT - current)
+		var raw: int = TeamFinance.SHIENKA_SOFT_TARGET - current - expected_promo - DRAFT_SIGNING_RESERVE
+		# 支配下を soft 目標 (67) 以上には埋めない (70 との差はシーズン中の昇格用)。
+		var capacity: int = max(0, TeamFinance.SHIENKA_SOFT_TARGET - current)
 		var target: int = clampi(raw, MAIN_DRAFT_MIN_PICKS, MAIN_DRAFT_MAX_PICKS)
 		targets[key] = min(target, capacity)
 	return targets
@@ -859,8 +857,6 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		profiles[str(team.id)] = {
 			"total": 0,
 			"initial_total": 0,
-			# 既存の育成選手数 (前年降格/育成指名)。育成ドラフトの空き枠 (DEVELOPMENT_LIMIT − dev_initial) に使う。
-			"dev_initial": 0,
 			"pitcher": 0,
 			"catcher": 0,
 			"infield": 0,
@@ -875,13 +871,9 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired():
 			continue
-		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外し、
-		# 育成枠の在籍数 (dev_initial) だけ別途数える。
+		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外する
+		# (育成は人数無制限なので別途のカウントは不要)。
 		if player.development_player:
-			var dev_key: String = str(player.team_id)
-			if profiles.has(dev_key):
-				var dev_profile: Dictionary = profiles[dev_key] as Dictionary
-				dev_profile["dev_initial"] = int(dev_profile.get("dev_initial", 0)) + 1
 			continue
 		var key: String = str(player.team_id)
 		if not profiles.has(key):

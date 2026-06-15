@@ -53,15 +53,15 @@ func test_process_demotion_marks_development_and_frees_slot() -> void:
 	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(before - 1)
 
 
-func test_process_demotion_respects_development_cap() -> void:
+func test_demotion_not_blocked_by_development_count() -> void:
+	# 育成は人数無制限: 既に多数の育成が居ても支配下→育成 降格は通る。
 	var players: Array = _support_players(1, 3)
-	# 育成枠を満杯にする。
-	for i in range(TeamFinance.DEVELOPMENT_LIMIT):
+	for i in range(20):
 		players.append(_player({"id": 5000 + i, "team_id": 1, "development_player": true}))
 	var support_id: int = (players[0] as PSPlayer).id
 	var result: Dictionary = Offseason.process_demotion(players, 1, [support_id])
-	assert_int(int(result.get("demoted_count", 0))).is_equal(0)
-	assert_bool((players[0] as PSPlayer).development_player).is_false()
+	assert_int(int(result.get("demoted_count", 0))).is_equal(1)
+	assert_bool((players[0] as PSPlayer).development_player).is_true()
 
 
 # --- 昇格 (育成 → 支配下) ----------------------------------------------------
@@ -97,6 +97,39 @@ func test_promotion_excludes_user_team() -> void:
 	var result: Dictionary = Offseason.process_development_promotions([strong_dev], [_team(1)], 1)
 	assert_int(int(result.get("promoted_count", 0))).is_equal(0)
 	assert_bool(strong_dev.development_player).is_true()
+
+
+# --- 即戦力基準は球団相対 --------------------------------------------------
+
+func test_first_team_ready_threshold_is_relative() -> void:
+	# 弱い一軍 (低能力支配下31人) は基準が floor、強い一軍 (高能力31人) は ceiling。
+	var weak: Array = []
+	for i in range(Offseason.FIRST_TEAM_SIZE):
+		weak.append(_player_with_z(3000 + i, 1, 3, false, -2.0))
+	var strong: Array = []
+	for i in range(Offseason.FIRST_TEAM_SIZE):
+		strong.append(_player_with_z(4000 + i, 2, 3, false, 2.5))
+	var weak_threshold: float = Offseason.first_team_ready_threshold(weak, 1)
+	var strong_threshold: float = Offseason.first_team_ready_threshold(strong, 2)
+	assert_float(weak_threshold).is_less(strong_threshold)
+	assert_float(weak_threshold).is_equal(Offseason.PROMOTE_READY_FLOOR)
+	assert_float(strong_threshold).is_equal(Offseason.PROMOTE_READY_CEILING)
+
+
+func test_promotion_respects_relative_threshold() -> void:
+	# 同能力の中堅育成が、弱い一軍の球団では即戦力(昇格)、強い一軍の球団では基準未満(据え置き)。
+	var players: Array = []
+	for i in range(Offseason.FIRST_TEAM_SIZE):
+		players.append(_player_with_z(5000 + i, 1, 3, false, -2.0))  # team1: 弱い支配下
+	for i in range(Offseason.FIRST_TEAM_SIZE):
+		players.append(_player_with_z(6000 + i, 2, 3, false, 2.5))   # team2: 強い支配下
+	var dev_weak_team: PSPlayer = _player_with_z(7001, 1, 3, true, 0.4)
+	var dev_strong_team: PSPlayer = _player_with_z(7002, 2, 3, true, 0.4)
+	players.append(dev_weak_team)
+	players.append(dev_strong_team)
+	Offseason.process_development_promotions(players, [_team(1), _team(2)], 0)
+	assert_bool(dev_weak_team.development_player).is_false()  # 弱い球団 → 昇格
+	assert_bool(dev_strong_team.development_player).is_true()  # 強い球団 → 据え置き
 
 
 # --- 育成整理 (pipeline 循環) ------------------------------------------------
@@ -191,16 +224,60 @@ func test_should_demote_prospect_injured_not_veteran() -> void:
 	assert_bool(Offseason._should_demote_to_development(injured_old)).is_false()
 
 
-func test_development_release_trims_over_cap_excess() -> void:
+func test_demotion_age30_requires_serious_injury() -> void:
+	# 30歳・大怪我 (重傷) → 降格可
+	var serious: PSPlayer = _player_with_z(100, 1, 3, false, 0.5)
+	serious.age = 30
+	serious.injury_days = 150
+	serious.injury_severity = PSInjuryModel.TIER_MAJOR
+	assert_bool(Offseason._should_demote_to_development(serious)).is_true()
+	# 30歳・大怪我でない (中度) → 降格しない (長期離脱日数でも severity で弾く)
+	var minor: PSPlayer = _player_with_z(101, 1, 3, false, 0.5)
+	minor.age = 30
+	minor.injury_days = 150
+	minor.injury_severity = PSInjuryModel.TIER_MODERATE
+	assert_bool(Offseason._should_demote_to_development(minor)).is_false()
+	# 29歳は長期故障なら大怪我でなくても降格可 (30歳境界の確認)
+	var young: PSPlayer = _player_with_z(102, 1, 3, false, 0.5)
+	young.age = 29
+	young.injury_days = 150
+	young.injury_severity = PSInjuryModel.TIER_MODERATE
+	assert_bool(Offseason._should_demote_to_development(young)).is_true()
+
+
+func test_development_release_cuts_aged_out_26plus() -> void:
+	# 26歳以上・健康・昇格水準未満 (failed) → 優先放出
+	var aged_failed: PSPlayer = _player_with_z(103, 1, 3, true, -1.0)
+	aged_failed.age = 27
+	aged_failed.years = 3
+	# 26歳以上でも昇格水準 (value≥48) の即戦力は保持 (満枠で昇格できなかっただけ)
+	var aged_ready: PSPlayer = _player_with_z(105, 1, 3, true, 2.5)
+	aged_ready.age = 27
+	aged_ready.years = 3
+	# 故障リハビリ中の26+は保持 (故障回復待ち)
+	var rehab: PSPlayer = _player_with_z(104, 1, 3, true, 0.6)
+	rehab.age = 27
+	rehab.years = 3
+	rehab.injury_days = 150
+	var players: Array = [aged_failed, aged_ready, rehab]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(result.get("released_count", 0))).is_equal(1)
+	assert_bool(aged_failed.is_retired()).is_true()
+	assert_bool(aged_ready.is_retired()).is_false()
+	assert_bool(rehab.is_retired()).is_false()
+	assert_bool(rehab.development_player).is_true()
+
+
+func test_development_release_keeps_many_viable_young() -> void:
+	# 育成は人数無制限: 大量の若い viable 育成は全員保持 (枠超過放出は無し)。
 	var players: Array = []
-	# 上限+3 人の若い育成 (全員 keep 条件だが上限超過分は放出)。
-	for i in range(TeamFinance.DEVELOPMENT_LIMIT + 3):
+	for i in range(20):
 		var dev: PSPlayer = _player_with_z(2000 + i, 1, 3, true, 0.5)
 		dev.age = 20
 		players.append(dev)
 	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
-	assert_int(int(result.get("released_count", 0))).is_equal(3)
-	assert_int(TeamFinance.development_count(players, 1)).is_equal(TeamFinance.DEVELOPMENT_LIMIT)
+	assert_int(int(result.get("released_count", 0))).is_equal(0)
+	assert_int(TeamFinance.development_count(players, 1)).is_equal(20)
 
 
 # --- 一軍出場不可 ------------------------------------------------------------
