@@ -292,17 +292,19 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "オフシーズンが開始されていません"}
 	if offseason_step == 1:
 		return {"ok": false, "message": "先に戦力外通告を確定してください"}
-	if offseason_step == 3 and not _is_draft_complete():
-		return {"ok": false, "message": "ドラフトが進行中です。先に完了してください"}
-	if offseason_step == 4 and not _is_released_market_complete():
+	if offseason_step == 3 and not _is_main_draft_complete():
+		return {"ok": false, "message": "本指名が進行中です。先に完了してください"}
+	if offseason_step == 4 and not _is_development_draft_complete():
+		return {"ok": false, "message": "育成指名が進行中です。先に完了してください"}
+	if offseason_step == 5 and not _is_released_market_complete():
 		return {"ok": false, "message": "戦力外獲得市場が進行中です。先に完了してください"}
-	if offseason_step == 5 and not _is_fa_complete():
+	if offseason_step == 6 and not _is_fa_complete():
 		return {"ok": false, "message": "FA市場が進行中です。先に完了してください"}
-	if offseason_step == 6 and not _is_foreign_complete():
+	if offseason_step == 7 and not _is_foreign_complete():
 		return {"ok": false, "message": "外国人補強が進行中です。先に完了してください"}
-	if offseason_step == 7 and not _is_camp_complete():
+	if offseason_step == 8 and not _is_camp_complete():
 		return {"ok": false, "message": "キャンプが進行中です。先に完了してください"}
-	if offseason_step >= 9:
+	if offseason_step >= 10:
 		return {"ok": false, "message": "オフシーズン処理は完了しています。「翌年開始」で次シーズンへ進んでください"}
 
 	var next_step: int = offseason_step + 1
@@ -317,12 +319,18 @@ func advance_offseason() -> Dictionary:
 		3:
 			# R4/R5 調整: 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長 の順。
 			# ドラフトを先に行い、残り枠を戦力外獲得・FA・外国人へ回す。
-			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
-			if _is_draft_complete():
+			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id, false)
+			if _is_main_draft_complete():
+				step_result = _store_main_draft_if_complete()
+			else:
+				step_result = {"title": "本指名", "draft_in_progress": true}
+		4:
+			draft_state = DraftService.begin_development_draft(draft_state)
+			if _is_development_draft_complete():
 				step_result = _finalize_draft_if_complete()
 			else:
-				step_result = {"title": "ドラフト", "draft_in_progress": true}
-		4:
+				step_result = {"title": "育成指名", "draft_in_progress": true}
+		5:
 			released_market_state = ReleasedMarketService.create_released_market_state(
 				GameDb.players,
 				GameDb.teams,
@@ -334,26 +342,26 @@ func advance_offseason() -> Dictionary:
 				step_result = _finalize_released_market_if_complete()
 			else:
 				step_result = {"title": "戦力外獲得", "released_market_in_progress": true}
-		5:
+		6:
 			fa_state = FaMarketService.create_fa_market_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
 			if _is_fa_complete():
 				step_result = _finalize_fa_if_complete()
 			else:
 				step_result = {"title": "FA市場", "fa_in_progress": true}
 				GameDb.rebuild_player_indices()
-		6:
+		7:
 			foreign_state = ForeignPlayerService.create_foreign_market_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
 			if _is_foreign_complete():
 				step_result = _finalize_foreign_if_complete()
 			else:
 				step_result = {"title": "外国人補強", "foreign_in_progress": true}
-		7:
+		8:
 			camp_state = _camp_service().create_camp_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
 			if _is_camp_complete():
 				step_result = _finalize_camp_if_complete()
 			else:
 				step_result = {"title": "キャンプ", "camp_in_progress": true}
-		8:
+		9:
 			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
 			step_result["title"] = "成長 / 衰え"
 			# roadmap #3: 成長で育った育成選手を CPU 球団は自動で支配下登録 (自軍は手動)。
@@ -364,7 +372,7 @@ func advance_offseason() -> Dictionary:
 			var dev_rel: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, selected_team_id)
 			step_result["dev_released_count"] = int(dev_rel.get("released_count", 0))
 			GameDb.rebuild_player_indices()
-		9:
+		10:
 			step_result = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, current_season)
 			step_result["title"] = "契約更新"
 		_:
@@ -381,7 +389,7 @@ func advance_offseason() -> Dictionary:
 
 
 func submit_draft_candidate(candidate_id: int) -> Dictionary:
-	if not offseason_active or offseason_step != 3:
+	if not offseason_active or (offseason_step != 3 and offseason_step != 4):
 		return {"ok": false, "message": "ドラフトは現在有効ではありません"}
 	if draft_state.is_empty():
 		return {"ok": false, "message": "ドラフトが初期化されていません"}
@@ -389,13 +397,13 @@ func submit_draft_candidate(candidate_id: int) -> Dictionary:
 	draft_state = result.get("state", draft_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
-	_finalize_draft_if_complete()
+	_after_draft_action()
 	_save_if_enabled()
 	return {"ok": true, "state": draft_state}
 
 
 func auto_draft_user_pick() -> Dictionary:
-	if not offseason_active or offseason_step != 3:
+	if not offseason_active or (offseason_step != 3 and offseason_step != 4):
 		return {"ok": false, "message": "ドラフトは現在有効ではありません"}
 	if draft_state.is_empty():
 		return {"ok": false, "message": "ドラフトが初期化されていません"}
@@ -403,13 +411,13 @@ func auto_draft_user_pick() -> Dictionary:
 	draft_state = result.get("state", draft_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
-	_finalize_draft_if_complete()
+	_after_draft_action()
 	_save_if_enabled()
 	return {"ok": true, "state": draft_state}
 
 
 func skip_draft_pick() -> Dictionary:
-	if not offseason_active or offseason_step != 3:
+	if not offseason_active or (offseason_step != 3 and offseason_step != 4):
 		return {"ok": false, "message": "ドラフトは現在有効ではありません"}
 	if draft_state.is_empty():
 		return {"ok": false, "message": "ドラフトが初期化されていません"}
@@ -417,13 +425,13 @@ func skip_draft_pick() -> Dictionary:
 	draft_state = result.get("state", draft_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
-	_finalize_draft_if_complete()
+	_after_draft_action()
 	_save_if_enabled()
 	return {"ok": true, "state": draft_state}
 
 
 func complete_draft_automatically() -> Dictionary:
-	if not offseason_active or offseason_step != 3:
+	if not offseason_active or (offseason_step != 3 and offseason_step != 4):
 		return {"ok": false, "message": "ドラフトは現在有効ではありません"}
 	if draft_state.is_empty():
 		return {"ok": false, "message": "ドラフトが初期化されていません"}
@@ -431,24 +439,85 @@ func complete_draft_automatically() -> Dictionary:
 	draft_state = result.get("state", draft_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
-	_finalize_draft_if_complete()
+	_after_draft_action()
 	_save_if_enabled()
 	return {"ok": true, "state": draft_state}
 
 
-func _is_draft_complete() -> bool:
-	return not draft_state.is_empty() and bool(draft_state.get("complete", false))
+func _after_draft_action() -> void:
+	if offseason_step == 3:
+		_store_main_draft_if_complete()
+	elif offseason_step == 4:
+		_finalize_draft_if_complete()
+
+
+func _is_main_draft_complete() -> bool:
+	return not draft_state.is_empty() and bool(draft_state.get("complete", false)) and str(draft_state.get("segment", "main")) == "main"
+
+
+func _is_development_draft_complete() -> bool:
+	return not draft_state.is_empty() and bool(draft_state.get("complete", false)) and str(draft_state.get("segment", "main")) == "development"
+
+
+func _draft_result_snapshot(title: String, picks: Array, rookies: Array = []) -> Dictionary:
+	return {
+		"draft_complete": true,
+		"draft_picks": picks.duplicate(true),
+		"rookies": rookies.duplicate(true),
+		"rookies_count": rookies.size(),
+		"logs": (draft_state.get("logs", []) as Array).duplicate(true),
+		"priority_league": str(draft_state.get("priority_league", "")),
+		"title": title,
+	}
+
+
+func _store_main_draft_if_complete() -> Dictionary:
+	if not _is_main_draft_complete():
+		return {"title": "本指名", "draft_in_progress": true}
+	var picks: Array = []
+	for pick_row in draft_state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		if not bool(pick.get("development", false)):
+			picks.append(pick)
+	var result: Dictionary = _draft_result_snapshot("本指名", picks)
+	offseason_results["step_3"] = result
+	last_status_message = "本指名"
+	return result
 
 
 func _finalize_draft_if_complete() -> Dictionary:
-	if not _is_draft_complete():
-		return {"title": "ドラフト", "draft_in_progress": true}
-	var result: Dictionary = DraftService.finalize_draft(draft_state, GameDb.players)
+	if not _is_development_draft_complete():
+		return {"title": "育成指名", "draft_in_progress": true}
+	var final_result: Dictionary = DraftService.finalize_draft(draft_state, GameDb.players)
 	GameDb.rebuild_player_indices()
-	result["title"] = "ドラフト"
-	offseason_results["step_3"] = result
-	last_status_message = "ドラフト"
+	var result: Dictionary = final_result.duplicate(true)
+	result["all_draft_picks"] = (final_result.get("draft_picks", []) as Array).duplicate(true)
+	result["all_rookies"] = (final_result.get("rookies", []) as Array).duplicate(true)
+	result["draft_picks"] = _filter_development_picks(final_result.get("draft_picks", []) as Array)
+	result["rookies"] = _filter_development_rookies(final_result.get("rookies", []) as Array)
+	result["rookies_count"] = (result.get("rookies", []) as Array).size()
+	result["title"] = "育成指名"
+	offseason_results["step_4"] = result
+	last_status_message = "育成指名"
 	return result
+
+
+func _filter_development_picks(picks: Array) -> Array:
+	var filtered: Array = []
+	for pick_row in picks:
+		var pick: Dictionary = pick_row as Dictionary
+		if bool(pick.get("development", false)):
+			filtered.append(pick.duplicate(true))
+	return filtered
+
+
+func _filter_development_rookies(rookies: Array) -> Array:
+	var filtered: Array = []
+	for rookie_row in rookies:
+		var rookie: Dictionary = rookie_row as Dictionary
+		if bool(rookie.get("development_player", false)):
+			filtered.append(rookie.duplicate(true))
+	return filtered
 
 
 func submit_released_candidate(candidate_id: int) -> Dictionary:
@@ -460,7 +529,7 @@ func skip_released_candidate(candidate_id: int) -> Dictionary:
 
 
 func _submit_released_decision(candidate_id: int, action: String) -> Dictionary:
-	if not offseason_active or offseason_step != 4:
+	if not offseason_active or offseason_step != 5:
 		return {"ok": false, "message": "戦力外獲得市場は現在有効ではありません"}
 	if released_market_state.is_empty():
 		return {"ok": false, "message": "戦力外獲得市場が初期化されていません"}
@@ -483,7 +552,7 @@ func _submit_released_decision(candidate_id: int, action: String) -> Dictionary:
 
 
 func auto_released_user_pick() -> Dictionary:
-	if not offseason_active or offseason_step != 4:
+	if not offseason_active or offseason_step != 5:
 		return {"ok": false, "message": "戦力外獲得市場は現在有効ではありません"}
 	if released_market_state.is_empty():
 		return {"ok": false, "message": "戦力外獲得市場が初期化されていません"}
@@ -499,7 +568,7 @@ func auto_released_user_pick() -> Dictionary:
 
 
 func complete_released_market_automatically() -> Dictionary:
-	if not offseason_active or offseason_step != 4:
+	if not offseason_active or offseason_step != 5:
 		return {"ok": false, "message": "戦力外獲得市場は現在有効ではありません"}
 	if released_market_state.is_empty():
 		return {"ok": false, "message": "戦力外獲得市場が初期化されていません"}
@@ -529,7 +598,7 @@ func _finalize_released_market_if_complete() -> Dictionary:
 	var result: Dictionary = ReleasedMarketService.finalize_released_market(released_market_state)
 	GameDb.rebuild_player_indices()
 	result["title"] = "戦力外獲得"
-	offseason_results["step_4"] = result
+	offseason_results["step_5"] = result
 	last_status_message = "戦力外獲得"
 	return result
 
@@ -543,7 +612,7 @@ func skip_fa_candidate(candidate_id: int) -> Dictionary:
 
 
 func _submit_fa_decision(candidate_id: int, action: String) -> Dictionary:
-	if not offseason_active or offseason_step != 5:
+	if not offseason_active or offseason_step != 6:
 		return {"ok": false, "message": "FA市場は現在有効ではありません"}
 	if fa_state.is_empty():
 		return {"ok": false, "message": "FA市場が初期化されていません"}
@@ -559,7 +628,7 @@ func _submit_fa_decision(candidate_id: int, action: String) -> Dictionary:
 
 
 func auto_fa_user_pick() -> Dictionary:
-	if not offseason_active or offseason_step != 5:
+	if not offseason_active or offseason_step != 6:
 		return {"ok": false, "message": "FA市場は現在有効ではありません"}
 	if fa_state.is_empty():
 		return {"ok": false, "message": "FA市場が初期化されていません"}
@@ -575,7 +644,7 @@ func auto_fa_user_pick() -> Dictionary:
 
 
 func complete_fa_automatically() -> Dictionary:
-	if not offseason_active or offseason_step != 5:
+	if not offseason_active or offseason_step != 6:
 		return {"ok": false, "message": "FA市場は現在有効ではありません"}
 	if fa_state.is_empty():
 		return {"ok": false, "message": "FA市場が初期化されていません"}
@@ -599,7 +668,7 @@ func _finalize_fa_if_complete() -> Dictionary:
 	var result: Dictionary = FaMarketService.finalize_fa_market(fa_state, GameDb.players, current_season)
 	GameDb.rebuild_player_indices()
 	result["title"] = "FA市場"
-	offseason_results["step_5"] = result
+	offseason_results["step_6"] = result
 	last_status_message = "FA市場"
 	return result
 
@@ -613,7 +682,7 @@ func skip_foreign_candidate(candidate_id: int) -> Dictionary:
 
 
 func _submit_foreign_decision(candidate_id: int, action: String) -> Dictionary:
-	if not offseason_active or offseason_step != 6:
+	if not offseason_active or offseason_step != 7:
 		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
 	if foreign_state.is_empty():
 		return {"ok": false, "message": "外国人補強が初期化されていません"}
@@ -629,7 +698,7 @@ func _submit_foreign_decision(candidate_id: int, action: String) -> Dictionary:
 
 
 func auto_foreign_user_pick() -> Dictionary:
-	if not offseason_active or offseason_step != 6:
+	if not offseason_active or offseason_step != 7:
 		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
 	if foreign_state.is_empty():
 		return {"ok": false, "message": "外国人補強が初期化されていません"}
@@ -645,7 +714,7 @@ func auto_foreign_user_pick() -> Dictionary:
 
 
 func complete_foreign_automatically() -> Dictionary:
-	if not offseason_active or offseason_step != 6:
+	if not offseason_active or offseason_step != 7:
 		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
 	if foreign_state.is_empty():
 		return {"ok": false, "message": "外国人補強が初期化されていません"}
@@ -669,7 +738,7 @@ func _finalize_foreign_if_complete() -> Dictionary:
 	var result: Dictionary = ForeignPlayerService.finalize_foreign_market(foreign_state)
 	GameDb.rebuild_player_indices()
 	result["title"] = "外国人補強"
-	offseason_results["step_6"] = result
+	offseason_results["step_7"] = result
 	last_status_message = "外国人補強"
 	return result
 
@@ -683,7 +752,7 @@ func skip_camp_candidate(candidate_id: int) -> Dictionary:
 
 
 func submit_camp_player_training(player_id: int, training_type: String, target_position: int = 0) -> Dictionary:
-	if not offseason_active or offseason_step != 7:
+	if not offseason_active or offseason_step != 8:
 		return {"ok": false, "message": "キャンプは現在有効ではありません"}
 	if camp_state.is_empty():
 		return {"ok": false, "message": "キャンプが初期化されていません"}
@@ -706,7 +775,7 @@ func submit_camp_player_training(player_id: int, training_type: String, target_p
 
 
 func _submit_camp_decision(candidate_id: int, action: String) -> Dictionary:
-	if not offseason_active or offseason_step != 7:
+	if not offseason_active or offseason_step != 8:
 		return {"ok": false, "message": "キャンプは現在有効ではありません"}
 	if camp_state.is_empty():
 		return {"ok": false, "message": "キャンプが初期化されていません"}
@@ -721,7 +790,7 @@ func _submit_camp_decision(candidate_id: int, action: String) -> Dictionary:
 
 
 func auto_camp_user_pick() -> Dictionary:
-	if not offseason_active or offseason_step != 7:
+	if not offseason_active or offseason_step != 8:
 		return {"ok": false, "message": "キャンプは現在有効ではありません"}
 	if camp_state.is_empty():
 		return {"ok": false, "message": "キャンプが初期化されていません"}
@@ -736,7 +805,7 @@ func auto_camp_user_pick() -> Dictionary:
 
 
 func finish_camp() -> Dictionary:
-	if not offseason_active or offseason_step != 7:
+	if not offseason_active or offseason_step != 8:
 		return {"ok": false, "message": "キャンプは現在有効ではありません"}
 	if camp_state.is_empty():
 		return {"ok": false, "message": "キャンプが初期化されていません"}
@@ -759,13 +828,13 @@ func _finalize_camp_if_complete() -> Dictionary:
 	var result: Dictionary = _camp_service().finalize_camp(camp_state, GameDb.players, current_season)
 	GameDb.rebuild_player_indices()
 	result["title"] = "キャンプ"
-	offseason_results["step_7"] = result
+	offseason_results["step_8"] = result
 	last_status_message = "キャンプ"
 	return result
 
 
 func finalize_offseason() -> bool:
-	if offseason_step < 9:
+	if offseason_step < 10:
 		push_warning("Offseason not fully processed before finalize")
 	return start_next_season()
 

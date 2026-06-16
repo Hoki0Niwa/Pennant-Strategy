@@ -3,6 +3,7 @@ class_name DraftService
 
 const Offseason = preload("res://services/season/offseason_service.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
+const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
 
 # ドラフトでのポジション別 WAR need の重み。
 # WAR 不足 (リーグ平均 starter_war - チーム starter_war) を round_no 別の係数で
@@ -40,16 +41,22 @@ const UTILITY_SUBPOS_WEIGHT: float = 0.6
 
 const ROSTER_LIMIT: int = 70
 # ドラフトは2フェーズ: 本指名 (支配下) → 育成ドラフト (育成枠外)。
+# AppState では本指名と育成指名を別ステップに分ける。レポート/テスト用の直接呼び出しでは
+# allow_development_segment=true のまま通し実行できる。
 # 本指名: 1球団あたりの指名数は need-driven (下記 _compute_main_draft_targets)。
-#   target = SHIENKA_SOFT_TARGET(67) − 在籍支配下 − 昇格見込み − FA/外国人予約。基準 ~6、戦力外が多い年は最大9、
-#   キーパーばかりで放出が少ない年は最小 MAIN_DRAFT_MIN_PICKS まで絞る。MAX で頭打ち。
-#   支配下は soft 目標 67 までしか埋めず、70 との差をシーズン中の昇格用に空ける (TeamFinance.SHIENKA_SOFT_TARGET)。
+#   6人を基本線に、在籍支配下が少ない球団は最大9、在籍が多い/昇格見込みがある球団は4〜5へ減らす。
+#   hard 上限70で頭打ち。
 const MAIN_DRAFT_MAX_PICKS: int = 9
-const MAIN_DRAFT_MIN_PICKS: int = 3
-# FA・外国人・戦力外獲得で埋まる見込みの予約枠 (ドラフトはその分控える)。
+const MAIN_DRAFT_BASE_PICKS: int = 6
+const MAIN_DRAFT_MIN_PICKS: int = 4
+# FA・外国人・戦力外獲得で使うため、本指名後に可能なら残す hard 枠の最低値。
 const DRAFT_SIGNING_RESERVE: int = 2
+# 外国人は4人保有を目標に、不足人数分の支配下枠を本指名で埋め切らず予約する。
+const FOREIGN_ROSTER_RESERVE_TARGET: int = 4
 # 育成→支配下 昇格見込みとしてドラフトから差し引く上限 (これ以上は数えない)。
 const DRAFT_PROMO_RESERVE_CAP: int = 4
+# 昇格見込みで本指名目標を直接減らす上限。基本6人を保つため、4人昇格見込みでも減算は最大2。
+const DRAFT_PROMO_TARGET_REDUCTION_CAP: int = 2
 # 育成ドラフト: 1球団 0〜3。CPU は育成枠の空きと球団ごとの appetite で 0 (指名なし) もあり得る。
 const DEV_DRAFT_MAX_PICKS: int = 3
 const MAX_TOTAL_PICKS: int = 200
@@ -70,7 +77,7 @@ const GROUP_TARGETS: Dictionary = {
 }
 
 
-static func create_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
+static func create_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int, allow_development_segment: bool = true) -> Dictionary:
 	var team_profiles: Dictionary = _build_team_profiles(players, teams)
 	var reverse_order: Array = _draft_reverse_order(teams, season)
 	var forward_order: Array = reverse_order.duplicate()
@@ -88,6 +95,7 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		"user_team_id": user_team_id,
 		# segment: "main" (本指名=支配下) → "development" (育成ドラフト)。
 		"segment": "main",
+		"allow_development_segment": allow_development_segment,
 		"stage": "first_round_bid",
 		"round": 1,
 		"round_position": 0,
@@ -227,6 +235,8 @@ static func skip_user_pick(state: Dictionary) -> Dictionary:
 	if bool(state.get("complete", false)):
 		return {"ok": true, "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
+	if str(state.get("stage", "")) != "user_pick" or int(state.get("current_team_id", 0)) != user_team_id:
+		return {"ok": false, "message": "現在は自球団の指名順ではありません。", "state": state}
 	_mark_team_done(state, user_team_id)
 	_consume_current_slot(state)
 	advance_until_user_turn_or_complete(state)
@@ -243,6 +253,21 @@ static func complete_automatically(state: Dictionary) -> Dictionary:
 		else:
 			advance_until_user_turn_or_complete(state)
 	return {"ok": bool(state.get("complete", false)), "state": state}
+
+
+static func begin_development_draft(state: Dictionary) -> Dictionary:
+	if state.is_empty():
+		return state
+	if str(state.get("segment", "main")) == "development":
+		if not bool(state.get("complete", false)):
+			return advance_until_user_turn_or_complete(state)
+		return state
+	if not bool(state.get("complete", false)):
+		return state
+	state["complete"] = false
+	state["allow_development_segment"] = true
+	_begin_development_segment(state)
+	return advance_until_user_turn_or_complete(state)
 
 
 static func advance_until_user_turn_or_complete(state: Dictionary) -> Dictionary:
@@ -290,7 +315,7 @@ static func advance_until_user_turn_or_complete(state: Dictionary) -> Dictionary
 # 現 segment が終わったとき、本指名なら育成ドラフトへ移行 (false を返す=継続)、
 # 育成ドラフトなら全工程完了 (true を返す=呼び出し側は return)。
 static func _enter_next_segment_or_complete(state: Dictionary) -> bool:
-	if str(state.get("segment", "main")) == "main":
+	if str(state.get("segment", "main")) == "main" and bool(state.get("allow_development_segment", true)):
 		_begin_development_segment(state)
 		return false
 	_complete_draft(state)
@@ -304,13 +329,14 @@ static func _begin_development_segment(state: Dictionary) -> void:
 	state["round"] = 1
 	state["round_position"] = 0
 	state["current_team_id"] = 0
+	state["complete"] = false
 	state["teams_done"] = {}
 	state["team_dev_targets"] = _compute_dev_targets(state)
 	(state.get("logs", []) as Array).append({"type": "segment", "segment": "development"})
 
 
 # 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS)。育成は人数無制限なので枠でなく appetite だけで決める。
-# CPU は乱数で 0 (指名なし) もあり得る。ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
+# CPU は指名なしもあり得る。ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
 static func _compute_dev_targets(state: Dictionary) -> Dictionary:
 	var targets: Dictionary = {}
 	var user_team_id: int = int(state.get("user_team_id", 0))
@@ -352,6 +378,7 @@ static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
 			"age": rookie.age,
 			"team_id": rookie.team_id,
 			"position": rookie.position,
+			"role": rookie.role,
 			"overall": Offseason.player_value_score(rookie),
 			"draft_round": round_no,
 			"overall_pick": int(pick.get("overall_pick", 0)),
@@ -541,6 +568,7 @@ static func _make_pick(state: Dictionary, team_id: int, candidate_id: int, round
 		"name": str(candidate.get("name", "")),
 		"age": int(candidate.get("age", 0)),
 		"position": int(candidate.get("position", 0)),
+		"role": str((candidate.get("player_template", {}) as Dictionary).get("role", "")),
 		"overall": int(candidate.get("overall", 0)),
 		"potential": int(candidate.get("potential", 0)),
 		"future_value": int(candidate.get("future_value", candidate.get("potential", 0))),
@@ -614,7 +642,8 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 		var targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
 		var target: int = int(targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
 		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS
-	# 本指名: 支配下空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。育成枠は影響しない。
+	# 本指名: 支配下 hard 空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。
+	# ドラフトは年1回の主補強なので soft 67 では止めず、3人程度で終わる年を避ける。
 	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary
 	var picked_count: int = int(counts.get(str(team_id), 0))
 	var capacity: int = max(0, ROSTER_LIMIT - int(profile.get("initial_total", profile.get("total", 0))))
@@ -811,11 +840,11 @@ static func _bucket_balance_score(profile: Dictionary, bucket: String, round_no:
 	return clamp(pitcher_share - 0.48, -0.18, 0.22) * (30.0 if round_no == 1 else 42.0)
 
 
-# 本指名の球団別目標指名数 (need-driven)。全球団が枠ギリギリまで指名する挙動を排し、
-# 「埋めたい支配下スロット − 他経路 (昇格/FA/外国人) で埋まる見込み」を指名数にする。
-#  - 戦力外が多く在籍支配下が少ない球団 → 目標が大きい (最大9: 大量入れ替え)。
-#  - キーパーばかりで放出が少ない球団 → 目標が小さい (最小 MAIN_DRAFT_MIN_PICKS)。
-#  - 育成からの昇格見込み (value≥昇格閾値) と FA/外国人予約 (DRAFT_SIGNING_RESERVE) を差し引く。
+# 本指名の球団別目標指名数 (need-driven)。
+#  - 6人を基本線にする。支配下 soft 目標との差分をそのまま使うと普通の球団が最低値に張り付く。
+#  - 戦力外が多く在籍支配下が少ない球団 → 7〜9 (大量入れ替え)。
+#  - キーパーばかりで放出が少ない/昇格見込みがある球団 → 4〜5。
+#  - hard 70枠は最後に必ず守る。
 # profiles は _build_team_profiles 済み (initial_total = 戦力外後の在籍支配下)。
 static func _compute_main_draft_targets(players: Array, profiles: Dictionary) -> Dictionary:
 	# 球団別の即戦力基準 (一軍下位レベルの相対値) を先に算出。
@@ -842,12 +871,41 @@ static func _compute_main_draft_targets(players: Array, profiles: Dictionary) ->
 		var current: int = int(profile.get("initial_total", profile.get("total", 0)))
 		var team_id: int = int(str(key))
 		var expected_promo: int = min(DRAFT_PROMO_RESERVE_CAP, int(promo_by_team.get(team_id, 0)))
-		var raw: int = TeamFinance.SHIENKA_SOFT_TARGET - current - expected_promo - DRAFT_SIGNING_RESERVE
-		# 支配下を soft 目標 (67) 以上には埋めない (70 との差はシーズン中の昇格用)。
-		var capacity: int = max(0, TeamFinance.SHIENKA_SOFT_TARGET - current)
+		var promotion_reduction: int = min(DRAFT_PROMO_TARGET_REDUCTION_CAP, expected_promo)
+		var raw: int = MAIN_DRAFT_BASE_PICKS + _main_draft_roster_adjustment(current) - promotion_reduction
+		var capacity: int = _main_draft_capacity(current, profile)
 		var target: int = clampi(raw, MAIN_DRAFT_MIN_PICKS, MAIN_DRAFT_MAX_PICKS)
 		targets[key] = min(target, capacity)
 	return targets
+
+
+static func _main_draft_capacity(current_shienka: int, profile: Dictionary) -> int:
+	var hard_capacity: int = max(0, ROSTER_LIMIT - current_shienka)
+	var reserve: int = _main_draft_signing_reserve(profile)
+	var reserved_capacity: int = max(0, hard_capacity - reserve)
+	if hard_capacity <= MAIN_DRAFT_MIN_PICKS:
+		return hard_capacity
+	return max(MAIN_DRAFT_MIN_PICKS, reserved_capacity)
+
+
+static func _main_draft_signing_reserve(profile: Dictionary) -> int:
+	var foreign_count: int = int(profile.get("foreign", 0))
+	var foreign_need: int = max(0, FOREIGN_ROSTER_RESERVE_TARGET - foreign_count)
+	return DRAFT_SIGNING_RESERVE + foreign_need
+
+
+static func _main_draft_roster_adjustment(current_shienka: int) -> int:
+	if current_shienka <= 56:
+		return 3
+	if current_shienka <= 59:
+		return 2
+	if current_shienka <= 62:
+		return 1
+	if current_shienka <= 65:
+		return 0
+	if current_shienka <= 67:
+		return -1
+	return -2
 
 
 static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
@@ -861,6 +919,7 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 			"catcher": 0,
 			"infield": 0,
 			"outfield": 0,
+			"foreign": 0,
 			# 守備位置別の適性保持者数と、その位置の最強保持者 overall (主力健在判定用)。
 			"position_holders": {2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0},
 			"position_top_overall": {2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0},
@@ -883,6 +942,8 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		profile["total"] = int(profile.get("total", 0)) + 1
 		profile["initial_total"] = int(profile.get("initial_total", 0)) + 1
 		profile[group] = int(profile.get(group, 0)) + 1
+		if player.foreign_player:
+			profile["foreign"] = int(profile.get("foreign", 0)) + 1
 		if not player.is_pitcher():
 			var holders: Dictionary = profile["position_holders"] as Dictionary
 			var top_overall: Dictionary = profile["position_top_overall"] as Dictionary
@@ -1072,7 +1133,8 @@ static func _candidate_player_data(candidate_id: int, name: String, age: int, po
 	var z_abilities: Dictionary = Offseason.generated_z_abilities(position, center, 70, ability_variance)
 	_tune_draft_generated_z_abilities(z_abilities, position)
 	var raw_abilities: Dictionary = Offseason.generated_raw_abilities(position, z_abilities)
-	return {
+	var arsenal: Array = Offseason.generated_arsenal(position, z_abilities)
+	var data: Dictionary = {
 		"id": candidate_id,
 		"sensyu_num": candidate_id,
 		"jersey_number": 0,
@@ -1084,7 +1146,7 @@ static func _candidate_player_data(candidate_id: int, name: String, age: int, po
 		"height": Rng.range_int(170, 193),
 		"weight": Rng.range_int(70, 100),
 		"position": position,
-		"role": "starter" if position == 1 else "fielder",
+		"role": "" if position == 1 else "fielder",
 		"throws": "L" if Rng.roll_percent() <= 25 else "R",
 		"bats": "L" if Rng.roll_percent() <= 35 else "R",
 		"salary": 1000,
@@ -1102,8 +1164,17 @@ static func _candidate_player_data(candidate_id: int, name: String, age: int, po
 		"injury_days": 0,
 		"z_abilities": z_abilities,
 		"raw_abilities": raw_abilities,
-		"arsenal": Offseason.generated_arsenal(position, z_abilities),
+		"arsenal": arsenal,
 	}
+	if position == 1:
+		data["role"] = _initial_pitcher_role(data)
+	return data
+
+
+static func _initial_pitcher_role(player_data: Dictionary) -> String:
+	var neutral_data: Dictionary = player_data.duplicate(true)
+	neutral_data["role"] = ""
+	return PitcherRoleModel.role_for_player(PSPlayer.from_dict(neutral_data))
 
 
 static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> void:

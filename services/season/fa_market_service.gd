@@ -229,6 +229,7 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 			"name": str(entry.get("name", "")),
 			"age": int(entry.get("age", 0)),
 			"position": int(entry.get("position", 0)),
+			"role": str(entry.get("role", "")),
 			"from_team": int(entry.get("from_team", 0)),
 			"reason": str(entry.get("reason", "regular")),
 			"value": int(entry.get("value", 0)),
@@ -371,6 +372,7 @@ static func _declaration_entry(
 		"name": player.name,
 		"age": player.age,
 		"position": player.position,
+		"role": player.role,
 		"from_team": player.team_id,
 		"salary": player.salary,
 		"fa_rank": fa_rank,
@@ -555,6 +557,7 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, sea
 		"name": player.name,
 		"age": player.age,
 		"position": player.position,
+		"role": player.role,
 		"from_team": int(entry.get("from_team", 0)),
 		"to_team": to_team_id,
 		"salary": player.salary,
@@ -624,8 +627,8 @@ static func _can_team_accept_candidate(players: Array, state: Dictionary, team_i
 			continue
 		if int(entry.get("from_team", 0)) == team_id and int(entry.get("player_id", 0)) != int(candidate.get("player_id", 0)):
 			reserved += 1
-	# オフの補強は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す (hard 上限 70 は別途保証)。
-	return _active_count_for_team(players, team_id) + reserved < TeamFinance.SHIENKA_SOFT_TARGET
+	# ドラフトが後段補強用に残した hard 枠を使う。FA残留/獲得予約も含めて70枠を超えない。
+	return _active_count_for_team(players, team_id) + reserved < TeamFinance.SHIENKA_LIMIT
 
 
 static func _signing_score(entry: Dictionary, team_need: float, players: Array, teams: Array, team_id: int) -> float:

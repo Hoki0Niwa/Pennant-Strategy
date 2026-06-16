@@ -179,7 +179,7 @@ func _refresh_after_team_change(use_current_player: bool) -> void:
 	for record_row in pitchers:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		var index: int = player_select.item_count
-		player_select.add_item("[投] %s" % record.name, record.player_id)
+		player_select.add_item("[%s] %s" % [_pitcher_role_label(record.role), record.name], record.player_id)
 		player_options.append(record.player_id)
 		if record.player_id == target_player_id:
 			selected_index = index
@@ -302,7 +302,7 @@ func _format_detail(record: PSPlayerSeasonRecord) -> String:
 	var lines: Array = []
 	var team_name: String = _team_short(record.team_id)
 	var jersey: String = "#%d  " % record.jersey_number if record.jersey_number > 0 else ""
-	lines.append("%s%s  %s  %s" % [jersey, record.name, str(PSPlayer.POSITION_NAMES.get(record.position, "?")), team_name])
+	lines.append("%s%s  %s  %s" % [jersey, record.name, _role_or_position_name(record), team_name])
 	lines.append("%d年 / %d年目  %d歳  %d年目  %dcm %dkg  %s投%s打" % [
 		record.year, record.season_number, record.age, record.years,
 		record.height, record.weight, _hand_name(record.throwing_hand), _hand_name(record.batting_side),
@@ -484,3 +484,21 @@ func _short_position_name(pos: int) -> String:
 		9: return "右"
 		10: return "DH"
 		_: return "?"
+
+
+func _role_or_position_name(record: PSPlayerSeasonRecord) -> String:
+	if record != null and record.is_pitcher():
+		return _pitcher_role_label(record.role)
+	return str(PSPlayer.POSITION_NAMES.get(record.position if record != null else 0, "?"))
+
+
+func _pitcher_role_label(role: String) -> String:
+	match role:
+		"starter":
+			return "先発"
+		"reliever":
+			return "中継"
+		"closer":
+			return "抑え"
+		_:
+			return "中継"

@@ -22,8 +22,8 @@ const FORCED_RETIREMENT_CERTAIN_AGE: int = 48
 #  プロスペクト保護: years <= ROOKIE_PROTECTION_YEARS。床: CPU_ROSTER_MIN 未満には削らない。
 # 放出数の変動はドラフト指名数 (draft_service の need ベース target) に直結する。
 const CPU_ROSTER_MIN: int = 55
-# これ未満の cut_score の非保護選手のみ放出対象 (= 代替が利く控え以下)。以上はキーパーとして残す。
-const RELEASE_KEEPER_CUT_SCORE: float = 36.0
+# これ未満の cut_score の非保護選手のみ放出対象 (= 代替が利きやすい控え以下)。以上はキーパーとして残す。
+const RELEASE_KEEPER_CUT_SCORE: float = 42.0
 const CPU_RELEASE_ROOKIE_PROTECTION_YEARS: int = 2
 const CPU_RELEASE_PHASE1_AGE: int = 30
 const CPU_RELEASE_AGE_FLOOR: int = 27
@@ -196,6 +196,7 @@ static func process_release(players: Array, team_id: int, player_ids: Array) -> 
 			"age": player.age,
 			"team_id": original_team_id,
 			"position": player.position,
+			"role": player.role,
 			"overall": player_value_score(player),
 			"years": player.years,
 			"salary": player.salary,
@@ -242,6 +243,7 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 				"age": player.age,
 				"team_id": team.id,
 				"position": player.position,
+				"role": player.role,
 				"overall": player_value_score(player),
 				"years": player.years,
 				"salary": player.salary,
@@ -305,6 +307,7 @@ static func process_foreign_releases(players: Array, teams: Array, season: PSSea
 				"age": player.age,
 				"team_id": team.id,
 				"position": player.position,
+				"role": player.role,
 				"overall": int(entry["value"]),
 				"years": player.years,
 				"salary": player.salary,
@@ -913,6 +916,7 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 				"age": dev.age,
 				"team_id": team.id,
 				"position": dev.position,
+				"role": dev.role,
 				"overall": player_value_score(dev),
 				"years": dev.years,
 				"salary": dev.salary,
@@ -978,6 +982,7 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 				"age": dev.age,
 				"team_id": team.id,
 				"position": dev.position,
+				"role": dev.role,
 				"overall": player_value_score(dev),
 				"years": dev.years,
 				"salary": dev.salary,
@@ -1010,6 +1015,7 @@ static func process_demotion(players: Array, team_id: int, player_ids: Array) ->
 			"age": player.age,
 			"team_id": team_id,
 			"position": player.position,
+			"role": player.role,
 			"overall": player_value_score(player),
 			"years": player.years,
 			"salary": player.salary,
@@ -1048,6 +1054,7 @@ static func process_retirement(players: Array, season: PSSeason) -> Dictionary:
 				"age": player.age,
 				"team_id": original_team_id,
 				"position": player.position,
+				"role": player.role,
 				"overall": player_value_score(player),
 				"years": player.years,
 			})
@@ -1794,6 +1801,7 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 					"age": player.age,
 					"team_id": player.team_id,
 					"position": player.position,
+					"role": player.role,
 					"old_salary": old_salary,
 					"new_salary": new_salary,
 					"delta": new_salary - old_salary,
@@ -1812,6 +1820,7 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 				"age": player.age,
 				"team_id": player.team_id,
 				"position": player.position,
+				"role": player.role,
 				"years": player.years,
 				"fa_eligible_years": player.fa_eligible_years,
 				"fa_nissuu": player.fa_service_days(),

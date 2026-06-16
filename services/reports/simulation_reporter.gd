@@ -541,7 +541,7 @@ func _batter_player_row(record: PSPlayerSeasonRecord, advanced_record: Dictionar
 		"team": _team_name(record.team_id),
 		"player_id": record.player_id,
 		"name": record.name,
-		"position": _position_name(record.position),
+		"position": _role_or_position_name(record),
 		"games": stats.games,
 		"plate_appearances": stats.plate_appearances,
 		"at_bats": stats.at_bats,
@@ -1149,6 +1149,24 @@ func _team_name(team_id: int) -> String:
 
 func _position_name(position: int) -> String:
 	return str(PSPlayer.POSITION_NAMES.get(position, "不明"))
+
+
+func _role_or_position_name(record: PSPlayerSeasonRecord) -> String:
+	if record != null and record.is_pitcher():
+		return _pitcher_role_label(record.role)
+	return _position_name(record.position if record != null else 0)
+
+
+func _pitcher_role_label(role: String) -> String:
+	match role:
+		"starter":
+			return "先発"
+		"reliever":
+			return "中継"
+		"closer":
+			return "抑え"
+		_:
+			return "中継"
 
 
 func _isolated_power(stats: PSBatterStats) -> float:

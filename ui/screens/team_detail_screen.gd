@@ -11,7 +11,7 @@ const POSITION_LABELS_WAR: Dictionary = {
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 
 const PITCHER_ROSTER_COLUMNS: Array = [
-	{"title": "位置", "key": "pos", "width": 48, "type": "string", "format": "string"},
+	{"title": "役割", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 130, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
 	{"title": "評価", "key": "eval", "width": 56, "type": "number", "format": "int"},
@@ -337,7 +337,7 @@ func _populate_roster(team_id: int) -> void:
 
 func _pitcher_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	return {
-		"pos": str(PSPlayer.POSITION_NAMES.get(record.position, "?")),
+		"pos": _pitcher_role_label(record.role),
 		"name": record.name,
 		"age": record.age,
 		"eval": PlayerValueEvaluator.overall_score(record),
@@ -372,6 +372,18 @@ func _roster_note(record: PSPlayerSeasonRecord) -> String:
 	if record.injury_days > 0:
 		parts.append("怪我%d日" % record.injury_days)
 	return " ".join(parts)
+
+
+func _pitcher_role_label(role: String) -> String:
+	match role:
+		"starter":
+			return "先発"
+		"reliever":
+			return "中継"
+		"closer":
+			return "抑え"
+		_:
+			return "中継"
 
 
 func _set_panel_title(table: Tree, base_text: String, shienka: int, development: int) -> void:

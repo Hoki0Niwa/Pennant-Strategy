@@ -516,6 +516,7 @@ static func _candidate_base(player: PSPlayer, training_type: String, expected_va
 		"name": player.name,
 		"age": player.age,
 		"position": player.position,
+		"role": player.role,
 		"training_type": training_type,
 		"training_label": training_label(training_type),
 		"success_chance": success_chance,

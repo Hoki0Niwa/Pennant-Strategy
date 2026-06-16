@@ -1,13 +1,44 @@
 extends GdUnitTestSuite
 
 # ドラフトの2フェーズ分割 (本指名=支配下 / 育成ドラフト=育成) を検証する。
-# 本指名は支配下空き (70−在籍) と MAIN_DRAFT_MAX_PICKS で 5〜9 程度、育成は 0〜3。
+# 本指名は6人を基本線に支配下状況で 4〜9 程度、育成は 0〜3。
 
 const DraftService = preload("res://services/season/draft_service.gd")
 
 
+func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
+	Rng.set_seed_value(20260615)
+	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var players: Array = []
+	_fill_team(players, 1, 58)
+	_fill_team(players, 2, 58)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
+	var pitchers: int = 0
+	var starters: int = 0
+	var relievers: int = 0
+	for candidate_row in state.get("candidate_pool", []) as Array:
+		var candidate: Dictionary = candidate_row as Dictionary
+		if int(candidate.get("position", 0)) != 1:
+			continue
+		pitchers += 1
+		var template: Dictionary = candidate.get("player_template", {}) as Dictionary
+		var neutral_template: Dictionary = template.duplicate(true)
+		neutral_template["role"] = ""
+		var expected_role: String = PSPitcherRoleModel.role_for_player(PSPlayer.from_dict(neutral_template))
+		assert_str(str(template.get("role", ""))).is_equal(expected_role)
+		if expected_role == "starter":
+			starters += 1
+		elif expected_role == "reliever":
+			relievers += 1
+
+	assert_int(pitchers).is_greater(0)
+	assert_int(starters).is_greater(relievers)
+	assert_int(relievers).is_greater_equal(int(round(float(pitchers) * 0.25)))
+
+
 func test_main_and_development_segments_split() -> void:
-	# capacity 15 (在籍55) の球団は本指名上限9まで、capacity 2 (在籍68) の球団は2まで。
+	# hard capacity 15 (在籍55) の球団は本指名上限9まで、capacity 2 (在籍68) の球団は2まで。
 	var teams: Array = [
 		_team(1, "central", 1),
 		_team(2, "central", 2),
@@ -18,7 +49,7 @@ func test_main_and_development_segments_split() -> void:
 	_fill_team(players, 1, 55)
 	_fill_team(players, 2, 55)
 	_fill_team(players, 3, 55)
-	_fill_team(players, 4, 68)  # soft 目標(67)超 → 本指名 0
+	_fill_team(players, 4, 68)  # hard 上限70まで残り2
 
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1)
 	DraftService.complete_automatically(state)
@@ -38,11 +69,11 @@ func test_main_and_development_segments_split() -> void:
 		else:
 			main_by_team[tid] = int(main_by_team.get(tid, 0)) + 1
 
-	# 本指名: 在籍55の3球団は上限9、在籍68 (soft目標67超) の球団は0。すべて MAIN 上限以下。
+	# 本指名: 在籍55の3球団は上限9、在籍68の球団はhard空き2。すべて MAIN 上限以下。
 	assert_int(int(main_by_team.get(1, 0))).is_equal(9)
 	assert_int(int(main_by_team.get(2, 0))).is_equal(9)
 	assert_int(int(main_by_team.get(3, 0))).is_equal(9)
-	assert_int(int(main_by_team.get(4, 0))).is_equal(0)
+	assert_int(int(main_by_team.get(4, 0))).is_equal(2)
 
 	# 育成: 各球団 0〜3。
 	for tid in [1, 2, 3, 4]:
@@ -84,6 +115,31 @@ func test_segments_are_sequential_and_flagged() -> void:
 			assert_str(player.registered_roster).is_equal("支配下")
 
 
+func test_development_step_result_filters_out_main_draft_rows() -> void:
+	var picks: Array = [
+		{"team_id": 1, "round": 1, "overall_pick": 1, "development": false},
+		{"team_id": 2, "round": 1, "overall_pick": 2, "development": false},
+		{"team_id": 1, "round": 1, "overall_pick": 3, "development": true},
+		{"team_id": 2, "round": 2, "overall_pick": 4, "development": true},
+	]
+	var rookies: Array = [
+		{"team_id": 1, "draft_round": 1, "development_player": false},
+		{"team_id": 2, "draft_round": 1, "development_player": false},
+		{"team_id": 1, "draft_round": 1, "development_player": true},
+		{"team_id": 2, "draft_round": 2, "development_player": true},
+	]
+
+	var dev_picks: Array = AppState._filter_development_picks(picks)
+	var dev_rookies: Array = AppState._filter_development_rookies(rookies)
+
+	assert_array(dev_picks).has_size(2)
+	assert_array(dev_rookies).has_size(2)
+	for pick_row in dev_picks:
+		assert_bool(bool((pick_row as Dictionary).get("development", false))).is_true()
+	for rookie_row in dev_rookies:
+		assert_bool(bool((rookie_row as Dictionary).get("development_player", false))).is_true()
+
+
 func test_user_skip_ends_development_participation() -> void:
 	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
 	var players: Array = []
@@ -114,34 +170,105 @@ func test_user_skip_ends_development_participation() -> void:
 	assert_bool(bool(state.get("complete", false))).is_true()
 
 
-func test_draft_target_scales_with_roster_need() -> void:
-	# 戦力外が多く在籍が少ない球団は大量指名 (上限9)、キーパーが多く在籍が多い球団は最小。
+func test_main_draft_can_complete_before_development_step() -> void:
+	Rng.set_seed_value(20260616)
 	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
 	var players: Array = []
+	_fill_team(players, 1, 58)
+	_fill_team(players, 2, 58)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1, false)
+	var guard: int = 0
+	while not bool(state.get("complete", false)) and guard < 500:
+		guard += 1
+		var stage: String = str(state.get("stage", ""))
+		if str(state.get("segment", "main")) == "main" and stage == "user_pick":
+			break
+		if stage == "first_round_bid" or stage == "user_pick":
+			DraftService.auto_pick_for_user(state)
+		else:
+			DraftService.advance_until_user_turn_or_complete(state)
+
+	assert_str(str(state.get("segment", ""))).is_equal("main")
+	assert_str(str(state.get("stage", ""))).is_equal("user_pick")
+
+	var user_main_before: int = _pick_count(state, 1, false)
+	var other_main_before: int = _pick_count(state, 2, false)
+	var result: Dictionary = DraftService.skip_user_pick(state)
+	assert_bool(bool(result.get("ok", false))).is_true()
+
+	assert_bool(bool(state.get("complete", false))).is_true()
+	assert_str(str(state.get("segment", ""))).is_equal("main")
+	assert_int(_pick_count(state, 1, false)).is_equal(user_main_before)
+	assert_int(_pick_count(state, 2, false)).is_greater(other_main_before)
+
+	var pool_size_before: int = (state.get("candidate_pool", []) as Array).size()
+	DraftService.begin_development_draft(state)
+	assert_bool(bool(state.get("complete", false))).is_false()
+	assert_str(str(state.get("segment", ""))).is_equal("development")
+	assert_int((state.get("candidate_pool", []) as Array).size()).is_equal(pool_size_before)
+
+
+func test_draft_target_scales_with_roster_need() -> void:
+	# 戦力外が多く在籍が少ない球団は大量指名。通常は6人、後段補強枠を残すため在籍が多い球団は4〜5人へ控える。
+	var teams: Array = [
+		_team(1, "central", 1),
+		_team(2, "pacific", 2),
+		_team(3, "central", 3),
+		_team(4, "pacific", 4),
+	]
+	var players: Array = []
 	_fill_team(players, 1, 56)  # 大量放出後 → 空きが多い
-	_fill_team(players, 2, 64)  # ほぼ維持 → 空きが少ない (soft目標67まで残り3)
+	_fill_team(players, 2, 62)  # 通常帯 → 基本6人
+	_fill_team(players, 3, 63)  # 補強枠を2つ残して5人
+	_fill_team(players, 4, 64)  # 補強枠を2つ残して4人
+	for tid in [1, 2, 3, 4]:
+		_mark_foreign(players, tid, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
 	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
 	assert_int(int(targets.get("1", 0))).is_equal(DraftService.MAIN_DRAFT_MAX_PICKS)
-	assert_int(int(targets.get("2", 0))).is_equal(DraftService.MAIN_DRAFT_MIN_PICKS)
+	assert_int(int(targets.get("2", 0))).is_equal(DraftService.MAIN_DRAFT_BASE_PICKS)
+	assert_int(int(targets.get("3", 0))).is_equal(DraftService.MAIN_DRAFT_BASE_PICKS - 1)
+	assert_int(int(targets.get("4", 0))).is_equal(DraftService.MAIN_DRAFT_MIN_PICKS)
 	assert_int(int(targets.get("1", 0))).is_greater(int(targets.get("2", 0)))
 
 
+func test_draft_reserves_slots_for_foreign_roster_shortage() -> void:
+	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2), _team(3, "central", 3)]
+	var players: Array = []
+	_fill_team(players, 1, 58)
+	_fill_team(players, 2, 58)
+	_fill_team(players, 3, 58)
+	_mark_foreign(players, 1, 4)
+	_mark_foreign(players, 2, 1)
+	_mark_foreign(players, 3, 0)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
+	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
+
+	assert_int(int(targets.get("1", 0))).is_equal(8)
+	assert_int(int(targets.get("2", 0))).is_equal(7)
+	assert_int(int(targets.get("3", 0))).is_equal(6)
+
+
 func test_draft_target_accounts_for_promotions() -> void:
-	# 昇格見込みの育成が多い球団はその分ドラフトを控える。
+	# 昇格見込みの育成が多い球団は基本6人から最大2人控える。
 	var teams: Array = [_team(1, "central", 1)]
 	var base_players: Array = []
-	_fill_team(base_players, 1, 58)
+	_fill_team(base_players, 1, 63)
+	_mark_foreign(base_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	var base_state: Dictionary = DraftService.create_draft_state(base_players, teams, null, 0)
 	var base_target: int = int((base_state.get("team_main_targets", {}) as Dictionary).get("1", 0))
 
 	var promo_players: Array = []
-	_fill_team(promo_players, 1, 58)
+	_fill_team(promo_players, 1, 63)
+	_mark_foreign(promo_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	_add_dev(promo_players, 1, 4)  # 昇格水準の育成4人 (value>=昇格閾値)
 	var promo_state: Dictionary = DraftService.create_draft_state(promo_players, teams, null, 0)
 	var promo_target: int = int((promo_state.get("team_main_targets", {}) as Dictionary).get("1", 0))
 
-	assert_int(promo_target).is_less(base_target)
+	assert_int(base_target).is_equal(DraftService.MAIN_DRAFT_BASE_PICKS - 1)
+	assert_int(promo_target).is_equal(DraftService.MAIN_DRAFT_MIN_PICKS)
 
 
 # --- helpers -----------------------------------------------------------------
@@ -171,6 +298,16 @@ func _fill_team(players: Array, team_id: int, count: int) -> void:
 			"z_abilities": {},
 			"raw_abilities": {},
 		}))
+
+
+func _mark_foreign(players: Array, team_id: int, count: int) -> void:
+	var marked: int = 0
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.team_id != team_id:
+			continue
+		player.foreign_player = marked < count
+		marked += 1
 
 
 const DEV_Z_KEYS: Array = [
@@ -209,3 +346,12 @@ func _find_player(players: Array, pid: int) -> PSPlayer:
 		if player.id == pid:
 			return player
 	return null
+
+
+func _pick_count(state: Dictionary, team_id: int, development: bool) -> int:
+	var count: int = 0
+	for pick_row in state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		if int(pick.get("team_id", 0)) == team_id and bool(pick.get("development", false)) == development:
+			count += 1
+	return count

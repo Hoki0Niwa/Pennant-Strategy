@@ -83,8 +83,8 @@ static func submit_user_released_decision(state: Dictionary, players: Array, tea
 		return {"ok": false, "message": "不正な戦力外獲得操作です。", "state": state}
 	if _signings_for_team(state, user_team_id) >= MAX_SIGNINGS_PER_TEAM:
 		return {"ok": false, "message": "今オフの戦力外獲得上限に達しています。", "state": state}
-	if not _can_team_accept_candidate(players, user_team_id):
-		return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
+	if not _can_team_accept_candidate(players, user_team_id, entry):
+		return {"ok": false, "message": "支配下枠または外国人枠が不足しています。", "state": state}
 	_apply_signing(state, players, season, entry, user_team_id, "user")
 	_advance_released_state_if_done(state, players, teams, season)
 	return {"ok": true, "acquired": true, "state": state}
@@ -130,7 +130,7 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 				continue
 			if _signings_for_team(state, team.id) >= MAX_SIGNINGS_PER_TEAM:
 				continue
-			if not _can_team_accept_candidate(players, team.id):
+			if not _can_team_accept_candidate(players, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 			if team_need < MIN_NEED_TO_SIGN:
@@ -163,6 +163,7 @@ static func finalize_released_market(state: Dictionary) -> Dictionary:
 			"name": str(entry.get("name", "")),
 			"age": int(entry.get("age", 0)),
 			"position": int(entry.get("position", 0)),
+			"role": str(entry.get("role", "")),
 			"from_team": int(entry.get("from_team", 0)),
 			"value": int(entry.get("value", 0)),
 			"war": float(entry.get("war", 0.0)),
@@ -199,7 +200,7 @@ static func available_user_candidates(state: Dictionary, players: Array, teams: 
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(pos, 0.0))
 		var copy: Dictionary = entry.duplicate(true)
 		copy["need"] = team_need
-		copy["can_sign"] = _can_team_accept_candidate(players, user_team_id)
+		copy["can_sign"] = _can_team_accept_candidate(players, user_team_id, entry)
 		rows.append(copy)
 	rows.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
@@ -230,7 +231,9 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"name": player.name,
 		"age": player.age,
 		"position": player.position,
+		"role": player.role,
 		"from_team": from_team,
+		"foreign_player": player.foreign_player,
 		"salary": player.salary,
 		"value": OffseasonService.player_value_score(player),
 		"war": snapped(war, 0.01),
@@ -263,8 +266,10 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 		"name": player.name,
 		"age": player.age,
 		"position": player.position,
+		"role": player.role,
 		"from_team": int(entry.get("from_team", 0)),
 		"to_team": to_team_id,
+		"foreign_player": player.foreign_player,
 		"salary": player.salary,
 		"value": int(entry.get("value", 0)),
 		"war": float(entry.get("war", 0.0)),
@@ -297,9 +302,13 @@ static func _signings_for_team(state: Dictionary, team_id: int) -> int:
 	return count
 
 
-static func _can_team_accept_candidate(players: Array, team_id: int) -> bool:
-	# オフの補強は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す (hard 上限 70 は別途保証)。
-	return _active_count_for_team(players, team_id) < TeamFinance.SHIENKA_SOFT_TARGET
+static func _can_team_accept_candidate(players: Array, team_id: int, entry: Dictionary = {}) -> bool:
+	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
+	if _active_count_for_team(players, team_id) >= TeamFinance.SHIENKA_LIMIT:
+		return false
+	if bool(entry.get("foreign_player", false)):
+		return _foreign_count_for_team(players, team_id) < ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM
+	return true
 
 
 static func _can_sign_entry(players: Array, entry: Dictionary) -> bool:
@@ -373,6 +382,19 @@ static func _record_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) ->
 # roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
 	return TeamFinance.shienka_count(players, team_id)
+
+
+static func _foreign_count_for_team(players: Array, team_id: int) -> int:
+	var count: int = 0
+	for row in players:
+		var player: PSPlayer = row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if player.is_retired():
+			continue
+		if player.foreign_player:
+			count += 1
+	return count
 
 
 static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:

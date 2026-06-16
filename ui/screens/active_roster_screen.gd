@@ -276,7 +276,7 @@ func _render_lists() -> void:
 func _development_row(player: PSPlayer) -> Dictionary:
 	var role_label: String
 	if player.is_pitcher():
-		role_label = "先発" if player.role == "starter" else "中継"
+		role_label = _pitcher_role_label(player.role)
 	else:
 		role_label = str(PSPlayer.POSITION_NAMES.get(player.position, "?"))
 	var note_parts: Array = []
@@ -297,7 +297,7 @@ func _development_row(player: PSPlayer) -> Dictionary:
 func _player_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	var role_label: String
 	if record.is_pitcher():
-		role_label = "先発" if record.role == "starter" else "中継"
+		role_label = _pitcher_role_label(record.role)
 	else:
 		role_label = str(PSPlayer.POSITION_NAMES.get(record.position, "?"))
 	var note_parts: Array = []
@@ -357,6 +357,18 @@ func _update_summary() -> void:
 		summary_label.add_theme_color_override("font_color", Color(0.95, 0.80, 0.45))
 	else:
 		summary_label.add_theme_color_override("font_color", Color(0.78, 0.92, 0.78))
+
+
+func _pitcher_role_label(role: String) -> String:
+	match role:
+		"starter":
+			return "先発"
+		"reliever":
+			return "中継"
+		"closer":
+			return "抑え"
+		_:
+			return "中継"
 
 
 func _on_demote_pressed() -> void:

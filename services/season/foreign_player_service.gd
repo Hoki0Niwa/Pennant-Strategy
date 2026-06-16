@@ -6,6 +6,7 @@ class_name ForeignPlayerService
 # process_foreign_market は長期検証/CPU用ラッパーとして維持する。
 
 const NamePoolRef = preload("res://services/data/name_pool.gd")
+const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
 
 const FOREIGN_FA_YEARS: int = 7
 const NUM_CANDIDATES: int = 54
@@ -202,6 +203,7 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, _se
 		"name": player.name,
 		"age": player.age,
 		"position": player.position,
+		"role": player.role,
 		"to_team": team_id,
 		"salary": player.salary,
 		"tier": str(candidate.get("tier", "")),
@@ -224,8 +226,8 @@ static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: 
 	if team_id <= 0:
 		return false
 	var active: int = _active_count_for_team(players, team_id)
-	# オフの補強は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す (hard 上限 70 は別途保証)。
-	if active >= TeamFinance.SHIENKA_SOFT_TARGET:
+	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
+	if active >= TeamFinance.SHIENKA_LIMIT:
 		return false
 	var foreign_total: int = _foreign_count_for_team(players, team_id)
 	return foreign_total < MAX_FOREIGN_HELD_PER_TEAM
@@ -249,10 +251,8 @@ static func _generate_candidate(candidate_id: int, year: int) -> Dictionary:
 	var tier: Dictionary = _roll_quality_tier()
 	var center: int = _adjusted_center_for_position(int(tier["center"]), position)
 	var age: int = Rng.range_int(CANDIDATE_MIN_AGE, CANDIDATE_MAX_AGE)
-	var role: String = "fielder"
-	if position == 1:
-		role = "reliever" if Rng.roll_percent() <= 40 else "starter"
 	var z_abilities: Dictionary = OffseasonService.generated_z_abilities(position, center, min(center + 10, 99))
+	var arsenal: Array = OffseasonService.generated_arsenal(position, z_abilities)
 	var base_salary: float = float(int(tier.get("salary", 5000)))
 	var variance_factor: float = 1.0 + (Rng.roll_float() * 2.0 - 1.0) * SALARY_VARIANCE
 	var salary: int = int(round(base_salary * variance_factor))
@@ -269,7 +269,7 @@ static func _generate_candidate(candidate_id: int, year: int) -> Dictionary:
 		"height": Rng.range_int(178, 200),
 		"weight": Rng.range_int(80, 110),
 		"position": position,
-		"role": role,
+		"role": "" if position == 1 else "fielder",
 		"throws": "L" if Rng.roll_percent() <= 30 else "R",
 		"bats": "L" if Rng.roll_percent() <= 40 else "R",
 		"salary": salary,
@@ -285,14 +285,17 @@ static func _generate_candidate(candidate_id: int, year: int) -> Dictionary:
 		"injury_days": 0,
 		"z_abilities": z_abilities,
 		"raw_abilities": OffseasonService.generated_raw_abilities(position, z_abilities),
-		"arsenal": OffseasonService.generated_arsenal(position, z_abilities),
+		"arsenal": arsenal,
 	}
+	if position == 1:
+		data["role"] = _initial_pitcher_role(data)
 	var player: PSPlayer = PSPlayer.from_dict(data)
 	return {
 		"candidate_id": candidate_id,
 		"name": player.name,
 		"age": age,
 		"position": position,
+		"role": player.role,
 		"salary": salary,
 		"tier": str(tier["label"]),
 		"value": OffseasonService.player_value_score(player),
@@ -344,6 +347,12 @@ static func _candidate_aptitudes(position: int) -> Dictionary:
 	if not primary_key.is_empty():
 		aptitudes[primary_key] = Rng.range_int(85, 100)
 	return aptitudes
+
+
+static func _initial_pitcher_role(player_data: Dictionary) -> String:
+	var neutral_data: Dictionary = player_data.duplicate(true)
+	neutral_data["role"] = ""
+	return PitcherRoleModel.role_for_player(PSPlayer.from_dict(neutral_data))
 
 
 static func _state_candidate_by_id(state: Dictionary, candidate_id: int) -> Dictionary:

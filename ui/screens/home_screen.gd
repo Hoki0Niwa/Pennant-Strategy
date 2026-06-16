@@ -7,7 +7,7 @@ const SortableTable = preload("res://ui/components/sortable_table.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 
 # オフシーズン処理の総ステップ数 (offseason_screen.gd の TOTAL_STEPS と一致させる)
-const OFFSEASON_TOTAL_STEPS: int = 9
+const OFFSEASON_TOTAL_STEPS: int = 10
 
 const LEAGUES: Array = [
 	{"key": "central", "label": "第1リーグ"},
@@ -16,7 +16,7 @@ const LEAGUES: Array = [
 
 const ROSTER_COLUMNS: Array = [
 	{"title": "背", "key": "jersey", "width": 44, "type": "string", "format": "string"},
-	{"title": "守備", "key": "pos", "width": 48, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
 	{"title": "評価", "key": "eval", "width": 56, "type": "number", "format": "int"},
@@ -38,7 +38,7 @@ const UPCOMING_COLUMNS: Array = [
 ]
 
 const INJURY_COLUMNS: Array = [
-	{"title": "位置", "key": "pos", "width": 48, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "故障内容", "key": "label", "width": 200, "type": "string", "format": "string"},
 	{"title": "残り日", "key": "days", "width": 64, "type": "number", "format": "int"},
@@ -460,7 +460,7 @@ func _add_injuries_section(parent: Control) -> void:
 	for record_row in injured:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		rows.append({
-			"pos": str(PSPlayer.POSITION_NAMES.get(record.position, "?")),
+			"pos": _role_or_position_name(record),
 			"name": record.name,
 			"label": record.injury_display_label(),
 			"days": record.injury_days,
@@ -727,7 +727,7 @@ func _refresh_player_list(team_id: int) -> void:
 func _roster_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	return {
 		"jersey": _jersey_text(record),
-		"pos": _position_name(record.position),
+		"pos": _role_or_position_name(record),
 		"name": record.name,
 		"age": record.age,
 		"eval": PlayerValueEvaluator.overall_score(record),
@@ -793,7 +793,7 @@ func _show_player_detail(record: PSPlayerSeasonRecord) -> void:
 	var lines: Array = []
 	var jersey_text: String = _jersey_text(record)
 	var jersey: String = "" if jersey_text == "-" else "#%s  " % jersey_text
-	lines.append("%s%s  %s" % [jersey, record.name, _position_name(record.position)])
+	lines.append("%s%s  %s" % [jersey, record.name, _role_or_position_name(record)])
 	lines.append("%d年 / %d年目  %d歳  %d年目  %dcm %dkg  %s投%s打" % [
 		record.year,
 		record.season_number,
@@ -932,6 +932,24 @@ func _player_rating_label(record: PSPlayerSeasonRecord) -> String:
 
 func _position_name(pos: int) -> String:
 	return str(PSPlayer.POSITION_NAMES.get(pos, "不明"))
+
+
+func _role_or_position_name(record: PSPlayerSeasonRecord) -> String:
+	if record != null and record.is_pitcher():
+		return _pitcher_role_label(record.role)
+	return _position_name(record.position if record != null else 0)
+
+
+func _pitcher_role_label(role: String) -> String:
+	match role:
+		"starter":
+			return "先発"
+		"reliever":
+			return "中継"
+		"closer":
+			return "抑え"
+		_:
+			return "中継"
 
 
 func _team_short_name(team_id: int) -> String:

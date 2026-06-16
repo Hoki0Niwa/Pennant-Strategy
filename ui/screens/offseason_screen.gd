@@ -5,12 +5,12 @@ const Offseason = preload("res://services/season/offseason_service.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
-const TOTAL_STEPS: int = 9
+const TOTAL_STEPS: int = 10
 
 # 戦力外通告リストの列。先頭は選択チェック表示。
 const RELEASE_COLUMNS: Array = [
 	{"title": "選", "key": "check", "width": 36, "type": "string", "format": "string"},
-	{"title": "位置", "key": "pos", "width": 48, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
 	{"title": "在籍", "key": "years", "width": 48, "type": "number", "format": "int", "align": "right"},
@@ -31,13 +31,22 @@ const CANDIDATE_COLUMNS: Array = [
 	{"title": "出身", "key": "source", "width": 64, "type": "string", "format": "string"},
 ]
 
+const PITCHER_CANDIDATE_COLUMNS: Array = [
+	{"title": "#", "key": "rank", "width": 44, "type": "number", "format": "int"},
+	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
+	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
+	{"title": "役割", "key": "pos", "width": 52, "type": "string", "format": "string"},
+	{"title": "総合", "key": "overall", "width": 56, "type": "number", "format": "int"},
+	{"title": "出身", "key": "source", "width": 64, "type": "string", "format": "string"},
+]
+
 # 指名履歴の列。
 const PICK_COLUMNS: Array = [
 	{"title": "順", "key": "pick", "width": 48, "type": "number", "format": "int"},
 	{"title": "巡", "key": "round", "width": 40, "type": "number", "format": "int"},
 	{"title": "チーム", "key": "team", "width": 64, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
-	{"title": "守備", "key": "pos", "width": 52, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 52, "type": "string", "format": "string"},
 	{"title": "総合", "key": "overall", "width": 56, "type": "number", "format": "int"},
 	{"title": "抽選", "key": "note", "width": 48, "type": "string", "format": "string"},
 ]
@@ -47,7 +56,7 @@ const PEOPLE_COLUMNS: Array = [
 	{"title": "チーム", "key": "team", "width": 72, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "在籍", "key": "years", "width": 56, "type": "number", "format": "int"},
 	{"title": "総合", "key": "overall", "width": 56, "type": "number", "format": "int"},
 ]
@@ -56,7 +65,7 @@ const ROOKIE_COLUMNS: Array = [
 	{"title": "チーム", "key": "team", "width": 72, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "総合", "key": "overall", "width": 56, "type": "number", "format": "int"},
 ]
 
@@ -75,7 +84,7 @@ const FA_COLUMNS: Array = [
 	{"title": "チーム", "key": "team", "width": 72, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "在籍", "key": "years", "width": 56, "type": "number", "format": "int", "align": "right"},
 	{"title": "FA日数", "key": "fa_days", "width": 72, "type": "number", "format": "int", "align": "right"},
 	{"title": "必要", "key": "fa_required", "width": 72, "type": "number", "format": "int", "align": "right"},
@@ -97,7 +106,7 @@ const FA_MOVE_COLUMNS: Array = [
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "ランク", "key": "rank", "width": 56, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
 	{"title": "補償", "key": "compensation", "width": 80, "type": "number", "format": "int", "align": "right"},
 ]
@@ -107,7 +116,7 @@ const FA_CANDIDATE_COLUMNS: Array = [
 	{"title": "元", "key": "from", "width": 64, "type": "string", "format": "string"},
 	{"title": "ランク", "key": "rank", "width": 56, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
-	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 72, "type": "string", "format": "string"},
 	{"title": "総合", "key": "value", "width": 56, "type": "number", "format": "int"},
 	{"title": "WAR", "key": "war", "width": 56, "type": "number", "format": "float1"},
 	{"title": "需要", "key": "need", "width": 56, "type": "number", "format": "float1"},
@@ -124,7 +133,7 @@ const RELEASED_MOVE_COLUMNS: Array = [
 	{"title": "先", "key": "to", "width": 64, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "年俸", "key": "salary", "width": 80, "type": "number", "format": "int", "align": "right"},
 ]
 
@@ -132,7 +141,7 @@ const RELEASED_CANDIDATE_COLUMNS: Array = [
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "元", "key": "from", "width": 64, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
-	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 72, "type": "string", "format": "string"},
 	{"title": "総合", "key": "value", "width": 56, "type": "number", "format": "int"},
 	{"title": "WAR", "key": "war", "width": 56, "type": "number", "format": "float1"},
 	{"title": "需要", "key": "need", "width": 56, "type": "number", "format": "float1"},
@@ -144,7 +153,7 @@ const FOREIGN_COLUMNS: Array = [
 	{"title": "獲得", "key": "to", "width": 64, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "ポジション", "key": "pos", "width": 84, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 84, "type": "string", "format": "string"},
 	{"title": "評価", "key": "tier", "width": 72, "type": "string", "format": "string"},
 	{"title": "年俸", "key": "salary", "width": 88, "type": "number", "format": "int", "align": "right"},
 ]
@@ -152,7 +161,7 @@ const FOREIGN_COLUMNS: Array = [
 const FOREIGN_CANDIDATE_COLUMNS: Array = [
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 52, "type": "number", "format": "int"},
-	{"title": "守備", "key": "pos", "width": 72, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 72, "type": "string", "format": "string"},
 	{"title": "評価", "key": "tier", "width": 80, "type": "string", "format": "string"},
 	{"title": "総合", "key": "value", "width": 56, "type": "number", "format": "int"},
 	{"title": "需要", "key": "need", "width": 56, "type": "number", "format": "float1"},
@@ -161,7 +170,7 @@ const FOREIGN_CANDIDATE_COLUMNS: Array = [
 
 const CAMP_ROSTER_COLUMNS: Array = [
 	{"title": "背", "key": "jersey", "width": 44, "type": "string", "format": "string"},
-	{"title": "守備", "key": "pos", "width": 48, "type": "string", "format": "string"},
+	{"title": "区分", "key": "pos", "width": 48, "type": "string", "format": "string"},
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
 	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
 	{"title": "評価", "key": "eval", "width": 56, "type": "number", "format": "int"},
@@ -212,12 +221,12 @@ const FIELDER_GROWTH_COLUMNS: Array = [
 	{"title": "選球", "key": "discipline", "width": 72, "type": "string", "format": "string"},
 ]
 
-# ドラフト結果 (球団ごとの表) の列。巡・選手・年齢・守備(1文字)・総合のみ。
+# ドラフト結果 (球団ごとの表) の列。巡・選手・年齢・区分(1文字)・総合のみ。
 const DRAFT_RESULT_COLUMNS: Array = [
 	{"title": "巡", "key": "round", "width": 30, "type": "number", "format": "int"},
 	{"title": "選手", "key": "name", "width": 92, "type": "string", "format": "string"},
 	{"title": "年", "key": "age", "width": 32, "type": "number", "format": "int"},
-	{"title": "守", "key": "pos", "width": 30, "type": "string", "format": "string"},
+	{"title": "区", "key": "pos", "width": 30, "type": "string", "format": "string"},
 	{"title": "総", "key": "overall", "width": 36, "type": "number", "format": "int"},
 ]
 
@@ -446,7 +455,7 @@ func _build_draft_panel() -> VBoxContainer:
 	draft_submit_button.pressed.connect(_on_draft_submit_pressed)
 	control_row.add_child(draft_submit_button)
 
-	# 育成ドラフトで「指名なし」を選ぶための見送りボタン (本指名では非表示)。
+	# 本指名/育成指名を打ち切るためのボタン。
 	draft_skip_button = Button.new()
 	draft_skip_button.text = "見送り"
 	draft_skip_button.custom_minimum_size = Vector2(100, 32)
@@ -500,7 +509,7 @@ func _build_draft_panel() -> VBoxContainer:
 	draft_pitcher_list = SortableTable.new()
 	draft_pitcher_list.add_theme_font_size_override("font_size", 14)
 	pitcher_box.add_child(draft_pitcher_list)
-	draft_pitcher_list.configure(CANDIDATE_COLUMNS)
+	draft_pitcher_list.configure(PITCHER_CANDIDATE_COLUMNS)
 	draft_pitcher_list.set_default_sort(0, true)
 	draft_pitcher_list.item_selected.connect(func() -> void: _on_candidate_selected(draft_pitcher_list, draft_fielder_list))
 
@@ -945,7 +954,7 @@ func _refresh() -> void:
 		status_label.text = "戦力外通告(編集)"
 		return
 
-	if step == 3 and not AppState.draft_state.is_empty() and not bool(AppState.draft_state.get("complete", false)):
+	if (step == 3 or step == 4) and not AppState.draft_state.is_empty() and not bool(AppState.draft_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = true
 		released_market_panel.visible = false
@@ -955,11 +964,11 @@ func _refresh() -> void:
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
-		status_label.text = "ドラフト"
+		status_label.text = "育成指名" if step == 4 else "本指名"
 		_populate_draft_panel()
 		return
 
-	if step == 4 and not AppState.released_market_state.is_empty() and not bool(AppState.released_market_state.get("complete", false)):
+	if step == 5 and not AppState.released_market_state.is_empty() and not bool(AppState.released_market_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = false
 		released_market_panel.visible = true
@@ -973,7 +982,7 @@ func _refresh() -> void:
 		_populate_released_market_panel()
 		return
 
-	if step == 5 and not AppState.fa_state.is_empty() and not bool(AppState.fa_state.get("complete", false)):
+	if step == 6 and not AppState.fa_state.is_empty() and not bool(AppState.fa_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = false
 		released_market_panel.visible = false
@@ -987,7 +996,7 @@ func _refresh() -> void:
 		_populate_fa_panel()
 		return
 
-	if step == 6 and not AppState.foreign_state.is_empty() and not bool(AppState.foreign_state.get("complete", false)):
+	if step == 7 and not AppState.foreign_state.is_empty() and not bool(AppState.foreign_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = false
 		released_market_panel.visible = false
@@ -1001,7 +1010,7 @@ func _refresh() -> void:
 		_populate_foreign_panel()
 		return
 
-	if step == 7 and not AppState.camp_state.is_empty() and not bool(AppState.camp_state.get("complete", false)):
+	if step == 8 and not AppState.camp_state.is_empty() and not bool(AppState.camp_state.get("complete", false)):
 		release_panel.visible = false
 		draft_panel.visible = false
 		released_market_panel.visible = false
@@ -1082,16 +1091,18 @@ func _render_step_content(step: int, result: Dictionary) -> void:
 			else:
 				_render_rookies(result)
 		4:
-			_render_released_market(result)
+			_render_draft_result(result)
 		5:
-			_render_fa_market(result)
+			_render_released_market(result)
 		6:
-			_render_foreign_market(result)
+			_render_fa_market(result)
 		7:
-			_render_camp(result)
+			_render_foreign_market(result)
 		8:
-			_render_growth(result)
+			_render_camp(result)
 		9:
+			_render_growth(result)
+		10:
 			_render_contract_update(result)
 		_:
 			pass
@@ -1120,7 +1131,7 @@ func _people_rows(people: Array) -> Array:
 			"team": _team_short(int(entry.get("team_id", 0))),
 			"name": str(entry.get("name", "")),
 			"age": int(entry.get("age", 0)),
-			"pos": _position_name(int(entry.get("position", 0))),
+			"pos": _dict_role_or_position(entry),
 			"years": int(entry.get("years", 0)),
 			"overall": int(entry.get("overall", 0)),
 		})
@@ -1163,7 +1174,7 @@ func _render_rookies(result: Dictionary) -> void:
 			"team": _team_short(int(entry.get("team_id", 0))),
 			"name": str(entry.get("name", "")),
 			"age": int(entry.get("age", 0)),
-			"pos": _position_name(int(entry.get("position", 0))),
+			"pos": _dict_role_or_position(entry),
 			"overall": int(entry.get("overall", 0)),
 		})
 	_add_content_table(ROOKIE_COLUMNS, rows, 360)
@@ -1190,7 +1201,7 @@ func _render_released_market(result: Dictionary) -> void:
 			"name": str(s.get("name", "")),
 			"rank": str(s.get("fa_rank", "C")),
 			"age": int(s.get("age", 0)),
-			"pos": _position_name(int(s.get("position", 0))),
+			"pos": _dict_role_or_position(s),
 			"salary": int(s.get("offer_salary", s.get("salary", 0))),
 			"compensation": int(s.get("compensation_money", 0)),
 		})
@@ -1218,7 +1229,7 @@ func _render_fa_market(result: Dictionary) -> void:
 			"to": _team_short(int(s.get("to_team", 0))),
 			"name": str(s.get("name", "")),
 			"age": int(s.get("age", 0)),
-			"pos": _position_name(int(s.get("position", 0))),
+			"pos": _dict_role_or_position(s),
 			"salary": int(s.get("salary", 0)),
 		})
 	_add_content_heading("FA移籍 %d件" % signings.size(), 16)
@@ -1245,7 +1256,7 @@ func _render_foreign_market(result: Dictionary) -> void:
 			"to": _team_short(int(s.get("to_team", 0))),
 			"name": str(s.get("name", "")),
 			"age": int(s.get("age", 0)),
-			"pos": _position_name(int(s.get("position", 0))),
+			"pos": _dict_role_or_position(s),
 			"tier": str(FOREIGN_TIER_LABELS.get(str(s.get("tier", "")), str(s.get("tier", "")))),
 			"salary": int(s.get("salary", 0)),
 		})
@@ -1302,7 +1313,7 @@ func _camp_action_target(action: Dictionary) -> String:
 	if new_role == "starter":
 		return "先発"
 	if new_role == "reliever":
-		return "リリーフ"
+		return "中継"
 	return ""
 
 
@@ -1328,7 +1339,7 @@ func _role_label(role: String) -> String:
 		"starter":
 			return "先発"
 		"reliever":
-			return "リリーフ"
+			return "中継"
 		"closer":
 			return "抑え"
 		_:
@@ -1371,7 +1382,7 @@ func _render_contract_update(result: Dictionary) -> void:
 				"team": _team_short(int(fa.get("team_id", 0))),
 				"name": str(fa.get("name", "")),
 				"age": int(fa.get("age", 0)),
-				"pos": _position_name(int(fa.get("position", 0))),
+				"pos": _dict_role_or_position(fa),
 				"years": int(fa.get("years", 0)),
 				"fa_days": int(fa.get("fa_nissuu", 0)),
 				"fa_required": int(fa.get("fa_eligible_years", 0)) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR,
@@ -1391,7 +1402,7 @@ func _render_contract_update(result: Dictionary) -> void:
 				"team": _team_short(int(s.get("team_id", 0))),
 				"name": str(s.get("name", "")),
 				"age": int(s.get("age", 0)),
-				"pos": _position_name(int(s.get("position", 0))),
+				"pos": _dict_role_or_position(s),
 				"old": int(s.get("old_salary", 0)),
 				"new": int(s.get("new_salary", 0)),
 				"delta": int(s.get("delta", 0)),
@@ -1498,7 +1509,8 @@ func _ability_change_cell(after: int, delta: int, suffix: String) -> String:
 func _render_draft_result(result: Dictionary) -> void:
 	var picks: Array = result.get("draft_picks", []) as Array
 	var rookies: Array = result.get("rookies", []) as Array
-	_add_content_heading("ドラフト終了 指名%d人 / 入団%d人" % [picks.size(), rookies.size()], 18)
+	var title_text: String = str(result.get("title", "ドラフト"))
+	_add_content_heading("%s終了 指名%d人 / 入団%d人" % [title_text, picks.size(), rookies.size()], 18)
 	var league_label: Label = Label.new()
 	league_label.text = "同順位優先リーグ: %s" % _league_label(str(result.get("priority_league", "")))
 	league_label.add_theme_color_override("font_color", Color(0.78, 0.86, 0.92))
@@ -1607,13 +1619,15 @@ func _populate_draft_panel() -> void:
 	else:
 		draft_status_label.text = phase_label
 		draft_submit_button.text = "指名する"
-	# 見送りは育成ドラフトで自軍の指名待ちのときだけ表示。
-	draft_skip_button.visible = is_dev_segment and stage == "user_pick"
+	# 本指名では自軍だけ指名終了し、他球団の本指名完了後に育成ドラフトへ移行する。
+	# 育成ドラフトでは自軍の育成指名を打ち切る。
+	draft_skip_button.visible = stage == "user_pick"
+	draft_skip_button.text = "育成指名終了" if is_dev_segment else "本指名終了"
 
 	_suppress_candidate_select = true
 	# limit=0 で残り全候補を表示する (打ち切りなし)。
-	_populate_candidate_table(draft_pitcher_list, DraftService.available_candidates_for_bucket(state, "pitcher", 0))
-	_populate_candidate_table(draft_fielder_list, DraftService.available_candidates_for_bucket(state, "fielder", 0))
+	_populate_candidate_table(draft_pitcher_list, DraftService.available_candidates_for_bucket(state, "pitcher", 0), true)
+	_populate_candidate_table(draft_fielder_list, DraftService.available_candidates_for_bucket(state, "fielder", 0), false)
 	_update_draft_position_summary(state)
 	if selected_draft_candidate_id > 0 and _draft_candidate_by_id(state, selected_draft_candidate_id).is_empty():
 		selected_draft_candidate_id = 0
@@ -1672,7 +1686,7 @@ func _profile_count(source: Dictionary, pos: int) -> int:
 	return int(source.get(str(pos), 0))
 
 
-func _populate_candidate_table(table: Tree, candidates: Array) -> void:
+func _populate_candidate_table(table: Tree, candidates: Array, show_pitcher_role: bool = false) -> void:
 	var rows: Array = []
 	for candidate_row in candidates:
 		var candidate: Dictionary = candidate_row as Dictionary
@@ -1680,12 +1694,20 @@ func _populate_candidate_table(table: Tree, candidates: Array) -> void:
 			"rank": int(candidate.get("bucket_rank", 0)),
 			"name": str(candidate.get("name", "")),
 			"age": int(candidate.get("age", 0)),
-			"pos": _position_name(int(candidate.get("position", 0))),
+			"pos": _candidate_role_or_position(candidate, show_pitcher_role),
 			"overall": int(candidate.get("overall", 0)),
 			"source": _source_label(str(candidate.get("source_type", ""))),
 			"__meta": int(candidate.get("candidate_id", 0)),
 		})
 	table.set_rows(rows)
+
+
+func _candidate_role_or_position(candidate: Dictionary, show_pitcher_role: bool) -> String:
+	var position: int = int(candidate.get("position", 0))
+	if show_pitcher_role and position == 1:
+		var template: Dictionary = candidate.get("player_template", {}) as Dictionary
+		return _role_label(str(template.get("role", "starter")))
+	return _position_name(position)
 
 
 func _on_candidate_selected(active_list: Tree, other_list: Tree) -> void:
@@ -1708,7 +1730,7 @@ func _pick_row(pick: Dictionary) -> Dictionary:
 		"team": _team_short(int(pick.get("team_id", 0))),
 		"name": str(pick.get("name", "")),
 		"age": int(pick.get("age", 0)),
-		"pos": _position_char(int(pick.get("position", 0))),
+		"pos": _dict_role_or_position_char(pick),
 		"overall": int(pick.get("overall", 0)),
 		"source": _source_label(str(pick.get("source_type", ""))),
 		"note": _pick_note(pick),
@@ -1737,7 +1759,7 @@ func _format_candidate_details(candidate: Dictionary) -> String:
 	var aptitudes: Dictionary = template.get("position_aptitudes", {}) as Dictionary
 	var pos: int = int(candidate.get("position", 0))
 	var lines: Array = []
-	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(pos)])
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _candidate_role_or_position(candidate, pos == 1)])
 	lines.append("%d歳  %s  指名優先#%d" % [
 		int(candidate.get("age", 0)),
 		_source_label(str(candidate.get("source_type", ""))),
@@ -1751,7 +1773,10 @@ func _format_candidate_details(candidate: Dictionary) -> String:
 	lines.append("")
 	var visible_template: Dictionary = template.duplicate(true)
 	visible_template["position"] = pos
-	visible_template["role"] = "starter" if pos == 1 else "fielder"
+	if pos == 1:
+		visible_template["role"] = str(template.get("role", "starter"))
+	else:
+		visible_template["role"] = "fielder"
 	lines.append("能力")
 	lines.append(PlayerVisibleRatings.summary_line_for_player_data(visible_template))
 	if pos == 1:
@@ -1846,7 +1871,7 @@ func _populate_released_market_panel() -> void:
 			"name": str(c.get("name", "")),
 			"from": _team_short(int(c.get("from_team", 0))),
 			"age": int(c.get("age", 0)),
-			"pos": _position_name(int(c.get("position", 0))),
+			"pos": _dict_role_or_position(c),
 			"value": int(c.get("value", 0)),
 			"war": float(c.get("war", 0.0)),
 			"need": float(c.get("need", 0.0)),
@@ -1883,15 +1908,14 @@ func _format_released_details(candidate: Dictionary) -> String:
 		return "自由契約候補を選択してください。"
 	var team_id: int = AppState.selected_team_id
 	var active_roster: int = _active_roster_count(team_id)
-	# 補強は支配下 soft 目標 (67) で止め、70 との差はシーズン中の昇格用に空ける。
-	var remaining_roster: int = max(0, TeamFinance.SHIENKA_SOFT_TARGET - active_roster)
+	var remaining_roster: int = max(0, TeamFinance.SHIENKA_LIMIT - active_roster)
 	var salary: int = int(candidate.get("salary", 0))
 	var team: PSTeam = GameDb.get_team(team_id)
 	var budget_room: int = 0
 	if team != null:
 		budget_room = team.funds - TeamFinance.team_payroll(GameDb.players, team_id) - salary
 	var lines: Array = []
-	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _dict_role_or_position(candidate)])
 	lines.append("%d歳  元%s  年俸%d万" % [
 		int(candidate.get("age", 0)),
 		_team_short(int(candidate.get("from_team", 0))),
@@ -1958,7 +1982,7 @@ func _populate_fa_panel() -> void:
 			"from": _team_short(int(c.get("from_team", 0))),
 			"rank": str(c.get("fa_rank", "C")),
 			"age": int(c.get("age", 0)),
-			"pos": _position_name(int(c.get("position", 0))),
+			"pos": _dict_role_or_position(c),
 			"value": int(c.get("value", 0)),
 			"war": float(c.get("war", 0.0)),
 			"need": float(c.get("need", 0.0)),
@@ -1998,7 +2022,7 @@ func _format_fa_details(candidate: Dictionary) -> String:
 	if candidate.is_empty():
 		return "FA候補を選択してください。"
 	var lines: Array = []
-	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _dict_role_or_position(candidate)])
 	lines.append("%d歳  元%s  ランク%s  年俸%d万" % [
 		int(candidate.get("age", 0)),
 		_team_short(int(candidate.get("from_team", 0))),
@@ -2064,7 +2088,7 @@ func _populate_foreign_panel() -> void:
 		rows.append({
 			"name": str(c.get("name", "")),
 			"age": int(c.get("age", 0)),
-			"pos": _position_name(int(c.get("position", 0))),
+			"pos": _dict_role_or_position(c),
 			"tier": str(FOREIGN_TIER_LABELS.get(str(c.get("tier", "")), str(c.get("tier", "")))),
 			"value": int(c.get("value", 0)),
 			"need": float(c.get("need", 0.0)),
@@ -2103,8 +2127,7 @@ func _format_foreign_details(candidate: Dictionary) -> String:
 	var team_id: int = AppState.selected_team_id
 	var active_roster: int = _active_roster_count(team_id)
 	var current_foreign: int = _active_foreign_count(team_id)
-	# 補強は支配下 soft 目標 (67) で止め、70 との差はシーズン中の昇格用に空ける。
-	var remaining_roster: int = max(0, TeamFinance.SHIENKA_SOFT_TARGET - active_roster)
+	var remaining_roster: int = max(0, TeamFinance.SHIENKA_LIMIT - active_roster)
 	var remaining_foreign: int = max(0, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM - current_foreign)
 	var salary: int = int(candidate.get("salary", 0))
 	var team: PSTeam = GameDb.get_team(team_id)
@@ -2112,7 +2135,7 @@ func _format_foreign_details(candidate: Dictionary) -> String:
 	if team != null:
 		budget_room = team.funds - TeamFinance.team_payroll(GameDb.players, team_id) - salary
 	var lines: Array = []
-	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _dict_role_or_position(candidate)])
 	lines.append("%d歳  %s  年俸%d万" % [
 		int(candidate.get("age", 0)),
 		str(FOREIGN_TIER_LABELS.get(str(candidate.get("tier", "")), str(candidate.get("tier", "")))),
@@ -2217,7 +2240,7 @@ func _camp_roster_row(player: PSPlayer, trained: Dictionary) -> Dictionary:
 	)
 	var row: Dictionary = {
 		"jersey": _camp_jersey_text(player),
-		"pos": _position_name(player.position),
+		"pos": _player_role_or_position(player),
 		"name": player.name,
 		"age": player.age,
 		"eval": PlayerValueEvaluator.overall_score(record),
@@ -2349,7 +2372,7 @@ func _format_camp_unavailable_player(player_id: int) -> String:
 	if player == null:
 		return "選手を選択してください。"
 	var lines: Array = []
-	lines.append("%s  %s" % [player.name, _position_name(player.position)])
+	lines.append("%s  %s" % [player.name, _player_role_or_position(player)])
 	if _camp_trained_player_set(AppState.camp_state).has(player.id):
 		lines.append("この選手は今オフに特別練習済みです。")
 	elif player.injury_days > 0:
@@ -2370,7 +2393,7 @@ func _camp_training_target(candidate: Dictionary) -> String:
 	if training_type == CampServiceRef.TRAIN_STARTER:
 		return "先発"
 	if training_type == CampServiceRef.TRAIN_RELIEVER:
-		return "リリーフ"
+		return "中継"
 	return ""
 
 
@@ -2380,7 +2403,7 @@ func _format_camp_details(candidate: Dictionary) -> String:
 	var player: PSPlayer = GameDb.get_player(int(candidate.get("player_id", 0)))
 	var target_position: int = int(candidate.get("target_position", 0))
 	var lines: Array = []
-	lines.append("%s  %s" % [str(candidate.get("name", "")), _position_name(int(candidate.get("position", 0)))])
+	lines.append("%s  %s" % [str(candidate.get("name", "")), _dict_role_or_position(candidate)])
 	lines.append("%d歳  %s → %s" % [
 		int(candidate.get("age", 0)),
 		str(candidate.get("training_label", "")),
@@ -2548,7 +2571,7 @@ func _release_row(player: PSPlayer) -> Dictionary:
 		check_text = "育"
 	var row: Dictionary = {
 		"check": check_text,
-		"pos": str(PSPlayer.POSITION_NAMES.get(player.position, "?")),
+		"pos": _player_role_or_position(player),
 		"name": player.name,
 		"age": player.age,
 		"years": player.years,
@@ -2989,3 +3012,46 @@ func _position_name(pos: int) -> String:
 
 func _position_char(pos: int) -> String:
 	return str(POSITION_CHARS.get(pos, "?"))
+
+
+func _dict_role_or_position(data: Dictionary) -> String:
+	return _role_or_position_name(int(data.get("position", 0)), str(data.get("role", "")), data)
+
+
+func _dict_role_or_position_char(data: Dictionary) -> String:
+	var position: int = int(data.get("position", 0))
+	if position == 1:
+		return _role_char(_resolved_pitcher_role(str(data.get("role", "")), data))
+	return _position_char(position)
+
+
+func _player_role_or_position(player: PSPlayer) -> String:
+	if player != null and player.is_pitcher():
+		return _role_label(_resolved_pitcher_role(player.role, {}))
+	return _position_name(player.position if player != null else 0)
+
+
+func _role_or_position_name(position: int, role: String, data: Dictionary = {}) -> String:
+	if position == 1:
+		return _role_label(_resolved_pitcher_role(role, data))
+	return _position_name(position)
+
+
+func _resolved_pitcher_role(role: String, data: Dictionary) -> String:
+	if role == "starter" or role == "reliever" or role == "closer":
+		return role
+	if int(data.get("starts", 0)) > int(data.get("relief_appearances", 0)):
+		return "starter"
+	return "reliever"
+
+
+func _role_char(role: String) -> String:
+	match role:
+		"starter":
+			return "先"
+		"reliever":
+			return "継"
+		"closer":
+			return "抑"
+		_:
+			return "継"
