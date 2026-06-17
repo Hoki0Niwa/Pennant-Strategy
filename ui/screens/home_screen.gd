@@ -6,9 +6,6 @@ const PlayerVisibleRatings = preload("res://services/simulation/player_visible_r
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 
-# オフシーズン処理の総ステップ数 (offseason_screen.gd の TOTAL_STEPS と一致させる)
-const OFFSEASON_TOTAL_STEPS: int = 10
-
 const LEAGUES: Array = [
 	{"key": "central", "label": "第1リーグ"},
 	{"key": "pacific", "label": "第2リーグ"},
@@ -646,8 +643,8 @@ func _configure_offseason_button(button: Button) -> void:
 		button.disabled = true
 		return
 	if AppState.offseason_active:
-		# step 4 まで処理済みの場合は finalize 直結ボタンに切り替える
-		if AppState.offseason_step >= OFFSEASON_TOTAL_STEPS:
+		# 全ステップ処理済みの場合は finalize 直結ボタンに切り替える。
+		if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS:
 			button.text = "翌年開始"
 		else:
 			button.text = "オフシーズン続行"
@@ -678,9 +675,9 @@ func _on_offseason_pressed() -> void:
 	if season == null:
 		return
 	if AppState.offseason_active:
-		# step 4 まで処理済みなら直接 finalize へ (home → 翌年開始)。
+		# 全ステップ処理済みなら直接 finalize へ (home → 翌年開始)。
 		# 途中ステップなら従来通り offseason 画面で続行。
-		if AppState.offseason_step >= OFFSEASON_TOTAL_STEPS:
+		if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS:
 			var ok: bool = AppState.finalize_offseason()
 			if not ok and status_label != null:
 				status_label.text = "翌年開始に失敗しました"

@@ -5,7 +5,6 @@ const Offseason = preload("res://services/season/offseason_service.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
-const TOTAL_STEPS: int = 10
 
 # 戦力外通告リストの列。先頭は選択チェック表示。
 const RELEASE_COLUMNS: Array = [
@@ -922,125 +921,71 @@ func _build_camp_panel() -> VBoxContainer:
 
 
 func _refresh() -> void:
-	var step: int = AppState.offseason_step
-	step_indicator.text = "ステップ%d / %d" % [step + 1, TOTAL_STEPS + 1]
+	var view_state: Dictionary = AppState.get_offseason_view_state()
+	var step: int = int(view_state.get("step", AppState.offseason_step))
+	var total_steps: int = int(view_state.get("total_steps", AppState.OFFSEASON_TOTAL_STEPS))
+	var active_panel: String = str(view_state.get("active_panel", AppState.OFFSEASON_PANEL_NONE))
+	step_indicator.text = "ステップ%d / %d" % [step + 1, total_steps + 1]
 
-	if not AppState.offseason_active:
-		status_label.text = "オフシーズンが開始されていません"
-		release_panel.visible = false
-		draft_panel.visible = false
-		released_market_panel.visible = false
-		fa_panel.visible = false
-		foreign_panel.visible = false
-		camp_panel.visible = false
+	if not bool(view_state.get("active", false)):
+		status_label.text = str(view_state.get("status", "オフシーズンが開始されていません"))
+		_set_active_panel(AppState.OFFSEASON_PANEL_NONE)
 		_clear_content()
 		next_button.disabled = true
 		finalize_button.disabled = true
 		return
 
-	if step == 1:
-		# Release editor mode (step 1 = 戦力外通告エディタ)
-		release_panel.visible = true
-		draft_panel.visible = false
-		released_market_panel.visible = false
-		fa_panel.visible = false
-		foreign_panel.visible = false
-		camp_panel.visible = false
+	next_button.disabled = not bool(view_state.get("can_advance", false))
+	finalize_button.disabled = not bool(view_state.get("can_finalize", false))
+	status_label.text = str(view_state.get("status", ""))
+
+	if active_panel == AppState.OFFSEASON_PANEL_RELEASE:
+		_set_active_panel(active_panel)
 		_clear_content()
-		next_button.disabled = true
-		finalize_button.disabled = true
 		_populate_release_list()
 		_refresh_release_summary()
-		status_label.text = "戦力外通告(編集)"
 		return
-
-	if (step == 3 or step == 4) and not AppState.draft_state.is_empty() and not bool(AppState.draft_state.get("complete", false)):
-		release_panel.visible = false
-		draft_panel.visible = true
-		released_market_panel.visible = false
-		fa_panel.visible = false
-		foreign_panel.visible = false
-		camp_panel.visible = false
+	if active_panel == AppState.OFFSEASON_PANEL_DRAFT:
+		_set_active_panel(active_panel)
 		_clear_content()
-		next_button.disabled = true
-		finalize_button.disabled = true
-		status_label.text = "育成指名" if step == 4 else "本指名"
 		_populate_draft_panel()
 		return
-
-	if step == 5 and not AppState.released_market_state.is_empty() and not bool(AppState.released_market_state.get("complete", false)):
-		release_panel.visible = false
-		draft_panel.visible = false
-		released_market_panel.visible = true
-		fa_panel.visible = false
-		foreign_panel.visible = false
-		camp_panel.visible = false
+	if active_panel == AppState.OFFSEASON_PANEL_RELEASED_MARKET:
+		_set_active_panel(active_panel)
 		_clear_content()
-		next_button.disabled = true
-		finalize_button.disabled = true
-		status_label.text = "戦力外獲得"
 		_populate_released_market_panel()
 		return
-
-	if step == 6 and not AppState.fa_state.is_empty() and not bool(AppState.fa_state.get("complete", false)):
-		release_panel.visible = false
-		draft_panel.visible = false
-		released_market_panel.visible = false
-		fa_panel.visible = true
-		foreign_panel.visible = false
-		camp_panel.visible = false
+	if active_panel == AppState.OFFSEASON_PANEL_FA:
+		_set_active_panel(active_panel)
 		_clear_content()
-		next_button.disabled = true
-		finalize_button.disabled = true
-		status_label.text = "FA市場"
 		_populate_fa_panel()
 		return
-
-	if step == 7 and not AppState.foreign_state.is_empty() and not bool(AppState.foreign_state.get("complete", false)):
-		release_panel.visible = false
-		draft_panel.visible = false
-		released_market_panel.visible = false
-		fa_panel.visible = false
-		foreign_panel.visible = true
-		camp_panel.visible = false
+	if active_panel == AppState.OFFSEASON_PANEL_FOREIGN:
+		_set_active_panel(active_panel)
 		_clear_content()
-		next_button.disabled = true
-		finalize_button.disabled = true
-		status_label.text = "外国人補強"
 		_populate_foreign_panel()
 		return
-
-	if step == 8 and not AppState.camp_state.is_empty() and not bool(AppState.camp_state.get("complete", false)):
-		release_panel.visible = false
-		draft_panel.visible = false
-		released_market_panel.visible = false
-		fa_panel.visible = false
-		foreign_panel.visible = false
-		camp_panel.visible = true
+	if active_panel == AppState.OFFSEASON_PANEL_CAMP:
+		_set_active_panel(active_panel)
 		_clear_content()
-		next_button.disabled = true
-		finalize_button.disabled = true
-		status_label.text = "キャンプ"
 		_populate_camp_panel()
 		return
 
-	release_panel.visible = false
-	draft_panel.visible = false
-	released_market_panel.visible = false
-	fa_panel.visible = false
-	foreign_panel.visible = false
-	camp_panel.visible = false
-	next_button.disabled = step >= TOTAL_STEPS
-	finalize_button.disabled = step < TOTAL_STEPS
-
-	var step_key: String = "step_%d" % step
-	var result: Dictionary = AppState.offseason_results.get(step_key, {}) as Dictionary
+	_set_active_panel(AppState.OFFSEASON_PANEL_RESULTS)
+	var result: Dictionary = view_state.get("result", {}) as Dictionary
 	if result.is_empty():
-		_set_content_message("結果データがありません")
+		_set_content_message(str(view_state.get("status", "結果データがありません")))
 		return
-
-	status_label.text = str(result.get("title", ""))
 	_render_step_content(step, result)
+
+
+func _set_active_panel(panel_name: String) -> void:
+	release_panel.visible = panel_name == AppState.OFFSEASON_PANEL_RELEASE
+	draft_panel.visible = panel_name == AppState.OFFSEASON_PANEL_DRAFT
+	released_market_panel.visible = panel_name == AppState.OFFSEASON_PANEL_RELEASED_MARKET
+	fa_panel.visible = panel_name == AppState.OFFSEASON_PANEL_FA
+	foreign_panel.visible = panel_name == AppState.OFFSEASON_PANEL_FOREIGN
+	camp_panel.visible = panel_name == AppState.OFFSEASON_PANEL_CAMP
 
 
 # ---------------------------------------------------------------------------
@@ -1080,32 +1025,29 @@ func _add_content_table(columns: Array, rows: Array, min_height: int) -> void:
 
 func _render_step_content(step: int, result: Dictionary) -> void:
 	_clear_content()
-	match step:
-		0:
-			_render_people("引退した選手", result, "retired", "今オフは引退者がいませんでした。")
-		2:
-			_render_release(result)
-		3:
-			if result.has("draft_picks"):
-				_render_draft_result(result)
-			else:
-				_render_rookies(result)
-		4:
+	if step == AppState.OFFSEASON_STEP_RETIREMENT:
+		_render_people("引退した選手", result, "retired", "今オフは引退者がいませんでした。")
+	elif step == AppState.OFFSEASON_STEP_RELEASE_COMMIT:
+		_render_release(result)
+	elif step == AppState.OFFSEASON_STEP_DRAFT_MAIN:
+		if result.has("draft_picks"):
 			_render_draft_result(result)
-		5:
-			_render_released_market(result)
-		6:
-			_render_fa_market(result)
-		7:
-			_render_foreign_market(result)
-		8:
-			_render_camp(result)
-		9:
-			_render_growth(result)
-		10:
-			_render_contract_update(result)
-		_:
-			pass
+		else:
+			_render_rookies(result)
+	elif step == AppState.OFFSEASON_STEP_DRAFT_DEVELOPMENT:
+		_render_draft_result(result)
+	elif step == AppState.OFFSEASON_STEP_RELEASED_MARKET:
+		_render_released_market(result)
+	elif step == AppState.OFFSEASON_STEP_FA_MARKET:
+		_render_fa_market(result)
+	elif step == AppState.OFFSEASON_STEP_FOREIGN_MARKET:
+		_render_foreign_market(result)
+	elif step == AppState.OFFSEASON_STEP_CAMP:
+		_render_camp(result)
+	elif step == AppState.OFFSEASON_STEP_GROWTH:
+		_render_growth(result)
+	elif step == AppState.OFFSEASON_STEP_CONTRACT_UPDATE:
+		_render_contract_update(result)
 
 
 func _render_people(title_text: String, result: Dictionary, key: String, empty_text: String) -> void:
