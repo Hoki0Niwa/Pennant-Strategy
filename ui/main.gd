@@ -114,10 +114,17 @@ func _show_screen(screen_name: String) -> void:
 		child.queue_free()
 
 	if sidebar != null:
-		sidebar.visible = screen_name != "start" and (screen_name != "options" or AppState.current_season != null)
+		sidebar.visible = screen_name != "start" and screen_name != "home" and (screen_name != "options" or AppState.current_season != null)
 		for screen_key in sidebar_buttons.keys():
 			var button: Button = sidebar_buttons[screen_key] as Button
 			button.disabled = screen_key == screen_name
+	if content != null:
+		var home_margin: int = 0 if screen_name == "home" else 16
+		var home_margin_top: int = 0 if screen_name == "home" else 14
+		content.add_theme_constant_override("margin_left", home_margin)
+		content.add_theme_constant_override("margin_top", home_margin_top)
+		content.add_theme_constant_override("margin_right", home_margin)
+		content.add_theme_constant_override("margin_bottom", home_margin_top)
 
 	var screen: Control
 	match screen_name:

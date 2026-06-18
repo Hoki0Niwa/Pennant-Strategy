@@ -1,641 +1,746 @@
 extends Control
 
+# ホーム画面 (2026-06-18 再設計版)。
+# 添付モックに合わせ「左サイドバー + ヘッダ + サマリー + 月間カレンダー + 右パネル群」の
+# 運用ダッシュボードを 1920x1080 固定座標系でカスタム描画する。
+# - スケールは画面サイズに対し **等倍 (min(sx, sy)) + 中央寄せ** で破綻させない
+#   (旧版の x/y 独立スケールは非16:9で歪んでいた)。
+# - 実際に押す操作 (上部アクション / サイドバー / カレンダーのフィルタ・月送り / この試合を消化)
+#   だけ Button を重ねる。それ以外は _draw() で描く。
+
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
-const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
-const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
-const SortableTable = preload("res://ui/components/sortable_table.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
-const LEAGUES: Array = [
-	{"key": "central", "label": "第1リーグ"},
-	{"key": "pacific", "label": "第2リーグ"},
+const BASE: Vector2 = Vector2(1920, 1080)
+
+# --- パレット ---
+const BG: Color = Color(0.047, 0.056, 0.068)
+const SIDEBAR_BG: Color = Color(0.066, 0.078, 0.095)
+const HEADER_BG: Color = Color(0.078, 0.092, 0.112)
+const PANEL: Color = Color(0.086, 0.104, 0.127)
+const PANEL_2: Color = Color(0.112, 0.137, 0.167)
+const PANEL_3: Color = Color(0.150, 0.182, 0.222)
+const BORDER: Color = Color(0.205, 0.245, 0.300)
+const BORDER_SOFT: Color = Color(0.140, 0.168, 0.205)
+const TEXT: Color = Color(0.930, 0.948, 0.965)
+const MUTED: Color = Color(0.605, 0.665, 0.725)
+const FAINT: Color = Color(0.395, 0.450, 0.510)
+const BLUE: Color = Color(0.290, 0.610, 0.965)
+const BLUE_SOFT: Color = Color(0.180, 0.380, 0.620)
+const GREEN: Color = Color(0.235, 0.790, 0.490)
+const RED: Color = Color(0.910, 0.370, 0.370)
+const AMBER: Color = Color(0.955, 0.715, 0.255)
+
+# --- レイアウト基準 (base 座標) ---
+const SIDEBAR_W: float = 240.0
+const HEADER_H: float = 86.0
+const INNER_L: float = 262.0
+const INNER_R: float = 1900.0
+const STAT_Y: float = 104.0
+const STAT_H: float = 84.0
+const CAL_RECT: Rect2 = Rect2(262, 206, 1020, 854)
+const RIGHT_X: float = 1300.0
+const RIGHT_W: float = 600.0
+
+const WEEKDAYS: Array = ["月", "火", "水", "木", "金", "土", "日"]
+
+const NAV_GROUPS: Array = [
+	{"title": "試合・シミュレーション", "items": [
+		{"id": "home", "label": "ホーム", "icon": "home"},
+		{"id": "skip_options", "label": "スキップ設定", "icon": "skip"},
+		{"id": "game_results", "label": "試合結果", "icon": "results"},
+		{"id": "standings", "label": "順位表", "icon": "standings"},
+		{"id": "rankings", "label": "ランキング", "icon": "rankings"},
+		{"id": "history", "label": "シーズン履歴", "icon": "history"},
+	]},
+	{"title": "チーム・選手", "items": [
+		{"id": "team_detail", "label": "チーム詳細", "icon": "team"},
+		{"id": "active_roster", "label": "1軍入れ替え", "icon": "swap"},
+		{"id": "lineup_editor", "label": "打順設定", "icon": "lineup"},
+		{"id": "rotation_editor", "label": "起用法", "icon": "role"},
+		{"id": "player_detail", "label": "選手詳細", "icon": "player"},
+	]},
+	{"title": "設定・その他", "items": [
+		{"id": "team_select", "label": "チーム選択", "icon": "teamselect"},
+		{"id": "options", "label": "オプション", "icon": "options"},
+	]},
 ]
 
-const ROSTER_COLUMNS: Array = [
-	{"title": "背", "key": "jersey", "width": 44, "type": "string", "format": "string"},
-	{"title": "区分", "key": "pos", "width": 48, "type": "string", "format": "string"},
-	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
-	{"title": "年齢", "key": "age", "width": 56, "type": "number", "format": "int"},
-	{"title": "評価", "key": "eval", "width": 56, "type": "number", "format": "int"},
+const FILTERS: Array = [
+	{"id": "all", "label": "全試合"},
+	{"id": "team", "label": "自軍のみ"},
+	{"id": "unplayed", "label": "未消化"},
+	{"id": "result", "label": "結果"},
 ]
 
-const TODAY_GAME_COLUMNS: Array = [
-	{"title": "", "key": "mark", "width": 30, "type": "string", "format": "string"},
-	{"title": "ビジター", "key": "away", "width": 72, "type": "string", "format": "string"},
-	{"title": "スコア", "key": "score", "width": 64, "type": "string", "format": "string"},
-	{"title": "ホーム", "key": "home", "width": 84, "type": "string", "format": "string"},
-	{"title": "結果", "key": "result", "width": 64, "type": "string", "format": "string"},
+const LEGEND: Array = [
+	{"label": "勝利", "color": GREEN, "mark": "○"},
+	{"label": "敗戦", "color": RED, "mark": "●"},
+	{"label": "引分", "color": AMBER, "mark": "△"},
+	{"label": "未消化", "color": BLUE, "mark": ""},
+	{"label": "休養・移動日", "color": FAINT, "mark": ""},
 ]
 
-const UPCOMING_COLUMNS: Array = [
-	{"title": "日付", "key": "date", "sort_key": "day", "width": 72, "type": "number", "format": "string"},
-	{"title": "いつ", "key": "when", "width": 64, "type": "string", "format": "string"},
-	{"title": "会場", "key": "venue", "width": 48, "type": "string", "format": "string"},
-	{"title": "相手", "key": "opp", "width": 84, "type": "string", "format": "string"},
-]
-
-const INJURY_COLUMNS: Array = [
-	{"title": "区分", "key": "pos", "width": 48, "type": "string", "format": "string"},
-	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
-	{"title": "故障内容", "key": "label", "width": 200, "type": "string", "format": "string"},
-	{"title": "残り日", "key": "days", "width": 64, "type": "number", "format": "int"},
-]
-
-const HOME_STANDINGS_COLUMNS: Array = [
-	{"title": "順", "key": "rank", "width": 36, "type": "number", "format": "int"},
-	{"title": "球団", "key": "team", "width": 56, "type": "string", "format": "string"},
-	{"title": "勝", "key": "w", "width": 40, "type": "number", "format": "int"},
-	{"title": "敗", "key": "l", "width": 40, "type": "number", "format": "int"},
-	{"title": "分", "key": "d", "width": 36, "type": "number", "format": "int"},
-	{"title": "勝率", "key": "pct", "width": 60, "type": "number", "format": "rate"},
-	{"title": "GB", "key": "gb", "width": 48, "type": "number", "format": "float1"},
-	{"title": "残", "key": "rem", "width": 40, "type": "number", "format": "int"},
-	{"title": "打率", "key": "avg", "width": 60, "type": "number", "format": "rate"},
-	{"title": "本", "key": "hr", "width": 40, "type": "number", "format": "int"},
-	{"title": "防", "key": "era", "width": 56, "type": "number", "format": "float2"},
-]
-
-var status_label: Label
-var sort_select: OptionButton
-var player_list: Tree
-var detail_text: RichTextLabel
-var current_records: Array = []
+var _font: Font
+var _buttons: Array = []
+var _sidebar_entries: Array = []
+var _calendar_year: int = 0
+var _calendar_month: int = 0
+var _calendar_filter: String = "team"
+var _status_text: String = ""
+var _scale_f: float = 1.0
+var _offset: Vector2 = Vector2.ZERO
+var _era_by_team: Dictionary = {}
 
 
 func _ready() -> void:
-	_build()
+	_font = ThemeDB.fallback_font
+	_status_text = AppState.last_status_message
+	var season: PSSeason = AppState.current_season
+	if season != null:
+		var date_data: Dictionary = _parse_date(SeasonCalendar.current_date(season))
+		_calendar_year = int(date_data.get("year", season.year))
+		_calendar_month = int(date_data.get("month", 3))
+	_sidebar_entries = _build_sidebar_layout()
+	_build_buttons()
+	queue_redraw()
 
 
-func _build() -> void:
-	var root: VBoxContainer = VBoxContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 10)
-	add_child(root)
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_layout_buttons()
+		queue_redraw()
 
-	var header: HBoxContainer = HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
-	root.add_child(header)
 
-	var title: Label = Label.new()
-	title.text = "メイン"
-	title.add_theme_font_size_override("font_size", 24)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
+# ============================================================ draw
 
-	if DeveloperTools.enabled():
-		var report_button: Button = Button.new()
-		report_button.text = "分析"
-		report_button.custom_minimum_size = Vector2(68, 34)
-		report_button.pressed.connect(func() -> void: AppState.request_screen("balance_report"))
-		header.add_child(report_button)
-
-		var probe_button: Button = Button.new()
-		probe_button.text = "選手プローブ"
-		probe_button.custom_minimum_size = Vector2(118, 34)
-		probe_button.pressed.connect(func() -> void: AppState.request_screen("player_probe"))
-		header.add_child(probe_button)
-
-	var next_game_button: Button = Button.new()
-	next_game_button.text = "次の試合"
-	next_game_button.custom_minimum_size = Vector2(96, 34)
-	next_game_button.pressed.connect(_simulate_next_game)
-	header.add_child(next_game_button)
-
-	var today_button: Button = Button.new()
-	today_button.text = "本日全試合"
-	today_button.custom_minimum_size = Vector2(104, 34)
-	today_button.pressed.connect(_simulate_current_day)
-	header.add_child(today_button)
-
-	var skip_all_button: Button = Button.new()
-	skip_all_button.text = "残り全試合"
-	skip_all_button.custom_minimum_size = Vector2(104, 34)
-	skip_all_button.pressed.connect(_simulate_remaining_season)
-	header.add_child(skip_all_button)
-
-	var save_button: Button = Button.new()
-	save_button.text = "セーブ"
-	save_button.custom_minimum_size = Vector2(78, 34)
-	save_button.pressed.connect(_save_game)
-	header.add_child(save_button)
-
-	var offseason_button: Button = Button.new()
-	offseason_button.custom_minimum_size = Vector2(120, 34)
-	offseason_button.pressed.connect(_on_offseason_pressed)
-	_configure_offseason_button(offseason_button)
-	header.add_child(offseason_button)
-
-	var team_button: Button = Button.new()
-	team_button.text = "チーム選択"
-	team_button.custom_minimum_size = Vector2(104, 34)
-	team_button.pressed.connect(func() -> void: AppState.request_screen("team_select"))
-	header.add_child(team_button)
+func _draw() -> void:
+	_update_transform()
+	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
 
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_empty_state(root)
+		_draw_empty()
 		return
 
-	var overview: GridContainer = GridContainer.new()
-	overview.columns = 4
-	overview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	overview.add_theme_constant_override("h_separation", 20)
-	overview.add_theme_constant_override("v_separation", 4)
-	root.add_child(overview)
+	_era_by_team = _compute_team_era(season)
 
-	_add_fact(overview, "球団", team.name)
-	_add_fact(overview, "年度", "%d年 / %d年目" % [season.year, season.season_number])
-	_add_fact(overview, "現在日", SeasonCalendar.day_status_label(season, season.current_day))
-	_add_fact(overview, "予定試合", "%d試合" % season.total_games())
-	_add_fact(overview, "未消化", "%d試合" % season.games_remaining())
-	_add_fact(overview, "自軍残り", "%d試合" % season.team_games_remaining(team.id))
-	# R4 Step1: 予算 (funds) と年俸総額。
+	# 背景レイヤ
+	_round(Rect2(0, 0, SIDEBAR_W, BASE.y), SIDEBAR_BG, Color.TRANSPARENT, 0, 0)
+	_line(Vector2(SIDEBAR_W, 0), Vector2(SIDEBAR_W, BASE.y), BORDER_SOFT, 1.0)
+	_round(Rect2(SIDEBAR_W, 0, BASE.x - SIDEBAR_W, HEADER_H), HEADER_BG, Color.TRANSPARENT, 0, 0)
+	_line(Vector2(SIDEBAR_W, HEADER_H), Vector2(BASE.x, HEADER_H), BORDER_SOFT, 1.0)
+
+	_draw_sidebar()
+	_draw_header(team, season)
+	_draw_statbar(team, season)
+	_draw_calendar(team.id, season)
+	_draw_right_column(team.id, season)
+
+	if not _status_text.is_empty():
+		_text(_status_text, Vector2(INNER_L, 1076), 12, MUTED)
+
+
+func _draw_empty() -> void:
+	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
+	_text("新規シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+
+
+# --- サイドバー ---
+
+func _draw_sidebar() -> void:
+	_text("PennantStrategy", Vector2(20, 40), 22, TEXT)
+	_text("ペナント戦略シミュレーション", Vector2(21, 62), 11, MUTED)
+
+	var current: String = AppState.current_screen
+	for entry_value in _sidebar_entries:
+		var entry: Dictionary = entry_value as Dictionary
+		if str(entry.get("type", "")) == "title":
+			_text(str(entry["label"]), Vector2(22, float(entry["y"])), 11, FAINT)
+			continue
+		var item: Dictionary = entry["item"] as Dictionary
+		var rect: Rect2 = entry["rect"] as Rect2
+		var active: bool = str(item.get("id", "")) == current
+		if active:
+			_round(rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.16), Color(BLUE.r, BLUE.g, BLUE.b, 0.55), 7)
+			_round(Rect2(rect.position.x, rect.position.y + 6, 3, rect.size.y - 12), BLUE, Color.TRANSPARENT, 2, 0)
+		_icon(str(item.get("icon", "")), Rect2(rect.position.x + 14, rect.position.y + 9, 20, 20), TEXT if active else MUTED)
+
+	_text("Ver 1.0.0", Vector2(22, BASE.y - 24), 12, FAINT)
+
+
+# --- ヘッダ ---
+
+func _draw_header(team: PSTeam, season: PSSeason) -> void:
+	_text("ホーム", Vector2(INNER_L, 56), 28, TEXT)
+	_line(Vector2(360, 26), Vector2(360, 60), BORDER, 1.0)
+	_team_badge(Rect2(384, 23, 40, 40), team)
+	_text(team.name, Vector2(436, 54), 20, TEXT)
+	_line(Vector2(660, 26), Vector2(660, 60), BORDER, 1.0)
+	var date_text: String = _format_date_long(SeasonCalendar.current_date(season))
+	_text("%s    %d年目" % [date_text, season.season_number], Vector2(684, 52), 16, MUTED)
+
+
+# --- サマリーカード ---
+
+func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
+	var stats: PSStats = season.standings.get(team.id) as PSStats
+	var standing: Dictionary = _standing_for_team(team.id)
 	var payroll: int = TeamFinance.team_payroll(GameDb.players, team.id)
-	_add_fact(overview, "予算", "%d万円" % team.funds)
-	_add_fact(overview, "年俸総額", "%d万円%s" % [payroll, "  (超過)" if TeamFinance.is_over_budget(team.funds, payroll) else ""])
+	var over: bool = TeamFinance.is_over_budget(team.funds, payroll)
+	var wins: int = stats.wins if stats != null else 0
+	var losses: int = stats.losses if stats != null else 0
+	var draws: int = stats.draws if stats != null else 0
+	var gb_value: float = float(standing.get("gb", 0.0))
 
-	var split: HSplitContainer = HSplitContainer.new()
-	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(split)
+	var cards: Array = [
+		{"icon": "rank", "label": "順位", "value": "%s位" % str(standing.get("rank", "-")), "vsize": 24, "color": BLUE},
+		{"icon": "record", "label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws], "vsize": 19, "color": TEXT},
+		{"icon": "winrate", "label": "勝率", "value": _rate_short(stats.win_rate() if stats != null else 0.0), "vsize": 24, "color": GREEN},
+		{"icon": "gb", "label": "ゲーム差", "value": ("-" if gb_value <= 0.0 else _float1(gb_value)), "vsize": 23, "color": TEXT},
+		{"icon": "remaining", "label": "残り試合", "value": "%d試合" % season.team_games_remaining(team.id), "vsize": 21, "color": TEXT},
+		{"icon": "budget", "label": "予算", "value": _format_money(team.funds), "vsize": 18, "color": TEXT},
+		{"icon": "payroll", "label": "年俸総額", "value": _format_money(payroll), "vsize": 18, "color": AMBER if over else TEXT, "warn": over},
+	]
 
-	var roster_panel: Control = _build_roster_panel(team.id)
-	split.add_child(roster_panel)
-
-	var schedule_panel: Control = _build_schedule_panel()
-	split.add_child(schedule_panel)
-
-	status_label = Label.new()
-	status_label.text = AppState.last_status_message
-	root.add_child(status_label)
-
-
-func _add_empty_state(parent: Control) -> void:
-	var label: Label = Label.new()
-	label.text = "新規シーズンが開始されていません"
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	parent.add_child(label)
-
-	var button: Button = Button.new()
-	button.text = "チーム選択へ"
-	button.custom_minimum_size = Vector2(180, 44)
-	button.pressed.connect(func() -> void: AppState.request_screen("team_select"))
-	parent.add_child(button)
-
-
-func _add_fact(parent: Control, label_text: String, value_text: String) -> void:
-	var label: Label = Label.new()
-	label.text = label_text
-	label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
-	parent.add_child(label)
-
-	var value: Label = Label.new()
-	value.text = value_text
-	parent.add_child(value)
+	var count: int = cards.size()
+	var gap: float = 10.0
+	var total_w: float = INNER_R - INNER_L
+	var card_w: float = (total_w - gap * float(count - 1)) / float(count)
+	var x: float = INNER_L
+	for card_value in cards:
+		var card: Dictionary = card_value as Dictionary
+		_round(Rect2(x, STAT_Y, card_w, STAT_H), PANEL, BORDER, 9)
+		_icon(str(card["icon"]), Rect2(x + 16, STAT_Y + 28, 28, 28), MUTED)
+		_text(str(card["label"]), Vector2(x + 54, STAT_Y + 34), 12, MUTED)
+		_text(str(card["value"]), Vector2(x + 54, STAT_Y + 63), int(card["vsize"]), card["color"] as Color, card_w - 64)
+		if bool(card.get("warn", false)):
+			_chip(Rect2(x + card_w - 84, STAT_Y + 12, 68, 20), "予算超過", AMBER)
+		x += card_w + gap
 
 
-func _build_roster_panel(team_id: int) -> Control:
-	var box: VBoxContainer = VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", 8)
+# --- カレンダー ---
 
-	var header: HBoxContainer = HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
-	box.add_child(header)
+func _draw_calendar(team_id: int, season: PSSeason) -> void:
+	_round(CAL_RECT, PANEL, BORDER, 10)
+	_text("%d年 %d月" % [_calendar_year, _calendar_month], Vector2(CAL_RECT.position.x + 56, CAL_RECT.position.y + 40), 23, TEXT)
 
-	var title: Label = Label.new()
-	title.text = "選手一覧"
-	title.add_theme_font_size_override("font_size", 20)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
+	var inner_x: float = CAL_RECT.position.x + 16
+	var inner_w: float = CAL_RECT.size.x - 32
+	var cell_gap: float = 6.0
+	var cell_w: float = (inner_w - cell_gap * 6.0) / 7.0
+	var week_y: float = CAL_RECT.position.y + 84
+	for i in range(7):
+		var wcolor: Color = MUTED
+		if i == 6:
+			wcolor = Color(RED.r, RED.g, RED.b, 0.85)
+		elif i == 5:
+			wcolor = Color(BLUE.r, BLUE.g, BLUE.b, 0.9)
+		_text(str(WEEKDAYS[i]), Vector2(inner_x + i * (cell_w + cell_gap), week_y), 13, wcolor, cell_w, HORIZONTAL_ALIGNMENT_CENTER)
 
-	sort_select = OptionButton.new()
-	sort_select.custom_minimum_size = Vector2(150, 34)
-	sort_select.add_item("評価順")
-	sort_select.add_item("年齢順")
-	sort_select.add_item("守備位置順")
-	sort_select.item_selected.connect(func(_index: int) -> void: _refresh_player_list(team_id))
-	header.add_child(sort_select)
+	var first_date: String = _date_string(_calendar_year, _calendar_month, 1)
+	var offset: int = (SeasonCalendar.weekday_for_date(first_date) + 6) % 7
+	var days: int = _days_in_month(_calendar_year, _calendar_month)
+	var grid_y: float = CAL_RECT.position.y + 100
+	var grid_bottom: float = CAL_RECT.end.y - 40
+	var cell_h: float = (grid_bottom - grid_y - cell_gap * 5.0) / 6.0
+	var n: int = 1 - offset
+	for row in range(6):
+		for col in range(7):
+			var cell_rect: Rect2 = Rect2(inner_x + col * (cell_w + cell_gap), grid_y + row * (cell_h + cell_gap), cell_w, cell_h)
+			if n >= 1 and n <= days:
+				_draw_day_cell(cell_rect, _date_string(_calendar_year, _calendar_month, n), n, col, team_id, season)
+			else:
+				_round(cell_rect, Color(0.056, 0.066, 0.080), BORDER_SOFT, 7)
+			n += 1
 
-	var detail_button: Button = Button.new()
-	detail_button.text = "詳細"
-	detail_button.custom_minimum_size = Vector2(68, 34)
-	detail_button.pressed.connect(_open_selected_player_detail)
-	header.add_child(detail_button)
-
-	var split: HSplitContainer = HSplitContainer.new()
-	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_child(split)
-
-	player_list = SortableTable.new()
-	split.add_child(player_list)
-	player_list.configure(ROSTER_COLUMNS)
-	player_list.item_selected.connect(_on_player_selected)
-	player_list.row_activated.connect(func(meta: Variant) -> void: AppState.show_player_detail(int(meta)))
-
-	detail_text = RichTextLabel.new()
-	detail_text.bbcode_enabled = false
-	detail_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	split.add_child(detail_text)
-
-	_refresh_player_list(team_id)
-	return box
+	_draw_legend(Rect2(CAL_RECT.position.x + 16, grid_bottom + 8, inner_w, 26))
 
 
-func _build_schedule_panel() -> Control:
-	var box: VBoxContainer = VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", 8)
+func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, team_id: int, season: PSSeason) -> void:
+	var is_today: bool = date_text == SeasonCalendar.current_date(season)
+	var games: Array = _filtered_games_on_date(date_text, season, team_id)
+	var has_team_game: bool = false
+	var has_dh: bool = false
+	for game_value in games:
+		var g: Dictionary = game_value as Dictionary
+		if _is_team_game(g, team_id):
+			has_team_game = true
+			if bool(g.get("dh_enabled", false)):
+				has_dh = true
 
-	_add_today_games_section(box)
-	_add_team_pulse_section(box)
-	_add_standings_list(box)
-	_add_upcoming_schedule_section(box)
-	_add_injuries_section(box)
+	var border: Color = BORDER_SOFT
+	if is_today:
+		border = BLUE
+	elif has_team_game:
+		border = Color(BLUE.r, BLUE.g, BLUE.b, 0.5)
+	_round(rect, Color(0.118, 0.144, 0.176) if is_today else PANEL_2, border, 7, 2 if is_today else 1)
 
-	return box
+	var num_color: Color = TEXT if is_today else MUTED
+	if not is_today:
+		if col == 6:
+			num_color = Color(RED.r, RED.g, RED.b, 0.8)
+		elif col == 5:
+			num_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.85)
+	_text(str(day_number), Vector2(rect.position.x + 9, rect.position.y + 21), 14, num_color)
+
+	# バッジは上段に置き、セル本文 (対戦カード) と重ねない。
+	var badge_x: float = rect.end.x - 44
+	if is_today:
+		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), "本日", BLUE)
+		badge_x -= 38
+	if has_dh:
+		_chip(Rect2(badge_x, rect.position.y + 7, 30, 18), "DH", BLUE_SOFT)
+
+	if games.is_empty():
+		if _calendar_filter == "team" or _calendar_filter == "all":
+			_text("休養", Vector2(rect.position.x + 10, rect.position.y + 54), 12, FAINT)
+		return
+
+	# 自軍1試合は添付画像どおり大きく (対戦カード+スコア+白星/黒星/三角)、
+	# 「全試合」のリーグ複数試合だけコンパクトな複数ピルにする。
+	if games.size() == 1 and _is_team_game(games[0] as Dictionary, team_id):
+		_draw_cell_self_game(rect, games[0] as Dictionary, team_id)
+		return
+
+	games.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var au: bool = _is_team_game(a as Dictionary, team_id)
+		var bu: bool = _is_team_game(b as Dictionary, team_id)
+		return au if au != bu else _game_title(a as Dictionary) < _game_title(b as Dictionary)
+	)
+	var shown: Array = games.slice(0, 2)
+	var y: float = rect.position.y + 34
+	var slot_h: float = 30.0
+	for game_value in shown:
+		_draw_cell_game(Rect2(rect.position.x + 7, y, rect.size.x - 14, slot_h - 4), game_value as Dictionary, team_id)
+		y += slot_h
+	if games.size() > shown.size():
+		_text("+%d試合" % (games.size() - shown.size()), Vector2(rect.position.x + 10, y + 12), 10, MUTED)
 
 
-func _add_today_games_section(parent: Control) -> void:
-	var season: PSSeason = AppState.current_season
-	var title: Label = Label.new()
-	title.text = "本日の試合 (%s)" % SeasonCalendar.label_for_date(SeasonCalendar.current_date(season))
-	title.add_theme_font_size_override("font_size", 18)
-	parent.add_child(title)
-
-	var table: Tree = SortableTable.new()
-	table.custom_minimum_size = Vector2(500, 150)
-	table.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	parent.add_child(table)
-	table.configure(TODAY_GAME_COLUMNS, false)
-
-	var rows: Array = []
-	for game_row in season.schedule:
-		var game: Dictionary = game_row as Dictionary
-		if int(game.get("day", 0)) == season.current_day:
-			rows.append(_today_game_row(game))
-	table.set_rows(rows)
+func _draw_cell_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
+	var is_team: bool = _is_team_game(game, team_id)
+	var played: bool = bool(game.get("played", false))
+	var color: Color = _game_color(game, team_id)
+	_round(rect, Color(color.r, color.g, color.b, 0.14), Color(color.r, color.g, color.b, 0.34), 5)
+	var label: String = ""
+	if is_team:
+		label = _short_matchup(game, team_id)
+	else:
+		label = _game_title(game)
+		if played:
+			label += "  %s" % _score(game)
+	_text(label, Vector2(rect.position.x + 8, rect.position.y + 16), 11, TEXT if is_team else MUTED, rect.size.x - 40)
+	if played:
+		_text(_result_symbol(game, team_id) if is_team else _winner_short(game), Vector2(rect.end.x - 26, rect.position.y + 16), 12, color)
+	elif is_team:
+		_text("予定", Vector2(rect.end.x - 34, rect.position.y + 16), 10, MUTED)
 
 
-func _today_game_row(game: Dictionary) -> Dictionary:
+# 自軍1試合セル: 対戦カード + スコア + 白星/黒星/三角 を添付画像どおり大きめに描く。
+func _draw_cell_self_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
+	var played: bool = bool(game.get("played", false))
+	var color: Color = _game_color(game, team_id)
+	var pill: Rect2 = Rect2(rect.position.x + 7, rect.position.y + 34, rect.size.x - 14, rect.size.y - 44)
+	_round(pill, Color(color.r, color.g, color.b, 0.13), Color(color.r, color.g, color.b, 0.36), 6)
 	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
 	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
 	if away == null or home == null:
-		return {"mark": "", "away": "-", "score": "", "home": "-", "result": ""}
-	var dh_label: String = " DH" if bool(game.get("dh_enabled", false)) else ""
-	var is_user_game: bool = (away.id == AppState.selected_team_id or home.id == AppState.selected_team_id)
-	var mark: String = "★" if is_user_game else ""
+		return
+	var opponent: PSTeam = home if away.id == team_id else away
+	var venue: String = "@" if away.id == team_id else "vs"
+	_text("%s %s" % [venue, opponent.short_name], Vector2(pill.position.x + 10, pill.position.y + 24), 14, TEXT, pill.size.x - 20)
+	if played:
+		_text(_self_score(game, team_id), Vector2(pill.position.x + 10, pill.position.y + 50), 14, TEXT)
+		_text(_result_symbol(game, team_id), Vector2(pill.end.x - 30, pill.position.y + 51), 16, color)
+	else:
+		_text("予定", Vector2(pill.position.x + 10, pill.position.y + 50), 13, MUTED)
+
+
+# 自軍視点のスコア (自軍得点 - 相手得点)。勝てば大きい方が先に出る。
+func _self_score(game: Dictionary, team_id: int) -> String:
+	var user_home: bool = int(game.get("home_team_id", 0)) == team_id
+	var us: int = int(game.get("home_score", 0)) if user_home else int(game.get("away_score", 0))
+	var them: int = int(game.get("away_score", 0)) if user_home else int(game.get("home_score", 0))
+	return "%d - %d" % [us, them]
+
+
+func _draw_legend(rect: Rect2) -> void:
+	var x: float = rect.position.x
+	var y: float = rect.position.y + 17
+	for item_value in LEGEND:
+		var item: Dictionary = item_value as Dictionary
+		var mark: String = str(item.get("mark", ""))
+		if mark.is_empty():
+			_dot(Vector2(x + 6, y - 4), 5, item["color"] as Color)
+		else:
+			_text(mark, Vector2(x, y), 13, item["color"] as Color)
+		_text(str(item["label"]), Vector2(x + 18, y), 11, MUTED)
+		x += 20 + _measure(str(item["label"]), 11) + 18
+	_chip(Rect2(x, y - 15, 30, 18), "DH", BLUE_SOFT)
+	_text("DH試合", Vector2(x + 38, y), 11, MUTED)
+
+
+# --- 右カラム ---
+
+func _draw_right_column(team_id: int, season: PSSeason) -> void:
+	_draw_today_card(Rect2(RIGHT_X, 206, RIGHT_W, 214), team_id, season)
+	_draw_yesterday(Rect2(RIGHT_X, 432, RIGHT_W, 208), team_id, season)
+	_draw_standings(Rect2(RIGHT_X, 652, RIGHT_W, 214), team_id, season)
+	_draw_upcoming(Rect2(RIGHT_X, 878, 294, 182), team_id, season)
+	_draw_injuries(Rect2(RIGHT_X + 306, 878, 294, 182), team_id)
+
+
+func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
+	_panel(rect, "今日のカード")
+	var game: Dictionary = _team_game_on_day(team_id, season.current_day)
+	var ox: float = rect.position.x + 18
+	if game.is_empty():
+		_text("本日は自軍の試合はありません", Vector2(ox, rect.position.y + 78), 16, TEXT)
+		var next_game: Dictionary = _next_team_game(team_id, season.current_day)
+		if not next_game.is_empty():
+			_text("次戦  %s   %s" % [
+				SeasonCalendar.compact_label_for_game(next_game, season),
+				_matchup_for_team(next_game, team_id),
+			], Vector2(ox, rect.position.y + 112), 14, MUTED)
+		return
+
+	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
+	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+	if away == null or home == null:
+		return
+	# 対戦カード行
+	var row_y: float = rect.position.y + 50
+	_team_badge(Rect2(ox, row_y, 34, 34), away)
+	_text(away.name, Vector2(ox + 44, row_y + 23), 16, TEXT, 180)
+	_text("VS", Vector2(rect.position.x + rect.size.x * 0.5 - 14, row_y + 23), 15, MUTED)
+	var hx: float = rect.end.x - 18 - 220
+	_team_badge(Rect2(hx, row_y, 34, 34), home)
+	_text(home.name, Vector2(hx + 44, row_y + 23), 16, TEXT, 176)
+
+	# 会場 (球場データは無いため主催チームで代替) + DH
+	var host_label: String = "%s 主催（%s）" % [home.name, "ホーム" if home.id == team_id else "ビジター"]
+	_text(host_label, Vector2(ox, rect.position.y + 110), 13, MUTED)
+	if bool(game.get("dh_enabled", false)):
+		_chip(Rect2(rect.end.x - 52, rect.position.y + 98, 34, 18), "DH", BLUE_SOFT)
+
+	# 予告先発
+	_text("予告先発  %s  %s" % [away.short_name, _pitcher_line(_probable_pitcher(away.id, season))], Vector2(ox, rect.position.y + 138), 13, TEXT)
+	_text("予告先発  %s  %s" % [home.short_name, _pitcher_line(_probable_pitcher(home.id, season))], Vector2(ox, rect.position.y + 160), 13, TEXT)
 
 	if bool(game.get("played", false)):
-		var winner: int = int((game.get("result", {}) as Dictionary).get("winning_team_id", 0))
-		var result_text: String = "引分"
-		if winner == away.id:
-			result_text = "%s 勝" % away.short_name
-		elif winner == home.id:
-			result_text = "%s 勝" % home.short_name
-		return {
-			"mark": mark,
-			"away": away.short_name,
-			"score": "%d-%d" % [int(game.get("away_score", 0)), int(game.get("home_score", 0))],
-			"home": home.short_name + dh_label,
-			"result": result_text,
-		}
-	return {
-		"mark": mark,
-		"away": away.short_name,
-		"score": "-",
-		"home": home.short_name + dh_label,
-		"result": "予定",
-	}
+		_text("終了  %s  %s" % [_score(game), _result_symbol(game, team_id)], Vector2(ox, rect.position.y + 192), 15, _game_color(game, team_id))
 
 
-func _add_team_pulse_section(parent: Control) -> void:
-	var team_id: int = AppState.selected_team_id
-	if team_id <= 0:
+# 6試合を 2行x3列 のミニカードで表示。各カードは「[Aバッジ] 2-4 [Bバッジ]」の横並び。
+# 強調はスコアのみ (勝者のスコアを明色、敗者を淡色)。バッジは減光しない。
+func _draw_yesterday(rect: Rect2, team_id: int, season: PSSeason) -> void:
+	_panel(rect, "前日の試合結果")
+	var day: int = max(1, season.current_day - 1)
+	_text(SeasonCalendar.label_for_date(SeasonCalendar.date_for_season_day(season, day)), Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
+	var rows: Array = _games_on_day(day, season)
+	if rows.is_empty():
+		_text("試合はありません", Vector2(rect.position.x + 18, rect.position.y + 92), 14, MUTED)
 		return
+	# 自軍の試合を先頭(左上)へ寄せる。
+	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return _is_team_game(a as Dictionary, team_id) and not _is_team_game(b as Dictionary, team_id)
+	)
+	var gap: float = 8.0
+	var gx: float = rect.position.x + 14.0
+	var gy: float = rect.position.y + 50.0
+	var cw: float = (rect.size.x - 28.0 - gap * 2.0) / 3.0
+	var ch: float = (rect.size.y - 62.0 - gap) / 2.0
+	for i in range(min(rows.size(), 6)):
+		var col: int = i % 3
+		var row: int = 0 if i < 3 else 1
+		var cell: Rect2 = Rect2(gx + col * (cw + gap), gy + row * (ch + gap), cw, ch)
+		_draw_yesterday_game(cell, rows[i] as Dictionary, team_id)
+
+
+func _draw_yesterday_game(cell: Rect2, game: Dictionary, team_id: int) -> void:
+	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
+	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+	if away == null or home == null:
+		return
+	var played: bool = bool(game.get("played", false))
+	var result: Dictionary = game.get("result", {}) as Dictionary
+	var draw_game: bool = bool(result.get("draw", false))
+	var winner_id: int = int(result.get("winning_team_id", 0))
+	var away_won: bool = played and not draw_game and winner_id == away.id
+	var home_won: bool = played and not draw_game and winner_id == home.id
+	var is_self: bool = _is_team_game(game, team_id)
+
+	_round(cell, PANEL_2, Color(BLUE.r, BLUE.g, BLUE.b, 0.55) if is_self else BORDER_SOFT, 7)
+
+	# [away] スコア [home] を中央寄せで横並び。
+	var badge: float = 30.0
+	var center: float = cell.position.x + cell.size.x * 0.5
+	var by: float = cell.position.y + (cell.size.y - badge) * 0.5
+	var sy: float = cell.position.y + cell.size.y * 0.5 + 6.0
+	_team_badge(Rect2(center - 58.0, by, badge, badge), away)
+	_team_badge(Rect2(center + 28.0, by, badge, badge), home)
+	if played:
+		_text_right(str(int(game.get("away_score", 0))), center - 7.0, sy, 18, TEXT if (away_won or draw_game) else FAINT, 22)
+		_text("-", Vector2(center - 4.0, sy), 16, MUTED)
+		_text(str(int(game.get("home_score", 0))), Vector2(center + 8.0, sy), 18, TEXT if (home_won or draw_game) else FAINT)
+	else:
+		_text("-", Vector2(center - 4.0, sy), 14, MUTED)
+
+
+func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	var team: PSTeam = GameDb.get_team(team_id)
-	if team == null:
-		return
+	var league_key: String = team.league if team != null else "central"
+	_panel(rect, "順位 / チーム指標")
+	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
-	var title: Label = Label.new()
-	title.text = "%s 直近10試合" % team.short_name
-	title.add_theme_font_size_override("font_size", 16)
-	parent.add_child(title)
+	var hy: float = rect.position.y + 56
+	_text("順", Vector2(rect.position.x + 18, hy), 11, FAINT)
+	_text("チーム", Vector2(rect.position.x + 50, hy), 11, FAINT)
+	_text_right("勝", rect.position.x + 268, hy, 11, FAINT)
+	_text_right("敗", rect.position.x + 318, hy, 11, FAINT)
+	_text_right("分", rect.position.x + 366, hy, 11, FAINT)
+	_text_right("勝率", rect.position.x + 446, hy, 11, FAINT)
+	_text_right("GB", rect.position.x + 512, hy, 11, FAINT)
+	_text_right("防御率", rect.end.x - 18, hy, 11, FAINT)
 
-	var pulse_label: Label = Label.new()
-	pulse_label.text = _build_recent_pulse(team_id)
-	pulse_label.add_theme_font_size_override("font_size", 16)
-	parent.add_child(pulse_label)
-
-
-func _build_recent_pulse(team_id: int) -> String:
-	var season: PSSeason = AppState.current_season
-	if season == null:
-		return ""
-	var played: Array = []
-	for game_row in season.schedule:
-		var game: Dictionary = game_row as Dictionary
-		if not bool(game.get("played", false)):
-			continue
-		var away_id: int = int(game.get("away_team_id", 0))
-		var home_id: int = int(game.get("home_team_id", 0))
-		if away_id != team_id and home_id != team_id:
-			continue
-		played.append(game)
-
-	played.sort_custom(func(a, b) -> bool:
-		return int((a as Dictionary).get("day", 0)) > int((b as Dictionary).get("day", 0))
-	)
-
-	if played.is_empty():
-		return "(消化済みの試合がありません)"
-
-	var recent: Array = played.slice(0, 10)
-	recent.reverse()
-	var parts: Array = []
-	var wins: int = 0
-	var losses: int = 0
-	var draws: int = 0
-	for game_row in recent:
-		var game: Dictionary = game_row as Dictionary
-		var result_dict: Dictionary = game.get("result", {}) as Dictionary
-		if bool(result_dict.get("draw", false)):
-			parts.append("△")
-			draws += 1
-		elif int(result_dict.get("winning_team_id", 0)) == team_id:
-			parts.append("○")
-			wins += 1
-		else:
-			parts.append("●")
-			losses += 1
-	return "%s   (%d勝 %d敗 %d分)" % [" ".join(parts), wins, losses, draws]
-
-
-func _add_upcoming_schedule_section(parent: Control) -> void:
-	var team_id: int = AppState.selected_team_id
-	if team_id <= 0:
-		return
-	var team: PSTeam = GameDb.get_team(team_id)
-	if team == null:
-		return
-
-	var title: Label = Label.new()
-	title.text = "今後の自軍試合"
-	title.add_theme_font_size_override("font_size", 16)
-	parent.add_child(title)
-
-	var table: Tree = SortableTable.new()
-	table.custom_minimum_size = Vector2(500, 120)
-	table.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	parent.add_child(table)
-	table.configure(UPCOMING_COLUMNS, false)
-
-	var season: PSSeason = AppState.current_season
-	var rows: Array = []
-	var shown: int = 0
-	for game_row in season.schedule:
-		var game: Dictionary = game_row as Dictionary
-		if bool(game.get("played", false)):
-			continue
-		if shown >= 10:
-			break
-		var away_id: int = int(game.get("away_team_id", 0))
-		var home_id: int = int(game.get("home_team_id", 0))
-		if away_id != team_id and home_id != team_id:
-			continue
-		var venue: String = "@" if team_id == away_id else "vs"
-		var opp_id: int = home_id if team_id == away_id else away_id
-		var opp: PSTeam = GameDb.get_team(opp_id)
-		var opp_name: String = opp.short_name if opp != null else "-"
-		var dh_label: String = " DH" if bool(game.get("dh_enabled", false)) else ""
-		var game_day: int = int(game.get("day", 0))
-		var when_text: String = SeasonCalendar.relative_label(season.current_day, game_day)
-		rows.append({
-			"date": SeasonCalendar.compact_label_for_game(game, season),
-			"day": game_day,
-			"when": when_text,
-			"venue": venue,
-			"opp": opp_name + dh_label,
-		})
-		shown += 1
-	table.set_rows(rows)
-
-
-func _add_injuries_section(parent: Control) -> void:
-	var team_id: int = AppState.selected_team_id
-	if team_id <= 0:
-		return
-	var injured: Array = []
-	for record_row in RecordStore.get_current_player_records_for_team(team_id):
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record.injury_days > 0:
-			injured.append(record)
-	if injured.is_empty():
-		return
-
-	var title: Label = Label.new()
-	title.text = "怪我選手 (%d人)" % injured.size()
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", Color(0.95, 0.80, 0.45))
-	parent.add_child(title)
-
-	injured.sort_custom(func(a, b) -> bool:
-		return (a as PSPlayerSeasonRecord).injury_days > (b as PSPlayerSeasonRecord).injury_days
-	)
-
-	var table: Tree = SortableTable.new()
-	table.custom_minimum_size = Vector2(640, 100)
-	table.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	parent.add_child(table)
-	table.configure(INJURY_COLUMNS)
-	table.set_default_sort(3, false)  # 残り日 降順
-	var rows: Array = []
-	for record_row in injured:
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		rows.append({
-			"pos": _role_or_position_name(record),
-			"name": record.name,
-			"label": record.injury_display_label(),
-			"days": record.injury_days,
-		})
-	table.set_rows(rows)
-
-
-func _add_standings_list(parent: Control) -> void:
-	var title: Label = Label.new()
-	title.text = "順位 / チーム指標"
-	title.add_theme_font_size_override("font_size", 18)
-	parent.add_child(title)
-
-	var split: HSplitContainer = HSplitContainer.new()
-	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.custom_minimum_size = Vector2(0, 300)
-	parent.add_child(split)
-
-	for league_row in LEAGUES:
-		var league: Dictionary = league_row as Dictionary
-		var key: String = str(league["key"])
-		var label_text: String = str(league["label"])
-		_add_home_league_panel(split, label_text, key)
-
-
-func _add_home_league_panel(split_parent: Control, label_text: String, league_key: String) -> void:
-	var panel: VBoxContainer = VBoxContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	panel.add_theme_constant_override("separation", 4)
-	split_parent.add_child(panel)
-
-	var label: Label = Label.new()
-	label.text = label_text
-	label.add_theme_font_size_override("font_size", 15)
-	label.add_theme_color_override("font_color", Color(0.78, 0.82, 0.86))
-	panel.add_child(label)
-
-	var table: Tree = SortableTable.new()
-	table.custom_minimum_size = Vector2(360, 280)
-	panel.add_child(table)
-	table.configure(HOME_STANDINGS_COLUMNS)
-	table.set_default_sort(5, false)  # 勝率 降順
-
-	var entries: Array = []
-	for team_id in AppState.current_season.standings.keys():
-		var team: PSTeam = GameDb.get_team(int(team_id))
-		if team == null or team.league != league_key:
-			continue
-		entries.append({
-			"team": team,
-			"stats": AppState.current_season.standings[team_id],
-			"remaining": AppState.current_season.team_games_remaining(int(team_id)),
-			"metrics": _team_metrics(int(team_id)),
-		})
-
-	entries.sort_custom(func(a, b) -> bool:
-		var row_a: Dictionary = a as Dictionary
-		var row_b: Dictionary = b as Dictionary
-		var stats_a: PSStats = row_a["stats"] as PSStats
-		var stats_b: PSStats = row_b["stats"] as PSStats
-		if stats_a.win_rate() == stats_b.win_rate():
-			return stats_a.wins > stats_b.wins
-		return stats_a.win_rate() > stats_b.win_rate()
-	)
-
-	var leader_stats: PSStats = null
-	if not entries.is_empty():
-		leader_stats = (entries[0] as Dictionary)["stats"] as PSStats
-
-	var rows: Array = []
+	var entries: Array = _league_entries(league_key, season)
+	var leader: PSStats = (entries[0] as Dictionary).get("stats") as PSStats if not entries.is_empty() else null
+	var y: float = rect.position.y + 80
 	var rank: int = 1
-	for row_data in entries:
-		var row: Dictionary = row_data as Dictionary
-		var team: PSTeam = row["team"] as PSTeam
-		var stats: PSStats = row["stats"] as PSStats
-		var metrics: Dictionary = row.get("metrics", {}) as Dictionary
-		var has_pitching: bool = int(metrics.get("outs_pitched", 0)) > 0
-		rows.append({
-			"rank": rank,
-			"team": team.short_name,
-			"w": stats.wins,
-			"l": stats.losses,
-			"d": stats.draws,
-			"pct": stats.win_rate(),
-			"gb": 0.0 if (rank == 1 or leader_stats == null) else _game_back(leader_stats, stats),
-			"rem": int(row.get("remaining", 0)),
-			"avg": float(metrics.get("batting_average", 0.0)),
-			"hr": int(metrics.get("home_runs", 0)),
-			"era": float(metrics.get("earned_run_average", 0.0)) if has_pitching else 0.0,
-		})
+	for entry_value in entries:
+		var entry: Dictionary = entry_value as Dictionary
+		var row_team: PSTeam = entry["team"] as PSTeam
+		var stats: PSStats = entry["stats"] as PSStats
+		var is_self: bool = row_team.id == team_id
+		if is_self:
+			_round(Rect2(rect.position.x + 12, y - 17, rect.size.x - 24, 24), Color(BLUE.r, BLUE.g, BLUE.b, 0.12), Color.TRANSPARENT, 5, 0)
+		var color: Color = BLUE if is_self else TEXT
+		_text(str(rank), Vector2(rect.position.x + 18, y), 13, color)
+		_text(row_team.short_name, Vector2(rect.position.x + 50, y), 13, color)
+		_text_right(str(stats.wins), rect.position.x + 268, y, 13, color)
+		_text_right(str(stats.losses), rect.position.x + 318, y, 13, color)
+		_text_right(str(stats.draws), rect.position.x + 366, y, 13, color)
+		_text_right(_rate_short(stats.win_rate()), rect.position.x + 446, y, 13, color)
+		_text_right("-" if leader == null or rank == 1 else _float1(_game_back(leader, stats)), rect.position.x + 512, y, 13, color)
+		_text_right(_era_str_for(row_team.id), rect.end.x - 18, y, 13, color)
+		y += 25
 		rank += 1
-	table.set_rows(rows)
 
 
-func _team_metrics(team_id: int) -> Dictionary:
-	var batter_stats: PSBatterStats = PSBatterStats.new()
-	var pitcher_stats: PSPitcherStats = PSPitcherStats.new()
+func _draw_upcoming(rect: Rect2, team_id: int, season: PSSeason) -> void:
+	_panel(rect, "今後の自軍試合")
+	var y: float = rect.position.y + 58
+	var count: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if count >= 4:
+			break
+		if bool(game.get("played", false)) or not _is_team_game(game, team_id):
+			continue
+		_text(SeasonCalendar.compact_label_for_game(game, season), Vector2(rect.position.x + 18, y), 13, TEXT if count == 0 else MUTED)
+		_text(_matchup_for_team(game, team_id), Vector2(rect.position.x + 110, y), 13, TEXT if count == 0 else MUTED, rect.size.x - 124)
+		y += 30
+		count += 1
+	if count == 0:
+		_text("未消化の自軍試合はありません", Vector2(rect.position.x + 18, rect.position.y + 64), 13, MUTED)
+
+
+func _draw_injuries(rect: Rect2, team_id: int) -> void:
+	var injured: Array = _injured_records(team_id)
+	_panel(rect, "怪我選手", AMBER if not injured.is_empty() else TEXT)
+	var hy: float = rect.position.y + 50
+	_text("選手", Vector2(rect.position.x + 18, hy), 11, FAINT)
+	_text_right("離脱", rect.end.x - 70, hy, 11, FAINT)
+	_text_right("復帰", rect.end.x - 14, hy, 11, FAINT)
+	if injured.is_empty():
+		_text("離脱者はいません", Vector2(rect.position.x + 18, rect.position.y + 78), 13, MUTED)
+		return
+	var y: float = rect.position.y + 74
+	for record_value in injured.slice(0, 4):
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		_text(record.name, Vector2(rect.position.x + 18, y), 13, TEXT, 150)
+		_text_right("%d日" % record.injury_days, rect.end.x - 70, y, 13, AMBER)
+		_text_right(_return_label(record.injury_days), rect.end.x - 14, y, 12, MUTED)
+		y += 28
+
+
+# ============================================================ buttons
+
+func _build_buttons() -> void:
+	for child in get_children():
+		if child is Button:
+			child.queue_free()
+	_buttons.clear()
+
+	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
-	if season == null:
-		return {
-			"batting_average": 0.0,
-			"home_runs": 0,
-			"earned_run_average": 0.0,
-			"outs_pitched": 0,
-		}
+	if team == null or season == null:
+		_add_button("team_select_empty", "チーム選択へ", Rect2(810, 560, 160, 46), func() -> void: AppState.request_screen("team_select"), "primary")
+		_add_button("options_empty", "オプション", Rect2(982, 560, 140, 46), func() -> void: AppState.request_screen("options"), "action")
+		_layout_buttons()
+		return
 
-	var records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
-	for record_row in records:
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		batter_stats.add_from(record.batter_stats)
-		if record.is_pitcher():
-			pitcher_stats.add_from(record.pitcher_stats)
+	# 上部アクション (1試合だけ消化する操作は廃止。日単位で進める)
+	_add_button("today", "本日を終了", Rect2(1384, 22, 128, 42), _simulate_current_day, "primary")
+	_add_button("remaining", "残り全試合", Rect2(1522, 22, 120, 42), _simulate_remaining_season, "action")
+	_add_button("save", "セーブ", Rect2(1652, 22, 88, 42), _save_game, "action")
+	var season_button: Button = _add_button("offseason", "翌年へ", Rect2(1750, 22, 150, 42), _on_offseason_pressed, "action")
+	_configure_offseason_button(season_button)
 
-	return {
-		"batting_average": batter_stats.batting_average(),
-		"home_runs": batter_stats.home_runs,
-		"earned_run_average": pitcher_stats.era(),
-		"outs_pitched": pitcher_stats.outs_pitched,
-	}
+	# サイドバー
+	for entry_value in _sidebar_entries:
+		var entry: Dictionary = entry_value as Dictionary
+		if str(entry.get("type", "")) != "item":
+			continue
+		var item: Dictionary = entry["item"] as Dictionary
+		var screen_name: String = str(item["id"])
+		var active: bool = screen_name == AppState.current_screen
+		_add_button("nav_%s" % screen_name, str(item["label"]), entry["rect"] as Rect2,
+			func(target: String = screen_name) -> void: AppState.request_screen(target),
+			"nav_active" if active else "nav")
+
+	# カレンダーのフィルタ (パネル右端から右寄せ配置)
+	var fwidths: Array = []
+	var total_fw: float = 0.0
+	for filter_value in FILTERS:
+		var fw: float = 26.0 + _measure(str((filter_value as Dictionary)["label"]), 13) + 20.0
+		fwidths.append(fw)
+		total_fw += fw
+	total_fw += 8.0 * float(FILTERS.size() - 1)
+	var fx: float = CAL_RECT.end.x - 16.0 - total_fw
+	for idx in range(FILTERS.size()):
+		var filter: Dictionary = FILTERS[idx] as Dictionary
+		var fid: String = str(filter["id"])
+		_add_button("filter_%s" % fid, str(filter["label"]), Rect2(fx, 218, float(fwidths[idx]), 30),
+			func(target: String = fid) -> void: _set_calendar_filter(target),
+			"chip_active" if _calendar_filter == fid else "chip")
+		fx += float(fwidths[idx]) + 8.0
+
+	# 月送り
+	_add_button("prev_month", "‹", Rect2(CAL_RECT.position.x + 18, 216, 30, 30), func() -> void: _shift_month(-1), "chip")
+	_add_button("next_month", "›", Rect2(CAL_RECT.position.x + 220, 216, 30, 30), func() -> void: _shift_month(1), "chip")
+
+	# この試合を消化 (本日を終了と同じく日単位で消化する)
+	var today_game: Dictionary = _team_game_on_day(team.id, season.current_day)
+	if not today_game.is_empty() and not bool(today_game.get("played", false)):
+		_add_button("play_today", "この試合を消化", Rect2(RIGHT_X + RIGHT_W - 196, 372, 180, 36), _simulate_current_day, "primary")
+
+	_layout_buttons()
 
 
-func _simulate_next_game() -> void:
-	# 1 試合だけなので同期で十分 (~100-300ms)
-	var result: Dictionary = AppState.simulate_next_game()
-	if status_label != null:
-		status_label.text = str(result.get("message", ""))
+func _add_button(id: String, label: String, base_rect: Rect2, callback: Callable, kind: String) -> Button:
+	var button: Button = Button.new()
+	button.text = label
+	button.focus_mode = Control.FOCUS_NONE
+	button.clip_text = true
+	if kind == "nav" or kind == "nav_active":
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.pressed.connect(callback)
+	add_child(button)
+	_buttons.append({"id": id, "button": button, "rect": base_rect, "kind": kind})
+	return button
 
+
+func _layout_buttons() -> void:
+	_update_transform()
+	for spec_value in _buttons:
+		var spec: Dictionary = spec_value as Dictionary
+		var button: Button = spec["button"] as Button
+		if button == null:
+			continue
+		var rect: Rect2 = _r(spec["rect"] as Rect2)
+		button.position = rect.position
+		button.size = rect.size
+		_apply_button_style(button, str(spec.get("kind", "action")))
+
+
+func _apply_button_style(button: Button, kind: String) -> void:
+	var font_px: int = max(9, int(round(14.0 * _scale_f)))
+	var nav_pad: int = int(round(40.0 * _scale_f))
+	match kind:
+		"primary":
+			_style(button, BLUE, BLUE, TEXT, Color(0.360, 0.660, 1.0), Color(0.180, 0.430, 0.800))
+		"action":
+			_style(button, PANEL_3, BORDER, TEXT, Color(0.180, 0.220, 0.270), PANEL_2)
+		"chip_active":
+			_style(button, BLUE, BLUE, TEXT, Color(0.360, 0.660, 1.0), Color(0.180, 0.430, 0.800))
+			font_px = max(9, int(round(13.0 * _scale_f)))
+		"chip":
+			_style(button, PANEL_2, BORDER, MUTED, Color(0.160, 0.200, 0.245), PANEL)
+			font_px = max(9, int(round(13.0 * _scale_f)))
+		"nav_active":
+			_style(button, Color.TRANSPARENT, Color.TRANSPARENT, TEXT, Color(1, 1, 1, 0.06), Color(BLUE.r, BLUE.g, BLUE.b, 0.18), nav_pad)
+		_:
+			_style(button, Color.TRANSPARENT, Color.TRANSPARENT, MUTED, Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.09), nav_pad)
+	button.add_theme_font_size_override("font_size", font_px)
+
+
+func _style(button: Button, bg: Color, border: Color, fg: Color, hover: Color, pressed: Color, pad_left: int = 6) -> void:
+	button.add_theme_stylebox_override("normal", _box(bg, border, pad_left))
+	button.add_theme_stylebox_override("hover", _box(hover, border if border.a > 0.0 else BORDER, pad_left))
+	button.add_theme_stylebox_override("pressed", _box(pressed, BLUE, pad_left))
+	button.add_theme_stylebox_override("disabled", _box(PANEL, BORDER_SOFT, pad_left))
+	button.add_theme_color_override("font_color", fg)
+	button.add_theme_color_override("font_hover_color", TEXT)
+	button.add_theme_color_override("font_pressed_color", TEXT)
+	button.add_theme_color_override("font_disabled_color", FAINT)
+
+
+func _box(bg: Color, border: Color, pad_left: int) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = border
+	style.set_border_width_all(1 if border.a > 0.0 else 0)
+	style.set_corner_radius_all(7)
+	style.content_margin_left = pad_left
+	style.content_margin_right = 6
+	style.content_margin_top = 4
+	style.content_margin_bottom = 4
+	return style
+
+
+# ============================================================ actions
 
 func _simulate_current_day() -> void:
 	var ov: Dictionary = _show_progress_overlay("本日の試合を消化中…")
-	var result: Dictionary = await AppState.simulate_current_day_async(
-		get_tree(), ov["callback"], ov["cancel_token"], false
-	)
+	var result: Dictionary = await AppState.simulate_current_day_async(get_tree(), ov["callback"], ov["cancel_token"], false)
 	_hide_progress_overlay(ov)
-	if status_label != null:
-		status_label.text = str(result.get("message", ""))
+	_status_text = str(result.get("message", ""))
+	queue_redraw()
 
 
 func _simulate_remaining_season() -> void:
 	var ov: Dictionary = _show_progress_overlay("残り全試合を消化中…")
-	var result: Dictionary = await AppState.simulate_remaining_season_async(
-		get_tree(), ov["callback"], ov["cancel_token"], false
-	)
+	var result: Dictionary = await AppState.simulate_remaining_season_async(get_tree(), ov["callback"], ov["cancel_token"], false)
 	_hide_progress_overlay(ov)
-	if status_label != null:
-		status_label.text = str(result.get("message", ""))
-
-
-func _show_progress_overlay(label: String) -> Dictionary:
-	var overlay: ProgressOverlay = ProgressOverlayScript.new()
-	add_child(overlay)
-	var cancel_token: Dictionary = {"cancelled": false}
-	overlay.cancel_requested.connect(func() -> void: cancel_token["cancelled"] = true)
-	overlay.show_progress(label)
-	var update_cb: Callable = func(done: int, total: int, sub: String) -> void:
-		if overlay != null:
-			overlay.update_progress(done, total, sub)
-	return {
-		"overlay": overlay,
-		"cancel_token": cancel_token,
-		"callback": update_cb,
-	}
-
-
-func _hide_progress_overlay(ov: Dictionary) -> void:
-	var overlay: ProgressOverlay = ov.get("overlay") as ProgressOverlay
-	if overlay != null:
-		overlay.hide_progress()
-		overlay.queue_free()
+	_status_text = str(result.get("message", ""))
+	queue_redraw()
 
 
 func _save_game() -> void:
 	var ok: bool = SaveService.save_state(AppState)
-	if status_label != null:
-		status_label.text = "保存しました" if ok else "保存に失敗しました"
+	_status_text = "保存しました" if ok else "保存に失敗しました"
+	queue_redraw()
+
+
+func _set_calendar_filter(mode: String) -> void:
+	_calendar_filter = mode
+	_build_buttons()
+	queue_redraw()
+
+
+func _shift_month(delta: int) -> void:
+	_calendar_month += delta
+	while _calendar_month < 1:
+		_calendar_month += 12
+		_calendar_year -= 1
+	while _calendar_month > 12:
+		_calendar_month -= 12
+		_calendar_year += 1
+	queue_redraw()
 
 
 func _configure_offseason_button(button: Button) -> void:
@@ -645,27 +750,15 @@ func _configure_offseason_button(button: Button) -> void:
 		button.disabled = true
 		return
 	if AppState.offseason_active:
-		# 全ステップ処理済みの場合は finalize 直結ボタンに切り替える。
-		if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS:
-			button.text = "翌年開始"
-		else:
-			button.text = "オフシーズン続行"
+		button.text = "翌年開始" if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS else "オフ続行"
 		button.disabled = false
 		return
 	if AppState.postseason_active:
-		# ポストシーズン進行中またはJS完了で表彰待ち
-		if AppState.current_postseason != null and PostseasonService.is_complete(AppState.current_postseason):
-			button.text = "表彰へ"
-		else:
-			button.text = "ポストシーズン続行"
+		button.text = "表彰へ" if (AppState.current_postseason != null and PostseasonService.is_complete(AppState.current_postseason)) else "PS続行"
 		button.disabled = false
 		return
 	if season.is_finished():
-		# 表彰未了ならポストシーズン開始
-		if AppState.current_postseason == null or not PostseasonService.is_complete(AppState.current_postseason):
-			button.text = "ポストシーズン開始"
-		else:
-			button.text = "オフシーズン開始"
+		button.text = "ポストシーズン" if (AppState.current_postseason == null or not PostseasonService.is_complete(AppState.current_postseason)) else "オフシーズン"
 		button.disabled = false
 		return
 	button.text = "翌年へ"
@@ -677,316 +770,562 @@ func _on_offseason_pressed() -> void:
 	if season == null:
 		return
 	if AppState.offseason_active:
-		# 全ステップ処理済みなら直接 finalize へ (home → 翌年開始)。
-		# 途中ステップなら従来通り offseason 画面で続行。
 		if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS:
-			var ok: bool = AppState.finalize_offseason()
-			if not ok and status_label != null:
-				status_label.text = "翌年開始に失敗しました"
+			if not AppState.finalize_offseason():
+				_status_text = "翌年開始に失敗しました"
 		else:
 			AppState.request_screen("offseason")
 		return
 	if AppState.postseason_active:
 		if AppState.current_postseason != null and PostseasonService.is_complete(AppState.current_postseason):
 			var fin: Dictionary = AppState.finalize_postseason_to_awards()
-			if not bool(fin.get("ok", false)) and status_label != null:
-				status_label.text = str(fin.get("message", ""))
+			if not bool(fin.get("ok", false)):
+				_status_text = str(fin.get("message", ""))
 		else:
 			AppState.request_screen("postseason")
 		return
 	if not season.is_finished():
-		if status_label != null:
-			status_label.text = "シーズン完了後にオフシーズンを開始できます(残り%d試合)" % season.games_remaining()
+		_status_text = "シーズン完了後にオフシーズンを開始できます(残り%d試合)" % season.games_remaining()
+		queue_redraw()
 		return
-	# ポストシーズン未開始 → 開始する
 	if AppState.current_postseason == null or not PostseasonService.is_complete(AppState.current_postseason):
 		var ps: Dictionary = AppState.start_postseason()
-		if not bool(ps.get("ok", false)) and status_label != null:
-			status_label.text = str(ps.get("message", ""))
+		if not bool(ps.get("ok", false)):
+			_status_text = str(ps.get("message", ""))
 		return
-	# ポストシーズン完了済み → オフシーズン
 	var result: Dictionary = AppState.start_offseason()
-	if not bool(result.get("ok", false)) and status_label != null:
-		status_label.text = str(result.get("message", ""))
+	if not bool(result.get("ok", false)):
+		_status_text = str(result.get("message", ""))
+	queue_redraw()
 
 
-func _refresh_player_list(team_id: int) -> void:
-	if player_list == null:
-		return
+func _show_progress_overlay(title: String) -> Dictionary:
+	var overlay: ProgressOverlay = ProgressOverlayScript.new()
+	add_child(overlay)
+	var cancel_token: Dictionary = {"cancelled": false}
+	overlay.cancel_requested.connect(func() -> void: cancel_token["cancelled"] = true)
+	overlay.show_progress(title)
+	var update_cb: Callable = func(done: int, total: int, sub: String) -> void:
+		if overlay != null:
+			overlay.update_progress(done, total, sub)
+	return {"overlay": overlay, "cancel_token": cancel_token, "callback": update_cb}
 
-	current_records = RecordStore.get_current_player_records_for_team(team_id)
-	var rows: Array = []
-	for record_row in current_records:
-		rows.append(_roster_row(record_row as PSPlayerSeasonRecord))
-	player_list.set_rows(rows)
-	_apply_roster_sort()
-	_select_first_roster()
+
+func _hide_progress_overlay(ov: Dictionary) -> void:
+	var overlay: ProgressOverlay = ov.get("overlay") as ProgressOverlay
+	if overlay != null:
+		overlay.hide_progress()
+		overlay.queue_free()
 
 
-func _roster_row(record: PSPlayerSeasonRecord) -> Dictionary:
+# ============================================================ data helpers
+
+func _build_sidebar_layout() -> Array:
+	var entries: Array = []
+	var y: float = 96.0
+	var groups: Array = NAV_GROUPS.duplicate(true)
+	if DeveloperTools.enabled():
+		(groups[2]["items"] as Array).append({"id": "balance_report", "label": "分析ツール", "icon": "options"})
+	for group_value in groups:
+		var group: Dictionary = group_value as Dictionary
+		entries.append({"type": "title", "label": str(group["title"]), "y": y})
+		y += 28
+		for item_value in group["items"] as Array:
+			entries.append({"type": "item", "item": item_value, "rect": Rect2(12, y, SIDEBAR_W - 24, 38)})
+			y += 42
+		y += 14
+	return entries
+
+
+func _team_game_on_day(team_id: int, day: int) -> Dictionary:
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return {}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) == day and _is_team_game(game, team_id):
+			return game
+	return {}
+
+
+func _next_team_game(team_id: int, from_day: int) -> Dictionary:
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return {}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) >= from_day and not bool(game.get("played", false)) and _is_team_game(game, team_id):
+			return game
+	return {}
+
+
+func _games_on_day(day: int, season: PSSeason) -> Array:
+	var games: Array = []
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) == day:
+			games.append(game)
+	return games
+
+
+func _filtered_games_on_date(date_text: String, season: PSSeason, team_id: int) -> Array:
+	# 既定は自軍の試合のみ表示 (添付画像どおり)。フィルタ:
+	#   team=自軍全試合 / unplayed=自軍の未消化 / result=自軍の結果 / all=自軍リーグ全試合。
+	var user_team: PSTeam = GameDb.get_team(team_id)
+	var league: String = user_team.league if user_team != null else ""
+	var games: Array = []
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if _date_for_game(game, season) != date_text:
+			continue
+		match _calendar_filter:
+			"team":
+				if not _is_team_game(game, team_id):
+					continue
+			"unplayed":
+				if not _is_team_game(game, team_id) or bool(game.get("played", false)):
+					continue
+			"result":
+				if not _is_team_game(game, team_id) or not bool(game.get("played", false)):
+					continue
+			_:
+				if not _game_in_league(game, league):
+					continue
+		games.append(game)
+	return games
+
+
+func _game_in_league(game: Dictionary, league: String) -> bool:
+	if league.is_empty():
+		return true
+	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
+	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+	return (away != null and away.league == league) or (home != null and home.league == league)
+
+
+func _date_for_game(game: Dictionary, season: PSSeason) -> String:
+	var date_text: String = str(game.get("date", ""))
+	if not date_text.is_empty():
+		return date_text
+	return SeasonCalendar.date_for_season_day(season, int(game.get("day", 1)))
+
+
+func _is_team_game(game: Dictionary, team_id: int) -> bool:
+	return int(game.get("away_team_id", 0)) == team_id or int(game.get("home_team_id", 0)) == team_id
+
+
+func _matchup_for_team(game: Dictionary, team_id: int) -> String:
+	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
+	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+	if away == null or home == null:
+		return "-"
+	var opponent: PSTeam = home if away.id == team_id else away
+	var venue: String = "@" if away.id == team_id else "vs"
+	return "%s %s" % [venue, opponent.name]
+
+
+func _short_matchup(game: Dictionary, team_id: int) -> String:
+	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
+	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+	if away == null or home == null:
+		return "-"
+	var opponent: PSTeam = home if away.id == team_id else away
+	var venue: String = "@" if away.id == team_id else "vs"
+	if bool(game.get("played", false)):
+		return "%s %s %s" % [venue, opponent.short_name, _score(game)]
+	return "%s %s" % [venue, opponent.short_name]
+
+
+func _game_title(game: Dictionary) -> String:
+	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
+	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+	return "%s-%s" % [away.short_name if away != null else "-", home.short_name if home != null else "-"]
+
+
+func _score(game: Dictionary) -> String:
+	return "%d-%d" % [int(game.get("away_score", 0)), int(game.get("home_score", 0))]
+
+
+func _result_symbol(game: Dictionary, team_id: int) -> String:
+	if not bool(game.get("played", false)):
+		return ""
+	var result: Dictionary = game.get("result", {}) as Dictionary
+	if bool(result.get("draw", false)):
+		return "△"
+	return "○" if int(result.get("winning_team_id", 0)) == team_id else "●"
+
+
+func _winner_short(game: Dictionary) -> String:
+	if not bool(game.get("played", false)):
+		return "予定"
+	var result: Dictionary = game.get("result", {}) as Dictionary
+	if bool(result.get("draw", false)):
+		return "△"
+	var team: PSTeam = GameDb.get_team(int(result.get("winning_team_id", 0)))
+	return team.short_name if team != null else "-"
+
+
+func _game_color(game: Dictionary, team_id: int) -> Color:
+	if not bool(game.get("played", false)):
+		return BLUE
+	var symbol: String = _result_symbol(game, team_id)
+	if symbol == "○":
+		return GREEN
+	if symbol == "●":
+		return RED
+	if symbol == "△":
+		return AMBER
+	# 自軍以外の消化済み: 中立色
+	return MUTED
+
+
+func _standing_for_team(team_id: int) -> Dictionary:
+	var season: PSSeason = AppState.current_season
+	var team: PSTeam = GameDb.get_team(team_id)
+	if season == null or team == null:
+		return {}
+	var entries: Array = _league_entries(team.league, season)
+	var leader: PSStats = (entries[0] as Dictionary).get("stats") as PSStats if not entries.is_empty() else null
+	var rank: int = 1
+	for entry_value in entries:
+		var entry: Dictionary = entry_value as Dictionary
+		if (entry["team"] as PSTeam).id == team_id:
+			var stats: PSStats = entry["stats"] as PSStats
+			return {"rank": rank, "gb": 0.0 if leader == null or rank == 1 else _game_back(leader, stats)}
+		rank += 1
+	return {}
+
+
+func _league_entries(league_key: String, season: PSSeason) -> Array:
+	var entries: Array = []
+	for team_id in season.standings.keys():
+		var team: PSTeam = GameDb.get_team(int(team_id))
+		if team == null or team.league != league_key:
+			continue
+		entries.append({"team": team, "stats": season.standings[team_id]})
+	entries.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var sa: PSStats = (a as Dictionary)["stats"] as PSStats
+		var sb: PSStats = (b as Dictionary)["stats"] as PSStats
+		return sa.wins > sb.wins if is_equal_approx(sa.win_rate(), sb.win_rate()) else sa.win_rate() > sb.win_rate()
+	)
+	return entries
+
+
+func _injured_records(team_id: int) -> Array:
+	var injured: Array = []
+	for record_value in RecordStore.get_current_player_records_for_team(team_id):
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record.injury_days > 0:
+			injured.append(record)
+	injured.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return (a as PSPlayerSeasonRecord).injury_days > (b as PSPlayerSeasonRecord).injury_days
+	)
+	return injured
+
+
+func _compute_team_era(season: PSSeason) -> Dictionary:
+	var acc: Dictionary = {}
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record == null or record.year != season.year or record.season_number != season.season_number:
+			continue
+		var ps: PSPitcherStats = record.pitcher_stats
+		if ps == null or ps.outs_pitched <= 0:
+			continue
+		var bucket: Dictionary = acc.get(record.team_id, {"er": 0, "outs": 0}) as Dictionary
+		bucket["er"] = int(bucket["er"]) + ps.earned_runs
+		bucket["outs"] = int(bucket["outs"]) + ps.outs_pitched
+		acc[record.team_id] = bucket
+	var out: Dictionary = {}
+	for team_id in acc.keys():
+		var bucket: Dictionary = acc[team_id] as Dictionary
+		var outs: int = int(bucket["outs"])
+		out[team_id] = (float(bucket["er"]) * 27.0 / float(outs)) if outs > 0 else -1.0
+	return out
+
+
+func _era_str_for(team_id: int) -> String:
+	var era: float = float(_era_by_team.get(team_id, -1.0))
+	return "-" if era < 0.0 else "%0.2f" % era
+
+
+func _probable_pitcher(team_id: int, season: PSSeason) -> PSPlayerSeasonRecord:
+	var preview: Dictionary = PSTeamSetupBuilder.preview_rotation(season, team_id)
+	if not bool(preview.get("ok", false)):
+		return null
+	var pid: int = int(preview.get("next_pitcher_id", 0))
+	if pid <= 0:
+		return null
+	return RecordStore.get_player_record(pid, season.year, season.season_number)
+
+
+func _pitcher_line(record: PSPlayerSeasonRecord) -> String:
+	if record == null:
+		return "未定"
+	var ps: PSPitcherStats = record.pitcher_stats
+	var era: String = "-.--" if ps.outs_pitched <= 0 else "%0.2f" % ps.era()
+	return "%s  %d勝%d敗 防%s" % [record.name, ps.wins, ps.losses, era]
+
+
+func _return_label(days: int) -> String:
+	if days <= 0:
+		return "-"
+	if days >= 40:
+		return "未定"
+	var target_date: String = SeasonCalendar.add_days(SeasonCalendar.current_date(AppState.current_season), days)
+	var parts: PackedStringArray = target_date.split("-")
+	if parts.size() != 3:
+		return "%d日後" % days
+	return "%d/%d頃" % [int(parts[1]), int(parts[2])]
+
+
+# ============================================================ draw primitives
+
+func _update_transform() -> void:
+	_scale_f = min(size.x / BASE.x, size.y / BASE.y)
+	_offset = (size - BASE * _scale_f) * 0.5
+
+
+func _p(v: Vector2) -> Vector2:
+	return _offset + v * _scale_f
+
+
+func _r(rect: Rect2) -> Rect2:
+	return Rect2(_offset + rect.position * _scale_f, rect.size * _scale_f)
+
+
+func _round(base_rect: Rect2, bg: Color, border: Color, radius: int, border_width: int = 1) -> void:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = border
+	style.set_border_width_all(border_width)
+	style.set_corner_radius_all(radius)
+	draw_style_box(style, _r(base_rect))
+
+
+func _text(text: String, base_pos: Vector2, base_size: int, color: Color, base_width: float = -1.0, align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT) -> void:
+	draw_string(_font, _p(base_pos), text, align, (base_width * _scale_f) if base_width > 0.0 else -1.0, max(8, int(round(float(base_size) * _scale_f))), color)
+
+
+func _text_right(text: String, right_x: float, base_y: float, base_size: int, color: Color, box: float = 80.0) -> void:
+	_text(text, Vector2(right_x - box, base_y), base_size, color, box, HORIZONTAL_ALIGNMENT_RIGHT)
+
+
+func _line(from: Vector2, to: Vector2, color: Color, width: float) -> void:
+	draw_line(_p(from), _p(to), color, width * _scale_f, true)
+
+
+func _dot(base_center: Vector2, base_radius: float, color: Color) -> void:
+	draw_circle(_p(base_center), base_radius * _scale_f, color)
+
+
+func _chip(base_rect: Rect2, text: String, color: Color) -> void:
+	_round(base_rect, Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.5), 9)
+	_text(text, Vector2(base_rect.position.x, base_rect.position.y + base_rect.size.y * 0.72), int(base_rect.size.y * 0.52), color, base_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
+
+
+func _panel(base_rect: Rect2, title: String, color: Color = TEXT) -> void:
+	_round(base_rect, PANEL, BORDER, 10)
+	_text(title, Vector2(base_rect.position.x + 18, base_rect.position.y + 32), 16, color)
+
+
+func _measure(text: String, base_size: int) -> float:
+	return _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, base_size).x
+
+
+func _team_badge(base_rect: Rect2, team: PSTeam) -> void:
+	var bg: Color = Color(team.color.r * 0.85, team.color.g * 0.85, team.color.b * 0.85, 1.0)
+	_round(base_rect, bg, team.color, 9)
+	var label: String = team.short_name.substr(0, 2) if team.short_name.length() > 0 else "?"
+	var fg: Color = Color(0.05, 0.06, 0.08) if _luminance(bg) > 0.6 else Color.WHITE
+	_text(label, Vector2(base_rect.position.x, base_rect.position.y + base_rect.size.y * 0.68), int(base_rect.size.y * 0.48), fg, base_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
+
+
+func _luminance(c: Color) -> float:
+	return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b
+
+
+# 簡易ラインアイコン。base 座標の box 内に正規化座標で描く。
+func _icon(name: String, box: Rect2, color: Color) -> void:
+	var r: Rect2 = _r(box)
+	var w: float = max(1.3, 1.9 * _scale_f)
+	var pt: Callable = func(x: float, y: float) -> Vector2: return r.position + Vector2(x * r.size.x, y * r.size.y)
+	var seg: Callable = func(x0: float, y0: float, x1: float, y1: float) -> void:
+		draw_line(r.position + Vector2(x0 * r.size.x, y0 * r.size.y), r.position + Vector2(x1 * r.size.x, y1 * r.size.y), color, w, true)
+	var poly: Callable = func(pts: PackedVector2Array) -> void:
+		draw_colored_polygon(pts, color)
+	match name:
+		"home":
+			seg.call(0.12, 0.52, 0.5, 0.16)
+			seg.call(0.5, 0.16, 0.88, 0.52)
+			seg.call(0.22, 0.48, 0.22, 0.9)
+			seg.call(0.78, 0.48, 0.78, 0.9)
+			seg.call(0.22, 0.9, 0.78, 0.9)
+			seg.call(0.43, 0.9, 0.43, 0.66)
+			seg.call(0.57, 0.9, 0.57, 0.66)
+			seg.call(0.43, 0.66, 0.57, 0.66)
+		"skip":
+			poly.call(PackedVector2Array([pt.call(0.14, 0.22), pt.call(0.14, 0.78), pt.call(0.5, 0.5)]))
+			poly.call(PackedVector2Array([pt.call(0.5, 0.22), pt.call(0.5, 0.78), pt.call(0.86, 0.5)]))
+		"results":
+			for v in [0.28, 0.5, 0.72]:
+				draw_circle(pt.call(0.2, v), w * 1.1, color)
+				seg.call(0.36, v, 0.86, v)
+		"standings":
+			draw_rect(Rect2(pt.call(0.18, 0.55), Vector2(0.16 * r.size.x, 0.33 * r.size.y)), color)
+			draw_rect(Rect2(pt.call(0.42, 0.4), Vector2(0.16 * r.size.x, 0.48 * r.size.y)), color)
+			draw_rect(Rect2(pt.call(0.66, 0.26), Vector2(0.16 * r.size.x, 0.62 * r.size.y)), color)
+		"rankings":
+			draw_arc(pt.call(0.5, 0.42), 0.26 * r.size.x, 0, TAU, 20, color, w, true)
+			seg.call(0.4, 0.62, 0.34, 0.9)
+			seg.call(0.6, 0.62, 0.66, 0.9)
+			seg.call(0.34, 0.9, 0.5, 0.78)
+			seg.call(0.66, 0.9, 0.5, 0.78)
+		"history":
+			draw_arc(pt.call(0.5, 0.5), 0.34 * r.size.x, 0, TAU, 24, color, w, true)
+			seg.call(0.5, 0.5, 0.5, 0.28)
+			seg.call(0.5, 0.5, 0.66, 0.58)
+		"team":
+			var sh: PackedVector2Array = PackedVector2Array([pt.call(0.5, 0.12), pt.call(0.85, 0.26), pt.call(0.8, 0.6), pt.call(0.5, 0.9), pt.call(0.2, 0.6), pt.call(0.15, 0.26)])
+			for i in range(sh.size()):
+				draw_line(sh[i], sh[(i + 1) % sh.size()], color, w, true)
+		"swap":
+			seg.call(0.34, 0.82, 0.34, 0.2)
+			seg.call(0.34, 0.2, 0.26, 0.32)
+			seg.call(0.34, 0.2, 0.42, 0.32)
+			seg.call(0.66, 0.18, 0.66, 0.8)
+			seg.call(0.66, 0.8, 0.58, 0.68)
+			seg.call(0.66, 0.8, 0.74, 0.68)
+		"lineup":
+			for v in [0.3, 0.5, 0.7]:
+				draw_rect(Rect2(pt.call(0.16, v - 0.06), Vector2(0.12 * r.size.x, 0.12 * r.size.y)), color)
+				seg.call(0.38, v, 0.86, v)
+		"role", "options":
+			draw_arc(pt.call(0.5, 0.5), 0.24 * r.size.x, 0, TAU, 20, color, w, true)
+			draw_circle(pt.call(0.5, 0.5), 0.07 * r.size.x, color)
+			for k in range(6):
+				var a: float = float(k) / 6.0 * TAU
+				var dir: Vector2 = Vector2(cos(a), sin(a))
+				draw_line(pt.call(0.5, 0.5) + dir * 0.3 * r.size.x, pt.call(0.5, 0.5) + dir * 0.42 * r.size.x, color, w, true)
+		"player":
+			draw_arc(pt.call(0.5, 0.34), 0.16 * r.size.x, 0, TAU, 16, color, w, true)
+			poly.call(PackedVector2Array([pt.call(0.26, 0.9), pt.call(0.34, 0.62), pt.call(0.66, 0.62), pt.call(0.74, 0.9)]))
+		"teamselect":
+			seg.call(0.22, 0.38, 0.78, 0.38)
+			seg.call(0.78, 0.38, 0.66, 0.28)
+			seg.call(0.78, 0.38, 0.66, 0.48)
+			seg.call(0.78, 0.64, 0.22, 0.64)
+			seg.call(0.22, 0.64, 0.34, 0.54)
+			seg.call(0.22, 0.64, 0.34, 0.74)
+		"rank":
+			poly.call(PackedVector2Array([pt.call(0.32, 0.2), pt.call(0.68, 0.2), pt.call(0.6, 0.54), pt.call(0.4, 0.54)]))
+			seg.call(0.5, 0.54, 0.5, 0.72)
+			seg.call(0.34, 0.84, 0.66, 0.84)
+			seg.call(0.4, 0.72, 0.6, 0.72)
+		"record":
+			seg.call(0.24, 0.8, 0.72, 0.22)
+			seg.call(0.28, 0.22, 0.76, 0.8)
+			draw_circle(pt.call(0.24, 0.8), w * 1.3, color)
+			draw_circle(pt.call(0.76, 0.8), w * 1.3, color)
+		"winrate":
+			seg.call(0.16, 0.84, 0.16, 0.18)
+			seg.call(0.16, 0.84, 0.86, 0.84)
+			seg.call(0.2, 0.7, 0.42, 0.46)
+			seg.call(0.42, 0.46, 0.6, 0.6)
+			seg.call(0.6, 0.6, 0.84, 0.24)
+		"gb":
+			seg.call(0.5, 0.2, 0.2, 0.8)
+			seg.call(0.5, 0.2, 0.8, 0.8)
+			seg.call(0.2, 0.8, 0.8, 0.8)
+		"remaining":
+			for i in range(4):
+				draw_line(r.position + Vector2((0.2 + i * 0.16) * r.size.x, 0.28 * r.size.y), r.position + Vector2((0.2 + i * 0.16) * r.size.x, 0.84 * r.size.y), color, max(1.0, w * 0.7), true)
+			seg.call(0.16, 0.28, 0.84, 0.28)
+			seg.call(0.16, 0.84, 0.84, 0.84)
+			seg.call(0.16, 0.28, 0.16, 0.84)
+			seg.call(0.84, 0.28, 0.84, 0.84)
+			seg.call(0.16, 0.44, 0.84, 0.44)
+		"budget":
+			draw_arc(pt.call(0.5, 0.5), 0.34 * r.size.x, 0, TAU, 24, color, w, true)
+			seg.call(0.5, 0.4, 0.38, 0.28)
+			seg.call(0.5, 0.4, 0.62, 0.28)
+			seg.call(0.5, 0.4, 0.5, 0.66)
+			seg.call(0.4, 0.5, 0.6, 0.5)
+			seg.call(0.4, 0.58, 0.6, 0.58)
+		"payroll":
+			seg.call(0.18, 0.32, 0.82, 0.32)
+			seg.call(0.18, 0.32, 0.18, 0.78)
+			seg.call(0.82, 0.32, 0.82, 0.78)
+			seg.call(0.18, 0.78, 0.82, 0.78)
+			seg.call(0.55, 0.45, 0.82, 0.45)
+			seg.call(0.55, 0.45, 0.55, 0.62)
+			seg.call(0.55, 0.62, 0.82, 0.62)
+			draw_circle(pt.call(0.66, 0.535), w * 1.1, color)
+		_:
+			draw_circle(pt.call(0.5, 0.5), 0.16 * r.size.x, color)
+
+
+# ============================================================ formatting
+
+func _rate_short(value: float) -> String:
+	var s: String = "%0.3f" % value
+	if s.begins_with("0."):
+		return s.substr(1)
+	return s
+
+
+func _float1(value: float) -> String:
+	return "%0.1f" % value
+
+
+func _format_money(man_value: int) -> String:
+	var oku: int = int(float(man_value) / 10000.0)
+	var man: int = man_value - oku * 10000
+	if oku > 0:
+		return "%s億%s万円" % [_comma(oku), _comma(man)]
+	return "%s万円" % _comma(man)
+
+
+func _comma(value: int) -> String:
+	var s: String = str(absi(value))
+	var out: String = ""
+	var c: int = 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		c += 1
+		if c % 3 == 0 and i > 0:
+			out = "," + out
+	return ("-" if value < 0 else "") + out
+
+
+func _format_date_long(date_text: String) -> String:
+	var d: Dictionary = _parse_date(date_text)
+	return "%d年 %d月%d日" % [int(d.get("year", 0)), int(d.get("month", 0)), int(d.get("day", 0))]
+
+
+func _parse_date(date_text: String) -> Dictionary:
+	var parts: PackedStringArray = date_text.split("-")
 	return {
-		"jersey": _jersey_text(record),
-		"pos": _role_or_position_name(record),
-		"name": record.name,
-		"age": record.age,
-		"eval": PlayerValueEvaluator.overall_score(record),
-		"__meta": record.player_id,
+		"year": int(parts[0]) if parts.size() > 0 else 1970,
+		"month": int(parts[1]) if parts.size() > 1 else 1,
+		"day": int(parts[2]) if parts.size() > 2 else 1,
 	}
 
 
-# sort_select (評価順/年齢順/守備位置順) を SortableTable の既定ソートにマップする。
-# 列見出しクリックでも個別にソートできる。
-func _apply_roster_sort() -> void:
-	var selected: int = 0 if sort_select == null else sort_select.selected
-	match selected:
-		1:
-			player_list.set_default_sort(3, true)   # 年齢 昇順
-		2:
-			player_list.set_default_sort(1, true)   # 守備位置 昇順
+func _date_string(year: int, month: int, day: int) -> String:
+	return "%04d-%02d-%02d" % [year, month, day]
+
+
+func _days_in_month(year: int, month: int) -> int:
+	match month:
+		1, 3, 5, 7, 8, 10, 12:
+			return 31
+		4, 6, 9, 11:
+			return 30
 		_:
-			player_list.set_default_sort(4, false)  # 評価 降順
-
-
-func _select_first_roster() -> void:
-	if player_list == null:
-		return
-	var root: TreeItem = player_list.get_root()
-	var first: TreeItem = root.get_first_child() if root != null else null
-	if first == null:
-		detail_text.text = "選手記録がありません"
-		return
-	first.select(0)
-	_show_detail_for_player(int(first.get_metadata(0)))
-
-
-func _show_detail_for_player(player_id: int) -> void:
-	for record_row in current_records:
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record.player_id == player_id:
-			_show_player_detail(record)
-			return
-
-
-func _on_player_selected() -> void:
-	var meta: Variant = player_list.get_selected_meta()
-	if meta == null:
-		return
-	AppState.current_player_id = int(meta)
-	_show_detail_for_player(int(meta))
-
-
-func _open_selected_player_detail() -> void:
-	if player_list == null:
-		return
-	var meta: Variant = player_list.get_selected_meta()
-	if meta == null:
-		return
-	AppState.show_player_detail(int(meta))
-
-
-func _show_player_detail(record: PSPlayerSeasonRecord) -> void:
-	if detail_text == null:
-		return
-
-	var history: Array = RecordStore.get_player_records(record.player_id)
-	var lines: Array = []
-	var jersey_text: String = _jersey_text(record)
-	var jersey: String = "" if jersey_text == "-" else "#%s  " % jersey_text
-	lines.append("%s%s  %s" % [jersey, record.name, _role_or_position_name(record)])
-	lines.append("%d年 / %d年目  %d歳  %d年目  %dcm %dkg  %s投%s打" % [
-		record.year,
-		record.season_number,
-		record.age,
-		record.years,
-		record.height,
-		record.weight,
-		_hand_name(record.throwing_hand),
-		_hand_name(record.batting_side),
-	])
-	lines.append("%s  %s" % [record.registered_roster, record.contract_status])
-	lines.append("疲労 %d  怪我 %d日" % [record.fatigue, record.injury_days])
-	lines.append("")
-	lines.append("能力")
-	lines.append(_ability_line(record))
-	lines.append("")
-	if record.is_pitcher():
-		lines.append("投手成績")
-		lines.append("登板 %d  先発 %d  勝敗 %d-%d  H %d  S %d" % [
-			record.pitcher_stats.games,
-			record.pitcher_stats.starts,
-			record.pitcher_stats.wins,
-			record.pitcher_stats.losses,
-			record.pitcher_stats.holds,
-			record.pitcher_stats.saves,
-		])
-		lines.append("防御率 %s  WHIP %s  奪三振率 %s" % [
-			_format_float(record.pitcher_stats.era(), 2),
-			_format_float(record.pitcher_stats.whip(), 2),
-			_format_float(record.pitcher_stats.strikeouts_per_nine(), 2),
-		])
-	else:
-		lines.append("野手成績")
-		lines.append("試合 %d  打席 %d  打数 %d  安打 %d  本塁打 %d  打点 %d" % [
-			record.batter_stats.games,
-			record.batter_stats.plate_appearances,
-			record.batter_stats.at_bats,
-			record.batter_stats.hits,
-			record.batter_stats.home_runs,
-			record.batter_stats.runs_batted_in,
-		])
-		lines.append("打率 %s  出塁率 %s  OPS %s" % [
-			_format_rate(record.batter_stats.batting_average()),
-			_format_rate(record.batter_stats.on_base_percentage()),
-			_format_rate(record.batter_stats.ops()),
-		])
-
-	lines.append("")
-	lines.append("年度履歴")
-	for past_row in history:
-		var past: PSPlayerSeasonRecord = past_row as PSPlayerSeasonRecord
-		lines.append("%d年 %d年目  %s  %d歳  %s" % [
-			past.year,
-			past.season_number,
-			_team_short_name(past.team_id),
-			past.age,
-			_player_rating_label(past),
-		])
-
-	lines.append("")
-	if record.is_pitcher():
-		lines.append("今期投手成績")
-		lines.append(_pitcher_stats_basic_line(record.pitcher_stats))
-		lines.append(_pitcher_stats_rate_line(record.pitcher_stats))
-		lines.append("")
-		var career_pitcher_stats: PSPitcherStats = RecordStore.get_player_career_pitcher_stats(record.player_id)
-		lines.append("通算投手成績")
-		lines.append(_pitcher_stats_basic_line(career_pitcher_stats))
-		lines.append(_pitcher_stats_rate_line(career_pitcher_stats))
-	else:
-		lines.append("今期野手成績")
-		lines.append(_batter_stats_basic_line(record.batter_stats))
-		lines.append(_batter_stats_rate_line(record.batter_stats))
-		lines.append("")
-		var career_batter_stats: PSBatterStats = RecordStore.get_player_career_batter_stats(record.player_id)
-		lines.append("通算野手成績")
-		lines.append(_batter_stats_basic_line(career_batter_stats))
-		lines.append(_batter_stats_rate_line(career_batter_stats))
-
-	detail_text.text = "\n".join(lines)
-
-
-func _pitcher_stats_basic_line(stats: PSPitcherStats) -> String:
-	return "登板 %d  先発 %d  勝敗 %d-%d  H %d  S %d  回 %s" % [
-		stats.games,
-		stats.starts,
-		stats.wins,
-		stats.losses,
-		stats.holds,
-		stats.saves,
-		_format_innings(stats.outs_pitched),
-	]
-
-
-func _pitcher_stats_rate_line(stats: PSPitcherStats) -> String:
-	return "防御率 %s  WHIP %s  奪三振率 %s" % [
-		_format_float(stats.era(), 2),
-		_format_float(stats.whip(), 2),
-		_format_float(stats.strikeouts_per_nine(), 2),
-	]
-
-
-func _batter_stats_basic_line(stats: PSBatterStats) -> String:
-	return "試合 %d  打席 %d  打数 %d  安打 %d  二塁打 %d  三塁打 %d  本塁打 %d  打点 %d" % [
-		stats.games,
-		stats.plate_appearances,
-		stats.at_bats,
-		stats.hits,
-		stats.doubles,
-		stats.triples,
-		stats.home_runs,
-		stats.runs_batted_in,
-	]
-
-
-func _batter_stats_rate_line(stats: PSBatterStats) -> String:
-	return "打率 %s  出塁率 %s  OPS %s" % [
-		_format_rate(stats.batting_average()),
-		_format_rate(stats.on_base_percentage()),
-		_format_rate(stats.ops()),
-	]
-
-
-func _format_innings(outs: int) -> String:
-	@warning_ignore("integer_division")
-	return "%d.%d" % [int(outs / 3), outs % 3]
-
-
-func _ability_line(record: PSPlayerSeasonRecord) -> String:
-	return PlayerVisibleRatings.summary_line(record)
-
-
-func _player_rating_label(record: PSPlayerSeasonRecord) -> String:
-	return "Eval %d" % PlayerValueEvaluator.overall_score(record)
-
-
-func _position_name(pos: int) -> String:
-	return str(PSPlayer.POSITION_NAMES.get(pos, "不明"))
-
-
-func _role_or_position_name(record: PSPlayerSeasonRecord) -> String:
-	if record != null and record.is_pitcher():
-		return _pitcher_role_label(record.role)
-	return _position_name(record.position if record != null else 0)
-
-
-func _pitcher_role_label(role: String) -> String:
-	match role:
-		"starter":
-			return "先発"
-		"reliever":
-			return "中継"
-		"closer":
-			return "抑え"
-		_:
-			return "中継"
-
-
-func _team_short_name(team_id: int) -> String:
-	var team: PSTeam = GameDb.get_team(team_id)
-	if team == null:
-		return "-"
-	return team.short_name
-
-
-func _jersey_text(record: PSPlayerSeasonRecord) -> String:
-	if record.jersey_number > 0:
-		return str(record.jersey_number)
-	if record.team_id > 0 or record.sensyu_num > 0:
-		return "0"
-	return "-"
-
-
-func _hand_name(value: String) -> String:
-	match value:
-		"L":
-			return "左"
-		"S":
-			return "両"
-		_:
-			return "右"
-
-
-func _format_rate(value: float) -> String:
-	return "%0.3f" % value
+			var leap: bool = (year % 400 == 0) or (year % 4 == 0 and year % 100 != 0)
+			return 29 if leap else 28
 
 
 func _game_back(leader: PSStats, stats: PSStats) -> float:
 	return float((leader.wins - stats.wins) + (stats.losses - leader.losses)) / 2.0
-
-
-func _format_float(value: float, digits: int) -> String:
-	if digits == 1:
-		return "%0.1f" % value
-	if digits == 2:
-		return "%0.2f" % value
-	return "%0.3f" % value
