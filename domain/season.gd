@@ -9,6 +9,9 @@ var year: int
 var season_number: int
 var selected_team_id: int
 var current_day: int = 1
+var calendar_start_date: String = ""
+var schedule_template_id: String = ""
+var schedule_bucket_seed: int = 0
 var schedule: Array = []
 var standings: Dictionary = {}
 var team_lineups: Dictionary = {}
@@ -291,6 +294,9 @@ func to_dict() -> Dictionary:
 		"season_number": season_number,
 		"selected_team_id": selected_team_id,
 		"current_day": current_day,
+		"calendar_start_date": calendar_start_date,
+		"schedule_template_id": schedule_template_id,
+		"schedule_bucket_seed": schedule_bucket_seed,
 		"schedule": _schedule_for_save(),
 		"standings": standings_data,
 		"team_lineups": team_lineups,
@@ -328,6 +334,9 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.season_number = int(data.get("season_number", 1))
 	season.selected_team_id = int(data.get("selected_team_id", 0))
 	season.current_day = int(data.get("current_day", 1))
+	season.calendar_start_date = str(data.get("calendar_start_date", ""))
+	season.schedule_template_id = str(data.get("schedule_template_id", ""))
+	season.schedule_bucket_seed = int(data.get("schedule_bucket_seed", 0))
 	season.schedule = data.get("schedule", []) as Array
 
 	var standings_data: Dictionary = data.get("standings", {}) as Dictionary

@@ -4,6 +4,7 @@ const ROTATION_SIZE: int = 6
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const PITCHER_COLUMNS: Array = [
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
@@ -149,9 +150,9 @@ func _load_initial_state() -> void:
 	else:
 		displayed_ids = (saved.get("pitcher_ids", []) as Array).duplicate()
 		if bool(saved.get("auto_generated", false)):
-			status_text = "自動ローテーション状態を表示しています (Day %d 更新)" % int(saved.get("updated_at_day", 0))
+			status_text = "自動ローテーション状態を表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0)))
 		else:
-			status_text = "保存されたローテーションを表示しています (Day %d 更新)" % int(saved.get("updated_at_day", 0))
+			status_text = "保存されたローテーションを表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0)))
 
 	while displayed_ids.size() < ROTATION_SIZE:
 		displayed_ids.append(0)
@@ -315,7 +316,7 @@ func _on_save_pressed() -> void:
 	SaveService.save_state(AppState)
 	var preview: Dictionary = GameSimulator.preview_rotation(season, team_id)
 	_update_next_pitcher_label(preview)
-	_set_status("保存しました (Day %d)" % season.current_day, false)
+	_set_status("保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
 
 
 func _update_next_pitcher_label(preview: Dictionary) -> void:

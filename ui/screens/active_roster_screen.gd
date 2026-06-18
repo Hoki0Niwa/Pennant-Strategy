@@ -4,6 +4,7 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const Offseason = preload("res://services/season/offseason_service.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const ROSTER_COLUMNS: Array = [
 	{"title": "区分", "key": "role", "width": 56, "type": "string", "format": "string"},
@@ -235,7 +236,7 @@ func _load_initial_state() -> void:
 		status_text = "保存されたロスターがありません。自動編成を表示しています。"
 	else:
 		initial_ids = saved.get("player_ids", []) as Array
-		status_text = "保存されたロスターを表示しています (Day %d 更新)" % int(saved.get("updated_at_day", 0))
+		status_text = "保存されたロスターを表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0)))
 
 	for id_value in initial_ids:
 		active_ids[int(id_value)] = true
@@ -531,7 +532,7 @@ func _on_save_pressed() -> void:
 	season.set_active_roster(team_id, {"player_ids": player_ids})
 	GameSimulator.preview_lineup(season, team_id, false)
 	SaveService.save_state(AppState)
-	_set_status("保存しました (Day %d)" % season.current_day, false)
+	_set_status("保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
 
 
 func _set_status(text: String, is_error: bool) -> void:

@@ -5,6 +5,7 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const LEAGUES: Array = [
 	{"key": "central", "label": "第1リーグ"},
@@ -28,7 +29,7 @@ const TODAY_GAME_COLUMNS: Array = [
 ]
 
 const UPCOMING_COLUMNS: Array = [
-	{"title": "日", "key": "day", "width": 56, "type": "number", "format": "int"},
+	{"title": "日付", "key": "date", "sort_key": "day", "width": 72, "type": "number", "format": "string"},
 	{"title": "いつ", "key": "when", "width": 64, "type": "string", "format": "string"},
 	{"title": "会場", "key": "venue", "width": 48, "type": "string", "format": "string"},
 	{"title": "相手", "key": "opp", "width": 84, "type": "string", "format": "string"},
@@ -146,7 +147,7 @@ func _build() -> void:
 
 	_add_fact(overview, "球団", team.name)
 	_add_fact(overview, "年度", "%d年 / %d年目" % [season.year, season.season_number])
-	_add_fact(overview, "現在日", "%d日目" % season.current_day)
+	_add_fact(overview, "現在日", SeasonCalendar.day_status_label(season, season.current_day))
 	_add_fact(overview, "予定試合", "%d試合" % season.total_games())
 	_add_fact(overview, "未消化", "%d試合" % season.games_remaining())
 	_add_fact(overview, "自軍残り", "%d試合" % season.team_games_remaining(team.id))
@@ -264,7 +265,7 @@ func _build_schedule_panel() -> Control:
 func _add_today_games_section(parent: Control) -> void:
 	var season: PSSeason = AppState.current_season
 	var title: Label = Label.new()
-	title.text = "本日の試合 (Day %d)" % season.current_day
+	title.text = "本日の試合 (%s)" % SeasonCalendar.label_for_date(SeasonCalendar.current_date(season))
 	title.add_theme_font_size_override("font_size", 18)
 	parent.add_child(title)
 
@@ -413,10 +414,11 @@ func _add_upcoming_schedule_section(parent: Control) -> void:
 		var opp: PSTeam = GameDb.get_team(opp_id)
 		var opp_name: String = opp.short_name if opp != null else "-"
 		var dh_label: String = " DH" if bool(game.get("dh_enabled", false)) else ""
-		var gap: int = int(game.get("day", 0)) - season.current_day
-		var when_text: String = "本日" if gap == 0 else "%d日後" % gap
+		var game_day: int = int(game.get("day", 0))
+		var when_text: String = SeasonCalendar.relative_label(season.current_day, game_day)
 		rows.append({
-			"day": int(game.get("day", 0)),
+			"date": SeasonCalendar.compact_label_for_game(game, season),
+			"day": game_day,
 			"when": when_text,
 			"venue": venue,
 			"opp": opp_name + dh_label,

@@ -1,6 +1,7 @@
 extends Control
 
 const SortableTable = preload("res://ui/components/sortable_table.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const LEAGUE_COLUMNS: Array = [
 	{"title": "順", "key": "rank", "width": 40, "type": "number", "format": "int"},
@@ -106,8 +107,8 @@ func _refresh() -> void:
 			table.set_rows([])
 		return
 
-	status_label.text = "%d年 / %d年目  Day %d  (残り%d試合)" % [
-		season.year, season.season_number, season.current_day, season.games_remaining(),
+	status_label.text = "%d年 / %d年目  %s  (残り%d試合)" % [
+		season.year, season.season_number, SeasonCalendar.day_status_label(season, season.current_day), season.games_remaining(),
 	]
 
 	for league_row in LEAGUES:

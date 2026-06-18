@@ -1,6 +1,7 @@
 extends Control
 
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 var overview_label: Label
 var status_label: Label
@@ -122,8 +123,8 @@ func _refresh_overview() -> void:
 		overview_label.text = "シーズンが開始されていません"
 		next_team_game_label.text = ""
 		return
-	overview_label.text = "%d年 / %d年目  Day %d  残り%d試合 (全%d試合)" % [
-		season.year, season.season_number, season.current_day,
+	overview_label.text = "%d年 / %d年目  %s  残り%d試合 (全%d試合)" % [
+		season.year, season.season_number, SeasonCalendar.day_status_label(season, season.current_day),
 		season.games_remaining(), season.total_games(),
 	]
 	next_team_game_label.text = _format_next_team_game(season, AppState.selected_team_id)
@@ -144,9 +145,11 @@ func _format_next_team_game(season: PSSeason, team_id: int) -> String:
 		var opp_id: int = home_id if team_id == away_id else away_id
 		var opp_team: PSTeam = GameDb.get_team(opp_id)
 		var opp_name: String = opp_team.short_name if opp_team != null else "-"
-		var day_gap: int = int(game.get("day", 0)) - season.current_day
-		var gap_text: String = "本日" if day_gap == 0 else "%d日後" % day_gap
-		return "次の自軍試合: Day %d (%s) %s %s" % [int(game.get("day", 0)), gap_text, venue, opp_name]
+		var game_day: int = int(game.get("day", 0))
+		var gap_text: String = SeasonCalendar.relative_label(season.current_day, game_day)
+		return "次の自軍試合: %s (%s) %s %s" % [
+			SeasonCalendar.compact_label_for_game(game, season), gap_text, venue, opp_name
+		]
 	return "自軍の未消化試合がありません"
 
 

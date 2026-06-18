@@ -2,6 +2,7 @@ extends Control
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const SortableTable = preload("res://ui/components/sortable_table.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const ROSTER_COLUMNS: Array = [
 	{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
@@ -222,7 +223,7 @@ func _load_initial_state() -> void:
 			_set_status("保存された打順がありません。自動編成を表示しています。", false)
 		else:
 			_render_grid(lineup)
-			_set_status("保存された打順を表示しています (Day %d 更新)" % int(lineup.get("updated_at_day", 0)), false)
+			_set_status("保存された打順を表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(lineup.get("updated_at_day", 0))), false)
 	_apply_auto_lineup_state()
 
 
@@ -748,7 +749,7 @@ func _on_save_pressed() -> void:
 
 	if team != null and team.auto_lineup:
 		SaveService.save_state(AppState)
-		_set_status("野手起用設定を保存しました (Day %d)" % season.current_day, false)
+		_set_status("野手起用設定を保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
 		return
 
 	var lineup: Dictionary = _collect_lineup()
@@ -759,7 +760,7 @@ func _on_save_pressed() -> void:
 
 	season.set_lineup(team_id, dh_enabled, lineup)
 	SaveService.save_state(AppState)
-	_set_status("保存しました (Day %d)" % season.current_day, false)
+	_set_status("保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
 
 
 # Phase 5: 監督AI任せトグルのハンドラ。

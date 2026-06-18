@@ -8,9 +8,10 @@ const SortableTable = preload("res://ui/components/sortable_table.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 const BoxScoreTable = preload("res://ui/components/box_score_table.gd")
 const BoxScoreBuilder = preload("res://services/reports/box_score_builder.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const GAME_LIST_COLUMNS: Array = [
-	{"title": "日", "key": "day", "width": 56, "type": "number", "format": "int"},
+	{"title": "日付", "key": "date", "sort_key": "day", "width": 72, "type": "number", "format": "string"},
 	{"title": "勝敗", "key": "marker", "width": 48, "type": "string", "format": "string"},
 	{"title": "会場", "key": "venue", "width": 48, "type": "string", "format": "string"},
 	{"title": "相手", "key": "opp", "width": 80, "type": "string", "format": "string"},
@@ -333,6 +334,7 @@ func _game_row(team_id: int, game: Dictionary) -> Dictionary:
 
 	var dh_label: String = "  DH" if bool(game.get("dh_enabled", false)) else ""
 	return {
+		"date": SeasonCalendar.compact_label_for_game(game, AppState.current_season),
 		"day": int(game.get("day", 0)),
 		"marker": marker,
 		"venue": "@" if team_id == away_id else "vs",
@@ -354,8 +356,8 @@ func _format_game_detail(game: Dictionary) -> String:
 	var result_dict: Dictionary = game.get("result", {}) as Dictionary
 	var lines: Array = []
 
-	lines.append("%d日目  %s @ %s  %s" % [
-		int(game.get("day", 0)),
+	lines.append("%s  %s @ %s  %s" % [
+		SeasonCalendar.compact_label_for_game(game, AppState.current_season),
 		away_name,
 		home_name,
 		"DHリーグ" if bool(game.get("dh_enabled", false)) else "非DHリーグ",

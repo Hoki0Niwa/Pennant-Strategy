@@ -2,6 +2,7 @@ extends RefCounted
 class_name GameSimulator
 
 const GameLogService = preload("res://services/storage/game_log_service.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const REGULATION_INNINGS: int = 9
 const MAX_INNINGS: int = 12
@@ -94,7 +95,9 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 	return {
 		"ok": true,
 		"results": results,
-		"message": "%d日目の%d試合を消化しました。%s" % [day, results.size(), str(last_result.get("message", ""))],
+		"message": "%s の%d試合を消化しました。%s" % [
+			SeasonCalendar.day_status_label(season, day), results.size(), str(last_result.get("message", ""))
+		],
 	}
 
 
@@ -129,11 +132,11 @@ static func simulate_days(season: PSSeason, days: int, persist: bool = true, aut
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
-		"message": "%d日分、%d試合を消化しました。Day %d から Day %d。%s" % [
+		"message": "%d日分、%d試合を消化しました。%s から %s。%s" % [
 			min(days, season.current_day - start_day),
 			simulated_games,
-			start_day,
-			season.current_day,
+			SeasonCalendar.day_status_label(season, start_day),
+			SeasonCalendar.day_status_label(season, season.current_day),
 			str(last_result.get("message", "")),
 		],
 	}
@@ -169,10 +172,10 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
-		"message": "自軍試合日(Day %d)まで進めました。Day %d から Day %d、%d試合消化。%s" % [
-			season.current_day,
-			start_day,
-			season.current_day,
+		"message": "自軍試合日(%s)まで進めました。%s から %s、%d試合消化。%s" % [
+			SeasonCalendar.day_status_label(season, season.current_day),
+			SeasonCalendar.day_status_label(season, start_day),
+			SeasonCalendar.day_status_label(season, season.current_day),
 			simulated_games,
 			str(last_result.get("message", "")),
 		],
@@ -273,7 +276,7 @@ static func simulate_current_day_async(
 			return game_result
 		results.append(game_result)
 		if progress_cb.is_valid():
-			progress_cb.call(progress_baseline + results.size(), progress_total, "Day %d" % day)
+			progress_cb.call(progress_baseline + results.size(), progress_total, SeasonCalendar.day_status_label(season, day))
 		if tree != null:
 			await tree.process_frame
 
@@ -290,7 +293,9 @@ static func simulate_current_day_async(
 		"ok": true,
 		"results": results,
 		"cancelled": _is_cancelled(cancel_token),
-		"message": "%d日目の%d試合を消化しました。%s" % [day, results.size(), str(last_result.get("message", ""))],
+		"message": "%s の%d試合を消化しました。%s" % [
+			SeasonCalendar.day_status_label(season, day), results.size(), str(last_result.get("message", ""))
+		],
 	}
 
 
@@ -405,8 +410,11 @@ static func simulate_days_async(
 		"ok": true,
 		"simulated_count": simulated_games,
 		"cancelled": cancelled,
-		"message": "%s。Day %d から Day %d。%s" % [
-			prefix, start_day, season.current_day, str(last_result.get("message", ""))
+		"message": "%s。%s から %s。%s" % [
+			prefix,
+			SeasonCalendar.day_status_label(season, start_day),
+			SeasonCalendar.day_status_label(season, season.current_day),
+			str(last_result.get("message", ""))
 		],
 	}
 
@@ -453,15 +461,19 @@ static func simulate_until_team_game_async(
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "次の自軍試合は本日です。または未消化試合がありません"}
-	var prefix: String = "自軍試合日(Day %d)まで進めました" % season.current_day
+	var prefix: String = "自軍試合日(%s)まで進めました" % SeasonCalendar.day_status_label(season, season.current_day)
 	if cancelled:
-		prefix = "Day %d でキャンセルされました" % season.current_day
+		prefix = "%s でキャンセルされました" % SeasonCalendar.day_status_label(season, season.current_day)
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
 		"cancelled": cancelled,
-		"message": "%s。Day %d から Day %d、%d試合消化。%s" % [
-			prefix, start_day, season.current_day, simulated_games, str(last_result.get("message", ""))
+		"message": "%s。%s から %s、%d試合消化。%s" % [
+			prefix,
+			SeasonCalendar.day_status_label(season, start_day),
+			SeasonCalendar.day_status_label(season, season.current_day),
+			simulated_games,
+			str(last_result.get("message", ""))
 		],
 	}
 

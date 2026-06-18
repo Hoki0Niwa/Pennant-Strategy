@@ -1,0 +1,8 @@
+# Abstract schedule template entrypoint.
+# Columns: template_month,template_day,away_bucket,home_bucket,is_interleague,series_id,cycle_number
+# This file intentionally has only the schema in v1. PSSchedule uses the embedded validated
+# NPB-style template when no rows are present. The embedded template follows the 2026 official
+# skeleton: Friday opening day, May 26-Jun 14 interleague, July 28-29 All-Star break, Monday off,
+# and Tue-Thu/Fri-Sun three-game series as the normal cadence. Future CSV rows hard-fail if
+# partial or malformed.
+template_month,template_day,away_bucket,home_bucket,is_interleague,series_id,cycle_number
