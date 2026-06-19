@@ -1,26 +1,30 @@
 extends Control
 
-const StartScreen = preload("res://ui/screens/start_screen.gd")
-const TeamSelectScreen = preload("res://ui/screens/team_select_screen.gd")
-const HomeScreen = preload("res://ui/screens/home_screen.gd")
-const BalanceReportScreen = preload("res://ui/screens/balance_report_screen.gd")
-const PlayerProbeScreen = preload("res://ui/screens/player_probe_screen.gd")
-const DraftSimulatorScreen = preload("res://ui/screens/draft_simulator_screen.gd")
-const GameResultScreen = preload("res://ui/screens/game_result_screen.gd")
-const LineupEditorScreen = preload("res://ui/screens/lineup_editor_screen.gd")
-const RotationEditorScreen = preload("res://ui/screens/rotation_editor_screen.gd")
-const PlayerDetailScreen = preload("res://ui/screens/player_detail_screen.gd")
-const StandingsScreen = preload("res://ui/screens/standings_screen.gd")
-const RankingsScreen = preload("res://ui/screens/rankings_screen.gd")
-const ActiveRosterScreen = preload("res://ui/screens/active_roster_screen.gd")
-const TeamDetailScreen = preload("res://ui/screens/team_detail_screen.gd")
-const OptionsScreen = preload("res://ui/screens/options_screen.gd")
-const SkipOptionsScreen = preload("res://ui/screens/skip_options_screen.gd")
-const OFFSEASON_SCREEN_PATH: String = "res://ui/screens/offseason_screen.gd"
-const PostseasonScreen = preload("res://ui/screens/postseason_screen.gd")
-const AwardsScreen = preload("res://ui/screens/awards_screen.gd")
-const HistoryScreen = preload("res://ui/screens/history_screen.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
+
+const START_SCREEN_PATH: String = "res://ui/screens/start_screen.gd"
+const SCREEN_SCRIPT_PATHS: Dictionary = {
+	"start": START_SCREEN_PATH,
+	"team_select": "res://ui/screens/team_select_screen.gd",
+	"home": "res://ui/screens/home_screen.gd",
+	"balance_report": "res://ui/screens/balance_report_screen.gd",
+	"player_probe": "res://ui/screens/player_probe_screen.gd",
+	"draft_simulator": "res://ui/screens/draft_simulator_screen.gd",
+	"game_results": "res://ui/screens/game_result_screen.gd",
+	"lineup_editor": "res://ui/screens/lineup_editor_screen.gd",
+	"rotation_editor": "res://ui/screens/rotation_editor_screen.gd",
+	"player_detail": "res://ui/screens/player_detail_screen.gd",
+	"standings": "res://ui/screens/standings_screen.gd",
+	"rankings": "res://ui/screens/rankings_screen.gd",
+	"active_roster": "res://ui/screens/active_roster_screen.gd",
+	"team_detail": "res://ui/screens/team_detail_screen.gd",
+	"options": "res://ui/screens/options_screen.gd",
+	"skip_options": "res://ui/screens/skip_options_screen.gd",
+	"offseason": "res://ui/screens/offseason_screen.gd",
+	"postseason": "res://ui/screens/postseason_screen.gd",
+	"awards": "res://ui/screens/awards_screen.gd",
+	"history": "res://ui/screens/history_screen.gd",
+}
 
 const SIDEBAR_ITEMS: Array = [
 	{"name": "home", "label": "ホーム"},
@@ -148,49 +152,25 @@ func _show_screen(screen_name: String) -> void:
 		content.add_theme_constant_override("margin_right", home_margin)
 		content.add_theme_constant_override("margin_bottom", home_margin_top)
 
-	var screen: Control
-	match screen_name:
-		"team_select":
-			screen = TeamSelectScreen.new()
-		"balance_report":
-			screen = BalanceReportScreen.new()
-		"player_probe":
-			screen = PlayerProbeScreen.new()
-		"draft_simulator":
-			screen = DraftSimulatorScreen.new()
-		"game_results":
-			screen = GameResultScreen.new()
-		"lineup_editor":
-			screen = LineupEditorScreen.new()
-		"rotation_editor":
-			screen = RotationEditorScreen.new()
-		"player_detail":
-			screen = PlayerDetailScreen.new()
-		"standings":
-			screen = StandingsScreen.new()
-		"rankings":
-			screen = RankingsScreen.new()
-		"active_roster":
-			screen = ActiveRosterScreen.new()
-		"team_detail":
-			screen = TeamDetailScreen.new()
-		"options":
-			screen = OptionsScreen.new()
-		"skip_options":
-			screen = SkipOptionsScreen.new()
-		"offseason":
-			screen = (load(OFFSEASON_SCREEN_PATH) as GDScript).new()
-		"postseason":
-			screen = PostseasonScreen.new()
-		"awards":
-			screen = AwardsScreen.new()
-		"history":
-			screen = HistoryScreen.new()
-		"home":
-			screen = HomeScreen.new()
-		_:
-			screen = StartScreen.new()
+	var screen_path: String = str(SCREEN_SCRIPT_PATHS.get(screen_name, START_SCREEN_PATH))
+	var screen: Control = _instantiate_screen(screen_path)
 
 	screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	screen.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_child(screen)
+
+
+func _instantiate_screen(path: String) -> Control:
+	var script: GDScript = load(path) as GDScript
+	if script == null:
+		push_error("Could not load screen script: %s" % path)
+		var fallback: Label = Label.new()
+		fallback.text = "画面を読み込めませんでした: %s" % path
+		return fallback
+	var screen: Control = script.new() as Control
+	if screen == null:
+		push_error("Screen script is not a Control: %s" % path)
+		var fallback: Label = Label.new()
+		fallback.text = "画面の型が不正です: %s" % path
+		return fallback
+	return screen

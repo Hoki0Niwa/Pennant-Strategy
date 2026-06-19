@@ -5,9 +5,25 @@ signal records_changed
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 const RECORDS_PATH = "user://pennant_strategy_records_m1.json"
 
-var player_records: Dictionary = {}
-var team_records: Dictionary = {}
-var season_archives: Array = []
+var _records_loaded: bool = false
+var _player_records: Dictionary = {}
+var _team_records: Dictionary = {}
+var _season_archives: Array = []
+
+var player_records: Dictionary:
+	get:
+		ensure_loaded()
+		return _player_records
+
+var team_records: Dictionary:
+	get:
+		ensure_loaded()
+		return _team_records
+
+var season_archives: Array:
+	get:
+		ensure_loaded()
+		return _season_archives
 
 # simulation_reporter など、レポート用のスナップショット/リストア中に
 # save_records() がトリガーされて中間状態が永続化レイヤへ漏れるのを防ぐためのフラグ。
@@ -16,17 +32,24 @@ var _suspend_persistence: bool = false
 
 
 func _ready() -> void:
+	pass
+
+
+func ensure_loaded() -> void:
+	if _records_loaded:
+		return
 	load_records()
 
 
 func ensure_season_records(season: PSSeason, teams: Array, players: Array, persist: bool = true) -> void:
+	ensure_loaded()
 	var changed: bool = false
 	var active_players_by_id: Dictionary = {}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		var key: String = _season_key(team.id, season.year, season.season_number)
-		if not team_records.has(key):
-			team_records[key] = PSTeamSeasonRecord.from_team(team, season.year, season.season_number)
+		if not _team_records.has(key):
+			_team_records[key] = PSTeamSeasonRecord.from_team(team, season.year, season.season_number)
 			changed = true
 
 	for player_row in players:
@@ -35,21 +58,21 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 			continue
 		active_players_by_id[player.id] = player
 		var key: String = _season_key(player.id, season.year, season.season_number)
-		if not player_records.has(key):
-			player_records[key] = PSPlayerSeasonRecord.from_player(player, season.year, season.season_number)
+		if not _player_records.has(key):
+			_player_records[key] = PSPlayerSeasonRecord.from_player(player, season.year, season.season_number)
 			changed = true
 		else:
-			var existing_record: PSPlayerSeasonRecord = player_records[key] as PSPlayerSeasonRecord
+			var existing_record: PSPlayerSeasonRecord = _player_records[key] as PSPlayerSeasonRecord
 			if _record_identity_changed(existing_record, player):
-				player_records[key] = _refreshed_player_record(existing_record, player)
+				_player_records[key] = _refreshed_player_record(existing_record, player)
 				changed = true
 
-	for key in player_records.keys():
-		var record: PSPlayerSeasonRecord = player_records[key] as PSPlayerSeasonRecord
+	for key in _player_records.keys():
+		var record: PSPlayerSeasonRecord = _player_records[key] as PSPlayerSeasonRecord
 		if record.year != season.year or record.season_number != season.season_number:
 			continue
 		if not active_players_by_id.has(record.player_id):
-			player_records.erase(key)
+			_player_records.erase(key)
 			changed = true
 
 	if changed:
@@ -62,7 +85,7 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 
 func _warn_missing_z_abilities(season: PSSeason) -> void:
 	var season_records: Array = []
-	for record_value in player_records.values():
+	for record_value in _player_records.values():
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
 			continue
@@ -82,16 +105,19 @@ func _warn_missing_z_abilities(season: PSSeason) -> void:
 
 
 func get_player_record(player_id: int, year: int, season_number: int) -> PSPlayerSeasonRecord:
-	return player_records.get(_season_key(player_id, year, season_number)) as PSPlayerSeasonRecord
+	ensure_loaded()
+	return _player_records.get(_season_key(player_id, year, season_number)) as PSPlayerSeasonRecord
 
 
 func get_team_record(team_id: int, year: int, season_number: int) -> PSTeamSeasonRecord:
-	return team_records.get(_season_key(team_id, year, season_number)) as PSTeamSeasonRecord
+	ensure_loaded()
+	return _team_records.get(_season_key(team_id, year, season_number)) as PSTeamSeasonRecord
 
 
 func get_player_records(player_id: int) -> Array:
+	ensure_loaded()
 	var records: Array = []
-	for record_row in player_records.values():
+	for record_row in _player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.player_id == player_id:
 			records.append(record)
@@ -122,8 +148,9 @@ func get_player_career_pitcher_stats(player_id: int) -> PSPitcherStats:
 
 
 func get_team_player_records(team_id: int, year: int, season_number: int) -> Array:
+	ensure_loaded()
 	var records: Array = []
-	for record_row in player_records.values():
+	for record_row in _player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.team_id == team_id and record.year == year and record.season_number == season_number:
 			records.append(record)
@@ -138,25 +165,29 @@ func get_current_player_records_for_team(team_id: int) -> Array:
 
 
 func clear_records() -> void:
-	player_records.clear()
-	team_records.clear()
-	season_archives.clear()
+	_player_records.clear()
+	_team_records.clear()
+	_season_archives.clear()
+	_records_loaded = true
 	records_changed.emit()
 
 
 func add_season_archive(archive: PSSeasonArchive) -> void:
 	if archive == null:
 		return
-	season_archives.append(archive)
+	ensure_loaded()
+	_season_archives.append(archive)
 	save_records()
 	records_changed.emit()
 
 
 func get_season_archives() -> Array:
-	return season_archives
+	ensure_loaded()
+	return _season_archives
 
 
 func to_dict() -> Dictionary:
+	ensure_loaded()
 	var payload: Dictionary = {
 		"version": 2,
 		"player_records": [],
@@ -164,13 +195,13 @@ func to_dict() -> Dictionary:
 		"season_archives": [],
 	}
 
-	for record_row in player_records.values():
+	for record_row in _player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		payload["player_records"].append(record.to_dict())
-	for record_row in team_records.values():
+	for record_row in _team_records.values():
 		var record: PSTeamSeasonRecord = record_row as PSTeamSeasonRecord
 		payload["team_records"].append(record.to_dict())
-	for archive_row in season_archives:
+	for archive_row in _season_archives:
 		var archive: PSSeasonArchive = archive_row as PSSeasonArchive
 		payload["season_archives"].append(archive.to_dict())
 
@@ -178,34 +209,36 @@ func to_dict() -> Dictionary:
 
 
 func load_from_dict(payload: Dictionary) -> void:
-	player_records.clear()
-	team_records.clear()
-	season_archives.clear()
+	_player_records.clear()
+	_team_records.clear()
+	_season_archives.clear()
 
 	var player_rows: Array = payload.get("player_records", []) as Array
 	for row in player_rows:
 		var player_row: Dictionary = row as Dictionary
 		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(player_row)
-		player_records[_season_key(record.player_id, record.year, record.season_number)] = record
+		_player_records[_season_key(record.player_id, record.year, record.season_number)] = record
 
 	var team_rows: Array = payload.get("team_records", []) as Array
 	for row in team_rows:
 		var team_row: Dictionary = row as Dictionary
 		var record: PSTeamSeasonRecord = PSTeamSeasonRecord.from_dict(team_row)
-		team_records[_season_key(record.team_id, record.year, record.season_number)] = record
+		_team_records[_season_key(record.team_id, record.year, record.season_number)] = record
 
 	var archive_rows: Array = payload.get("season_archives", []) as Array
 	for row in archive_rows:
 		var archive_dict: Dictionary = row as Dictionary
 		var archive: PSSeasonArchive = PSSeasonArchive.from_dict(archive_dict)
-		season_archives.append(archive)
+		_season_archives.append(archive)
 
+	_records_loaded = true
 	records_changed.emit()
 
 
 func save_records() -> bool:
 	if _suspend_persistence:
 		return true
+	ensure_loaded()
 
 	var payload: Dictionary = to_dict()
 	# blob (team_records / season_archives) + 正規化テーブル (player_records) を
@@ -224,9 +257,10 @@ func save_records() -> bool:
 
 
 func load_records() -> void:
-	player_records.clear()
-	team_records.clear()
-	season_archives.clear()
+	_player_records.clear()
+	_team_records.clear()
+	_season_archives.clear()
+	_records_loaded = true
 
 	# 新テーブルが populated ならそこから hydrate (検索高速化の本命)。
 	# team_records / season_archives はまだ blob 管理なので、その分は後段で blob から拾う。
@@ -235,7 +269,7 @@ func load_records() -> void:
 		for row_value in psr_dicts:
 			var row: Dictionary = row_value as Dictionary
 			var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(row)
-			player_records[_season_key(record.player_id, record.year, record.season_number)] = record
+			_player_records[_season_key(record.player_id, record.year, record.season_number)] = record
 		# team_records / season_archives は依然 blob 側にあるので blob からも読む。
 		var blob_payload: Dictionary = SQLiteStoreService.load_record_store()
 		_load_team_and_archives_from_blob(blob_payload)
@@ -285,12 +319,12 @@ func _load_team_and_archives_from_blob(blob_payload: Dictionary) -> void:
 	for row in team_rows:
 		var team_row: Dictionary = row as Dictionary
 		var record: PSTeamSeasonRecord = PSTeamSeasonRecord.from_dict(team_row)
-		team_records[_season_key(record.team_id, record.year, record.season_number)] = record
+		_team_records[_season_key(record.team_id, record.year, record.season_number)] = record
 	var archive_rows: Array = blob_payload.get("season_archives", []) as Array
 	for row in archive_rows:
 		var archive_dict: Dictionary = row as Dictionary
 		var archive: PSSeasonArchive = PSSeasonArchive.from_dict(archive_dict)
-		season_archives.append(archive)
+		_season_archives.append(archive)
 
 
 func _season_key(entity_id: int, year: int, season_number: int) -> String:
