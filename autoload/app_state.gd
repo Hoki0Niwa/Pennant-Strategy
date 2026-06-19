@@ -28,6 +28,19 @@ const OFFSEASON_PANEL_FOREIGN: String = "foreign"
 const OFFSEASON_PANEL_CAMP: String = "camp"
 
 var current_screen: String = "start"
+# 「前に開いていた画面」に戻る/進むためのナビゲーション履歴スタック。
+# 各要素は {"screen": String, "player_id": int} のスナップショット。
+var _screen_history: Array = []  # 戻る用 (過去)
+var _forward_history: Array = []  # 進む用 (go_back で退避した先)
+var _navigating_history: bool = false
+const MAX_SCREEN_HISTORY: int = 50
+# 履歴に積まない画面 (フロー専用 / 戻る対象にすると壊れる画面)。
+const NON_HISTORY_SCREENS: Dictionary = {
+	"start": true,
+	"offseason": true,
+	"postseason": true,
+	"awards": true,
+}
 var selected_team_id: int = 0
 var current_season: PSSeason = null
 var last_status_message: String = ""
@@ -66,11 +79,55 @@ func _save_if_enabled() -> void:
 
 
 func show_player_detail(player_id: int) -> void:
+	# player_id を更新する前に現在画面を履歴へ積む (順序が重要)。
+	_record_history_snapshot("player_detail")
 	current_player_id = player_id
-	request_screen("player_detail")
+	request_screen("player_detail", false)
 
 
-func request_screen(screen_name: String) -> void:
+# 現在の画面状態を履歴スタックへ積む。連続重複・フロー専用画面・戻る/進む操作中は積まない。
+func _record_history_snapshot(next_screen: String) -> void:
+	if _navigating_history:
+		return
+	# 新規ナビゲーションなので「進む」履歴は無効化する (ブラウザと同様)。
+	_forward_history.clear()
+	if NON_HISTORY_SCREENS.has(current_screen):
+		return
+	if current_screen == next_screen and current_screen != "player_detail":
+		return
+	_screen_history.append({"screen": current_screen, "player_id": current_player_id})
+	if _screen_history.size() > MAX_SCREEN_HISTORY:
+		_screen_history.pop_front()
+
+
+# 現在画面を退避スタックへ積んでから、別スタックから取り出した画面へ遷移する共通処理。
+func _navigate_history(pop_stack: Array, push_stack: Array) -> bool:
+	if pop_stack.is_empty():
+		return false
+	var snapshot: Dictionary = pop_stack.pop_back() as Dictionary
+	push_stack.append({"screen": current_screen, "player_id": current_player_id})
+	if push_stack.size() > MAX_SCREEN_HISTORY:
+		push_stack.pop_front()
+	_navigating_history = true
+	current_player_id = int(snapshot.get("player_id", current_player_id))
+	request_screen(str(snapshot.get("screen", "home")), false)
+	_navigating_history = false
+	return true
+
+
+# マウスの戻るボタンなどから呼ぶ。直前に開いていた画面へ戻る。戻れたら true。
+func go_back() -> bool:
+	return _navigate_history(_screen_history, _forward_history)
+
+
+# マウスの進むボタンなどから呼ぶ。go_back で戻る前の画面へ進む。進めたら true。
+func go_forward() -> bool:
+	return _navigate_history(_forward_history, _screen_history)
+
+
+func request_screen(screen_name: String, record_history: bool = true) -> void:
+	if record_history:
+		_record_history_snapshot(screen_name)
 	current_screen = screen_name
 	screen_change_requested.emit(screen_name)
 
@@ -193,6 +250,8 @@ func start_new_season() -> bool:
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
+	_screen_history.clear()
+	_forward_history.clear()
 	request_screen("home")
 	season_started.emit(current_season)
 	return true
@@ -221,6 +280,8 @@ func start_next_season() -> bool:
 	postseason_active = false
 	current_postseason = null
 	current_awards = null
+	_screen_history.clear()
+	_forward_history.clear()
 	request_screen("home")
 	season_started.emit(current_season)
 	return true
@@ -1171,5 +1232,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	last_status_message = ""
 	if current_season != null:
 		next_screen = "home"
-	request_screen(next_screen)
+	_screen_history.clear()
+	_forward_history.clear()
+	request_screen(next_screen, false)
 	return true

@@ -43,6 +43,58 @@ func test_home_screen_builds_with_active_season() -> void:
 	AppState.last_status_message = old_status
 
 
+func test_screen_history_back_navigation() -> void:
+	var old_screen: String = AppState.current_screen
+	var old_player: int = AppState.current_player_id
+	var old_history: Array = AppState._screen_history.duplicate(true)
+	var old_forward: Array = AppState._forward_history.duplicate(true)
+
+	AppState._screen_history.clear()
+	AppState._forward_history.clear()
+	# standings -> rankings -> player_detail(42) と進む。
+	AppState.request_screen("standings")
+	AppState.request_screen("rankings")
+	AppState.show_player_detail(42)
+	assert_str(AppState.current_screen).is_equal("player_detail")
+	assert_int(AppState.current_player_id).is_equal(42)
+
+	# 右クリック相当: rankings に戻る。
+	assert_bool(AppState.go_back()).is_true()
+	assert_str(AppState.current_screen).is_equal("rankings")
+
+	# さらに戻ると standings。
+	assert_bool(AppState.go_back()).is_true()
+	assert_str(AppState.current_screen).is_equal("standings")
+
+	# 進む: rankings -> player_detail(42) と復元され、player_id も戻る。
+	assert_bool(AppState.go_forward()).is_true()
+	assert_str(AppState.current_screen).is_equal("rankings")
+	assert_bool(AppState.go_forward()).is_true()
+	assert_str(AppState.current_screen).is_equal("player_detail")
+	assert_int(AppState.current_player_id).is_equal(42)
+
+	# 進む履歴が尽きたら false。
+	assert_bool(AppState.go_forward()).is_false()
+	assert_str(AppState.current_screen).is_equal("player_detail")
+
+	# 新規ナビゲーションは進む履歴を無効化する。
+	AppState.go_back()  # rankings へ (forward=[player_detail])
+	AppState.request_screen("team_detail")  # 新規遷移 → forward クリア
+	assert_bool(AppState.go_forward()).is_false()
+
+	# 戻る履歴が尽きたら false を返し、現画面を維持する。
+	AppState._screen_history.clear()
+	AppState._forward_history.clear()
+	AppState.current_screen = "standings"
+	assert_bool(AppState.go_back()).is_false()
+	assert_str(AppState.current_screen).is_equal("standings")
+
+	AppState._screen_history = old_history
+	AppState._forward_history = old_forward
+	AppState.current_screen = old_screen
+	AppState.current_player_id = old_player
+
+
 func test_offseason_view_state_exposes_ui_phase() -> void:
 	var old_active: bool = AppState.offseason_active
 	var old_step: int = AppState.offseason_step

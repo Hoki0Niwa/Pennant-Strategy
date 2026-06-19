@@ -61,6 +61,28 @@ func _ready() -> void:
 	_show_screen(AppState.current_screen)
 
 
+func _input(event: InputEvent) -> void:
+	# 画面遷移の「戻る/進む」。マウスのサイドボタンと Alt+←/Alt+→ に対応。
+	# 画面は mouse_filter=STOP の Control で覆われており _unhandled_input には届かないため、
+	# GUI より先に届く _input で処理する (これらの入力は他用途に使っていないので横取りして安全)。
+	if event is InputEventMouseButton and event.pressed:
+		match event.button_index:
+			MOUSE_BUTTON_XBUTTON1:  # マウスの「戻る」ボタン
+				if AppState.go_back():
+					get_viewport().set_input_as_handled()
+			MOUSE_BUTTON_XBUTTON2:  # マウスの「進む」ボタン
+				if AppState.go_forward():
+					get_viewport().set_input_as_handled()
+	elif event is InputEventKey and event.pressed and not event.echo and event.alt_pressed:
+		match event.keycode:
+			KEY_LEFT:  # Alt+← で戻る
+				if AppState.go_back():
+					get_viewport().set_input_as_handled()
+			KEY_RIGHT:  # Alt+→ で進む
+				if AppState.go_forward():
+					get_viewport().set_input_as_handled()
+
+
 func _build_shell() -> void:
 	var root: HBoxContainer = HBoxContainer.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
