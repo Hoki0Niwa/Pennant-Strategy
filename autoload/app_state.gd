@@ -238,6 +238,10 @@ func start_new_season() -> bool:
 		push_warning("Cannot start a season without a selected team.")
 		return false
 
+	if not SaveService.begin_new_game():
+		push_warning("Could not create a new save folder.")
+		return false
+
 	current_season = SeasonService.create_new_season(GameDb.teams, selected_team_id, SeasonService.DEFAULT_START_YEAR, dh_settings_for_schedule())
 	RecordStore.clear_records()
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
@@ -254,6 +258,7 @@ func start_new_season() -> bool:
 	_forward_history.clear()
 	request_screen("home")
 	season_started.emit(current_season)
+	SaveService.save_state(self)
 	return true
 
 

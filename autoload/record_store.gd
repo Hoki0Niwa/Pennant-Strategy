@@ -3,7 +3,7 @@ extends Node
 signal records_changed
 
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
-const RECORDS_PATH = "user://pennant_strategy_records_m1.json"
+const SaveContext = preload("res://services/storage/save_context.gd")
 
 var _records_loaded: bool = false
 var _player_records: Dictionary = {}
@@ -247,9 +247,13 @@ func save_records() -> bool:
 	if SQLiteStoreService.save_record_store_and_normalized(payload):
 		return true
 
-	var file: FileAccess = FileAccess.open(RECORDS_PATH, FileAccess.WRITE)
+	var records_path: String = SaveContext.records_path()
+	if records_path.is_empty():
+		push_error("Could not write records file: no active save folder.")
+		return false
+	var file: FileAccess = FileAccess.open(records_path, FileAccess.WRITE)
 	if file == null:
-		push_error("Could not write records file: %s" % RECORDS_PATH)
+		push_error("Could not write records file: %s" % records_path)
 		return false
 
 	file.store_string(JSON.stringify(payload, "\t"))
@@ -281,18 +285,19 @@ func load_records() -> void:
 		load_from_dict(sqlite_payload)
 		return
 
-	if not FileAccess.file_exists(RECORDS_PATH):
+	var records_path: String = SaveContext.records_path()
+	if records_path.is_empty() or not FileAccess.file_exists(records_path):
 		records_changed.emit()
 		return
 
-	var file: FileAccess = FileAccess.open(RECORDS_PATH, FileAccess.READ)
+	var file: FileAccess = FileAccess.open(records_path, FileAccess.READ)
 	if file == null:
-		push_error("Could not read records file: %s" % RECORDS_PATH)
+		push_error("Could not read records file: %s" % records_path)
 		return
 
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	if not (parsed is Dictionary):
-		push_error("Records file is not valid: %s" % RECORDS_PATH)
+		push_error("Records file is not valid: %s" % records_path)
 		return
 	var payload: Dictionary = parsed as Dictionary
 	load_from_dict(payload)

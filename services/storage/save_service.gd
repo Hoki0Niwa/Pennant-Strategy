@@ -2,10 +2,15 @@ extends RefCounted
 class_name SaveService
 
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
-const SAVE_PATH = "user://pennant_strategy_m0.save"
+const SaveContext = preload("res://services/storage/save_context.gd")
 
 
 static func save_state(app_state) -> bool:
+	if not SaveContext.has_active_save():
+		if not SaveContext.begin_new_save():
+			push_error("Could not create save folder.")
+			return false
+
 	if not RecordStore.save_records():
 		push_error("Could not write record store before saving game state.")
 		return false
@@ -15,6 +20,7 @@ static func save_state(app_state) -> bool:
 		season_data = app_state.current_season.to_dict()
 
 	var payload: Dictionary = {
+		"save_id": SaveContext.active_save_id(),
 		"selected_team_id": app_state.selected_team_id,
 		"current_screen": app_state.current_screen,
 		"season": season_data,
@@ -44,9 +50,10 @@ static func save_state(app_state) -> bool:
 	if SQLiteStoreService.save_game_state(payload):
 		return true
 
-	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var save_path: String = SaveContext.game_state_path()
+	var file: FileAccess = FileAccess.open(save_path, FileAccess.WRITE)
 	if file == null:
-		push_error("Could not write save file: %s" % SAVE_PATH)
+		push_error("Could not write save file: %s" % save_path)
 		return false
 
 	file.store_string(JSON.stringify(payload, "\t"))
@@ -54,16 +61,19 @@ static func save_state(app_state) -> bool:
 
 
 static func load_state() -> Dictionary:
+	if not SaveContext.select_active_or_latest_save():
+		return {}
 	var sqlite_payload: Dictionary = SQLiteStoreService.load_game_state()
 	if not sqlite_payload.is_empty():
 		return sqlite_payload
 
-	if not FileAccess.file_exists(SAVE_PATH):
+	var save_path: String = SaveContext.game_state_path()
+	if save_path.is_empty() or not FileAccess.file_exists(save_path):
 		return {}
 
-	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var file: FileAccess = FileAccess.open(save_path, FileAccess.READ)
 	if file == null:
-		push_error("Could not read save file: %s" % SAVE_PATH)
+		push_error("Could not read save file: %s" % save_path)
 		return {}
 
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
@@ -73,7 +83,7 @@ static func load_state() -> Dictionary:
 			SQLiteStoreService.save_game_state(payload)
 		return payload
 
-	push_error("Save file is not valid: %s" % SAVE_PATH)
+	push_error("Save file is not valid: %s" % save_path)
 	return {}
 
 
@@ -81,6 +91,18 @@ static func load_state() -> Dictionary:
 # シーズンの節目 (オフシーズン開始時など) に呼ぶ想定。
 static func compact_storage() -> void:
 	SQLiteStoreService.vacuum_if_needed()
+
+
+static func begin_new_game() -> bool:
+	return SaveContext.begin_new_save()
+
+
+static func current_save_display_path() -> String:
+	return SaveContext.display_path()
+
+
+static func delete_current_save() -> Array:
+	return SaveContext.delete_current_save_data()
 
 
 static func _players_to_dicts() -> Array:

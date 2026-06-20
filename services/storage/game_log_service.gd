@@ -1,19 +1,23 @@
 extends RefCounted
 class_name PSGameLogService
 
+const SaveContext = preload("res://services/storage/save_context.gd")
+
 # 試合の詳細ログ(打席ごと play-by-play + 交代)を、セーブ本体とは別の
 # 年(シーズン)別ファイルへ書き出す。セーブ JSON を肥大化させずに全試合の詳細を保持し、
 # 試合結果画面が必要時に遅延読込する。1 試合 1 ファイルなので長期オートプレイでも O(1) 書き込み。
-#   user://game_logs/<year>_s<season>/g<game_index>.json
-
-const LOG_ROOT: String = "user://game_logs"
+#   <save_folder>/game_logs/<year>_s<season>/g<game_index>.json
 
 # テスト/オートプレイで書き込みを抑止したい場合に false にする。
 static var enabled: bool = true
 
 
+static func log_root() -> String:
+	return SaveContext.game_log_root()
+
+
 static func _season_dir(season: PSSeason) -> String:
-	return "%s/%d_s%d" % [LOG_ROOT, season.year, season.season_number]
+	return "%s/%d_s%d" % [log_root(), season.year, season.season_number]
 
 
 static func _game_path(season: PSSeason, game_index: int) -> String:
@@ -133,6 +137,8 @@ static func _assign_hr_numbers(pa_log: Array, season: PSSeason) -> void:
 static func write_game_log(season: PSSeason, game_index: int, result: Dictionary) -> void:
 	if not enabled or season == null:
 		return
+	if log_root().is_empty():
+		return
 	DirAccess.make_dir_recursive_absolute(_season_dir(season))
 	var file: FileAccess = FileAccess.open(_game_path(season, game_index), FileAccess.WRITE)
 	if file == null:
@@ -144,6 +150,8 @@ static func write_game_log(season: PSSeason, game_index: int, result: Dictionary
 # 画面の遅延読込用。無ければ空 Dictionary。
 static func read_game_log(season: PSSeason, game_index: int) -> Dictionary:
 	if season == null:
+		return {}
+	if log_root().is_empty():
 		return {}
 	var path: String = _game_path(season, game_index)
 	if not FileAccess.file_exists(path):

@@ -1,7 +1,7 @@
 extends RefCounted
 class_name SQLiteStore
 
-const RUNTIME_DB_PATH = "user://pennant_strategy_runtime.sqlite"
+const SaveContext = preload("res://services/storage/save_context.gd")
 const RUNTIME_TEMPLATE_DB_PATH = "res://data/pennant_strategy.sqlite"
 
 # 永続化スキーマ世代:
@@ -15,10 +15,15 @@ const SCHEMA_VERSION: int = 3
 # 一度実行できれば十分。毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
 # 固定オーバーヘッドが積み上がるため、成功後はこのフラグでスキップする。
 static var _schema_ensured: bool = false
+static var _schema_ensured_path: String = ""
 
 
 static func is_available() -> bool:
 	return ClassDB.class_exists("SQLite")
+
+
+static func runtime_db_path() -> String:
+	return SaveContext.runtime_db_path()
 
 
 static func save_game_state(payload: Dictionary) -> bool:
@@ -614,14 +619,17 @@ static func _load_blob(key: String) -> Dictionary:
 static func _open_runtime_db() -> Object:
 	if not is_available():
 		return null
-	if not _ensure_runtime_db_file():
+	var runtime_path: String = runtime_db_path()
+	if runtime_path.is_empty():
+		return null
+	if not _ensure_runtime_db_file(runtime_path):
 		return null
 
 	var db: Object = ClassDB.instantiate("SQLite") as Object
 	if db == null:
 		return null
 
-	db.set("path", RUNTIME_DB_PATH)
+	db.set("path", runtime_path)
 	db.set("foreign_keys", true)
 	db.set("verbosity_level", 0)
 	if not bool(db.call("open_db")):
@@ -632,27 +640,32 @@ static func _open_runtime_db() -> Object:
 	_execute(db, "PRAGMA journal_mode = WAL")
 	_execute(db, "PRAGMA synchronous = NORMAL")
 
-	if not _schema_ensured:
+	if (not _schema_ensured) or _schema_ensured_path != runtime_path:
 		if not _ensure_runtime_schema(db):
 			_close(db)
 			return null
 		_schema_ensured = true
+		_schema_ensured_path = runtime_path
 
 	return db
 
 
-static func _ensure_runtime_db_file() -> bool:
-	if FileAccess.file_exists(RUNTIME_DB_PATH):
+static func _ensure_runtime_db_file(runtime_path: String) -> bool:
+	if FileAccess.file_exists(runtime_path):
+		return true
+	# Per-save runtime DBs must start empty; copying the bundled seed/template DB can
+	# bring an older record schema into a brand-new save folder.
+	if SaveContext.has_active_save():
 		return true
 
 	var template_path: String = ProjectSettings.globalize_path(RUNTIME_TEMPLATE_DB_PATH)
-	var runtime_path: String = ProjectSettings.globalize_path(RUNTIME_DB_PATH)
-	if FileAccess.file_exists(runtime_path):
+	var global_runtime_path: String = ProjectSettings.globalize_path(runtime_path)
+	if FileAccess.file_exists(global_runtime_path):
 		return true
 	if not FileAccess.file_exists(template_path):
 		return true
 
-	if DirAccess.copy_absolute(template_path, runtime_path) == OK:
+	if DirAccess.copy_absolute(template_path, global_runtime_path) == OK:
 		return true
 
 	var source: FileAccess = FileAccess.open(template_path, FileAccess.READ)
@@ -660,7 +673,7 @@ static func _ensure_runtime_db_file() -> bool:
 		return true
 
 	var bytes: PackedByteArray = source.get_buffer(source.get_length())
-	var target: FileAccess = FileAccess.open(runtime_path, FileAccess.WRITE)
+	var target: FileAccess = FileAccess.open(global_runtime_path, FileAccess.WRITE)
 	if target == null:
 		return true
 

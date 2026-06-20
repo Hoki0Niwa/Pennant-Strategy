@@ -66,7 +66,7 @@ func _build() -> void:
 
 	content.add_child(_build_section_label("セーブデータ"))
 	save_path_label = Label.new()
-	save_path_label.text = "保存先: user://pennant_strategy_m0.save"
+	_refresh_save_path_label()
 	save_path_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	content.add_child(save_path_label)
 
@@ -385,35 +385,36 @@ func _on_manual_save() -> void:
 		_set_status("シーズン開始前はセーブできません。", true)
 		return
 	var ok: bool = SaveService.save_state(AppState)
+	_refresh_save_path_label()
 	_set_status("セーブしました。" if ok else "セーブに失敗しました。", not ok)
 
 
 func _on_central_dh_toggled(pressed: bool) -> void:
 	AppState.set_dh_enabled_for_league("central", pressed)
 	var ok: bool = SaveService.save_state(AppState)
+	_refresh_save_path_label()
 	_set_status("DH設定を保存しました。" if ok else "DH設定の保存に失敗しました。", not ok)
 
 
 func _on_pacific_dh_toggled(pressed: bool) -> void:
 	AppState.set_dh_enabled_for_league("pacific", pressed)
 	var ok: bool = SaveService.save_state(AppState)
+	_refresh_save_path_label()
 	_set_status("DH設定を保存しました。" if ok else "DH設定の保存に失敗しました。", not ok)
 
 
 func _on_delete_save() -> void:
-	var save_path: String = "user://pennant_strategy_m0.save"
-	var records_path: String = "user://pennant_strategy_records_m1.json"
-	var deleted: Array = []
-	if FileAccess.file_exists(save_path):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
-		deleted.append("セーブ")
-	if FileAccess.file_exists(records_path):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(records_path))
-		deleted.append("成績記録")
+	var deleted: Array = SaveService.delete_current_save()
+	_refresh_save_path_label()
 	if deleted.is_empty():
 		_set_status("削除対象のファイルが見つかりません。", true)
 	else:
 		_set_status("削除しました: %s。再起動後に反映されます。" % "、".join(deleted), false)
+
+
+func _refresh_save_path_label() -> void:
+	if save_path_label != null:
+		save_path_label.text = "保存フォルダ: %s" % SaveService.current_save_display_path()
 
 
 func _build_info_text() -> String:
