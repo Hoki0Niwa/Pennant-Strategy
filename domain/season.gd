@@ -338,6 +338,19 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.schedule_template_id = str(data.get("schedule_template_id", ""))
 	season.schedule_bucket_seed = int(data.get("schedule_bucket_seed", 0))
 	season.schedule = data.get("schedule", []) as Array
+	# 旧バージョンは交流戦ブロックを配列末尾に append しており、day 順でない日程は
+	# シミュレータに飛ばされてしまう。読込時に day 順へ整列して復旧する。
+	PSSchedule.sort_by_day(season.schedule)
+	# 整列の結果、current_day より前に未消化試合(飛ばされた交流戦)が残っていれば
+	# そこまで巻き戻して取りこぼしを消化できるようにする。
+	var earliest_unplayed_day: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("played", false)):
+			earliest_unplayed_day = int(game.get("day", 0))
+			break
+	if earliest_unplayed_day > 0 and earliest_unplayed_day < season.current_day:
+		season.current_day = earliest_unplayed_day
 
 	var standings_data: Dictionary = data.get("standings", {}) as Dictionary
 	for key in standings_data.keys():

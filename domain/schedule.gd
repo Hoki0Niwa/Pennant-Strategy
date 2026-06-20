@@ -61,11 +61,31 @@ static func generate_pennant_schedule(
 	var games: Array = _schedule_from_template(
 		template_rows, centrals, pacifics, leagues_by_team_id, dh_by_league, year, season_number
 	)
+	sort_by_day(games)
 	var validation: Dictionary = validate_schedule(games, team_rows)
 	if not bool(validation.get("ok", false)):
 		push_error("Invalid pennant schedule: %s" % str(validation.get("message", "")))
 		return []
 	return games
+
+
+# schedule を day 昇順(同日内は series_id / 試合番号)で安定整列する。
+# シミュレータの _next_unplayed_game_index / advance_current_day は配列順 == 日付順を前提に
+# しているため、交流戦ブロックなど後から append された日程が飛ばされないよう必ず整列する。
+static func sort_by_day(games: Array) -> void:
+	games.sort_custom(func(a, b) -> bool:
+		var ga: Dictionary = a as Dictionary
+		var gb: Dictionary = b as Dictionary
+		var da: int = int(ga.get("day", 0))
+		var db: int = int(gb.get("day", 0))
+		if da != db:
+			return da < db
+		var sa: int = int(ga.get("series_id", 0))
+		var sb: int = int(gb.get("series_id", 0))
+		if sa != sb:
+			return sa < sb
+		return int(ga.get("series_game_no", 0)) < int(gb.get("series_game_no", 0))
+	)
 
 
 static func bucket_seed_for_season(year: int, season_number: int) -> int:

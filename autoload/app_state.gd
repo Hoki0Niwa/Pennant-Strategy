@@ -5,6 +5,7 @@ signal selected_team_changed(team_id: int)
 signal season_started(season: PSSeason)
 
 const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 const OFFSEASON_STEP_RETIREMENT: int = 0
 const OFFSEASON_STEP_RELEASE_EDIT: int = 1
 const OFFSEASON_STEP_RELEASE_COMMIT: int = 2
@@ -58,7 +59,7 @@ var current_postseason: PSPostseasonResult = null
 var current_awards: PSAwards = null
 # 通常プレイ中に自軍も成績ベースの自動入替を行うか。active_roster_screenから操作。
 var auto_roster_swap_for_user_team: bool = false
-# スキップ操作中に自軍も成績ベースの自動入替を行うか。skip_options_screenから操作。
+# スキップ操作中に自軍も成績ベースの自動入替を行うか。オプション画面から操作。
 var auto_roster_swap_during_skip: bool = true
 # 自動セーブを有効にするか。デフォルトは false (手動セーブのみ)。
 var auto_save_enabled: bool = false
@@ -1153,6 +1154,29 @@ func simulate_until_team_game_async(
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
 	var result: Dictionary = await GameSimulator.simulate_until_team_game_async(
 		current_season, selected_team_id, true, _build_auto_swap_ctx(during_skip),
+		tree, progress_cb, cancel_token
+	)
+	last_status_message = str(result.get("message", ""))
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
+# 現在日が属する月の最終日まで(その日の試合を含む)消化する。
+func simulate_to_month_end_async(
+	tree: SceneTree,
+	progress_cb: Callable,
+	cancel_token: Dictionary,
+	during_skip: bool = false
+) -> Dictionary:
+	if current_season == null:
+		return {"ok": false, "message": "シーズンが開始されていません"}
+
+	var end_date: String = SeasonCalendar.last_day_of_month(SeasonCalendar.current_date(current_season))
+	var end_day: int = SeasonCalendar.season_day_for_date(current_season, end_date)
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	var result: Dictionary = await GameSimulator.simulate_until_day_async(
+		current_season, end_day, true, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))

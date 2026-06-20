@@ -108,6 +108,56 @@ func test_three_game_series_are_the_default() -> void:
 	assert_int(single_games).is_equal(30)
 
 
+func test_schedule_is_sorted_by_day_with_interleague_mid_season() -> void:
+	# 配列が day 昇順であること (シミュレータが配列順 == 日付順を前提にしているため必須)。
+	var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, 2026, 1)
+	var prev_day: int = 0
+	for game_value in schedule:
+		var day: int = int((game_value as Dictionary).get("day", 0))
+		assert_int(day).is_greater_equal(prev_day)
+		prev_day = day
+
+	# 交流戦はシーズン中盤に挟まる: 最後の交流戦より後に通常(非交流戦)の試合が存在する。
+	var max_interleague_day: int = 0
+	for game_value in schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("is_interleague", false)):
+			max_interleague_day = max(max_interleague_day, int(game.get("day", 0)))
+	assert_int(max_interleague_day).is_greater(0)
+	var has_intra_after_interleague: bool = false
+	for game_value in schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("is_interleague", false)) and int(game.get("day", 0)) > max_interleague_day:
+			has_intra_after_interleague = true
+			break
+	assert_bool(has_intra_after_interleague).is_true()
+
+
+func test_month_end_boundary_helpers() -> void:
+	# 月末日付の算出 (うるう年含む)。
+	assert_str(SeasonCalendar.last_day_of_month("2026-03-15")).is_equal("2026-03-31")
+	assert_str(SeasonCalendar.last_day_of_month("2026-02-10")).is_equal("2026-02-28")
+	assert_str(SeasonCalendar.last_day_of_month("2028-02-10")).is_equal("2028-02-29")
+	assert_str(SeasonCalendar.last_day_of_month("2026-12-05")).is_equal("2026-12-31")
+
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	# season_day_for_date は date_for_season_day の逆変換。
+	for day in [1, 5, 30, 120]:
+		var date_text: String = SeasonCalendar.date_for_season_day(season, day)
+		assert_int(SeasonCalendar.season_day_for_date(season, date_text)).is_equal(day)
+
+	# 開幕月(3月)の月末 day index を境界に、当月の試合は <=、翌月以降は > になる。
+	var end_date: String = SeasonCalendar.last_day_of_month(SeasonCalendar.current_date(season))
+	var end_day: int = SeasonCalendar.season_day_for_date(season, end_date)
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var month: int = int(str(game.get("date", "")).split("-")[1])
+		if month == 3:
+			assert_int(int(game.get("day", 0))).is_less_equal(end_day)
+		elif month >= 4:
+			assert_int(int(game.get("day", 0))).is_greater(end_day)
+
+
 func _matchup_signature(schedule: Array) -> String:
 	var parts: Array = []
 	for game_value in schedule:

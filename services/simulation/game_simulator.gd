@@ -478,6 +478,110 @@ static func simulate_until_team_game_async(
 	}
 
 
+# end_day (season day, inclusive) 以前の未消化試合をすべて消化する。
+# 翌月送りなど「特定日まで」の消化に使う。day はカレンダー日offsetと1:1なので境界判定に使える。
+static func simulate_until_day(season: PSSeason, end_day: int, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
+	var start_day: int = season.current_day
+	var simulated_games: int = 0
+	var last_result: Dictionary = {}
+	var guard: int = season.schedule.size() + 1
+	while guard > 0:
+		guard -= 1
+		var idx: int = _next_unplayed_game_index(season)
+		if idx < 0:
+			break
+		if int((season.schedule[idx] as Dictionary).get("day", 0)) > end_day:
+			break
+		var prev_day: int = season.current_day
+		var day_result: Dictionary = simulate_current_day(season, false, auto_swap_ctx)
+		if not bool(day_result.get("ok", false)):
+			if simulated_games > 0 and persist:
+				PSGameDecisions.persist_records()
+			return day_result
+		last_result = day_result
+		simulated_games += (day_result.get("results", []) as Array).size()
+		if season.current_day == prev_day:
+			break
+	if persist:
+		PSGameDecisions.persist_records()
+	if simulated_games == 0:
+		return {"ok": false, "message": "消化できる試合がありません"}
+	return {
+		"ok": true,
+		"simulated_count": simulated_games,
+		"message": "%d試合を消化しました。%s から %s。%s" % [
+			simulated_games,
+			SeasonCalendar.day_status_label(season, start_day),
+			SeasonCalendar.day_status_label(season, season.current_day),
+			str(last_result.get("message", "")),
+		],
+	}
+
+
+static func simulate_until_day_async(
+	season: PSSeason,
+	end_day: int,
+	persist: bool,
+	auto_swap_ctx: Dictionary,
+	tree: SceneTree,
+	progress_cb: Callable,
+	cancel_token: Dictionary
+) -> Dictionary:
+	var start_day: int = season.current_day
+	var simulated_games: int = 0
+	var last_result: Dictionary = {}
+	var guard: int = season.schedule.size() + 1
+	var total_games: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("played", false)):
+			continue
+		var d: int = int(game.get("day", 0))
+		if d >= start_day and d <= end_day:
+			total_games += 1
+	while guard > 0:
+		guard -= 1
+		if _is_cancelled(cancel_token):
+			break
+		var idx: int = _next_unplayed_game_index(season)
+		if idx < 0:
+			break
+		if int((season.schedule[idx] as Dictionary).get("day", 0)) > end_day:
+			break
+		var prev_day: int = season.current_day
+		var day_result: Dictionary = await simulate_current_day_async(
+			season, false, auto_swap_ctx, tree, progress_cb, cancel_token,
+			simulated_games, total_games
+		)
+		if not bool(day_result.get("ok", false)):
+			if simulated_games > 0 and persist:
+				PSGameDecisions.persist_records()
+			return day_result
+		last_result = day_result
+		simulated_games += (day_result.get("results", []) as Array).size()
+		if season.current_day == prev_day:
+			break
+	if persist:
+		PSGameDecisions.persist_records()
+	var cancelled: bool = _is_cancelled(cancel_token)
+	if simulated_games == 0:
+		return {"ok": false, "cancelled": cancelled, "message": "消化できる試合がありません"}
+	var prefix: String = "%d試合を消化しました" % simulated_games
+	if cancelled:
+		prefix = "%d試合まで進めてキャンセルされました" % simulated_games
+	return {
+		"ok": true,
+		"simulated_count": simulated_games,
+		"cancelled": cancelled,
+		"message": "%s。%s から %s。%s" % [
+			prefix,
+			SeasonCalendar.day_status_label(season, start_day),
+			SeasonCalendar.day_status_label(season, season.current_day),
+			str(last_result.get("message", "")),
+		],
+	}
+
+
 static func simulate_game_at_index(season: PSSeason, game_index: int, persist: bool = true) -> Dictionary:
 	if game_index < 0 or game_index >= season.schedule.size():
 		return {"ok": false, "message": "試合番号が不正です"}

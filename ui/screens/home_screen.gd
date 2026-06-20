@@ -38,6 +38,7 @@ var _calendar_month: int = 0
 var _calendar_filter: String = "team"
 var _status_text: String = ""
 var _era_by_team: Dictionary = {}
+var _skip_button: Button = null
 
 
 func _ready() -> void:
@@ -479,7 +480,7 @@ func _build_buttons() -> void:
 
 	# 上部アクション (1試合だけ消化する操作は廃止。日単位で進める)
 	_add_button("today", "本日を終了", Rect2(1384, 22, 128, 42), _simulate_current_day, "primary")
-	_add_button("remaining", "残り全試合", Rect2(1522, 22, 120, 42), _simulate_remaining_season, "action")
+	_skip_button = _add_button("skip", "スキップ ▾", Rect2(1522, 22, 120, 42), _on_skip_pressed, "action")
 	_add_button("save", "セーブ", Rect2(1652, 22, 88, 42), _save_game, "action")
 	var season_button: Button = _add_button("offseason", "翌年へ", Rect2(1750, 22, 150, 42), _on_offseason_pressed, "action")
 	_configure_offseason_button(season_button)
@@ -523,15 +524,107 @@ func _simulate_current_day() -> void:
 	var result: Dictionary = await AppState.simulate_current_day_async(get_tree(), ov["callback"], ov["cancel_token"], false)
 	_hide_progress_overlay(ov)
 	_status_text = str(result.get("message", ""))
+	_sync_calendar_to_current()
+	queue_redraw()
+
+
+# スキップボタンの派生メニュー。日数/月末/自軍次戦/残り全試合をその場で選んで進める。
+func _on_skip_pressed() -> void:
+	var menu: PopupMenu = PopupMenu.new()
+	menu.add_item("7日進める", 0)
+	menu.add_item("月末まで進める", 1)
+	menu.add_item("残り全試合", 2)
+	_style_popup(menu)
+	add_child(menu)
+	menu.id_pressed.connect(_on_skip_menu_selected)
+	menu.popup_hide.connect(func() -> void:
+		if is_instance_valid(menu):
+			menu.queue_free()
+	)
+	var anchor: Vector2 = Vector2(1522, 64)
+	if _skip_button != null:
+		anchor = _skip_button.global_position + Vector2(0.0, _skip_button.size.y)
+	menu.position = Vector2i(anchor.round())
+	menu.reset_size()
+	menu.popup()
+
+
+# ダッシュボードのダーク配色に合わせて PopupMenu をテーマ上書きする。
+# 本文は固定座標系を _scale_f で拡縮しているので、フォントもボタンと同じ係数で合わせる。
+func _style_popup(menu: PopupMenu) -> void:
+	var panel: StyleBoxFlat = StyleBoxFlat.new()
+	panel.bg_color = PANEL_2
+	panel.border_color = BORDER
+	panel.set_border_width_all(1)
+	panel.set_corner_radius_all(8)
+	panel.content_margin_left = 6
+	panel.content_margin_right = 6
+	panel.content_margin_top = 6
+	panel.content_margin_bottom = 6
+	menu.add_theme_stylebox_override("panel", panel)
+
+	var hover: StyleBoxFlat = StyleBoxFlat.new()
+	hover.bg_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.18)
+	hover.border_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.55)
+	hover.set_border_width_all(1)
+	hover.set_corner_radius_all(6)
+	menu.add_theme_stylebox_override("hover", hover)
+
+	menu.add_theme_color_override("font_color", TEXT)
+	menu.add_theme_color_override("font_hover_color", TEXT)
+	menu.add_theme_color_override("font_disabled_color", FAINT)
+	menu.add_theme_color_override("font_separator_color", MUTED)
+	menu.add_theme_constant_override("v_separation", 6)
+	menu.add_theme_font_size_override("font_size", max(11, int(round(14.0 * _scale_f))))
+
+
+func _on_skip_menu_selected(id: int) -> void:
+	match id:
+		0:
+			await _simulate_days(7)
+		1:
+			await _simulate_to_month_end()
+		2:
+			await _simulate_remaining_season()
+
+
+func _simulate_days(days: int) -> void:
+	if days <= 0:
+		return
+	var ov: Dictionary = _show_progress_overlay("%d日分を消化中…" % days)
+	var result: Dictionary = await AppState.simulate_days_async(days, get_tree(), ov["callback"], ov["cancel_token"], true)
+	_hide_progress_overlay(ov)
+	_status_text = str(result.get("message", ""))
+	_sync_calendar_to_current()
+	queue_redraw()
+
+
+func _simulate_to_month_end() -> void:
+	var ov: Dictionary = _show_progress_overlay("月末まで消化中…")
+	var result: Dictionary = await AppState.simulate_to_month_end_async(get_tree(), ov["callback"], ov["cancel_token"], true)
+	_hide_progress_overlay(ov)
+	_status_text = str(result.get("message", ""))
+	_sync_calendar_to_current()
 	queue_redraw()
 
 
 func _simulate_remaining_season() -> void:
 	var ov: Dictionary = _show_progress_overlay("残り全試合を消化中…")
-	var result: Dictionary = await AppState.simulate_remaining_season_async(get_tree(), ov["callback"], ov["cancel_token"], false)
+	var result: Dictionary = await AppState.simulate_remaining_season_async(get_tree(), ov["callback"], ov["cancel_token"], true)
 	_hide_progress_overlay(ov)
 	_status_text = str(result.get("message", ""))
+	_sync_calendar_to_current()
 	queue_redraw()
+
+
+# スキップ後に月をまたいだら、カレンダー表示をスキップ終了時点の月へ追従させる。
+func _sync_calendar_to_current() -> void:
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return
+	var d: Dictionary = _parse_date(SeasonCalendar.current_date(season))
+	_calendar_year = int(d.get("year", _calendar_year))
+	_calendar_month = int(d.get("month", _calendar_month))
 
 
 func _save_game() -> void:

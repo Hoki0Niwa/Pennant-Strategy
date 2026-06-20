@@ -42,7 +42,6 @@ const INNER_R: float = 1900.0
 const NAV_GROUPS: Array = [
 	{"title": "試合・シミュレーション", "items": [
 		{"id": "home", "label": "ホーム", "icon": "home"},
-		{"id": "skip_options", "label": "スキップ設定", "icon": "skip"},
 		{"id": "game_results", "label": "試合結果", "icon": "results"},
 		{"id": "standings", "label": "順位表", "icon": "standings"},
 		{"id": "rankings", "label": "ランキング", "icon": "rankings"},

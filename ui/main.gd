@@ -19,7 +19,6 @@ const SCREEN_SCRIPT_PATHS: Dictionary = {
 	"active_roster": "res://ui/screens/active_roster_screen.gd",
 	"team_detail": "res://ui/screens/team_detail_screen.gd",
 	"options": "res://ui/screens/options_screen.gd",
-	"skip_options": "res://ui/screens/skip_options_screen.gd",
 	"offseason": "res://ui/screens/offseason_screen.gd",
 	"postseason": "res://ui/screens/postseason_screen.gd",
 	"awards": "res://ui/screens/awards_screen.gd",
@@ -28,7 +27,6 @@ const SCREEN_SCRIPT_PATHS: Dictionary = {
 
 const SIDEBAR_ITEMS: Array = [
 	{"name": "home", "label": "ホーム"},
-	{"name": "skip_options", "label": "スキップ設定"},
 	{"name": "game_results", "label": "試合結果"},
 	{"name": "standings", "label": "順位表"},
 	{"name": "rankings", "label": "ランキング"},

@@ -47,6 +47,27 @@ static func current_date(season: PSSeason) -> String:
 	return date_for_season_day(season, season.current_day)
 
 
+# date_for_season_day の逆変換。カレンダー日付に対応する season day (1始まり) を返す。
+static func season_day_for_date(season: PSSeason, date_text: String) -> int:
+	if season == null or date_text.is_empty():
+		return 0
+	var start_date: String = season.calendar_start_date
+	if start_date.is_empty():
+		start_date = opening_date_for_year(season.year)
+	return days_between(start_date, date_text) + 1
+
+
+# 指定日付が属する月の最終日 (YYYY-MM-DD)。翌月1日の前日として求める。
+static func last_day_of_month(date_text: String) -> String:
+	var d: Dictionary = _date_dict(date_text)
+	var year: int = int(d.get("year", 0))
+	var month: int = int(d.get("month", 1)) + 1
+	if month > 12:
+		month = 1
+		year += 1
+	return add_days(_date_string(year, month, 1), -1)
+
+
 static func label_for_date(date_text: String) -> String:
 	if date_text.is_empty():
 		return "-"

@@ -11,6 +11,8 @@ var status_label: Label
 var save_path_label: Label
 var central_dh_toggle: CheckButton
 var pacific_dh_toggle: CheckButton
+var auto_swap_checkbox: CheckButton
+var auto_save_checkbox: CheckButton
 var regen_seasons_spin: SpinBox
 var regen_seed_edit: LineEdit
 var regen_button: Button
@@ -86,6 +88,9 @@ func _build() -> void:
 	delete_button.pressed.connect(_on_delete_save)
 	save_row.add_child(delete_button)
 
+	content.add_child(_build_section_label("スキップ・進行"))
+	content.add_child(_build_skip_controls())
+
 	content.add_child(_build_section_label("DHルール"))
 	content.add_child(_build_dh_controls())
 
@@ -111,6 +116,43 @@ func _build_section_label(text: String) -> Label:
 	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", Color(0.86, 0.90, 0.94))
 	return label
+
+
+# 旧スキップ設定画面から移設したスキップ時の挙動トグル。
+func _build_skip_controls() -> VBoxContainer:
+	var box: VBoxContainer = VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+
+	auto_swap_checkbox = CheckButton.new()
+	auto_swap_checkbox.text = "スキップ中は成績ベースで自動的に一二軍入替を行う"
+	auto_swap_checkbox.set_pressed_no_signal(AppState.auto_roster_swap_during_skip)
+	auto_swap_checkbox.toggled.connect(_on_auto_swap_toggled)
+	box.add_child(auto_swap_checkbox)
+
+	auto_save_checkbox = CheckButton.new()
+	auto_save_checkbox.text = "自動セーブを有効にする (試合進行・オフシーズン処理時)"
+	auto_save_checkbox.set_pressed_no_signal(AppState.auto_save_enabled)
+	auto_save_checkbox.toggled.connect(_on_auto_save_toggled)
+	box.add_child(auto_save_checkbox)
+	return box
+
+
+func _on_auto_swap_toggled(pressed: bool) -> void:
+	AppState.auto_roster_swap_during_skip = pressed
+	var season: PSSeason = AppState.current_season
+	var team_id: int = AppState.selected_team_id
+	if pressed and season != null and team_id > 0:
+		# ON 直後のスキップで即発動するよう、最終入替日を current_day - SWAP_INTERVAL_DAYS に
+		season.set_last_auto_swap_day(team_id, season.current_day - TeamAutoAI.SWAP_INTERVAL_DAYS)
+	var ok: bool = SaveService.save_state(AppState)
+	_set_status("自動入替設定を保存しました。" if ok else "設定の保存に失敗しました。", not ok)
+
+
+func _on_auto_save_toggled(pressed: bool) -> void:
+	AppState.auto_save_enabled = pressed
+	# このトグル自体はユーザの明示操作なので、フラグ反転を保存しておく
+	var ok: bool = SaveService.save_state(AppState)
+	_set_status("自動セーブ設定を保存しました。" if ok else "設定の保存に失敗しました。", not ok)
 
 
 func _build_dh_controls() -> VBoxContainer:
