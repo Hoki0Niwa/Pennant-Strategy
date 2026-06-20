@@ -4,8 +4,14 @@ class_name PSRotationPlanner
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 
 const ROTATION_SIZE_MAX: int = 6
+const RELIEF_ROLE_SIZE_MAX: int = 6
 const MIN_STARTER_REST_DAYS: int = 4
 const STARTER_DANGER_FATIGUE: int = 145
+
+const RELIEF_ROLE_LONG: String = "long"
+const RELIEF_ROLE_MIDDLE: String = "middle"
+const RELIEF_ROLE_SETUP: String = "setup"
+const RELIEF_ROLE_CLOSER: String = "closer"
 
 
 static func resolve_rotation_decision(season: PSSeason, team_id: int, starter_pitchers: Array, team_record: PSTeamSeasonRecord) -> Dictionary:
@@ -221,7 +227,12 @@ static func _id_set(ids: Array) -> Dictionary:
 	return out
 
 
-static func select_relievers_for_innings(reliever_pool: Array, starter_pool_fallback: Array, exclude_pitcher_id: int) -> Array:
+static func select_relievers_for_innings(
+	reliever_pool: Array,
+	starter_pool_fallback: Array,
+	exclude_pitcher_id: int,
+	saved: Dictionary = {}
+) -> Array:
 	var eligible: Array = []
 	for r in reliever_pool:
 		var pitcher: PSPlayerSeasonRecord = r as PSPlayerSeasonRecord
@@ -232,12 +243,25 @@ static func select_relievers_for_innings(reliever_pool: Array, starter_pool_fall
 		return PlayerValueEvaluator.pitching_score(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score(b as PSPlayerSeasonRecord)
 	)
 	var top6: Array = []
-	for i in range(int(min(6, eligible.size()))):
-		top6.append(eligible[i])
-	if top6.size() < 6:
-		var used_ids: Dictionary = {}
-		for p in top6:
-			used_ids[(p as PSPlayerSeasonRecord).player_id] = true
+	var used_ids: Dictionary = {}
+	var eligible_by_id: Dictionary = _records_by_id(eligible)
+	for id_value in relief_role_order_ids(saved):
+		if top6.size() >= RELIEF_ROLE_SIZE_MAX:
+			break
+		var pid: int = int(id_value)
+		if pid <= 0 or used_ids.has(pid) or not eligible_by_id.has(pid):
+			continue
+		top6.append(eligible_by_id[pid])
+		used_ids[pid] = true
+	for pitcher_value in eligible:
+		if top6.size() >= RELIEF_ROLE_SIZE_MAX:
+			break
+		var pitcher: PSPlayerSeasonRecord = pitcher_value as PSPlayerSeasonRecord
+		if used_ids.has(pitcher.player_id):
+			continue
+		top6.append(pitcher)
+		used_ids[pitcher.player_id] = true
+	if top6.size() < RELIEF_ROLE_SIZE_MAX:
 		used_ids[exclude_pitcher_id] = true
 		var fallback: Array = []
 		for p in starter_pool_fallback:
@@ -249,11 +273,14 @@ static func select_relievers_for_innings(reliever_pool: Array, starter_pool_fall
 			return PlayerValueEvaluator.pitching_score(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score(b as PSPlayerSeasonRecord)
 		)
 		for p in fallback:
-			if top6.size() >= 6:
+			if top6.size() >= RELIEF_ROLE_SIZE_MAX:
 				break
 			top6.append(p)
+			used_ids[(p as PSPlayerSeasonRecord).player_id] = true
 	# top6 は overall 降順 [最強, 2番手, 3番手, 4番手, 5番手, 6番手]。
 	# 出力順: [7回, 8回, 9回, 10回, 11回, 12回] = [3番手, 2番手, 最強, 4番手, 5番手, 6番手]
+	if not relief_role_order_ids(saved).is_empty():
+		return top6
 	var ordered: Array = []
 	var top3: Array = top6.slice(0, int(min(3, top6.size())))
 	top3.reverse()
@@ -261,3 +288,66 @@ static func select_relievers_for_innings(reliever_pool: Array, starter_pool_fall
 	if top6.size() > 3:
 		ordered.append_array(top6.slice(3))
 	return ordered
+
+
+static func relief_role_by_pitcher(saved: Dictionary, available_relievers: Array = []) -> Dictionary:
+	var allowed: Dictionary = _records_by_id(available_relievers)
+	var restrict: bool = not allowed.is_empty()
+	var roles: Dictionary = {}
+	var relief_roles: Dictionary = saved.get("relief_roles", {}) as Dictionary
+	# long は複数可 (long_ids 配列)。旧セーブの単数 long_id も読む。
+	for id_value in _long_ids(relief_roles):
+		_add_role_id(roles, int(id_value), RELIEF_ROLE_LONG, allowed, restrict)
+	for id_value in relief_roles.get("middle_ids", []) as Array:
+		_add_role_id(roles, int(id_value), RELIEF_ROLE_MIDDLE, allowed, restrict)
+	for id_value in relief_roles.get("setup_ids", []) as Array:
+		_add_role_id(roles, int(id_value), RELIEF_ROLE_SETUP, allowed, restrict)
+	_add_role_id(roles, int(relief_roles.get("closer_id", 0)), RELIEF_ROLE_CLOSER, allowed, restrict)
+	return roles
+
+
+# long ロールの player_id 群 (long_ids 配列 + 旧 long_id 単数)。
+static func _long_ids(relief_roles: Dictionary) -> Array:
+	var ids: Array = []
+	for id_value in relief_roles.get("long_ids", []) as Array:
+		_append_unique_id(ids, int(id_value))
+	_append_unique_id(ids, int(relief_roles.get("long_id", 0)))
+	return ids
+
+
+static func relief_role_order_ids(saved: Dictionary) -> Array:
+	var relief_roles: Dictionary = saved.get("relief_roles", {}) as Dictionary
+	if relief_roles.is_empty():
+		return []
+	var ids: Array = []
+	_append_unique_id(ids, int(relief_roles.get("closer_id", 0)))
+	for id_value in relief_roles.get("setup_ids", []) as Array:
+		_append_unique_id(ids, int(id_value))
+	for id_value in relief_roles.get("middle_ids", []) as Array:
+		_append_unique_id(ids, int(id_value))
+	for id_value in _long_ids(relief_roles):
+		_append_unique_id(ids, int(id_value))
+	return ids
+
+
+static func _records_by_id(records: Array) -> Dictionary:
+	var by_id: Dictionary = {}
+	for record_value in records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record != null:
+			by_id[record.player_id] = record
+	return by_id
+
+
+static func _add_role_id(roles: Dictionary, player_id: int, role: String, allowed: Dictionary, restrict: bool) -> void:
+	if player_id <= 0 or roles.has(player_id):
+		return
+	if restrict and not allowed.has(player_id):
+		return
+	roles[player_id] = role
+
+
+static func _append_unique_id(ids: Array, player_id: int) -> void:
+	if player_id <= 0 or ids.has(player_id):
+		return
+	ids.append(player_id)

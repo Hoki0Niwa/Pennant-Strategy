@@ -31,3 +31,8 @@ ROADMAP.md
 # Python build/cache artifacts
 __pycache__/
 *.pyc
+
+# 検証用の一時スクショ/クロップ/スクリプト (リポジトリ直下の throwaway)
+/_shot_*
+/_crop_*
+/_warnscan.*

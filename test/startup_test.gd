@@ -3,11 +3,14 @@
 # 新しいテストは test/ 配下に *_test.gd を追加するだけで自動検出される(専用 .tscn 不要)。
 extends GdUnitTestSuite
 
+const SaveContext = preload("res://services/storage/save_context.gd")
+
 
 func test_core_scripts_load() -> void:
 	assert_object(load("res://ui/main.gd")).is_not_null()
 	assert_object(load("res://ui/screens/home_screen.gd")).is_not_null()
 	assert_object(load("res://ui/screens/offseason_screen.gd")).is_not_null()
+	assert_object(load("res://ui/screens/options_screen.gd")).is_not_null()
 
 
 func test_autoloads_registered() -> void:
@@ -24,10 +27,12 @@ func test_home_screen_builds_with_active_season() -> void:
 	var old_season: PSSeason = AppState.current_season
 	var old_screen: String = AppState.current_screen
 	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
 
 	var team: PSTeam = GameDb.teams[0] as PSTeam
 	AppState.select_team(team.id)
 	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
 
 	var home_script: GDScript = load("res://ui/screens/home_screen.gd") as GDScript
 	var screen: Control = home_script.new()
@@ -41,6 +46,46 @@ func test_home_screen_builds_with_active_season() -> void:
 	AppState.current_season = old_season
 	AppState.current_screen = old_screen
 	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func test_rotation_editor_screen_builds_with_active_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "rotation_editor"
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var screen_script: GDScript = load("res://ui/screens/rotation_editor_screen.gd") as GDScript
+	var screen: Control = screen_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# サイドバーナビ + アクションボタン + 6スロットの OptionButton が生成されている。
+	assert_int(screen.get_child_count()).is_greater(0)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
 
 
 func test_screen_history_back_navigation() -> void:

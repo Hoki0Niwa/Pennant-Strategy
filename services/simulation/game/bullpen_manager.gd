@@ -50,7 +50,7 @@ static func substitute_reliever(setup: Dictionary, inning: int, game_result: Dic
 	if not already_relieved and starter != null and current == starter:
 		mark_starter_relieved(setup)
 	setup["pitcher"] = reliever
-	var role: String = PSPitcherUsageModel.ROLE_LONG_RELIEF if prefer_long else PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	var role: String = _outing_role_for_reliever(setup, reliever, prefer_long)
 	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
 
 
@@ -79,7 +79,7 @@ static func substitute_reliever_mid_inning(
 	if starter != null and current == starter:
 		mark_starter_relieved(setup, int(setup.get("game_outs", 0)) + outs, runs_allowed)
 	setup["pitcher"] = reliever
-	var role: String = PSPitcherUsageModel.ROLE_LONG_RELIEF if prefer_long else PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	var role: String = _outing_role_for_reliever(setup, reliever, prefer_long)
 	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
 	return true
 
@@ -127,9 +127,64 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	candidates.sort_custom(func(a, b) -> bool:
 		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return PSPitcherUsageModel.reliever_selection_score(pitcher_a, prefer_long, inning, close_game, game_day, team_games_played_before) > PSPitcherUsageModel.reliever_selection_score(pitcher_b, prefer_long, inning, close_game, game_day, team_games_played_before)
+		return reliever_selection_score_for_setup(setup, pitcher_a, prefer_long, inning, close_game, game_day, team_games_played_before) > reliever_selection_score_for_setup(setup, pitcher_b, prefer_long, inning, close_game, game_day, team_games_played_before)
 	)
 	return candidates[0] as PSPlayerSeasonRecord
+
+
+static func reliever_selection_score_for_setup(
+	setup: Dictionary,
+	reliever: PSPlayerSeasonRecord,
+	prefer_long: bool,
+	inning: int,
+	close_game: bool,
+	game_day: int,
+	team_games_played_before: int
+) -> float:
+	var score: float = PSPitcherUsageModel.reliever_selection_score(reliever, prefer_long, inning, close_game, game_day, team_games_played_before)
+	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
+	var role: String = str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))
+	return score + relief_role_context_bonus(role, prefer_long, inning, close_game)
+
+
+static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, close_game: bool) -> float:
+	match role:
+		PSRotationPlanner.RELIEF_ROLE_CLOSER:
+			if prefer_long:
+				return -160.0
+			if close_game and inning >= 9:
+				return 180.0
+			if close_game and inning >= 8:
+				return 80.0
+			return -35.0
+		PSRotationPlanner.RELIEF_ROLE_SETUP:
+			if prefer_long:
+				return -85.0
+			if close_game and inning >= 7 and inning <= 8:
+				return 130.0
+			if close_game and inning == 6:
+				return 60.0
+			if close_game and inning >= 9:
+				return -20.0
+			return 12.0
+		PSRotationPlanner.RELIEF_ROLE_MIDDLE:
+			if prefer_long:
+				return -30.0
+			if close_game and inning >= 9:
+				return -45.0
+			if inning <= 7 or not close_game:
+				return 45.0
+			return 0.0
+		PSRotationPlanner.RELIEF_ROLE_LONG:
+			if prefer_long:
+				return 170.0
+			if inning <= 5:
+				return 70.0
+			if close_game and inning >= 7:
+				return -120.0
+			return -20.0
+		_:
+			return 0.0
 
 
 static func is_close_game_for_setup(setup: Dictionary, game_result: Dictionary) -> bool:
@@ -160,6 +215,16 @@ static func score_margin_for_setup(setup: Dictionary, game_result: Dictionary) -
 	if team_id == home_team_id:
 		return home_score - away_score
 	return 0
+
+
+static func _outing_role_for_reliever(setup: Dictionary, reliever: PSPlayerSeasonRecord, prefer_long: bool) -> String:
+	if reliever == null:
+		return PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
+	var assigned_role: String = str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))
+	if assigned_role == PSRotationPlanner.RELIEF_ROLE_LONG:
+		return PSPitcherUsageModel.ROLE_LONG_RELIEF
+	return PSPitcherUsageModel.ROLE_LONG_RELIEF if prefer_long else PSPitcherUsageModel.ROLE_SHORT_RELIEF
 
 
 static func pitcher_usage_for(setup: Dictionary, pitcher: PSPlayerSeasonRecord, role: String = "") -> Dictionary:

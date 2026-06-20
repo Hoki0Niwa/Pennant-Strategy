@@ -24,7 +24,9 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -
 	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
 	if rotation_pitcher == null:
 		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
-	var relievers: Array = PSRotationPlanner.select_relievers_for_innings(reliever_pool, starter_pitchers, rotation_pitcher.player_id)
+	var saved_rotation: Dictionary = season.get_rotation(team_id)
+	var relievers: Array = PSRotationPlanner.select_relievers_for_innings(reliever_pool, starter_pitchers, rotation_pitcher.player_id, saved_rotation)
+	var relief_role_by_pitcher: Dictionary = PSRotationPlanner.relief_role_by_pitcher(saved_rotation, relievers)
 	var team_games_played_before: int = 0 if team_record == null else int(team_record.stats.games)
 
 	# Phase 5: team.auto_lineup ON なら保存済み打順を無視して常に build_setup_from_auto 経由。
@@ -46,6 +48,7 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -
 	if bool(setup.get("ok", false)):
 		setup["starter_pitcher"] = rotation_pitcher
 		setup["relievers"] = relievers
+		setup["relief_role_by_pitcher"] = relief_role_by_pitcher
 		setup["starter_outs"] = -1
 		setup["starter_runs"] = -1
 		setup["starter_relieved"] = false

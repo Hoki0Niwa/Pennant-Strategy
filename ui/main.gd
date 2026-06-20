@@ -36,7 +36,7 @@ const SIDEBAR_ITEMS: Array = [
 	{"name": "team_detail", "label": "チーム詳細"},
 	{"name": "active_roster", "label": "1軍入れ替え"},
 	{"name": "lineup_editor", "label": "打順設定"},
-	{"name": "rotation_editor", "label": "起用法"},
+	{"name": "rotation_editor", "label": "投手起用法"},
 	{"name": "player_detail", "label": "選手詳細"},
 	{"name": "balance_report", "label": "バランスレポート"},
 	{"name": "player_probe", "label": "選手プローブ"},
@@ -49,6 +49,12 @@ const DEVELOPER_SCREEN_NAMES: Dictionary = {
 	"balance_report": true,
 	"player_probe": true,
 	"draft_simulator": true,
+}
+
+# 自前のサイドバー+ヘッダを内包しシェルのサイドバー/余白を使わない全画面ダッシュボード。
+const FULL_BLEED_SCREENS: Dictionary = {
+	"home": true,
+	"rotation_editor": true,
 }
 
 var sidebar: VBoxContainer
@@ -139,18 +145,19 @@ func _show_screen(screen_name: String) -> void:
 		content.remove_child(child)
 		child.queue_free()
 
+	var full_bleed: bool = FULL_BLEED_SCREENS.has(screen_name)
 	if sidebar != null:
-		sidebar.visible = screen_name != "start" and screen_name != "home" and (screen_name != "options" or AppState.current_season != null)
+		sidebar.visible = screen_name != "start" and not full_bleed and (screen_name != "options" or AppState.current_season != null)
 		for screen_key in sidebar_buttons.keys():
 			var button: Button = sidebar_buttons[screen_key] as Button
 			button.disabled = screen_key == screen_name
 	if content != null:
-		var home_margin: int = 0 if screen_name == "home" else 16
-		var home_margin_top: int = 0 if screen_name == "home" else 14
-		content.add_theme_constant_override("margin_left", home_margin)
-		content.add_theme_constant_override("margin_top", home_margin_top)
-		content.add_theme_constant_override("margin_right", home_margin)
-		content.add_theme_constant_override("margin_bottom", home_margin_top)
+		var margin_x: int = 0 if full_bleed else 16
+		var margin_y: int = 0 if full_bleed else 14
+		content.add_theme_constant_override("margin_left", margin_x)
+		content.add_theme_constant_override("margin_top", margin_y)
+		content.add_theme_constant_override("margin_right", margin_x)
+		content.add_theme_constant_override("margin_bottom", margin_y)
 
 	var screen_path: String = str(SCREEN_SCRIPT_PATHS.get(screen_name, START_SCREEN_PATH))
 	var screen: Control = _instantiate_screen(screen_path)
