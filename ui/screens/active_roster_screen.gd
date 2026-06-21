@@ -22,7 +22,7 @@ const TARGET_PITCHERS_MIN: int = 14
 const TARGET_PITCHERS_MAX: int = 15
 const MIN_CATCHERS: int = 2
 
-# 役割色 (rotation_editor と統一: 先発=ピンク / 中継=赤 / 抑え=金)。捕=青 / 内野=黄(AMBER) / 外野=緑。
+# 役割色 (rotation_editor と統一: 先発=ピンク / 中継=赤)。捕=青 / 内野=黄(AMBER) / 外野=緑。
 const PINK: Color = Color(0.94, 0.46, 0.66)
 
 # --- レイアウト (base 1920x1080 座標) ---
@@ -78,10 +78,9 @@ var _selected_list: String = ""        # "active" / "inactive" / "dev"
 var _status_text: String = ""
 var _status_is_error: bool = false
 
-# 投手の区分 (先発/中継/抑え) を投手起用法と一致させるための分類元。
-# _rotation_set = 先発ローテ入りの投手 id (保存ローテ or preview)、_closer_id = 抑え。
+# 投手の区分 (先発/中継) を投手起用法と一致させるための分類元。
+# _rotation_set = 先発ローテ入りの投手 id (保存ローテ or preview)。クローザーは中継の一種として扱う。
 var _rotation_set: Dictionary = {}
-var _closer_id: int = 0
 
 # 育成→支配下登録は保存まで確定しない (リセットで取り消せる)。{player_id: true}。
 var _pending_shienka: Dictionary = {}
@@ -267,7 +266,7 @@ func _draw_stat_cards(s: Dictionary) -> void:
 	var cards: Array = [
 		{"label": "1軍", "big": "%d/%d" % [total, ROSTER_MAX], "color": total_color, "sub": ""},
 		{"label": "投手", "big": str(pitchers), "color": pit_color,
-			"sub": "先発%d 中継%d 抑え%d" % [int(s["starters"]), int(s["middle"]), int(s["closers"])]},
+			"sub": "先発%d 中継%d" % [int(s["starters"]), int(s["middle"])]},
 		{"label": "野手", "big": str(fielders), "color": TEXT,
 			"sub": "捕%d 内%d 外%d" % [catchers, int(s["infield"]), int(s["outfield"])]},
 		{"label": "捕手", "big": str(catchers), "color": c_color, "sub": "最低%d" % MIN_CATCHERS},
@@ -315,7 +314,7 @@ func _draw_columns() -> void:
 		if _player_passes_filter(dev_player):
 			dev_rows.append(_dev_row(dev_player))
 
-	# 既定ソート: 区分順 (先発→中継→抑え→捕→内野→外野 = ポジション番号順)、同順位は評価降順。
+	# 既定ソート: 区分順 (先発→中継→捕→内野→外野 = ポジション番号順)、同順位は評価降順。
 	var sort_by_position: Callable = func(a: Variant, b: Variant) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
@@ -413,7 +412,7 @@ func _draw_player_detail() -> void:
 	if player.jersey_number > 0:
 		_text("#%d" % player.jersey_number, Vector2(px, top), 16, MUTED)
 	_text(player.name, Vector2(px + 56, top), 22, TEXT)
-	var role_chip: Dictionary = _classify(player.id, player.is_pitcher(), player.is_starter_pitcher(), player.position, _active_ids.has(player.id))
+	var role_chip: Dictionary = _classify(player.id, player.is_pitcher(), player.role, player.position, _active_ids.has(player.id))
 	_chip(Rect2(px + 56 + _measure(player.name, 22) + 16, top - 20, 48, 24), str(role_chip["text"]), role_chip["color"] as Color)
 
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(Offseason.player_value_score(player))
@@ -851,7 +850,7 @@ func _commit_pending_shienka(season: PSSeason) -> void:
 # ============================================================ row builders / helpers
 
 func _record_row(record: PSPlayerSeasonRecord) -> Dictionary:
-	var chip: Dictionary = _classify(record.player_id, record.is_pitcher(), record.is_starter_pitcher(), record.position, _active_ids.has(record.player_id))
+	var chip: Dictionary = _classify(record.player_id, record.is_pitcher(), record.role, record.position, _active_ids.has(record.player_id))
 	var war: float = float((_war_by_id.get(record.player_id, {}) as Dictionary).get("war", 0.0))
 	return {
 		"id": record.player_id,
@@ -869,7 +868,7 @@ func _record_row(record: PSPlayerSeasonRecord) -> Dictionary:
 
 
 func _dev_row(player: PSPlayer) -> Dictionary:
-	var chip: Dictionary = _classify(player.id, player.is_pitcher(), player.is_starter_pitcher(), player.position, false)
+	var chip: Dictionary = _classify(player.id, player.is_pitcher(), player.role, player.position, false)
 	# 育成は出場記録が無い (= WAR 算出不可) ので "-" 表示。
 	return {
 		"id": player.id,
@@ -894,10 +893,9 @@ func _note_for(foreign: bool, injury_days: int) -> String:
 	return ""
 
 
-# 投手起用法 (rotation_editor) の保存ローテ / 抑えを読み、先発/中継の判定元にする。
+# 投手起用法 (rotation_editor) の保存ローテを読み、先発/中継の判定元にする。
 func _load_rotation_classification(season: PSSeason) -> void:
 	_rotation_set = {}
-	_closer_id = 0
 	var saved: Dictionary = season.get_rotation(_team_id)
 	var rotation_ids: Array = []
 	if saved.is_empty() or (saved.get("pitcher_ids", []) as Array).is_empty():
@@ -908,18 +906,15 @@ func _load_rotation_classification(season: PSSeason) -> void:
 		rotation_ids = saved.get("pitcher_ids", []) as Array
 	for id_value in rotation_ids:
 		_rotation_set[int(id_value)] = true
-	_closer_id = int((saved.get("relief_roles", {}) as Dictionary).get("closer_id", 0))
 
 
-# 区分チップ + ソート順を一括算出。投手は投手起用法と一致する 先発/中継/抑え 判定を使う。
-# order: 先発0→中継1→抑え2→捕3→一4→…→右10 (= ポジション番号順)。
-func _classify(pid: int, is_pitcher: bool, is_starter: bool, position: int, is_active: bool) -> Dictionary:
+# 区分チップ + ソート順を一括算出。投手は 先発/中継 の2区分のみ (クローザーは中継扱い)。
+# order: 先発0→中継1→捕3→一4→…→右10 (= ポジション番号順)。
+func _classify(pid: int, is_pitcher: bool, role: String, position: int, is_active: bool) -> Dictionary:
 	if is_pitcher:
-		var group: int = _pitcher_group(pid, is_starter, is_active)
-		match group:
-			0: return {"text": "先発", "color": PINK, "order": 0}
-			2: return {"text": "抑え", "color": AMBER, "order": 2}
-			_: return {"text": "中継", "color": RED, "order": 1}
+		if _pitcher_group(pid, role, is_active) == 0:
+			return {"text": "先発", "color": PINK, "order": 0}
+		return {"text": "中継", "color": RED, "order": 1}
 	var order: int = position + 1 if position >= 2 and position <= 9 else 11
 	match position:
 		2: return {"text": "捕", "color": BLUE, "order": order}
@@ -928,16 +923,16 @@ func _classify(pid: int, is_pitcher: bool, is_starter: bool, position: int, is_a
 		_: return {"text": _pos_short(position), "color": MUTED, "order": order}
 
 
-# 0=先発 / 1=中継 / 2=抑え。1軍は保存ローテ入り=先発・抑え指定=抑え・それ以外=中継。
-# 2軍/育成 やローテ未設定時は先発適性 (is_starter_pitcher) で代替する。
-func _pitcher_group(pid: int, is_starter: bool, is_active: bool) -> int:
+# 0=先発 / 1=中継。1軍は保存ローテ入り=先発・それ以外=中継 (クローザーも中継)。
+# 2軍/育成 やローテ未設定時は保存役割 (role) を正準とする (能力からの再分類はしない)。
+func _pitcher_group(pid: int, role: String, is_active: bool) -> int:
 	if _rotation_set.has(pid):
 		return 0
-	if pid > 0 and pid == _closer_id:
-		return 2
 	if is_active and not _rotation_set.is_empty():
 		return 1
-	return 0 if is_starter else 1
+	if role == "reliever" or role == "closer":
+		return 1
+	return 0
 
 
 func _pos_short(position: int) -> String:
@@ -997,10 +992,9 @@ func _player_passes_filter(player: PSPlayer) -> bool:
 
 func _compute_stats() -> Dictionary:
 	var summary: Dictionary = GameSimulator.summarize_active_roster_ids(_active_ids.keys(), _all_records)
-	# 先発/中継/抑え は投手起用法と一致する分類で数える (summary の starters は使わない)。
+	# 先発/中継 は投手起用法と一致する分類で数える (summary の starters は使わない)。
 	var starters: int = 0
 	var middle: int = 0
-	var closers: int = 0
 	var infield: int = 0
 	var outfield: int = 0
 	for record_row in _all_records:
@@ -1008,10 +1002,10 @@ func _compute_stats() -> Dictionary:
 		if not _active_ids.has(record.player_id):
 			continue
 		if record.is_pitcher():
-			match _pitcher_group(record.player_id, record.is_starter_pitcher(), true):
-				0: starters += 1
-				2: closers += 1
-				_: middle += 1
+			if _pitcher_group(record.player_id, record.role, true) == 0:
+				starters += 1
+			else:
+				middle += 1
 		elif _is_catcher(record):
 			pass
 		elif record.position >= 7 and record.position <= 9:
@@ -1022,7 +1016,6 @@ func _compute_stats() -> Dictionary:
 		"total": int(summary.get("total", 0)),
 		"pitchers": int(summary.get("pitchers", 0)),
 		"starters": starters,
-		"closers": closers,
 		"middle": middle,
 		"fielders": int(summary.get("fielders", 0)),
 		"catchers": int(summary.get("catchers", 0)),

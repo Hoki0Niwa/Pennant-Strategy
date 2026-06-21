@@ -400,9 +400,8 @@ func _contract_line(record: PSPlayerSeasonRecord) -> String:
 
 func _evaluation_line(record: PSPlayerSeasonRecord) -> String:
 	if record.is_pitcher():
-		var pitcher_eval: int = PlayerValueEvaluator.pitching_score(record)
 		var field_eval: int = PlayerValueEvaluator.defensive_score_for_position(record, 1)
-		return "Eval  Pitch %d  Field %d" % [pitcher_eval, field_eval]
+		return "Eval  Total %d  Field %d" % [PlayerValueEvaluator.overall_score(record), field_eval]
 	var best: Dictionary = PlayerValueEvaluator.best_defensive_fit(record)
 	var best_position: int = int(best.get("position", record.position))
 	var best_defense: int = int(best.get("score", 0))

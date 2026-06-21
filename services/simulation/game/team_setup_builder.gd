@@ -9,6 +9,10 @@ const DefenseAlignmentService = preload("res://services/simulation/lineup/defens
 
 const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
 const MIN_ACTIVE_CATCHERS: int = 2
+# 役割は保存 role が正準 (PSPitcherRoleModel.is_starter_record)。stored-starter が 1 人でもいれば
+# リリーフは先発ローテに混入させない。starter がゼロのチーム (ドリフト/小ロスター) のときだけ
+# 緊急補充し、その上限人数がこの定数。通常編成 (各チーム starter 多数) では発火しない。
+const STARTER_POOL_MIN: int = 5
 
 
 static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
@@ -1019,10 +1023,25 @@ static func sort_batting_order(batting_order: Array) -> void:
 
 static func starter_pitcher_candidates(pitchers: Array) -> Array:
 	var candidates: Array = []
+	var rest: Array = []
 	for pitcher_row in pitchers:
 		var pitcher: PSPlayerSeasonRecord = pitcher_row as PSPlayerSeasonRecord
+		if pitcher == null:
+			continue
 		if _is_starter_role(pitcher):
 			candidates.append(pitcher)
+		else:
+			rest.append(pitcher)
+	# stored-starter が1人でもいればそのまま使う = リリーフ (クローザー含む) は先発ローテに混入しない。
+	# stored-starter がゼロのチーム (ドリフト/小ロスター) のときだけ緊急的に先発適性順で補う。
+	if candidates.is_empty() and not rest.is_empty():
+		rest.sort_custom(func(a, b) -> bool:
+			return PSPitcherRoleModel.starter_order_score(a) > PSPitcherRoleModel.starter_order_score(b)
+		)
+		for pitcher_row in rest:
+			if candidates.size() >= STARTER_POOL_MIN:
+				break
+			candidates.append(pitcher_row)
 	return candidates
 
 

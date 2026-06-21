@@ -33,8 +33,35 @@ func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
 			relievers += 1
 
 	assert_int(pitchers).is_greater(0)
-	assert_int(starters).is_greater(relievers)
-	assert_int(relievers).is_greater_equal(int(round(float(pitchers) * 0.25)))
+	# 生成は概ね均衡 (やや中継寄り)。どちらの役割も全体の 3 割以上で、極端に偏らないこと。
+	assert_int(starters).is_greater_equal(int(round(float(pitchers) * 0.30)))
+	assert_int(relievers).is_greater_equal(int(round(float(pitchers) * 0.30)))
+
+
+# 生成投手の先発比率は概ね均衡 (やや中継寄り)。STARTER_DECISION_MARGIN の較正ガード。
+func test_generation_role_ratio_roughly_balanced() -> void:
+	Rng.set_seed_value(20260621)
+	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2), _team(3, "central", 3), _team(4, "pacific", 4)]
+	var players: Array = []
+	for tid in [1, 2, 3, 4]:
+		_fill_team(players, tid, 58)
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
+	var n: int = 0
+	var starters: int = 0
+	for candidate_row in state.get("candidate_pool", []) as Array:
+		var candidate: Dictionary = candidate_row as Dictionary
+		if int(candidate.get("position", 0)) != 1:
+			continue
+		n += 1
+		var template: Dictionary = (candidate.get("player_template", {}) as Dictionary).duplicate(true)
+		template["role"] = ""
+		if PSPitcherRoleModel.role_for_player(PSPlayer.from_dict(template)) == PSPitcherRoleModel.ROLE_STARTER:
+			starters += 1
+	var frac: float = float(starters) / float(max(1, n))
+	print("ROLEADV n=%d starters=%d (%.0f%%) margin=%.2f" % [n, starters, 100.0 * frac, PSPitcherRoleModel.STARTER_DECISION_MARGIN])
+	assert_int(n).is_greater(0)
+	# 先発 35〜55% (中継がやや多めで均衡)。極端な偏りや先発過多が再発したら検知する。
+	assert_float(frac).is_between(0.35, 0.55)
 
 
 func test_main_and_development_segments_split() -> void:

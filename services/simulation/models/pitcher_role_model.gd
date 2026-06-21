@@ -10,12 +10,23 @@ const ROLE_RELIEVER: String = "reliever"
 const STARTER_ROLE_BIAS: float = 0.55
 const RELIEVER_ROLE_BIAS: float = 0.55
 const OFF_ROLE_PENALTY: float = -0.25
-const STARTER_DECISION_MARGIN: float = 0.0
+# 役割未設定 (role="") の能力判定で「先発 >= 中継 + margin」を要求する閾値。生成時のみ効く
+# (保存 role がある投手は is_starter_record が role を直に見るため無関係)。正の値ほど中継寄りに生成。
+# 実野球は中継ぎの方が多く、二軍の先発過多も避けたいので先発 ~45% 程度に寄せる。
+const STARTER_DECISION_MARGIN: float = 0.3
 
 
 static func is_starter_record(record) -> bool:
 	if record == null or not record.is_pitcher():
 		return false
+	# 保存役割 (role) を正準とする。守備位置適性と同様、能力からの再分類はしない。
+	# 変更はキャンプの役割転向 (camp_service が player.role を書き換える) でのみ行う。
+	# role 未設定 ("") のときだけ能力比較で初期判定する (生成時の初期 role 決定に使用)。
+	match record.role:
+		ROLE_STARTER:
+			return true
+		ROLE_RELIEVER, "closer":
+			return false
 	return starter_score(record) >= reliever_score(record) + STARTER_DECISION_MARGIN
 
 

@@ -11,7 +11,17 @@ const NORMAL_CAMP_NEW_PITCH_CHANCE: float = 0.02
 const NORMAL_CAMP_YOUNG_BONUS: float = 0.01
 const NORMAL_CAMP_VETERAN_PENALTY: float = 0.01
 const FAILURE_PENALTY_CHANCE: float = 0.65
-const MIN_AI_EXPECTED_VALUE: float = 18.0
+# CPU/自動が特別練習を行う最低 expected。これ未満は「やる価値が薄い」とみなし実施しない。
+# 高めに設定することで、明確な需要のある球団だけが (需要分だけ) 練習し、不要な球団は0件になる。
+const MIN_AI_EXPECTED_VALUE: float = 25.0
+
+# CPU/自動のキャンプ転向が目指す球団全体の先発比率 (先発:中継 = 2:3 = 先発 40%)。
+const STARTER_TARGET_RATIO: float = 0.4
+# 目標比率からの乖離 (人数) 1 あたりの need。乖離が大きいほど expected_value が上がり優先転向される。
+const ROLE_BALANCE_NEED_WEIGHT: float = 14.0
+# 前年「主力相応」とみなす出場ライン。これ以上出場していれば idle=0 (転向対象から外す)。
+const IDLE_REGULAR_STARTS: int = 16
+const IDLE_REGULAR_RELIEF: int = 30
 
 const TRAIN_STARTER: String = "starter_conversion"
 const TRAIN_RELIEVER: String = "reliever_conversion"
@@ -101,6 +111,7 @@ static func create_camp_state(players: Array, teams: Array, season: PSSeason, us
 		"candidates": candidates,
 		"actions": [],
 		"team_action_counts": {},
+		"team_pitcher_balance": _initial_pitcher_balance(profiles),
 		"trained_player_ids": [],
 		"user_finished": false,
 		"injury_carryover": injury_carryover,
@@ -180,6 +191,10 @@ static func complete_camp_automatically(
 		if team_id == user_team_id and bool(entry.get("user_skipped", false)):
 			continue
 		if float(entry.get("expected_value", 0.0)) < MIN_AI_EXPECTED_VALUE:
+			continue
+		# 役割転向は球団が 2:3 目標へ達した時点で打ち切る (件数を需要連動にする)。
+		if _is_role_conversion(entry) and not _role_conversion_still_needed(state, entry):
+			entry["available"] = false
 			continue
 		if not _can_apply_entry(state, entry):
 			entry["available"] = false
@@ -279,7 +294,7 @@ static func user_training_options_for_player(state: Dictionary, players: Array, 
 	if bool(state.get("complete", false)):
 		return rows
 	var user_team_id: int = int(state.get("user_team_id", 0))
-	if user_team_id <= 0 or _team_action_count(state, user_team_id) >= MAX_SPECIAL_TRAININGS_PER_TEAM:
+	if user_team_id <= 0:
 		return rows
 	var player: PSPlayer = _find_player_by_id(players, player_id)
 	if player == null or player.team_id != user_team_id:
@@ -288,7 +303,15 @@ static func user_training_options_for_player(state: Dictionary, players: Array, 
 		return rows
 	if _trained_player_set(state).has(player.id):
 		return rows
-	return _user_training_options(player, season)
+	var options: Array = _user_training_options(player, season)
+	# 役割転向 (先発⇄中継) は無制限。上限到達後は役割転向のみ残し、位置習得/本職変更は不可。
+	if _team_action_count(state, user_team_id) >= MAX_SPECIAL_TRAININGS_PER_TEAM:
+		var role_only: Array = []
+		for option_row in options:
+			if _is_role_conversion(option_row as Dictionary):
+				role_only.append(option_row)
+		return role_only
+	return options
 
 
 static func submit_user_player_training(
@@ -315,7 +338,7 @@ static func submit_user_player_training(
 		return {"ok": false, "message": "この選手には選択できない特別練習です。", "state": state}
 	if not _can_apply_entry(state, entry):
 		return {"ok": false, "message": "この球団または選手は今オフの特別練習上限に達しています。", "state": state}
-	_apply_training(state, players, season, entry, "user")
+	_apply_training(state, players, season, entry, "user_manual")
 	_advance_user_training_state_if_done(state, players, teams, season)
 	return {"ok": true, "state": state}
 
@@ -332,6 +355,9 @@ static func available_user_candidates(state: Dictionary) -> Array:
 		if not bool(entry.get("available", true)) or bool(entry.get("user_skipped", false)):
 			continue
 		if _trained_player_set(state).has(int(entry.get("player_id", 0))):
+			continue
+		# 2:3 目標に達した方向の役割転向は「おまかせ/候補」には出さない (手動指定は別経路で無制限)。
+		if _is_role_conversion(entry) and not _role_conversion_still_needed(state, entry):
 			continue
 		rows.append(entry.duplicate(true))
 	rows.sort_custom(func(a, b) -> bool:
@@ -382,19 +408,43 @@ static func _pitcher_candidates(player: PSPlayer, profile: Dictionary, season: P
 	var rows: Array = []
 	var starter_count: int = int(profile.get("starters", 0))
 	var reliever_count: int = int(profile.get("relievers", 0))
-	if not PSPitcherRoleModel.is_starter_record(record):
-		var need: float = max(0.0, float(6 - starter_count)) * 16.0 + max(0.0, float(reliever_count - 9)) * 4.0
-		var advantage: float = PSPitcherRoleModel.starter_advantage(record)
-		var expected: float = need + advantage * 8.0 + float(OffseasonService.player_value_score(player)) * 0.08
-		if need > 0.0 or advantage > -0.4:
-			rows.append(_candidate_base(player, TRAIN_STARTER, expected, _starter_success_chance(record), "先発不足 %.1f / 先発適性差 %.2f" % [need, advantage]))
+	var total: int = starter_count + reliever_count
+	if total <= 0:
+		return rows
+	# 球団全体で 先発:中継 = 2:3 (先発 40%) を目標にし、乖離している方向だけ転向を提案する。
+	# CPU は1チーム年3件まで (cap) なので、目標へは複数年かけて緩やかに収束する。
+	var target_starters: int = int(round(float(total) * STARTER_TARGET_RATIO))
+	var starter_surplus: int = starter_count - target_starters
+	var value: float = float(OffseasonService.player_value_score(player))
+	# 「能力が高い割に前年あまり出場できていない」投手ほど優先して転向させる。
+	# blocked = (能力 + 乖離need) × idle。主力(idle≈0)は ~0 になり MIN_AI を割って転向対象から外れる。
+	var idle: float = _idle_fraction(record)
 	if PSPitcherRoleModel.is_starter_record(record):
-		var relief_need: float = max(0.0, float(9 - reliever_count)) * 12.0 + max(0.0, float(starter_count - 7)) * 5.0
-		var relief_advantage: float = PSPitcherRoleModel.reliever_advantage(record)
-		var expected_relief: float = relief_need + relief_advantage * 8.0 + float(OffseasonService.player_value_score(player)) * 0.06
-		if relief_need > 0.0 or relief_advantage > -0.3:
-			rows.append(_candidate_base(player, TRAIN_RELIEVER, expected_relief, _reliever_success_chance(record), "救援不足 %.1f / 救援適性差 %.2f" % [relief_need, relief_advantage]))
+		# 先発過多のときだけ、出場の少ない高能力先発を救援適性順に中継へ。
+		if starter_surplus > 0:
+			var relief_advantage: float = PSPitcherRoleModel.reliever_advantage(record)
+			var blocked: float = (value * 0.5 + 20.0 + float(starter_surplus) * ROLE_BALANCE_NEED_WEIGHT) * idle
+			var expected_relief: float = blocked + relief_advantage * 8.0
+			rows.append(_candidate_base(player, TRAIN_RELIEVER, expected_relief, _reliever_success_chance(record), "中継不足(先発過多 %d) / 出場不足 %.0f%% / 救援適性差 %.2f" % [starter_surplus, idle * 100.0, relief_advantage]))
+	else:
+		# 先発不足のときだけ、出場の少ない高能力中継を先発適性順に先発へ。
+		if starter_surplus < 0:
+			var advantage: float = PSPitcherRoleModel.starter_advantage(record)
+			var deficit: int = -starter_surplus
+			var blocked_s: float = (value * 0.5 + 20.0 + float(deficit) * ROLE_BALANCE_NEED_WEIGHT) * idle
+			var expected: float = blocked_s + advantage * 8.0
+			rows.append(_candidate_base(player, TRAIN_STARTER, expected, _starter_success_chance(record), "先発不足 %d / 出場不足 %.0f%% / 先発適性差 %.2f" % [deficit, idle * 100.0, advantage]))
 	return rows
+
+
+# 前年「主力相応に出場できていない」度合い (0=主力相応, 1=ほぼ未出場)。現役割の出場で測る。
+# キャンプ転向で「能力が高い割に出場できていない」投手を優先するための重み。
+static func _idle_fraction(record: PSPlayerSeasonRecord) -> float:
+	if record == null:
+		return 1.0
+	if PSPitcherRoleModel.is_starter_record(record):
+		return clampf(1.0 - float(record.pitcher_stats.starts) / float(IDLE_REGULAR_STARTS), 0.0, 1.0)
+	return clampf(1.0 - float(record.pitcher_stats.games) / float(IDLE_REGULAR_RELIEF), 0.0, 1.0)
 
 
 static func _fielder_candidates(player: PSPlayer, profile: Dictionary, season: PSSeason) -> Array:
@@ -586,7 +636,12 @@ static func _apply_training(state: Dictionary, players: Array, season: PSSeason,
 	var actions: Array = state.get("actions", []) as Array
 	actions.append(action)
 	state["actions"] = actions
-	_increment_team_action_count(state, player.team_id)
+	# 役割転向 (AI/手動とも) は上限を消費しない。野手の位置練習だけ上限を1消費する。
+	if not _is_role_conversion(entry):
+		_increment_team_action_count(state, player.team_id)
+	# 役割転向はライブ比率を更新し、2:3 到達後の不要な転向を止める判定に使う。
+	if _is_role_conversion(entry):
+		_apply_pitcher_balance_shift(state, player.team_id, str(entry.get("training_type", "")))
 	var trained: Array = state.get("trained_player_ids", []) as Array
 	if not trained.has(player.id):
 		trained.append(player.id)
@@ -755,16 +810,13 @@ static func _primary_need_score(profile: Dictionary, position: int) -> float:
 	return float(shortage) * 16.0 + float(war_deficit.get(position, 0.0)) * 10.0
 
 
-static func _starter_success_chance(record: PSPlayerSeasonRecord) -> float:
-	var chance: float = 0.50 + PSPitcherRoleModel.starter_advantage(record) * 0.08
-	chance += _age_training_bonus(record.age)
-	return clampf(chance, 0.18, 0.78)
+# 先発⇄中継の役割転向は「必ず成功」(能力に依らず 100%)。役割の付け替えは失敗する性質のものではない。
+static func _starter_success_chance(_record: PSPlayerSeasonRecord) -> float:
+	return 1.0
 
 
-static func _reliever_success_chance(record: PSPlayerSeasonRecord) -> float:
-	var chance: float = 0.56 + PSPitcherRoleModel.reliever_advantage(record) * 0.08
-	chance += _age_training_bonus(record.age) * 0.5
-	return clampf(chance, 0.20, 0.82)
+static func _reliever_success_chance(_record: PSPlayerSeasonRecord) -> float:
+	return 1.0
 
 
 static func _position_learn_success_chance(record: PSPlayerSeasonRecord, target_position: int, ability_bonus: int) -> float:
@@ -876,12 +928,68 @@ static func _state_candidate_by_id(state: Dictionary, candidate_id: int) -> Dict
 	return {}
 
 
+static func _is_role_conversion(entry: Dictionary) -> bool:
+	var training_type: String = str(entry.get("training_type", ""))
+	return training_type == TRAIN_STARTER or training_type == TRAIN_RELIEVER
+
+
+# 役割転向 (先発⇄中継) は AI/手動とも特別練習上限の対象外 (無制限)。
+# CPU の転向は上限ではなく 2:3 目標 (_role_conversion_still_needed) で止まる。
+# 野手の位置習得/本職変更だけが MAX_SPECIAL_TRAININGS_PER_TEAM の上限に従う。
 static func _can_apply_entry(state: Dictionary, entry: Dictionary) -> bool:
-	var team_id: int = int(entry.get("team_id", 0))
-	if _team_action_count(state, team_id) >= MAX_SPECIAL_TRAININGS_PER_TEAM:
-		return false
 	var player_id: int = int(entry.get("player_id", 0))
-	return not _trained_player_set(state).has(player_id)
+	if _trained_player_set(state).has(player_id):
+		return false
+	if _is_role_conversion(entry):
+		return true
+	return _team_action_count(state, int(entry.get("team_id", 0))) < MAX_SPECIAL_TRAININGS_PER_TEAM
+
+
+static func _initial_pitcher_balance(profiles: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for team_id in profiles.keys():
+		var profile: Dictionary = profiles[team_id] as Dictionary
+		out[str(team_id)] = {
+			"starters": int(profile.get("starters", 0)),
+			"relievers": int(profile.get("relievers", 0)),
+		}
+	return out
+
+
+# CPU/自動の役割転向は、球団が 2:3 目標に達したら止める (ライブ再計算)。
+# これで転向件数が「目標からの乖離」に連動し、均衡している球団は0件になる。手動は対象外 (無制限)。
+static func _role_conversion_still_needed(state: Dictionary, entry: Dictionary) -> bool:
+	var balance: Dictionary = state.get("team_pitcher_balance", {}) as Dictionary
+	var tb: Dictionary = balance.get(str(int(entry.get("team_id", 0))), {}) as Dictionary
+	if tb.is_empty():
+		return true
+	var starters: int = int(tb.get("starters", 0))
+	var total: int = starters + int(tb.get("relievers", 0))
+	if total <= 0:
+		return true
+	var target: int = int(round(float(total) * STARTER_TARGET_RATIO))
+	match str(entry.get("training_type", "")):
+		TRAIN_RELIEVER:
+			return starters > target
+		TRAIN_STARTER:
+			return starters < target
+	return true
+
+
+static func _apply_pitcher_balance_shift(state: Dictionary, team_id: int, training_type: String) -> void:
+	var balance: Dictionary = state.get("team_pitcher_balance", {}) as Dictionary
+	var key: String = str(team_id)
+	if not balance.has(key):
+		return
+	var tb: Dictionary = balance[key] as Dictionary
+	if training_type == TRAIN_RELIEVER:
+		tb["starters"] = max(0, int(tb.get("starters", 0)) - 1)
+		tb["relievers"] = int(tb.get("relievers", 0)) + 1
+	elif training_type == TRAIN_STARTER:
+		tb["relievers"] = max(0, int(tb.get("relievers", 0)) - 1)
+		tb["starters"] = int(tb.get("starters", 0)) + 1
+	balance[key] = tb
+	state["team_pitcher_balance"] = balance
 
 
 static func _team_action_count(state: Dictionary, team_id: int) -> int:

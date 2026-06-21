@@ -47,7 +47,7 @@ static func overall_score(record: PSPlayerSeasonRecord) -> int:
 	if record == null:
 		return 0
 	if record.is_pitcher():
-		return pitching_score(record)
+		return _pitcher_eval_score(record, true)
 	return fielder_starter_score(record)
 
 
@@ -55,7 +55,7 @@ static func overall_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
 	if record == null:
 		return 0
 	if record.is_pitcher():
-		return pitching_score_without_fatigue(record)
+		return _pitcher_eval_score(record, false)
 	return _fielder_starter_score(record, false)
 
 
@@ -147,6 +147,56 @@ static func _pitching_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty:
 	score += velocity_curve * 5.0
 	score += breaking_curve * 10.0
 	score += stamina_curve * 5.0
+	return _visible_score(score)
+
+
+# 表示評価値 (overall_score) は役割別に算出する。pitching_score (継投選抜用の素の投手力) は変えない。
+# 先発: pitching_score と同じ要素だが係数を圧縮し、野手 (fielder_starter_score) と同スケールにする。
+# 中継: スタミナを外し、奪三振 (stuff) / 球速 / 際どさ (edge) を強調。先発=野手と同スケールに較正。
+const PITCHER_EVAL_BASE: float = 50.0
+const STARTER_EVAL_WEIGHTS: Dictionary = {
+	"control": 11.1, "stuff": 9.6, "movement": 9.6,
+	"velocity": 3.7, "breaking": 7.4, "stamina": 3.7, "edge": 0.0,
+}
+const RELIEVER_EVAL_WEIGHTS: Dictionary = {
+	"control": 8.4, "stuff": 12.6, "movement": 8.4,
+	"velocity": 6.0, "breaking": 7.2, "stamina": 0.0, "edge": 6.0,
+}
+
+
+static func starter_eval_score(record: PSPlayerSeasonRecord) -> int:
+	return _pitcher_eval_score(record, true, STARTER_EVAL_WEIGHTS)
+
+
+static func reliever_eval_score(record: PSPlayerSeasonRecord) -> int:
+	return _pitcher_eval_score(record, true, RELIEVER_EVAL_WEIGHTS)
+
+
+# 役割で重みを切り替える表示評価値。weights 省略時は保存 role から先発/中継を判定する。
+static func _pitcher_eval_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: bool, weights: Dictionary = {}) -> int:
+	if record == null:
+		return 0
+	if weights.is_empty():
+		weights = STARTER_EVAL_WEIGHTS if record.is_starter_pitcher() else RELIEVER_EVAL_WEIGHTS
+	@warning_ignore("integer_division")
+	var fatigue_penalty: int = int(record.fatigue / 4) if apply_fatigue_penalty else 0
+	var fatigue_penalty_z: float = float(fatigue_penalty) / 12.5
+	var control: float = max(-3.92, record.z_ability("Pit_BBPrevent", 0.0) - fatigue_penalty_z)
+	var stuff: float = max(-3.92, record.z_ability("Pit_KCreate", 0.0) - fatigue_penalty_z)
+	var movement: float = max(-3.92, record.z_ability("Pit_LoftControl", 0.0) - fatigue_penalty_z)
+	var stamina: float = max(-3.92, record.z_ability("Pit_Stamina", 0.0) - fatigue_penalty_z)
+	var edge: float = max(-3.92, record.z_ability("Pit_EdgeRate", 0.0) - fatigue_penalty_z)
+	var velocity: int = _max_velocity(record)
+	var breaking: int = max(1, record.breaking_score() - fatigue_penalty * 3)
+
+	var score: float = PITCHER_EVAL_BASE
+	score += _ability_curve(control, 0.4, 1.52) * float(weights.get("control", 0.0))
+	score += _ability_curve(stuff, 0.4, 1.6) * float(weights.get("stuff", 0.0))
+	score += _ability_curve(movement, 0.4, 1.6) * float(weights.get("movement", 0.0))
+	score += _ability_curve(stamina, 0.4, 1.6) * float(weights.get("stamina", 0.0))
+	score += _ability_curve(edge, 0.4, 1.6) * float(weights.get("edge", 0.0))
+	score += _ability_curve(float(velocity), 145.0, 8.0) * float(weights.get("velocity", 0.0))
+	score += _ability_curve(float(breaking), 105.0, 28.0) * float(weights.get("breaking", 0.0))
 	return _visible_score(score)
 
 

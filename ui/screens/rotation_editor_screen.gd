@@ -297,7 +297,7 @@ func _draw_pitcher_row(record: PSPlayerSeasonRecord, y: float, rotation_set: Dic
 	_dot(Vector2(C_FAT_DOT_X + 4, y - 4), 5, _fatigue_color(pct))
 	_text("%d%%" % pct, Vector2(C_FAT_TX, y), 13, TEXT)
 
-	_text_right(str(PlayerValueEvaluator.pitching_score(record)), C_EVAL_R, y, 14, TEXT)
+	_text_right(str(PlayerValueEvaluator.overall_score(record)), C_EVAL_R, y, 14, TEXT)
 	_text_right(_war_str(record), C_WAR_R, y, 13, _war_color(record))
 
 	_text_right("%dkm/h" % PlayerVisibleRatings.pitcher_velocity(record), C_VELO_R, y, 12, TEXT)
@@ -349,7 +349,7 @@ func _draw_rotation_panel() -> void:
 		_text("%d%%" % pct, Vector2(px + R_FAT_TX, cy), 13, TEXT)
 		_text_right(_era_str(record), px + R_ERA_R, cy, 13, TEXT)
 		_text_right(_war_str(record), px + R_WAR_R, cy, 13, _war_color(record))
-		_text_right(str(PlayerValueEvaluator.pitching_score(record)), px + R_EVAL_R, cy, 13, TEXT)
+		_text_right(str(PlayerValueEvaluator.overall_score(record)), px + R_EVAL_R, cy, 13, TEXT)
 
 
 func _rotation_slot_rect(i: int) -> Rect2:
@@ -370,7 +370,7 @@ func _draw_slot_card(rect: Rect2, record: PSPlayerSeasonRecord, target: Dictiona
 	if record.jersey_number > 0:
 		label = "%d  %s" % [record.jersey_number, record.name]
 	_text(label, Vector2(rect.position.x + 12, ty), 14, TEXT, rect.size.x - 70)
-	_text_right("評%d" % PlayerValueEvaluator.pitching_score(record), rect.end.x - 12, ty, 12, MUTED, 56)
+	_text_right("評%d" % PlayerValueEvaluator.overall_score(record), rect.end.x - 12, ty, 12, MUTED, 56)
 
 
 # --- リリーフ起用法 (レーン式・複数可) ---
@@ -662,7 +662,7 @@ func _sorted_table_rows(rotation_set: Dictionary, closer_id: int) -> Array:
 			return ga < gb
 		if ga == 0:
 			return _rotation_index(ra.player_id) < _rotation_index(rb.player_id)
-		return PlayerValueEvaluator.pitching_score(ra) > PlayerValueEvaluator.pitching_score(rb)
+		return PlayerValueEvaluator.overall_score(ra) > PlayerValueEvaluator.overall_score(rb)
 	)
 	return rows
 

@@ -1,5 +1,127 @@
 extends GdUnitTestSuite
 
+const SaveContext = preload("res://services/storage/save_context.gd")
+const CampServiceRef = preload("res://services/season/camp_service.gd")
+
+
+# CPU の特別練習件数は球団事情で変動し、必要なければ 0、上限は 3。一律 3 にならないこと。
+func test_camp_training_count_varies_by_need() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var result: Dictionary = CampServiceRef.process_camp(GameDb.players, GameDb.teams, season, 0)
+	var per_team: Dictionary = {}
+	for action_row in result.get("actions", []) as Array:
+		var tid: int = int((action_row as Dictionary).get("team_id", 0))
+		per_team[tid] = int(per_team.get(tid, 0)) + 1
+	var counts: Array = []
+	for team_row in GameDb.teams:
+		counts.append(int(per_team.get((team_row as PSTeam).id, 0)))
+	counts.sort()
+	print("CAMPCOUNT per_team=%s" % str(counts))
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	# 需要連動: 一律にならず変動する (最少 < 最多)。需要の薄い球団は少なく (<=1)、需要のある球団は実施する。
+	assert_int(int(counts[0])).is_less(int(counts[counts.size() - 1]))
+	assert_int(int(counts[0])).is_less_equal(1)
+	assert_int(int(counts[counts.size() - 1])).is_greater(0)
+
+
+# 表示評価値 (overall_score) は 野手 / 先発 / 中継 で同スケールであること。
+# 先発は係数圧縮で野手スケールへ、中継は relief 強調式で先発スケールへ較正済み。
+func test_pitcher_eval_on_same_scale_as_fielders() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var fielders: Array = []
+	var starters: Array = []
+	var relievers: Array = []
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null:
+			continue
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
+		if record.is_pitcher():
+			if PSPitcherRoleModel.is_starter_record(record):
+				starters.append(PSPlayerValueEvaluator.overall_score(record))
+			else:
+				relievers.append(PSPlayerValueEvaluator.overall_score(record))
+		else:
+			fielders.append(PSPlayerValueEvaluator.overall_score(record))
+
+	print("EVALSCALE fielders ", _dist(fielders))
+	print("EVALSCALE starters ", _dist(starters))
+	print("EVALSCALE relievers ", _dist(relievers))
+
+	var fielder_mean: float = _mean(fielders)
+	var starter_mean: float = _mean(starters)
+	var reliever_mean: float = _mean(relievers)
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	assert_int(starters.size()).is_greater(0)
+	assert_int(relievers.size()).is_greater(0)
+	# 先発は野手と同スケール (平均差 <= 5)。旧実装は +7 高かった。
+	assert_float(absf(starter_mean - fielder_mean)).is_less_equal(5.0)
+	# 中継は先発と同スケール (平均差 <= 5)。
+	assert_float(absf(reliever_mean - starter_mean)).is_less_equal(5.0)
+	# 先発の上位帯が野手を大きく上回らない (旧 p90 88 > 野手 80 / max 99 の是正)。
+	assert_int(_pctl(starters, 0.90)).is_less_equal(_pctl(fielders, 0.90) + 4)
+	assert_int(_max(starters)).is_less_equal(_max(fielders) + 2)
+
+
+func _dist(values: Array) -> String:
+	if values.is_empty():
+		return "n=0"
+	values.sort()
+	var n: int = values.size()
+	var pct: Callable = func(p: float) -> int:
+		return int(values[clampi(int(round(p * float(n - 1))), 0, n - 1)])
+	return "n=%d mean=%.1f min=%d p25=%d p50=%d p75=%d p90=%d max=%d" % [
+		n, _mean(values), int(values[0]), pct.call(0.25), pct.call(0.50), pct.call(0.75), pct.call(0.90), int(values[n - 1])]
+
+
+func _mean(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var sum: float = 0.0
+	for v in values:
+		sum += float(v)
+	return sum / float(values.size())
+
+
+func _pctl(values: Array, p: float) -> int:
+	if values.is_empty():
+		return 0
+	var sorted: Array = values.duplicate()
+	sorted.sort()
+	return int(sorted[clampi(int(round(p * float(sorted.size() - 1))), 0, sorted.size() - 1)])
+
+
+func _max(values: Array) -> int:
+	var best: int = -2147483647
+	for v in values:
+		best = maxi(best, int(v))
+	return best
+
 
 func test_closer_role_is_preferred_in_ninth_close_game() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(101, "Closer", 0.0)
@@ -74,6 +196,113 @@ func test_saved_relief_roles_are_kept_in_reliever_pool() -> void:
 
 	assert_array(ids).contains(role_pick.player_id)
 	assert_int(int(ids[0])).is_equal(role_pick.player_id)
+
+
+func test_is_starter_pitcher_honors_stored_role_over_ability() -> void:
+	# 先発寄りの能力 (高スタミナ) を持つ投手。
+	var p: PSPlayerSeasonRecord = _pitcher(401, "Swing", 0.5)
+	p.z_abilities_snapshot["Pit_Stamina"] = 2.0
+	p.z_abilities_snapshot["Pit_FatigueResist"] = 1.5
+
+	# role="starter" → 能力に関わらず先発。
+	p.role = "starter"
+	assert_bool(p.is_starter_pitcher()).is_true()
+
+	# role="reliever" → 能力が先発寄りでも保存 role が正準なのでリリーフ。
+	p.role = "reliever"
+	assert_bool(p.is_starter_pitcher()).is_false()
+
+	# role="closer" → リリーフ扱い。
+	p.role = "closer"
+	assert_bool(p.is_starter_pitcher()).is_false()
+
+	# role 未設定 ("") のときだけ能力で初期判定 (高スタミナなので先発)。
+	p.role = ""
+	assert_bool(p.is_starter_pitcher()).is_true()
+
+
+func test_starter_candidates_use_stored_role_and_keep_reliever_out() -> void:
+	var pitchers: Array = []
+	for i in range(6):
+		var s: PSPlayerSeasonRecord = _pitcher(440 + i, "Start %d" % i, 0.5)
+		s.role = "starter"
+		pitchers.append(s)
+	var rel: PSPlayerSeasonRecord = _pitcher(450, "Ace Reliever", 1.8)
+	rel.role = "reliever"
+	pitchers.append(rel)
+
+	var starters: Array = PSTeamSetupBuilder.starter_pitcher_candidates(pitchers)
+	# stored-starter が十分いれば補充は発火しない。
+	assert_int(starters.size()).is_equal(6)
+	var ids: Array = []
+	for s in starters:
+		ids.append((s as PSPlayerSeasonRecord).player_id)
+	# 能力の高いリリーフでも保存 role が reliever ならローテに入らない。
+	assert_array(ids).not_contains(450)
+
+
+func test_starter_candidates_backfill_only_when_no_stored_starter() -> void:
+	var pitchers: Array = []
+	for i in range(6):
+		var r: PSPlayerSeasonRecord = _pitcher(420 + i, "Relief %d" % i, 0.6 - float(i) * 0.05)
+		r.role = "reliever"
+		pitchers.append(r)
+
+	var starters: Array = PSTeamSetupBuilder.starter_pitcher_candidates(pitchers)
+	# stored-starter ゼロのときだけ先発適性順で STARTER_POOL_MIN 人まで緊急補充される。
+	assert_int(starters.size()).is_equal(PSTeamSetupBuilder.STARTER_POOL_MIN)
+
+
+func test_few_starters_do_not_pull_reliever_or_closer_into_rotation() -> void:
+	var pitchers: Array = []
+	# stored-starter は 2 人だけ (ローテ最小未満) だが、補充はしない。
+	for i in range(2):
+		var s: PSPlayerSeasonRecord = _pitcher(460 + i, "Start %d" % i, 0.4)
+		s.role = "starter"
+		pitchers.append(s)
+	# 能力の高いクローザー/中継 (起用法でクローザー指定されるような投手) も混ざる。
+	var closer: PSPlayerSeasonRecord = _pitcher(470, "Ace Closer", 2.0)
+	closer.role = "closer"
+	pitchers.append(closer)
+	for i in range(4):
+		var r: PSPlayerSeasonRecord = _pitcher(471 + i, "Relief %d" % i, 1.0)
+		r.role = "reliever"
+		pitchers.append(r)
+
+	var starters: Array = PSTeamSetupBuilder.starter_pitcher_candidates(pitchers)
+	var ids: Array = []
+	for s in starters:
+		ids.append((s as PSPlayerSeasonRecord).player_id)
+	# starter が 1 人でもいれば補充は発火せず、リリーフ/クローザーはローテに入らない。
+	assert_int(starters.size()).is_equal(2)
+	assert_array(ids).not_contains(470)
+
+
+# 統合: 保存 role 正準 (B) でも実シードの全チームが先発を立て、ブルペンを編成できること。
+# autoload (GameDb/AppState) が必要なので GdUnit 文脈で実行する。
+func test_all_teams_field_rotation_and_bullpen_with_stored_roles() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	for team_row in GameDb.teams:
+		var tid: int = (team_row as PSTeam).id
+		var setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, tid, true)
+		assert_bool(bool(setup.get("ok", false))) \
+			.override_failure_message("team %d setup failed: %s" % [tid, str(setup.get("message", ""))]) \
+			.is_true()
+		assert_object(setup.get("starter_pitcher", null)).is_not_null()
+		assert_int((setup.get("relievers", []) as Array).size()).is_greater(0)
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
 
 
 func _pitcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:
