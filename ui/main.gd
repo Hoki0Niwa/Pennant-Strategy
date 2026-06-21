@@ -32,7 +32,7 @@ const SIDEBAR_ITEMS: Array = [
 	{"name": "rankings", "label": "ランキング"},
 	{"name": "history", "label": "シーズン履歴"},
 	{"name": "team_detail", "label": "チーム詳細"},
-	{"name": "active_roster", "label": "1軍入れ替え"},
+	{"name": "active_roster", "label": "選手登録"},
 	{"name": "lineup_editor", "label": "打順設定"},
 	{"name": "rotation_editor", "label": "投手起用法"},
 	{"name": "player_detail", "label": "選手詳細"},
@@ -53,6 +53,7 @@ const DEVELOPER_SCREEN_NAMES: Dictionary = {
 const FULL_BLEED_SCREENS: Dictionary = {
 	"home": true,
 	"rotation_editor": true,
+	"active_roster": true,
 }
 
 var sidebar: VBoxContainer

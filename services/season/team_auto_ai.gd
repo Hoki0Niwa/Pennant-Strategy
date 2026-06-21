@@ -384,11 +384,15 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 		if team == null:
 			continue
 		var is_user: bool = (team.id == user_team_id)
-		if is_user and not include_user_team:
-			continue
 		var last_day: int = season.get_last_auto_swap_day(team.id)
 		# 初回(last_day == 0)も実行する。前回から SWAP_INTERVAL_DAYS 以上経過していれば実行。
 		if last_day > 0 and current_day - last_day < SWAP_INTERVAL_DAYS:
+			continue
+		# 自軍の自動入替が無効でも、ロスター画面の「直近2週間」表示用にスナップショットだけは残す
+		# (入替判定はしない)。CPU 球団・自動入替ONの自軍は従来通り _swap_one_team で入替+記録。
+		if is_user and not include_user_team:
+			_append_snapshots(season, RecordStore.get_team_player_records(team.id, season.year, season.season_number), current_day)
+			season.set_last_auto_swap_day(team.id, current_day)
 			continue
 		var summary: Dictionary = _swap_one_team(season, team.id, current_day, war_ctx)
 		season.set_last_auto_swap_day(team.id, current_day)

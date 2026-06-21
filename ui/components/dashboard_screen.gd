@@ -49,7 +49,7 @@ const NAV_GROUPS: Array = [
 	]},
 	{"title": "チーム・選手", "items": [
 		{"id": "team_detail", "label": "チーム詳細", "icon": "team"},
-		{"id": "active_roster", "label": "1軍入れ替え", "icon": "swap"},
+		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
 		{"id": "lineup_editor", "label": "打順設定", "icon": "lineup"},
 		{"id": "rotation_editor", "label": "投手起用法", "icon": "pitch"},
 		{"id": "player_detail", "label": "選手詳細", "icon": "player"},
