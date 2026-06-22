@@ -1,7 +1,15 @@
-extends Control
+extends "res://ui/components/dashboard_screen.gd"
+
+# タイトル争い画面 (2026-06-22 ホーム画面のダッシュボード体裁へ刷新)。
+# 旧版は Label / Button / Tree の標準コントロール構成だったが、ホーム画面と同じ
+# 「左サイドバー + ヘッダ + ダーク角丸パネル」の固定座標系カスタム描画へ統一した。
+# - 配色 / 座標変換 / 描画プリミティブ / サイドバー / ヘッダ / ボタン基盤は基底
+#   (dashboard_screen.gd) を利用する。
+# - 各部門は 2リーグ × 9部門のパネルグリッドで描画し、各パネル上位7名を並べる。
+# - 1位(トップ)の選手は行をアンバーで強調表示する。
+# - 重い集計 (WAR / 部門別ソート) は _refresh で 1度だけ行いキャッシュ、_draw は描画専念。
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
-const SortableTable = preload("res://ui/components/sortable_table.gd")
 
 const LEAGUES: Array = [
 	{"key": "central", "label": "第1リーグ"},
@@ -11,10 +19,6 @@ const LEAGUES: Array = [
 const RANKING_TOP_COUNT: int = 7
 const QUALIFIER_PA_PER_DAY: float = 3.1
 const QUALIFIER_IP_PER_DAY: float = 1.0
-const RANKING_COLUMNS: int = 3
-const RANKING_LEAGUE_SEPARATION: int = 12
-const RANKING_PANEL_H_SEPARATION: int = 10
-const RANKING_PANEL_V_SEPARATION: int = 8
 
 const BATTER_CATEGORIES: Array = [
 	{"key": "war",       "label": "WAR",    "min_pa": false},
@@ -40,88 +44,208 @@ const PITCHER_CATEGORIES: Array = [
 	{"key": "woba_allowed", "label": "wOBAA", "min_ip": true, "ascending": true},
 ]
 
+# --- レイアウト基準 (base 座標) ---
+const INFO_Y: float = 116.0
+const GRID_TOP: float = 134.0
+const GRID_BOTTOM: float = 1058.0
+const LEAGUE_GAP: float = 22.0
+const PANEL_H_GAP: float = 12.0
+const PANEL_V_GAP: float = 12.0
+const GRID_COLS: int = 3
+const GRID_ROWS: int = 3
+
 # WAR 集計は全選手集計のため refresh 単位で 1 度だけ実施。リーグ context を共有。
 var _war_ctx_cache: Dictionary = {}
 
-var status_label: Label
-var tab_batter_button: Button
-var tab_pitcher_button: Button
-var batter_container: HBoxContainer
-var pitcher_container: HBoxContainer
-var show_batters: bool = true
+# 集計済みデータ。{"batter": {league_key: [{label, rows}]}, "pitcher": {...}}
+var _data: Dictionary = {}
+var _info_text: String = ""
+var _show_batters: bool = true
+
+# 行ヒット (クリックで選手詳細へ)。{rect(base), pid}
+var _row_hits: Array = []
+var _hover_pid: int = 0
 
 
 func _ready() -> void:
-	_build()
-
-
-func _build() -> void:
-	var root: VBoxContainer = VBoxContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 10)
-	add_child(root)
-
-	var header: HBoxContainer = HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
-	root.add_child(header)
-
-	var title: Label = Label.new()
-	title.text = "タイトル争い"
-	title.add_theme_font_size_override("font_size", 24)
-	header.add_child(title)
-
-	tab_batter_button = Button.new()
-	tab_batter_button.text = "野手"
-	tab_batter_button.toggle_mode = true
-	tab_batter_button.custom_minimum_size = Vector2(96, 32)
-	tab_batter_button.button_pressed = true
-	tab_batter_button.pressed.connect(func() -> void: _on_tab_pressed(true))
-	header.add_child(tab_batter_button)
-
-	tab_pitcher_button = Button.new()
-	tab_pitcher_button.text = "投手"
-	tab_pitcher_button.toggle_mode = true
-	tab_pitcher_button.custom_minimum_size = Vector2(96, 32)
-	tab_pitcher_button.pressed.connect(func() -> void: _on_tab_pressed(false))
-	header.add_child(tab_pitcher_button)
-
-	var refresh_button: Button = Button.new()
-	refresh_button.text = "再集計"
-	refresh_button.custom_minimum_size = Vector2(80, 32)
-	refresh_button.pressed.connect(_refresh)
-	header.add_child(refresh_button)
-
-	status_label = Label.new()
-	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	status_label.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
-	header.add_child(status_label)
-
-	batter_container = HBoxContainer.new()
-	batter_container.add_theme_constant_override("separation", RANKING_LEAGUE_SEPARATION)
-	batter_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	batter_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(batter_container)
-
-	pitcher_container = HBoxContainer.new()
-	pitcher_container.add_theme_constant_override("separation", RANKING_LEAGUE_SEPARATION)
-	pitcher_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	pitcher_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(pitcher_container)
-
+	_init_chrome()
 	_refresh()
+	_build_buttons()
+	queue_redraw()
 
+
+# ============================================================ input
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_update_transform()
+			var hit: Dictionary = _row_at(_to_base(event.position))
+			var pid: int = int(hit.get("pid", 0))
+			if pid > 0:
+				AppState.show_player_detail(pid)
+	elif event is InputEventMouseMotion:
+		_update_transform()
+		var pid: int = int(_row_at(_to_base(event.position)).get("pid", 0))
+		if pid != _hover_pid:
+			_hover_pid = pid
+			queue_redraw()
+
+
+func _to_base(pos: Vector2) -> Vector2:
+	if _scale_f <= 0.0:
+		return pos
+	return (pos - _offset) / _scale_f
+
+
+func _row_at(base_pos: Vector2) -> Dictionary:
+	for hit_value in _row_hits:
+		var hit: Dictionary = hit_value as Dictionary
+		if (hit["rect"] as Rect2).has_point(base_pos):
+			return hit
+	return {}
+
+
+# ============================================================ draw
+
+func _draw() -> void:
+	_update_transform()
+	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
+	_row_hits = []
+
+	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
+	var season: PSSeason = AppState.current_season
+	if team == null or season == null:
+		_draw_empty()
+		return
+
+	_draw_shell("タイトル争い", team, season)
+	if not _info_text.is_empty():
+		_text(_info_text, Vector2(INNER_L, INFO_Y), 13, MUTED)
+
+	var tab_key: String = "batter" if _show_batters else "pitcher"
+	var tab_data: Dictionary = _data.get(tab_key, {}) as Dictionary
+	var league_w: float = (INNER_R - INNER_L - LEAGUE_GAP) / 2.0
+	for li in range(LEAGUES.size()):
+		var league: Dictionary = LEAGUES[li] as Dictionary
+		var key: String = str(league["key"])
+		var lx: float = INNER_L + float(li) * (league_w + LEAGUE_GAP)
+		_draw_league_column(lx, league_w, str(league["label"]), tab_data.get(key, []) as Array)
+
+
+func _draw_empty() -> void:
+	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
+	_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+
+
+func _draw_league_column(lx: float, lw: float, label: String, cats: Array) -> void:
+	# リーグ見出し (サイドバー見出しと同じ青アクセントバー付き)。
+	_round(Rect2(lx, GRID_TOP + 4, 3, 17), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(label, Vector2(lx + 12, GRID_TOP + 21), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+	var gy0: float = GRID_TOP + 34.0
+	var gh: float = GRID_BOTTOM - gy0
+	var pw: float = (lw - PANEL_H_GAP * float(GRID_COLS - 1)) / float(GRID_COLS)
+	var ph: float = (gh - PANEL_V_GAP * float(GRID_ROWS - 1)) / float(GRID_ROWS)
+	for idx in range(cats.size()):
+		var col: int = idx % GRID_COLS
+		var row: int = floori(float(idx) / float(GRID_COLS))
+		var px: float = lx + float(col) * (pw + PANEL_H_GAP)
+		var py: float = gy0 + float(row) * (ph + PANEL_V_GAP)
+		var cat: Dictionary = cats[idx] as Dictionary
+		_draw_category_panel(Rect2(px, py, pw, ph), str(cat["label"]), cat["rows"] as Array)
+
+
+func _draw_category_panel(rect: Rect2, label: String, rows: Array) -> void:
+	_round(rect, PANEL, BORDER, 9)
+	_text(label, Vector2(rect.position.x + 12, rect.position.y + 25), 15, TEXT, rect.size.x - 24, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_line(Vector2(rect.position.x + 12, rect.position.y + 34), Vector2(rect.end.x - 12, rect.position.y + 34), BORDER_SOFT, 1.0)
+
+	if rows.is_empty():
+		_text("データなし", Vector2(rect.position.x + 12, rect.position.y + 62), 12, FAINT)
+		return
+
+	var inner_x: float = rect.position.x + 12.0
+	var top: float = rect.position.y + 42.0
+	var row_h: float = (rect.end.y - top - 8.0) / float(RANKING_TOP_COUNT)
+	var value_box: float = 56.0
+	var value_right: float = rect.end.x - 10.0
+	var name_x: float = inner_x + 56.0
+	var name_w: float = value_right - value_box - 6.0 - name_x
+	var muted_text: Color = MUTED.lerp(TEXT, 0.55)
+
+	for i in range(rows.size()):
+		var r: Dictionary = rows[i] as Dictionary
+		var pid: int = int(r.get("pid", 0))
+		var is_top: bool = int(r["rank"]) == 1
+		var ry: float = top + float(i) * row_h
+		var row_rect: Rect2 = Rect2(rect.position.x + 6.0, ry + 1.0, rect.size.x - 12.0, row_h - 2.0)
+		if is_top:
+			_round(row_rect, Color(AMBER.r, AMBER.g, AMBER.b, 0.13), Color(AMBER.r, AMBER.g, AMBER.b, 0.42), 6)
+		elif pid > 0 and pid == _hover_pid:
+			_round(row_rect, Color(1, 1, 1, 0.05), Color.TRANSPARENT, 6, 0)
+
+		var ty: float = ry + row_h * 0.5 + 5.0
+		var rank_color: Color = AMBER if is_top else MUTED
+		var name_color: Color = TEXT if is_top else muted_text
+		var value_color: Color = AMBER if is_top else TEXT
+		_text(str(r["rank"]), Vector2(inner_x, ty), 13, rank_color, 18, HORIZONTAL_ALIGNMENT_LEFT, is_top)
+		_text(str(r["team"]), Vector2(inner_x + 22.0, ty), 12, MUTED, 32)
+		_text(str(r["name"]), Vector2(name_x, ty), 13, name_color, name_w, HORIZONTAL_ALIGNMENT_LEFT, is_top)
+		_text_right(str(r["val"]), value_right, ty, 13, value_color, value_box)
+
+		if pid > 0:
+			_row_hits.append({"rect": row_rect, "pid": pid})
+
+
+# ============================================================ buttons
+
+func _build_buttons() -> void:
+	_clear_buttons()
+	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
+	var season: PSSeason = AppState.current_season
+	if team == null or season == null:
+		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_layout_buttons()
+		return
+
+	_build_nav_buttons()
+
+	# ヘッダ右側に 野手/投手 タブ + 再集計。
+	_add_button("tab_batter", "野手", Rect2(1486, 22, 92, 42),
+		func() -> void: _set_tab(true), "chip_active" if _show_batters else "chip")
+	_add_button("tab_pitcher", "投手", Rect2(1584, 22, 92, 42),
+		func() -> void: _set_tab(false), "chip_active" if not _show_batters else "chip")
+	_add_button("refresh", "再集計", Rect2(1682, 22, 110, 42), _on_refresh_pressed, "action")
+
+	_layout_buttons()
+
+
+func _set_tab(show_batters: bool) -> void:
+	if _show_batters == show_batters:
+		return
+	_show_batters = show_batters
+	_build_buttons()
+	queue_redraw()
+
+
+func _on_refresh_pressed() -> void:
+	_refresh()
+	queue_redraw()
+
+
+# ============================================================ aggregation
 
 func _refresh() -> void:
+	_data = {}
+	_info_text = ""
 	var season: PSSeason = AppState.current_season
 	if season == null:
-		status_label.text = "シーズンが開始されていません"
-		_clear_container(batter_container)
-		_clear_container(pitcher_container)
 		return
 
 	var qualifier_pa: int = int(max(1, ceil(QUALIFIER_PA_PER_DAY * float(season.current_day))))
 	var qualifier_outs: int = int(max(1, ceil(QUALIFIER_IP_PER_DAY * 3.0 * float(season.current_day))))
-	status_label.text = "各Top%d  規定打席≥%d  規定投球回≥%s回" % [
+	_info_text = "各部門 Top%d    規定打席 ≥ %d    規定投球回 ≥ %s 回" % [
 		RANKING_TOP_COUNT,
 		qualifier_pa,
 		_format_innings(qualifier_outs),
@@ -130,59 +254,30 @@ func _refresh() -> void:
 	_war_ctx_cache = WarCalculator.build_league_context(season.year, season.season_number)
 	var all_records: Array = _collect_records(season)
 
-	_clear_container(batter_container)
+	var batter: Dictionary = {}
+	var pitcher: Dictionary = {}
 	for league_row in LEAGUES:
-		var league: Dictionary = league_row as Dictionary
-		var key: String = str(league["key"])
-		var group: VBoxContainer = _build_ranking_league_group(str(league["label"]))
-		batter_container.add_child(group)
-		var inner: GridContainer = group.get_meta("inner") as GridContainer
+		var key: String = str((league_row as Dictionary)["key"])
+		var bcats: Array = []
 		for category_row in BATTER_CATEGORIES:
 			var category: Dictionary = category_row as Dictionary
-			inner.add_child(_build_batter_panel(all_records, category, qualifier_pa, key))
-
-	_clear_container(pitcher_container)
-	for league_row in LEAGUES:
-		var league: Dictionary = league_row as Dictionary
-		var key: String = str(league["key"])
-		var group: VBoxContainer = _build_ranking_league_group(str(league["label"]))
-		pitcher_container.add_child(group)
-		var inner: GridContainer = group.get_meta("inner") as GridContainer
+			bcats.append({
+				"label": str(category["label"]),
+				"rows": _batter_rows(all_records, category, qualifier_pa, key),
+			})
+		batter[key] = bcats
+		var pcats: Array = []
 		for category_row in PITCHER_CATEGORIES:
 			var category: Dictionary = category_row as Dictionary
-			inner.add_child(_build_pitcher_panel(all_records, category, qualifier_outs, key))
-
-	batter_container.visible = show_batters
-	pitcher_container.visible = not show_batters
-
-
-func _build_ranking_league_group(label_text: String) -> VBoxContainer:
-	var group: VBoxContainer = VBoxContainer.new()
-	group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	group.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	group.add_theme_constant_override("separation", 4)
-
-	var label: Label = Label.new()
-	label.text = label_text
-	label.add_theme_font_size_override("font_size", 16)
-	label.add_theme_color_override("font_color", Color(0.78, 0.82, 0.86))
-	group.add_child(label)
-
-	var inner: GridContainer = GridContainer.new()
-	inner.columns = RANKING_COLUMNS
-	inner.add_theme_constant_override("h_separation", RANKING_PANEL_H_SEPARATION)
-	inner.add_theme_constant_override("v_separation", RANKING_PANEL_V_SEPARATION)
-	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	inner.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	group.add_child(inner)
-	group.set_meta("inner", inner)
-	return group
+			pcats.append({
+				"label": str(category["label"]),
+				"rows": _pitcher_rows(all_records, category, qualifier_outs, key),
+			})
+		pitcher[key] = pcats
+	_data = {"batter": batter, "pitcher": pitcher}
 
 
-func _build_batter_panel(records: Array, category: Dictionary, qualifier_pa: int, league_key: String) -> VBoxContainer:
-	var panel: VBoxContainer = _build_panel_shell(str(category["label"]))
-	var table: Tree = _build_ranking_table(panel, str(category["label"]))
-
+func _batter_rows(records: Array, category: Dictionary, qualifier_pa: int, league_key: String) -> Array:
 	var key: String = str(category["key"])
 	var require_min_pa: bool = bool(category.get("min_pa", false))
 	var entries: Array = []
@@ -222,18 +317,13 @@ func _build_batter_panel(records: Array, category: Dictionary, qualifier_pa: int
 			"team": _team_short(record.team_id),
 			"name": record.name,
 			"val": _format_batter_value(key, value),
-			"val_num": value,
-			"__meta": record.player_id,
+			"pid": record.player_id,
 		})
 		shown += 1
-	table.set_rows(rows)
-	return panel
+	return rows
 
 
-func _build_pitcher_panel(records: Array, category: Dictionary, qualifier_outs: int, league_key: String) -> VBoxContainer:
-	var panel: VBoxContainer = _build_panel_shell(str(category["label"]))
-	var table: Tree = _build_ranking_table(panel, str(category["label"]))
-
+func _pitcher_rows(records: Array, category: Dictionary, qualifier_outs: int, league_key: String) -> Array:
 	var key: String = str(category["key"])
 	var require_min_ip: bool = bool(category.get("min_ip", false))
 	var ascending: bool = bool(category.get("ascending", false))
@@ -276,56 +366,10 @@ func _build_pitcher_panel(records: Array, category: Dictionary, qualifier_outs: 
 			"team": _team_short(record.team_id),
 			"name": record.name,
 			"val": _format_pitcher_value(key, value, record.pitcher_stats),
-			"val_num": value,
-			"__meta": record.player_id,
+			"pid": record.player_id,
 		})
 		shown += 1
-	table.set_rows(rows)
-	return panel
-
-
-func _build_panel_shell(label_text: String) -> VBoxContainer:
-	var panel: VBoxContainer = VBoxContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	panel.add_theme_constant_override("separation", 3)
-
-	var label: Label = Label.new()
-	label.text = label_text
-	label.add_theme_font_size_override("font_size", 15)
-	panel.add_child(label)
-	return panel
-
-
-func _build_ranking_table(parent: Control, value_label: String) -> Tree:
-	var table: Tree = SortableTable.new()
-	table.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	table.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	parent.add_child(table)
-	table.configure(_ranking_columns(value_label))
-	table.set_default_sort(0, true)  # 順位 昇順 (リーダーボード順を維持)
-	table.row_activated.connect(func(meta: Variant) -> void:
-		if int(meta) > 0:
-			AppState.show_player_detail(int(meta))
-	)
-	return table
-
-
-func _ranking_columns(value_label: String) -> Array:
-	return [
-		{"title": "順", "key": "rank", "width": 36, "type": "number", "format": "int"},
-		{"title": "球団", "key": "team", "width": 44, "type": "string", "format": "string"},
-		{"title": "選手", "key": "name", "width": 120, "type": "string", "format": "string"},
-		{"title": value_label, "key": "val", "sort_key": "val_num", "width": 68, "type": "number", "format": "string"},
-	]
-
-
-func _on_tab_pressed(new_show_batters: bool) -> void:
-	show_batters = new_show_batters
-	tab_batter_button.button_pressed = show_batters
-	tab_pitcher_button.button_pressed = not show_batters
-	batter_container.visible = show_batters
-	pitcher_container.visible = not show_batters
+	return rows
 
 
 func _collect_records(season: PSSeason) -> Array:
@@ -339,6 +383,8 @@ func _collect_records(season: PSSeason) -> Array:
 			records.append(record_row as PSPlayerSeasonRecord)
 	return records
 
+
+# ============================================================ metrics (旧版から移植)
 
 func _batter_metric_value(stats: PSBatterStats, key: String) -> float:
 	match key:
@@ -415,12 +461,6 @@ func _batter_metric_uses_record(key: String) -> bool:
 
 func _pitcher_metric_uses_record(key: String) -> bool:
 	return key == "war" or key == "fip" or key == "woba_allowed"
-
-
-func _clear_container(container: Control) -> void:
-	for child in container.get_children():
-		container.remove_child(child)
-		child.queue_free()
 
 
 func _team_short(team_id: int) -> String:

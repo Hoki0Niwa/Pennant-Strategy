@@ -60,6 +60,8 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"lineup_editor": true,
 	"rotation_editor": true,
 	"active_roster": true,
+	"rankings": true,
+	"standings": true,
 }
 
 var sidebar: VBoxContainer
