@@ -2,6 +2,7 @@ extends Control
 
 const ReporterScript = preload("res://services/reports/simulation_reporter.gd")
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
+const DevChrome = preload("res://ui/components/dev_chrome.gd")
 const REPORT_PATH: String = "res://reports/balance_report_latest.json"
 const BATTER_COLUMNS: Array = [
 	{"title": "年", "key": "year", "width": 64, "type": "number", "format": "int"},
@@ -227,6 +228,7 @@ func _build() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", 10)
 	add_child(root)
+	DevChrome.apply_chrome(self, root)
 
 	var header: HBoxContainer = HBoxContainer.new()
 	header.add_theme_constant_override("separation", 8)
@@ -236,19 +238,22 @@ func _build() -> void:
 	title.text = "シミュレーション計測"
 	title.add_theme_font_size_override("font_size", 24)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	DevChrome.style_title(title)
 	header.add_child(title)
-
-	var back_button: Button = Button.new()
-	back_button.text = "戻る"
-	back_button.custom_minimum_size = Vector2(78, 34)
-	back_button.pressed.connect(_go_back)
-	header.add_child(back_button)
 
 	var probe_button: Button = Button.new()
 	probe_button.text = "選手プローブ"
 	probe_button.custom_minimum_size = Vector2(118, 34)
-	probe_button.pressed.connect(func() -> void: AppState.request_screen("player_probe"))
+	probe_button.pressed.connect(func() -> void: AppState.request_screen("player_probe", false))
+	DevChrome.style_button(probe_button)
 	header.add_child(probe_button)
+
+	var back_button: Button = Button.new()
+	back_button.text = "タイトルへ戻る"
+	back_button.custom_minimum_size = Vector2(128, 34)
+	back_button.pressed.connect(_go_back)
+	DevChrome.style_primary(back_button)
+	header.add_child(back_button)
 
 	var controls: HBoxContainer = HBoxContainer.new()
 	controls.add_theme_constant_override("separation", 8)
@@ -889,10 +894,7 @@ func _format_cell(row: Dictionary, column: Dictionary) -> String:
 
 
 func _go_back() -> void:
-	if AppState.current_season != null:
-		AppState.request_screen("home")
-	else:
-		AppState.request_screen("start")
+	AppState.request_screen("start")
 
 
 func _format_rate(value: float) -> String:

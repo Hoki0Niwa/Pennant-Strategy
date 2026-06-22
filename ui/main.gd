@@ -39,7 +39,6 @@ const SIDEBAR_ITEMS: Array = [
 	{"name": "balance_report", "label": "バランスレポート"},
 	{"name": "player_probe", "label": "選手プローブ"},
 	{"name": "draft_simulator", "label": "ドラフト検証"},
-	{"name": "team_select", "label": "チーム選択"},
 	{"name": "options", "label": "オプション"},
 ]
 
@@ -52,7 +51,12 @@ const DEVELOPER_SCREEN_NAMES: Dictionary = {
 # 自前のサイドバー+ヘッダを内包しシェルのサイドバー/余白を使わない全画面ダッシュボード。
 const FULL_BLEED_SCREENS: Dictionary = {
 	"start": true,
+	"team_select": true,
 	"home": true,
+	"options": true,
+	"balance_report": true,
+	"player_probe": true,
+	"draft_simulator": true,
 	"lineup_editor": true,
 	"rotation_editor": true,
 	"active_roster": true,

@@ -4,7 +4,8 @@ extends "res://ui/components/dashboard_screen.gd"
 # ホーム系ダッシュボード (dashboard_screen.gd) のダーク配色・固定座標系・描画プリミティブ・
 # ボタン基盤を流用し、統一感のあるエントリ画面にする。チーム/シーズン未選択なので
 # サイドバー+ヘッダ (_draw_shell) は使わず、中央ヒーロー (ロゴ + メニューカード) を描く。
-# DeveloperTools / 配色 / 描画プリミティブ / ボタン基盤は基底 (dashboard_screen.gd) が提供する。
+# 配色 / 描画プリミティブ / ボタン基盤は基底 (dashboard_screen.gd) が提供する。
+# 開発ツール (テストモード) はオプション画面へ移設済み。
 
 # --- レイアウト基準 (base 座標) ---
 const CARD_W: float = 460.0
@@ -16,7 +17,6 @@ const BTN_GAP: float = 16.0
 const BTN_X: float = (BASE.x - BTN_W) * 0.5
 
 var _status_text: String = ""
-var _debug_open: bool = false
 
 
 func _ready() -> void:
@@ -65,9 +65,7 @@ func _draw_emblem(box: Rect2) -> void:
 
 
 func _menu_card_height() -> float:
-	var rows: int = 3 + (1 if DeveloperTools.enabled() else 0)
-	if DeveloperTools.enabled() and _debug_open:
-		rows += 3
+	var rows: int = 3
 	return 36.0 + float(rows) * (BTN_H + BTN_GAP) - BTN_GAP + 36.0
 
 
@@ -82,27 +80,8 @@ func _build_buttons() -> void:
 	_add_button("load", "ロード", Rect2(BTN_X, y, BTN_W, BTN_H), _load_game, "action")
 	y += BTN_H + BTN_GAP
 	_add_button("options", "オプション", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("options"), "action")
-	y += BTN_H + BTN_GAP
-
-	if DeveloperTools.enabled():
-		_add_button("debug_toggle", "開発ツール ▴" if _debug_open else "開発ツール ▾", Rect2(BTN_X, y, BTN_W, BTN_H), _toggle_debug, "action")
-		y += BTN_H + BTN_GAP
-		if _debug_open:
-			_add_button("reload", "データ再読込", Rect2(BTN_X, y, BTN_W, BTN_H), _reload_data, "chip")
-			y += BTN_H + BTN_GAP
-			_add_button("balance_report", "計測レポート", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("balance_report"), "chip")
-			y += BTN_H + BTN_GAP
-			_add_button("player_probe", "選手プローブ", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("player_probe"), "chip")
-			y += BTN_H + BTN_GAP
-			_add_button("draft_simulator", "ドラフト検証", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("draft_simulator"), "chip")
 
 	_layout_buttons()
-
-
-func _toggle_debug() -> void:
-	_debug_open = not _debug_open
-	_build_buttons()
-	queue_redraw()
 
 
 # ============================================================ actions
@@ -114,9 +93,3 @@ func _load_game() -> void:
 		queue_redraw()
 		return
 	AppState.restore_from_save(save_data)
-
-
-func _reload_data() -> void:
-	GameDb.load_initial_data()
-	_status_text = "初期データを再読み込みしました: %d球団 / %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()]
-	queue_redraw()

@@ -4,6 +4,7 @@ const RunnerScript = preload("res://services/reports/player_probe_runner.gd")
 const ChartScript = preload("res://ui/screens/player_probe_chart.gd")
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
+const DevChrome = preload("res://ui/components/dev_chrome.gd")
 const REPORT_PATH: String = "res://reports/player_probe_ui_latest.json"
 const CSV_PATH: String = "res://reports/player_probe_ui_latest.csv"
 const GRAPH_PATH: String = "res://reports/player_probe_ui_latest.svg"
@@ -116,6 +117,7 @@ func _build() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", 10)
 	add_child(root)
+	DevChrome.apply_chrome(self, root)
 
 	var header: HBoxContainer = HBoxContainer.new()
 	header.add_theme_constant_override("separation", 8)
@@ -125,18 +127,21 @@ func _build() -> void:
 	title.text = "選手プローブ"
 	title.add_theme_font_size_override("font_size", 24)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	DevChrome.style_title(title)
 	header.add_child(title)
 
 	var report_button: Button = Button.new()
 	report_button.text = "計測レポート"
 	report_button.custom_minimum_size = Vector2(118, 34)
-	report_button.pressed.connect(func() -> void: AppState.request_screen("balance_report"))
+	report_button.pressed.connect(func() -> void: AppState.request_screen("balance_report", false))
+	DevChrome.style_button(report_button)
 	header.add_child(report_button)
 
 	var back_button: Button = Button.new()
-	back_button.text = "戻る"
-	back_button.custom_minimum_size = Vector2(78, 34)
-	back_button.pressed.connect(func() -> void: AppState.request_screen("home" if AppState.current_season != null else "start"))
+	back_button.text = "タイトルへ戻る"
+	back_button.custom_minimum_size = Vector2(128, 34)
+	back_button.pressed.connect(func() -> void: AppState.request_screen("start"))
+	DevChrome.style_primary(back_button)
 	header.add_child(back_button)
 
 	var top_controls: HBoxContainer = HBoxContainer.new()

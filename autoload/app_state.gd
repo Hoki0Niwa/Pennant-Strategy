@@ -38,6 +38,7 @@ const MAX_SCREEN_HISTORY: int = 50
 # 履歴に積まない画面 (フロー専用 / 戻る対象にすると壊れる画面)。
 const NON_HISTORY_SCREENS: Dictionary = {
 	"start": true,
+	"team_select": true,
 	"offseason": true,
 	"postseason": true,
 	"awards": true,
@@ -118,7 +119,14 @@ func _navigate_history(pop_stack: Array, push_stack: Array) -> bool:
 
 # マウスの戻るボタンなどから呼ぶ。直前に開いていた画面へ戻る。戻れたら true。
 func go_back() -> bool:
-	return _navigate_history(_screen_history, _forward_history)
+	if _navigate_history(_screen_history, _forward_history):
+		return true
+	# 履歴が無い場合のフォールバック: シーズン開始前の画面 (タイトルから来た
+	# オプション/チーム選択など) からはタイトルへ戻る。
+	if current_season == null and current_screen != "start":
+		request_screen("start", false)
+		return true
+	return false
 
 
 # マウスの進むボタンなどから呼ぶ。go_back で戻る前の画面へ進む。進めたら true。

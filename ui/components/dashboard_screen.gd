@@ -55,7 +55,6 @@ const NAV_GROUPS: Array = [
 		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
 	]},
 	{"title": "設定・その他", "items": [
-		{"id": "team_select", "label": "チーム選択", "icon": "teamselect"},
 		{"id": "options", "label": "オプション", "icon": "options"},
 	]},
 ]
@@ -161,8 +160,6 @@ func _build_sidebar_layout() -> Array:
 	var entries: Array = []
 	var y: float = 96.0
 	var groups: Array = NAV_GROUPS.duplicate(true)
-	if DeveloperTools.enabled():
-		(groups[2]["items"] as Array).append({"id": "balance_report", "label": "分析ツール", "icon": "options"})
 	var first: bool = true
 	for group_value in groups:
 		var group: Dictionary = group_value as Dictionary

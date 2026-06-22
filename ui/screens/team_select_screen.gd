@@ -1,116 +1,182 @@
-extends Control
+extends "res://ui/components/dashboard_screen.gd"
+
+# チーム選択画面 (2026-06-22 ホーム画面に合わせて再設計)。
+# dashboard_screen.gd のダーク配色・固定座標系・描画プリミティブ・ボタン基盤を流用した
+# full-bleed 画面。ゲーム開始前フローなのでサイドバー (nav) は表示しない。
+# 第1リーグ(central)を左カラム、第2リーグ(pacific)を右カラムに 2 列ずつ並べる。
+# カードをクリックで選択し、ヘッダの「このチームで開始」ボタン 1 つで開始する。
 
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 
+const MARGIN: float = 48.0
+const CENTER_GAP: float = 40.0
+const LEAGUE_W: float = (BASE.x - 2.0 * MARGIN - CENTER_GAP) / 2.0
+const LEFT_X: float = MARGIN
+const RIGHT_X: float = MARGIN + LEAGUE_W + CENTER_GAP
+const LEAGUE_HEADER_Y: float = 150.0
+const CARD_TOP: float = 172.0
+const COLS: int = 2
+const GAP: float = 18.0
+
+# 各リーグの {team, bat, pitch, shienka, dev} を _ready でキャッシュ (毎フレーム再計算しない)。
+var _central: Array = []
+var _pacific: Array = []
+var _selected_team_id: int = 0
+
 
 func _ready() -> void:
-	_build()
+	_init_chrome()
+	_build_infos()
+	_build_buttons()
+	queue_redraw()
 
 
-func _build() -> void:
-	var root: VBoxContainer = VBoxContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 14)
-	add_child(root)
-
-	var header: HBoxContainer = HBoxContainer.new()
-	header.add_theme_constant_override("separation", 12)
-	root.add_child(header)
-
-	var title: Label = Label.new()
-	title.text = "チーム選択"
-	title.add_theme_font_size_override("font_size", 28)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-
-	var back_button: Button = Button.new()
-	back_button.text = "戻る"
-	back_button.custom_minimum_size = Vector2(96, 36)
-	back_button.pressed.connect(func() -> void: AppState.request_screen("start"))
-	header.add_child(back_button)
-
-	var scroll: ScrollContainer = ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(scroll)
-
-	var grid: GridContainer = GridContainer.new()
-	grid.columns = 3
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.add_theme_constant_override("h_separation", 12)
-	grid.add_theme_constant_override("v_separation", 12)
-	scroll.add_child(grid)
-
+func _build_infos() -> void:
+	_central.clear()
+	_pacific.clear()
 	for team_row in GameDb.teams:
 		var team: PSTeam = team_row as PSTeam
-		grid.add_child(_create_team_card(team))
+		if team == null:
+			continue
+		var info: Dictionary = {
+			"team": team,
+			"bat": _team_batting_rating(team.id),
+			"pitch": _team_pitching_rating(team.id),
+			"shienka": TeamFinance.shienka_count(GameDb.players, team.id),
+			"dev": TeamFinance.development_count(GameDb.players, team.id),
+		}
+		if team.league == "central":
+			_central.append(info)
+		else:
+			_pacific.append(info)
+	if _selected_team_id <= 0:
+		var first: Array = _central if not _central.is_empty() else _pacific
+		if not first.is_empty():
+			_selected_team_id = ((first[0] as Dictionary)["team"] as PSTeam).id
 
 
-func _create_team_card(team: PSTeam) -> Control:
-	var panel: PanelContainer = PanelContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.custom_minimum_size = Vector2(260, 210)
+# ============================================================ draw
 
-	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = Color(0.10, 0.11, 0.13)
-	style.border_color = team.color
-	style.set_border_width_all(3)
-	style.set_corner_radius_all(6)
-	panel.add_theme_stylebox_override("panel", style)
+func _draw() -> void:
+	_update_transform()
+	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
+	_round(Rect2(0, 0, BASE.x, 4), Color(BLUE.r, BLUE.g, BLUE.b, 0.85), Color.TRANSPARENT, 0, 0)
 
-	var margin: MarginContainer = MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_top", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_bottom", 12)
-	panel.add_child(margin)
+	_text("チーム選択", Vector2(MARGIN, 66), 30, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var selected: PSTeam = _selected_team()
+	var sub: String = "選択中: %s" % selected.name if selected != null else "操作する球団を選んでください"
+	_text(sub, Vector2(MARGIN + 2, 96), 15, MUTED if selected == null else BLUE)
 
-	var box: VBoxContainer = VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
-
-	var name_label: Label = Label.new()
-	name_label.text = team.name
-	name_label.add_theme_font_size_override("font_size", 20)
-	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(name_label)
-
-	var league_label: Label = Label.new()
-	league_label.text = "%s / 前年%d位" % [team.league_label(), team.previous_rank]
-	box.add_child(league_label)
-
-	var rating_label: Label = Label.new()
-	rating_label.text = "Bat %d  Pitch %d" % [
-		_team_batting_rating(team.id),
-		_team_pitching_rating(team.id),
-	]
-	rating_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(rating_label)
-
-	var roster_label: Label = Label.new()
-	roster_label.text = "支配下 %d名 / 育成 %d名" % [
-		TeamFinance.shienka_count(GameDb.players, team.id),
-		TeamFinance.development_count(GameDb.players, team.id),
-	]
-	box.add_child(roster_label)
-
-	var spacer: Control = Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_child(spacer)
-
-	var start_button: Button = Button.new()
-	start_button.text = "このチームで開始"
-	start_button.custom_minimum_size = Vector2(0, 38)
-	start_button.pressed.connect(_start_with_team.bind(team.id))
-	box.add_child(start_button)
-
-	return panel
+	_draw_league(LEFT_X, _central, _league_label(_central, "第1リーグ"))
+	_draw_league(RIGHT_X, _pacific, _league_label(_pacific, "第2リーグ"))
 
 
-func _start_with_team(team_id: int) -> void:
-	AppState.select_team(team_id)
+func _draw_league(area_x: float, infos: Array, label: String) -> void:
+	_round(Rect2(area_x, LEAGUE_HEADER_Y - 16.0, 4.0, 18.0), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(label, Vector2(area_x + 14.0, LEAGUE_HEADER_Y), 18, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	for i in range(infos.size()):
+		_draw_card(_league_card_rect(area_x, i, infos.size()), infos[i] as Dictionary)
+
+
+func _league_card_rect(area_x: float, idx: int, n: int) -> Rect2:
+	var rows: int = int(ceil(float(n) / float(COLS)))
+	var area_h: float = BASE.y - CARD_TOP - 48.0
+	var cw: float = (LEAGUE_W - float(COLS - 1) * GAP) / float(COLS)
+	var ch: float = (area_h - float(rows - 1) * GAP) / float(max(rows, 1))
+	var col: int = idx % COLS
+	var row: int = idx / COLS
+	return Rect2(area_x + float(col) * (cw + GAP), CARD_TOP + float(row) * (ch + GAP), cw, ch)
+
+
+func _draw_card(rect: Rect2, info: Dictionary) -> void:
+	var team: PSTeam = info["team"] as PSTeam
+	var selected: bool = team.id == _selected_team_id
+	_round(rect, PANEL_2 if selected else PANEL, BLUE if selected else BORDER, 12, 2 if selected else 1)
+	# チームカラーの左アクセントバー
+	_round(Rect2(rect.position.x, rect.position.y + 12.0, 5.0, rect.size.y - 24.0), team.color, Color.TRANSPARENT, 3, 0)
+
+	_team_badge(Rect2(rect.position.x + 22.0, rect.position.y + 20.0, 46.0, 46.0), team)
+	_text(team.name, Vector2(rect.position.x + 80.0, rect.position.y + 44.0), 20, TEXT, rect.size.x - 96.0)
+	_text("前年 %d位" % team.previous_rank, Vector2(rect.position.x + 80.0, rect.position.y + 68.0), 12, MUTED, rect.size.x - 96.0)
+	if selected:
+		_chip(Rect2(rect.end.x - 76.0, rect.position.y + 18.0, 58.0, 22.0), "選択中", BLUE)
+
+	_line(Vector2(rect.position.x + 18.0, rect.position.y + 92.0), Vector2(rect.end.x - 18.0, rect.position.y + 92.0), BORDER_SOFT, 1.0)
+
+	_draw_bar(rect.position.x + 18.0, rect.position.y + 112.0, rect.size.x - 36.0, "打撃", int(info["bat"]), BLUE)
+	_draw_bar(rect.position.x + 18.0, rect.position.y + 146.0, rect.size.x - 36.0, "投手", int(info["pitch"]), RED)
+
+	_text("支配下 %d名 ・ 育成 %d名" % [int(info["shienka"]), int(info["dev"])],
+		Vector2(rect.position.x + 18.0, rect.position.y + 194.0), 12, MUTED, rect.size.x - 36.0)
+
+
+func _draw_bar(x: float, y: float, w: float, label: String, value: int, color: Color) -> void:
+	_text(label, Vector2(x, y + 13.0), 12, MUTED)
+	var bx: float = x + 50.0
+	var bw: float = w - 50.0 - 42.0
+	_round(Rect2(bx, y + 2.0, bw, 12.0), PANEL_3, Color.TRANSPARENT, 6, 0)
+	var frac: float = clampf(float(value) / 100.0, 0.0, 1.0)
+	if frac > 0.0:
+		_round(Rect2(bx, y + 2.0, bw * frac, 12.0), color, Color.TRANSPARENT, 6, 0)
+	_text_right(str(value), x + w, y + 13.0, 13, TEXT, 40.0)
+
+
+# ============================================================ buttons
+
+func _build_buttons() -> void:
+	_clear_buttons()
+
+	var back_rect: Rect2 = Rect2(BASE.x - MARGIN - 110.0, 40.0, 110.0, 42.0)
+	var start_rect: Rect2 = Rect2(back_rect.position.x - 16.0 - 230.0, 40.0, 230.0, 42.0)
+	var start_button: Button = _add_button("start", "このチームで開始", start_rect, _start_selected, "primary")
+	start_button.disabled = _selected_team_id <= 0
+	_add_button("back", "戻る", back_rect, func() -> void: AppState.request_screen("start"), "action")
+
+	# カード全体を透明ボタンで覆い、クリックで選択する。
+	_add_select_buttons(LEFT_X, _central)
+	_add_select_buttons(RIGHT_X, _pacific)
+
+	_layout_buttons()
+
+
+func _add_select_buttons(area_x: float, infos: Array) -> void:
+	for i in range(infos.size()):
+		var team: PSTeam = (infos[i] as Dictionary)["team"] as PSTeam
+		_add_button("sel_%d" % team.id, "", _league_card_rect(area_x, i, infos.size()),
+			func(tid: int = team.id) -> void: _on_select(tid), "select")
+
+
+# ============================================================ actions
+
+func _on_select(team_id: int) -> void:
+	_selected_team_id = team_id
+	_build_buttons()
+	queue_redraw()
+
+
+func _start_selected() -> void:
+	if _selected_team_id <= 0:
+		return
+	AppState.select_team(_selected_team_id)
 	AppState.start_new_season()
 
+
+func _selected_team() -> PSTeam:
+	for info_value in _central + _pacific:
+		var team: PSTeam = (info_value as Dictionary)["team"] as PSTeam
+		if team.id == _selected_team_id:
+			return team
+	return null
+
+
+func _league_label(infos: Array, fallback: String) -> String:
+	if infos.is_empty():
+		return fallback
+	var label: String = ((infos[0] as Dictionary)["team"] as PSTeam).league_label()
+	return label if not label.is_empty() else fallback
+
+
+# ============================================================ rating helpers
 
 func _team_batting_rating(team_id: int) -> int:
 	var scores: Array = []

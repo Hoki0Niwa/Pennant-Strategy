@@ -4,6 +4,7 @@ const GrowthReporterScript = preload("res://services/reports/draft_growth_curve_
 const LongReporterScript = preload("res://services/reports/long_autoplay_reporter.gd")
 const DistributionChartScript = preload("res://ui/screens/draft_growth_distribution_chart.gd")
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
+const DevChrome = preload("res://ui/components/dev_chrome.gd")
 
 const GROWTH_REPORT_PATH: String = "res://reports/draft_growth_curve_latest.json"
 const GROWTH_CSV_PATH: String = "res://reports/draft_growth_curve_latest.csv"
@@ -70,6 +71,7 @@ func _build() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.add_theme_constant_override("separation", 10)
 	add_child(root)
+	DevChrome.apply_chrome(self, root)
 
 	var header: HBoxContainer = HBoxContainer.new()
 	header.add_theme_constant_override("separation", 8)
@@ -79,18 +81,21 @@ func _build() -> void:
 	title.text = "ドラフト検証"
 	title.add_theme_font_size_override("font_size", 24)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	DevChrome.style_title(title)
 	header.add_child(title)
 
 	var balance_button: Button = Button.new()
 	balance_button.text = "バランスレポート"
 	balance_button.custom_minimum_size = Vector2(132, 34)
-	balance_button.pressed.connect(func() -> void: AppState.request_screen("balance_report"))
+	balance_button.pressed.connect(func() -> void: AppState.request_screen("balance_report", false))
+	DevChrome.style_button(balance_button)
 	header.add_child(balance_button)
 
 	var back_button: Button = Button.new()
-	back_button.text = "戻る"
-	back_button.custom_minimum_size = Vector2(78, 34)
-	back_button.pressed.connect(func() -> void: AppState.request_screen("home" if AppState.current_season != null else "start"))
+	back_button.text = "タイトルへ戻る"
+	back_button.custom_minimum_size = Vector2(128, 34)
+	back_button.pressed.connect(func() -> void: AppState.request_screen("start"))
+	DevChrome.style_primary(back_button)
 	header.add_child(back_button)
 
 	var tabs: TabContainer = TabContainer.new()
