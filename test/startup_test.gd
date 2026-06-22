@@ -143,6 +143,90 @@ func test_screen_history_back_navigation() -> void:
 	AppState.current_player_id = old_player
 
 
+func test_history_screen_builds_with_archive() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.current_screen = "history"
+
+	# アーカイブを1件、永続化せずに live 配列へ直接差し込んで集計経路を検証する。
+	var archives: Array = RecordStore.get_season_archives()
+	var archive: PSSeasonArchive = _make_test_archive()
+	archives.append(archive)
+
+	var script: GDScript = load("res://ui/screens/history_screen.gd") as GDScript
+	var screen: Control = script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# 集計結果が表示用に展開されている (全リーグ行 / ポストシーズン / 表彰)。
+	assert_int(screen._rows_by_league.size()).is_equal(2)
+	assert_int((screen._rows_by_league.get("central", []) as Array).size()).is_greater(0)
+	assert_int(screen._post_champion_id).is_equal(archive.postseason.champion_team_id)
+	assert_bool(screen._post_by_stage.has("japan_series")).is_true()
+	assert_int(((screen._post_by_stage["japan_series"] as Dictionary).get("games", []) as Array).size()).is_equal(2)
+	assert_int(screen._award_cards.size()).is_equal(4)
+	assert_int(screen._bat_rows.size()).is_equal(PSAwards.BATTING_CATEGORIES.size())
+	assert_int(screen._pit_rows.size()).is_equal(PSAwards.PITCHING_CATEGORIES.size())
+	screen.queue_free()
+
+	archives.erase(archive)
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func _make_test_archive() -> PSSeasonArchive:
+	var archive: PSSeasonArchive = PSSeasonArchive.new()
+	archive.year = 2099
+	archive.season_number = 9
+	var standings: Dictionary = {}
+	var i: int = 0
+	for team_value in GameDb.teams:
+		var t: PSTeam = team_value as PSTeam
+		standings[str(t.id)] = {
+			"wins": 80 - i, "losses": 60 + i, "draws": 3,
+			"runs_scored": 600 - i * 5, "runs_allowed": 500 + i * 5,
+		}
+		i += 1
+	archive.standings = standings
+
+	var top_id: int = (GameDb.teams[0] as PSTeam).id
+	var chal_id: int = (GameDb.teams[1] as PSTeam).id
+	var post: PSPostseasonResult = PSPostseasonResult.new()
+	post.japan_series = {
+		"top_id": top_id, "challenger_id": chal_id, "winner_id": top_id,
+		"top_wins_final": 4, "challenger_wins_final": 2, "completed": true,
+		"advantage_wins": 0,
+		"games": [
+			{"game_num": 1, "away_id": chal_id, "home_id": top_id, "away_score": 2, "home_score": 5, "winner_id": top_id, "draw": false},
+			{"game_num": 2, "away_id": chal_id, "home_id": top_id, "away_score": 4, "home_score": 1, "winner_id": chal_id, "draw": false},
+		],
+	}
+	post.champion_team_id = top_id
+	archive.postseason = post
+
+	var awards: PSAwards = PSAwards.new()
+	awards.mvp_central_player_id = 1
+	awards.batting_titles = {"central": {"average": 1}, "pacific": {"home_runs": 2}}
+	awards.pitching_titles = {"central": {"wins": 3}, "pacific": {"era": 4}}
+	archive.awards = awards
+	return archive
+
+
 func test_offseason_view_state_exposes_ui_phase() -> void:
 	var old_active: bool = AppState.offseason_active
 	var old_step: int = AppState.offseason_step
