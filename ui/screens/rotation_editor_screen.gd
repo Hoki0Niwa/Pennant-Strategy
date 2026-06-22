@@ -297,7 +297,7 @@ func _draw_pitcher_row(record: PSPlayerSeasonRecord, y: float, rotation_set: Dic
 	_dot(Vector2(C_FAT_DOT_X + 4, y - 4), 5, _fatigue_color(pct))
 	_text("%d%%" % pct, Vector2(C_FAT_TX, y), 13, TEXT)
 
-	_text_right(str(PlayerValueEvaluator.overall_score(record)), C_EVAL_R, y, 14, TEXT)
+	_text_right(str(PlayerValueEvaluator.overall_score(record)), C_EVAL_R, y, 14, _grade_color(PlayerValueEvaluator.overall_score(record)))
 	_text_right(_war_str(record), C_WAR_R, y, 13, _war_color(record))
 
 	_text_right("%dkm/h" % PlayerVisibleRatings.pitcher_velocity(record), C_VELO_R, y, 12, TEXT)
@@ -349,7 +349,7 @@ func _draw_rotation_panel() -> void:
 		_text("%d%%" % pct, Vector2(px + R_FAT_TX, cy), 13, TEXT)
 		_text_right(_era_str(record), px + R_ERA_R, cy, 13, TEXT)
 		_text_right(_war_str(record), px + R_WAR_R, cy, 13, _war_color(record))
-		_text_right(str(PlayerValueEvaluator.overall_score(record)), px + R_EVAL_R, cy, 13, TEXT)
+		_text_right(str(PlayerValueEvaluator.overall_score(record)), px + R_EVAL_R, cy, 13, _grade_color(PlayerValueEvaluator.overall_score(record)))
 
 
 func _rotation_slot_rect(i: int) -> Rect2:
@@ -764,11 +764,12 @@ func _fip_str(record: PSPlayerSeasonRecord) -> String:
 	return "%0.2f" % float(w.get("fip", 0.0)) if w.has("fip") else "-.--"
 
 
+# 評価色は active_roster の _eval_color と統一 (最高=青 / 次=緑 / 並=白 / 下=淡)。
 func _grade_color(value: int) -> Color:
 	if value >= 75:
-		return GREEN
-	if value >= 66:
 		return BLUE
+	if value >= 66:
+		return GREEN
 	if value >= 52:
 		return TEXT
 	return MUTED

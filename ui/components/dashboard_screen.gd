@@ -40,19 +40,19 @@ const INNER_L: float = 262.0
 const INNER_R: float = 1900.0
 
 const NAV_GROUPS: Array = [
-	{"title": "試合・シミュレーション", "items": [
+	{"title": "試合・情報", "items": [
 		{"id": "home", "label": "ホーム", "icon": "home"},
 		{"id": "game_results", "label": "試合結果", "icon": "results"},
 		{"id": "standings", "label": "順位表", "icon": "standings"},
-		{"id": "rankings", "label": "ランキング", "icon": "rankings"},
+		{"id": "rankings", "label": "タイトル争い", "icon": "rankings"},
 		{"id": "history", "label": "シーズン履歴", "icon": "history"},
 	]},
 	{"title": "チーム・選手", "items": [
 		{"id": "team_detail", "label": "チーム詳細", "icon": "team"},
-		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
+		{"id": "player_detail", "label": "選手詳細", "icon": "player"},
 		{"id": "lineup_editor", "label": "打順設定", "icon": "lineup"},
 		{"id": "rotation_editor", "label": "投手起用法", "icon": "pitch"},
-		{"id": "player_detail", "label": "選手詳細", "icon": "player"},
+		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
 	]},
 	{"title": "設定・その他", "items": [
 		{"id": "team_select", "label": "チーム選択", "icon": "teamselect"},
@@ -60,7 +60,13 @@ const NAV_GROUPS: Array = [
 	]},
 ]
 
+# Noto Sans JP (可変フォント, wght 軸つき)。本文は Medium 寄り、見出しは Bold で描く。
+const FONT_PATH: String = "res://assets/fonts/NotoSansJP.ttf"
+const FONT_WEIGHT_BODY: int = 520
+const FONT_WEIGHT_BOLD: int = 700
+
 var _font: Font
+var _font_bold: Font
 var _buttons: Array = []
 var _sidebar_entries: Array = []
 var _scale_f: float = 1.0
@@ -69,8 +75,25 @@ var _offset: Vector2 = Vector2.ZERO
 
 # サブクラスの _ready から呼ぶ。フォントとサイドバーレイアウトを初期化する。
 func _init_chrome() -> void:
-	_font = ThemeDB.fallback_font
+	var base: FontFile = load(FONT_PATH) as FontFile
+	if base != null:
+		# 文字列キー "wght" は無視されるため、TextServer の整数タグで weight 軸を指定する。
+		var ts: TextServer = TextServerManager.get_primary_interface()
+		var wght_tag: int = ts.name_to_tag("weight")
+		# Noto Sans JP の Regular(400) は細く見えるので、本文は Medium 寄り、見出しは Bold にする。
+		_font = _make_weighted(base, wght_tag, FONT_WEIGHT_BODY)
+		_font_bold = _make_weighted(base, wght_tag, FONT_WEIGHT_BOLD)
+	else:
+		_font = ThemeDB.fallback_font
+		_font_bold = _font
 	_sidebar_entries = _build_sidebar_layout()
+
+
+func _make_weighted(base: FontFile, wght_tag: int, weight: int) -> FontVariation:
+	var fv: FontVariation = FontVariation.new()
+	fv.base_font = base
+	fv.variation_opentype = {wght_tag: weight}
+	return fv
 
 
 func _notification(what: int) -> void:
@@ -99,7 +122,11 @@ func _draw_sidebar() -> void:
 	for entry_value in _sidebar_entries:
 		var entry: Dictionary = entry_value as Dictionary
 		if str(entry.get("type", "")) == "title":
-			_text(str(entry["label"]), Vector2(22, float(entry["y"])), 11, FAINT)
+			# カテゴリ見出し: 左に青のアクセントバー + 明るめの文字で「分類」だと一目で分かるようにする。
+			var ty: float = float(entry["y"])
+			var tcol: Color = MUTED.lerp(TEXT, 0.45)
+			_round(Rect2(12, ty - 13, 3, 15), BLUE, Color.TRANSPARENT, 2, 0)
+			_text(str(entry["label"]), Vector2(24, ty), 15, tcol, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 			continue
 		var item: Dictionary = entry["item"] as Dictionary
 		var rect: Rect2 = entry["rect"] as Rect2
@@ -136,14 +163,19 @@ func _build_sidebar_layout() -> Array:
 	var groups: Array = NAV_GROUPS.duplicate(true)
 	if DeveloperTools.enabled():
 		(groups[2]["items"] as Array).append({"id": "balance_report", "label": "分析ツール", "icon": "options"})
+	var first: bool = true
 	for group_value in groups:
 		var group: Dictionary = group_value as Dictionary
+		# グループ間は広め、見出し→配下項目は狭めにして、見出しが自分の属する項目群と
+		# 視覚的に近くなるようにする (見出しが直前グループへ寄って見える問題の対策)。
+		if not first:
+			y += 40
+		first = false
 		entries.append({"type": "title", "label": str(group["title"]), "y": y})
-		y += 28
+		y += 14
 		for item_value in group["items"] as Array:
 			entries.append({"type": "item", "item": item_value, "rect": Rect2(12, y, SIDEBAR_W - 24, 38)})
 			y += 42
-		y += 14
 	return entries
 
 
@@ -214,6 +246,8 @@ func _apply_button_style(button: Button, kind: String) -> void:
 			_style(button, Color.TRANSPARENT, Color.TRANSPARENT, TEXT, Color(1, 1, 1, 0.06), Color(BLUE.r, BLUE.g, BLUE.b, 0.18), nav_pad)
 		_:
 			_style(button, Color.TRANSPARENT, Color.TRANSPARENT, MUTED, Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.09), nav_pad)
+	if _font != null:
+		button.add_theme_font_override("font", _font)
 	button.add_theme_font_size_override("font_size", font_px)
 
 
@@ -265,8 +299,9 @@ func _round(base_rect: Rect2, bg: Color, border: Color, radius: int, border_widt
 	draw_style_box(style, _r(base_rect))
 
 
-func _text(text: String, base_pos: Vector2, base_size: int, color: Color, base_width: float = -1.0, align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT) -> void:
-	draw_string(_font, _p(base_pos), text, align, (base_width * _scale_f) if base_width > 0.0 else -1.0, max(8, int(round(float(base_size) * _scale_f))), color)
+func _text(text: String, base_pos: Vector2, base_size: int, color: Color, base_width: float = -1.0, align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT, bold: bool = false) -> void:
+	var f: Font = _font_bold if bold and _font_bold != null else _font
+	draw_string(f, _p(base_pos), text, align, (base_width * _scale_f) if base_width > 0.0 else -1.0, max(8, int(round(float(base_size) * _scale_f))), color)
 
 
 func _text_right(text: String, right_x: float, base_y: float, base_size: int, color: Color, box: float = 80.0) -> void:

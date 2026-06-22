@@ -66,7 +66,7 @@ func _build() -> void:
 	root.add_child(header)
 
 	var title: Label = Label.new()
-	title.text = "成績ランキング"
+	title.text = "タイトル争い"
 	title.add_theme_font_size_override("font_size", 24)
 	header.add_child(title)
 
