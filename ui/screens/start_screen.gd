@@ -1,129 +1,122 @@
-extends Control
+extends "res://ui/components/dashboard_screen.gd"
 
-const DeveloperTools = preload("res://services/development/developer_tools.gd")
+# タイトル画面 (2026-06-22 ホーム画面に合わせて再設計)。
+# ホーム系ダッシュボード (dashboard_screen.gd) のダーク配色・固定座標系・描画プリミティブ・
+# ボタン基盤を流用し、統一感のあるエントリ画面にする。チーム/シーズン未選択なので
+# サイドバー+ヘッダ (_draw_shell) は使わず、中央ヒーロー (ロゴ + メニューカード) を描く。
+# DeveloperTools / 配色 / 描画プリミティブ / ボタン基盤は基底 (dashboard_screen.gd) が提供する。
 
-var status_label: Label
-var debug_row: HBoxContainer
-var debug_toggle_button: Button
+# --- レイアウト基準 (base 座標) ---
+const CARD_W: float = 460.0
+const CARD_X: float = (BASE.x - CARD_W) * 0.5
+const MENU_TOP: float = 470.0
+const BTN_W: float = 380.0
+const BTN_H: float = 58.0
+const BTN_GAP: float = 16.0
+const BTN_X: float = (BASE.x - BTN_W) * 0.5
+
+var _status_text: String = ""
+var _debug_open: bool = false
 
 
 func _ready() -> void:
-	_build()
+	_init_chrome()
+	_build_buttons()
+	queue_redraw()
 
 
-func _build() -> void:
-	var root: VBoxContainer = VBoxContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("separation", 18)
-	add_child(root)
+# ============================================================ draw
 
-	var title: Label = Label.new()
-	title.text = "PennantStrategy"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 36)
-	root.add_child(title)
+func _draw() -> void:
+	_update_transform()
+	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
 
-	var subtitle: Label = Label.new()
-	subtitle.text = "ペナントレース運営シミュレーション"
-	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", 18)
-	root.add_child(subtitle)
+	# 上端のブルーアクセント (ホームの青系アクセントに合わせる)
+	_round(Rect2(0, 0, BASE.x, 4), Color(BLUE.r, BLUE.g, BLUE.b, 0.85), Color.TRANSPARENT, 0, 0)
 
-	var summary: Label = Label.new()
-	summary.text = "初期データ: %d球団 / %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()]
-	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(summary)
+	# ロゴエンブレム + タイトル
+	_draw_emblem(Rect2(BASE.x * 0.5 - 64, 196, 128, 128))
+	_text("PennantStrategy", Vector2(0, 410), 60, TEXT, BASE.x, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text("ペナントレース運営シミュレーション", Vector2(0, 452), 20, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
-	# メイン行: 新規 / ロード / オプション / 開発ツール
-	var main_row: HBoxContainer = HBoxContainer.new()
-	main_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	main_row.add_theme_constant_override("separation", 12)
-	root.add_child(main_row)
+	# メニューカード (ボタンの背面パネル)
+	var card_h: float = _menu_card_height()
+	_round(Rect2(CARD_X, MENU_TOP, CARD_W, card_h), PANEL, BORDER, 14)
 
-	var new_game_button: Button = Button.new()
-	new_game_button.text = "新しく始める"
-	new_game_button.custom_minimum_size = Vector2(180, 44)
-	new_game_button.pressed.connect(func() -> void: AppState.request_screen("team_select"))
-	main_row.add_child(new_game_button)
+	# 収録データのサマリー (カード下端)
+	_text("初期データ  %d球団 ・ %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()],
+		Vector2(0, MENU_TOP + card_h + 38), 14, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
-	var load_button: Button = Button.new()
-	load_button.text = "ロード"
-	load_button.custom_minimum_size = Vector2(140, 44)
-	load_button.pressed.connect(_load_game)
-	main_row.add_child(load_button)
+	# フッタ + ステータス
+	_text("Ver 1.0.0", Vector2(28, BASE.y - 28), 13, FAINT)
+	if not _status_text.is_empty():
+		_text(_status_text, Vector2(0, BASE.y - 26), 14, AMBER, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
-	var options_button: Button = Button.new()
-	options_button.text = "オプション"
-	options_button.custom_minimum_size = Vector2(140, 44)
-	options_button.pressed.connect(func() -> void: AppState.request_screen("options"))
-	main_row.add_child(options_button)
+
+# 白球 + 赤い縫い目のロゴエンブレム。
+func _draw_emblem(box: Rect2) -> void:
+	_round(box, PANEL_2, BORDER, 20)
+	var ctr: Vector2 = box.position + box.size * 0.5
+	draw_circle(_p(ctr), box.size.x * 0.30 * _scale_f, Color(0.945, 0.958, 0.972))
+	var seam_r: float = box.size.x * 0.46 * _scale_f
+	var seam_w: float = max(1.5, 2.6 * _scale_f)
+	draw_arc(_p(ctr + Vector2(box.size.x * 0.30, 0.0)), seam_r, deg_to_rad(150.0), deg_to_rad(210.0), 20, RED, seam_w, true)
+	draw_arc(_p(ctr - Vector2(box.size.x * 0.30, 0.0)), seam_r, deg_to_rad(-30.0), deg_to_rad(30.0), 20, RED, seam_w, true)
+
+
+func _menu_card_height() -> float:
+	var rows: int = 3 + (1 if DeveloperTools.enabled() else 0)
+	if DeveloperTools.enabled() and _debug_open:
+		rows += 3
+	return 36.0 + float(rows) * (BTN_H + BTN_GAP) - BTN_GAP + 36.0
+
+
+# ============================================================ buttons
+
+func _build_buttons() -> void:
+	_clear_buttons()
+
+	var y: float = MENU_TOP + 36.0
+	_add_button("new_game", "新しく始める", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("team_select"), "primary")
+	y += BTN_H + BTN_GAP
+	_add_button("load", "ロード", Rect2(BTN_X, y, BTN_W, BTN_H), _load_game, "action")
+	y += BTN_H + BTN_GAP
+	_add_button("options", "オプション", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("options"), "action")
+	y += BTN_H + BTN_GAP
 
 	if DeveloperTools.enabled():
-		_build_debug_tools(root, main_row)
+		_add_button("debug_toggle", "開発ツール ▴" if _debug_open else "開発ツール ▾", Rect2(BTN_X, y, BTN_W, BTN_H), _toggle_debug, "action")
+		y += BTN_H + BTN_GAP
+		if _debug_open:
+			_add_button("reload", "データ再読込", Rect2(BTN_X, y, BTN_W, BTN_H), _reload_data, "chip")
+			y += BTN_H + BTN_GAP
+			_add_button("balance_report", "計測レポート", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("balance_report"), "chip")
+			y += BTN_H + BTN_GAP
+			_add_button("player_probe", "選手プローブ", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("player_probe"), "chip")
+			y += BTN_H + BTN_GAP
+			_add_button("draft_simulator", "ドラフト検証", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("draft_simulator"), "chip")
 
-	status_label = Label.new()
-	status_label.text = ""
-	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(status_label)
-
-	var spacer: Control = Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(spacer)
-
-
-func _toggle_debug_row() -> void:
-	if debug_row == null or debug_toggle_button == null:
-		return
-	debug_row.visible = not debug_row.visible
-	debug_toggle_button.text = "開発ツール ▴" if debug_row.visible else "開発ツール ▾"
+	_layout_buttons()
 
 
-func _build_debug_tools(root: VBoxContainer, main_row: HBoxContainer) -> void:
-	debug_toggle_button = Button.new()
-	debug_toggle_button.text = "開発ツール ▾"
-	debug_toggle_button.custom_minimum_size = Vector2(150, 44)
-	debug_toggle_button.pressed.connect(_toggle_debug_row)
-	main_row.add_child(debug_toggle_button)
+func _toggle_debug() -> void:
+	_debug_open = not _debug_open
+	_build_buttons()
+	queue_redraw()
 
-	debug_row = HBoxContainer.new()
-	debug_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	debug_row.add_theme_constant_override("separation", 12)
-	debug_row.visible = false
-	root.add_child(debug_row)
 
-	var reload_button: Button = Button.new()
-	reload_button.text = "データ再読込"
-	reload_button.custom_minimum_size = Vector2(140, 44)
-	reload_button.pressed.connect(_reload_data)
-	debug_row.add_child(reload_button)
-
-	var report_button: Button = Button.new()
-	report_button.text = "計測レポート"
-	report_button.custom_minimum_size = Vector2(150, 44)
-	report_button.pressed.connect(func() -> void: AppState.request_screen("balance_report"))
-	debug_row.add_child(report_button)
-
-	var probe_button: Button = Button.new()
-	probe_button.text = "選手プローブ"
-	probe_button.custom_minimum_size = Vector2(150, 44)
-	probe_button.pressed.connect(func() -> void: AppState.request_screen("player_probe"))
-	debug_row.add_child(probe_button)
-
-	var draft_simulator_button: Button = Button.new()
-	draft_simulator_button.text = "ドラフト検証"
-	draft_simulator_button.custom_minimum_size = Vector2(150, 44)
-	draft_simulator_button.pressed.connect(func() -> void: AppState.request_screen("draft_simulator"))
-	debug_row.add_child(draft_simulator_button)
-
+# ============================================================ actions
 
 func _load_game() -> void:
 	var save_data: Dictionary = SaveService.load_state()
 	if save_data.is_empty():
-		status_label.text = "セーブデータがありません"
+		_status_text = "セーブデータがありません"
+		queue_redraw()
 		return
 	AppState.restore_from_save(save_data)
 
 
 func _reload_data() -> void:
 	GameDb.load_initial_data()
-	status_label.text = "初期データを再読み込みしました: %d球団 / %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()]
+	_status_text = "初期データを再読み込みしました: %d球団 / %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()]
+	queue_redraw()

@@ -88,6 +88,64 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	assert_int(_max(starters)).is_less_equal(_max(fielders) + 2)
 
 
+# 控え (打順設定の補充優先リスト) は usage.position_slots[pos].backup_ids として保存され、
+# 守備配置で profile.backup_priority より優先される。スタメンが故障で抜けた枠を埋める。
+func test_usage_backup_ids_take_priority_over_profile() -> void:
+	var apt_keys: Dictionary = PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS
+	var mk: Callable = func(pid: int, pos: int, injured: bool) -> PSPlayerSeasonRecord:
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		r.player_id = pid
+		r.position = pos
+		r.name = "P%d" % pid
+		r.injury_days = 5 if injured else 0
+		var snap: Dictionary = {}
+		snap[str(apt_keys.get(pos, "catcher"))] = 80
+		r.position_aptitudes_snapshot = snap
+		return r
+
+	# 守備位置 [捕2, 遊6, 中8, 二4, 三5, 一3, 左7, 右9] をテンプレートで埋める。捕手の正は故障。
+	var positions: Array = [2, 6, 8, 4, 5, 3, 7, 9]
+	var fielders: Array = []
+	var template: Dictionary = {}
+	var injured_catcher: PSPlayerSeasonRecord = mk.call(200, 2, true)
+	fielders.append(injured_catcher)
+	template[2] = injured_catcher.player_id
+	var next_id: int = 300
+	for pos_row in positions:
+		var pos: int = int(pos_row)
+		if pos == 2:
+			continue
+		var rec: PSPlayerSeasonRecord = mk.call(next_id, pos, false)
+		fielders.append(rec)
+		template[pos] = rec.player_id
+		next_id += 1
+	# 捕手を守れる控え2人 (B=usage, X=profile)。
+	var usage_backup: PSPlayerSeasonRecord = mk.call(501, 2, false)
+	var profile_backup: PSPlayerSeasonRecord = mk.call(502, 2, false)
+	fielders.append(usage_backup)
+	fielders.append(profile_backup)
+
+	var profile: PSDefenseAlignmentProfile = PSDefenseAlignmentProfile.build_default(9999)
+	profile.starting_positions = template.duplicate()
+	profile.backup_priority = {2: [profile_backup.player_id]}
+
+	var usage: Dictionary = {"position_slots": {"2": {
+		"starter_id": injured_catcher.player_id,
+		"sub_id": 0,
+		"sub_start_interval": 0,
+		"backup_ids": [usage_backup.player_id],
+	}}}
+
+	var slots: Array = PSDefenseAlignmentService.assign_defensive_starters(fielders, profile, usage, 1)
+	var catcher_id: int = 0
+	for slot_row in slots:
+		var slot: Dictionary = slot_row as Dictionary
+		if int(slot.get("position", 0)) == 2:
+			catcher_id = (slot.get("record", null) as PSPlayerSeasonRecord).player_id
+	# usage の backup_ids (B) が profile.backup_priority (X) より優先される。
+	assert_int(catcher_id).is_equal(usage_backup.player_id)
+
+
 func _dist(values: Array) -> String:
 	if values.is_empty():
 		return "n=0"

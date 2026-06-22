@@ -80,12 +80,14 @@ static func assign_defensive_starters(
 			if tmpl_rec.injury_days <= 0 and _can_play_position(tmpl_rec, position):
 				chosen = tmpl_rec
 
-		# b. backup_priority の優先順
-		var backups: Array = []
-		if profile.backup_priority.has(position):
-			backups = profile.backup_priority[position] as Array
-		elif profile.backup_priority.has(str(position)):
-			backups = profile.backup_priority[str(position)] as Array
+		# b. 補充優先順。ユーザが「控え」画面で設定した backup_ids (usage 経由) を最優先し、
+		# 無ければチーム既定の profile.backup_priority に落とす。
+		var backups: Array = (slot_settings.get("backup_ids", []) as Array)
+		if backups.is_empty():
+			if profile.backup_priority.has(position):
+				backups = profile.backup_priority[position] as Array
+			elif profile.backup_priority.has(str(position)):
+				backups = profile.backup_priority[str(position)] as Array
 		if chosen == null and not backups.is_empty():
 			for backup_id_row in backups:
 				var backup_id: int = int(backup_id_row)

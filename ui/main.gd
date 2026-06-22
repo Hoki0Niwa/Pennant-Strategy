@@ -33,7 +33,7 @@ const SIDEBAR_ITEMS: Array = [
 	{"name": "history", "label": "シーズン履歴"},
 	{"name": "team_detail", "label": "チーム詳細"},
 	{"name": "player_detail", "label": "選手詳細"},
-	{"name": "lineup_editor", "label": "打順設定"},
+	{"name": "lineup_editor", "label": "打順・守備位置"},
 	{"name": "rotation_editor", "label": "投手起用法"},
 	{"name": "active_roster", "label": "選手登録"},
 	{"name": "balance_report", "label": "バランスレポート"},
@@ -51,7 +51,9 @@ const DEVELOPER_SCREEN_NAMES: Dictionary = {
 
 # 自前のサイドバー+ヘッダを内包しシェルのサイドバー/余白を使わない全画面ダッシュボード。
 const FULL_BLEED_SCREENS: Dictionary = {
+	"start": true,
 	"home": true,
+	"lineup_editor": true,
 	"rotation_editor": true,
 	"active_roster": true,
 }

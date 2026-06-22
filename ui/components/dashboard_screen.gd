@@ -50,7 +50,7 @@ const NAV_GROUPS: Array = [
 	{"title": "チーム・選手", "items": [
 		{"id": "team_detail", "label": "チーム詳細", "icon": "team"},
 		{"id": "player_detail", "label": "選手詳細", "icon": "player"},
-		{"id": "lineup_editor", "label": "打順設定", "icon": "lineup"},
+		{"id": "lineup_editor", "label": "打順・守備位置", "icon": "lineup"},
 		{"id": "rotation_editor", "label": "投手起用法", "icon": "pitch"},
 		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
 	]},

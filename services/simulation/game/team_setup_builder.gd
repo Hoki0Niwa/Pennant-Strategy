@@ -871,10 +871,13 @@ static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slot
 			sub_id = 0 if sub == null else sub.player_id
 		if interval == 0 and sub != null:
 			interval = _sub_interval_for(record, sub, position)
+		# ユーザが「控え」で設定した補充優先リストは AI 既定生成でも保持する。
+		var backup_ids: Array = (existing_slot.get("backup_ids", []) as Array).duplicate()
 		position_slots[str(position)] = {
 			"starter_id": starter_id,
 			"sub_id": sub_id,
 			"sub_start_interval": interval,
+			"backup_ids": backup_ids,
 		}
 
 	var result: Dictionary = existing_usage.duplicate(true)
