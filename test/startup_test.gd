@@ -91,9 +91,11 @@ func test_rotation_editor_screen_builds_with_active_season() -> void:
 func test_screen_history_back_navigation() -> void:
 	var old_screen: String = AppState.current_screen
 	var old_player: int = AppState.current_player_id
+	var old_season: PSSeason = AppState.current_season
 	var old_history: Array = AppState._screen_history.duplicate(true)
 	var old_forward: Array = AppState._forward_history.duplicate(true)
 
+	AppState.current_season = PSSeason.new()
 	AppState._screen_history.clear()
 	AppState._forward_history.clear()
 	# standings -> rankings -> player_detail(42) と進む。
@@ -136,6 +138,7 @@ func test_screen_history_back_navigation() -> void:
 
 	AppState._screen_history = old_history
 	AppState._forward_history = old_forward
+	AppState.current_season = old_season
 	AppState.current_screen = old_screen
 	AppState.current_player_id = old_player
 

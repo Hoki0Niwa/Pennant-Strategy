@@ -147,6 +147,25 @@ static func write_game_log(season: PSSeason, game_index: int, result: Dictionary
 	file.close()
 
 
+static func write_pending_game_logs(season: PSSeason) -> void:
+	if not enabled or season == null:
+		return
+	if log_root().is_empty():
+		return
+	for index in range(season.schedule.size()):
+		var game: Dictionary = season.schedule[index] as Dictionary
+		if not bool(game.get("played", false)):
+			continue
+		var result: Dictionary = game.get("result", {}) as Dictionary
+		if not _has_detailed_payload(result):
+			continue
+		write_game_log(season, index, result)
+
+
+static func _has_detailed_payload(result: Dictionary) -> bool:
+	return result.has("play_events") or result.has("substitutions") or result.has("lineups")
+
+
 # 画面の遅延読込用。無ければ空 Dictionary。
 static func read_game_log(season: PSSeason, game_index: int) -> Dictionary:
 	if season == null:

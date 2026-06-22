@@ -1017,8 +1017,9 @@ func simulate_next_game(during_skip: bool = false) -> Dictionary:
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
-	var result: Dictionary = GameSimulator.simulate_next_unplayed_game(current_season, true, _build_auto_swap_ctx(during_skip))
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
+	var result: Dictionary = GameSimulator.simulate_next_unplayed_game(current_season, persist_progress, _build_auto_swap_ctx(during_skip))
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
@@ -1030,8 +1031,9 @@ func simulate_current_day(during_skip: bool = false) -> Dictionary:
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
-	var result: Dictionary = GameSimulator.simulate_current_day(current_season, true, _build_auto_swap_ctx(during_skip))
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
+	var result: Dictionary = GameSimulator.simulate_current_day(current_season, persist_progress, _build_auto_swap_ctx(during_skip))
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
@@ -1043,8 +1045,9 @@ func simulate_remaining_season(during_skip: bool = false) -> Dictionary:
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
-	var result: Dictionary = GameSimulator.simulate_remaining_season(current_season, true, _build_auto_swap_ctx(during_skip))
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
+	var result: Dictionary = GameSimulator.simulate_remaining_season(current_season, persist_progress, _build_auto_swap_ctx(during_skip))
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
@@ -1056,8 +1059,9 @@ func simulate_days(days: int, during_skip: bool = false) -> Dictionary:
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
-	var result: Dictionary = GameSimulator.simulate_days(current_season, days, true, _build_auto_swap_ctx(during_skip))
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
+	var result: Dictionary = GameSimulator.simulate_days(current_season, days, persist_progress, _build_auto_swap_ctx(during_skip))
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
@@ -1070,8 +1074,9 @@ func simulate_until_team_game(during_skip: bool = false) -> Dictionary:
 	if selected_team_id <= 0:
 		return {"ok": false, "message": "自軍が選択されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
-	var result: Dictionary = GameSimulator.simulate_until_team_game(current_season, selected_team_id, true, _build_auto_swap_ctx(during_skip))
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
+	var result: Dictionary = GameSimulator.simulate_until_team_game(current_season, selected_team_id, persist_progress, _build_auto_swap_ctx(during_skip))
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
@@ -1091,9 +1096,10 @@ func simulate_current_day_async(
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = await GameSimulator.simulate_current_day_async(
-		current_season, true, _build_auto_swap_ctx(during_skip),
+		current_season, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))
@@ -1114,9 +1120,10 @@ func simulate_remaining_season_async(
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = await GameSimulator.simulate_remaining_season_async(
-		current_season, true, _build_auto_swap_ctx(during_skip),
+		current_season, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))
@@ -1137,9 +1144,10 @@ func simulate_days_async(
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = await GameSimulator.simulate_days_async(
-		current_season, days, true, _build_auto_swap_ctx(during_skip),
+		current_season, days, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))
@@ -1159,9 +1167,10 @@ func simulate_until_team_game_async(
 	if selected_team_id <= 0:
 		return {"ok": false, "message": "自軍が選択されていません"}
 
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = await GameSimulator.simulate_until_team_game_async(
-		current_season, selected_team_id, true, _build_auto_swap_ctx(during_skip),
+		current_season, selected_team_id, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))
@@ -1182,9 +1191,10 @@ func simulate_to_month_end_async(
 
 	var end_date: String = SeasonCalendar.last_day_of_month(SeasonCalendar.current_date(current_season))
 	var end_day: int = SeasonCalendar.season_day_for_date(current_season, end_date)
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	var persist_progress: bool = auto_save_enabled
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = await GameSimulator.simulate_until_day_async(
-		current_season, end_day, true, _build_auto_swap_ctx(during_skip),
+		current_season, end_day, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))

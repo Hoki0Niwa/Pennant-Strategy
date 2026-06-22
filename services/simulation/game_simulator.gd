@@ -79,7 +79,7 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 		var game_result: Dictionary = simulate_game_at_index(season, index, false)
 		if not bool(game_result.get("ok", false)):
 			if not results.is_empty() and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return game_result
 		results.append(game_result)
 
@@ -90,7 +90,7 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 		_run_periodic_roster_swap_hook(season, day, auto_swap_ctx)
 
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	var last_result: Dictionary = results[results.size() - 1] as Dictionary
 	return {
 		"ok": true,
@@ -119,14 +119,14 @@ static func simulate_days(season: PSSeason, days: int, persist: bool = true, aut
 		var day_result: Dictionary = simulate_current_day(season, false, auto_swap_ctx)
 		if not bool(day_result.get("ok", false)):
 			if simulated_games > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	if simulated_games == 0:
 		return {"ok": false, "message": "進行できる試合がありません"}
 	return {
@@ -159,14 +159,14 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 		var day_result: Dictionary = simulate_current_day(season, false, auto_swap_ctx)
 		if not bool(day_result.get("ok", false)):
 			if simulated_games > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	if simulated_games == 0:
 		return {"ok": false, "message": "次の自軍試合は本日です。または未消化試合がありません"}
 	return {
@@ -188,6 +188,11 @@ static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dict
 	var user_team_id: int = int(ctx.get("user_team_id", 0))
 	var include_user: bool = bool(ctx.get("include_user_team", false))
 	TeamAutoAI.run_periodic_roster_swaps(season, GameDb.teams, day, user_team_id, include_user)
+
+
+static func _persist_simulation_outputs(season: PSSeason) -> void:
+	GameLogService.write_pending_game_logs(season)
+	PSGameDecisions.persist_records()
 
 
 static func _team_has_unplayed_game_today(season: PSSeason, team_id: int) -> bool:
@@ -215,7 +220,7 @@ static func simulate_remaining_season(season: PSSeason, persist: bool = true, au
 		var game_result: Dictionary = simulate_game_at_index(season, game_index, false)
 		if not bool(game_result.get("ok", false)):
 			if simulated_count > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return game_result
 		last_result = game_result
 		simulated_count += 1
@@ -223,7 +228,7 @@ static func simulate_remaining_season(season: PSSeason, persist: bool = true, au
 			_run_periodic_roster_swap_hook(season, pre_day, auto_swap_ctx)
 
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	if simulated_count == 0:
 		return {"ok": false, "message": "未消化の試合がありません"}
 	return {
@@ -272,7 +277,7 @@ static func simulate_current_day_async(
 		var game_result: Dictionary = simulate_game_at_index(season, index, false)
 		if not bool(game_result.get("ok", false)):
 			if not results.is_empty() and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return game_result
 		results.append(game_result)
 		if progress_cb.is_valid():
@@ -287,7 +292,7 @@ static func simulate_current_day_async(
 		_run_periodic_roster_swap_hook(season, day, auto_swap_ctx)
 
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	var last_result: Dictionary = results[results.size() - 1] as Dictionary
 	return {
 		"ok": true,
@@ -322,7 +327,7 @@ static func simulate_remaining_season_async(
 		var game_result: Dictionary = simulate_game_at_index(season, game_index, false)
 		if not bool(game_result.get("ok", false)):
 			if simulated_count > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return game_result
 		last_result = game_result
 		simulated_count += 1
@@ -334,7 +339,7 @@ static func simulate_remaining_season_async(
 			await tree.process_frame
 
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_count == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "未消化の試合がありません"}
@@ -391,14 +396,14 @@ static func simulate_days_async(
 		)
 		if not bool(day_result.get("ok", false)):
 			if simulated_games > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "進行できる試合がありません"}
@@ -450,14 +455,14 @@ static func simulate_until_team_game_async(
 		)
 		if not bool(day_result.get("ok", false)):
 			if simulated_games > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "次の自軍試合は本日です。または未消化試合がありません"}
@@ -496,14 +501,14 @@ static func simulate_until_day(season: PSSeason, end_day: int, persist: bool = t
 		var day_result: Dictionary = simulate_current_day(season, false, auto_swap_ctx)
 		if not bool(day_result.get("ok", false)):
 			if simulated_games > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	if simulated_games == 0:
 		return {"ok": false, "message": "消化できる試合がありません"}
 	return {
@@ -555,14 +560,14 @@ static func simulate_until_day_async(
 		)
 		if not bool(day_result.get("ok", false)):
 			if simulated_games > 0 and persist:
-				PSGameDecisions.persist_records()
+				_persist_simulation_outputs(season)
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "消化できる試合がありません"}
@@ -607,7 +612,6 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	game["innings"] = result.get("innings", [])
 	game["result"] = result
 	season.schedule[game_index] = game
-	GameLogService.write_game_log(season, game_index, result)
 
 	PSGameDecisions.apply_game_decisions(season, away_team_id, home_team_id, result)
 	var game_day: int = int(game.get("day", season.current_day))
@@ -615,7 +619,7 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	PSRotationPlanner.record_rotation_start(season, home_team_id, home_setup, game_day)
 	PSGameDecisions.advance_current_day(season)
 	if persist:
-		PSGameDecisions.persist_records()
+		_persist_simulation_outputs(season)
 
 	var summary: String = _result_summary(away_team_id, home_team_id, result)
 	return {

@@ -3,6 +3,7 @@ class_name SaveService
 
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
+const GameLogService = preload("res://services/storage/game_log_service.gd")
 
 
 static func save_state(app_state) -> bool:
@@ -17,6 +18,7 @@ static func save_state(app_state) -> bool:
 
 	var season_data: Dictionary = {}
 	if app_state.current_season != null:
+		GameLogService.write_pending_game_logs(app_state.current_season)
 		season_data = app_state.current_season.to_dict()
 
 	var payload: Dictionary = {

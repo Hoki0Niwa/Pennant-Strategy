@@ -29,3 +29,115 @@ func test_new_save_folder_scopes_storage_paths() -> void:
 		SaveContext.clear_active_save()
 	else:
 		SaveContext.activate_save_id(old_save_id)
+
+
+func test_unsaved_simulation_does_not_persist_records_or_logs() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+	var first_game_index: int = -1
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	first_game_index = _first_unplayed_game_index(AppState.current_season)
+	assert_int(first_game_index).is_greater_equal(0)
+	assert_int(_played_game_count(AppState.current_season)).is_equal(0)
+	assert_int(_recorded_team_games(AppState.current_season)).is_equal(0)
+
+	var result: Dictionary = AppState.simulate_next_game()
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
+	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
+	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
+
+	var reloaded: Dictionary = SaveService.load_state()
+	assert_bool(AppState.restore_from_save(reloaded)).is_true()
+	assert_int(_played_game_count(AppState.current_season)).is_equal(0)
+	assert_int(_recorded_team_games(AppState.current_season)).is_equal(0)
+	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_manual_save_flushes_pending_game_logs() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+	var first_game_index: int = -1
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	first_game_index = _first_unplayed_game_index(AppState.current_season)
+	var result: Dictionary = AppState.simulate_next_game()
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
+
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
+
+	var reloaded: Dictionary = SaveService.load_state()
+	assert_bool(AppState.restore_from_save(reloaded)).is_true()
+	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
+	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
+	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func _capture_app_state() -> Dictionary:
+	return {
+		"selected_team_id": AppState.selected_team_id,
+		"current_season": AppState.current_season,
+		"current_screen": AppState.current_screen,
+		"auto_save_enabled": AppState.auto_save_enabled,
+		"active_save_id": SaveContext.active_save_id(),
+		"records": RecordStore.to_dict().duplicate(true),
+	}
+
+
+func _restore_app_state(old_state: Dictionary, test_save_id: String) -> void:
+	if not test_save_id.is_empty() and SaveContext.active_save_id() == test_save_id:
+		SaveContext.delete_current_save_data()
+	AppState.selected_team_id = int(old_state.get("selected_team_id", 0))
+	AppState.current_season = old_state.get("current_season", null) as PSSeason
+	AppState.current_screen = str(old_state.get("current_screen", "start"))
+	AppState.auto_save_enabled = bool(old_state.get("auto_save_enabled", false))
+	RecordStore.load_from_dict(old_state.get("records", {}) as Dictionary)
+	var old_save_id: String = str(old_state.get("active_save_id", ""))
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func _first_unplayed_game_index(season: PSSeason) -> int:
+	for index in range(season.schedule.size()):
+		var game: Dictionary = season.schedule[index] as Dictionary
+		if not bool(game.get("played", false)):
+			return index
+	return -1
+
+
+func _played_game_count(season: PSSeason) -> int:
+	var count: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("played", false)):
+			count += 1
+	return count
+
+
+func _recorded_team_games(season: PSSeason) -> int:
+	var count: int = 0
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		var record: PSTeamSeasonRecord = RecordStore.get_team_record(team.id, season.year, season.season_number)
+		if record != null:
+			count += record.stats.games
+	return count
