@@ -313,6 +313,33 @@ func _dot(base_center: Vector2, base_radius: float, color: Color) -> void:
 	draw_circle(_p(base_center), base_radius * _scale_f, color)
 
 
+# 勝敗記号を図形で描く。ダークモードではフォントの ○/● が判別しづらいため、
+# 白星 (勝ち="○") は白丸、黒星 (負け="●") は黒丸 + 白縁で塗り分ける (絵文字の白丸/黒丸相当)。
+# それ以外 (引分"△" や勝者略称などの文字列) は fallback 色のテキストで描く。
+func _draw_result_mark(base_center: Vector2, base_radius: float, symbol: String, fallback: Color) -> void:
+	var c: Vector2 = _p(base_center)
+	var r: float = base_radius * _scale_f
+	# 白星と黒星でシルエット (塗り半径 + 白縁) を揃える。縁はほんの少し細め。
+	var stroke: float = max(1.0, 1.2 * _scale_f)
+	match symbol:
+		"○":
+			draw_circle(c, r, TEXT)
+			draw_arc(c, r, 0.0, TAU, 28, TEXT, stroke, true)
+		"●":
+			draw_circle(c, r, Color(0.03, 0.04, 0.05))
+			draw_arc(c, r, 0.0, TAU, 28, TEXT, stroke, true)
+		"△":
+			# 引分も黒星と同じく黒塗り + 白縁。形 (三角) で勝敗と区別する。
+			var p0: Vector2 = c + Vector2(0.0, -r)
+			var p1: Vector2 = c + Vector2(r * 0.92, r * 0.72)
+			var p2: Vector2 = c + Vector2(-r * 0.92, r * 0.72)
+			draw_colored_polygon(PackedVector2Array([p0, p1, p2]), Color(0.03, 0.04, 0.05))
+			draw_polyline(PackedVector2Array([p0, p1, p2, p0]), TEXT, stroke, true)
+		_:
+			_text(symbol, Vector2(base_center.x - base_radius, base_center.y + base_radius * 0.78),
+				int(round(base_radius * 1.9)), fallback, base_radius * 2.0, HORIZONTAL_ALIGNMENT_CENTER)
+
+
 func _chip(base_rect: Rect2, text: String, color: Color) -> void:
 	_round(base_rect, Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.5), 9)
 	_text(text, Vector2(base_rect.position.x, base_rect.position.y + base_rect.size.y * 0.72), int(base_rect.size.y * 0.52), color, base_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)

@@ -10,12 +10,15 @@ const POSITION_CHARS: Dictionary = {
 }
 
 
-# 戻り値: {rows: Array[Dictionary], totals: Dictionary, inning_count: int}
+# 戻り値: {rows: Array[Dictionary], totals: Dictionary, inning_count: int, columns: Array}
 # row: {pos, name, bats, ab, h, rbi, gidp, avg, hr, cells:[{text,is_hit}]}
+# columns: Array[{inning, round}]。打者一巡で同一イニングに 2 打席立った場合は、その
+# イニングに列 (round) を追加し、cells は columns と同じ並びで対応する (「・」連結はしない)。
 static func build(log_data: Dictionary, team_id: int, season: PSSeason) -> Dictionary:
 	var pa_log: Array = log_data.get("pa_log", []) as Array
 	var subs: Array = log_data.get("substitutions", []) as Array
 	var lineup: Dictionary = _lineup_for_team(log_data, team_id)
+	var dh: bool = bool(lineup.get("dh", false))
 	var inning_count: int = _inning_count(pa_log)
 
 	var team_pas: Array = []
@@ -46,6 +49,9 @@ static func build(log_data: Dictionary, team_id: int, season: PSSeason) -> Dicti
 		var entry: Dictionary = {"player_id": int(sub.get("in_id", 0)), "position": int(sub.get("position", 0)), "kind": kind}
 		var slot: int = int(sub.get("slot", -1))
 		if kind == "pitching":
+			# DH 制では投手は打席に立たないため、救援投手も打席結果(ボックススコア)に含めない。
+			if dh:
+				continue
 			if pitcher_slot > 0:
 				(slot_players[pitcher_slot] as Array).append(entry)
 			else:
@@ -55,14 +61,45 @@ static func build(log_data: Dictionary, team_id: int, season: PSSeason) -> Dicti
 		else:
 			extra.append(entry)
 
+	# 列構成 (イニング x 打者一巡の round) と、inning -> 列index配列 の対応を作る。
+	var columns: Array = _build_columns(team_pas, inning_count)
+	var col_index: Dictionary = {}
+	for ci in range(columns.size()):
+		var inn: int = int((columns[ci] as Dictionary)["inning"])
+		if not col_index.has(inn):
+			col_index[inn] = []
+		(col_index[inn] as Array).append(ci)
+
 	var rows: Array = []
 	for slot_num in slot_order:
 		for entry_row in (slot_players[slot_num] as Array):
-			rows.append(_player_row(entry_row as Dictionary, team_pas, inning_count, season))
+			rows.append(_player_row(entry_row as Dictionary, team_pas, columns.size(), col_index, season))
 	for entry_row in extra:
-		rows.append(_player_row(entry_row as Dictionary, team_pas, inning_count, season))
+		rows.append(_player_row(entry_row as Dictionary, team_pas, columns.size(), col_index, season))
 
-	return {"rows": rows, "totals": _totals(team_pas), "inning_count": inning_count}
+	return {"rows": rows, "totals": _totals(team_pas), "inning_count": inning_count, "columns": columns}
+
+
+# 各イニングの列数 = そのイニングで「同一打者が立った最大打席数」(=打者一巡の周回数)。
+# 通常は全イニング 1 列。打者一巡したイニングだけ列が増える。打席ゼロのイニングも 1 列確保。
+static func _build_columns(team_pas: Array, inning_count: int) -> Array:
+	var counts: Dictionary = {}   # "inning_batter" -> その打者の当該イニング打席数
+	var rounds: Dictionary = {}   # inning -> 最大周回数
+	for pa_row in team_pas:
+		var pa: Dictionary = pa_row as Dictionary
+		var inn: int = int(pa.get("inning", 0))
+		if inn < 1:
+			continue
+		var key: String = "%d_%d" % [inn, int(pa.get("batter_id", 0))]
+		var c: int = int(counts.get(key, 0)) + 1
+		counts[key] = c
+		rounds[inn] = max(int(rounds.get(inn, 0)), c)
+	var columns: Array = []
+	for inn in range(1, inning_count + 1):
+		var rc: int = max(1, int(rounds.get(inn, 0)))
+		for r in range(rc):
+			columns.append({"inning": inn, "round": r})
+	return columns
 
 
 static func _lineup_for_team(log_data: Dictionary, team_id: int) -> Dictionary:
@@ -81,19 +118,20 @@ static func _inning_count(pa_log: Array) -> int:
 	return mx
 
 
-static func _player_row(entry: Dictionary, team_pas: Array, inning_count: int, season: PSSeason) -> Dictionary:
+static func _player_row(entry: Dictionary, team_pas: Array, column_count: int, col_index: Dictionary, season: PSSeason) -> Dictionary:
 	var player_id: int = int(entry.get("player_id", 0))
 	var record: PSPlayerSeasonRecord = null
 	if season != null:
 		record = RecordStore.get_player_record(player_id, season.year, season.season_number)
 	var cells: Array = []
-	for _i in range(inning_count):
+	for _i in range(column_count):
 		cells.append({"text": "", "is_hit": false})
 
 	var ab: int = 0
 	var h: int = 0
 	var rbi: int = 0
 	var gidp: int = 0
+	var round_by_inning: Dictionary = {}  # この選手の各イニングの打席周回 (0,1,...)
 	for pa_row in team_pas:
 		var pa: Dictionary = pa_row as Dictionary
 		if int(pa.get("batter_id", 0)) != player_id:
@@ -107,13 +145,19 @@ static func _player_row(entry: Dictionary, team_pas: Array, inning_count: int, s
 			gidp += 1
 		rbi += int(pa.get("rbi", 0))
 		var inn: int = int(pa.get("inning", 0))
-		if inn >= 1 and inn <= inning_count:
-			var cell: Dictionary = cells[inn - 1] as Dictionary
-			var text: String = _pa_abbrev(pa)
-			cell["text"] = text if str(cell.get("text", "")).is_empty() else (str(cell["text"]) + "・" + text)
+		if not col_index.has(inn):
+			continue
+		# 同一イニング2打席目以降は「・」連結せず、その周回に対応する列へ書く。
+		var r: int = int(round_by_inning.get(inn, 0))
+		round_by_inning[inn] = r + 1
+		var inning_cols: Array = col_index[inn] as Array
+		if r < inning_cols.size():
+			var cidx: int = int(inning_cols[r])
+			var cell: Dictionary = cells[cidx] as Dictionary
+			cell["text"] = _pa_abbrev(pa)
 			if cat == "hit":
 				cell["is_hit"] = true
-			cells[inn - 1] = cell
+			cells[cidx] = cell
 
 	return {
 		"pos": _position_label(entry),
@@ -132,6 +176,9 @@ static func _position_label(entry: Dictionary) -> String:
 			return "打"
 		"pitching":
 			return "投"
+		"start":
+			# スタメンの守備位置はカッコで囲み、途中出場 (守備固め等) と区別する。
+			return "(%s)" % str(POSITION_CHARS.get(int(entry.get("position", 0)), ""))
 	return str(POSITION_CHARS.get(int(entry.get("position", 0)), ""))
 
 
@@ -245,7 +292,7 @@ static func build_pitching(log_data: Dictionary, season: PSSeason) -> Dictionary
 			elif pid == loss_id:
 				mark = "●"
 			elif pid == save_id:
-				mark = "Ⓢ"
+				mark = "Ｓ"
 			elif holds.has(pid):
 				mark = "Ｈ"
 			rows.append({

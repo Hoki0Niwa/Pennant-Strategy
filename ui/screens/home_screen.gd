@@ -25,9 +25,11 @@ const FILTERS: Array = [
 	{"id": "result", "label": "結果"},
 ]
 
+# 勝敗は図形で描く (白星=○→白丸 / 黒星=●→黒丸+白縁)。mark は意味どおりの記号を持たせ、
+# 見た目の塗り分けは _draw_result_mark に任せる。色は引分のみ使用 (○● は図形側で固定)。
 const LEGEND: Array = [
-	{"label": "勝利", "color": GREEN, "mark": "○"},
-	{"label": "敗戦", "color": RED, "mark": "●"},
+	{"label": "勝利", "color": TEXT, "mark": "○"},
+	{"label": "敗戦", "color": TEXT, "mark": "●"},
 	{"label": "引分", "color": AMBER, "mark": "△"},
 	{"label": "未消化", "color": BLUE, "mark": ""},
 	{"label": "休養・移動日", "color": FAINT, "mark": ""},
@@ -232,7 +234,10 @@ func _draw_cell_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
 			label += "  %s" % _score(game)
 	_text(label, Vector2(rect.position.x + 8, rect.position.y + 16), 11, TEXT if is_team else MUTED, rect.size.x - 40)
 	if played:
-		_text(_result_symbol(game, team_id) if is_team else _winner_short(game), Vector2(rect.end.x - 26, rect.position.y + 16), 12, color)
+		if is_team:
+			_draw_result_mark(Vector2(rect.end.x - 18, rect.position.y + 12), 5.0, _result_symbol(game, team_id), color)
+		else:
+			_text(_winner_short(game), Vector2(rect.end.x - 26, rect.position.y + 16), 12, color)
 	elif is_team:
 		_text("予定", Vector2(rect.end.x - 34, rect.position.y + 16), 10, MUTED)
 
@@ -252,7 +257,7 @@ func _draw_cell_self_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
 	_text("%s %s" % [venue, opponent.short_name], Vector2(pill.position.x + 10, pill.position.y + 24), 14, TEXT, pill.size.x - 20)
 	if played:
 		_text(_self_score(game, team_id), Vector2(pill.position.x + 10, pill.position.y + 50), 14, TEXT)
-		_text(_result_symbol(game, team_id), Vector2(pill.end.x - 30, pill.position.y + 51), 16, color)
+		_draw_result_mark(Vector2(pill.end.x - 22, pill.position.y + 45), 6.5, _result_symbol(game, team_id), color)
 	else:
 		_text("予定", Vector2(pill.position.x + 10, pill.position.y + 50), 13, MUTED)
 
@@ -274,7 +279,7 @@ func _draw_legend(rect: Rect2) -> void:
 		if mark.is_empty():
 			_dot(Vector2(x + 6, y - 4), 5, item["color"] as Color)
 		else:
-			_text(mark, Vector2(x, y), 13, item["color"] as Color)
+			_draw_result_mark(Vector2(x + 6, y - 4), 5.0, mark, item["color"] as Color)
 		_text(str(item["label"]), Vector2(x + 18, y), 11, MUTED)
 		x += 20 + _measure(str(item["label"]), 11) + 18
 	_chip(Rect2(x, y - 15, 30, 18), "DH", BLUE_SOFT)
@@ -329,7 +334,11 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_text("予告先発  %s  %s" % [home.short_name, _pitcher_line(_probable_pitcher(home.id, season))], Vector2(ox, rect.position.y + 160), 13, TEXT)
 
 	if bool(game.get("played", false)):
-		_text("終了  %s  %s" % [_score(game), _result_symbol(game, team_id)], Vector2(ox, rect.position.y + 192), 15, _game_color(game, team_id))
+		# スコアは試合結果色、白星/黒星 (○●) の字色は白にする。
+		var gc: Color = _game_color(game, team_id)
+		var prefix: String = "終了  %s  " % _score(game)
+		_text(prefix, Vector2(ox, rect.position.y + 192), 15, gc)
+		_draw_result_mark(Vector2(ox + _measure(prefix, 15) + 7, rect.position.y + 187), 6.0, _result_symbol(game, team_id), gc)
 
 
 # 6試合を 2行x3列 のミニカードで表示。各カードは「[Aバッジ] 2-4 [Bバッジ]」の横並び。

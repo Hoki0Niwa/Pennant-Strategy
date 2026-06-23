@@ -53,6 +53,7 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"start": true,
 	"team_select": true,
 	"home": true,
+	"game_results": true,
 	"options": true,
 	"balance_report": true,
 	"player_probe": true,

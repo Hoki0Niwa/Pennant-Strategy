@@ -390,3 +390,80 @@ func _pitcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRe
 		{"type": "slider", "mastery": z - 0.1},
 	]
 	return record
+
+
+# DH 制の打席結果には投手 (救援含む) を含めず、非 DH では投手が打席に並ぶこと。
+func test_box_score_excludes_pitchers_under_dh() -> void:
+	var BoxScore = load("res://services/reports/box_score_builder.gd")
+
+	# DH: 打順9枠に投手 (守備位置1) は無く、DH は位置10。救援投手の交代を1件含める。
+	var dh_slots: Array = []
+	for i in range(9):
+		dh_slots.append({"slot": i + 1, "position": [2, 3, 4, 5, 6, 7, 8, 9, 10][i], "player_id": 101 + i})
+	var dh_log: Dictionary = {
+		"pa_log": [],
+		"lineups": {"away": {"team_id": 1, "dh": true, "slots": dh_slots}},
+		"substitutions": [{"team_id": 1, "kind": "pitching", "out_id": 200, "in_id": 201, "position": 1, "slot": -1}],
+	}
+	var dh_rows: Array = BoxScore.build(dh_log, 1, null).get("rows", []) as Array
+	assert_int(dh_rows.size()).is_equal(9)
+	for row_value in dh_rows:
+		var row: Dictionary = row_value as Dictionary
+		assert_str(str(row.get("pos", ""))).is_not_equal("投")
+		assert_str(str(row.get("name", ""))).is_not_equal("#201")
+
+	# 非 DH: 打順9枠目を投手 (守備位置1) にし、同じ救援交代を投手スロットへ連ねる。
+	var nodh_slots: Array = []
+	for i in range(9):
+		nodh_slots.append({"slot": i + 1, "position": [2, 3, 4, 5, 6, 7, 8, 9, 1][i], "player_id": 101 + i})
+	var nodh_log: Dictionary = {
+		"pa_log": [],
+		"lineups": {"away": {"team_id": 1, "dh": false, "slots": nodh_slots}},
+		"substitutions": [{"team_id": 1, "kind": "pitching", "out_id": 109, "in_id": 201, "position": 1, "slot": -1}],
+	}
+	var nodh_rows: Array = BoxScore.build(nodh_log, 1, null).get("rows", []) as Array
+	assert_int(nodh_rows.size()).is_equal(10)  # 先発9 + 救援1
+	var has_relief: bool = false
+	for row_value in nodh_rows:
+		var row: Dictionary = row_value as Dictionary
+		if str(row.get("name", "")) == "#201":
+			has_relief = true
+			assert_str(str(row.get("pos", ""))).is_equal("投")
+	assert_bool(has_relief).is_true()
+
+
+# 打者一巡で同一イニングに2打席立った場合、「・」連結ではなく新しい列に書く。
+func test_box_score_adds_column_when_batting_around() -> void:
+	var BoxScore = load("res://services/reports/box_score_builder.gd")
+	var log: Dictionary = {
+		"lineups": {"away": {"team_id": 1, "dh": false, "slots": [
+			{"slot": 1, "position": 8, "player_id": 101},
+		]}},
+		"substitutions": [],
+		"pa_log": [
+			{"batting_team_id": 1, "batter_id": 101, "inning": 1, "category": "hit", "bases": 1, "ab_charged": true, "rbi": 0, "fielder_position": 8},
+			{"batting_team_id": 1, "batter_id": 101, "inning": 1, "category": "strikeout", "ab_charged": true, "rbi": 0},
+		],
+	}
+	var data: Dictionary = BoxScore.build(log, 1, null)
+
+	# 1回の列が2列に増えている。
+	var inning1_cols: int = 0
+	for col_value in (data.get("columns", []) as Array):
+		if int((col_value as Dictionary).get("inning", 0)) == 1:
+			inning1_cols += 1
+	assert_int(inning1_cols).is_equal(2)
+
+	# 101 の行: 1回の2列がそれぞれ非空で、「・」連結されていない。
+	var rows: Array = data.get("rows", []) as Array
+	assert_int(rows.size()).is_greater(0)
+	var cells: Array = (rows[0] as Dictionary).get("cells", []) as Array
+	var c0: String = str((cells[0] as Dictionary).get("text", ""))
+	var c1: String = str((cells[1] as Dictionary).get("text", ""))
+	assert_str(c0).is_not_empty()
+	assert_str(c1).is_not_empty()
+	assert_bool(c0.contains("・")).is_false()
+	assert_bool(c1.contains("・")).is_false()
+	# 打数2 / 安打1。
+	assert_int(int((rows[0] as Dictionary).get("ab", 0))).is_equal(2)
+	assert_int(int((rows[0] as Dictionary).get("h", 0))).is_equal(1)
