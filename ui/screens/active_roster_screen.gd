@@ -22,8 +22,8 @@ const TARGET_PITCHERS_MIN: int = 14
 const TARGET_PITCHERS_MAX: int = 15
 const MIN_CATCHERS: int = 2
 
-# 役割色 (rotation_editor と統一: 先発=ピンク / 中継=赤)。捕=青 / 内野=黄(AMBER) / 外野=緑。
-const PINK: Color = Color(0.94, 0.46, 0.66)
+# 役割色 (rotation_editor と統一: 先発=ピンク=基底 PINK / 中継=赤)。捕=青 / 内野=黄(AMBER) / 外野=緑。
+# 守備位置の色は共有基底 dashboard_screen._pos_color を使う。
 
 # --- レイアウト (base 1920x1080 座標) ---
 const CARD_Y: float = 104.0
@@ -916,11 +916,8 @@ func _classify(pid: int, is_pitcher: bool, role: String, position: int, is_activ
 			return {"text": "先発", "color": PINK, "order": 0}
 		return {"text": "中継", "color": RED, "order": 1}
 	var order: int = position + 1 if position >= 2 and position <= 9 else 11
-	match position:
-		2: return {"text": "捕", "color": BLUE, "order": order}
-		3, 4, 5, 6: return {"text": _pos_short(position), "color": AMBER, "order": order}
-		7, 8, 9: return {"text": _pos_short(position), "color": GREEN, "order": order}
-		_: return {"text": _pos_short(position), "color": MUTED, "order": order}
+	# 守備位置の色は共有基底 _pos_color に統一 (捕=BLUE / 内野=AMBER / 外野=GREEN)。
+	return {"text": _pos_short(position), "color": _pos_color(position), "order": order}
 
 
 # 0=先発 / 1=中継。1軍は保存ローテ入り=先発・それ以外=中継 (クローザーも中継)。

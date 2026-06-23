@@ -231,6 +231,70 @@ func test_history_screen_builds_with_archive() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_team_detail_screen_builds_with_active_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "team_detail"
+	var test_save_id: String = SaveContext.active_save_id()
+
+	# 開幕日を消化して打撃/投球成績を残し、打線・ローテ・ランキング集計を実データで通す。
+	var GameSimulator = load("res://services/simulation/game_simulator.gd")
+	GameSimulator.simulate_current_day(AppState.current_season, false)
+
+	# 直近5年パネルのポストシーズン表示経路を検証するためアーカイブを1件差し込む
+	# (_make_test_archive は teams[0] を日本一にする → 直近成績の ps が "日本一")。
+	var archives: Array = RecordStore.get_season_archives()
+	var archive: PSSeasonArchive = _make_test_archive()
+	archives.append(archive)
+
+	var script: GDScript = load("res://ui/screens/team_detail_screen.gd") as GDScript
+	var screen: Control = script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# サイドバーナビ + チーム巡回ボタンが生成されている。
+	assert_int(screen.get_child_count()).is_greater(0)
+	# 今期成績と巡回順が集計されている。
+	assert_int(screen._team_ids.size()).is_equal(GameDb.teams.size())
+	assert_int(screen._rank).is_greater(0)
+	# 打順 (9枠) と先発ローテが組み立てられている。
+	assert_int((screen._lineup_rows as Array).size()).is_greater(0)
+	assert_int((screen._rotation_rows as Array).size()).is_greater(0)
+	# チーム内ランキングは野手5 + 投手5 = 10カテゴリ。
+	assert_int((screen._ranking_cards as Array).size()).is_equal(10)
+	# サマリーの指標リーグ内順位 (得点/失点/打率…) が算出されている。
+	assert_bool(screen._metric_ranks.has("rs")).is_true()
+	assert_int(int(screen._metric_ranks.get("avg", 0))).is_greater(0)
+	# 直近5年パネルにアーカイブ行があり、日本一のポストシーズン結果が付与されている。
+	assert_int((screen._recent5 as Array).size()).is_greater(0)
+	assert_str(str((screen._recent5[0] as Dictionary).get("ps", ""))).is_equal("日本一")
+	# プルダウンで別球団へ切り替えても落ちない。
+	var other_id: int = int(screen._team_ids[screen._team_ids.size() - 1])
+	screen._on_team_selected(other_id)
+	await get_tree().process_frame
+	assert_int(screen._team_id).is_equal(other_id)
+	screen.queue_free()
+
+	archives.erase(archive)
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func _make_test_archive() -> PSSeasonArchive:
 	var archive: PSSeasonArchive = PSSeasonArchive.new()
 	archive.year = 2099

@@ -17,8 +17,6 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-const VIOLET: Color = Color(0.64, 0.52, 0.96)
-const PINK: Color = Color(0.94, 0.46, 0.66)
 
 # --- レイアウト (base 座標, rotation_editor と同一枠) ---
 const TABLE_PANEL: Rect2 = Rect2(262, 104, 1638, 528)
@@ -1166,18 +1164,7 @@ func _short_pos(pos: int) -> String:
 		_: return "?"
 
 
-# 守備位置の色は選手登録 (active_roster の _classify) と完全一致:
-# 捕=BLUE / 内野(一二三遊)=AMBER / 外野(左中右)=GREEN。投=PINK / DH=VIOLET は守備位置外。
-func _pos_color(pos: int) -> Color:
-	match pos:
-		1: return PINK
-		2: return BLUE
-		3, 4, 5, 6: return AMBER
-		7, 8, 9: return GREEN
-		10: return VIOLET
-		_: return MUTED
-
-
+# 守備位置の色は共有基底 dashboard_screen._pos_color を使う (全画面共通)。
 # 選手登録と同一の見た目にするため基底の _chip (淡い塗り+色文字) を使う。
 func _pos_badge(rect: Rect2, pos: int) -> void:
 	_chip(rect, _short_pos(pos), _pos_color(pos))

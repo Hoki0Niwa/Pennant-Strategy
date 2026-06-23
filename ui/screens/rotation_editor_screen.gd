@@ -19,8 +19,7 @@ const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const ROTATION_SIZE: int = 6
 
-const PINK: Color = Color(0.94, 0.46, 0.66)        # 先発 (鮮やかなピンク)
-const VIOLET: Color = Color(0.64, 0.52, 0.96)      # セットアッパー
+# 先発=PINK / セットアッパー=VIOLET は共有基底 dashboard_screen の const を使う。
 const CLOSER_RED: Color = Color(0.92, 0.24, 0.30)  # 抑え/クローザー (赤系統)
 
 # --- レイアウト (base 座標) ---

@@ -32,6 +32,9 @@ const BLUE_SOFT: Color = Color(0.180, 0.380, 0.620)
 const GREEN: Color = Color(0.235, 0.790, 0.490)
 const RED: Color = Color(0.910, 0.370, 0.370)
 const AMBER: Color = Color(0.955, 0.715, 0.255)
+# 守備位置/投手役割の色 (全ダッシュボード画面で共通)。投=PINK / DH=VIOLET。
+const PINK: Color = Color(0.94, 0.46, 0.66)
+const VIOLET: Color = Color(0.64, 0.52, 0.96)
 
 # --- レイアウト基準 (base 座標) ---
 const SIDEBAR_W: float = 240.0
@@ -364,6 +367,24 @@ func _team_badge(base_rect: Rect2, team: PSTeam) -> void:
 
 func _luminance(c: Color) -> float:
 	return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b
+
+
+# 守備位置 (1-10) → 役割色。全画面共通: 投=PINK / 捕=BLUE / 内野(一二三遊)=AMBER / 外野(左中右)=GREEN / DH=VIOLET。
+# lineup_editor / active_roster / team_detail が共用する (各画面の重複実装は廃止)。
+func _pos_color(pos: int) -> Color:
+	match pos:
+		1:
+			return PINK
+		2:
+			return BLUE
+		3, 4, 5, 6:
+			return AMBER
+		7, 8, 9:
+			return GREEN
+		10:
+			return VIOLET
+		_:
+			return MUTED
 
 
 # 簡易ラインアイコン。base 座標の box 内に正規化座標で描く。
