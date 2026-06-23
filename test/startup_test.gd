@@ -130,6 +130,56 @@ func test_game_result_screen_builds_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_player_detail_screen_builds_with_active_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_player: int = AppState.current_player_id
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "player_detail"
+	AppState.current_player_id = 0
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var screen_script: GDScript = load("res://ui/screens/player_detail_screen.gd") as GDScript
+	var screen: Control = screen_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# サイドバーナビ + 絞り込み chip + タブ等のボタンが生成され、選手が解決されている。
+	assert_int(screen.get_child_count()).is_greater(0)
+	assert_array(screen._candidates).is_not_empty()
+	assert_object(screen._record).is_not_null()
+	assert_array(screen._basic_rows).is_not_empty()
+	assert_array(screen._ability_rows).is_not_empty()
+
+	# 今季タブ(既定)はカテゴリ別カードを遅延計算する。
+	screen._ensure_season_cards()
+	assert_array(screen._season_groups).is_not_empty()
+
+	# 過去指標タブを開くと WAR/wOBA 集計が遅延計算される (末尾に通算行)。
+	screen._active_tab = "advanced"
+	screen._ensure_advanced()
+	assert_array(screen._advanced_rows).is_not_empty()
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.current_player_id = old_player
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_screen_history_back_navigation() -> void:
 	var old_screen: String = AppState.current_screen
 	var old_player: int = AppState.current_player_id

@@ -65,6 +65,7 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"standings": true,
 	"history": true,
 	"team_detail": true,
+	"player_detail": true,
 }
 
 var sidebar: VBoxContainer
