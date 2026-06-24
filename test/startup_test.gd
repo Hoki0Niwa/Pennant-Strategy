@@ -281,6 +281,94 @@ func test_history_screen_builds_with_archive() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_awards_screen_builds_with_current_awards() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_awards: PSAwards = AppState.current_awards
+	var old_post: PSPostseasonResult = AppState.current_postseason
+	var old_post_active: bool = AppState.postseason_active
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var central_team: PSTeam = null
+	var pacific_team: PSTeam = null
+	for team_value in GameDb.teams:
+		var t: PSTeam = team_value as PSTeam
+		if t.league == "central" and central_team == null:
+			central_team = t
+		elif t.league == "pacific" and pacific_team == null:
+			pacific_team = t
+	assert_object(central_team).is_not_null()
+	assert_object(pacific_team).is_not_null()
+
+	AppState.select_team(central_team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "awards"
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var central_records: Array = RecordStore.get_team_player_records(central_team.id, AppState.current_season.year, AppState.current_season.season_number)
+	var pacific_records: Array = RecordStore.get_team_player_records(pacific_team.id, AppState.current_season.year, AppState.current_season.season_number)
+	var central_batter: PSPlayerSeasonRecord = _first_record(central_records, false)
+	var central_pitcher: PSPlayerSeasonRecord = _first_record(central_records, true)
+	var pacific_batter: PSPlayerSeasonRecord = _first_record(pacific_records, false)
+	var pacific_pitcher: PSPlayerSeasonRecord = _first_record(pacific_records, true)
+	assert_object(central_batter).is_not_null()
+	assert_object(central_pitcher).is_not_null()
+	assert_object(pacific_batter).is_not_null()
+	assert_object(pacific_pitcher).is_not_null()
+
+	var awards: PSAwards = PSAwards.new()
+	awards.year = AppState.current_season.year
+	awards.season_number = AppState.current_season.season_number
+	awards.mvp_central_player_id = central_batter.player_id
+	awards.rookie_central_player_id = central_pitcher.player_id
+	awards.mvp_pacific_player_id = pacific_batter.player_id
+	awards.rookie_pacific_player_id = pacific_pitcher.player_id
+	awards.batting_titles = {
+		"central": {"average": central_batter.player_id},
+		"pacific": {"home_runs": pacific_batter.player_id},
+	}
+	awards.pitching_titles = {
+		"central": {"wins": central_pitcher.player_id},
+		"pacific": {"era": pacific_pitcher.player_id},
+	}
+	AppState.current_awards = awards
+
+	var post: PSPostseasonResult = PSPostseasonResult.new()
+	post.japan_series = {
+		"top_id": central_team.id, "challenger_id": pacific_team.id, "winner_id": central_team.id,
+		"top_wins_final": 4, "challenger_wins_final": 2, "completed": true,
+	}
+	post.champion_team_id = central_team.id
+	AppState.current_postseason = post
+
+	var script: GDScript = load("res://ui/screens/awards_screen.gd") as GDScript
+	var screen: Control = script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	assert_int(screen.get_child_count()).is_greater(0)
+	assert_bool(screen._has_awards).is_true()
+	assert_int(screen._champion_id).is_equal(central_team.id)
+	assert_int((screen._award_rows as Array).size()).is_equal(2)
+	assert_int((screen._bat_rows as Array).size()).is_equal(PSAwards.BATTING_CATEGORIES.size())
+	assert_int((screen._pit_rows as Array).size()).is_equal(PSAwards.PITCHING_CATEGORIES.size())
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.current_awards = old_awards
+	AppState.current_postseason = old_post
+	AppState.postseason_active = old_post_active
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_team_detail_screen_builds_with_active_season() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
@@ -381,6 +469,95 @@ func _make_test_archive() -> PSSeasonArchive:
 	awards.pitching_titles = {"central": {"wins": 3}, "pacific": {"era": 4}}
 	archive.awards = awards
 	return archive
+
+
+func _first_record(records: Array, pitcher: bool) -> PSPlayerSeasonRecord:
+	for record_value in records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record != null and record.is_pitcher() == pitcher:
+			return record
+	return null
+
+
+# オフシーズン画面 (dashboard_screen 継承の自前描画刷新) の build/draw スモーク。
+# 戦力外通告 (対話パネル) と 引退/成長/ドラフト (結果テーブル + 2カラム + 12球団グリッド) の
+# 描画経路を、画面を tree に載せて 1 フレーム回し例外なく通ることで確認する。
+func test_offseason_screen_builds_each_step() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_active: bool = AppState.offseason_active
+	var old_step: int = AppState.offseason_step
+	var old_results: Dictionary = AppState.offseason_results.duplicate(true)
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "offseason"
+	var test_save_id: String = SaveContext.active_save_id()
+
+	# 戦力外 WAR 列のため開幕日を消化して成績を残す。
+	var GameSimulator = load("res://services/simulation/game_simulator.gd")
+	GameSimulator.simulate_current_day(AppState.current_season, false)
+
+	AppState.offseason_active = true
+	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
+
+	# (1) 戦力外通告: 対話パネル (実データで populate)。
+	AppState.offseason_step = AppState.OFFSEASON_STEP_RELEASE_EDIT
+	var release_screen: Control = script.new()
+	add_child(release_screen)
+	await get_tree().process_frame
+	assert_str(str(release_screen._active_panel)).is_equal(AppState.OFFSEASON_PANEL_RELEASE)
+	assert_int((release_screen._release_rows as Array).size()).is_greater(0)
+	# 行クリックのトグル経路 (戦力外 → 育成降格 → 解除) が落ちない。
+	var first_pid: int = int((release_screen._release_rows[0] as Dictionary).get("__meta", 0))
+	release_screen._toggle_release(first_pid)
+	assert_bool(release_screen.selected_release_ids.has(first_pid)).is_true()
+	release_screen.queue_free()
+
+	# (2) 結果テーブル群: 引退 / 成長 (2カラム) / ドラフト (12球団グリッド) を inject して描画。
+	AppState.offseason_results["step_%d" % AppState.OFFSEASON_STEP_RETIREMENT] = {
+		"title": "引退",
+		"retired": [{"team_id": team.id, "name": "テスト 引退", "age": 38, "position": 3, "role": "fielder", "years": 15, "overall": 60}],
+	}
+	AppState.offseason_results["step_%d" % AppState.OFFSEASON_STEP_GROWTH] = {
+		"title": "成長",
+		"growers_count": 1, "decayers_count": 0,
+		"growth_kind_counts": {"awakening": 1},
+		"pitchers": [{"name": "成長 投手", "age": 22, "growth_label": "成長", "after": 70, "delta": 5,
+			"abilities": [{"key": "velocity", "after": 150, "delta": 2, "suffix": ""}]}],
+		"fielders": [{"name": "成長 野手", "age": 23, "growth_label": "覚醒", "after": 72, "delta": 8,
+			"abilities": [{"key": "contact", "after": 68, "delta": 6, "suffix": ""}]}],
+	}
+	AppState.offseason_results["step_%d" % AppState.OFFSEASON_STEP_DRAFT_MAIN] = {
+		"title": "本指名", "priority_league": "central", "logs": [], "rookies": [],
+		"draft_picks": [{"team_id": team.id, "overall_pick": 1, "round": 1, "name": "ルーキー", "age": 18,
+			"position": 1, "overall": 65, "source_type": "high_school", "development": false, "lottery": false}],
+	}
+	for step in [AppState.OFFSEASON_STEP_RETIREMENT, AppState.OFFSEASON_STEP_GROWTH, AppState.OFFSEASON_STEP_DRAFT_MAIN]:
+		AppState.offseason_step = step
+		var result_screen: Control = script.new()
+		add_child(result_screen)
+		await get_tree().process_frame
+		assert_str(str(result_screen._active_panel)).is_equal(AppState.OFFSEASON_PANEL_RESULTS)
+		assert_bool((result_screen._view as Dictionary).get("active", false)).is_true()
+		result_screen.queue_free()
+
+	# 後始末。
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.offseason_active = old_active
+	AppState.offseason_step = old_step
+	AppState.offseason_results = old_results
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
 
 
 func test_offseason_view_state_exposes_ui_phase() -> void:

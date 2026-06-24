@@ -67,6 +67,7 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"team_detail": true,
 	"player_detail": true,
 	"postseason": true,
+	"awards": true,
 }
 
 var sidebar: VBoxContainer
