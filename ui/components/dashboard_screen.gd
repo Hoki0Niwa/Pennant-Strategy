@@ -450,12 +450,16 @@ func _icon(name: String, box: Rect2, color: Color) -> void:
 				var dir: Vector2 = Vector2(cos(a), sin(a))
 				draw_line(pt.call(0.5, 0.5) + dir * 0.3 * r.size.x, pt.call(0.5, 0.5) + dir * 0.42 * r.size.x, color, w, true)
 		"pitch":
-			# 野球ボール: 塗りつぶした球 + 左右の縁に沿う細い縫い目2本 (中央は白く広く残す)。
-			draw_circle(pt.call(0.5, 0.5), 0.38 * r.size.x, color)
-			var seam_radius: float = 0.62 * r.size.x
-			var seam_w: float = max(1.0, w * 0.9)
-			draw_arc(pt.call(0.80, 0.5), seam_radius, deg_to_rad(155.0), deg_to_rad(205.0), 16, BG, seam_w, true)
-			draw_arc(pt.call(0.20, 0.5), seam_radius, deg_to_rad(-25.0), deg_to_rad(25.0), 16, BG, seam_w, true)
+			var radius: float = min(r.size.x, r.size.y) * 0.39
+			var center: Vector2 = pt.call(0.5, 0.5)
+			var seam_radius: float = radius * 1.18
+			var seam_offset: float = radius * 0.70
+			var seam_w: float = max(1.0, w * 0.85)
+			draw_arc(center, radius, 0.0, TAU, 32, color, w, true)
+			draw_arc(center + Vector2(seam_offset, 0.0), seam_radius, deg_to_rad(145.0), deg_to_rad(215.0), 18, color, seam_w, true)
+			draw_arc(center - Vector2(seam_offset, 0.0), seam_radius, deg_to_rad(-35.0), deg_to_rad(35.0), 18, color, seam_w, true)
+			_draw_baseball_stitches(center + Vector2(seam_offset, 0.0), seam_radius, [156.0, 180.0, 204.0], color, radius, seam_w)
+			_draw_baseball_stitches(center - Vector2(seam_offset, 0.0), seam_radius, [-24.0, 0.0, 24.0], color, radius, seam_w)
 		"player":
 			draw_arc(pt.call(0.5, 0.34), 0.16 * r.size.x, 0, TAU, 16, color, w, true)
 			poly.call(PackedVector2Array([pt.call(0.26, 0.9), pt.call(0.34, 0.62), pt.call(0.66, 0.62), pt.call(0.74, 0.9)]))
@@ -512,6 +516,16 @@ func _icon(name: String, box: Rect2, color: Color) -> void:
 			draw_circle(pt.call(0.66, 0.535), w * 1.1, color)
 		_:
 			draw_circle(pt.call(0.5, 0.5), 0.16 * r.size.x, color)
+
+
+func _draw_baseball_stitches(arc_center: Vector2, arc_radius: float, angles_degrees: Array, color: Color, ball_radius: float, width: float) -> void:
+	var half_len: float = max(1.8 * _scale_f, ball_radius * 0.12)
+	var stroke: float = max(1.0, width * 0.70)
+	for value in angles_degrees:
+		var angle: float = deg_to_rad(float(value))
+		var dir: Vector2 = Vector2(cos(angle), sin(angle))
+		var p: Vector2 = arc_center + dir * arc_radius
+		draw_line(p - dir * half_len, p + dir * half_len, color, stroke, true)
 
 
 # ============================================================ formatting
