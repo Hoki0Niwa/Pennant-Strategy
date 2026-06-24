@@ -85,6 +85,9 @@ const HIT_BG: Color = Color(0.86, 0.20, 0.18, 0.92)
 
 var _view_team_id: int = 0
 var _team_games: Array = []          # [{index, game, day}]
+# ポストシーズン: 閲覧チームが関与した試合 [{stage_key, game_num, game(正規化), result}]。
+# 月タブの末尾に「ポストシーズン」タブとして並べ、選択時はこちらから一覧/詳細を引く。
+var _ps_games_for_view: Array = []
 var _months: Array = []              # [{year, month, label}]
 var _sel_month: int = 0
 var _selected_index: int = -1
@@ -278,8 +281,9 @@ func _draw_list_row(rect: Rect2, game: Dictionary) -> void:
 	var cy: float = rect.position.y + rect.size.y * 0.5 + 5.0
 	# 勝敗マーク: 白星=白丸 / 黒星=黒丸+白縁 / 引分=△(試合結果色)。
 	_draw_result_mark(Vector2(rect.position.x + 17, rect.position.y + rect.size.y * 0.5), 6.0, symbol, color)
-	# 日付
-	_text(SeasonCalendar.compact_label_for_game(game, AppState.current_season), Vector2(rect.position.x + 30, cy), 12, MUTED, 76)
+	# 日付 (ポストシーズンはステージ+第N戦ラベル)
+	var date_label: String = str(game.get("ps_label", "")) if game.has("ps_label") else SeasonCalendar.compact_label_for_game(game, AppState.current_season)
+	_text(date_label, Vector2(rect.position.x + 30, cy), 12, MUTED, 76)
 	# 対戦
 	var away_id: int = int(game.get("away_team_id", 0))
 	var home_id: int = int(game.get("home_team_id", 0))
@@ -740,13 +744,81 @@ func _style_popup(menu: PopupMenu) -> void:
 func _reload_for_team() -> void:
 	_team_games = _collect_team_games(_view_team_id)
 	_months = _build_months(_team_games)
+	_ps_games_for_view = _collect_ps_games(_view_team_id)
+	if not _ps_games_for_view.is_empty():
+		var season: PSSeason = AppState.current_season
+		_months.append({"year": season.year if season != null else 0, "key": "postseason", "label": "ポストシーズン"})
 	_list_scroll = 0
 	if _months.is_empty():
 		_sel_month = 0
 		_clear_selection()
 		return
-	_sel_month = _months.size() - 1  # 既定は最新の月
+	_sel_month = _months.size() - 1  # 既定は最新の月 (ポストシーズン進行中ならポストシーズン)
 	_select_latest_in_month()
+
+
+func _selected_is_ps() -> bool:
+	if _months.is_empty() or _sel_month < 0 or _sel_month >= _months.size():
+		return false
+	return str((_months[_sel_month] as Dictionary).get("key", "")) == "postseason"
+
+
+# 閲覧チームが関与したポストシーズン試合を日順に集める。
+func _collect_ps_games(team_id: int) -> Array:
+	var out: Array = []
+	var post: PSPostseasonResult = AppState.current_postseason
+	if post == null or team_id <= 0:
+		return out
+	var rows: Array = []
+	for stage_key in PSPostseasonResult.STAGE_KEYS:
+		var series: Dictionary = post.stage_dict(str(stage_key))
+		for game_value in (series.get("games", []) as Array):
+			var game: Dictionary = game_value as Dictionary
+			if int(game.get("away_id", 0)) != team_id and int(game.get("home_id", 0)) != team_id:
+				continue
+			rows.append({"stage_key": str(stage_key), "game": game})
+	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var ga: Dictionary = (a as Dictionary)["game"] as Dictionary
+		var gb: Dictionary = (b as Dictionary)["game"] as Dictionary
+		if int(ga.get("day", 0)) == int(gb.get("day", 0)):
+			return int(ga.get("game_num", 0)) < int(gb.get("game_num", 0))
+		return int(ga.get("day", 0)) < int(gb.get("day", 0))
+	)
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		out.append(_build_ps_entry(str(row["stage_key"]), row["game"] as Dictionary))
+	return out
+
+
+# ポストシーズン試合を、詳細描画系が読める正規化 game へ変換した entry を作る。
+func _build_ps_entry(stage_key: String, game: Dictionary) -> Dictionary:
+	var result: Dictionary = game.get("result", {}) as Dictionary
+	var normalized: Dictionary = {
+		"away_team_id": int(game.get("away_id", 0)),
+		"home_team_id": int(game.get("home_id", 0)),
+		"away_score": int(game.get("away_score", 0)),
+		"home_score": int(game.get("home_score", 0)),
+		"innings": result.get("innings", []) as Array,
+		"result": result,
+		"played": true,
+		"ps_label": "%s 第%d戦" % [_ps_stage_short(stage_key), int(game.get("game_num", 0))],
+	}
+	return {
+		"stage_key": stage_key,
+		"game_num": int(game.get("game_num", 0)),
+		"game": normalized,
+		"result": result,
+	}
+
+
+func _ps_stage_short(stage_key: String) -> String:
+	match stage_key:
+		"cs1_central": return "CS1 第1L"
+		"cs1_pacific": return "CS1 第2L"
+		"cs2_central": return "CSF 第1L"
+		"cs2_pacific": return "CSF 第2L"
+		"japan_series": return "日本S"
+	return stage_key
 
 
 func _collect_team_games(team_id: int) -> Array:
@@ -799,6 +871,12 @@ func _build_months(games: Array) -> Array:
 func _month_games() -> Array:
 	if _months.is_empty():
 		return []
+	if _selected_is_ps():
+		var ps_out: Array = []
+		for i in range(_ps_games_for_view.size()):
+			var e: Dictionary = _ps_games_for_view[i] as Dictionary
+			ps_out.append({"index": i, "game": e["game"], "day": i})
+		return ps_out
 	var key: String = str((_months[_sel_month] as Dictionary)["key"])
 	var season: PSSeason = AppState.current_season
 	var out: Array = []
@@ -823,7 +901,46 @@ func _select_latest_in_month() -> void:
 
 func _select_game(index: int) -> void:
 	_selected_index = index
-	_load_detail()
+	if _selected_is_ps():
+		_load_ps_detail(index)
+	else:
+		_load_detail()
+
+
+func _load_ps_detail(index: int) -> void:
+	var season: PSSeason = AppState.current_season
+	if season == null or index < 0 or index >= _ps_games_for_view.size():
+		_clear_selection()
+		return
+	var entry: Dictionary = _ps_games_for_view[index] as Dictionary
+	_cur_game = entry["game"] as Dictionary
+	_cur_log = _ps_game_log(season, str(entry["stage_key"]), int(entry["game_num"]), entry["result"] as Dictionary)
+	_box_home = int(_cur_game.get("home_team_id", 0)) == _view_team_id
+	_box_data = BoxScoreBuilder.build(_cur_log, int(_cur_game.get("home_team_id" if _box_home else "away_team_id", 0)), season)
+	_pitching = BoxScoreBuilder.build_pitching(_cur_log, season)
+	_records = BoxScoreBuilder.build_records(_cur_log, season)
+	_subs = _cur_log.get("substitutions", []) as Array
+	_compute_line_aux()
+
+
+# メモリ上の完全結果 (今セッション分) を優先、無ければポストシーズンログファイルから読む。
+func _ps_game_log(season: PSSeason, stage_key: String, game_num: int, result: Dictionary) -> Dictionary:
+	var play_events: Array = result.get("play_events", []) as Array
+	if not play_events.is_empty():
+		return {
+			"pa_log": GameLogService.build_pa_log(result, season),
+			"substitutions": result.get("substitutions", []) as Array,
+			"lineups": result.get("lineups", {}) as Dictionary,
+			"pitcher_outings": result.get("pitcher_outings", []) as Array,
+			"errors": GameLogService.build_error_log(result),
+			"decisions": {
+				"winning_pitcher_id": int(result.get("winning_pitcher_id", 0)),
+				"losing_pitcher_id": int(result.get("losing_pitcher_id", 0)),
+				"save_pitcher_id": int(result.get("save_pitcher_id", 0)),
+				"hold_pitcher_ids": result.get("hold_pitcher_ids", []) as Array,
+			},
+		}
+	return GameLogService.read_postseason_game_log(season, stage_key, game_num)
 
 
 func _clear_selection() -> void:

@@ -24,6 +24,12 @@ static func _game_path(season: PSSeason, game_index: int) -> String:
 	return "%s/g%d.json" % [_season_dir(season), game_index]
 
 
+# ポストシーズン試合は season.schedule に乗らないため、ステージ + 試合番号で別ファイルにする。
+#   <save_folder>/game_logs/<year>_s<season>/post_<stage_key>_<game_num>.json
+static func _postseason_path(season: PSSeason, stage_key: String, game_num: int) -> String:
+	return "%s/post_%s_%d.json" % [_season_dir(season), stage_key, game_num]
+
+
 # result(メモリ上の完全結果)から永続化用の compact なログ Dictionary を作る。
 static func build_game_log(result: Dictionary, season: PSSeason = null) -> Dictionary:
 	return {
@@ -164,6 +170,37 @@ static func write_pending_game_logs(season: PSSeason) -> void:
 
 static func _has_detailed_payload(result: Dictionary) -> bool:
 	return result.has("play_events") or result.has("substitutions") or result.has("lineups")
+
+
+static func write_postseason_game_log(season: PSSeason, stage_key: String, game_num: int, result: Dictionary) -> void:
+	if not enabled or season == null:
+		return
+	if log_root().is_empty():
+		return
+	DirAccess.make_dir_recursive_absolute(_season_dir(season))
+	var file: FileAccess = FileAccess.open(_postseason_path(season, stage_key, game_num), FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(build_game_log(result, season)))
+	file.close()
+
+
+# 試合結果画面のポストシーズンタブ用。無ければ空 Dictionary。
+static func read_postseason_game_log(season: PSSeason, stage_key: String, game_num: int) -> Dictionary:
+	if season == null or log_root().is_empty():
+		return {}
+	var path: String = _postseason_path(season, stage_key, game_num)
+	if not FileAccess.file_exists(path):
+		return {}
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var text: String = file.get_as_text()
+	file.close()
+	var parsed: Variant = JSON.parse_string(text)
+	if parsed is Dictionary:
+		return parsed as Dictionary
+	return {}
 
 
 # 画面の遅延読込用。無ければ空 Dictionary。

@@ -315,8 +315,19 @@ func start_postseason() -> Dictionary:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
 	postseason_active = true
 	_save_if_enabled()
-	request_screen("postseason")
+	# ポストシーズン中はホーム画面をポストシーズン用ダッシュボードへ差し替える (main.gd でルーティング)。
+	request_screen("home")
 	return {"ok": true}
+
+
+# 1日進める: 進行中ステージグループ(第1/第2リーグ)の試合を同時に1試合ずつ消化する。
+func advance_postseason_day() -> Dictionary:
+	if current_season == null or current_postseason == null:
+		return {"ok": false, "message": "ポストシーズンが開始されていません"}
+	var result: Dictionary = PostseasonService.advance_one_day(current_postseason, current_season)
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
 
 
 func advance_postseason_stage(stage_key: String) -> Dictionary:

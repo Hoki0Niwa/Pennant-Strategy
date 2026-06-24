@@ -66,6 +66,7 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"history": true,
 	"team_detail": true,
 	"player_detail": true,
+	"postseason": true,
 }
 
 var sidebar: VBoxContainer
@@ -152,11 +153,17 @@ func _show_screen(screen_name: String) -> void:
 	if DEVELOPER_SCREEN_NAMES.has(screen_name) and not DeveloperTools.enabled():
 		screen_name = "home" if AppState.current_season != null else "start"
 
+	# ポストシーズン中はホーム画面をポストシーズン用ダッシュボードへ差し替える。
+	# current_screen("home") はそのまま = サイドバーの「ホーム」がハイライトされる。
+	var effective_screen: String = screen_name
+	if screen_name == "home" and AppState.postseason_active and AppState.current_postseason != null:
+		effective_screen = "postseason"
+
 	for child in content.get_children():
 		content.remove_child(child)
 		child.queue_free()
 
-	var full_bleed: bool = FULL_BLEED_SCREENS.has(screen_name)
+	var full_bleed: bool = FULL_BLEED_SCREENS.has(effective_screen)
 	if sidebar != null:
 		sidebar.visible = screen_name != "start" and not full_bleed and (screen_name != "options" or AppState.current_season != null)
 		for screen_key in sidebar_buttons.keys():
@@ -170,7 +177,7 @@ func _show_screen(screen_name: String) -> void:
 		content.add_theme_constant_override("margin_right", margin_x)
 		content.add_theme_constant_override("margin_bottom", margin_y)
 
-	var screen_path: String = str(SCREEN_SCRIPT_PATHS.get(screen_name, START_SCREEN_PATH))
+	var screen_path: String = str(SCREEN_SCRIPT_PATHS.get(effective_screen, START_SCREEN_PATH))
 	var screen: Control = _instantiate_screen(screen_path)
 
 	screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL

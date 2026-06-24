@@ -32,7 +32,10 @@ static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonR
 	if pacific_ranked.size() >= 1:
 		var p1: PSTeam = pacific_ranked[0] as PSTeam
 		result.cs2_pacific = PSPostseasonResult.make_pending_series(p1.id, 0, CS2_WIN_TARGET, CS2_ADVANTAGE)
-	result.japan_series = PSPostseasonResult.make_pending_series(0, 0, JS_WIN_TARGET, 0)
+	var japan_series: Dictionary = PSPostseasonResult.make_pending_series(0, 0, JS_WIN_TARGET, 0)
+	# 日本シリーズは規定試合数で打ち切らず、決着するまで延長戦を行う (引き分けでの上位勝ち抜けはしない)。
+	japan_series["extension"] = true
+	result.japan_series = japan_series
 	return result
 
 
@@ -79,6 +82,159 @@ static func is_complete(postseason: PSPostseasonResult) -> bool:
 	if postseason == null:
 		return false
 	return postseason.is_complete()
+
+
+# ============================================================ 日単位消化 (game-by-game)
+#
+# ホーム画面を踏襲した運用 UI 向けに、シリーズ一括ではなく「1日 = 進行中グループの全シリーズを
+# 1 試合ずつ」消化する。CS ファースト(第1/第2リーグ) → CS ファイナル → 日本シリーズ の順に
+# グループが進み、各グループ内の 2 シリーズは並行して 1 日 1 試合ずつ消化される。
+
+# 進行中グループ(まだ完了していない最初のグループ)の index。全消化済みなら STAGE_GROUPS.size()。
+static func active_group_index(postseason: PSPostseasonResult) -> int:
+	if postseason == null:
+		return 0
+	var groups: Array = PSPostseasonResult.STAGE_GROUPS
+	for gi in range(groups.size()):
+		for key in (groups[gi] as Array):
+			var s: Dictionary = postseason.stage_dict(str(key))
+			if s.is_empty():
+				continue
+			if not bool(s.get("completed", false)):
+				return gi
+	return groups.size()
+
+
+# 進行中グループのステージキー配列 (空 = 全消化済み)。
+static func active_group_keys(postseason: PSPostseasonResult) -> Array:
+	var gi: int = active_group_index(postseason)
+	var groups: Array = PSPostseasonResult.STAGE_GROUPS
+	if gi >= groups.size():
+		return []
+	return (groups[gi] as Array).duplicate()
+
+
+# 1日進める: 進行中グループの未完了シリーズを 1 試合ずつ消化する。
+static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason) -> Dictionary:
+	if postseason == null or season == null:
+		return {"ok": false, "message": "ポストシーズンが開始されていません"}
+	var keys: Array = active_group_keys(postseason)
+	if keys.is_empty():
+		return {"ok": false, "completed": true, "message": "ポストシーズンは終了しています"}
+	postseason.current_day += 1
+	var played: Array = []
+	for key_value in keys:
+		var stage_key: String = str(key_value)
+		var s: Dictionary = postseason.stage_dict(stage_key)
+		if s.is_empty() or bool(s.get("completed", false)):
+			continue
+		if not _ensure_series_ready(postseason, stage_key, s):
+			continue
+		var r: Dictionary = play_series_game(season, s, postseason.current_day)
+		postseason.set_stage(stage_key, s)
+		if bool(r.get("ok", false)):
+			var game_entry: Dictionary = r.get("game", {}) as Dictionary
+			_write_postseason_game_log(season, stage_key, game_entry)
+			played.append({"stage": stage_key, "game": game_entry})
+		if stage_key == "japan_series" and bool(s.get("completed", false)):
+			postseason.champion_team_id = int(s.get("winner_id", 0))
+	return {
+		"ok": true,
+		"completed": is_complete(postseason),
+		"day": postseason.current_day,
+		"played": played,
+	}
+
+
+# CS2 / 日本シリーズの対戦カードを前段の勝者で充填する。両者が確定したら true。
+static func _ensure_series_ready(postseason: PSPostseasonResult, stage_key: String, s: Dictionary) -> bool:
+	match stage_key:
+		"cs2_central":
+			if int(s.get("challenger_id", 0)) == 0:
+				s["challenger_id"] = int(postseason.cs1_central.get("winner_id", 0))
+		"cs2_pacific":
+			if int(s.get("challenger_id", 0)) == 0:
+				s["challenger_id"] = int(postseason.cs1_pacific.get("winner_id", 0))
+		"japan_series":
+			# パ代表をホーム扱い (慣例的に交互だがここは固定)。
+			if int(s.get("top_id", 0)) == 0:
+				s["top_id"] = int(postseason.cs2_pacific.get("winner_id", 0))
+			if int(s.get("challenger_id", 0)) == 0:
+				s["challenger_id"] = int(postseason.cs2_central.get("winner_id", 0))
+	return int(s.get("top_id", 0)) > 0 and int(s.get("challenger_id", 0)) > 0
+
+
+# シリーズで 1 試合だけ消化し、結果を series へ反映する。series は in-place で更新される。
+static func play_series_game(season: PSSeason, series: Dictionary, day: int) -> Dictionary:
+	var top_id: int = int(series.get("top_id", 0))
+	var challenger_id: int = int(series.get("challenger_id", 0))
+	if top_id <= 0 or challenger_id <= 0:
+		return {"ok": false, "message": "対戦カードが未確定です"}
+	var win_target: int = int(series.get("win_target", 4))
+	var advantage: int = int(series.get("advantage_wins", 0))
+	var top_wins: int = int(series.get("top_wins", advantage))
+	var challenger_wins: int = int(series.get("challenger_wins", 0))
+	var games: Array = series.get("games", []) as Array
+	# 規定試合数 = 必要試合数。引き分けが絡んで先勝に届かなくても、ここで打ち切る。
+	#   CSファースト: 2*2-0-1=3 / CSファイナル: 2*4-1-1=6。
+	# 日本シリーズ (extension=true) は打ち切らず決着まで延長戦。MAX_SAFETY_GAMES は無限ループ防止の保険。
+	var max_games: int = MAX_SAFETY_GAMES if bool(series.get("extension", false)) else (2 * win_target - advantage - 1)
+	if top_wins >= win_target or challenger_wins >= win_target or games.size() >= max_games:
+		_finalize_series(series, top_id, challenger_id, top_wins, challenger_wins)
+		return {"ok": false, "completed": true}
+	var postseason_stats: Dictionary = _normalized_postseason_stats(series.get("postseason_stats", {}) as Dictionary)
+	var game_num: int = games.size() + 1
+	# 2-3-2 風の単純な交替 (top=ホームを多めに)。
+	var home_is_top: bool = (game_num <= 2 or game_num >= 6)
+	var home_id: int = top_id if home_is_top else challenger_id
+	var away_id: int = challenger_id if home_is_top else top_id
+
+	var outcome: Dictionary = _simulate_one_postseason_game(season, away_id, home_id, postseason_stats)
+	var winner_id: int = int(outcome.get("winning_team_id", 0))
+	var is_draw: bool = bool(outcome.get("draw", false))
+	if not is_draw:
+		if winner_id == top_id:
+			top_wins += 1
+		elif winner_id == challenger_id:
+			challenger_wins += 1
+
+	var game_entry: Dictionary = {
+		"game_num": game_num,
+		"day": day,
+		"away_id": away_id,
+		"home_id": home_id,
+		"away_score": int(outcome.get("away_score", 0)),
+		"home_score": int(outcome.get("home_score", 0)),
+		"winner_id": winner_id,
+		"draw": is_draw,
+		"result": outcome,
+	}
+	games.append(game_entry)
+	series["games"] = games
+	series["top_wins"] = top_wins
+	series["challenger_wins"] = challenger_wins
+	series["postseason_stats"] = postseason_stats
+
+	var completed: bool = top_wins >= win_target or challenger_wins >= win_target or games.size() >= max_games
+	if completed:
+		_finalize_series(series, top_id, challenger_id, top_wins, challenger_wins)
+	return {"ok": true, "completed": completed, "game": game_entry}
+
+
+# シリーズを完了扱いにし、勝者を確定する。先勝に届いていないイーブン時 (引き分けで規定試合数に到達)は
+# 勝ち星の多い方、同数なら上位 (top = ペナント上位/1位) が勝ち抜ける。
+static func _finalize_series(series: Dictionary, top_id: int, challenger_id: int, top_wins: int, challenger_wins: int) -> void:
+	series["completed"] = true
+	series["winner_id"] = top_id if top_wins >= challenger_wins else challenger_id
+	series["top_wins_final"] = top_wins
+	series["challenger_wins_final"] = challenger_wins
+
+
+static func _write_postseason_game_log(season: PSSeason, stage_key: String, game_entry: Dictionary) -> void:
+	var result: Dictionary = game_entry.get("result", {}) as Dictionary
+	if result.is_empty():
+		return
+	PSGameLogService.write_postseason_game_log(season, stage_key, int(game_entry.get("game_num", 0)), result)
 
 
 static func _league_standings(season: PSSeason, teams: Array) -> Dictionary:

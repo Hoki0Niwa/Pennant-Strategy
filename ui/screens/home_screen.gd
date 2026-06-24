@@ -698,7 +698,8 @@ func _on_offseason_pressed() -> void:
 			if not bool(fin.get("ok", false)):
 				_status_text = str(fin.get("message", ""))
 		else:
-			AppState.request_screen("postseason")
+			# ポストシーズン中はホームがポストシーズン用ダッシュボードへ差し替わる (main.gd)。
+			AppState.request_screen("home")
 		return
 	if not season.is_finished():
 		_status_text = "シーズン完了後にオフシーズンを開始できます(残り%d試合)" % season.games_remaining()

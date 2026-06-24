@@ -410,3 +410,94 @@ func test_offseason_view_state_exposes_ui_phase() -> void:
 	AppState.offseason_active = old_active
 	AppState.offseason_step = old_step
 	AppState.draft_state = old_draft_state
+
+
+# ポストシーズン: 引き分けで規定試合数に達しイーブンなら、追加試合なしで上位 (top) が勝ち抜ける。
+# games.size() >= 規定試合数のシリーズは play_series_game がシミュ前に確定するため season は不要。
+func test_postseason_tie_break_advances_higher_seed() -> void:
+	var dummy_games: Array = [{"game_num": 1}, {"game_num": 2}, {"game_num": 3}]
+	# CSファースト相当 (win_target=2, advantage=0 → 規定3試合)。1-1 のイーブン → 上位が勝ち抜け。
+	var even_series: Dictionary = {
+		"top_id": 10, "challenger_id": 20, "win_target": 2, "advantage_wins": 0,
+		"games": dummy_games.duplicate(true), "top_wins": 1, "challenger_wins": 1, "completed": false,
+	}
+	var r1: Dictionary = PostseasonService.play_series_game(null, even_series, 1)
+	assert_bool(bool(r1.get("completed", false))).is_true()
+	assert_bool(bool(even_series.get("completed", false))).is_true()
+	assert_int(int(even_series.get("winner_id", 0))).is_equal(10)
+
+	# 挑戦者が勝ち越していれば挑戦者が勝ち抜け。
+	var chal_series: Dictionary = {
+		"top_id": 10, "challenger_id": 20, "win_target": 2, "advantage_wins": 0,
+		"games": dummy_games.duplicate(true), "top_wins": 0, "challenger_wins": 1, "completed": false,
+	}
+	PostseasonService.play_series_game(null, chal_series, 1)
+	assert_int(int(chal_series.get("winner_id", 0))).is_equal(20)
+
+
+# ポストシーズン: 日単位消化 (第1/第2リーグ同時) → 完了 → ダッシュボード生成 → 試合結果タブ収集。
+func test_postseason_day_advance_and_dashboard() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_post: PSPostseasonResult = AppState.current_postseason
+	var old_post_active: bool = AppState.postseason_active
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	AppState.current_postseason = PostseasonService.build_initial_state(AppState.current_season, GameDb.teams)
+	AppState.postseason_active = true
+	AppState.current_screen = "home"
+
+	# 1日進める = CS1 第1/第2リーグが同時に1試合ずつ消化される。
+	var day_result: Dictionary = AppState.advance_postseason_day()
+	assert_bool(bool(day_result.get("ok", false))).is_true()
+	assert_int(AppState.current_postseason.current_day).is_equal(1)
+	assert_int((AppState.current_postseason.cs1_central.get("games", []) as Array).size()).is_equal(1)
+	assert_int((AppState.current_postseason.cs1_pacific.get("games", []) as Array).size()).is_equal(1)
+
+	# ポストシーズン用ダッシュボードがブラケット込みで生成される。
+	var ps_script: GDScript = load("res://ui/screens/postseason_screen.gd") as GDScript
+	var ps_screen: Control = ps_script.new()
+	add_child(ps_screen)
+	await get_tree().process_frame
+	assert_int(ps_screen.get_child_count()).is_greater(0)
+	ps_screen.queue_free()
+
+	# 残りを全消化 → 日本一が確定する。
+	var guard: int = 400
+	while guard > 0 and not PostseasonService.is_complete(AppState.current_postseason):
+		guard -= 1
+		var step: Dictionary = AppState.advance_postseason_day()
+		if not bool(step.get("ok", false)):
+			break
+	assert_bool(PostseasonService.is_complete(AppState.current_postseason)).is_true()
+	assert_int(AppState.current_postseason.champion_team_id).is_greater(0)
+
+	# 試合結果画面: 日本一チーム視点でポストシーズン試合が収集される。
+	AppState.select_team(AppState.current_postseason.champion_team_id)
+	AppState.current_screen = "game_results"
+	var gr_script: GDScript = load("res://ui/screens/game_result_screen.gd") as GDScript
+	var gr_screen: Control = gr_script.new()
+	add_child(gr_screen)
+	await get_tree().process_frame
+	assert_int((gr_screen._ps_games_for_view as Array).size()).is_greater(0)
+	gr_screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.current_postseason = old_post
+	AppState.postseason_active = old_post_active
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
