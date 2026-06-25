@@ -68,6 +68,7 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"player_detail": true,
 	"postseason": true,
 	"awards": true,
+	"offseason": true,
 }
 
 var sidebar: VBoxContainer
@@ -156,8 +157,12 @@ func _show_screen(screen_name: String) -> void:
 
 	# ポストシーズン中はホーム画面をポストシーズン用ダッシュボードへ差し替える。
 	# current_screen("home") はそのまま = サイドバーの「ホーム」がハイライトされる。
+	# オフシーズン/ポストシーズン中はホーム画面をそれぞれのダッシュボードへ差し替える。
+	# current_screen("home") はそのまま = サイドバーの「ホーム」がハイライトされる。
 	var effective_screen: String = screen_name
-	if screen_name == "home" and AppState.postseason_active and AppState.current_postseason != null:
+	if screen_name == "home" and AppState.offseason_active:
+		effective_screen = "offseason"
+	elif screen_name == "home" and AppState.postseason_active and AppState.current_postseason != null:
 		effective_screen = "postseason"
 
 	for child in content.get_children():

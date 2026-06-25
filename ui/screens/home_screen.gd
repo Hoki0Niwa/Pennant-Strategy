@@ -690,7 +690,7 @@ func _on_offseason_pressed() -> void:
 			if not AppState.finalize_offseason():
 				_status_text = "翌年開始に失敗しました"
 		else:
-			AppState.request_screen("offseason")
+			AppState.request_screen("home")
 		return
 	if AppState.postseason_active:
 		if AppState.current_postseason != null and PostseasonService.is_complete(AppState.current_postseason):

@@ -48,7 +48,7 @@ func _draw() -> void:
 		Vector2(0, MENU_TOP + card_h + 38), 14, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 	# フッタ + ステータス
-	_text("Ver 1.0.0", Vector2(28, BASE.y - 28), 13, FAINT)
+	_text(APP_VERSION, Vector2(28, BASE.y - 28), 13, FAINT)
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(0, BASE.y - 26), 14, AMBER, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 

@@ -114,78 +114,9 @@ func _draw() -> void:
 
 # ============================================================ 順位表 (順位表画面から流用)
 
+# 描画本体は基底 _draw_data_table に集約 (2026-06-24)。
 func _draw_table(rect: Rect2, title: String, columns: Array, rows: Array) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text(title, Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-
-	var inner_x: float = rect.position.x + 12.0
-	var usable: float = rect.size.x - 24.0
-	var sum_w: float = 0.0
-	for col_value in columns:
-		sum_w += float((col_value as Dictionary)["w"])
-	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
-
-	var hy: float = rect.position.y + 60.0
-	var cx: float = inner_x
-	for col_value in columns:
-		var col: Dictionary = col_value as Dictionary
-		var w: float = float(col["w"]) * factor
-		if str(col["align"]) == "l":
-			_text(str(col["title"]), Vector2(cx + 4.0, hy), 11, FAINT, w - 6.0)
-		else:
-			_text_right(str(col["title"]), cx + w - 4.0, hy, 11, FAINT, w - 6.0)
-		cx += w
-	_line(Vector2(inner_x, rect.position.y + 68.0), Vector2(rect.end.x - 12.0, rect.position.y + 68.0), BORDER_SOFT, 1.0)
-
-	if rows.is_empty():
-		_text("記録がありません", Vector2(rect.position.x + 24, rect.position.y + rect.size.y * 0.55), 14, MUTED)
-		return
-	var row_top: float = rect.position.y + 74.0
-	var row_h: float = (rect.end.y - row_top - 8.0) / float(rows.size())
-	for i in range(rows.size()):
-		_draw_table_row(rect, inner_x, factor, columns, rows[i] as Dictionary, row_top + float(i) * row_h, row_h)
-
-
-func _draw_table_row(rect: Rect2, inner_x: float, factor: float, columns: Array, row: Dictionary, ry: float, row_h: float) -> void:
-	var is_self: bool = bool(row.get("is_self", false))
-	var is_leader: bool = bool(row.get("is_leader", false))
-	if is_self:
-		_round(Rect2(rect.position.x + 8.0, ry + 1.0, rect.size.x - 16.0, row_h - 2.0),
-			Color(BLUE.r, BLUE.g, BLUE.b, 0.12), Color.TRANSPARENT, 6, 0)
-	var base_color: Color = BLUE if is_self else TEXT
-	var ty: float = ry + row_h * 0.5 + 5.0
-	var cx: float = inner_x
-	for col_value in columns:
-		var col: Dictionary = col_value as Dictionary
-		var key: String = str(col["key"])
-		var fmt: String = str(col["fmt"])
-		var w: float = float(col["w"]) * factor
-		match fmt:
-			"rank":
-				var rc: Color = AMBER if is_leader else base_color
-				_text(str(row.get("rank", "")), Vector2(cx + 4.0, ty), 13, rc, w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_leader)
-			"team":
-				_dot(Vector2(cx + 9.0, ry + row_h * 0.5), 5.0, row.get("color", MUTED) as Color)
-				_text(str(row.get("team", "")), Vector2(cx + 20.0, ty), 13, base_color, w - 24.0)
-			"diff":
-				var dv: int = int(row.get(key, 0))
-				var dcol: Color = GREEN if dv > 0 else (RED if dv < 0 else MUTED)
-				_text_right(("+%d" % dv) if dv > 0 else str(dv), cx + w - 6.0, ty, 13, dcol, w - 8.0)
-			_:
-				_text_right(_fmt_cell(fmt, row.get(key, 0)), cx + w - 6.0, ty, 13, base_color, w - 8.0)
-		cx += w
-
-
-func _fmt_cell(fmt: String, value: Variant) -> String:
-	match fmt:
-		"int":
-			return str(int(value))
-		"rate":
-			return _rate_short(float(value))
-		"gb":
-			return "-" if float(value) <= 0.0 else _float1(float(value))
-		_:
-			return str(value)
+	_draw_data_table(rect, columns, rows, {"title": title, "empty_text": "記録がありません"})
 
 
 # ============================================================ ポストシーズン

@@ -9,9 +9,9 @@ class_name PSFatigueCalculator
 # --- 調整係数（旧 simulation_tuning.tres から移設。先発の粘り/疲労落差をここで直接調整する） ---
 const ROLE_BASE_PITCH_LIMIT_STARTER: float = 95.0  # 先発が疲労し始める基準球数。
 const ROLE_BASE_PITCH_LIMIT_RELIEVER: float = 30.0 # 救援が疲労し始める基準球数。
-const STAMINA_SCALE: float = 7.0           # スタミナ能力1ポイントあたりの基準球数の伸び。
+const STAMINA_SCALE: float = 7.0           # 持久能力1ポイントあたりの基準球数の伸び。
 const FATIGUE_BASE_WIDTH: float = 15.0     # 疲労カーブの幅(大きいほど緩やかに悪化)。
-const FATIGUE_RESIST_SCALE: float = 4.0    # スタミナ耐性による疲労カーブ幅の伸び。
+const FATIGUE_RESIST_SCALE: float = 4.0    # 持久耐性による疲労カーブ幅の伸び。
 const FATIGUE_K_DROP: float = 0.6          # 疲労で奪三振力が落ちる量。
 const FATIGUE_CONTROL_DROP: float = 0.4    # 疲労で制球が落ちる量(四球増)。
 const FATIGUE_IMPACT_DROP: float = 0.5     # 疲労で打球を抑える力が落ちる量(被安打増)。

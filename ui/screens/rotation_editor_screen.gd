@@ -304,8 +304,8 @@ func _draw_pitcher_row(record: PSPlayerSeasonRecord, y: float, rotation_set: Dic
 	_draw_rating(PlayerVisibleRatings.pitcher_control(record), C_CTRL_R, y)
 	_draw_rating(PlayerVisibleRatings.pitcher_stamina(record), C_STAM_R, y)
 
-	_text_right(str(ps.games), C_G_R, y, 13, MUTED)
-	_text_right(str(ps.wins), C_W_R, y, 13, TEXT)
+	_text_right(str(ps.games), C_G_R, y, 13, TEXT)
+	_text_right(str(ps.wins), C_W_R, y, 13, MUTED)
 	_text_right(str(ps.losses), C_L_R, y, 13, MUTED)
 	_text_right(str(ps.saves), C_SV_R, y, 13, MUTED)
 	_text_right(str(ps.holds), C_HLD_R, y, 13, MUTED)

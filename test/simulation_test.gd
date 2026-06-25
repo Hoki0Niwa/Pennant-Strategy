@@ -257,7 +257,7 @@ func test_saved_relief_roles_are_kept_in_reliever_pool() -> void:
 
 
 func test_is_starter_pitcher_honors_stored_role_over_ability() -> void:
-	# 先発寄りの能力 (高スタミナ) を持つ投手。
+	# 先発寄りの能力 (高持久) を持つ投手。
 	var p: PSPlayerSeasonRecord = _pitcher(401, "Swing", 0.5)
 	p.z_abilities_snapshot["Pit_Stamina"] = 2.0
 	p.z_abilities_snapshot["Pit_FatigueResist"] = 1.5
@@ -274,7 +274,7 @@ func test_is_starter_pitcher_honors_stored_role_over_ability() -> void:
 	p.role = "closer"
 	assert_bool(p.is_starter_pitcher()).is_false()
 
-	# role 未設定 ("") のときだけ能力で初期判定 (高スタミナなので先発)。
+	# role 未設定 ("") のときだけ能力で初期判定 (高持久なので先発)。
 	p.role = ""
 	assert_bool(p.is_starter_pitcher()).is_true()
 

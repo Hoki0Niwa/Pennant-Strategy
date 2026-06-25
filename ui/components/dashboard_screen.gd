@@ -14,6 +14,7 @@ const DeveloperTools = preload("res://services/development/developer_tools.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const BASE: Vector2 = Vector2(1920, 1080)
+const APP_VERSION: String = "v0.1.0"
 
 # --- パレット ---
 const BG: Color = Color(0.047, 0.056, 0.068)
@@ -138,7 +139,7 @@ func _draw_sidebar() -> void:
 			_round(Rect2(rect.position.x, rect.position.y + 6, 3, rect.size.y - 12), BLUE, Color.TRANSPARENT, 2, 0)
 		_icon(str(item.get("icon", "")), Rect2(rect.position.x + 14, rect.position.y + 9, 20, 20), TEXT if active else MUTED)
 
-	_text("Ver 1.0.0", Vector2(22, BASE.y - 24), 12, FAINT)
+	_text(APP_VERSION, Vector2(22, BASE.y - 24), 12, FAINT)
 
 
 func _draw_header(title: String, team: PSTeam, season: PSSeason) -> void:
@@ -526,6 +527,319 @@ func _draw_baseball_stitches(arc_center: Vector2, arc_radius: float, angles_degr
 		var dir: Vector2 = Vector2(cos(angle), sin(angle))
 		var p: Vector2 = arc_center + dir * arc_radius
 		draw_line(p - dir * half_len, p + dir * half_len, color, stroke, true)
+
+
+# ============================================================ shared data table
+
+# 共通テーブル描画 (2026-06-24)。各画面に重複していた _draw_table / _draw_table_row / _fmt_cell を集約。
+# 列 columns: 幅 = w / 整列 = align ("l"|"left"/"c"|"center"/"r"|"right", 無指定は default_align) / 書式 = fmt。
+# 行 rows は key->値の Dictionary。特殊キー: __meta(選択/当たり判定) / __color(行文字色) /
+# is_self / is_leader / is_total (強調)。
+# opts (すべて任意):
+#   panel:bool(=true) パネル背景を描く / title:String 見出し / right_label:String 右肩ラベル
+#   title_size(=17) title_pad(=18) title_y(=32) title_width(=-1)
+#   header_top(=60 見出し行の rect 上端からの y) header_size(=11) cell_size(=13)
+#   inner_pad(=12) bottom_pad(=8) default_align("left"|"right", =推論) empty_text:String
+#   row_h(=0 → 行数で均等ストレッチ) row_h_max(=0 → ストレッチ上限なし) alt_rows:bool(=false 奇数行の薄い縞)
+#   scroll_key:String + scroll:Dictionary + scroll_zones:Array (固定行高 row_h>0 のときホイールスクロール)
+#   sel_kind:String + selected_id:int + hits:Array (__meta 行を選択可能にし hits へ当たり判定を push)
+func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary = {}) -> void:
+	if bool(opts.get("panel", true)):
+		_round(rect, PANEL, BORDER, 10)
+	var title: String = str(opts.get("title", ""))
+	if not title.is_empty():
+		_text(title, Vector2(rect.position.x + float(opts.get("title_pad", 18.0)), rect.position.y + float(opts.get("title_y", 32.0))),
+			int(opts.get("title_size", 17)), TEXT, float(opts.get("title_width", -1.0)), HORIZONTAL_ALIGNMENT_LEFT, true)
+	var right_label: String = str(opts.get("right_label", ""))
+	if not right_label.is_empty():
+		_text_right(right_label, rect.end.x - 18.0, rect.position.y + 30.0, 12, MUTED, 200.0)
+
+	var default_align: String = str(opts.get("default_align", ""))
+	var inner_pad: float = float(opts.get("inner_pad", 12.0))
+	var inner_x: float = rect.position.x + inner_pad
+	var usable: float = rect.size.x - inner_pad * 2.0
+	var sum_w: float = 0.0
+	for col_value in columns:
+		sum_w += _col_width(col_value as Dictionary)
+	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
+
+	var header_size: int = int(opts.get("header_size", 11))
+	var hy: float = rect.position.y + float(opts.get("header_top", 60.0))
+	var cx: float = inner_x
+	for col_value in columns:
+		var col: Dictionary = col_value as Dictionary
+		var w: float = _col_width(col) * factor
+		var content_w: float = _col_content_width(col, w, factor)
+		var header_delta_w: float = _growth_delta_width(col, factor)
+		var header_w: float = max(8.0, content_w - header_delta_w) if header_delta_w > 0.0 else content_w
+		match _col_align(col, default_align):
+			HORIZONTAL_ALIGNMENT_LEFT:
+				_text(str(col.get("title", "")), Vector2(cx + 4.0, hy), header_size, FAINT, header_w - 6.0)
+			HORIZONTAL_ALIGNMENT_CENTER:
+				_text(str(col.get("title", "")), Vector2(cx + 2.0, hy), header_size, FAINT, header_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
+			_:
+				_text_right(str(col.get("title", "")), cx + header_w - 4.0, hy, header_size, FAINT, header_w - 6.0)
+		cx += w
+	var line_y: float = hy + 8.0
+	_line(Vector2(inner_x, line_y), Vector2(rect.end.x - inner_pad, line_y), BORDER_SOFT, 1.0)
+
+	if rows.is_empty():
+		var empty_text: String = str(opts.get("empty_text", ""))
+		if not empty_text.is_empty():
+			_text(empty_text, Vector2(inner_x + 6.0, rect.position.y + rect.size.y * 0.55), 14, MUTED)
+		return
+
+	var row_top: float = line_y + 6.0
+	var area_h: float = rect.end.y - row_top - float(opts.get("bottom_pad", 8.0))
+	var row_h: float = float(opts.get("row_h", 0.0))
+	var scroll_key: String = str(opts.get("scroll_key", ""))
+	var offset: int = 0
+	var visible: int = rows.size()
+	if row_h > 0.0:
+		visible = max(1, int(area_h / row_h))
+		if not scroll_key.is_empty():
+			var scroll: Dictionary = opts.get("scroll", {}) as Dictionary
+			var max_off: int = max(0, rows.size() - visible)
+			offset = clampi(int(scroll.get(scroll_key, 0)), 0, max_off)
+			scroll[scroll_key] = offset
+			if max_off > 0:
+				(opts.get("scroll_zones", []) as Array).append({"rect": rect, "key": scroll_key, "max": max_off})
+	else:
+		row_h = area_h / float(rows.size())
+		var row_h_max: float = float(opts.get("row_h_max", 0.0))
+		if row_h_max > 0.0:
+			row_h = min(row_h_max, row_h)
+
+	var sel_kind: String = str(opts.get("sel_kind", ""))
+	var selected_id: int = int(opts.get("selected_id", 0))
+	var alt_rows: bool = bool(opts.get("alt_rows", false))
+	var cell_size: int = int(opts.get("cell_size", 13))
+	var hits: Array = opts.get("hits", []) as Array
+	for vi in range(visible):
+		var ri: int = offset + vi
+		if ri >= rows.size():
+			break
+		_draw_data_row(rect, inner_x, factor, columns, rows[ri] as Dictionary, row_top + float(vi) * row_h, row_h,
+			default_align, cell_size, sel_kind, selected_id, alt_rows, ri, hits)
+
+	if not scroll_key.is_empty() and rows.size() > visible:
+		_text_right("%d / %d" % [min(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+
+
+func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, row: Dictionary, ry: float, row_h: float, default_align: String, cell_size: int, sel_kind: String, selected_id: int, alt_rows: bool, index: int, hits: Array) -> void:
+	var has_meta: bool = row.has("__meta")
+	var meta: int = int(row.get("__meta", 0)) if has_meta else 0
+	var selectable: bool = not sel_kind.is_empty() and has_meta
+	var is_self: bool = bool(row.get("is_self", false))
+	var is_total: bool = bool(row.get("is_total", false))
+	var is_leader: bool = bool(row.get("is_leader", false))
+	if selectable and selected_id != 0 and meta == selected_id:
+		_round(Rect2(rect.position.x + 8.0, ry + 1.0, rect.size.x - 16.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.16), Color(BLUE.r, BLUE.g, BLUE.b, 0.5), 6, 1)
+	elif is_self:
+		_round(Rect2(rect.position.x + 8.0, ry + 1.0, rect.size.x - 16.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.12), Color.TRANSPARENT, 6, 0)
+	elif is_total:
+		_round(Rect2(rect.position.x + 10.0, ry + 1.0, rect.size.x - 20.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 6, 0)
+	elif alt_rows and index % 2 == 1:
+		_round(Rect2(rect.position.x + 10.0, ry, rect.size.x - 20.0, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
+	var base_color: Color = TEXT
+	if row.has("__color"):
+		base_color = row["__color"] as Color
+	elif is_self or is_total:
+		base_color = BLUE
+	var bold: bool = is_total
+	var ty: float = ry + row_h * 0.5 + 5.0
+	var cx: float = inner_x
+	for col_value in columns:
+		var col: Dictionary = col_value as Dictionary
+		var key: String = str(col.get("key", ""))
+		var w: float = _col_width(col) * factor
+		var content_w: float = _col_content_width(col, w, factor)
+		match _col_format(col):
+			"rank":
+				_text(str(row.get("rank", "")), Vector2(cx + 4.0, ty), cell_size, AMBER if is_leader else base_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_leader)
+			"team":
+				_dot(Vector2(cx + 9.0, ry + row_h * 0.5), 5.0, row.get("color", MUTED) as Color)
+				_text(str(row.get("team", "")), Vector2(cx + 20.0, ty), cell_size, base_color, content_w - 24.0)
+			"pos_badge":
+				# 守備位置/役割を色付きチップで描く。row[key]=表示文字 / row[key+"_color"]=色。
+				var badge_text: String = str(row.get(key, ""))
+				if not badge_text.is_empty():
+					var bw: float = min(content_w - 8.0, 40.0)
+					_chip(Rect2(cx + (content_w - bw) * 0.5, ry + row_h * 0.5 - 11.0, bw, 22.0),
+						badge_text, row.get("%s_color" % key, MUTED) as Color)
+			"diff":
+				var dv: int = int(row.get(key, 0))
+				var dcol: Color = GREEN if dv > 0 else (RED if dv < 0 else MUTED)
+				_text_right(("+%d" % dv) if dv > 0 else str(dv), cx + content_w - 6.0, ty, cell_size, dcol, content_w - 8.0)
+			"delta":
+				if row.has(key):
+					var delta_value: int = int(row.get(key, 0))
+					if delta_value != 0:
+						var delta_col: Color = GREEN if delta_value > 0 else RED
+						_text_right(("+%d" % delta_value) if delta_value > 0 else str(delta_value), cx + content_w - 6.0, ty, cell_size, delta_col, content_w - 8.0)
+			"growth":
+				# 能力の変化セル: row[key] = {after, delta, suffix}。後値は能力段階色、増減値(+N/-N)は緑/赤で色分け。
+				var fixed_delta_w: float = _growth_delta_width(col, factor)
+				var value_w: float = max(8.0, content_w - fixed_delta_w) if fixed_delta_w > 0.0 else content_w
+				var gcell: Dictionary = row.get(key, {}) as Dictionary
+				if gcell.is_empty():
+					match _col_align(col, default_align):
+						HORIZONTAL_ALIGNMENT_LEFT:
+							_text("-", Vector2(cx + 4.0, ty), cell_size, FAINT, value_w - 8.0)
+						HORIZONTAL_ALIGNMENT_CENTER:
+							_text("-", Vector2(cx + 2.0, ty), cell_size, FAINT, value_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
+						_:
+							_text_right("-", cx + value_w - 6.0, ty, cell_size, FAINT, value_w - 8.0)
+					cx += w
+					continue
+				var after_value: int = int(gcell.get("after", 0))
+				var suffix: String = str(gcell.get("suffix", ""))
+				var after_text: String = "%d%s" % [after_value, suffix]
+				var gdelta: int = int(gcell.get("delta", 0))
+				var after_color: Color = _growth_value_color(key, after_value, suffix)
+				var delta_text: String = "(%+d)" % gdelta if gdelta != 0 else ""
+				var compact_delta_text: String = "%+d" % gdelta if gdelta != 0 else ""
+				var gcol: Color = GREEN if gdelta > 0 else RED
+				if fixed_delta_w > 0.0:
+					match _col_align(col, default_align):
+						HORIZONTAL_ALIGNMENT_LEFT:
+							_text(after_text, Vector2(cx + 4.0, ty), cell_size, after_color, value_w - 8.0)
+						HORIZONTAL_ALIGNMENT_CENTER:
+							_text(after_text, Vector2(cx + 2.0, ty), cell_size, after_color, value_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
+						_:
+							_text_right(after_text, cx + value_w - 6.0, ty, cell_size, after_color, value_w - 8.0)
+					if not compact_delta_text.is_empty():
+						_text(compact_delta_text, Vector2(cx + value_w + 2.0, ty), cell_size, gcol, max(0.0, fixed_delta_w - 4.0))
+					cx += w
+					continue
+				match _col_align(col, default_align):
+					HORIZONTAL_ALIGNMENT_LEFT:
+						_text(after_text, Vector2(cx + 4.0, ty), cell_size, after_color, content_w - 8.0)
+						if not delta_text.is_empty():
+							var after_w_left: float = _font.get_string_size(after_text, HORIZONTAL_ALIGNMENT_LEFT, -1, cell_size).x
+							_text(delta_text, Vector2(cx + 8.0 + after_w_left, ty), cell_size, gcol, max(0.0, content_w - 12.0 - after_w_left))
+					HORIZONTAL_ALIGNMENT_CENTER:
+						var joined_text: String = after_text
+						if not delta_text.is_empty():
+							joined_text += " " + delta_text
+						var total_w: float = _font.get_string_size(joined_text, HORIZONTAL_ALIGNMENT_LEFT, -1, cell_size).x
+						var start_x: float = cx + max(2.0, (content_w - total_w) * 0.5)
+						_text(after_text, Vector2(start_x, ty), cell_size, after_color, content_w)
+						if not delta_text.is_empty():
+							var after_w_center: float = _font.get_string_size(after_text, HORIZONTAL_ALIGNMENT_LEFT, -1, cell_size).x
+							_text(delta_text, Vector2(start_x + after_w_center + 4.0, ty), cell_size, gcol, content_w)
+					_:
+						if delta_text.is_empty():
+							_text_right(after_text, cx + content_w - 6.0, ty, cell_size, after_color, content_w - 8.0)
+						else:
+							var dw: float = _font.get_string_size(delta_text, HORIZONTAL_ALIGNMENT_LEFT, -1, cell_size).x
+							_text_right(delta_text, cx + content_w - 6.0, ty, cell_size, gcol, dw + 4.0)
+							_text_right(after_text, cx + content_w - 6.0 - dw - 3.0, ty, cell_size, after_color, content_w - 10.0 - dw)
+			_:
+				var text: String = _fmt_cell(_col_format(col), row.get(key, ""))
+				var cell_color: Color = row.get("%s_color" % key, base_color) as Color
+				match _col_align(col, default_align):
+					HORIZONTAL_ALIGNMENT_LEFT:
+						_text(text, Vector2(cx + 4.0, ty), cell_size, cell_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, bold)
+					HORIZONTAL_ALIGNMENT_CENTER:
+						_text(text, Vector2(cx + 2.0, ty), cell_size, cell_color, content_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, bold)
+					_:
+						_text_right(text, cx + content_w - 6.0, ty, cell_size, cell_color, content_w - 8.0)
+		cx += w
+	if selectable:
+		hits.append({"rect": Rect2(rect.position.x + 8.0, ry, rect.size.x - 16.0, row_h), "kind": sel_kind, "meta": meta})
+
+
+func _col_width(col: Dictionary) -> float:
+	return float(col.get("w", 72))
+
+
+func _col_content_width(col: Dictionary, width: float, factor: float) -> float:
+	return max(8.0, width - max(0.0, float(col.get("gap_after", 0.0)) * factor))
+
+
+func _growth_delta_width(col: Dictionary, factor: float) -> float:
+	if _col_format(col) != "growth":
+		return 0.0
+	return max(0.0, float(col.get("delta_w", 0.0)) * factor)
+
+
+func _col_format(col: Dictionary) -> String:
+	return str(col.get("fmt", "string"))
+
+
+func _growth_value_color(key: String, value: int, suffix: String) -> Color:
+	if key == "velocity" or suffix.find("km") >= 0 or value > 110:
+		return TEXT
+	return _table_rating_color(value)
+
+
+func _table_rating_color(value: int) -> Color:
+	if value >= 75:
+		return BLUE
+	if value >= 66:
+		return GREEN
+	if value >= 52:
+		return TEXT
+	return MUTED
+
+
+# 表の整列規約: 文字列/チーム列は左寄せ、バッジ列は中央寄せ、数値系の列は右寄せを既定にする
+# (align 未指定でも書式から推測して全表で統一する)。明示 align があればそれを優先。
+const _TEXT_FORMATS: Array = ["string", "str", "team"]
+
+func _col_align(col: Dictionary, _default_align: String = "") -> int:
+	match str(col.get("align", "")):
+		"l", "left":
+			return HORIZONTAL_ALIGNMENT_LEFT
+		"c", "center":
+			return HORIZONTAL_ALIGNMENT_CENTER
+		"r", "right":
+			return HORIZONTAL_ALIGNMENT_RIGHT
+		_:
+			if _col_format(col) == "pos_badge":
+				return HORIZONTAL_ALIGNMENT_CENTER
+			match _default_align:
+				"l", "left":
+					return HORIZONTAL_ALIGNMENT_LEFT
+				"c", "center":
+					return HORIZONTAL_ALIGNMENT_CENTER
+				"r", "right":
+					return HORIZONTAL_ALIGNMENT_RIGHT
+			return HORIZONTAL_ALIGNMENT_LEFT if _TEXT_FORMATS.has(_col_format(col)) else HORIZONTAL_ALIGNMENT_RIGHT
+
+
+# 各画面の _fmt_cell を集約した上位集合。値が String ならそのまま (例: 欠損 "-")。
+# 書式トークン: int/rate/float1/float2(負→"-")/float3/f1/f2/f1s(符号付)/z/pct1/gb/comma/str(既定)。
+func _fmt_cell(fmt: String, value: Variant) -> String:
+	if value is String:
+		return str(value)
+	match fmt:
+		"int":
+			return str(int(value))
+		"rate":
+			return _rate_short(float(value))
+		"float1", "f1":
+			return "%0.1f" % float(value)
+		"float2":
+			return "-" if float(value) < 0.0 else "%0.2f" % float(value)
+		"f2":
+			return "%0.2f" % float(value)
+		"float3":
+			return "%0.3f" % float(value)
+		"f1s":
+			var f: float = float(value)
+			return ("+%0.1f" % f) if f > 0.0 else ("%0.1f" % f)
+		"z":
+			return "%+.2f" % float(value)
+		"pct1":
+			return "%0.1f%%" % (float(value) * 100.0)
+		"gb":
+			return "-" if float(value) <= 0.0 else _float1(float(value))
+		"comma":
+			return _comma(int(value))
+		_:
+			return str(value)
 
 
 # ============================================================ formatting

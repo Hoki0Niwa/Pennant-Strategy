@@ -152,7 +152,7 @@ static func _pitching_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty:
 
 # 表示評価値 (overall_score) は役割別に算出する。pitching_score (継投選抜用の素の投手力) は変えない。
 # 先発: pitching_score と同じ要素だが係数を圧縮し、野手 (fielder_starter_score) と同スケールにする。
-# 中継: スタミナを外し、奪三振 (stuff) / 球速 / 際どさ (edge) を強調。先発=野手と同スケールに較正。
+# 中継: 持久を外し、奪三振 (stuff) / 球速 / 際どさ (edge) を強調。先発=野手と同スケールに較正。
 const PITCHER_EVAL_BASE: float = 50.0
 const STARTER_EVAL_WEIGHTS: Dictionary = {
 	"control": 11.1, "stuff": 9.6, "movement": 9.6,

@@ -442,7 +442,7 @@ func _draw_roster_row(record: PSPlayerSeasonRecord, y: float) -> void:
 	_draw_rating(PlayerVisibleRatings.fielder_arm(record), C_ARM_R, y)
 	_draw_rating(PlayerVisibleRatings.fielder_discipline(record), C_EYE_R, y)
 
-	_text_right(str(bs.games), C_G_R, y, 13, MUTED)
+	_text_right(str(bs.games), C_G_R, y, 13, TEXT)
 	_text_right(_rate_short(bs.batting_average()), C_AVG_R, y, 13, TEXT)
 	_text_right(str(bs.home_runs), C_HR_R, y, 13, TEXT)
 	_text_right(str(bs.runs_batted_in), C_RBI_R, y, 13, MUTED)

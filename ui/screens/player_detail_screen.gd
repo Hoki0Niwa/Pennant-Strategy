@@ -197,7 +197,7 @@ func _draw_ability(rect: Rect2) -> void:
 	var x: float = rect.position.x + 20.0
 	var w: float = rect.size.x - 40.0
 	var bar_top: float = rect.position.y + 64.0
-	# 能力名の幅はラベルにぴったり合わせ、値をその右に詰める (離れすぎ対策)。投手は「スタミナ」が4字。
+	# 能力名の幅はラベルにぴったり合わせ、値をその右に詰める。
 	var label_w: float = 62.0 if _record.is_pitcher() else 44.0
 	var value_box: float = 64.0   # 球速 "150km/h" が入る幅
 
@@ -432,93 +432,13 @@ func _draw_season(rect: Rect2) -> void:
 		y += float(grows) * card_h + float(grows - 1) * gap + section_gap
 
 
+# 描画本体は基底 _draw_data_table に集約 (2026-06-24)。タブボタンはヘッダ帯に重なるため見出しは描かず
+# header_top=84 から始める。通算行 (is_total) 強調 + 奇数行縞 (alt_rows) + 行高上限40 は opts で指定。
 func _draw_table(rect: Rect2) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	# タブボタンはヘッダ帯に重ねる (描画は _build_buttons のボタン)。
-
-	var columns: Array = _columns_for_tab()
-	var rows: Array = _rows_for_tab()
-
-	var inner_x: float = rect.position.x + 16.0
-	var usable: float = rect.size.x - 32.0
-	var sum_w: float = 0.0
-	for col_value in columns:
-		sum_w += float((col_value as Dictionary)["w"])
-	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
-
-	var hy: float = rect.position.y + 84.0
-	var cx: float = inner_x
-	for col_value in columns:
-		var col: Dictionary = col_value as Dictionary
-		var w: float = float(col["w"]) * factor
-		var align: String = str(col["align"])
-		if align == "l":
-			_text(str(col["title"]), Vector2(cx + 4.0, hy), 12, FAINT, w - 6.0)
-		elif align == "c":
-			_text(str(col["title"]), Vector2(cx + 2.0, hy), 12, FAINT, w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
-		else:
-			# セル(_draw_table_row)と同じ右端基準・ボックス幅に揃える (見出しと数値のズレ防止)。
-			_text_right(str(col["title"]), cx + w - 6.0, hy, 12, FAINT, w - 8.0)
-		cx += w
-	_line(Vector2(inner_x, rect.position.y + 92.0), Vector2(rect.end.x - 16.0, rect.position.y + 92.0), BORDER_SOFT, 1.0)
-
-	if rows.is_empty():
-		_text("記録がありません", Vector2(inner_x + 6.0, rect.position.y + rect.size.y * 0.58), 14, MUTED)
-		return
-
-	var row_top: float = rect.position.y + 100.0
-	var row_h: float = min(40.0, (rect.end.y - row_top - 10.0) / float(rows.size()))
-	for i in range(rows.size()):
-		_draw_table_row(rect, inner_x, factor, columns, rows[i] as Dictionary, row_top + float(i) * row_h, row_h, i)
-
-
-func _draw_table_row(rect: Rect2, inner_x: float, factor: float, columns: Array, row: Dictionary, ry: float, row_h: float, index: int) -> void:
-	var is_total: bool = bool(row.get("is_total", false))
-	if is_total:
-		_round(Rect2(rect.position.x + 10.0, ry + 1.0, rect.size.x - 20.0, row_h - 2.0),
-			Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 6, 0)
-	elif index % 2 == 1:
-		_round(Rect2(rect.position.x + 10.0, ry, rect.size.x - 20.0, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
-	var label_color: Color = BLUE if is_total else TEXT
-	var num_color: Color = BLUE if is_total else TEXT
-	var bold: bool = is_total
-	var ty: float = ry + row_h * 0.5 + 5.0
-	var cx: float = inner_x
-	for col_value in columns:
-		var col: Dictionary = col_value as Dictionary
-		var key: String = str(col["key"])
-		var fmt: String = str(col["fmt"])
-		var w: float = float(col["w"]) * factor
-		var text: String = _fmt_cell(fmt, row.get(key, ""))
-		var align: String = str(col["align"])
-		if align == "l":
-			_text(text, Vector2(cx + 4.0, ty), 13, label_color, w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, bold)
-		elif align == "c":
-			_text(text, Vector2(cx + 2.0, ty), 13, num_color, w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, bold)
-		else:
-			_text_right(text, cx + w - 6.0, ty, 13, num_color, w - 8.0)
-		cx += w
-
-
-func _fmt_cell(fmt: String, value: Variant) -> String:
-	if value is String:
-		return str(value)
-	match fmt:
-		"int":
-			return str(int(value))
-		"rate":
-			return _rate_short(float(value))
-		"f1":
-			return "%0.1f" % float(value)
-		"f2":
-			return "%0.2f" % float(value)
-		"f1s":
-			var f: float = float(value)
-			return ("+%0.1f" % f) if f > 0.0 else ("%0.1f" % f)
-		"comma":
-			return _comma(int(value))
-		_:
-			return str(value)
+	_draw_data_table(rect, _columns_for_tab(), _rows_for_tab(), {
+		"header_top": 84.0, "inner_pad": 16.0, "header_size": 12,
+		"row_h_max": 40.0, "alt_rows": true, "empty_text": "記録がありません",
+	})
 
 
 # 表のカラム定義。タブ + 投手/野手で切り替える。
@@ -573,7 +493,7 @@ func _columns_for_tab() -> Array:
 				cols.append({"title": "球速", "key": "velocity", "w": 56, "align": "c", "fmt": "int"})
 				cols.append({"title": "球質", "key": "stuff", "w": 52, "align": "c", "fmt": "int"})
 				cols.append({"title": "制球", "key": "control", "w": 52, "align": "c", "fmt": "int"})
-				cols.append({"title": "スタミナ", "key": "stamina", "w": 60, "align": "c", "fmt": "int"})
+				cols.append({"title": "持久", "key": "stamina", "w": 60, "align": "c", "fmt": "int"})
 				for type_value in _arsenal_types:
 					cols.append({"title": PSPitchTypes.display_name(str(type_value)), "key": "pitch_%s" % str(type_value), "w": 66, "align": "c", "fmt": "int"})
 				cols.append({"title": "総合評価", "key": "overall", "w": 60, "align": "r", "fmt": "int"})

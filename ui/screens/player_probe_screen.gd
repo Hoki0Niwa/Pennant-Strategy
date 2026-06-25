@@ -27,7 +27,7 @@ const PITCHER_ABILITIES: Array = [
 	{"label": "弾道抑制", "key": "Pit_LoftControl", "value": 0.8},
 	{"label": "芯外し", "key": "Pit_BarrelDeny", "value": 0.8},
 	{"label": "投球効率", "key": "Pit_Efficiency", "value": 0.8},
-	{"label": "スタミナ", "key": "Pit_Stamina", "value": 1.6},
+	{"label": "持久", "key": "Pit_Stamina", "value": 1.6},
 	{"label": "疲労耐性", "key": "Pit_FatigueResist", "value": 0.8},
 	{"label": "走者抑制", "key": "Pit_HoldRunner", "value": 0.8},
 	{"label": "ゾーン端", "key": "Pit_EdgeRate", "value": 0.0},

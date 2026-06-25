@@ -121,7 +121,7 @@ const PITCHER_METRIC_COLUMNS: Array = [
 	{"title": "表示球速", "key": "display_velocity", "width": 82, "type": "number", "format": "int"},
 	{"title": "表示球質", "key": "display_stuff", "width": 82, "type": "number", "format": "int"},
 	{"title": "表示制球", "key": "display_control", "width": 82, "type": "number", "format": "int"},
-	{"title": "表示スタ", "key": "display_stamina", "width": 82, "type": "number", "format": "int"},
+	{"title": "表示持久", "key": "display_stamina", "width": 82, "type": "number", "format": "int"},
 ]
 const BATTING_ADVANCED_COLUMNS: Array = [
 	{"title": "Adv PA", "key": "advanced_plate_appearances", "width": 76, "type": "number", "format": "int"},
@@ -191,7 +191,7 @@ const PITCHING_ABILITY_COLUMNS: Array = [
 	{"title": "表示球速", "key": "display_velocity", "width": 82, "type": "number", "format": "int"},
 	{"title": "表示球質", "key": "display_stuff", "width": 82, "type": "number", "format": "int"},
 	{"title": "表示制球", "key": "display_control", "width": 82, "type": "number", "format": "int"},
-	{"title": "表示スタ", "key": "display_stamina", "width": 82, "type": "number", "format": "int"},
+	{"title": "表示持久", "key": "display_stamina", "width": 82, "type": "number", "format": "int"},
 ]
 const FIELDING_ABILITY_COLUMNS: Array = []
 

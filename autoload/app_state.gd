@@ -415,7 +415,8 @@ func start_offseason() -> Dictionary:
 	_save_if_enabled()
 	# 年に一度の節目で、肥大化していれば DB ファイルを切り詰める (freelist 回収)。
 	SaveService.compact_storage()
-	request_screen("offseason")
+	# オフシーズン画面はホームを上書きする (main.gd が offseason_active 中は "home" をここへルーティング)。
+	request_screen("home")
 	return {"ok": true}
 
 

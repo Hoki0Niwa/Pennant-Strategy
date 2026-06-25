@@ -43,7 +43,7 @@ static func pitcher_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 		{"key": "velocity", "label": "球速", "display_value": pitcher_velocity(record), "suffix": "km/h"},
 		{"key": "stuff", "label": "球質", "display_value": pitcher_stuff(record)},
 		{"key": "control", "label": "制球", "display_value": pitcher_control(record)},
-		{"key": "stamina", "label": "スタミナ", "display_value": pitcher_stamina(record)},
+		{"key": "stamina", "label": "持久", "display_value": pitcher_stamina(record)},
 	])
 
 

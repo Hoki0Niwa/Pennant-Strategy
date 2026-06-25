@@ -1230,7 +1230,7 @@ static func generated_raw_abilities(position: int, z_abilities: Dictionary) -> D
 
 
 # 投手の変化球アーセナルを生成する。[{ "type": <String>, "mastery": <float z> }, ...]。
-#  - 球種数: スタミナ(=先発度)が高いほど多い (3〜6本)。
+#  - 球種数: 持久(=先発度)が高いほど多い (3〜6本)。
 #  - 直球を必ず1本含み、残りは投手リーン(K vs ムーブ)に応じた変化球から割当 (PSPitchTypes.assign_types)。
 #  - mastery は投手の stuff 系 z (KCreate/BarrelDeny/EdgeRate) にアンカーしノイズを足す
 #    (→ エースは良い球種を持ちやすく z と矛盾しない)。スケールは synth mastery と同じ [-2.0, 2.8]。
@@ -1242,7 +1242,7 @@ static func generated_arsenal(position: int, z_abilities: Dictionary) -> Array:
 	var barrel_deny: float = float(z_abilities.get("Pit_BarrelDeny", 0.0))
 	var edge: float = float(z_abilities.get("Pit_EdgeRate", 0.0))
 	var stamina: float = float(z_abilities.get("Pit_Stamina", 0.0))
-	# 球種数: スタミナ連動 (z 0 で約4本、先発級で5〜6、短いリリーフで3) + 軽いジッター。
+	# 球種数: 持久連動 (z 0 で約4本、先発級で5〜6、短いリリーフで3) + 軽いジッター。
 	var pitch_count: int = clampi(int(round(4.0 + stamina * 0.7 + float(Rng.range_int(-1, 1)))), 3, 6)
 	var lean: float = k - move
 	var types: Array = PSPitchTypes.assign_types(pitch_count, lean, Rng.range_int(0, 1000000))
@@ -1305,10 +1305,16 @@ static func process_growth_decay(players: Array, user_team_id: int = 0, season: 
 		var aggregated: bool = user_team_id <= 0 or player.team_id == user_team_id
 		var before: int = 0
 		var before_ratings: Dictionary = {}
+		var before_pitch_changes: Array = []
+		var before_aptitudes: Dictionary = {}
 		if aggregated:
 			before = player_value_score(player)
 			if want_abilities:
 				before_ratings = _capture_display_ratings(player)
+				if player.is_pitcher():
+					before_pitch_changes = _capture_pitch_mastery_values(player)
+				else:
+					before_aptitudes = _capture_position_aptitude_values(player)
 		var mutation: Dictionary = _mutate_abilities(player)
 		# 守備適性の成長 (本職キャンプ + 試合イニング)。season から当該シーズンの record を引いて
 		# 守備イニングを参照する。season 無し (レポート/smoke 等) では適性成長はスキップ。
@@ -1320,7 +1326,15 @@ static func process_growth_decay(players: Array, user_team_id: int = 0, season: 
 		var growth_kind: String = str(mutation.get("kind", GROWTH_KIND_STAGNATION))
 		kind_counts[growth_kind] = int(kind_counts.get(growth_kind, 0)) + 1
 		var after: int = player_value_score(player)
-		if before == after:
+		var pitch_changes: Array = []
+		var aptitude_changes: Dictionary = {}
+		if want_abilities:
+			if player.is_pitcher():
+				pitch_changes = _build_pitch_mastery_changes(before_pitch_changes, _capture_pitch_mastery_values(player))
+			else:
+				aptitude_changes = _build_position_aptitude_changes(before_aptitudes, _capture_position_aptitude_values(player))
+		var detail_changed: bool = _detail_array_has_delta(pitch_changes) or _detail_dict_has_delta(aptitude_changes)
+		if before == after and not detail_changed:
 			continue
 		var change: Dictionary = {
 			"player_id": player.id,
@@ -1339,6 +1353,10 @@ static func process_growth_decay(players: Array, user_team_id: int = 0, season: 
 		}
 		if want_abilities:
 			change["abilities"] = _build_ability_changes(before_ratings, _capture_display_ratings(player))
+			if player.is_pitcher():
+				change["pitch_changes"] = pitch_changes
+			else:
+				change["aptitude_changes"] = aptitude_changes
 		changes.append(change)
 
 	var growers: Array = []
@@ -1432,6 +1450,59 @@ static func _build_ability_changes(before_map: Dictionary, after_map: Dictionary
 			"delta": after_val - before_val,
 		})
 	return out
+
+
+static func _capture_pitch_mastery_values(player: PSPlayer) -> Array:
+	var mastery_by_type: Dictionary = {}
+	for entry_value in player.arsenal:
+		var entry: Dictionary = entry_value as Dictionary
+		mastery_by_type[str(entry.get("type", ""))] = float(entry.get("mastery", 0.0))
+	var out: Array = []
+	for type_value in PSPitchTypes.ALL_TYPES:
+		var type_key: String = str(type_value)
+		out.append(PSAbilityScale.z_to_display(float(mastery_by_type[type_key])) if mastery_by_type.has(type_key) else -1)
+	return out
+
+
+static func _build_pitch_mastery_changes(before_values: Array, after_values: Array) -> Array:
+	var out: Array = []
+	for i in range(after_values.size()):
+		var after: int = int(after_values[i])
+		var before: int = int(before_values[i]) if i < before_values.size() else after
+		out.append({"after": after, "delta": (after - before) if after >= 0 and before >= 0 else 0})
+	return out
+
+
+static func _capture_position_aptitude_values(player: PSPlayer) -> Dictionary:
+	var out: Dictionary = {}
+	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
+		var key: String = str(POSITION_NAME_BY_ID.get(position, ""))
+		out[position] = int(player.position_aptitudes.get(key, 0)) if not key.is_empty() else 0
+	return out
+
+
+static func _build_position_aptitude_changes(before_values: Dictionary, after_values: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
+		var after: int = int(after_values.get(position, 0))
+		var before: int = int(before_values.get(position, after))
+		if after > 0 or after != before:
+			out[position] = {"after": after, "delta": after - before}
+	return out
+
+
+static func _detail_array_has_delta(rows: Array) -> bool:
+	for row_value in rows:
+		if int((row_value as Dictionary).get("delta", 0)) != 0:
+			return true
+	return false
+
+
+static func _detail_dict_has_delta(rows: Dictionary) -> bool:
+	for row_value in rows.values():
+		if int((row_value as Dictionary).get("delta", 0)) != 0:
+			return true
+	return false
 
 
 static func _mutate_abilities(player: PSPlayer) -> Dictionary:

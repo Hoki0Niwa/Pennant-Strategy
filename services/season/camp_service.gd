@@ -598,6 +598,8 @@ static func _apply_training(state: Dictionary, players: Array, season: PSSeason,
 		entry["available"] = false
 		return
 	var before_value: int = OffseasonService.player_value_score(player)
+	var before_ratings: Dictionary = OffseasonService._capture_display_ratings(player)
+	var before_pitch_values: Array = OffseasonService._capture_pitch_mastery_values(player) if player.is_pitcher() else []
 	var old_position: int = player.position
 	var old_role: String = player.role
 	var target_position: int = int(entry.get("target_position", 0))
@@ -632,6 +634,12 @@ static func _apply_training(state: Dictionary, players: Array, season: PSSeason,
 		"target_position_name": str(entry.get("target_position_name", "")),
 		"aptitude_before": aptitude_before,
 		"aptitude_after": aptitude_after,
+		"is_pitcher": player.is_pitcher(),
+		"arsenal": player.arsenal.duplicate(true),
+		"aptitudes": player.position_aptitudes.duplicate(true),
+		"pitch_changes": OffseasonService._build_pitch_mastery_changes(before_pitch_values, OffseasonService._capture_pitch_mastery_values(player)) if player.is_pitcher() else [],
+		# 基本能力の前後変化 (成長結果と同形式)。特別練習は基本能力をほぼ変えないため大半は ±0。
+		"abilities": OffseasonService._build_ability_changes(before_ratings, OffseasonService._capture_display_ratings(player)),
 	}
 	var actions: Array = state.get("actions", []) as Array
 	actions.append(action)
