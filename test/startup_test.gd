@@ -180,6 +180,101 @@ func test_player_detail_screen_builds_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_ability_stats_screen_builds_each_tab_and_mode() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "ability_stats"
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var screen_script: GDScript = load("res://ui/screens/ability_stats_screen.gd") as GDScript
+	var screen: Control = screen_script.new()
+	screen.size = Vector2(1920, 1080)
+	add_child(screen)
+	await get_tree().process_frame
+
+	# 既定 = 全球団 / 野手 / 能力値。母集団・行・列が構築され、_draw でヘッダ判定が積まれている。
+	assert_array(screen._filtered).is_not_empty()
+	assert_array(screen._rows).is_not_empty()
+	assert_array(screen._columns_for_current()).is_not_empty()
+	assert_str(screen._current_mode()).is_equal("batter")
+	assert_array(screen._header_hits).is_not_empty()
+
+	# 行の左クリック=単独選択 / Ctrl=複数トグル / Shift=範囲選択 / 選択解除でゼロへ。
+	assert_int(screen._rows.size()).is_greater_equal(4)
+	var pid_a: int = int((screen._rows[0] as Dictionary).get("__meta", 0))
+	var pid_b: int = int((screen._rows[1] as Dictionary).get("__meta", 0))
+	var pid_d: int = int((screen._rows[3] as Dictionary).get("__meta", 0))
+	screen._on_row_selected(pid_a, false, false)
+	assert_int(screen._selected_ids.size()).is_equal(1)
+	assert_bool(screen._selected_ids.has(pid_a)).is_true()
+	screen._on_row_selected(pid_b, true, false)   # Ctrl+クリックで追加
+	assert_int(screen._selected_ids.size()).is_equal(2)
+	screen._on_row_selected(pid_b, true, false)   # 再Ctrlで解除
+	assert_int(screen._selected_ids.size()).is_equal(1)
+	screen._on_row_selected(pid_a, false, false)  # 単独クリックはその選手のみ (アンカー確立)
+	assert_int(screen._selected_ids.size()).is_equal(1)
+	screen._on_row_selected(pid_d, false, true)   # Shift+クリック → 表示順 rows[0..3] の4件
+	assert_int(screen._selected_ids.size()).is_equal(4)
+	assert_bool(screen._selected_ids.has(pid_a)).is_true()
+	assert_bool(screen._selected_ids.has(pid_d)).is_true()
+	screen._on_clear_selection()
+	assert_int(screen._selected_ids.size()).is_equal(0)
+
+	# 投手へ切替 → 列セットが投手 mode になる。能力タブの球種カラムは母集団の和集合。
+	screen._on_filter_pressed("p_all")
+	assert_str(screen._current_mode()).is_equal("pitcher")
+	assert_array(screen._rows).is_not_empty()
+	assert_array(screen._pitch_types).is_not_empty()
+
+	# 成績タブ。
+	screen._on_tab_pressed("stats")
+	assert_array(screen._rows).is_not_empty()
+
+	# 高度な指標タブ (WAR のリーグ文脈集計を行う経路)。
+	screen._on_tab_pressed("advanced")
+	assert_array(screen._rows).is_not_empty()
+
+	# ヘッダクリックのソート: 別カラムを選ぶと降順から始まり、同カラム再クリックで昇順へトグルする。
+	screen._on_header_clicked("ip")
+	assert_str(screen._sort_key).is_equal("ip")
+	assert_bool(screen._sort_asc).is_false()
+	screen._on_header_clicked("ip")
+	assert_bool(screen._sort_asc).is_true()
+
+	# 守備位置で絞り込み (野手 mode に戻る) + 描画でヘッダ判定再構築。
+	screen._on_filter_pressed("b_6")
+	assert_str(screen._current_mode()).is_equal("batter")
+	screen.queue_redraw()
+	await get_tree().process_frame
+	assert_array(screen._header_hits).is_not_empty()
+
+	# 球団絞り込み → 全球団 へ戻せる (PopupMenu の負 id 自動採番で戻れなくなる回帰の防止)。
+	var sample_team: int = int(screen._team_ids[0])
+	screen._on_team_selected(sample_team)
+	assert_int(screen._view_team_id).is_equal(sample_team)
+	screen._on_team_selected(screen.ALL_TEAMS_MENU_ID)
+	assert_int(screen._view_team_id).is_equal(screen.ALL_TEAMS_ID)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_screen_history_back_navigation() -> void:
 	var old_screen: String = AppState.current_screen
 	var old_player: int = AppState.current_player_id

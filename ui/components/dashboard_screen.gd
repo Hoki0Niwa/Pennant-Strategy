@@ -49,6 +49,7 @@ const NAV_GROUPS: Array = [
 		{"id": "game_results", "label": "試合結果", "icon": "results"},
 		{"id": "standings", "label": "順位表", "icon": "standings"},
 		{"id": "rankings", "label": "タイトル争い", "icon": "rankings"},
+		{"id": "ability_stats", "label": "能力・成績一覧", "icon": "record"},
 		{"id": "history", "label": "シーズン履歴", "icon": "history"},
 	]},
 	{"title": "チーム・選手", "items": [
