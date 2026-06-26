@@ -79,13 +79,49 @@ func test_manual_save_flushes_pending_game_logs() -> void:
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
 
 	assert_bool(SaveService.save_state(AppState)).is_true()
-	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
+	var written_log: Dictionary = GameLogService.read_game_log(AppState.current_season, first_game_index)
+	assert_bool(written_log.is_empty()).is_false()
+	assert_int((written_log.get("innings", []) as Array).size()).is_greater(0)
 
 	var reloaded: Dictionary = SaveService.load_state()
 	assert_bool(AppState.restore_from_save(reloaded)).is_true()
 	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
 	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_unsaved_next_season_progress_does_not_persist_records() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_RETIREMENT
+	AppState.offseason_results = {"step_0": {"title": "引退判定", "retired": []}}
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	var saved_season_number: int = AppState.current_season.season_number
+	AppState.offseason_step = AppState.OFFSEASON_TOTAL_STEPS
+	assert_bool(AppState.finalize_offseason()).is_true()
+	var unsaved_season: PSSeason = AppState.current_season
+	assert_int(unsaved_season.season_number).is_equal(saved_season_number + 1)
+	assert_int(_record_count_for_season(unsaved_season.year, unsaved_season.season_number)).is_greater(0)
+
+	var result: Dictionary = AppState.simulate_next_game()
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_int(_played_game_count(unsaved_season)).is_equal(1)
+	assert_int(_recorded_team_games(unsaved_season)).is_equal(2)
+
+	var reloaded: Dictionary = SaveService.load_state()
+	assert_bool(AppState.restore_from_save(reloaded)).is_true()
+	assert_bool(AppState.offseason_active).is_true()
+	assert_int(AppState.current_season.season_number).is_equal(saved_season_number)
+	assert_int(_record_count_for_season(unsaved_season.year, unsaved_season.season_number)).is_equal(0)
 
 	_restore_app_state(old_state, test_save_id)
 
@@ -140,4 +176,17 @@ func _recorded_team_games(season: PSSeason) -> int:
 		var record: PSTeamSeasonRecord = RecordStore.get_team_record(team.id, season.year, season.season_number)
 		if record != null:
 			count += record.stats.games
+	return count
+
+
+func _record_count_for_season(year: int, season_number: int) -> int:
+	var count: int = 0
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record.year == year and record.season_number == season_number:
+			count += 1
+	for record_value in RecordStore.team_records.values():
+		var record: PSTeamSeasonRecord = record_value as PSTeamSeasonRecord
+		if record.year == year and record.season_number == season_number:
+			count += 1
 	return count

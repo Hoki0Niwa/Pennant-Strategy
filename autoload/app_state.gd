@@ -278,7 +278,7 @@ func start_next_season() -> bool:
 
 	GameDb.advance_players_one_year()
 	current_season = SeasonService.create_next_season(current_season, GameDb.teams, dh_settings_for_schedule())
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, auto_save_enabled)
 	# 新シーズンは現在のロースター/能力でスタメン・打順を選び直すため、テンプレキャッシュをリセット。
 	PSDefenseAlignmentProfile.reset_cache()
 	PSBattingOrderProfile.reset_cache()
@@ -324,7 +324,7 @@ func start_postseason() -> Dictionary:
 func advance_postseason_day() -> Dictionary:
 	if current_season == null or current_postseason == null:
 		return {"ok": false, "message": "ポストシーズンが開始されていません"}
-	var result: Dictionary = PostseasonService.advance_one_day(current_postseason, current_season)
+	var result: Dictionary = PostseasonService.advance_one_day(current_postseason, current_season, auto_save_enabled)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -361,7 +361,7 @@ func finalize_postseason_to_awards() -> Dictionary:
 	archive.postseason = current_postseason
 	archive.awards = current_awards
 	if not _archive_exists(archive.year, archive.season_number):
-		RecordStore.add_season_archive(archive)
+		RecordStore.add_season_archive(archive, auto_save_enabled)
 	_save_if_enabled()
 	request_screen("awards")
 	return {"ok": true}
@@ -414,7 +414,8 @@ func start_offseason() -> Dictionary:
 	last_status_message = str(retirement_result.get("title", ""))
 	_save_if_enabled()
 	# 年に一度の節目で、肥大化していれば DB ファイルを切り詰める (freelist 回収)。
-	SaveService.compact_storage()
+	if auto_save_enabled:
+		SaveService.compact_storage()
 	# オフシーズン画面はホームを上書きする (main.gd が offseason_active 中は "home" をここへルーティング)。
 	request_screen("home")
 	return {"ok": true}
@@ -1285,7 +1286,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	# (game_state には含めない)。専用ストアから hydrate する。
 	RecordStore.load_records()
 	if current_season != null:
-		RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
+		RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, false)
 
 	var next_screen: String = str(data.get("current_screen", "home"))
 	last_status_message = ""

@@ -88,6 +88,31 @@ func test_rotation_editor_screen_builds_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_game_result_line_score_uses_result_or_log_innings() -> void:
+	var screen_script: GDScript = load("res://ui/screens/game_result_screen.gd") as GDScript
+	var screen = screen_script.new()
+
+	var from_result: Array = screen._line_score_innings({
+		"result": {
+			"innings": [
+				{"inning": 1, "away": 2, "home": 1, "home_half_played": true},
+			],
+		},
+	}, {})
+	assert_int(from_result.size()).is_equal(1)
+	assert_int(int((from_result[0] as Dictionary).get("away", 0))).is_equal(2)
+
+	var from_log: Array = screen._line_score_innings({"result": {}}, {
+		"innings": [
+			{"inning": 1, "away": 0, "home": 3, "home_half_played": true},
+		],
+	})
+	assert_int(from_log.size()).is_equal(1)
+	assert_int(int((from_log[0] as Dictionary).get("home", 0))).is_equal(3)
+
+	screen.queue_free()
+
+
 func test_game_result_screen_builds_with_active_season() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season

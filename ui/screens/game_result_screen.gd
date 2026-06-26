@@ -302,7 +302,7 @@ func _draw_list_row(rect: Rect2, game: Dictionary) -> void:
 func _draw_line_score(rect: Rect2) -> void:
 	_panel(rect, "イニングスコア")
 	var game: Dictionary = _cur_game
-	var innings: Array = game.get("innings", []) as Array
+	var innings: Array = _line_score_innings(game, _cur_log)
 	var inning_count: int = max(9, innings.size())
 	var away_id: int = int(game.get("away_team_id", 0))
 	var home_id: int = int(game.get("home_team_id", 0))
@@ -349,6 +349,23 @@ func _draw_line_row(rect: Rect2, team_id: int, is_home: bool, innings: Array, in
 	_text(str(runs), Vector2(tx, y), 14, TEXT, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
 	_text(str(hits), Vector2(tx + tcol_w, y), 13, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
 	_text(str(errs), Vector2(tx + tcol_w * 2.0, y), 13, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
+
+
+func _line_score_innings(game: Dictionary, log: Dictionary = {}) -> Array:
+	var innings: Array = _array_value(game.get("innings", []))
+	if not innings.is_empty():
+		return innings
+	var result: Dictionary = game.get("result", {}) as Dictionary
+	innings = _array_value(result.get("innings", []))
+	if not innings.is_empty():
+		return innings
+	return _array_value(log.get("innings", []))
+
+
+func _array_value(value: Variant) -> Array:
+	if value is Array:
+		return value as Array
+	return []
 
 
 # --- 上段: サマリー (勝敗投手 + 記録) ---

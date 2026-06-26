@@ -39,6 +39,7 @@ static func build_game_log(result: Dictionary, season: PSSeason = null) -> Dicti
 			"away_score": int(result.get("away_score", 0)),
 			"home_score": int(result.get("home_score", 0)),
 		},
+		"innings": (result.get("innings", []) as Array).duplicate(true),
 		"lineups": (result.get("lineups", {}) as Dictionary).duplicate(true),
 		"decisions": {
 			"winning_pitcher_id": int(result.get("winning_pitcher_id", 0)),

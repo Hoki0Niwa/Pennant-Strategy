@@ -115,7 +115,7 @@ static func active_group_keys(postseason: PSPostseasonResult) -> Array:
 
 
 # 1日進める: 進行中グループの未完了シリーズを 1 試合ずつ消化する。
-static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason) -> Dictionary:
+static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, persist: bool = true) -> Dictionary:
 	if postseason == null or season == null:
 		return {"ok": false, "message": "ポストシーズンが開始されていません"}
 	var keys: Array = active_group_keys(postseason)
@@ -134,7 +134,8 @@ static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason) ->
 		postseason.set_stage(stage_key, s)
 		if bool(r.get("ok", false)):
 			var game_entry: Dictionary = r.get("game", {}) as Dictionary
-			_write_postseason_game_log(season, stage_key, game_entry)
+			if persist:
+				_write_postseason_game_log(season, stage_key, game_entry)
 			played.append({"stage": stage_key, "game": game_entry})
 		if stage_key == "japan_series" and bool(s.get("completed", false)):
 			postseason.champion_team_id = int(s.get("winner_id", 0))

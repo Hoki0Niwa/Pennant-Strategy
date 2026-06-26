@@ -172,12 +172,13 @@ func clear_records() -> void:
 	records_changed.emit()
 
 
-func add_season_archive(archive: PSSeasonArchive) -> void:
+func add_season_archive(archive: PSSeasonArchive, persist: bool = true) -> void:
 	if archive == null:
 		return
 	ensure_loaded()
 	_season_archives.append(archive)
-	save_records()
+	if persist:
+		save_records()
 	records_changed.emit()
 
 
@@ -301,8 +302,6 @@ func load_records() -> void:
 		return
 	var payload: Dictionary = parsed as Dictionary
 	load_from_dict(payload)
-	if SQLiteStoreService.is_available():
-		SQLiteStoreService.save_record_store_and_normalized(payload)
 
 
 # simulation_reporter のようなスナップショット/リストア処理中に
