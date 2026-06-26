@@ -1245,6 +1245,10 @@ func restore_from_save(data: Dictionary) -> bool:
 	if data.is_empty():
 		return false
 
+	var mod_warnings: Array[String] = ModManager.check_save_compatibility(data.get("active_mods", []) as Array)
+	for warning in mod_warnings:
+		push_warning(warning)
+
 	var player_rows: Array = data.get("players", []) as Array
 	if not player_rows.is_empty():
 		GameDb.replace_players_from_rows(player_rows)

@@ -17,13 +17,14 @@ static func ensure_loaded() -> void:
 	_given_names.clear()
 	_foreign_names.clear()
 
-	if not FileAccess.file_exists(CSV_PATH):
-		push_error("Name CSV not found: %s" % CSV_PATH)
+	var csv_path: String = ModManager.resolve_data_path("player_names", CSV_PATH)
+	if not FileAccess.file_exists(csv_path):
+		push_error("Name CSV not found: %s" % csv_path)
 		return
 
-	var file: FileAccess = FileAccess.open(CSV_PATH, FileAccess.READ)
+	var file: FileAccess = FileAccess.open(csv_path, FileAccess.READ)
 	if file == null:
-		push_error("Could not open name CSV: %s" % CSV_PATH)
+		push_error("Could not open name CSV: %s" % csv_path)
 		return
 
 	while not file.eof_reached():

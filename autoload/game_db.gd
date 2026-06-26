@@ -51,9 +51,10 @@ func load_initial_data() -> void:
 # SQLite 側のスキーマには無いため、initial_players.json から id 一致で上書きする。
 # SQLite スキーマ刷新が完了したら不要になる暫定パス。
 func _overlay_phase1_fields_from_json() -> void:
-	if not FileAccess.file_exists(PLAYER_DATA_PATH):
+	var player_data_path: String = ModManager.resolve_data_path("initial_players_json", PLAYER_DATA_PATH)
+	if not FileAccess.file_exists(player_data_path):
 		return
-	var file: FileAccess = FileAccess.open(PLAYER_DATA_PATH, FileAccess.READ)
+	var file: FileAccess = FileAccess.open(player_data_path, FileAccess.READ)
 	if file == null:
 		return
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
@@ -93,11 +94,13 @@ func _normalize_slot_list(source: Variant) -> Array[int]:
 
 
 func _load_initial_data_from_csv() -> bool:
-	if not (FileAccess.file_exists(CSV_PLAYER_PATH) and FileAccess.file_exists(CSV_TEAM_PATH)):
+	var player_path: String = ModManager.resolve_data_path("initial_players", CSV_PLAYER_PATH)
+	var team_path: String = ModManager.resolve_data_path("initial_teams", CSV_TEAM_PATH)
+	if not (FileAccess.file_exists(player_path) and FileAccess.file_exists(team_path)):
 		return false
-	var team_rows: Array = PSPlayerCsvIo.read_teams(CSV_TEAM_PATH)
+	var team_rows: Array = PSPlayerCsvIo.read_teams(team_path)
 	var player_rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(
-		PSPlayerCsvIo.read_players(CSV_PLAYER_PATH),
+		PSPlayerCsvIo.read_players(player_path),
 		SeasonService.DEFAULT_START_YEAR
 	)
 	if team_rows.is_empty() or player_rows.is_empty():
@@ -122,13 +125,15 @@ func _load_initial_data_from_csv() -> bool:
 
 func _load_initial_data_from_json() -> void:
 	data_source = "json"
-	var team_rows: Array = _read_json_array(TEAM_DATA_PATH)
+	var team_path: String = ModManager.resolve_data_path("initial_teams_json", TEAM_DATA_PATH)
+	var player_path: String = ModManager.resolve_data_path("initial_players_json", PLAYER_DATA_PATH)
+	var team_rows: Array = _read_json_array(team_path)
 	for row in team_rows:
 		var team: PSTeam = PSTeam.from_dict(row as Dictionary)
 		teams.append(team)
 		teams_by_id[team.id] = team
 
-	var player_rows: Array = _read_json_array(PLAYER_DATA_PATH)
+	var player_rows: Array = _read_json_array(player_path)
 	for row in player_rows:
 		var player: PSPlayer = PSPlayer.from_dict(row as Dictionary)
 		players.append(player)
@@ -139,7 +144,8 @@ func _load_initial_data_from_json() -> void:
 
 
 func _load_initial_data_from_sqlite() -> bool:
-	if not FileAccess.file_exists(SQLITE_DATA_PATH):
+	var sqlite_path: String = ModManager.resolve_data_path("initial_sqlite", SQLITE_DATA_PATH)
+	if not FileAccess.file_exists(sqlite_path):
 		return false
 	if not ClassDB.class_exists("SQLite"):
 		return false
@@ -147,7 +153,7 @@ func _load_initial_data_from_sqlite() -> bool:
 	var db: Object = ClassDB.instantiate("SQLite") as Object
 	if db == null:
 		return false
-	db.set("path", SQLITE_DATA_PATH)
+	db.set("path", sqlite_path)
 	db.set("read_only", true)
 	db.set("verbosity_level", 0)
 	if not bool(db.call("open_db")):

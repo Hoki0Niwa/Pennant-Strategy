@@ -23,6 +23,10 @@ static func save_state(app_state) -> bool:
 
 	var payload: Dictionary = {
 		"save_id": SaveContext.active_save_id(),
+		"active_mods": ModManager.active_mods_snapshot(),
+		"rules_profile_id": ModManager.rules_profile_id(),
+		"rules_schema_version": ModManager.rules_schema_version(),
+		"data_schema_version": ModManager.data_schema_version(),
 		"selected_team_id": app_state.selected_team_id,
 		"current_screen": app_state.current_screen,
 		"season": season_data,

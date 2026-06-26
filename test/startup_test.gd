@@ -18,8 +18,19 @@ func test_autoloads_registered() -> void:
 	# GdUnit はプロジェクト文脈で実行するため singleton として参照できる。
 	assert_object(Engine.get_main_loop().root.get_node_or_null("AppState")).is_not_null()
 	assert_object(Engine.get_main_loop().root.get_node_or_null("GameDb")).is_not_null()
+	assert_object(Engine.get_main_loop().root.get_node_or_null("ModManager")).is_not_null()
 	assert_object(Engine.get_main_loop().root.get_node_or_null("RecordStore")).is_not_null()
 	assert_object(Engine.get_main_loop().root.get_node_or_null("Rng")).is_not_null()
+
+
+func test_mod_manager_default_rules_and_paths() -> void:
+	assert_str(ModManager.resolve_data_path("initial_players", "res://fallback.csv")).is_equal("res://fallback.csv")
+	assert_int(ModManager.rule_int("season.schedule.pennant_games_per_team", 0)).is_equal(PSSchedule.PENNANT_GAMES_PER_TEAM)
+	assert_float(ModManager.rule_float("simulation.pa_probability.league_k_base", -1.0)).is_equal(PSPaProbabilityCalculator.LEAGUE_K_BASE)
+	var metadata: Dictionary = ModManager.save_metadata()
+	assert_str(str(metadata.get("rules_profile_id", ""))).is_equal("pennant_strategy_default")
+	assert_int(int(metadata.get("rules_schema_version", 0))).is_equal(1)
+	assert_bool(metadata.has("active_mods")).is_true()
 
 
 func test_home_screen_builds_with_active_season() -> void:

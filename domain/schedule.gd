@@ -32,7 +32,8 @@ static func generate_pennant_schedule(
 	year: int = DEFAULT_YEAR_FOR_SCHEDULE,
 	season_number: int = 1
 ) -> Array:
-	if games_per_team != PENNANT_GAMES_PER_TEAM:
+	var expected_games_per_team: int = _rule_int("pennant_games_per_team", PENNANT_GAMES_PER_TEAM)
+	if games_per_team != expected_games_per_team:
 		push_warning("games_per_team override is ignored in NPB-style schedule.")
 
 	var team_rows: Array = teams.duplicate()
@@ -53,8 +54,12 @@ static func generate_pennant_schedule(
 		else:
 			pacifics.append(team.id)
 
-	if centrals.size() != 6 or pacifics.size() != 6:
-		push_warning("Pennant schedule requires 6 central + 6 pacific teams.")
+	var teams_per_league: int = _rule_int("teams_per_league", 6)
+	if centrals.size() != teams_per_league or pacifics.size() != teams_per_league:
+		push_warning("Pennant schedule requires %d central + %d pacific teams." % [teams_per_league, teams_per_league])
+		return []
+	if teams_per_league != 6:
+		push_warning("Current NPB-style schedule generator only supports 6 teams per league.")
 		return []
 
 	var template_rows: Array = _load_template_rows()
@@ -93,8 +98,11 @@ static func bucket_seed_for_season(year: int, season_number: int) -> int:
 
 
 static func validate_schedule(games: Array, teams: Array) -> Dictionary:
-	if games.size() != EXPECTED_TOTAL_GAMES:
-		return {"ok": false, "message": "expected %d games, got %d" % [EXPECTED_TOTAL_GAMES, games.size()]}
+	var expected_total_games: int = _rule_int("expected_total_games", EXPECTED_TOTAL_GAMES)
+	var expected_games_per_team: int = _rule_int("pennant_games_per_team", PENNANT_GAMES_PER_TEAM)
+	var expected_interleague_games_per_team: int = _rule_int("expected_interleague_games_per_team", EXPECTED_INTERLEAGUE_GAMES_PER_TEAM)
+	if games.size() != expected_total_games:
+		return {"ok": false, "message": "expected %d games, got %d" % [expected_total_games, games.size()]}
 
 	var team_ids: Array = []
 	for team_row in teams:
@@ -138,9 +146,9 @@ static func validate_schedule(games: Array, teams: Array) -> Dictionary:
 			interleague_by_team[home_id] = int(interleague_by_team.get(home_id, 0)) + 1
 
 	for team_id in team_ids:
-		if int(games_by_team.get(team_id, 0)) != PENNANT_GAMES_PER_TEAM:
+		if int(games_by_team.get(team_id, 0)) != expected_games_per_team:
 			return {"ok": false, "message": "team %d has %d games" % [team_id, int(games_by_team.get(team_id, 0))]}
-		if int(interleague_by_team.get(team_id, 0)) != EXPECTED_INTERLEAGUE_GAMES_PER_TEAM:
+		if int(interleague_by_team.get(team_id, 0)) != expected_interleague_games_per_team:
 			return {"ok": false, "message": "team %d has %d interleague games" % [team_id, int(interleague_by_team.get(team_id, 0))]}
 		var home_games: int = int(home_by_team.get(team_id, 0))
 		if home_games < 71 or home_games > 72:
@@ -215,13 +223,22 @@ static func _deterministic_shuffle(values: Array, seed: int) -> Array:
 
 
 static func _load_template_rows() -> Array:
-	var rows: Array = _read_template_csv(TEMPLATE_PATH)
+	var template_path: String = ModManager.resolve_data_path(
+		"schedule_template",
+		str(ModManager.rule_value("season.schedule.template_path", TEMPLATE_PATH))
+	)
+	var expected_total_games: int = _rule_int("expected_total_games", EXPECTED_TOTAL_GAMES)
+	var rows: Array = _read_template_csv(template_path)
 	if rows.is_empty():
 		rows = _generated_template_rows()
-	if rows.size() != EXPECTED_TOTAL_GAMES:
-		push_error("Schedule template %s has %d rows, expected %d." % [TEMPLATE_PATH, rows.size(), EXPECTED_TOTAL_GAMES])
+	if rows.size() != expected_total_games:
+		push_error("Schedule template %s has %d rows, expected %d." % [template_path, rows.size(), expected_total_games])
 		return []
 	return rows
+
+
+static func _rule_int(name: String, fallback: int) -> int:
+	return ModManager.rule_int("season.schedule.%s" % name, fallback)
 
 
 static func _read_template_csv(path: String) -> Array:

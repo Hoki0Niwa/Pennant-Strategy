@@ -31,6 +31,25 @@ func test_new_save_folder_scopes_storage_paths() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_save_state_records_mod_metadata() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	var payload: Dictionary = SaveService.load_state()
+	assert_bool(payload.has("active_mods")).is_true()
+	assert_str(JSON.stringify(payload.get("active_mods", []) as Array)).is_equal(JSON.stringify(ModManager.active_mods_snapshot()))
+	assert_str(str(payload.get("rules_profile_id", ""))).is_equal(ModManager.rules_profile_id())
+	assert_int(int(payload.get("rules_schema_version", 0))).is_equal(ModManager.rules_schema_version())
+	assert_int(int(payload.get("data_schema_version", 0))).is_equal(ModManager.data_schema_version())
+
+	_restore_app_state(old_state, test_save_id)
+
+
 func test_unsaved_simulation_does_not_persist_records_or_logs() -> void:
 	var old_state: Dictionary = _capture_app_state()
 	var test_save_id: String = ""

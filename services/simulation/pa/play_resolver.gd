@@ -325,7 +325,7 @@ static func resolve(
 	if absf(spray) > FAIR_HALF_ANGLE_DEG:
 		return {"result": RESULT_FOUL_BACK, "category": RESULT_FOUL_BACK, "bases": 0}
 
-	var hr_line: float = _hr_line(spray) * HR_DISTANCE_SCALE
+	var hr_line: float = _hr_line(spray) * _rule_float("hr_distance_scale", HR_DISTANCE_SCALE)
 	var adjusted_hr_line: float = _power_adjusted_hr_line(hr_line, batter)
 	if distance >= adjusted_hr_line and trajectory != PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
 		var hr_field: int = _outfield_position_for_spray(spray, distance, trajectory)
@@ -743,12 +743,12 @@ static func _roll_error_type(
 		return "fielding" if Rng.roll_float() < OF_FIELD_ERROR_RATE * of_error_multiplier else ""
 
 	# 内野・投手・捕手の捕球失策。弾道の捌きにくさ + 打球の強さ + 守備(secure)能力 + 位置別捕球難度。
-	var field_base: float = FIELD_ERROR_BASE_LINER
+	var field_base: float = _rule_float("field_error_base_liner", FIELD_ERROR_BASE_LINER)
 	match trajectory:
 		PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
-			field_base = FIELD_ERROR_BASE_GROUNDER
+			field_base = _rule_float("field_error_base_grounder", FIELD_ERROR_BASE_GROUNDER)
 		PSBattedBallPhysicsResolver.TRAJECTORY_FLY, PSBattedBallPhysicsResolver.TRAJECTORY_POPUP:
-			field_base = FIELD_ERROR_BASE_FLY
+			field_base = _rule_float("field_error_base_fly", FIELD_ERROR_BASE_FLY)
 	var secure_deficiency: float = max(0.0, ERROR_SECURE_REFERENCE_Z - ability_secure)
 	var position_difficulty: float = float(FIELD_ERROR_POSITION_DIFFICULTY.get(position, 1.0))
 	var field_chance: float = makeable * position_difficulty * (
@@ -804,7 +804,7 @@ static func _error_advance_bases(error_type: String) -> int:
 static func _double_play_probability(batter: PSPlayerSeasonRecord, completion: float, position: int, ev: float) -> float:
 	# 打者の走力 z。0.0 が平均、速いほど一塁到達が早く併殺を崩す。
 	var batter_speed: float = 0.0 if batter == null else batter.z_ability("Run_Speed", 0.0)
-	var chance: float = DOUBLE_PLAY_BASE
+	var chance: float = _rule_float("double_play_base", DOUBLE_PLAY_BASE)
 	# 二遊間(2B/SS)は併殺機会が多く、三塁は中程度に補正する。
 	var position_multiplier: float = 1.0
 	match position:
@@ -1624,7 +1624,7 @@ static func _sacrifice_fly_probability(
 			position_bonus = -0.22
 
 	var chance: float = (
-		SACRIFICE_FLY_BASE
+		_rule_float("sacrifice_fly_base", SACRIFICE_FLY_BASE)
 		+ depth_factor * SACRIFICE_FLY_DEPTH_WEIGHT
 		+ hang_factor * SACRIFICE_FLY_HANG_WEIGHT
 		+ runner_speed * SACRIFICE_FLY_SPEED_WEIGHT_Z
@@ -1905,17 +1905,22 @@ static func _maybe_upgrade_hit_to_home_run(
 	var distance: float = float(physics.get("distance", 0.0))
 	var ev: float = float(physics.get("exit_velocity", 80.0))
 	var launch_angle: float = float(physics.get("launch_angle", 12.0))
-	var hr_line: float = _hr_line(spray) * HR_DISTANCE_SCALE
+	var hr_line: float = _hr_line(spray) * _rule_float("hr_distance_scale", HR_DISTANCE_SCALE)
 	hr_line = _power_adjusted_hr_line(hr_line, batter)
 	var shortfall: float = hr_line - distance
-	if shortfall < 0.0 or shortfall > HR_UPGRADE_WINDOW:
+	var hr_upgrade_window: float = _rule_float("hr_upgrade_window", HR_UPGRADE_WINDOW)
+	if shortfall < 0.0 or shortfall > hr_upgrade_window:
 		return outcome
 
 	# 打者パワー z をゲートに通し、0(非力)〜1(強打者)の昇格係数にする。
 	var power: float = _home_run_power(batter)
-	var power_factor: float = clamp((power - HR_UPGRADE_POWER_FLOOR) / HR_UPGRADE_POWER_WIDTH, 0.0, 1.0)
+	var power_factor: float = clamp(
+		(power - _rule_float("hr_upgrade_power_floor", HR_UPGRADE_POWER_FLOOR)) / _rule_float("hr_upgrade_power_width", HR_UPGRADE_POWER_WIDTH),
+		0.0,
+		1.0
+	)
 
-	var closeness: float = pow(1.0 - shortfall / HR_UPGRADE_WINDOW, 1.25)
+	var closeness: float = pow(1.0 - shortfall / hr_upgrade_window, 1.25)
 	var ev_bonus: float = clamp((ev - 90.0) * 0.014, 0.0, 0.22)
 	var angle_bonus: float = 0.10 if launch_angle >= 18.0 and launch_angle <= 38.0 else 0.0
 	var ideal_bonus: float = 0.36 if bool(contact_quality.get("ideal_power_launch", false)) else 0.0
@@ -1940,13 +1945,14 @@ static func _maybe_downgrade_single_to_out(
 	trajectory: String,
 	position: int
 ) -> Dictionary:
-	if SINGLE_TO_OUT_CHANCE <= 0.0:
+	var single_to_out_chance: float = _rule_float("single_to_out_chance", SINGLE_TO_OUT_CHANCE)
+	if single_to_out_chance <= 0.0:
 		return outcome
 	if str(outcome.get("category", "")) != CATEGORY_HIT:
 		return outcome
 	if int(outcome.get("bases", 0)) != 1:
 		return outcome
-	var chance: float = clamp(SINGLE_TO_OUT_CHANCE * _single_to_out_quality_multiplier(batter), 0.0, 0.95)
+	var chance: float = clamp(single_to_out_chance * _single_to_out_quality_multiplier(batter), 0.0, 0.95)
 	if chance <= 0.0:
 		return outcome
 	if Rng.roll_float() >= chance:
@@ -2012,8 +2018,8 @@ static func _home_run_power(batter: PSPlayerSeasonRecord) -> float:
 # s は 0(非力)〜1(強打者)で、中心付近で急に立ち上がり両端で飽和するため、本塁打数は S 字で増える。
 static func _power_adjusted_hr_line(base_line: float, batter: PSPlayerSeasonRecord) -> float:
 	var power: float = _home_run_power(batter)
-	var s: float = 1.0 / (1.0 + exp(-(power - HR_POWER_LINE_CENTER) / HR_POWER_LINE_WIDTH))
-	return base_line + HR_POWER_LINE_AMPLITUDE * (1.0 - 2.0 * s)
+	var s: float = 1.0 / (1.0 + exp(-(power - _rule_float("hr_power_line_center", HR_POWER_LINE_CENTER)) / _rule_float("hr_power_line_width", HR_POWER_LINE_WIDTH)))
+	return base_line + _rule_float("hr_power_line_amplitude", HR_POWER_LINE_AMPLITUDE) * (1.0 - 2.0 * s)
 
 
 static func _fielder_record(defense: Dictionary, position: int) -> PSPlayerSeasonRecord:
@@ -2177,3 +2183,7 @@ static func _weighted_z(values: Array, weights: Array) -> float:
 static func _round_float(value: float, digits: int) -> float:
 	var scale: float = pow(10.0, float(digits))
 	return round(value * scale) / scale
+
+
+static func _rule_float(name: String, fallback: float) -> float:
+	return ModManager.rule_float("simulation.play_resolver.%s" % name, fallback)
