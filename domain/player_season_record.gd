@@ -25,9 +25,9 @@ var hometown: String
 var registered_roster: String
 var contract_status: String
 var foreign_player: bool
-# R4 Step1: FA権を得る1軍登録年数相当 (8=高卒 / 7=その他) のスナップショット。
+# FA権取得に必要な1軍登録年数相当のスナップショット。出身により 8 または 7 が入る。
 var fa_eligible_years: int = 0
-# Phase 2 §10: 累積疲労 (post_game_fatigue_gain で球数比例的に加算、daily_recovery_amount で day-off に減衰)。
+# 累積疲労。試合後に球数比例で加算され、休養日で減衰する。
 # 0=元気, 200=飽和。PSFatigueCalculator は当試合の outing pitches を別途参照する。
 var fatigue: int
 var injury_days: int
@@ -45,12 +45,12 @@ var last_pitched_team_game: int = 0
 var position_aptitudes_snapshot: Dictionary = {}
 var position_experience_snapshot: Dictionary = {}
 var source_data: Dictionary = {}
-# File 2 §5: z-score 能力値のシーズン開始時スナップショット（唯一の正準能力値）。
-# display スケールが必要な計算式は z_display() を使う（旧 ability() は撤去済み）。
+# z-score 能力値のシーズン開始時スナップショット。シミュレーションはこの raw z を正準能力値として読む。
+# UI など display スケールが必要な箇所は z_display() で変換する。
 var z_abilities_snapshot: Dictionary = {}
 var raw_abilities_snapshot: Dictionary = {}
 # 変化球アーセナルのスナップショット: [{ "type": <String>, "mastery": <float z> }, ...]。
-# 空なら arsenal_or_derived() が z から派生 (既存セーブ/シードの後方互換)。
+# 空なら arsenal_or_derived() が z 能力から決定論的に派生する。
 var arsenal_snapshot: Array = []
 var batter_stats: PSBatterStats = PSBatterStats.new()
 var pitcher_stats: PSPitcherStats = PSPitcherStats.new()

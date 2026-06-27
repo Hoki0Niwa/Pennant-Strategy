@@ -1,10 +1,13 @@
 extends RefCounted
 
+# season day と実カレンダー日付の相互変換ヘルパー。
+# 内部シミュレーションは current_day を使い、UI 表示や日程テンプレートは YYYY-MM-DD を使う。
 const SECONDS_PER_DAY: int = 86400
 const OPENING_MONTH: int = 3
 const JAPANESE_WEEKDAYS: Array = ["日", "月", "火", "水", "木", "金", "土"]
 
 
+# 開幕日は「3月最終金曜日」。25〜31日を後ろから探す。
 static func opening_date_for_year(year: int) -> String:
 	var day: int = 31
 	while day >= 25:
@@ -15,12 +18,14 @@ static func opening_date_for_year(year: int) -> String:
 	return _date_string(year, OPENING_MONTH, 31)
 
 
+# YYYY-MM-DD に日数を足す。Godot の datetime dict は UTC 秒へ変換して扱う。
 static func add_days(date_text: String, days: int) -> String:
 	var unix: int = Time.get_unix_time_from_datetime_dict(_date_dict(date_text))
 	var out: Dictionary = Time.get_datetime_dict_from_unix_time(unix + days * SECONDS_PER_DAY)
 	return _date_string(int(out.get("year", 0)), int(out.get("month", 0)), int(out.get("day", 0)))
 
 
+# from_date から to_date までの日数差。date_for_day の逆算やテンプレート変換で使う。
 static func days_between(from_date: String, to_date: String) -> int:
 	var from_unix: int = Time.get_unix_time_from_datetime_dict(_date_dict(from_date))
 	var to_unix: int = Time.get_unix_time_from_datetime_dict(_date_dict(to_date))
@@ -28,10 +33,12 @@ static func days_between(from_date: String, to_date: String) -> int:
 	return int((to_unix - from_unix) / SECONDS_PER_DAY)
 
 
+# 1始まりの season day を実日付へ変換する。
 static func date_for_day(start_date: String, day: int) -> String:
 	return add_days(start_date, max(1, day) - 1)
 
 
+# season.calendar_start_date が古いセーブで空の場合は年度から開幕日を補う。
 static func date_for_season_day(season: PSSeason, day: int) -> String:
 	if season == null:
 		return ""
@@ -68,6 +75,7 @@ static func last_day_of_month(date_text: String) -> String:
 	return add_days(_date_string(year, month, 1), -1)
 
 
+# UI 用の短い日付ラベル。入力が壊れていれば元文字列をそのまま返す。
 static func label_for_date(date_text: String) -> String:
 	if date_text.is_empty():
 		return "-"

@@ -1,10 +1,13 @@
 extends RefCounted
 
+# balance_report / long_autoplay_report の数値を分布と health check に整形する。
+# health は pass/warn/fail の閾値付きチェック配列で、バランス調整中の異常検知を機械的に行う。
 const STATUS_PASS: String = "pass"
 const STATUS_WARN: String = "warn"
 const STATUS_FAIL: String = "fail"
 
 
+# 単年/短期バランスレポートから、主要な個人・チーム指標の min/p10/p50/p90/p99/max/mean を作る。
 static func balance_distributions(report: Dictionary) -> Dictionary:
 	var player_stats: Dictionary = report.get("player_stats", {}) as Dictionary
 	var batters: Array = player_stats.get("batters", []) as Array
@@ -38,6 +41,8 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 	}
 
 
+# 短期バランスの健全性チェック。得点環境、OPS/ERA、球数、盗塁、完投率、チーム勝率などを監視する。
+# warn は要確認、fail は明らかな壊れ方として扱う。
 static func balance_health(report: Dictionary) -> Dictionary:
 	var checks: Array = []
 	var completed: int = int(report.get("seasons_completed", 0))
@@ -80,6 +85,7 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	return _health_result(checks)
 
 
+# 長期オートプレイの年度別行から、リーグ環境・ロスター規模・タイトルリーダーの分布を作る。
 static func long_distributions(report: Dictionary) -> Dictionary:
 	var rows: Array = report.get("yearly", []) as Array
 	var leader_ops: Array = []
@@ -117,6 +123,8 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 	}
 
 
+# 長期オートプレイの健全性チェック。ロスター上限、孤立選手、長期平均の攻守環境、
+# タイトルリーダーの極端値を監視する。
 static func long_health(report: Dictionary) -> Dictionary:
 	var checks: Array = []
 	var completed: int = int(report.get("seasons_completed", 0))
@@ -151,6 +159,8 @@ static func long_health(report: Dictionary) -> Dictionary:
 	return _health_result(checks)
 
 
+# 複数 seed 実行の結果を、health status 件数と指定 metric path の分布へまとめる。
+# metric_paths は {"name": ["nested", "path"]} の形で渡す。
 static func multi_seed_summary(reports: Array, metric_paths: Dictionary = {}) -> Dictionary:
 	var summary: Dictionary = {
 		"runs": reports.size(),
@@ -171,6 +181,7 @@ static func multi_seed_summary(reports: Array, metric_paths: Dictionary = {}) ->
 	return summary
 
 
+# check 配列全体の代表 status を決める。fail が1つでもあれば fail、fail なし warn ありなら warn。
 static func _health_result(checks: Array) -> Dictionary:
 	var status: String = STATUS_PASS
 	var fail_count: int = 0
@@ -193,6 +204,7 @@ static func _health_result(checks: Array) -> Dictionary:
 	}
 
 
+# 値が warn 範囲外なら warn、fail 範囲外なら fail。
 static func _add_range_check(checks: Array, id: String, value: float, warn_min: float, warn_max: float, fail_min: float, fail_max: float, message: String) -> void:
 	var status: String = STATUS_PASS
 	if value < fail_min or value > fail_max:
@@ -209,6 +221,7 @@ static func _add_range_check(checks: Array, id: String, value: float, warn_min: 
 	})
 
 
+# 下限だけを見るチェック。値が小さすぎる崩壊を検知する。
 static func _add_min_check(checks: Array, id: String, value: float, warn_min: float, fail_min: float, message: String) -> void:
 	var status: String = STATUS_PASS
 	if value < fail_min:
@@ -225,6 +238,7 @@ static func _add_min_check(checks: Array, id: String, value: float, warn_min: fl
 	})
 
 
+# 上限だけを見るチェック。完投率やロスター数など増えすぎが問題になる指標に使う。
 static func _add_max_check(checks: Array, id: String, value: float, warn_max: float, fail_max: float, message: String) -> void:
 	var status: String = STATUS_PASS
 	if value > fail_max:
@@ -260,6 +274,7 @@ static func _add_manual_check(checks: Array, id: String, status: String, value: 
 	})
 
 
+# 数値配列を丸め済みの代表分布へ変換する。入力が空なら count だけ返す。
 static func _distribution(values: Array, digits: int) -> Dictionary:
 	var clean: Array = []
 	for value in values:
@@ -297,6 +312,7 @@ static func _positive_float_values(rows: Array, key: String) -> Array:
 	return values
 
 
+# ネストした Dictionary path から値を集める。欠損行はスキップする。
 static func _nested_values(rows: Array, keys: Array) -> Array:
 	var values: Array = []
 	for row_value in rows:

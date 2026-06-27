@@ -1,8 +1,9 @@
 extends RefCounted
 class_name PSPaProbabilityCalculator
 
-# File 2 §8: PA 結果カテゴリ (K/BB/HBP/BIP) を z-score 能力 + 本ファイルの調整係数(const) から softmax 抽選する。
-# 入力 precomp は PSPlateAppearanceCoordinator._build_precomp の戻り値（疲労/TTO drops 適用後）。
+# 打席結果カテゴリ (K/BB/HBP/BIP) の確率を作る。
+# 入力 precomp は PSPlateAppearanceCoordinator が組み立てた、疲労・巡目・捕手影響を反映済みの能力辞書。
+# 各カテゴリの logit を z 能力と調整係数から作り、softmax で相対確率へ変換する。
 
 
 const OUTCOME_STRIKEOUT: String = "k"
@@ -12,8 +13,8 @@ const OUTCOME_BIP: String = "bip"
 
 const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY_PITCH, OUTCOME_BIP]
 
-# --- 調整係数（旧 simulation_tuning.tres から移設。ここを直接書き換えて K/BB をチューニングする） ---
-# リーグベースライン: 能力差ゼロの平均的対戦での各カテゴリ初期 logit。softmax で相対比較される。
+# K/BB/HBP/BIP の調整係数。能力差ゼロの平均的対戦を基準に、個々の z 能力で logit を動かす。
+# リーグベースラインは softmax 前の初期値なので、1カテゴリを上げると他カテゴリは相対的に下がる。
 const LEAGUE_K_BASE: float = 0.25    # 三振の基準率。上げるとリーグ全体の三振が増える。
 const LEAGUE_BB_BASE: float = 0.35   # 四球の基準率。上げるとリーグ全体の四球が増える。
 const LEAGUE_HBP_BASE: float = 0.01  # 死球の基準率。通常はほぼ触らない。

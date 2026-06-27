@@ -3,6 +3,9 @@ class_name PSAdvancedStatReducer
 
 const AdvancedStatsRecord = preload("res://services/simulation/reducers/advanced_stats_record.gd")
 
+# play_event から高度指標の累積 Dictionary を更新する reducer。
+# 打席結果は打者/投手の wOBA・xwOBA・RE24、走者イベントは BSR、守備イベントは OAA/UZR/DRS 系へ流す。
+# advanced_stats は {"players": {id: dict}, "pitchers": {id: dict}} の形で in-place 更新される。
 const BUCKET_PLAYERS: String = "players"
 const BUCKET_PITCHERS: String = "pitchers"
 
@@ -24,6 +27,7 @@ const RE24_TABLE: Dictionary = {
 }
 
 
+# 空の累積コンテナ。保存時は AdvancedStatsRecord.to_dict() の集合として保持する。
 static func empty_advanced_stats() -> Dictionary:
 	return {
 		BUCKET_PLAYERS: {},
@@ -31,6 +35,8 @@ static func empty_advanced_stats() -> Dictionary:
 	}
 
 
+# 1プレー分のイベントを高度指標へ反映する入口。
+# plate_event / runner_events / fielding_events / defense_alignment が同じ play_event に同居している前提。
 static func apply_play_event(advanced_stats: Dictionary, play_event: Dictionary) -> void:
 	if play_event.is_empty():
 		return
@@ -87,6 +93,8 @@ static func apply_play_event(advanced_stats: Dictionary, play_event: Dictionary)
 		_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
+# RE24 = 得点 + プレイ後の得点期待値 - プレイ前の得点期待値。
+# 走者状況は bases 配列を 1/2/3 塁の bit mask に落として RE24_TABLE を参照する。
 static func re24_for_play(play_event: Dictionary) -> float:
 	var outs_before: int = int(play_event.get("outs_before", 0))
 	var outs_after: int = int(play_event.get("outs_after", 0))
@@ -98,6 +106,8 @@ static func re24_for_play(play_event: Dictionary) -> float:
 	return float(runs_scored) + after_expectancy - before_expectancy
 
 
+# アウトが増えたプレーでは、その時点の守備配置全員に守備イニング(outs)を加算する。
+# fielding_events だけでは「守備についていたが打球処理に絡まない選手」の守備機会が残らないため。
 static func _apply_defensive_alignment(advanced_stats: Dictionary, play_event: Dictionary) -> void:
 	var outs_added: int = int(play_event.get("outs_after", 0)) - int(play_event.get("outs_before", 0))
 	if outs_added <= 0:
@@ -114,6 +124,8 @@ static func _apply_defensive_alignment(advanced_stats: Dictionary, play_event: D
 		_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
+# 盗塁送球ミスなど runner_event 側にだけ出る失策を守備指標へ変換する。
+# 打球失策は fielding_events で処理されるため、ここでは is_fielding_error 付きの走者イベントだけを見る。
 static func _apply_runner_fielding_error(advanced_stats: Dictionary, play_event: Dictionary, runner_event: Dictionary) -> void:
 	if not bool(runner_event.get("is_fielding_error", false)):
 		return
@@ -151,6 +163,8 @@ static func _defensive_slot_for_position(play_event: Dictionary, position: int) 
 	return {}
 
 
+# 走者イベント失策の失点価値。刺殺期待が高い送球ミスほど大きく減点する。
+# RUNNER_FIELDING_ERROR_OPPORTUNITY_SCALE で、打球失策より軽い機会価値へ抑えている。
 static func _runner_fielding_error_run_value(runner_event: Dictionary) -> float:
 	var expected_out_probability: float = RUNNER_THROW_ERROR_DEFAULT_OUT_PROBABILITY
 	if runner_event.has("throw_out_probability"):
@@ -175,6 +189,8 @@ static func _oaa_zone_for_position(position: int, slot_zone: String = "") -> Str
 	return ""
 
 
+# 打球の EV/LA から簡易 xwOBA を推定する。
+# hard/liner/barrel の3要素を合成し、極端なゴロや高すぎるフライは下げる。
 static func expected_woba_for_batted_ball(batted_ball_event: Dictionary) -> float:
 	var exit_velocity: float = float(batted_ball_event.get("exit_velocity", 0.0))
 	var launch_angle: float = float(batted_ball_event.get("launch_angle", 0.0))
@@ -271,6 +287,7 @@ static func _ensure_shape(advanced_stats: Dictionary) -> void:
 		advanced_stats[BUCKET_PITCHERS] = {}
 
 
+# 既存 dict から AdvancedStatsRecord を復元し、呼び出し側が加算してから _store_record で戻す。
 static func _record_for(advanced_stats: Dictionary, bucket_name: String, player_id: int):
 	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
 	var key: String = _player_key(player_id)
@@ -280,6 +297,7 @@ static func _record_for(advanced_stats: Dictionary, bucket_name: String, player_
 	return stats
 
 
+# AdvancedStatsRecord を Dictionary 化して bucket へ戻す。キーは JSON 保存しやすい文字列 id。
 static func _store_record(advanced_stats: Dictionary, bucket_name: String, stats) -> void:
 	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
 	bucket[_player_key(stats.player_id)] = stats.to_dict()
@@ -290,6 +308,7 @@ static func _player_key(player_id: int) -> String:
 	return str(player_id)
 
 
+# wOBA の分子重み。category を優先し、古い/簡略イベントでは result や bases からフォールバックする。
 static func _woba_weight(plate_event: Dictionary) -> float:
 	var category: String = str(plate_event.get("category", "out"))
 	var result: String = str(plate_event.get("result", "out"))
@@ -323,6 +342,7 @@ static func _woba_weight(plate_event: Dictionary) -> float:
 	return 0.0
 
 
+# 犠打は wOBA 分母から除外し、それ以外の打席完了イベントは1打席分として数える。
 static func _woba_denominator_delta(plate_event: Dictionary) -> int:
 	var category: String = str(plate_event.get("category", "out"))
 	if category == "sacrifice":
@@ -330,6 +350,7 @@ static func _woba_denominator_delta(plate_event: Dictionary) -> int:
 	return 1
 
 
+# xwOBA は打球情報があれば EV/LA 由来、四死球は実 wOBA 重み、それ以外は0として扱う。
 static func _xwoba_weight(plate_event: Dictionary, batted_ball_event: Dictionary) -> float:
 	var category: String = str(plate_event.get("category", "out"))
 	if not batted_ball_event.is_empty():
@@ -355,6 +376,7 @@ static func _base_mask(bases: Array) -> int:
 	return mask
 
 
+# 走塁イベントの簡易 run value。盗塁/走塁死/暴投進塁などを BSR に加算する。
 static func _bsr_value(runner_event: Dictionary) -> float:
 	var result: String = str(runner_event.get("result", ""))
 	if bool(runner_event.get("is_stolen_base", false)) or result == "stolen_base":

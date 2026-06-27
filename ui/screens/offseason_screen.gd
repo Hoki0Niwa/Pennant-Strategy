@@ -1,14 +1,9 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# オフシーズン画面 (2026-06-24 共有基底 dashboard_screen へ全面刷新)。
-# 旧実装は唯一のノードUI (VBox + SortableTable(Tree) + Button + RichTextLabel + OptionButton) だったが、
-# home/standings/rankings/team_detail などと同じ「左サイドバー + ヘッダ + ダーク角丸パネル」の
-# 1920x1080 固定座標カスタム描画へ統一する。表示層のみ置換し、ゲームロジック
-# (AppState のオフシーズン API・各サービス) はそのまま流用する。
-# - Tree → 自前テーブル描画 (_draw_table / _draw_table_row)、行選択は _gui_input + _to_base + _row_hits。
-# - OptionButton (キャンプの練習種別/対象位置) → _add_button のチップ行。
-# - RichTextLabel (候補詳細など) → _text 複数行描画。
-# - 各操作ボタン (次へ/翌年開始/指名/獲得/見送り/自動…) → 基底の _add_button オーバーレイ。
+# オフシーズン画面。AppState の offseason_step と各 state 辞書を読み、
+# 戦力外、ドラフト、戦力外獲得、FA、外国人、キャンプ、成長、契約更新を1画面内で切り替える。
+# テーブル行は _row_hits に矩形を記録して _gui_input で選択し、操作ボタンは dashboard_screen の
+# オーバーレイボタンとして生成する。ゲーム状態の更新は AppState/各 season service に委譲する。
 
 const CampServiceRef = preload("res://services/season/camp_service.gd")
 const Offseason = preload("res://services/season/offseason_service.gd")

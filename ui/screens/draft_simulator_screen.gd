@@ -1,5 +1,8 @@
 extends Control
 
+# 開発用のドラフト検証画面。
+# 成長曲線レポートと長期オートプレイレポートを実行し、最新 JSON/CSV を読み直して表と分布で確認する。
+# 通常ゲーム画面ではなく DevChrome ベースの検証 UI なので、標準 Control ノードで構築している。
 const GrowthReporterScript = preload("res://services/reports/draft_growth_curve_reporter.gd")
 const LongReporterScript = preload("res://services/reports/long_autoplay_reporter.gd")
 const DistributionChartScript = preload("res://ui/screens/draft_growth_distribution_chart.gd")
@@ -66,6 +69,7 @@ func _ready() -> void:
 	_load_existing_reports()
 
 
+# 画面全体をコードで構築する。上部に検証画面共通ヘッダ、本文は TabContainer で成長曲線/長期オートプレイを分ける。
 func _build() -> void:
 	var root: VBoxContainer = VBoxContainer.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -107,6 +111,8 @@ func _build() -> void:
 	tabs.add_child(_build_long_tab())
 
 
+# 成長曲線タブ。サンプル数・年齢範囲・seed を指定して PSDraftGrowthCurveReporter を実行し、
+# 上段に年齢別サマリー、下段に選択セルの overall 分布を表示する。
 func _build_growth_tab() -> Control:
 	var margin: MarginContainer = MarginContainer.new()
 	margin.name = "ドラフト成長曲線"
@@ -189,6 +195,7 @@ func _build_growth_tab() -> Control:
 	return margin
 
 
+# 長期オートプレイタブ。指定年数を進め、リーグ環境・ロスター・タイトル傾向を複数 Tree に分けて表示する。
 func _build_long_tab() -> Control:
 	var margin: MarginContainer = MarginContainer.new()
 	margin.name = "長期オートプレイ"

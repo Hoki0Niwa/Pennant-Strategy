@@ -4,23 +4,17 @@ class_name OffseasonService
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-# 引退判定:
-#  (1) 段階的強制引退: FORCED_RETIREMENT_RAMP_START_AGE(40) から毎オフ引退確率が上がり、
-#      FORCED_RETIREMENT_CERTAIN_AGE(48) で確実に引退。出場数に関係なく適用。
-#      → 出場し続ける高能力ベテランが何歳になっても枠を埋め続ける問題を防ぐ。
-#  (2) 少出場引退: 年齢 >= RETIREMENT_AGE_THRESHOLD(38) かつ役割別少試合 (戦力外 Phase 1 と同基準)。
+# 引退は「年齢による自然減」と「高齢かつ低稼働」を併用する。
+# 出場機会を維持している選手でも40歳以降は毎年確率が上がり、48歳で必ず引退する。
+# 38歳以上で役割別の少試合基準を満たす選手は、強制年齢に達する前でも引退候補になる。
 const RETIREMENT_AGE_THRESHOLD: int = 38
 const FORCED_RETIREMENT_RAMP_START_AGE: int = 40
 const FORCED_RETIREMENT_CERTAIN_AGE: int = 48
 
-# 自動戦力外通告(CPU/自軍ボタン共通)
-# 仕様 (2026-06-14 改訂: 固定60へ削る方式を撤廃し need-driven へ):
-#  Phase 1 (常時): age >= PHASE1_AGE かつ少試合 → 優先カット
-#  Phase 2-4 (ROSTER_MIN 超過時): tier/perf 下位から切るが、**cut_score がキーパー水準
-#   (RELEASE_KEEPER_CUT_SCORE) 以上の選手は切らない**。= 入れ替える価値のある下位選手だけを放出する。
-#   → 弱い選手が多い球団は多く放出、キーパーばかりの球団はほぼ放出しない (放出数が need-driven に変動)。
-#  プロスペクト保護: years <= ROOKIE_PROTECTION_YEARS。床: CPU_ROSTER_MIN 未満には削らない。
-# 放出数の変動はドラフト指名数 (draft_service の need ベース target) に直結する。
+# 自動戦力外通告(CPU/自軍ボタン共通)は、固定人数ではなくロスターの弱点に応じて放出数が変わる。
+# まず高齢・少稼働の選手を常時候補にし、ロスターが厚いときだけ年齢/実績/能力の下位へ段階的に広げる。
+# cut_score がキーパー水準以上の選手と若手プロスペクトは残し、CPU_ROSTER_MIN 未満には削らない。
+# ここで空いた支配下枠は、ドラフトの need-driven target と後続の補強枠予約に反映される。
 const CPU_ROSTER_MIN: int = 55
 # これ未満の cut_score の非保護選手のみ放出対象 (= 代替が利きやすい控え以下)。以上はキーパーとして残す。
 const RELEASE_KEEPER_CUT_SCORE: float = 42.0

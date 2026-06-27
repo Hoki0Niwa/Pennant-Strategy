@@ -2,8 +2,8 @@ extends RefCounted
 class_name PSPlayResolver
 
 
-# Resolves a physical batted ball into a baseball play.
-# Inputs must already include EV/LA/spray/distance/hang time/trajectory.
+# 物理的な打球情報を野球のプレー結果へ変換する。
+# 入力には EV/LA/spray/distance/hang time/trajectory が事前計算済みで入っている前提。
 
 const CATEGORY_HIT: String = "hit"
 const CATEGORY_OUT: String = "out"
@@ -15,7 +15,7 @@ const CATEGORY_ERROR: String = "error"
 const RESULT_FOUL_BACK: String = "_foul_back_to_sequence"
 const FIELDER_ABILITY_CACHE_KEY: String = "_pa_fielder_ability_cache"
 
-# --- 調整係数（旧 simulation_tuning.tres から移設。打率・本塁打をここで直接調整する） ---
+# 打率・本塁打の大きな水準を動かす調整係数。
 const HR_DISTANCE_SCALE: float = 1.09    # 本塁打フェンスまでの距離の乗算。1未満で本塁打が増える。
 const SINGLE_TO_OUT_CHANCE: float = 0.27 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
 

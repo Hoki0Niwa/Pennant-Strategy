@@ -1,9 +1,10 @@
 extends RefCounted
 class_name PSDefenseAlignmentService
 
-# Phase 4: 守備配置テンプレート + 最小補充。
-# 旧 best_fielding_assignment_dp (8! 全探索 DP) を置換し、計算量を O(9 × N) に圧縮。
-# 不在判定は injury_days > 0 のみ (fatigue は score 計算で減点される既存挙動を維持)。
+# 守備配置テンプレートから当日の先発守備を決めるサービス。
+# 保存済み starter/sub 設定を優先し、欠員や重複があればポジション順に最適候補を補充する。
+# 不在判定は injury_days > 0 のみ。疲労は候補除外ではなくスコア減点として扱う。
+# 初回などテンプレートが空のときは、健康な野手から greedy に標準配置を作って profile へ保存する。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 
@@ -22,7 +23,7 @@ static func assign_defensive_starters(
 	if available_fielders.is_empty() or profile == null:
 		return []
 
-	# 1. record インデックスと healthy リストを構築
+	# player_id 参照用の索引と、当日出場可能な健康野手リストを作る。
 	var record_by_id: Dictionary = {}
 	var healthy: Array = []
 	for row in available_fielders:
@@ -36,22 +37,20 @@ static func assign_defensive_starters(
 	if healthy.size() < POSITIONS.size():
 		return []
 
-	# 2. starter_assignment_score の batting_score 部分を 1 度だけ計算してキャッシュ。
-	# 同じ候補が 8 ポジション × greedy fallback で何度も評価されるため、
-	# キャッシュしないと batting_score の中の ability lookup / sigmoid が重複する。
+	# 打撃スコアは候補×守備位置の評価で何度も読むため、先に1回だけ計算して使い回す。
 	var batting_cache: Dictionary = {}
 	for rec_row in healthy:
 		var rec: PSPlayerSeasonRecord = rec_row as PSPlayerSeasonRecord
 		if rec != null:
 			batting_cache[rec.player_id] = PlayerValueEvaluator.batting_score(rec)
 
-	# 3. starting_positions が空 (lazy default 初回) なら healthy から greedy で template 生成
+	# 保存テンプレートがまだ無いチームは、現在の健康野手から初期テンプレートを自動生成する。
 	var template: Dictionary = profile.starting_positions.duplicate()
 	if template.is_empty():
 		template = _generate_greedy_template(healthy, batting_cache)
 		profile.starting_positions = template.duplicate()
 
-	# 4. 各 position に割当
+	# 守備負荷の高い順に、保存設定・休養ローテ・補充候補を解決していく。
 	var assignments: Array = []
 	var used_ids: Dictionary = {}
 

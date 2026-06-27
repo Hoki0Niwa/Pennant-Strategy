@@ -5,7 +5,7 @@ signal data_loaded
 const TEAM_DATA_PATH = "res://data/initial_teams.json"
 const PLAYER_DATA_PATH = "res://data/initial_players.json"
 const SQLITE_DATA_PATH = "res://data/pennant_strategy.sqlite"
-# 本ゲーム由来のシード（run_export_seed_world が生成）。存在すればこれを最優先で使う。
+# 本ゲーム由来のシード。存在すれば CSV を最優先し、無ければ SQLite/JSON へフォールバックする。
 const CSV_PLAYER_PATH = "res://data/initial_players.csv"
 const CSV_TEAM_PATH = "res://data/initial_teams.csv"
 
@@ -30,7 +30,7 @@ func load_initial_data() -> void:
 	players_by_id.clear()
 	players_by_team.clear()
 
-	# 本ゲーム由来の CSV シードを最優先（借り物の SQLite/JSON は移行期のフォールバック）。
+	# CSV は現在の正準シード形式。存在しない環境だけ SQLite/JSON へフォールバックする。
 	if _load_initial_data_from_csv():
 		data_loaded_ok = true
 		data_loaded.emit()
@@ -47,9 +47,8 @@ func load_initial_data() -> void:
 	data_loaded.emit()
 
 
-# Phase 1 で追加した z_abilities / condition / fixed_slot / allowed_slots / preferred_slots は
-# SQLite 側のスキーマには無いため、initial_players.json から id 一致で上書きする。
-# SQLite スキーマ刷新が完了したら不要になる暫定パス。
+# SQLite シードを使う環境では、SQLite に無い追加フィールドを JSON から id 一致で重ねる。
+# z_abilities や起用固定情報が欠けたまま起動しないようにするための補完ルート。
 func _overlay_phase1_fields_from_json() -> void:
 	var player_data_path: String = ModManager.resolve_data_path("initial_players_json", PLAYER_DATA_PATH)
 	if not FileAccess.file_exists(player_data_path):

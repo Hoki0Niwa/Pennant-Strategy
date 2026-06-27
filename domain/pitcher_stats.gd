@@ -1,6 +1,7 @@
 extends RefCounted
 class_name PSPitcherStats
 
+# 投手のシーズン累積成績。イニングは 1/3 回を正確に扱うため outs_pitched で保持する。
 var games: int
 var starts: int
 var relief_appearances: int
@@ -48,6 +49,7 @@ static func from_dict(data: Dictionary) -> PSPitcherStats:
 	return stats
 
 
+# 別期間の投手成績をこのインスタンスへ加算する。チーム合算や通算行の作成で使う。
 func add_from(other: PSPitcherStats) -> void:
 	games += other.games
 	starts += other.starts
@@ -97,22 +99,26 @@ func subtract_from(other: PSPitcherStats) -> PSPitcherStats:
 	return diff
 
 
+# 表示用の投球回。内部の正準値は outs_pitched。
 func innings_pitched() -> float:
 	return float(outs_pitched) / 3.0
 
 
+# ERA = 自責点 * 9回 / 投球回。outs_pitched ベースなので 27 / outs で計算する。
 func era() -> float:
 	if outs_pitched == 0:
 		return 0.0
 	return float(earned_runs) * 27.0 / float(outs_pitched)
 
 
+# WHIP = (被安打 + 与四球) / 投球回。
 func whip() -> float:
 	if outs_pitched == 0:
 		return 0.0
 	return float(hits_allowed + walks) * 3.0 / float(outs_pitched)
 
 
+# K/9 = 奪三振 * 9回 / 投球回。
 func strikeouts_per_nine() -> float:
 	if outs_pitched == 0:
 		return 0.0

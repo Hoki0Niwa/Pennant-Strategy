@@ -1,9 +1,9 @@
 extends Resource
 class_name PSDefenseAlignmentProfile
 
-# Phase 4: チーム別の守備配置テンプレート。
-# 12 球団分 .tres は commit せず lazy default (starting_positions 空 → 初回 fallback)。
-# Phase 3 PSBattingOrderProfile と同形パターン。DH の概念は守備に無関係なので p_team_id のみキャッシュキー。
+# チーム別の守備配置テンプレート。
+# starting_positions が空なら初回利用時に PSDefenseAlignmentService が現在ロスターから greedy に生成する。
+# DH は守備配置に関係しないため、キャッシュキーは team_id のみ。
 
 const RESOURCE_DIR: String = "res://data/teams/"
 

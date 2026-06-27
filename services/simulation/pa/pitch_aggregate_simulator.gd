@@ -1,15 +1,15 @@
 extends RefCounted
 class_name PSPitchAggregateSimulator
 
-# File 2 §9.4: PA カテゴリと能力 + 本ファイルの調整係数(const) から擬似球数 (pitches/balls/strikes/swings/whiffs/...) を生成する。
-# 出力スキーマは既存 PitchSummary と完全互換:
+# 打席カテゴリと能力から、球数・ボール/ストライク・空振りなどの集計 PitchSummary を生成する。
+# 出力スキーマ:
 # {pitches, balls, strikes, final_count, swings, whiffs, called_strikes, fouls,
 #  in_zone_pitches, out_zone_pitches, first_pitch_strike, csw}
 
 const CATEGORY_K: String = "k"
 const CATEGORY_BB: String = "bb"
 const CATEGORY_HBP: String = "hbp"
-# --- 調整係数（旧 simulation_tuning.tres から移設。球数を直接ここでチューニングする） ---
+# 球数生成の調整係数。カテゴリごとの基本球数に、打者/投手/捕手能力と疲労の補正を足し引きする。
 # カテゴリ別の基本球数。リーグ平均でおよそ 3.9 球/打席(NPB 実水準)になるよう設定。
 const BASE_PITCHES_K: float = 4.9    # 三振で終わる打席の基本球数。
 const BASE_PITCHES_BB: float = 5.6   # 四球で終わる打席の基本球数。
@@ -20,9 +20,7 @@ const PATIENCE_COEF: float = 0.4            # 打者の選球眼が球数を増�
 const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減らす係数。
 const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が球数を減らす係数。
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
-# 能力 z は集団平均が 0 でない(投手 Pit_Efficiency ≈ +1.0 等)ため、生 z をそのまま係数に掛けると
-# リーグ全体の球数が系統的に沈む(旧実装は実測 3.0 球/打席まで低下し完投過多の温床だった)。
-# 平均的な選手で補正ゼロになるよう、各能力の集団平均(中立点)を引いてから係数を適用する。
+# 能力 z は集団平均が0とは限らないため、平均的な選手で補正ゼロになる中立点を引いてから係数を適用する。
 const PATIENCE_Z_NEUTRAL: float = 0.95   # Bat_BBCreate の野手平均。
 const AGGRESSION_Z_NEUTRAL: float = 0.3  # Bat_Aggression の野手平均。
 const EFFICIENCY_Z_NEUTRAL: float = 1.0  # Pit_Efficiency の投手平均。

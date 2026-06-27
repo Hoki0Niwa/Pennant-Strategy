@@ -1,8 +1,8 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# 年間表彰画面 (2026-06-24 ダッシュボードUIへ刷新)。
-# 左側に日本一 / MVP・新人王 / 打撃タイトル / 投手タイトルをパネル化し、
-# 右側には未実装のベストナイン・ゴールデン・グラブ賞の枠だけを置く。
+# 年間表彰画面。AppState.current_awards と current_postseason を読み、
+# 日本一、MVP、新人王、打撃タイトル、投手タイトルをシーズン終了時の結果として表示する。
+# ベストナインとゴールデン・グラブ賞は表示枠のみ用意し、選出ロジックが入るまで空状態を描く。
 
 const BATTING_TITLE_LABELS: Dictionary = {
 	"average": "首位打者",

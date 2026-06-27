@@ -3,12 +3,19 @@ class_name PSPlateEventReducer
 
 const BaseStateResolver = preload("res://services/simulation/reducers/base_state_resolver.gd")
 
+# 打席 outcome を公式記録と塁状況へ反映する reducer。
+# batter/pitcher の stats を必要に応じて更新し、bases は in-place で進塁後の状態へ変わる。
+# GameLoop は戻り値の outs/runs/earned_runs/pitches を使って試合スコアと投手責任を更新する。
 const OPTION_TRACK_BATTER: String = "track_batter"
 const OPTION_TRACK_PITCHER: String = "track_pitcher"
 const OPTION_CHARGE_PITCHER_RUNS: String = "charge_pitcher_runs"
 const OPTION_PITCH_SUMMARY: String = "pitch_summary"
 
 
+# options:
+# - track_batter / track_pitcher: テストや仮想処理で個人成績更新を止めたいとき false
+# - charge_pitcher_runs: inning 側で責任投手へ失点を付けるタイミングだけ true
+# - pitch_summary: 球数を打者 pitches_seen / 投手 pitches_thrown へ加算するための集計
 static func apply_plate_outcome(
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,

@@ -4,11 +4,11 @@ class_name SQLiteStore
 const SaveContext = preload("res://services/storage/save_context.gd")
 const RUNTIME_TEMPLATE_DB_PATH = "res://data/pennant_strategy.sqlite"
 
-# 永続化スキーマ世代:
+# 永続化スキーマ世代。SQLite の user_version に保存し、足りない列やテーブルを起動時に補う。
 #   0: blob (runtime_blobs) のみ
 #   1: 正規化テーブル (player_season_records / batter_stats / pitcher_stats) 追加済
 #   2: player_season_records に advanced_stats_json 列追加 (wRAA / BSR / OAA / 守備など)
-#   3: player_season_records に fa_eligible_years 列追加 (R4 Step1 FA権/保有権)
+#   3: player_season_records に fa_eligible_years 列追加
 const SCHEMA_VERSION: int = 3
 
 # スキーマ構築 (CREATE TABLE / INDEX / レガシー検出 / PRAGMA table_info) はプロセス内で
@@ -64,7 +64,7 @@ static func load_record_store() -> Dictionary:
 
 
 # -----------------------------------------------------------------------------
-# 永続化スキーマ v1: 正規化テーブルの CRUD
+# 選手年度記録は検索・集計しやすいよう、選手本体/打撃成績/投手成績の3テーブルに正規化する。
 # -----------------------------------------------------------------------------
 
 const PLAYER_SEASON_COLUMNS: Array = [
@@ -105,9 +105,8 @@ const PITCHER_STATS_COLUMNS: Array = [
 ]
 
 
-# Dual-write 経路 (RecordStore.save_records() から呼ばれる)。
-# blob (runtime_blobs.record_store) と新 3 テーブルを同一 transaction で更新する。
-# 一方の失敗で ROLLBACK し、状態の乖離を防ぐ。
+# RecordStore.save_records() から呼ばれる保存入口。
+# 軽量 blob と正規化3テーブルを同一 transaction で更新し、片方だけ成功する状態を防ぐ。
 static func save_record_store_and_normalized(blob_payload: Dictionary) -> bool:
 	var db: Object = _open_runtime_db()
 	if db == null:
@@ -122,9 +121,8 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 	if not _execute(db, "BEGIN TRANSACTION"):
 		return false
 
-	# player_records は正規化テーブルが真実 (load 時もそこから hydrate する) なので、
-	# blob には team_records / season_archives のみを残してサイズを抑える。これにより
-	# runtime_blobs.record_store に全履歴 JSON を毎回書き込む肥大化 (DB ファイル肥大の主因) を防ぐ。
+	# player_records は正規化テーブルを読み込み元にするため、blob にはチーム記録と履歴だけを残す。
+	# autosave ごとに全選手履歴 JSON を書き直さずに済み、DB サイズの肥大化を抑えられる。
 	var slim_blob: Dictionary = {
 		"version": blob_payload.get("version", 2),
 		"team_records": blob_payload.get("team_records", []),
@@ -192,7 +190,7 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 	return _execute(db, "COMMIT")
 
 
-# 新テーブルからの一括ロード。RecordStore.load_records() で blob より優先される。
+# 正規化テーブルから全選手年度記録を復元する。RecordStore.load_records() では blob より優先される。
 static func load_all_player_season_record_dicts() -> Array:
 	var db: Object = _open_runtime_db()
 	if db == null:
@@ -204,8 +202,7 @@ static func load_all_player_season_record_dicts() -> Array:
 	return _merge_normalized_rows(psr_rows, bs_rows, ps_rows)
 
 
-# 新テーブルが空 (= 一度も dual-write されていない) かどうか。
-# load_records() でこれが true なら blob からの hydrate ルートを取る。
+# 正規化テーブルがまだ空なら、古い blob だけのセーブとして扱って hydrate ルートへ戻す。
 static func normalized_tables_empty() -> bool:
 	if not is_available():
 		return true

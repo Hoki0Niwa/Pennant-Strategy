@@ -3,9 +3,12 @@ class_name SeasonService
 
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
+# PSSeason を新規作成するファクトリ。
+# AppState はここで年度、開幕日、schedule template 情報、チーム年度記録、ペナント日程をまとめて初期化する。
 const DEFAULT_START_YEAR = 2026
 
 
+# 完全新規ゲームの初年度を作る。
 static func create_new_season(teams: Array, selected_team_id: int, year: int = DEFAULT_START_YEAR, dh_by_league: Dictionary = {}) -> PSSeason:
 	var season: PSSeason = PSSeason.new()
 	season.year = year
@@ -26,6 +29,8 @@ static func create_new_season(teams: Array, selected_team_id: int, year: int = D
 	return season
 
 
+# 前年の操作チームと season_number を引き継いで翌年シーズンを作る。
+# ロスター/能力は GameDb 側の現在状態を使い、日程は新年度の開幕日と bucket seed で再生成する。
 static func create_next_season(previous_season: PSSeason, teams: Array, dh_by_league: Dictionary = {}) -> PSSeason:
 	var season: PSSeason = PSSeason.new()
 	season.year = previous_season.year + 1

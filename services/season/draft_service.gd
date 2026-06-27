@@ -5,10 +5,9 @@ const Offseason = preload("res://services/season/offseason_service.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
 
-# ドラフトでのポジション別 WAR need の重み。
-# WAR 不足 (リーグ平均 starter_war - チーム starter_war) を round_no 別の係数で
-# bucket_grade に加算する。1 WAR の不足 ≈ 1.5 / 3.0 ポイントのオーダーで、
-# 既存の shortage * need_weight (1.2 / 3.2) と同程度の影響度。
+# ドラフト指名は候補の素点に、球団ごとの不足ポジション補正を加えて決める。
+# WAR need は「リーグ平均の先発級 WAR との差」を bucket_grade へ足し、
+# 現有戦力が弱いポジションほど候補評価を押し上げる。
 const WAR_NEED_WEIGHT_ROUND1: float = 1.5
 const WAR_NEED_WEIGHT_LATER: float = 3.0
 # 投手 (position=1) はポジション分解せず単一の need として扱う。
@@ -40,12 +39,10 @@ const PRIMARY_NEED_WEIGHT_LATER: float = 7.0
 const UTILITY_SUBPOS_WEIGHT: float = 0.6
 
 const ROSTER_LIMIT: int = 70
-# ドラフトは2フェーズ: 本指名 (支配下) → 育成ドラフト (育成枠外)。
-# AppState では本指名と育成指名を別ステップに分ける。レポート/テスト用の直接呼び出しでは
-# allow_development_segment=true のまま通し実行できる。
-# 本指名: 1球団あたりの指名数は need-driven (下記 _compute_main_draft_targets)。
-#   6人を基本線に、在籍支配下が少ない球団は最大9、在籍が多い/昇格見込みがある球団は4〜5へ減らす。
-#   hard 上限70で頭打ち。
+# ドラフトは本指名(支配下)のあと育成ドラフトへ進む2フェーズ制。
+# AppState では別ステップとして表示するが、レポート/テスト用の直接実行では通しで処理できる。
+# 本指名数は固定ではなく、支配下人数・補強予約枠・育成昇格見込みからチームごとに決まる。
+# 基本は6人、薄い球団は最大9人、多い球団や昇格候補が多い球団は4〜5人へ抑える。
 const MAIN_DRAFT_MAX_PICKS: int = 9
 const MAIN_DRAFT_BASE_PICKS: int = 6
 const MAIN_DRAFT_MIN_PICKS: int = 4

@@ -1,6 +1,7 @@
 extends RefCounted
 class_name PSStats
 
+# チーム成績の基本集計。順位表、履歴、ゲーム差計算で共通して使う最小単位。
 var games: int
 var wins: int
 var losses: int
@@ -20,6 +21,7 @@ static func from_dict(data: Dictionary) -> PSStats:
 	return stats
 
 
+# 引き分けは勝率の分母に含めない。
 func win_rate() -> float:
 	var decisions: int = wins + losses
 	if decisions == 0:

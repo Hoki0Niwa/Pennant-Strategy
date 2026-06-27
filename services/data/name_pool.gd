@@ -1,6 +1,8 @@
 extends RefCounted
 class_name NamePool
 
+# 新規生成選手の名前プール。
+# CSV は category,name の2列で、mod が player_names を差し替えれば同じ API で別名簿を使える。
 const CSV_PATH: String = "res://data/player_names.csv"
 
 static var _loaded: bool = false
@@ -9,6 +11,7 @@ static var _given_names: PackedStringArray = PackedStringArray()
 static var _foreign_names: PackedStringArray = PackedStringArray()
 
 
+# 初回だけ CSV を読み、カテゴリ別配列へ分ける。読み込み失敗時はフォールバック名で生成を継続する。
 static func ensure_loaded() -> void:
 	if _loaded:
 		return
@@ -44,6 +47,7 @@ static func ensure_loaded() -> void:
 			"foreign": _foreign_names.append(name_text)
 
 
+# 日本人名は surname + given_name を独立に抽選して組み合わせる。
 static func pick_japanese_name() -> String:
 	ensure_loaded()
 	var surname: String = "佐藤"
@@ -55,6 +59,7 @@ static func pick_japanese_name() -> String:
 	return "%s %s" % [surname, given]
 
 
+# 外国人名は1セルに完成名を入れる。名簿が無い場合だけ Smith を返す。
 static func pick_foreign_name() -> String:
 	ensure_loaded()
 	if _foreign_names.size() == 0:

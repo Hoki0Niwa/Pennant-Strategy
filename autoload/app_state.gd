@@ -29,13 +29,12 @@ const OFFSEASON_PANEL_FOREIGN: String = "foreign"
 const OFFSEASON_PANEL_CAMP: String = "camp"
 
 var current_screen: String = "start"
-# 「前に開いていた画面」に戻る/進むためのナビゲーション履歴スタック。
-# 各要素は {"screen": String, "player_id": int} のスナップショット。
+# 画面遷移の戻る/進む用スタック。各要素は画面名と選択中 player_id のスナップショット。
 var _screen_history: Array = []  # 戻る用 (過去)
 var _forward_history: Array = []  # 進む用 (go_back で退避した先)
 var _navigating_history: bool = false
 const MAX_SCREEN_HISTORY: int = 50
-# 履歴に積まない画面 (フロー専用 / 戻る対象にすると壊れる画面)。
+# フロー専用画面は戻る先にすると進行状態と UI がずれるため、履歴に積まない。
 const NON_HISTORY_SCREENS: Dictionary = {
 	"start": true,
 	"team_select": true,
@@ -74,24 +73,24 @@ func _camp_service() -> GDScript:
 	return load(CAMP_SERVICE_PATH) as GDScript
 
 
-# 自動セーブが有効なときだけ SaveService.save_state を呼ぶラッパー。
+# 自動セーブ設定を見て SaveService.save_state を呼ぶ共通ラッパー。
 func _save_if_enabled() -> void:
 	if auto_save_enabled:
 		SaveService.save_state(self)
 
 
 func show_player_detail(player_id: int) -> void:
-	# player_id を更新する前に現在画面を履歴へ積む (順序が重要)。
+	# 現在画面を履歴へ積んでから選手詳細へ遷移する。player_id も履歴スナップショットに含める。
 	_record_history_snapshot("player_detail")
 	current_player_id = player_id
 	request_screen("player_detail", false)
 
 
-# 現在の画面状態を履歴スタックへ積む。連続重複・フロー専用画面・戻る/進む操作中は積まない。
+# 現在の画面状態を戻る履歴へ積む。連続重複・フロー専用画面・履歴操作中の再記録は抑止する。
 func _record_history_snapshot(next_screen: String) -> void:
 	if _navigating_history:
 		return
-	# 新規ナビゲーションなので「進む」履歴は無効化する (ブラウザと同様)。
+	# 新しい通常遷移が入ったら、戻る操作で退避していた進む履歴は破棄する。
 	_forward_history.clear()
 	if NON_HISTORY_SCREENS.has(current_screen):
 		return

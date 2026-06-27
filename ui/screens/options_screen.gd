@@ -1,10 +1,7 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# オプション画面 (2026-06-22 ホーム画面に合わせて再設計)。
-# dashboard_screen.gd のダーク配色・固定座標系・描画プリミティブ・ボタン基盤を流用した
-# full-bleed ダッシュボード。シーズン進行中はサイドバー+ヘッダ (_draw_shell) を、
-# 開始前 (start から) は簡易チロームを描く。トグルは ON=青(chip_active)/OFF=灰(chip) の
-# チップボタンで表し、1クリックで切り替える (基底のボタン基盤に載るのでレイアウトがズレない)。
+# オプション画面。開始前とシーズン中の両方から開かれるため、状態に応じて簡易 chrome か通常 shell を描く。
+# トグルは ON=青(chip_active)/OFF=灰(chip) のチップボタンで表し、1クリックで AppState の設定を切り替える。
 # 再生成の年数/シードは LineEdit を座標系に重ねて直接入力でき、focus_exited/Enter で確定する。
 # 能力分布グラフは SubViewport で PNG を生成し、得られたテクスチャを _draw 内で直接描画する。
 

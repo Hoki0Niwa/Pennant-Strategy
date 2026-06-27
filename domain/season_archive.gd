@@ -1,6 +1,8 @@
 extends RefCounted
 class_name PSSeasonArchive
 
+# 終了済みシーズンの履歴スナップショット。
+# 通常の season/team/player record とは分け、履歴画面が最終順位・ポストシーズン・表彰だけを軽く読める形にする。
 var year: int
 var season_number: int
 var standings: Dictionary = {}  # team_id → {wins, losses, draws, runs_scored, runs_allowed}

@@ -1,6 +1,8 @@
 extends Control
 class_name DraftGrowthDistributionChart
 
+# ドラフト成長曲線画面の overall 分布グラフ。
+# bins は {overall, count} の配列で、p10/p50/p90/mean などの stats があれば縦マーカーを描く。
 var bins: Array = []
 var title_text: String = ""
 var subtitle_text: String = ""
@@ -8,6 +10,7 @@ var empty_message: String = "年齢セルを選択すると分布グラフを表
 var stats: Dictionary = {}
 
 
+# 新しい分布をセットし、overall 昇順に並べてから再描画する。
 func set_distribution(new_bins: Array, new_title: String, new_subtitle: String, new_stats: Dictionary = {}) -> void:
 	bins = new_bins.duplicate(true)
 	bins.sort_custom(func(a, b) -> bool:
@@ -19,6 +22,7 @@ func set_distribution(new_bins: Array, new_title: String, new_subtitle: String, 
 	queue_redraw()
 
 
+# データが無い状態のメッセージへ戻す。
 func clear_message(message: String) -> void:
 	bins = []
 	title_text = ""
@@ -28,6 +32,7 @@ func clear_message(message: String) -> void:
 	queue_redraw()
 
 
+# 棒グラフ本体。横軸は overall、縦軸は人数。中央値の棒だけ色を少し変える。
 func _draw() -> void:
 	var rect: Rect2 = Rect2(Vector2.ZERO, size)
 	draw_rect(rect, Color(0.07, 0.08, 0.10), true)
@@ -93,6 +98,7 @@ func _draw() -> void:
 	draw_string(font, Vector2(8.0, plot.position.y - 8.0), "count", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, Color(0.75, 0.79, 0.86))
 
 
+# 平均や分位点を縦線で表示する。表示範囲外や NAN は描かない。
 func _draw_marker(plot: Rect2, min_overall: int, max_overall: int, value: float, color: Color, label: String) -> void:
 	if is_nan(value):
 		return

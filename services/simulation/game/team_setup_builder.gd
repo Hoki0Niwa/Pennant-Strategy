@@ -9,9 +9,8 @@ const DefenseAlignmentService = preload("res://services/simulation/lineup/defens
 
 const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
 const MIN_ACTIVE_CATCHERS: int = 2
-# 役割は保存 role が正準 (PSPitcherRoleModel.is_starter_record)。stored-starter が 1 人でもいれば
-# リリーフは先発ローテに混入させない。starter がゼロのチーム (ドリフト/小ロスター) のときだけ
-# 緊急補充し、その上限人数がこの定数。通常編成 (各チーム starter 多数) では発火しない。
+# 先発候補は保存 role を正準にする。先発 role が1人でもいればリリーフをローテへ混ぜず、
+# 先発ゼロの小規模/壊れたロスターだけ緊急補充を許す。その補充上限がこの定数。
 const STARTER_POOL_MIN: int = 5
 
 
@@ -33,9 +32,8 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -
 	var relief_role_by_pitcher: Dictionary = PSRotationPlanner.relief_role_by_pitcher(saved_rotation, relievers)
 	var team_games_played_before: int = 0 if team_record == null else int(team_record.stats.games)
 
-	# Phase 5: team.auto_lineup ON なら保存済み打順を無視して常に build_setup_from_auto 経由。
-	# Phase 3/4 の日替わり打順 + 守備配置サービスが毎試合呼ばれる。
-	# auto_lineup OFF なら saved → fallback build_setup_from_auto の従来挙動を維持。
+	# auto_lineup ON は保存済み打順を使わず、その日のロスターから打順と守備配置を毎試合作る。
+	# OFF のチームは保存設定を優先し、欠員などで組めない場合だけ自動生成へフォールバックする。
 	var setup: Dictionary = {}
 	var team: PSTeam = GameDb.get_team(team_id)
 	var use_saved: bool = team == null or not team.auto_lineup

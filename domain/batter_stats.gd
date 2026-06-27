@@ -1,6 +1,7 @@
 extends RefCounted
 class_name PSBatterStats
 
+# 打者のシーズン累積成績。公式記録系のカウントだけを持ち、率指標は必要時に関数で計算する。
 var games: int
 var plate_appearances: int
 var at_bats: int
@@ -46,6 +47,7 @@ static func from_dict(data: Dictionary) -> PSBatterStats:
 	return stats
 
 
+# 別期間の打撃成績をこのインスタンスへ加算する。チーム合算や通算行の作成で使う。
 func add_from(other: PSBatterStats) -> void:
 	games += other.games
 	plate_appearances += other.plate_appearances
@@ -93,12 +95,14 @@ func subtract_from(other: PSBatterStats) -> PSBatterStats:
 	return diff
 
 
+# 打率 = 安打 / 打数。打数ゼロは表示・ソートしやすいよう 0.0。
 func batting_average() -> float:
 	if at_bats == 0:
 		return 0.0
 	return float(hits) / float(at_bats)
 
 
+# 出塁率 = (安打 + 四球 + 死球) / (打数 + 四球 + 死球 + 犠飛)。
 func on_base_percentage() -> float:
 	var denominator: int = at_bats + walks + hit_by_pitches + sacrifice_flies
 	if denominator == 0:
@@ -106,6 +110,7 @@ func on_base_percentage() -> float:
 	return float(hits + walks + hit_by_pitches) / float(denominator)
 
 
+# 長打率 = 塁打 / 打数。単打は hits から二三本塁打を差し引いて求める。
 func slugging_percentage() -> float:
 	if at_bats == 0:
 		return 0.0

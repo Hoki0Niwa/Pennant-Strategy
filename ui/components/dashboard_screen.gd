@@ -1,14 +1,10 @@
 extends Control
 
-# ダッシュボード系画面の共有基底 (2026-06-20)。
-# ホーム画面で確立した「左サイドバー + ヘッダ + ダーク角丸パネル」の運用ダッシュボード体裁を
-# 複数画面で再利用するため、チーム横断で使う部分 (配色パレット / 1920x1080 固定座標系の座標変換 /
-# 描画プリミティブ / サイドバー / ヘッダ / オーバーレイボタン基盤) をここへ集約する。
-# サブクラス (home_screen / rotation_editor_screen など) は本クラスを継承し、
-#   _ready: super なし or 任意。_font と _sidebar_entries の初期化は _init_chrome() を呼ぶ。
-#   _draw:  先頭で _draw_shell(title, team, season) を呼び、その後に本文を描画する。
-#   ボタン: _build_nav_buttons() でサイドバーナビを生成し、固有アクションは _add_button() で足す。
-# のように使う。スケールは min(sx, sy) 等倍 + 中央寄せで非16:9でも破綻させない。
+# ダッシュボード系画面の共有基底。
+# 1920x1080 の base 座標を現在 viewport へ等倍変換し、左サイドバー・ヘッダ・共通描画部品・
+# オーバーレイボタン管理を提供する。サブクラスは _init_chrome() でフォント/ナビを初期化し、
+# _draw() の先頭で _draw_shell(title, team, season) を呼んでから本文を描く。
+# 固有アクションは _add_button()、サイドバーナビは _build_nav_buttons() で生成する。
 
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")

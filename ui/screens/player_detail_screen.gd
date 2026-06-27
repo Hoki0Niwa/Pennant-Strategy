@@ -1,7 +1,6 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# 選手詳細画面 (2026-06-23 ホーム/チーム詳細のダッシュボード体裁へ全面刷新)。
-# 旧版は「テキストの羅列 + 雑な履歴表」だったが、共有基底 dashboard_screen の上に組み直す。
+# 選手詳細画面。選択中 player_id の現所属・契約・能力・年度別成績を1画面に集約する。
 # 表示要素:
 #   - 識別バー: 選手名 + ▼(選手プルダウン) + 守備位置/役割 chip + 背番号、その横にプロ年数/年齢/投打/総合評価を
 #     インライン表示 (カードにするほどではない情報)。右端に閲覧球団プルダウン。
@@ -11,7 +10,7 @@ extends "res://ui/components/dashboard_screen.gd"
 #   - プロフィール・契約パネル: 登録区分 / 契約(FA) / 年俸 / 出身 / 疲労・怪我 / 評価内訳。
 #   - 下部タブ表: 成績 / 指標 / 高度指標 / 能力の変遷 を切り替え (初期は成績)。隠しパラメータ(z/raw)以外の
 #     ボックススコア項目をすべて網羅。各行=1シーズン、成績・指標は通算行つき。
-# 重い集計 (高度指標の WAR リーグ文脈) は高度指標タブを開いたとき 1 度だけ計算しキャッシュする。
+# 高度指標の WAR リーグ文脈は重いため、該当タブを開いたとき1度だけ計算してキャッシュする。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")

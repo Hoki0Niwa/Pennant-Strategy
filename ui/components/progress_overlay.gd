@@ -1,6 +1,9 @@
 extends Control
 class_name ProgressOverlay
 
+# 長時間処理中に画面全体を塞ぐ進捗オーバーレイ。
+# show_progress -> update_progress を繰り返し、キャンセルボタンは cancel_requested だけを emit する。
+# 実際に処理を止めるかどうかは呼び出し側の cancel_token が判断する。
 signal cancel_requested
 
 var _backdrop: ColorRect
@@ -17,6 +20,7 @@ func _ready() -> void:
 	hide_progress()
 
 
+# 子ノードをコードで構築する。シーンファイルを持たないため、どの画面からでも preload して使える。
 func _build() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -76,6 +80,7 @@ func _build() -> void:
 	button_row.add_child(_cancel_button)
 
 
+# 新しい処理開始時の初期化。前回のキャンセル状態と進捗表示をリセットする。
 func show_progress(label: String) -> void:
 	_cancelled = false
 	_title_label.text = label
@@ -86,6 +91,7 @@ func show_progress(label: String) -> void:
 	visible = true
 
 
+# done/total が有効なら determinate progress、total<=0 なら sub_label だけを表示する。
 func update_progress(done: int, total: int, sub_label: String = "") -> void:
 	if total > 0:
 		_progress_bar.max_value = float(total)
@@ -99,11 +105,13 @@ func update_progress(done: int, total: int, sub_label: String = "") -> void:
 		_detail_label.text = sub_label
 
 
+# 閉じるときはキャンセル状態も戻し、次回 show_progress で素直に再利用できるようにする。
 func hide_progress() -> void:
 	visible = false
 	_cancelled = false
 
 
+# 二重押しを防いでから呼び出し側へキャンセル要求を通知する。
 func _on_cancel_pressed() -> void:
 	if _cancelled:
 		return

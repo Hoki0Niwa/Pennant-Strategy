@@ -1,5 +1,8 @@
 extends Node
 
+# 薄い mod レイヤ。初期データの差し替えと、default_rules.json への部分上書きを扱う。
+# ルールは dot path で読み、頻繁に参照される値は _rule_cache に載せる。
+# セーブには active_mods と schema 情報を記録し、ロード時に現在の mod 構成と照合できるようにする。
 const DEFAULT_RULES_PATH: String = "res://data/rules/default_rules.json"
 const MOD_ROOT: String = "user://mods"
 const MOD_STATE_PATH: String = "user://pennant_strategy_mods.json"
@@ -16,6 +19,8 @@ func _ready() -> void:
 	reload_mods()
 
 
+# default_rules を読み直してから、有効 mod を load_order 順に重ねる。
+# 後の mod が同じ rule/data key を指定した場合は後勝ち。
 func reload_mods() -> void:
 	_default_rules = _read_json_dict(DEFAULT_RULES_PATH)
 	_rules = _default_rules.duplicate(true)
@@ -33,10 +38,13 @@ func reload_mods() -> void:
 		_apply_manifest(manifests[mod_id] as Dictionary)
 
 
+# データファイルの差し替え解決。未指定ならプロジェクト同梱の fallback_path をそのまま使う。
 func resolve_data_path(key: String, fallback_path: String) -> String:
 	return str(_data_overrides.get(key, fallback_path))
 
 
+# "simulation.pa.league_k_base" のような dot path でネストした rules を読む。
+# 見つからない/途中が Dictionary でない場合は fallback を返す。
 func rule_value(path: String, fallback: Variant = null) -> Variant:
 	if path.is_empty():
 		return _rules
@@ -108,6 +116,7 @@ func data_schema_version() -> int:
 	return int(_rules.get("data_schema_version", 1))
 
 
+# セーブファイルに埋め込む mod 状態。ロード時の警告用で、ルールそのものは保存しない。
 func save_metadata() -> Dictionary:
 	return {
 		"active_mods": active_mods_snapshot(),
@@ -117,6 +126,8 @@ func save_metadata() -> Dictionary:
 	}
 
 
+# 保存時の mod 一覧と現在有効な mod を比較し、欠落または version 差分を警告として返す。
+# 互換性を強制停止はせず、UI/ログがユーザーに判断材料を出せるようにする。
 func check_save_compatibility(saved_mods: Array) -> Array[String]:
 	var warnings: Array[String] = []
 	var current_by_id: Dictionary = {}
@@ -143,6 +154,8 @@ func check_save_compatibility(saved_mods: Array) -> Array[String]:
 	return warnings
 
 
+# user://mods/<mod_id>/mod.json を探索し、manifest に id と _base_dir を補って返す。
+# 無効な JSON や object でない JSON は _read_json_dict 側で空扱いにする。
 func _discover_mod_manifests() -> Dictionary:
 	var manifests: Dictionary = {}
 	var dir: DirAccess = DirAccess.open(MOD_ROOT)
@@ -165,6 +178,7 @@ func _discover_mod_manifests() -> Dictionary:
 	return manifests
 
 
+# 明示 load_order/enabled_mods があればそれを採用し、無ければ manifest の enabled=true を id 昇順で読む。
 func _configured_load_order(manifests: Dictionary) -> Array:
 	var state: Dictionary = _read_json_dict(MOD_STATE_PATH)
 	var configured: Array = []
@@ -184,6 +198,8 @@ func _configured_load_order(manifests: Dictionary) -> Array:
 	return mod_ids
 
 
+# 1つの manifest を適用する。data はパス解決テーブル、rules は Dictionary または JSON ファイル参照。
+# rules のマージは深い Dictionary だけ再帰し、それ以外の値は overlay 側で置換する。
 func _apply_manifest(manifest: Dictionary) -> void:
 	var base_dir: String = str(manifest.get("_base_dir", MOD_ROOT))
 	var mod_id: String = str(manifest.get("id", ""))
@@ -215,12 +231,14 @@ func _apply_manifest(manifest: Dictionary) -> void:
 	})
 
 
+# mod 内の相対パスを user://mods/<mod_id>/... へ解決する。res:// と user:// は絶対指定としてそのまま通す。
 func _resolve_mod_path(base_dir: String, path: String) -> String:
 	if path.begins_with("res://") or path.begins_with("user://"):
 		return path
 	return "%s/%s" % [base_dir.trim_suffix("/"), path.trim_prefix("./")]
 
 
+# JSON object だけを Dictionary として読む共通ヘルパー。配列や壊れた JSON は空扱いにして警告する。
 func _read_json_dict(path: String) -> Dictionary:
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return {}
@@ -235,6 +253,7 @@ func _read_json_dict(path: String) -> Dictionary:
 	return {}
 
 
+# 深い Dictionary マージ。部分的な rules patch で既存セクション全体を消さないための処理。
 func _merge_dicts(base: Dictionary, overlay: Dictionary) -> Dictionary:
 	var out: Dictionary = base.duplicate(true)
 	for key in overlay.keys():

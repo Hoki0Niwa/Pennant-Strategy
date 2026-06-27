@@ -1,11 +1,8 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# ホーム画面 (2026-06-18 再設計版 / 2026-06-20 共有基底 dashboard_screen へ分離)。
-# 添付モックに合わせ「左サイドバー + ヘッダ + サマリー + 月間カレンダー + 右パネル群」の
-# 運用ダッシュボードを 1920x1080 固定座標系でカスタム描画する。
-# - 配色パレット・座標変換・描画プリミティブ・サイドバー・ヘッダ・ボタン基盤は基底
-#   (dashboard_screen.gd) が提供する。本ファイルはホーム固有の本文 (サマリー / カレンダー /
-#   右カラム) と各アクションのみを実装する。
+# ホーム画面。サイドバーとヘッダは dashboard_screen に任せ、
+# 本ファイルはチームサマリー、月間カレンダー、右カラムの進行アクションだけを描画・操作する。
+# カレンダーは SeasonCalendar の日付情報と schedule を突き合わせ、試合状態ごとにフィルタ表示する。
 
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
 

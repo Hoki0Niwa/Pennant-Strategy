@@ -9,7 +9,7 @@ var color: Color = Color.WHITE
 var previous_rank: int
 var funds: int
 var ratings: Dictionary = {}
-# Phase 5 / File 1 §10: 監督AI任せモード（true なら自動日替わり打順 + 守備テンプレート起動）
+# true なら保存打順を使わず、試合ごとに自動打順と守備テンプレートからチーム編成を作る。
 var auto_lineup: bool = true
 
 

@@ -1,11 +1,14 @@
 extends Control
 class_name PlayerProbeChart
 
+# player_probe_screen の簡易折れ線グラフ。
+# points は {x, y} の配列で、能力値スイープなどの単純な関係を見るために使う。
 var points: Array = []
 var x_label: String = ""
 var y_label: String = ""
 
 
+# データを差し替えて再描画する。描画時に min/max を毎回求めるので、ここでは整形しない。
 func set_data(new_points: Array, new_x_label: String, new_y_label: String) -> void:
 	points = new_points.duplicate(true)
 	x_label = new_x_label
@@ -13,6 +16,8 @@ func set_data(new_points: Array, new_x_label: String, new_y_label: String) -> vo
 	queue_redraw()
 
 
+# 背景、軸、グリッド、折れ線、端点ラベルを直接描画する。
+# 同一 x/y だけのデータでも 0 除算しないよう、範囲が潰れた軸は +1 して広げる。
 func _draw() -> void:
 	var rect: Rect2 = Rect2(Vector2.ZERO, size)
 	draw_rect(rect, Color(0.07, 0.08, 0.10), true)
@@ -79,6 +84,7 @@ func _draw_empty_state(rect: Rect2) -> void:
 	draw_string(font, rect.position + Vector2(18.0, 34.0), "能力値を複数指定して実行するとグラフを表示します", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, Color(0.70, 0.74, 0.80))
 
 
+# 軸ラベルは大きい値なら整数、小さい値なら小数3桁で出す。
 func _format_axis_value(value: float) -> String:
 	if abs(value) >= 10.0:
 		return "%0.0f" % value

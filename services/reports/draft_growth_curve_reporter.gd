@@ -3,6 +3,8 @@ class_name PSDraftGrowthCurveReporter
 
 const Offseason = preload("res://services/season/offseason_service.gd")
 
+# ドラフト候補を大量生成し、出身別/投野別に「到達年齢ごとの総合値分布」を集計するレポーター。
+# 実在シーズンを進めず、候補テンプレートへ Offseason の成長処理を繰り返し当てる調査用。
 const VERSION: int = 4
 const DEFAULT_SAMPLES: int = 50000
 const DEFAULT_MIN_AGE: int = 18
@@ -33,6 +35,7 @@ const GROWTH_KIND_ORDER: Array = [
 const PLAYER_GROUP_ORDER: Array = ["all", "pitcher", "fielder"]
 
 
+# 同期版。CLI ツールやテストから使う想定で、指定 sample 数を一気に生成して report Dictionary を返す。
 func run(options: Dictionary = {}) -> Dictionary:
 	var seed_value: int = int(options.get("seed", DEFAULT_SEED))
 	var samples: int = max(1, int(options.get("samples", DEFAULT_SAMPLES)))
@@ -76,6 +79,8 @@ func run(options: Dictionary = {}) -> Dictionary:
 	}
 
 
+# UI 用の非同期版。chunk ごとに progress_callback を呼び、SceneTree に1フレーム返して画面固まりを防ぐ。
+# 実行前の Rng seed/state は最後に復元し、調査実行が通常プレイの乱数列へ影響しないようにする。
 func run_async(options: Dictionary = {}) -> Dictionary:
 	var seed_value: int = int(options.get("seed", DEFAULT_SEED))
 	var samples: int = max(1, int(options.get("samples", DEFAULT_SAMPLES)))
@@ -139,6 +144,8 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	}
 
 
+# レポート本体を表計算向け CSV へ展開する。
+# 全体(all)と投手/野手 split の両方を同じ列定義で出力する。
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
 	lines.append("source_type,source_label,player_group,source_count,age,observations,draft_age_mean,years_since_draft_mean,overall_mean,overall_p10,overall_p50,overall_p90,delta_from_draft_mean,awakening_rate,growth_rate,stagnation_rate,decline_rate,major_decline_rate")
@@ -184,6 +191,7 @@ func _append_csv_group_rows(lines: Array, source_type: String, player_group: Str
 		])
 
 
+# 集計グループの初期形。配列には個票を貯め、finalize で平均/分位/比率へ畳み込む。
 func _new_group(source_type: String) -> Dictionary:
 	return {
 		"source_type": source_type,
@@ -203,6 +211,8 @@ func _new_group(source_type: String) -> Dictionary:
 	}
 
 
+# 1候補を初期年齢から max_age まで成長させ、各到達年齢の overall を集計グループへ積む。
+# groups には出身全体と投野 split の2つを渡し、同じ観測値を両方へ反映する。
 func _simulate_candidate(candidate: Dictionary, groups: Array, min_age: int, max_age: int) -> void:
 	var template: Dictionary = (candidate.get("player_template", {}) as Dictionary).duplicate(true)
 	var player: PSPlayer = PSPlayer.from_dict(template)

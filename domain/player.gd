@@ -14,15 +14,15 @@ const POSITION_NAMES = {
 	10: "DH",
 }
 
-# R4 Step1: FA権/保有権。1軍登録日数が閾値に達するまで球団が保有権を持つ。
-# 高卒は8年相当、その他 (大学/社会人/独立/外国人) は7年相当 (NPB 国内FA 準拠の簡易値)。
+# FA権/保有権の基準値。1軍登録日数を145日=1年相当に換算し、
+# 高卒は8年、その他は7年に達するまで現在球団が保有権を持つ。
 const FA_ELIGIBLE_YEARS_HIGH_SCHOOL: int = 8
 const FA_ELIGIBLE_YEARS_OTHER: int = 7
 const FA_SERVICE_DAYS_PER_YEAR: int = 145
 # 高卒のデビュー年齢 (これ以下なら高卒出身と推定)。初期シード選手は draft_source 列が無いため。
 const HIGH_SCHOOL_DEBUT_AGE: int = 18
 
-# File 2 §5: z-score 内部能力値（旧 batting_abilities/pitching_abilities を置換済み・現行の正準）
+# z-score 内部能力値の正準キー。能力計算は raw z を直接読み、UI 表示だけ z_display() で変換する。
 const Z_BATTER_ABILITY_KEYS = {
 	"Bat_KAvoid": true,
 	"Bat_BBCreate": true,
@@ -97,12 +97,11 @@ const Z_ABILITY_GROUPS = {
 	"pitcher_fielding": Z_PITCHER_FIELDING_ABILITY_KEYS,
 }
 
-# 旧 ability キー → z-key の対応表 (LEGACY_KEY_TO_Z) と ability()/ability_value() は撤去した。
 # ゲーム本体は z 能力 (z_ability / z_display) のみを使う。
 
-# max_velocity は raw_abilities["max_velocity"] に生値(km/h)で保持する。
+# 球速は z ではなく raw_abilities["max_velocity"] に km/h の生値で保持する。
 
-# File 1 §6.5: 調子段階（-2:絶不調 〜 +2:絶好調）
+# 調子段階。負数ほど不調、正数ほど好調として一部の自動起用ロジックが参照する。
 const CONDITION_MIN: int = -2
 const CONDITION_MAX: int = 2
 

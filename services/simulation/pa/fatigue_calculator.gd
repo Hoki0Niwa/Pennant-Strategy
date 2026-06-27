@@ -1,12 +1,11 @@
 extends RefCounted
 class_name PSFatigueCalculator
 
-# File 2 §10: 球数ベース疲労モデル。
-# 当試合中の球数 (outing_pitches; PSPitcherUsageModel.usage["pitches"] が source) を起点に
-# sigmoid((pitches - start_threshold) / width) で fatigue_factor を算出する。
-# pitcher.fatigue (累積疲労) は ranking / availability 判定で別途使われる。
+# 球数ベースの試合内疲労モデル。
+# 当試合中の球数 outing_pitches を start_threshold と width に通し、
+# 1.0=元気、0.0=疲労飽和の factor を返す。pitcher.fatigue の累積値は起用可否側で別途使う。
 
-# --- 調整係数（旧 simulation_tuning.tres から移設。先発の粘り/疲労落差をここで直接調整する） ---
+# 先発/救援の疲労開始点と、疲労時に落とす各 z 能力の調整係数。
 const ROLE_BASE_PITCH_LIMIT_STARTER: float = 95.0  # 先発が疲労し始める基準球数。
 const ROLE_BASE_PITCH_LIMIT_RELIEVER: float = 30.0 # 救援が疲労し始める基準球数。
 const STAMINA_SCALE: float = 7.0           # 持久能力1ポイントあたりの基準球数の伸び。

@@ -1,7 +1,12 @@
 extends RefCounted
 class_name PSBullpenManager
 
+# 試合中の投手起用と登板記録を管理する。
+# setup は GameLoop が持つ試合中状態で、現在投手、使用済み投手、pitcher_usage、リリーフ役割表を含む。
+# ここで登板数・疲労・怪我判定まで更新し、試合後集計が同じ状態を参照できるようにする。
 
+# 試合開始時の先発投手とスタメン野手の出場記録を付ける。
+# DH は守備負荷が軽いので疲労/怪我 exposure を下げ、守備についた野手とは分けて扱う。
 static func mark_games_started(setup: Dictionary) -> void:
 	var pitcher: PSPlayerSeasonRecord = setup["pitcher"] as PSPlayerSeasonRecord
 	pitcher.pitcher_stats.games += 1
@@ -22,6 +27,8 @@ static func mark_games_started(setup: Dictionary) -> void:
 		PSScoringHelpers.maybe_injure(batter, false, exposure)
 
 
+# イニング間の継投。usage と inning から続投可否を判定し、必要なら文脈に合うリリーフへ差し替える。
+# 先発が早い回で降りる場合は prefer_long を立て、ロングリリーフを強く優先する。
 static func substitute_reliever(setup: Dictionary, inning: int, game_result: Dictionary = {}) -> void:
 	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", null) as PSPlayerSeasonRecord
 	var current: PSPlayerSeasonRecord = setup.get("pitcher", null) as PSPlayerSeasonRecord
@@ -54,6 +61,8 @@ static func substitute_reliever(setup: Dictionary, inning: int, game_result: Dic
 	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
 
 
+# 打席終了直後のイニング途中継投。現在イニングの失点と塁状況を加味して、
+# 危険域なら次打者前に投手を替える。替えた場合だけ true。
 static func substitute_reliever_mid_inning(
 	setup: Dictionary,
 	inning: int,
@@ -84,6 +93,8 @@ static func substitute_reliever_mid_inning(
 	return true
 
 
+# 救援登板時の公式出場記録と連投カウンタを更新する。
+# last_pitched_team_game はチーム試合数ベースなので、雨天/休養日を挟んでも連投判定がぶれない。
 static func mark_reliever_appeared(setup: Dictionary, reliever: PSPlayerSeasonRecord, team_games_played_before: int, role: String) -> void:
 	reliever.pitcher_stats.games += 1
 	reliever.pitcher_stats.relief_appearances += 1
@@ -100,6 +111,8 @@ static func mark_reliever_appeared(setup: Dictionary, reliever: PSPlayerSeasonRe
 	usage["consecutive_count"] = consecutive_count
 
 
+# 使用済み投手と登板不可投手を除外し、残り候補を文脈スコアで並べて最上位を返す。
+# まず疲労制限を守り、候補ゼロのときだけ allow_tired=true で非常時登板を許す。
 static func pick_reliever_for_context(setup: Dictionary, inning: int, game_result: Dictionary = {}, prefer_long: bool = false) -> PSPlayerSeasonRecord:
 	var relievers: Array = setup.get("relievers", []) as Array
 	if relievers.is_empty():
@@ -132,6 +145,7 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	return candidates[0] as PSPlayerSeasonRecord
 
 
+# 基礎スコア(能力・疲労・登板間隔)に、ユーザーが設定したリリーフ役割の場面補正を足す。
 static func reliever_selection_score_for_setup(
 	setup: Dictionary,
 	reliever: PSPlayerSeasonRecord,
@@ -147,6 +161,8 @@ static func reliever_selection_score_for_setup(
 	return score + relief_role_context_bonus(role, prefer_long, inning, close_game)
 
 
+# 保存された役割と試合状況の噛み合わせ。抑えは9回接戦、セットは7-8回接戦、
+# ロングは先発早期降板で大きく加点し、逆の場面では強めに減点する。
 static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, close_game: bool) -> float:
 	match role:
 		PSRotationPlanner.RELIEF_ROLE_CLOSER:
@@ -187,6 +203,7 @@ static func relief_role_context_bonus(role: String, prefer_long: bool, inning: i
 			return 0.0
 
 
+# setup のチーム視点で3点差以内なら close game とみなす。
 static func is_close_game_for_setup(setup: Dictionary, game_result: Dictionary) -> bool:
 	if game_result.is_empty():
 		return false
@@ -202,6 +219,7 @@ static func is_close_game_for_setup(setup: Dictionary, game_result: Dictionary) 
 	return false
 
 
+# setup のチーム視点の得失点差。正ならリード、負ならビハインド。
 static func score_margin_for_setup(setup: Dictionary, game_result: Dictionary) -> int:
 	if game_result.is_empty():
 		return 0
@@ -217,6 +235,8 @@ static func score_margin_for_setup(setup: Dictionary, game_result: Dictionary) -
 	return 0
 
 
+# usage モデルへ渡す outing role を決める。保存役割 long は常に長い回の想定、
+# それ以外でも先発早期降板の穴埋めでは long relief として疲労計算する。
 static func _outing_role_for_reliever(setup: Dictionary, reliever: PSPlayerSeasonRecord, prefer_long: bool) -> String:
 	if reliever == null:
 		return PSPitcherUsageModel.ROLE_SHORT_RELIEF
@@ -227,6 +247,7 @@ static func _outing_role_for_reliever(setup: Dictionary, reliever: PSPlayerSeaso
 	return PSPitcherUsageModel.ROLE_LONG_RELIEF if prefer_long else PSPitcherUsageModel.ROLE_SHORT_RELIEF
 
 
+# 投手ごとの当日 usage を遅延生成して返す。球数・失点・打者数などは GameLoop 側が同じ dict を更新する。
 static func pitcher_usage_for(setup: Dictionary, pitcher: PSPlayerSeasonRecord, role: String = "") -> Dictionary:
 	if pitcher == null:
 		return {}
@@ -242,6 +263,7 @@ static func pitcher_usage_for(setup: Dictionary, pitcher: PSPlayerSeasonRecord, 
 	return usage_by_id[key] as Dictionary
 
 
+# 同一試合で同じ投手を再登板させないための使用済みセット。
 static func mark_pitcher_used(setup: Dictionary, pitcher: PSPlayerSeasonRecord) -> void:
 	if pitcher == null:
 		return
@@ -250,6 +272,8 @@ static func mark_pitcher_used(setup: Dictionary, pitcher: PSPlayerSeasonRecord) 
 	setup["used_pitcher_ids"] = used_ids
 
 
+# 試合終了時に当日 usage から累積疲労を加算し、投手の怪我判定を行う。
+# 登板していない投手は pitcher_usage に存在しないので対象外。
 static func finalize_pitcher_usage(setup: Dictionary) -> void:
 	var usage_by_id: Dictionary = setup.get("pitcher_usage", {}) as Dictionary
 	for usage_value in usage_by_id.values():
@@ -264,6 +288,8 @@ static func finalize_pitcher_usage(setup: Dictionary) -> void:
 		PSScoringHelpers.maybe_injure(pitcher, true)
 
 
+# 先発が降板した時点のアウト数と失点を固定する。
+# 勝敗・完投・QS などの事後判定で「先発がどこまで投げたか」を読む。
 static func mark_starter_relieved(setup: Dictionary, current_outs: int = -1, current_runs: int = -1) -> void:
 	if int(setup.get("starter_outs", -1)) < 0:
 		setup["starter_outs"] = int(setup.get("game_outs", 0)) if current_outs < 0 else current_outs

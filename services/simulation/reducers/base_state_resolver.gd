@@ -1,7 +1,11 @@
 extends RefCounted
 class_name PSBaseStateResolver
 
+# 塁状況を in-place で更新する reducer。
+# bases は [一塁, 二塁, 三塁] の PSPlayerSeasonRecord/null 配列で、戻り値は得点数または {runs, outs}。
+# 得点した走者はここで batter_stats.runs も加算する。
 
+# 四球/死球の押し出し処理。フォースされる走者だけを1つずつ進め、三塁走者が押し出されたら得点。
 static func advance_walk(batter: PSPlayerSeasonRecord, bases: Array) -> int:
 	var runs: int = 0
 	if bases[0] == null:
@@ -20,6 +24,7 @@ static func advance_walk(batter: PSPlayerSeasonRecord, bases: Array) -> int:
 	return runs
 
 
+# 安打の基本進塁。全走者を打者の塁打数ぶん進める単純モデルで、個別進塁計画が無いときに使う。
 static func advance_hit(batter: PSPlayerSeasonRecord, bases: Array, bases_taken: int) -> int:
 	var runs: int = 0
 	for index in range(2, -1, -1):
@@ -42,6 +47,8 @@ static func advance_hit(batter: PSPlayerSeasonRecord, bases: Array, bases_taken:
 	return runs
 
 
+# runner_advance_resolver が作った個別進塁計画を優先して塁を再構築する。
+# 計画が空なら advance_hit の単純進塁にフォールバックする。
 static func advance_hit_with_plan(
 	batter: PSPlayerSeasonRecord,
 	bases: Array,
@@ -79,6 +86,8 @@ static func advance_hit_with_plan(
 	return {"runs": runs, "outs": outs}
 
 
+# 野選では既存走者の進塁/アウト計画を先に反映し、最後に打者走者を指定塁へ置く。
+# runner_advancements が無い古い outcome では force_out_from/to_base から標準的なフォースアウトを合成する。
 static func advance_fielders_choice(batter: PSPlayerSeasonRecord, bases: Array, outcome: Dictionary) -> Dictionary:
 	var advancements: Array = outcome.get("runner_advancements", []) as Array
 	if advancements.is_empty():
@@ -117,6 +126,8 @@ static func advance_fielders_choice(batter: PSPlayerSeasonRecord, bases: Array, 
 	return {"runs": runs, "outs": max(0, outs_result)}
 
 
+# 野選の既定進塁。アウト対象の走者だけ force_to_base へ向かってアウト、
+# その前方にいるフォース走者は1つ進む。
 static func _default_fielders_choice_advancements(bases: Array, force_from_base: int, force_to_base: int) -> Array:
 	var advancements: Array = []
 	for base_index in range(2, -1, -1):
@@ -166,6 +177,7 @@ static func advance_out_with_plan(bases: Array, outcome: Dictionary) -> int:
 	return _advance_existing_runners_with_plan(bases, planned_advancements)
 
 
+# 犠飛。計画があればそれを採用し、無ければ三塁走者の生還と二塁走者の低確率進塁だけを処理する。
 static func advance_sacrifice_fly(bases: Array, outcome: Dictionary = {}) -> int:
 	var planned_advancements: Array = outcome.get("runner_advancements", []) as Array
 	if not planned_advancements.is_empty():
@@ -184,6 +196,7 @@ static func advance_sacrifice_fly(bases: Array, outcome: Dictionary = {}) -> int
 	return runs
 
 
+# 既存走者だけを個別計画で動かす。打者走者を置かないアウト/犠飛/走者イベント向け。
 static func _advance_existing_runners_with_plan(bases: Array, advancements: Array) -> int:
 	var runs: int = 0
 	for advancement_value in advancements:
@@ -209,6 +222,7 @@ static func _advance_existing_runners_with_plan(bases: Array, advancements: Arra
 	return runs
 
 
+# 計画内の runner オブジェクトが欠けている場合、from_base と runner_id から現在の塁上走者を復元する。
 static func _runner_from_plan(bases: Array, from_base: int, runner_id: int) -> PSPlayerSeasonRecord:
 	if from_base >= 1 and from_base <= 3:
 		var runner: PSPlayerSeasonRecord = bases[from_base - 1] as PSPlayerSeasonRecord
@@ -221,6 +235,7 @@ static func _runner_from_plan(bases: Array, from_base: int, runner_id: int) -> P
 	return null
 
 
+# runner を塁上から取り除くための検索。from_base を優先し、合わなければ全塁を走査する。
 static func _base_index_for_runner(
 	bases: Array,
 	runner: PSPlayerSeasonRecord,
@@ -246,6 +261,7 @@ static func _same_runner(a: PSPlayerSeasonRecord, b: PSPlayerSeasonRecord, runne
 	return a == b
 
 
+# 一般的な進塁打/犠打用。前の塁から順に動かし、詰まっている塁は元に戻す。
 static func advance_runners_one_base(bases: Array) -> int:
 	var runs: int = 0
 	for index in range(2, -1, -1):
@@ -264,6 +280,7 @@ static func advance_runners_one_base(bases: Array) -> int:
 	return runs
 
 
+# 併殺の塁上処理。現状は一塁走者がいる通常併殺を扱い、アウト上限は3から現在アウト数を引いた値。
 static func apply_double_play(bases: Array, current_outs: int) -> int:
 	var outs_added: int = 1
 	if current_outs <= 1 and bases[0] != null:
@@ -272,6 +289,7 @@ static func apply_double_play(bases: Array, current_outs: int) -> int:
 	return int(min(3 - current_outs, outs_added))
 
 
+# 盗塁、牽制死、暴投進塁など、打席結果とは別に発生した走者イベントを塁状況へ反映する。
 static func apply_runner_event(bases: Array, current_outs: int, runner_event: Dictionary) -> Dictionary:
 	var result: String = str(runner_event.get("result", "advance"))
 	var from_base: int = int(runner_event.get("from_base", 0))

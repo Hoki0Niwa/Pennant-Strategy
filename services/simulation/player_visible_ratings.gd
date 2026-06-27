@@ -3,10 +3,12 @@ class_name PSPlayerVisibleRatings
 
 # UI / reports 用の表示能力をここに集約する。
 # 打席シミュレーション本体は z_abilities を直接使い、ここには依存しない。
+# 戻り値は 1-100 の display rating で、球速だけ km/h の raw 表示を混ぜる。
 const MIN_RATING: int = 1
 const MAX_RATING: int = 100
 
 
+# record が投手か野手かを見て、画面表示用の能力セットを返す。
 static func ratings_for_record(record: PSPlayerSeasonRecord) -> Dictionary:
 	if record == null:
 		return _display_rating_result("none", [])
@@ -15,6 +17,7 @@ static func ratings_for_record(record: PSPlayerSeasonRecord) -> Dictionary:
 	return fielder_ratings(record)
 
 
+# CSV/JSON 由来の PSPlayer から一時的な season record を作り、同じ表示計算へ流す。
 static func ratings_for_player(player: PSPlayer) -> Dictionary:
 	if player == null:
 		return _display_rating_result("none", [])
@@ -27,6 +30,7 @@ static func ratings_for_player_data(data: Dictionary) -> Dictionary:
 	return ratings_for_player(PSPlayer.from_dict(data))
 
 
+# 野手表示は打撃6項目。内部 z キーが細かいため、ユーザーに見せる粒度へ加重合成する。
 static func fielder_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 	return _display_rating_result("fielder", [
 		{"key": "contact", "label": "巧打", "display_value": fielder_contact(record)},
@@ -38,6 +42,7 @@ static func fielder_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 	])
 
 
+# 投手表示は球速、球質、制球、持久。球速だけ max_velocity の km/h をそのまま出す。
 static func pitcher_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 	return _display_rating_result("pitcher", [
 		{"key": "velocity", "label": "球速", "display_value": pitcher_velocity(record), "suffix": "km/h"},
@@ -47,6 +52,7 @@ static func pitcher_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 	])
 
 
+# 詳細画面以外で使う短い能力サマリー文字列を作る。
 static func summary_line(record: PSPlayerSeasonRecord) -> String:
 	var result: Dictionary = ratings_for_record(record)
 	return summary_line_from_result(result)
@@ -67,6 +73,7 @@ static func summary_line_from_result(result: Dictionary) -> String:
 	return "  ".join(parts)
 
 
+# ミート系表示。Barrel を中心に三振回避・四球・広角を足し、積極性はわずかに減点する。
 static func fielder_contact(record: PSPlayerSeasonRecord) -> int:
 	if _has_any_z(record, ["Bat_Barrel", "Bat_KAvoid", "Bat_BBCreate", "Bat_Spray", "Bat_Platoon"]):
 		return _display_from_weighted_z(record, {
@@ -80,6 +87,7 @@ static func fielder_contact(record: PSPlayerSeasonRecord) -> int:
 	return record.z_display("Bat_Barrel")
 
 
+# 長打系表示。Impact と Loft を主軸に、Barrel/Aggression/Spray/Platoon を少量足す。
 static func fielder_power(record: PSPlayerSeasonRecord) -> int:
 	if _has_any_z(record, ["Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Aggression", "Bat_Spray"]):
 		return _display_from_weighted_z(record, {
@@ -103,6 +111,7 @@ static func fielder_speed(record: PSPlayerSeasonRecord) -> int:
 	return record.z_display("Run_Speed")
 
 
+# 守備表示は登録ポジションの守備カテゴリを読む。捕手/内野/外野で見る z キーが異なる。
 static func fielder_defense(record: PSPlayerSeasonRecord) -> int:
 	match record.position:
 		2:
@@ -135,6 +144,7 @@ static func fielder_defense(record: PSPlayerSeasonRecord) -> int:
 	return _display_from_weighted_z_or_default(record, {"IF_Reach": 0.5, "IF_Secure": 0.5}, 60)
 
 
+# 肩力表示。捕手は送球、内野は送球速度/正確性/持ち替え、外野は肩力/正確性/リリースを中心に見る。
 static func fielder_arm(record: PSPlayerSeasonRecord) -> int:
 	match record.position:
 		2:
@@ -164,6 +174,7 @@ static func fielder_arm(record: PSPlayerSeasonRecord) -> int:
 	return _display_from_weighted_z_or_default(record, {"IF_ThrowPower": 0.6, "IF_ThrowAccuracy": 0.4}, 60)
 
 
+# 選球表示。BBCreate を中心にしつつ、三振回避や左右対応を加点、過度な積極性は減点する。
 static func fielder_discipline(record: PSPlayerSeasonRecord) -> int:
 	if _has_any_z(record, ["Bat_BBCreate", "Bat_KAvoid", "Bat_Aggression", "Bat_Platoon", "Bat_Spray"]):
 		return _display_from_weighted_z(record, {
@@ -186,6 +197,7 @@ static func pitcher_velocity(record: PSPlayerSeasonRecord) -> int:
 	return 70 + record.z_display("Pit_KCreate")
 
 
+# 球質表示。奪三振、打球抑制、バレル抑制、角度抑制、EdgeRate を合成し、球速も少しだけ足す。
 static func pitcher_stuff(record: PSPlayerSeasonRecord) -> int:
 	if _has_any_z(record, ["Pit_KCreate", "Pit_ImpactLimit", "Pit_BarrelDeny", "Pit_LoftControl", "Pit_EdgeRate"]):
 		var stuff_z: float = _weighted_z(record, {
@@ -202,6 +214,7 @@ static func pitcher_stuff(record: PSPlayerSeasonRecord) -> int:
 	return record.z_display("Pit_KCreate")
 
 
+# 制球表示。BBPrevent を中心に、効率・EdgeRate・牽制保持・疲労耐性を補助的に見る。
 static func pitcher_control(record: PSPlayerSeasonRecord) -> int:
 	if _has_any_z(record, ["Pit_BBPrevent", "Pit_Efficiency", "Pit_EdgeRate", "Pit_HoldRunner"]):
 		return _display_from_weighted_z(record, {
@@ -215,6 +228,7 @@ static func pitcher_control(record: PSPlayerSeasonRecord) -> int:
 	return record.z_display("Pit_BBPrevent")
 
 
+# 持久表示。Stamina と FatigueResist が主で、効率や牽制保持も少量加える。
 static func pitcher_stamina(record: PSPlayerSeasonRecord) -> int:
 	if _has_any_z(record, ["Pit_Stamina", "Pit_FatigueResist", "Pit_Efficiency", "Pit_HoldRunner"]):
 		return _display_from_weighted_z(record, {
@@ -254,6 +268,7 @@ static func _display_from_weighted_z_or_default(record: PSPlayerSeasonRecord, we
 	return default_value
 
 
+# weights は正負どちらも許す。平均化の分母は abs(weight) 合計にして、減点項もスケールに含める。
 static func _weighted_z(record: PSPlayerSeasonRecord, weights: Dictionary) -> float:
 	if record == null:
 		return 0.0
@@ -269,6 +284,7 @@ static func _weighted_z(record: PSPlayerSeasonRecord, weights: Dictionary) -> fl
 	return weighted_sum / total_weight
 
 
+# 球速を z 相当に粗く変換する。表示評価への小さな補正用で、シミュレーションの球速モデルではない。
 static func _velocity_z(record: PSPlayerSeasonRecord) -> float:
 	var velocity: float = float(record.max_velocity_display())
 	if velocity <= 0.0:
@@ -280,6 +296,7 @@ static func _clamp_rating(value: float) -> int:
 	return clampi(int(round(value)), MIN_RATING, MAX_RATING)
 
 
+# 旧 UI 互換のため display_ratings と ratings の両方に同じ配列を入れる。
 static func _display_rating_result(kind: String, display_ratings: Array) -> Dictionary:
 	var rows: Array = []
 	for rating_value in display_ratings:

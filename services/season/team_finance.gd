@@ -1,16 +1,11 @@
 extends RefCounted
 class_name TeamFinance
 
-# R4 Step1: チーム予算の会計ヘルパー。
-# funds = 年間予算キャップ (PSTeam.funds, セーブに永続化)。
-# payroll = 所属アクティブ選手の年俸 (salary) 合計。
-# 残枠 (room) = funds - payroll。超過は is_over_budget で判定するが、Step1 では
-# ソフト警告のみで契約更新/補強をブロックしない (硬い上限は Step2 以降)。
-#
-# 収入モデル (funds の年次変動) は R5 へ先送り。funds は毎年のベースライン予算として維持し、
-# 多年で枯渇させない。
+# チーム予算の会計ヘルパー。
+# funds は年間予算キャップ、payroll は所属アクティブ選手の年俸合計、room は funds - payroll。
+# 予算超過は is_over_budget で検出するが、現状は警告に留めて契約更新や補強を直接ブロックしない。
 
-# roadmap #3 育成選手制度: ロスター計数の単一ソース。
+# 育成選手制度を含むロスター計数の単一ソース。
 #  - 支配下 (development_player == false) のみが SHIENKA_LIMIT(70) 枠を消費する。
 #  - 育成選手 (development_player == true) は枠外で **人数無制限** (NPB 育成同様)。むやみな抱え込みは
 #    枠数ではなく獲得/放出ロジック (素材保持型のみ降格・26歳以上整理・失敗プロスペクト整理) で抑制する。

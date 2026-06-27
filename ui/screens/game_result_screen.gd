@@ -1,16 +1,8 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# 試合結果画面 (2026-06-22 ホーム画面のダッシュボード体裁へ刷新)。
-# 旧版は Label / OptionButton / Tree / TabContainer の標準コントロール構成で、
-# 巨大な試合一覧 + タブ切替 (サマリー/打席結果/投手成績/交代) だった。
-# 新版はホーム画面と同じ「左サイドバー + ヘッダ + ダーク角丸パネル」の固定座標系
-# カスタム描画へ統一し、
-#   - 左カラム: 月ごとのタブ + ほどほどの大きさの試合一覧 (ホイールでスクロール)。
-#   - 右エリア: 選択試合の イニングスコア+サマリー / 打席結果 / 交代 / 投手成績 を
-#     タブではなく 1 画面に同時表示する。
-# 配色 / 座標変換 / 描画プリミティブ / サイドバー / ヘッダ / ボタン基盤は基底
-# (dashboard_screen.gd) を利用する。重い集計は _load_detail で 1 度だけ行いキャッシュ、
-# _draw は描画専念 (_draw は hover 毎に走るため)。
+# 試合結果画面。左で月別の試合一覧を選び、右で選択試合のスコア、打席結果、交代、投手成績を描く。
+# 試合ログの読み込みと集計は _load_detail で一度だけ行い、_draw はキャッシュ済み detail の描画に専念する。
+# _draw は hover やスクロールで頻繁に走るため、重い GameLogService/BoxScoreBuilder 呼び出しを入れない。
 
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 const BoxScoreBuilder = preload("res://services/reports/box_score_builder.gd")

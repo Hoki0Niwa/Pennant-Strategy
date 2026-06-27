@@ -1,10 +1,10 @@
 extends RefCounted
 class_name PSPlateAppearanceCoordinator
 
-# Phase 2 §7-10: PA 駆動部を softmax + 球数集計モデルへ刷新。
-# 旧 pitch-by-pitch ループ (MAX_PITCHES_PER_PA=16) を廃止し、PSPaProbabilityCalculator で K/BB/HBP/BIP を
-# 1 度抽選 → PSPitchAggregateSimulator で球数 summary を生成 → BIP は既存 ContactQualityModel に流す。
-# 戻り値 schema は変更なし: {result, category, bases, pitch_summary, physical_traits, contact_quality}。
+# 1打席の司令塔。打席結果カテゴリを softmax で1回抽選し、球数集計と打球処理を後段へ渡す。
+# 処理順は 敬遠/バントの早期判定 → K/BB/HBP/BIP の抽選 → 球数 summary 生成 →
+# BIP のみ ContactQualityModel/PhysicsResolver/PlayResolver へ接続。
+# 戻り値は試合エンジンが読む {result, category, bases, pitch_summary, physical_traits, contact_quality}。
 
 const RESULT_INTENTIONAL_WALK: String = "intentional_walk"
 const RESULT_WALK: String = "walk"
@@ -19,8 +19,8 @@ const CATEGORY_SACRIFICE: String = "sacrifice"
 # 敬遠判定
 const INTENTIONAL_WALK_BASE_DENOMINATOR: int = 1000
 
-# --- 調整係数（旧 simulation_tuning.tres から移設。巡目・捕手まわりをここで直接調整する） ---
-# 巡目(times-through-order)ペナルティ重み。1巡目→2→3…。3巡目以降にじわっと効く。
+# 巡目・捕手影響・球威テール圧縮の調整係数。打席カテゴリ抽選と打球品質の両方へ効く。
+# 巡目(times-through-order)ペナルティは 1巡目→2→3… の順で、3巡目以降にじわっと効く。
 const TTO_PENALTY_PER_ROUND: Array = [0.0, 0.0, 0.05, 0.10, 0.15]
 const FRAMING_SCALE: float = 0.05         # 捕手フレーミング能力を「奪ったストライク数」へ変換する倍率。
 const GAMECALL_CONTACT_COEF: float = 0.04 # 捕手の配球が打球の質(被コンタクト抑制)に効く係数。

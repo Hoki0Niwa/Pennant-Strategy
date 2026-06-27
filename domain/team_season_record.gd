@@ -1,6 +1,8 @@
 extends RefCounted
 class_name PSTeamSeasonRecord
 
+# 1チーム×1シーズンのチーム記録。
+# PSTeam の静的情報をスナップショットし、PSStats に試合結果を累積する。
 var team_id: int
 var year: int
 var season_number: int
@@ -9,6 +11,7 @@ var league: String
 var stats: PSStats = PSStats.new()
 
 
+# 新シーズン開始時に PSTeam から空の年度記録を作る。
 static func from_team(team: PSTeam, p_year: int, p_season_number: int) -> PSTeamSeasonRecord:
 	var record: PSTeamSeasonRecord = PSTeamSeasonRecord.new()
 	record.team_id = team.id

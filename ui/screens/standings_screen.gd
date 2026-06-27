@@ -1,12 +1,10 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# 順位表画面 (2026-06-22 ホーム画面のダッシュボード体裁へ刷新)。
-# 旧版は Tree(SortableTable) 構成だったが、ホーム/タイトル争いと同じ固定座標系カスタム描画へ統一。
+# 順位表画面。現在シーズンのリーグ順位、貯金推移、交流戦順位を同時に表示する。
 # - 上段: 第1/第2リーグの順位表 (チーム成績の総合指標つき、全幅)。
 # - 下段左: 貯金・借金の推移グラフ (各球団の wins-losses を試合数軸で折れ線描画)。
 # - 下段右: 交流戦順位表 (is_interleague 試合のみ集計、全12球団の混合順位)。
 # 重い集計 (チーム指標 / 貯金時系列 / 交流戦) は _refresh で1度だけ行いキャッシュ、_draw は描画専念。
-# SeasonCalendar は基底 (dashboard_screen.gd) が const 宣言済みなので継承して使う。
 
 const LEAGUES: Array = [
 	{"key": "central", "label": "第1リーグ"},

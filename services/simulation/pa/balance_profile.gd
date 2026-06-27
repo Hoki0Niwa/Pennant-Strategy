@@ -2,10 +2,7 @@ extends RefCounted
 class_name PSBalanceProfile
 
 # 打席計算用の純粋数式ヘルパー集（確率・logit・softmax・能力カーブ）。
-# 旧バランススライダー層と PSSimulationTuning(.tres) は 2026-06 に全廃。
-# 調整係数は各計算ファイル（pa_probability_calculator.gd / pitch_aggregate_simulator.gd /
-# fatigue_calculator.gd / plate_appearance_coordinator.gd / contact_quality_model.gd /
-# play_resolver.gd 等）の const へ移設済み。ここにはチューニング値は持たない。
+# ここにはチューニング値を置かず、各計算ファイルの const がバランス調整ノブを持つ。
 
 
 # 能力 z を [-1, 1] のS字カーブへ写す。center が中立点、width が立ち上がりの広がり。

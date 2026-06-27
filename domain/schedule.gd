@@ -3,6 +3,9 @@ class_name PSSchedule
 
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
+# NPB 風の143試合ペナント日程を、CSV テンプレートの「日付枠」と球団バケット割当から生成する。
+# テンプレートは実日付の並びだけを持ち、年度ごとの球団割当は deterministic shuffle で変える。
+# 生成結果は game Dictionary 配列で、シミュレータは day 昇順であることを前提に消化する。
 const PENNANT_GAMES_PER_TEAM: int = 143
 const DEFAULT_YEAR_FOR_SCHEDULE: int = 2026
 const TEMPLATE_ID: String = "npb_calendar_template_v1"
@@ -25,6 +28,8 @@ const TEMPLATE_ALL_STAR_START_DATE: String = "2026-07-28"
 const TEMPLATE_ALL_STAR_END_DATE: String = "2026-07-29"
 
 
+# 12球団をリーグ別に並べ、テンプレート上の C1..C6/P1..P6 バケットへ割り当てて日程を作る。
+# 現状は6球団×2リーグ専用で、生成後に validate_schedule で試合数・休養日・重複を検証する。
 static func generate_pennant_schedule(
 	teams: Array,
 	games_per_team: int = PENNANT_GAMES_PER_TEAM,
@@ -93,10 +98,14 @@ static func sort_by_day(games: Array) -> void:
 	)
 
 
+# 年度と season_number からバケットシャッフル用 seed を作る。
+# 同じ年度/周回なら常に同じ日程、次年度や次周回ではカード配置が変わる。
 static func bucket_seed_for_season(year: int, season_number: int) -> int:
 	return year * 1009 + season_number * 9173 + 143
 
 
+# 日程の不変条件をまとめて検査する。
+# 総試合数、各球団143試合、交流戦18試合、月曜開催なし、同日二重登録なし、ホーム試合数を確認する。
 static func validate_schedule(games: Array, teams: Array) -> Dictionary:
 	var expected_total_games: int = _rule_int("expected_total_games", EXPECTED_TOTAL_GAMES)
 	var expected_games_per_team: int = _rule_int("pennant_games_per_team", PENNANT_GAMES_PER_TEAM)
@@ -157,6 +166,7 @@ static func validate_schedule(games: Array, teams: Array) -> Dictionary:
 	return {"ok": true}
 
 
+# テンプレートの月日を対象年度の開幕日基準 day へ変換し、バケット名を実球団 id に置き換える。
 static func _schedule_from_template(
 	template_rows: Array,
 	centrals: Array,
@@ -200,6 +210,7 @@ static func _schedule_from_template(
 	return games
 
 
+# C1..C6/P1..P6 へ球団 id を割り当てる。リーグ内の並びだけを seed で変え、リーグ所属は固定する。
 static func _bucket_assignment(centrals: Array, pacifics: Array, year: int, season_number: int) -> Dictionary:
 	var central_order: Array = _deterministic_shuffle(centrals, bucket_seed_for_season(year, season_number))
 	var pacific_order: Array = _deterministic_shuffle(pacifics, bucket_seed_for_season(year, season_number) + 7919)
@@ -210,6 +221,7 @@ static func _bucket_assignment(centrals: Array, pacifics: Array, year: int, seas
 	return out
 
 
+# Godot のグローバル RNG を汚さない簡易 deterministic shuffle。
 static func _deterministic_shuffle(values: Array, seed: int) -> Array:
 	var out: Array = values.duplicate()
 	var state: int = seed & 0x7fffffff

@@ -1,5 +1,8 @@
 extends RefCounted
 
+# セーブ先フォルダの選択とパス解決を一元管理する。
+# ゲーム本体・RecordStore・SQLite・試合ログはここから現在の save_* フォルダを取得し、
+# セーブ本体の外へ状態を書かないようにする。
 const SAVE_ROOT: String = "user://saves"
 const ACTIVE_SAVE_PATH: String = "user://pennant_strategy_active_save.json"
 
@@ -12,6 +15,8 @@ static var _active_loaded: bool = false
 static var _active_save_id: String = ""
 
 
+# 新規ゲーム用に timestamp ベースの save_* フォルダを作り、以後の保存先として選択する。
+# 同一秒に複数作られた場合は _02, _03... を付けて衝突を避ける。
 static func begin_new_save() -> bool:
 	if not _ensure_dir(SAVE_ROOT):
 		return false
@@ -24,6 +29,7 @@ static func begin_new_save() -> bool:
 	return _write_active_meta()
 
 
+# 起動時の復帰用。前回選択したフォルダが有効ならそれを使い、無ければ最新の save_* を選ぶ。
 static func select_active_or_latest_save() -> bool:
 	ensure_active_loaded()
 	if has_active_save():
@@ -34,6 +40,8 @@ static func select_active_or_latest_save() -> bool:
 	return activate_save_id(latest_id)
 
 
+# UI やロード処理から明示的にセーブフォルダを選ぶ入口。
+# save_id はフォルダ名だけを受け取り、パス区切りを含む値は拒否する。
 static func activate_save_id(save_id: String) -> bool:
 	if not _valid_save_id(save_id):
 		return false
@@ -44,6 +52,8 @@ static func activate_save_id(save_id: String) -> bool:
 	return _write_active_meta()
 
 
+# ACTIVE_SAVE_PATH を一度だけ読み、プロセス内キャッシュへ反映する。
+# メタファイルが壊れている/指すフォルダが消えている場合はアクティブ無しとして扱う。
 static func ensure_active_loaded() -> void:
 	if _active_loaded:
 		return
@@ -85,6 +95,8 @@ static func latest_save_id() -> String:
 	return str(ids[ids.size() - 1])
 
 
+# user://saves 配下にある有効な save_* フォルダを昇順で返す。
+# timestamp 形式なので、末尾が最新セーブとして扱える。
 static func save_ids() -> Array:
 	if not _ensure_dir(SAVE_ROOT):
 		return []
@@ -107,6 +119,7 @@ static func save_dir_for_id(save_id: String) -> String:
 	return _join(SAVE_ROOT, save_id)
 
 
+# 現在選択中セーブの主要ファイルパス。未選択なら空文字を返し、呼び出し側が保存不可として扱う。
 static func game_state_path() -> String:
 	var dir: String = active_save_dir()
 	if dir.is_empty():
@@ -142,6 +155,8 @@ static func display_path() -> String:
 	return dir
 
 
+# 現在のセーブフォルダを丸ごと削除する。テスト/新規作成向けの破棄操作なので、
+# ACTIVE_SAVE_PATH も同時にクリアして孤立したアクティブ参照を残さない。
 static func delete_current_save_data() -> Array:
 	var deleted: Array = []
 	if has_active_save():
@@ -205,6 +220,8 @@ static func _ensure_dir(path: String) -> bool:
 	return DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path)) == OK
 
 
+# 再帰削除。Godot の user:// パスで DirAccess を開き、remove_absolute だけ globalize して使う。
+# 呼び出し元は save_dir_for_id() 由来のパスだけを渡す前提。
 static func _remove_dir_recursive(path: String) -> bool:
 	var dir: DirAccess = DirAccess.open(path)
 	if dir == null:
