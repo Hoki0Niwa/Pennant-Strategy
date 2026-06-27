@@ -25,6 +25,20 @@ static func add_days(date_text: String, days: int) -> String:
 	return _date_string(int(out.get("year", 0)), int(out.get("month", 0)), int(out.get("day", 0)))
 
 
+# month 内の n 回目の weekday (0=日..6=土) を返す。
+static func nth_weekday_of_month(year: int, month: int, weekday: int, nth: int) -> String:
+	var first_date: String = _date_string(year, month, 1)
+	var first_weekday: int = weekday_for_date(first_date)
+	var offset: int = posmod(weekday - first_weekday, 7) + max(0, nth - 1) * 7
+	return add_days(first_date, offset)
+
+
+# date_text 以降で最初に weekday (0=日..6=土) になる日付を返す。
+static func first_weekday_on_or_after(date_text: String, weekday: int) -> String:
+	var current_weekday: int = weekday_for_date(date_text)
+	return add_days(date_text, posmod(weekday - current_weekday, 7))
+
+
 # from_date から to_date までの日数差。date_for_day の逆算やテンプレート変換で使う。
 static func days_between(from_date: String, to_date: String) -> int:
 	var from_unix: int = Time.get_unix_time_from_datetime_dict(_date_dict(from_date))

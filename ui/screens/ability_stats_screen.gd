@@ -746,7 +746,7 @@ func _ability_row(record: PSPlayerSeasonRecord) -> Dictionary:
 			else:
 				row["pitch_%s" % type_key] = "-"
 	else:
-		var bat_eval: int = PlayerValueEvaluator.batting_score(record)
+		var bat_eval: int = PlayerValueEvaluator.batting_score_without_fatigue(record)
 		row["bat_eval"] = bat_eval
 		row["bat_eval_color"] = _eval_color(bat_eval)
 		if record.position >= 2 and record.position <= 9:

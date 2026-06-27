@@ -312,6 +312,9 @@ func start_postseason() -> Dictionary:
 	# 表彰はレギュラーシーズン成績で計算するため、ポストシーズン開始時にスナップショットする。
 	if current_awards == null:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
+	var sync_result: Dictionary = PostseasonService.sync_to_next_postseason_day(current_postseason, current_season)
+	if not bool(sync_result.get("ok", false)):
+		return sync_result
 	postseason_active = true
 	_save_if_enabled()
 	# ポストシーズン中はホーム画面をポストシーズン用ダッシュボードへ差し替える (main.gd でルーティング)。
@@ -1290,6 +1293,8 @@ func restore_from_save(data: Dictionary) -> bool:
 	RecordStore.load_records()
 	if current_season != null:
 		RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, false)
+		if postseason_active and current_postseason != null and not PostseasonService.is_complete(current_postseason):
+			PostseasonService.sync_to_next_postseason_day(current_postseason, current_season)
 
 	var next_screen: String = str(data.get("current_screen", "home"))
 	last_status_message = ""

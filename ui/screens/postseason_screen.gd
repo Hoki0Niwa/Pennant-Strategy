@@ -250,8 +250,7 @@ func _draw_ps_today_row(row: Rect2, stage_key: String, series: Dictionary, post:
 	var top_id: int = _display_top_id(post, stage_key, series)
 	var chal_id: int = _display_challenger_id(post, stage_key, series)
 	var game_no: int = (series.get("games", []) as Array).size() + 1
-	# 次戦の主催 (2-3-2 風: 第1-2戦と第6戦以降は上位ホーム)。
-	var home_is_top: bool = (game_no <= 2 or game_no >= 6)
+	var home_is_top: bool = PostseasonService.next_home_side_for_series(series, game_no) != PostseasonService.HOME_SIDE_CHALLENGER
 	var home_id: int = top_id if home_is_top else chal_id
 	var away_id: int = chal_id if home_is_top else top_id
 
@@ -282,7 +281,9 @@ func _draw_ps_recent(rect: Rect2, post: PSPostseasonResult) -> void:
 	if games.is_empty():
 		_text("まだ試合が行われていません", Vector2(rect.position.x + 18, rect.position.y + 92), 14, MUTED)
 		return
-	_text("第%d日" % post.current_day, Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
+	var first_game: Dictionary = (games[0] as Dictionary).get("game", {}) as Dictionary
+	var date_label: String = SeasonCalendar.label_for_date(str(first_game.get("date", "")))
+	_text_right("%s / 第%d日" % [date_label, post.current_day], rect.end.x - 18, rect.position.y + 30, 12, MUTED, 150)
 	# レギュラーの「前日の試合結果」のミニカード (球団バッジ + スコア) をそのまま流用し、枠サイズだけ変える。
 	var gap: float = 10.0
 	var gx: float = rect.position.x + 14.0
@@ -299,6 +300,8 @@ func _draw_ps_recent(rect: Rect2, post: PSPostseasonResult) -> void:
 # ポストシーズン試合を home._draw_yesterday_game が読める形へ正規化する。
 func _normalize_ps_game(game: Dictionary) -> Dictionary:
 	return {
+		"day": int(game.get("season_day", game.get("day", 1))),
+		"date": str(game.get("date", "")),
 		"away_team_id": int(game.get("away_id", 0)),
 		"home_team_id": int(game.get("home_id", 0)),
 		"away_score": int(game.get("away_score", 0)),
@@ -453,7 +456,12 @@ func _day_status_message(result: Dictionary) -> String:
 	var played: Array = result.get("played", []) as Array
 	if played.is_empty():
 		return _status_text
-	return "第%d日を消化しました (%d試合)。" % [int(result.get("day", post.current_day if post != null else 0)), played.size()]
+	var date_label: String = SeasonCalendar.label_for_date(str(result.get("date", "")))
+	return "%s / 第%d日を消化しました (%d試合)。" % [
+		date_label,
+		int(result.get("day", post.current_day if post != null else 0)),
+		played.size(),
+	]
 
 
 func _is_active_stage(post: PSPostseasonResult, stage_key: String) -> bool:
@@ -466,6 +474,9 @@ func _display_top_id(post: PSPostseasonResult, stage_key: String, series: Dictio
 	if t > 0:
 		return t
 	if stage_key == "japan_series":
+		var first_home_league: String = str(series.get("first_home_league", PostseasonService.FIRST_LEAGUE))
+		if first_home_league == PostseasonService.FIRST_LEAGUE:
+			return int(post.cs2_central.get("winner_id", 0))
 		return int(post.cs2_pacific.get("winner_id", 0))
 	return 0
 
@@ -480,6 +491,9 @@ func _display_challenger_id(post: PSPostseasonResult, stage_key: String, series:
 		"cs2_pacific":
 			return int(post.cs1_pacific.get("winner_id", 0))
 		"japan_series":
+			var first_home_league: String = str(series.get("first_home_league", PostseasonService.FIRST_LEAGUE))
+			if first_home_league == PostseasonService.FIRST_LEAGUE:
+				return int(post.cs2_pacific.get("winner_id", 0))
 			return int(post.cs2_central.get("winner_id", 0))
 	return 0
 

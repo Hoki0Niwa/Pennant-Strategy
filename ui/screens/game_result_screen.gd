@@ -273,8 +273,8 @@ func _draw_list_row(rect: Rect2, game: Dictionary) -> void:
 	var cy: float = rect.position.y + rect.size.y * 0.5 + 5.0
 	# 勝敗マーク: 白星=白丸 / 黒星=黒丸+白縁 / 引分=△(試合結果色)。
 	_draw_result_mark(Vector2(rect.position.x + 17, rect.position.y + rect.size.y * 0.5), 6.0, symbol, color)
-	# 日付 (ポストシーズンはステージ+第N戦ラベル)
-	var date_label: String = str(game.get("ps_label", "")) if game.has("ps_label") else SeasonCalendar.compact_label_for_game(game, AppState.current_season)
+	# 日付
+	var date_label: String = SeasonCalendar.compact_label_for_game(game, AppState.current_season)
 	_text(date_label, Vector2(rect.position.x + 30, cy), 12, MUTED, 76)
 	# 対戦
 	var away_id: int = int(game.get("away_team_id", 0))
@@ -282,7 +282,10 @@ func _draw_list_row(rect: Rect2, game: Dictionary) -> void:
 	var is_home: bool = home_id == _view_team_id
 	var opp_id: int = away_id if is_home else home_id
 	var venue: String = "vs" if is_home else "@"
-	_text("%s %s" % [venue, _team_short(opp_id)], Vector2(rect.position.x + 108, cy), 13, TEXT, 110)
+	var matchup_label: String = "%s %s" % [venue, _team_short(opp_id)]
+	if game.has("ps_label"):
+		matchup_label = "%s  %s" % [str(game.get("ps_label", "")), matchup_label]
+	_text(matchup_label, Vector2(rect.position.x + 108, cy), 13, TEXT, 128)
 	# スコア (自軍 - 相手)
 	var us: int = int(game.get("home_score", 0)) if is_home else int(game.get("away_score", 0))
 	var them: int = int(game.get("away_score", 0)) if is_home else int(game.get("home_score", 0))
@@ -803,6 +806,8 @@ func _collect_ps_games(team_id: int) -> Array:
 func _build_ps_entry(stage_key: String, game: Dictionary) -> Dictionary:
 	var result: Dictionary = game.get("result", {}) as Dictionary
 	var normalized: Dictionary = {
+		"day": int(game.get("season_day", game.get("day", 1))),
+		"date": str(game.get("date", "")),
 		"away_team_id": int(game.get("away_id", 0)),
 		"home_team_id": int(game.get("home_id", 0)),
 		"away_score": int(game.get("away_score", 0)),

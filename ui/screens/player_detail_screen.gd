@@ -365,7 +365,7 @@ func _draw_eval(rect: Rect2) -> void:
 func _eval_items(record: PSPlayerSeasonRecord) -> Array:
 	if record.is_pitcher():
 		return [{"label": "守備", "value": PlayerValueEvaluator.defensive_score_for_position(record, 1)}]
-	var items: Array = [{"label": "打撃", "value": PlayerValueEvaluator.batting_score(record)}]
+	var items: Array = [{"label": "打撃", "value": PlayerValueEvaluator.batting_score_without_fatigue(record)}]
 	var primary: int = record.position
 	if primary >= 2 and primary <= 9:
 		items.append({
@@ -912,7 +912,7 @@ func _build_ability_rows() -> void:
 				var type_key: String = str(type_value)
 				row["pitch_%s" % type_key] = PSAbilityScale.z_to_display(float(mastery_by_type[type_key])) if mastery_by_type.has(type_key) else "-"
 		else:
-			row["bat_eval"] = PlayerValueEvaluator.batting_score(record)
+			row["bat_eval"] = PlayerValueEvaluator.batting_score_without_fatigue(record)
 			row["def_eval"] = PlayerValueEvaluator.defensive_score_for_position(record, record.position) if (record.position >= 2 and record.position <= 9) else "-"
 			# 守備適性: 全8守備位置。未習得(0)は "-"。
 			for pos in [2, 3, 4, 5, 6, 7, 8, 9]:

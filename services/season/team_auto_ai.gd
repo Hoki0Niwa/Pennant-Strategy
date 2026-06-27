@@ -19,6 +19,7 @@ const UNDERPERFORM_RATIO_STARTER: float = 0.4    # 先発は登板間隔が長�
 const MIN_APPEARANCE_RATIO_BATTER: float = 0.3
 const MIN_APPEARANCE_RATIO_PITCHER: float = 0.9
 const MIN_APPEARANCE_RATIO_STARTER: float = 0.5  # 先発は中6日登板なので出場率は低くて当然
+const DEMOTION_FATIGUE_PROTECT_THRESHOLD: int = 80
 
 # スタメン/一二軍入替時の WAR ボーナス係数。perf_score の成績パートに
 # war_value × WAR_PERF_WEIGHT を加算する。WAR +5 で +30、WAR -3 で -18 程度。
@@ -74,7 +75,7 @@ static func perf_score(
 
 # 一二軍入替の方針として疲労ペナルティは査定に含めない (apply_fatigue_penalty=false を明示)。
 static func overall_prior(record: PSPlayerSeasonRecord) -> float:
-	return float(PlayerValueEvaluator.overall_score_without_fatigue(record))
+	return float(PlayerValueEvaluator.overall_score(record))
 
 
 static func _is_starting_pitcher(record: PSPlayerSeasonRecord) -> bool:
@@ -682,6 +683,8 @@ static func _is_demotion_candidate(
 	reliever_mean: float,
 	batter_mean: float
 ) -> bool:
+	if record.fatigue >= DEMOTION_FATIGUE_PROTECT_THRESHOLD:
+		return false
 	var day_denom: int = max(current_day, 1)
 	var is_starter: bool = _is_starting_pitcher(record)
 	# (A) 未出場判定

@@ -43,20 +43,26 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 }
 
 
+# 画面表示・ロスター査定で使う基礎評価。累積疲労による一時的な低下は含めない。
 static func overall_score(record: PSPlayerSeasonRecord) -> int:
-	if record == null:
-		return 0
-	if record.is_pitcher():
-		return _pitcher_eval_score(record, true)
-	return fielder_starter_score(record)
-
-
-static func overall_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
 	if record == null:
 		return 0
 	if record.is_pitcher():
 		return _pitcher_eval_score(record, false)
 	return _fielder_starter_score(record, false)
+
+
+static func overall_score_with_fatigue(record: PSPlayerSeasonRecord) -> int:
+	if record == null:
+		return 0
+	if record.is_pitcher():
+		return _pitcher_eval_score(record, true)
+	return _fielder_starter_score(record, true)
+
+
+# 旧呼び名との互換 alias。新規コードでは overall_score を使う。
+static func overall_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
+	return overall_score(record)
 
 
 static func fielder_starter_score(record: PSPlayerSeasonRecord) -> int:
@@ -77,6 +83,10 @@ static func _fielder_starter_score(record: PSPlayerSeasonRecord, apply_fatigue_p
 
 static func batting_score(record: PSPlayerSeasonRecord) -> int:
 	return _batting_score(record, true)
+
+
+static func batting_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
+	return _batting_score(record, false)
 
 
 static func _batting_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: bool) -> int:
@@ -150,7 +160,7 @@ static func _pitching_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty:
 	return _visible_score(score)
 
 
-# 表示評価値 (overall_score) は役割別に算出する。pitching_score (継投選抜用の素の投手力) は変えない。
+# 投手評価値は役割別に算出する。pitching_score (継投選抜用の素の投手力) は変えない。
 # 先発: pitching_score と同じ要素だが係数を圧縮し、野手 (fielder_starter_score) と同スケールにする。
 # 中継: 持久を外し、奪三振 (stuff) / 球速 / 際どさ (edge) を強調。先発=野手と同スケールに較正。
 const PITCHER_EVAL_BASE: float = 50.0

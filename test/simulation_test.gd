@@ -88,6 +88,22 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	assert_int(_max(starters)).is_less_equal(_max(fielders) + 2)
 
 
+func test_overall_score_ignores_fatigue_with_explicit_fatigue_variant() -> void:
+	var record: PSPlayerSeasonRecord = _fielder(901, "Everyday", 1.0)
+	record.fatigue = 0
+	var base_overall: int = PSPlayerValueEvaluator.overall_score(record)
+	var fresh_with_fatigue: int = PSPlayerValueEvaluator.overall_score_with_fatigue(record)
+	var base_display_bat: int = PSPlayerValueEvaluator.batting_score_without_fatigue(record)
+	var fresh_batting: int = PSPlayerValueEvaluator.batting_score(record)
+
+	record.fatigue = 160
+
+	assert_int(PSPlayerValueEvaluator.overall_score(record)).is_equal(base_overall)
+	assert_int(PSPlayerValueEvaluator.batting_score_without_fatigue(record)).is_equal(base_display_bat)
+	assert_int(PSPlayerValueEvaluator.overall_score_with_fatigue(record)).is_less(fresh_with_fatigue)
+	assert_int(PSPlayerValueEvaluator.batting_score(record)).is_less(fresh_batting)
+
+
 # 控え (打順設定の補充優先リスト) は usage.position_slots[pos].backup_ids として保存され、
 # 守備配置で profile.backup_priority より優先される。スタメンが故障で抜けた枠を埋める。
 func test_usage_backup_ids_take_priority_over_profile() -> void:
@@ -389,6 +405,38 @@ func _pitcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRe
 		{"type": "four_seam", "mastery": z},
 		{"type": "slider", "mastery": z - 0.1},
 	]
+	return record
+
+
+func _fielder(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = player_id
+	record.name = player_name
+	record.position = 3
+	record.role = "fielder"
+	record.age = 27
+	record.fatigue = 0
+	record.injury_days = 0
+	record.position_aptitudes_snapshot = {"first": 100}
+	record.z_abilities_snapshot = {
+		"Bat_KAvoid": z,
+		"Bat_BBCreate": z,
+		"Bat_Impact": z,
+		"Bat_Loft": z,
+		"Bat_Barrel": z,
+		"Bat_Spray": z,
+		"Bat_Aggression": z,
+		"Bat_Platoon": z,
+		"IF_Reach": z,
+		"IF_Secure": z,
+		"IF_ThrowPower": z,
+		"IF_ThrowAccuracy": z,
+		"IF_Exchange": z,
+		"IF_PositionFit": z,
+		"Run_Speed": z,
+		"Run_Judgment": z,
+		"Run_Steal": z,
+	}
 	return record
 
 

@@ -5,6 +5,7 @@ extends GdUnitTestSuite
 const Offseason = preload("res://services/season/offseason_service.gd")
 const ReleasedMarket = preload("res://services/season/released_market_service.gd")
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
+const TeamAutoAIRef = preload("res://services/season/team_auto_ai.gd")
 
 const ALL_Z_KEYS: Array = [
 	"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Spray", "Bat_Aggression", "Bat_Platoon",
@@ -320,6 +321,18 @@ func test_eligible_or_fallback_excludes_development() -> void:
 		ids.append((row as PSPlayerSeasonRecord).player_id)
 	assert_array(ids).contains(60)
 	assert_array(ids).not_contains(61)
+
+
+func test_high_fatigue_record_is_not_auto_demotion_candidate() -> void:
+	var player: PSPlayer = _player_with_z(62, 1, 3, false, 0.4)
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2026, 1)
+	record.fatigue = TeamAutoAIRef.DEMOTION_FATIGUE_PROTECT_THRESHOLD
+	record.batter_stats.plate_appearances = 0
+
+	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 1.0, 100, 70.0, 70.0, 70.0)).is_false()
+
+	record.fatigue = TeamAutoAIRef.DEMOTION_FATIGUE_PROTECT_THRESHOLD - 1
+	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 1.0, 100, 70.0, 70.0, 70.0)).is_true()
 
 
 # --- 永続化 ------------------------------------------------------------------

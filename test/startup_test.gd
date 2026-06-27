@@ -4,6 +4,7 @@
 extends GdUnitTestSuite
 
 const SaveContext = preload("res://services/storage/save_context.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 
 func test_core_scripts_load() -> void:
@@ -11,6 +12,13 @@ func test_core_scripts_load() -> void:
 	assert_object(load("res://ui/screens/home_screen.gd")).is_not_null()
 	assert_object(load("res://ui/screens/offseason_screen.gd")).is_not_null()
 	assert_object(load("res://ui/screens/options_screen.gd")).is_not_null()
+
+
+func test_dashboard_long_date_includes_weekday() -> void:
+	var dashboard_script: GDScript = load("res://ui/components/dashboard_screen.gd") as GDScript
+	var dashboard: Control = dashboard_script.new()
+	assert_str(str(dashboard.call("_format_date_long", "2026-10-10"))).is_equal("2026年 10月10日(土)")
+	dashboard.free()
 
 
 func test_autoloads_registered() -> void:
@@ -743,6 +751,78 @@ func test_postseason_tie_break_advances_higher_seed() -> void:
 	assert_int(int(chal_series.get("winner_id", 0))).is_equal(20)
 
 
+func test_postseason_calendar_slots_are_scheduled() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var post: PSPostseasonResult = PostseasonService.build_initial_state(season, GameDb.teams)
+
+	assert_array(post.cs1_central.get("scheduled_dates", []) as Array).is_equal(["2026-10-10", "2026-10-11", "2026-10-12"])
+	assert_array(post.cs2_central.get("scheduled_dates", []) as Array).is_equal(["2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"])
+	assert_array(post.japan_series.get("scheduled_dates", []) as Array).is_equal(["2026-10-24", "2026-10-25", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-31", "2026-11-01"])
+	assert_str(str(post.japan_series.get("first_home_league", ""))).is_equal(PostseasonService.FIRST_LEAGUE)
+	assert_array(post.japan_series.get("home_sides", []) as Array).is_equal([
+		PostseasonService.HOME_SIDE_TOP,
+		PostseasonService.HOME_SIDE_TOP,
+		PostseasonService.HOME_SIDE_CHALLENGER,
+		PostseasonService.HOME_SIDE_CHALLENGER,
+		PostseasonService.HOME_SIDE_CHALLENGER,
+		PostseasonService.HOME_SIDE_TOP,
+		PostseasonService.HOME_SIDE_TOP,
+	])
+
+	var next_season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2027, {})
+	next_season.season_number = 2
+	var next_post: PSPostseasonResult = PostseasonService.build_initial_state(next_season, GameDb.teams)
+	assert_str(str(next_post.japan_series.get("first_home_league", ""))).is_equal(PostseasonService.SECOND_LEAGUE)
+
+
+func test_start_postseason_sets_current_date_to_cs1_opening_day() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_post: PSPostseasonResult = AppState.current_postseason
+	var old_post_active: bool = AppState.postseason_active
+	var old_awards: PSAwards = AppState.current_awards
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.auto_save_enabled = false
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	assert_bool(AppState.start_new_season()).is_true()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var last_regular_day: int = 1
+	for game_value in AppState.current_season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		game["played"] = true
+		last_regular_day = max(last_regular_day, int(game.get("day", 0)))
+	AppState.current_season.current_day = last_regular_day + 1
+
+	var start_result: Dictionary = AppState.start_postseason()
+	assert_bool(bool(start_result.get("ok", false))).is_true()
+	assert_bool(AppState.postseason_active).is_true()
+	assert_str(SeasonCalendar.current_date(AppState.current_season)).is_equal("2026-10-10")
+	assert_int(AppState.current_season.current_day).is_equal(SeasonCalendar.season_day_for_date(AppState.current_season, "2026-10-10"))
+	assert_int(AppState.current_postseason.current_day).is_equal(0)
+	assert_int((AppState.current_postseason.cs1_central.get("games", []) as Array).size()).is_equal(0)
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.current_postseason = old_post
+	AppState.postseason_active = old_post_active
+	AppState.current_awards = old_awards
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 # ポストシーズン: 日単位消化 (第1/第2リーグ同時) → 完了 → ダッシュボード生成 → 試合結果タブ収集。
 func test_postseason_day_advance_and_dashboard() -> void:
 	var old_team_id: int = AppState.selected_team_id
@@ -761,13 +841,47 @@ func test_postseason_day_advance_and_dashboard() -> void:
 	AppState.current_postseason = PostseasonService.build_initial_state(AppState.current_season, GameDb.teams)
 	AppState.postseason_active = true
 	AppState.current_screen = "home"
+	var non_playing_record: PSPlayerSeasonRecord = _first_record_not_in_cs1(AppState.current_postseason, AppState.current_season)
+	assert_object(non_playing_record).is_not_null()
+	non_playing_record.fatigue = 100
+	var sync_result: Dictionary = PostseasonService.sync_to_next_postseason_day(AppState.current_postseason, AppState.current_season)
+	assert_bool(bool(sync_result.get("ok", false))).is_true()
+	assert_str(str(sync_result.get("date", ""))).is_equal("2026-10-10")
+	assert_str(SeasonCalendar.current_date(AppState.current_season)).is_equal("2026-10-10")
+	assert_int(non_playing_record.fatigue).is_equal(0)
 
 	# 1日進める = CS1 第1/第2リーグが同時に1試合ずつ消化される。
 	var day_result: Dictionary = AppState.advance_postseason_day()
 	assert_bool(bool(day_result.get("ok", false))).is_true()
 	assert_int(AppState.current_postseason.current_day).is_equal(1)
+	assert_str(str(day_result.get("date", ""))).is_equal("2026-10-10")
+	assert_int(AppState.current_season.current_day).is_equal(SeasonCalendar.season_day_for_date(AppState.current_season, "2026-10-11"))
+	assert_int(non_playing_record.fatigue).is_equal(0)
 	assert_int((AppState.current_postseason.cs1_central.get("games", []) as Array).size()).is_equal(1)
 	assert_int((AppState.current_postseason.cs1_pacific.get("games", []) as Array).size()).is_equal(1)
+	var first_game: Dictionary = (AppState.current_postseason.cs1_central.get("games", []) as Array)[0] as Dictionary
+	assert_str(str(first_game.get("date", ""))).is_equal("2026-10-10")
+	assert_int(int(first_game.get("season_day", 0))).is_equal(SeasonCalendar.season_day_for_date(AppState.current_season, "2026-10-10"))
+	var ps_status_script: GDScript = load("res://ui/screens/postseason_screen.gd") as GDScript
+	var ps_status_screen: Control = ps_status_script.new()
+	assert_str(str(ps_status_screen.call("_day_status_message", day_result))).contains("10/10(土)")
+	ps_status_screen.free()
+
+	var stage_guard: int = 20
+	while stage_guard > 0 and PostseasonService.active_group_index(AppState.current_postseason) == 0:
+		stage_guard -= 1
+		var cs1_step: Dictionary = AppState.advance_postseason_day()
+		assert_bool(bool(cs1_step.get("ok", false))).is_true()
+	assert_int(PostseasonService.active_group_index(AppState.current_postseason)).is_equal(1)
+	assert_str(SeasonCalendar.current_date(AppState.current_season)).is_equal("2026-10-14")
+
+	stage_guard = 20
+	while stage_guard > 0 and PostseasonService.active_group_index(AppState.current_postseason) == 1:
+		stage_guard -= 1
+		var cs2_step: Dictionary = AppState.advance_postseason_day()
+		assert_bool(bool(cs2_step.get("ok", false))).is_true()
+	assert_int(PostseasonService.active_group_index(AppState.current_postseason)).is_equal(2)
+	assert_str(SeasonCalendar.current_date(AppState.current_season)).is_equal("2026-10-24")
 
 	# ポストシーズン用ダッシュボードがブラケット込みで生成される。
 	var ps_script: GDScript = load("res://ui/screens/postseason_screen.gd") as GDScript
@@ -795,6 +909,11 @@ func test_postseason_day_advance_and_dashboard() -> void:
 	add_child(gr_screen)
 	await get_tree().process_frame
 	assert_int((gr_screen._ps_games_for_view as Array).size()).is_greater(0)
+	var ps_entry: Dictionary = (gr_screen._ps_games_for_view as Array)[0] as Dictionary
+	var ps_game: Dictionary = ps_entry.get("game", {}) as Dictionary
+	var ps_date_label: String = SeasonCalendar.compact_label_for_game(ps_game, AppState.current_season)
+	assert_str(ps_date_label).contains("(")
+	assert_str(ps_date_label).contains(")")
 	gr_screen.queue_free()
 
 	AppState.selected_team_id = old_team_id
@@ -809,3 +928,19 @@ func test_postseason_day_advance_and_dashboard() -> void:
 		SaveContext.clear_active_save()
 	else:
 		SaveContext.activate_save_id(old_save_id)
+
+
+func _first_record_not_in_cs1(post: PSPostseasonResult, season: PSSeason) -> PSPlayerSeasonRecord:
+	var playing: Dictionary = {}
+	for key in ["cs1_central", "cs1_pacific"]:
+		var series: Dictionary = post.stage_dict(str(key))
+		playing[int(series.get("top_id", 0))] = true
+		playing[int(series.get("challenger_id", 0))] = true
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null or playing.has(team.id):
+			continue
+		var records: Array = RecordStore.get_team_player_records(team.id, season.year, season.season_number)
+		if not records.is_empty():
+			return records[0] as PSPlayerSeasonRecord
+	return null

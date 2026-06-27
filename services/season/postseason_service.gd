@@ -1,12 +1,22 @@
 extends RefCounted
 class_name PostseasonService
 
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
+
 const CS1_WIN_TARGET: int = 2  # 3戦先勝(2勝)
 const CS2_WIN_TARGET: int = 4  # 6戦中4勝(1位は1勝アドバンテージ)
 const CS2_ADVANTAGE: int = 1
 const JS_WIN_TARGET: int = 4   # BO7
 const MAX_SAFETY_GAMES: int = 15  # 引き分け連続でも無限ループ防止
 const POSTSEASON_STATS_VERSION: int = 1
+const POSTSEASON_SCHEDULE_VERSION: int = 1
+const POSTSEASON_MONTH: int = 10
+const WEEKDAY_WEDNESDAY: int = 3
+const WEEKDAY_SATURDAY: int = 6
+const FIRST_LEAGUE: String = "central"
+const SECOND_LEAGUE: String = "pacific"
+const HOME_SIDE_TOP: String = "top"
+const HOME_SIDE_CHALLENGER: String = "challenger"
 
 
 static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonResult:
@@ -36,6 +46,7 @@ static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonR
 	# 日本シリーズは規定試合数で打ち切らず、決着するまで延長戦を行う (引き分けでの上位勝ち抜けはしない)。
 	japan_series["extension"] = true
 	result.japan_series = japan_series
+	_apply_postseason_schedule(result, season)
 	return result
 
 
@@ -62,9 +73,12 @@ static func advance_stage(postseason: PSPostseasonResult, stage_key: String, sea
 		var p: int = int(postseason.cs2_pacific.get("winner_id", 0))
 		if c == 0 or p == 0:
 			return {"ok": false, "message": "CS2が未消化です"}
-		# パ代表をホーム扱い(慣例的に交互だがここは固定)
-		s["top_id"] = p
-		s["challenger_id"] = c
+		if str(s.get("first_home_league", _japan_series_first_home_league(postseason.season_number))) == FIRST_LEAGUE:
+			s["top_id"] = c
+			s["challenger_id"] = p
+		else:
+			s["top_id"] = p
+			s["challenger_id"] = c
 
 	var sim: Dictionary = _simulate_series(season, s)
 	for key in sim.keys():
@@ -114,15 +128,229 @@ static func active_group_keys(postseason: PSPostseasonResult) -> Array:
 	return (groups[gi] as Array).duplicate()
 
 
-# 1日進める: 進行中グループの未完了シリーズを 1 試合ずつ消化する。
+static func _ensure_postseason_schedule(postseason: PSPostseasonResult, season: PSSeason) -> void:
+	if postseason == null or season == null:
+		return
+	for stage_key in PSPostseasonResult.STAGE_KEYS:
+		var series: Dictionary = postseason.stage_dict(str(stage_key))
+		if series.is_empty():
+			continue
+		if not series.has("scheduled_days") or (series.get("scheduled_days", []) as Array).is_empty():
+			_apply_postseason_schedule(postseason, season)
+			return
+
+
+static func _apply_postseason_schedule(postseason: PSPostseasonResult, season: PSSeason) -> void:
+	if postseason == null or season == null:
+		return
+	var cs1_start: String = SeasonCalendar.nth_weekday_of_month(season.year, POSTSEASON_MONTH, WEEKDAY_SATURDAY, 2)
+	var cs2_start: String = SeasonCalendar.first_weekday_on_or_after(SeasonCalendar.add_days(cs1_start, 3), WEEKDAY_WEDNESDAY)
+	var js_start: String = SeasonCalendar.add_days(cs2_start, 10)
+	var first_home_league: String = _japan_series_first_home_league(season.season_number)
+	var second_home_league: String = SECOND_LEAGUE if first_home_league == FIRST_LEAGUE else FIRST_LEAGUE
+
+	_set_series_schedule(
+		postseason.cs1_central,
+		_dates_from_offsets(cs1_start, [0, 1, 2]),
+		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
+		season
+	)
+	_set_series_schedule(
+		postseason.cs1_pacific,
+		_dates_from_offsets(cs1_start, [0, 1, 2]),
+		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
+		season
+	)
+	_set_series_schedule(
+		postseason.cs2_central,
+		_dates_from_offsets(cs2_start, [0, 1, 2, 3, 4, 5]),
+		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
+		season
+	)
+	_set_series_schedule(
+		postseason.cs2_pacific,
+		_dates_from_offsets(cs2_start, [0, 1, 2, 3, 4, 5]),
+		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
+		season
+	)
+	_set_series_schedule(
+		postseason.japan_series,
+		_dates_from_offsets(js_start, [0, 1, 3, 4, 5, 7, 8]),
+		[
+			HOME_SIDE_TOP,
+			HOME_SIDE_TOP,
+			HOME_SIDE_CHALLENGER,
+			HOME_SIDE_CHALLENGER,
+			HOME_SIDE_CHALLENGER,
+			HOME_SIDE_TOP,
+			HOME_SIDE_TOP,
+		],
+		season
+	)
+	postseason.japan_series["first_home_league"] = first_home_league
+	postseason.japan_series["second_home_league"] = second_home_league
+
+
+static func _dates_from_offsets(start_date: String, offsets: Array) -> Array:
+	var out: Array = []
+	for offset_value in offsets:
+		out.append(SeasonCalendar.add_days(start_date, int(offset_value)))
+	return out
+
+
+static func _set_series_schedule(series: Dictionary, dates: Array, home_sides: Array, season: PSSeason) -> void:
+	if series.is_empty() or season == null:
+		return
+	var days: Array = []
+	for date_value in dates:
+		days.append(SeasonCalendar.season_day_for_date(season, str(date_value)))
+	series["schedule_version"] = POSTSEASON_SCHEDULE_VERSION
+	series["scheduled_dates"] = dates.duplicate()
+	series["scheduled_days"] = days
+	series["home_sides"] = home_sides.duplicate()
+
+
+static func _japan_series_first_home_league(season_number: int) -> String:
+	return FIRST_LEAGUE if season_number % 2 == 1 else SECOND_LEAGUE
+
+
+static func _next_scheduled_day(postseason: PSPostseasonResult, season: PSSeason) -> int:
+	var best: int = 0
+	for key_value in active_group_keys(postseason):
+		var stage_key: String = str(key_value)
+		var series: Dictionary = postseason.stage_dict(stage_key)
+		if series.is_empty() or bool(series.get("completed", false)):
+			continue
+		if not _ensure_series_ready(postseason, stage_key, series):
+			continue
+		postseason.set_stage(stage_key, series)
+		var game_num: int = (series.get("games", []) as Array).size() + 1
+		var day: int = _series_next_game_day(series, season, game_num)
+		if day <= 0:
+			continue
+		if best == 0 or day < best:
+			best = day
+	return best
+
+
+static func _series_next_game_day(series: Dictionary, _season: PSSeason, game_num: int) -> int:
+	if game_num <= 0:
+		return 0
+	var days: Array = series.get("scheduled_days", []) as Array
+	var index: int = game_num - 1
+	if index >= 0 and index < days.size():
+		return int(days[index])
+	if not bool(series.get("extension", false)) or days.is_empty():
+		return 0
+	return int(days[days.size() - 1]) + (index - days.size() + 1)
+
+
+static func _series_date_for_game(series: Dictionary, season: PSSeason, game_num: int, season_day: int) -> String:
+	var dates: Array = series.get("scheduled_dates", []) as Array
+	var index: int = game_num - 1
+	if index >= 0 and index < dates.size():
+		return str(dates[index])
+	if season != null and season_day > 0:
+		return SeasonCalendar.date_for_season_day(season, season_day)
+	return ""
+
+
+static func next_home_side_for_series(series: Dictionary, game_num: int) -> String:
+	if game_num <= 0:
+		return HOME_SIDE_TOP
+	var sides: Array = series.get("home_sides", []) as Array
+	var index: int = game_num - 1
+	if index >= 0 and index < sides.size():
+		return str(sides[index])
+	if bool(series.get("extension", false)) and not sides.is_empty():
+		var last_side: String = str(sides[sides.size() - 1])
+		var extra_index: int = index - sides.size()
+		if extra_index % 2 == 0:
+			return HOME_SIDE_CHALLENGER if last_side == HOME_SIDE_TOP else HOME_SIDE_TOP
+		return last_side
+	return HOME_SIDE_TOP if (game_num <= 2 or game_num >= 6) else HOME_SIDE_CHALLENGER
+
+
+static func _move_season_to_day(season: PSSeason, target_day: int) -> int:
+	if season == null or target_day <= 0 or season.current_day >= target_day:
+		return 0
+	var elapsed_days: int = target_day - season.current_day
+	season.current_day = target_day
+	PSGameDecisions.recover_after_day(season, elapsed_days)
+	return elapsed_days
+
+
+static func _advance_to_next_postseason_day_or_after_finish(postseason: PSPostseasonResult, season: PSSeason) -> int:
+	var next_day: int = _next_scheduled_day(postseason, season)
+	if next_day > 0:
+		return _move_season_to_day(season, next_day)
+	return _move_season_to_day(season, season.current_day + 1)
+
+
+static func _team_games_played_before_by_team(postseason: PSPostseasonResult, season: PSSeason) -> Dictionary:
+	var out: Dictionary = {}
+	if season == null:
+		return out
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		var stats: PSStats = season.standings.get(team.id, null) as PSStats
+		out[team.id] = 0 if stats == null else stats.games
+	for stage_key in PSPostseasonResult.STAGE_KEYS:
+		var series: Dictionary = postseason.stage_dict(str(stage_key))
+		for game_value in (series.get("games", []) as Array):
+			var game: Dictionary = game_value as Dictionary
+			var away_id: int = int(game.get("away_id", 0))
+			var home_id: int = int(game.get("home_id", 0))
+			if away_id > 0:
+				out[away_id] = int(out.get(away_id, out.get(str(away_id), 0))) + 1
+			if home_id > 0:
+				out[home_id] = int(out.get(home_id, out.get(str(home_id), 0))) + 1
+	return out
+
+
+static func _team_games_before(team_games_before_by_team: Dictionary, team_id: int, fallback: int) -> int:
+	if team_games_before_by_team.has(team_id):
+		return int(team_games_before_by_team.get(team_id, fallback))
+	if team_games_before_by_team.has(str(team_id)):
+		return int(team_games_before_by_team.get(str(team_id), fallback))
+	return fallback
+
+
+static func sync_to_next_postseason_day(postseason: PSPostseasonResult, season: PSSeason) -> Dictionary:
+	if postseason == null or season == null:
+		return {"ok": false, "message": "ポストシーズンが開始されていません"}
+	_ensure_postseason_schedule(postseason, season)
+	var target_day: int = _next_scheduled_day(postseason, season)
+	if target_day <= 0:
+		return {"ok": false, "completed": is_complete(postseason), "message": "未消化のポストシーズン日程がありません"}
+	var recovery_days: int = _move_season_to_day(season, target_day)
+	return {
+		"ok": true,
+		"completed": is_complete(postseason),
+		"season_day": target_day,
+		"date": SeasonCalendar.date_for_season_day(season, target_day),
+		"recovery_days": recovery_days,
+	}
+
+
+# 1日進める: 次のポストシーズン試合日まで season.current_day を進め、その日にある試合を消化する。
 static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, persist: bool = true) -> Dictionary:
 	if postseason == null or season == null:
 		return {"ok": false, "message": "ポストシーズンが開始されていません"}
+	_ensure_postseason_schedule(postseason, season)
 	var keys: Array = active_group_keys(postseason)
 	if keys.is_empty():
 		return {"ok": false, "completed": true, "message": "ポストシーズンは終了しています"}
+	var target_day: int = _next_scheduled_day(postseason, season)
+	if target_day <= 0:
+		return {"ok": false, "completed": is_complete(postseason), "message": "消化できるポストシーズン日程がありません"}
+	var recovery_before: int = _move_season_to_day(season, target_day)
 	postseason.current_day += 1
+	var play_day: int = postseason.current_day
 	var played: Array = []
+	var team_games_before: Dictionary = _team_games_played_before_by_team(postseason, season)
 	for key_value in keys:
 		var stage_key: String = str(key_value)
 		var s: Dictionary = postseason.stage_dict(stage_key)
@@ -130,7 +358,10 @@ static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, pe
 			continue
 		if not _ensure_series_ready(postseason, stage_key, s):
 			continue
-		var r: Dictionary = play_series_game(season, s, postseason.current_day)
+		var next_game_day: int = _series_next_game_day(s, season, int((s.get("games", []) as Array).size()) + 1)
+		if next_game_day != target_day:
+			continue
+		var r: Dictionary = play_series_game(season, s, play_day, team_games_before)
 		postseason.set_stage(stage_key, s)
 		if bool(r.get("ok", false)):
 			var game_entry: Dictionary = r.get("game", {}) as Dictionary
@@ -139,10 +370,16 @@ static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, pe
 			played.append({"stage": stage_key, "game": game_entry})
 		if stage_key == "japan_series" and bool(s.get("completed", false)):
 			postseason.champion_team_id = int(s.get("winner_id", 0))
+	var recovery_after: int = _advance_to_next_postseason_day_or_after_finish(postseason, season)
+	if persist:
+		PSGameDecisions.persist_records()
 	return {
 		"ok": true,
 		"completed": is_complete(postseason),
-		"day": postseason.current_day,
+		"day": play_day,
+		"season_day": target_day,
+		"date": SeasonCalendar.date_for_season_day(season, target_day),
+		"recovery_days": recovery_before + recovery_after,
 		"played": played,
 	}
 
@@ -157,16 +394,24 @@ static func _ensure_series_ready(postseason: PSPostseasonResult, stage_key: Stri
 			if int(s.get("challenger_id", 0)) == 0:
 				s["challenger_id"] = int(postseason.cs1_pacific.get("winner_id", 0))
 		"japan_series":
-			# パ代表をホーム扱い (慣例的に交互だがここは固定)。
-			if int(s.get("top_id", 0)) == 0:
-				s["top_id"] = int(postseason.cs2_pacific.get("winner_id", 0))
-			if int(s.get("challenger_id", 0)) == 0:
-				s["challenger_id"] = int(postseason.cs2_central.get("winner_id", 0))
+			var central_winner: int = int(postseason.cs2_central.get("winner_id", 0))
+			var pacific_winner: int = int(postseason.cs2_pacific.get("winner_id", 0))
+			var first_home_league: String = str(s.get("first_home_league", _japan_series_first_home_league(postseason.season_number)))
+			if first_home_league == FIRST_LEAGUE:
+				if int(s.get("top_id", 0)) == 0:
+					s["top_id"] = central_winner
+				if int(s.get("challenger_id", 0)) == 0:
+					s["challenger_id"] = pacific_winner
+			else:
+				if int(s.get("top_id", 0)) == 0:
+					s["top_id"] = pacific_winner
+				if int(s.get("challenger_id", 0)) == 0:
+					s["challenger_id"] = central_winner
 	return int(s.get("top_id", 0)) > 0 and int(s.get("challenger_id", 0)) > 0
 
 
 # シリーズで 1 試合だけ消化し、結果を series へ反映する。series は in-place で更新される。
-static func play_series_game(season: PSSeason, series: Dictionary, day: int) -> Dictionary:
+static func play_series_game(season: PSSeason, series: Dictionary, day: int, team_games_before_by_team: Dictionary = {}) -> Dictionary:
 	var top_id: int = int(series.get("top_id", 0))
 	var challenger_id: int = int(series.get("challenger_id", 0))
 	if top_id <= 0 or challenger_id <= 0:
@@ -185,12 +430,13 @@ static func play_series_game(season: PSSeason, series: Dictionary, day: int) -> 
 		return {"ok": false, "completed": true}
 	var postseason_stats: Dictionary = _normalized_postseason_stats(series.get("postseason_stats", {}) as Dictionary)
 	var game_num: int = games.size() + 1
-	# 2-3-2 風の単純な交替 (top=ホームを多めに)。
-	var home_is_top: bool = (game_num <= 2 or game_num >= 6)
+	var home_is_top: bool = next_home_side_for_series(series, game_num) != HOME_SIDE_CHALLENGER
 	var home_id: int = top_id if home_is_top else challenger_id
 	var away_id: int = challenger_id if home_is_top else top_id
+	var season_day: int = _series_next_game_day(series, season, game_num)
+	var date_text: String = _series_date_for_game(series, season, game_num, season_day)
 
-	var outcome: Dictionary = _simulate_one_postseason_game(season, away_id, home_id, postseason_stats)
+	var outcome: Dictionary = _simulate_one_postseason_game(season, away_id, home_id, postseason_stats, season_day, team_games_before_by_team)
 	var winner_id: int = int(outcome.get("winning_team_id", 0))
 	var is_draw: bool = bool(outcome.get("draw", false))
 	if not is_draw:
@@ -202,6 +448,8 @@ static func play_series_game(season: PSSeason, series: Dictionary, day: int) -> 
 	var game_entry: Dictionary = {
 		"game_num": game_num,
 		"day": day,
+		"season_day": season_day,
+		"date": date_text,
 		"away_id": away_id,
 		"home_id": home_id,
 		"away_score": int(outcome.get("away_score", 0)),
@@ -280,8 +528,7 @@ static func _simulate_series(season: PSSeason, series: Dictionary) -> Dictionary
 		if games.size() >= MAX_SAFETY_GAMES:
 			break
 		var game_num: int = games.size() + 1
-		# 2-3-2 風の単純な交替(top=ホームを多めに)
-		var home_is_top: bool = (game_num <= 2 or game_num >= 6)
+		var home_is_top: bool = next_home_side_for_series(series, game_num) != HOME_SIDE_CHALLENGER
 		var home_id: int = top_id if home_is_top else challenger_id
 		var away_id: int = challenger_id if home_is_top else top_id
 
@@ -319,18 +566,35 @@ static func _simulate_series(season: PSSeason, series: Dictionary) -> Dictionary
 	}
 
 
-static func _simulate_one_postseason_game(season: PSSeason, away_id: int, home_id: int, postseason_stats: Dictionary = {}) -> Dictionary:
+static func _simulate_one_postseason_game(
+	season: PSSeason,
+	away_id: int,
+	home_id: int,
+	postseason_stats: Dictionary = {},
+	game_day: int = 0,
+	team_games_before_by_team: Dictionary = {}
+) -> Dictionary:
 	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, away_id, true)
 	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, home_id, true)
 	if not bool(away_setup.get("ok", false)) or not bool(home_setup.get("ok", false)):
 		return {"away_score": 0, "home_score": 0, "draw": true, "winning_team_id": 0}
+	_apply_postseason_setup_overrides(away_setup, away_id, team_games_before_by_team)
+	_apply_postseason_setup_overrides(home_setup, home_id, team_games_before_by_team)
 	var snapshots: Dictionary = _snapshot_setup_records(away_setup, home_setup)
 	var result: Dictionary = PSGameLoop.simulate_game(away_setup, home_setup)
 	if postseason_stats.is_empty():
 		postseason_stats.merge(_empty_postseason_stats(), true)
 	_apply_postseason_pitching_decisions(season, result, away_id, home_id, away_setup, home_setup)
 	_collect_postseason_stat_deltas(snapshots, postseason_stats)
+	if game_day > 0:
+		PSRotationPlanner.record_rotation_start(season, away_id, away_setup, game_day)
+		PSRotationPlanner.record_rotation_start(season, home_id, home_setup, game_day)
 	return result
+
+
+static func _apply_postseason_setup_overrides(setup: Dictionary, team_id: int, team_games_before_by_team: Dictionary) -> void:
+	var fallback: int = int(setup.get("team_games_played_before", 0))
+	setup["team_games_played_before"] = _team_games_before(team_games_before_by_team, team_id, fallback)
 
 
 static func _empty_postseason_stats() -> Dictionary:

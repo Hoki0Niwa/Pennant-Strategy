@@ -874,7 +874,12 @@ func _comma(value: int) -> String:
 
 func _format_date_long(date_text: String) -> String:
 	var d: Dictionary = _parse_date(date_text)
-	return "%d年 %d月%d日" % [int(d.get("year", 0)), int(d.get("month", 0)), int(d.get("day", 0))]
+	return "%d年 %d月%d日(%s)" % [
+		int(d.get("year", 0)),
+		int(d.get("month", 0)),
+		int(d.get("day", 0)),
+		SeasonCalendar.weekday_label_for_date(date_text),
+	]
 
 
 func _parse_date(date_text: String) -> Dictionary:
