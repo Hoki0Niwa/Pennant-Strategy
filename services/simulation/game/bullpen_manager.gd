@@ -119,6 +119,7 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 		return null
 	var used_ids: Dictionary = setup.get("used_pitcher_ids", {}) as Dictionary
 	var close_game: bool = is_close_game_for_setup(setup, game_result)
+	var score_margin: int = score_margin_for_setup(setup, game_result)
 	var game_day: int = int(setup.get("game_day", 0))
 	var team_games_played_before: int = int(setup.get("team_games_played_before", 0))
 	var candidates: Array = []
@@ -131,7 +132,8 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 			if used_ids.has(reliever.player_id):
 				continue
 			if not PSPitcherUsageModel.is_reliever_available(reliever, bool(allow_tired), game_day, team_games_played_before):
-				continue
+				if bool(allow_tired) or not _can_relax_availability_for_late_role(setup, reliever, inning, score_margin, game_day, team_games_played_before):
+					continue
 			candidates.append(reliever)
 		if not candidates.is_empty():
 			break
@@ -140,7 +142,7 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	candidates.sort_custom(func(a, b) -> bool:
 		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return reliever_selection_score_for_setup(setup, pitcher_a, prefer_long, inning, close_game, game_day, team_games_played_before) > reliever_selection_score_for_setup(setup, pitcher_b, prefer_long, inning, close_game, game_day, team_games_played_before)
+		return reliever_selection_score_for_setup(setup, pitcher_a, prefer_long, inning, close_game, score_margin, game_day, team_games_played_before) > reliever_selection_score_for_setup(setup, pitcher_b, prefer_long, inning, close_game, score_margin, game_day, team_games_played_before)
 	)
 	return candidates[0] as PSPlayerSeasonRecord
 
@@ -152,55 +154,129 @@ static func reliever_selection_score_for_setup(
 	prefer_long: bool,
 	inning: int,
 	close_game: bool,
+	score_margin: int,
 	game_day: int,
 	team_games_played_before: int
 ) -> float:
 	var score: float = PSPitcherUsageModel.reliever_selection_score(reliever, prefer_long, inning, close_game, game_day, team_games_played_before)
 	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
 	var role: String = str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))
-	return score + relief_role_context_bonus(role, prefer_long, inning, close_game)
+	return score + relief_role_context_bonus(role, prefer_long, inning, close_game, score_margin)
 
 
-# 保存された役割と試合状況の噛み合わせ。抑えは9回接戦、セットは7-8回接戦、
-# ロングは先発早期降板で大きく加点し、逆の場面では強めに減点する。
-static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, close_game: bool) -> float:
+# 保存された役割と試合状況の噛み合わせ。セットは7-8回の4点以内リード/同点、
+# クローザーは9回以降の4点以内リード/同点、ロングは早期降板/敗戦処理、ミドルはそれ以外を担当する。
+# close_game は基礎スコア用に残し、役割判定は score_margin の符号まで見る。
+static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, close_game: bool, score_margin: int) -> float:
+	var setup_spot: bool = _is_setup_spot(inning, score_margin)
+	var setup_tie_spot: bool = _is_setup_tie_spot(inning, score_margin)
+	var closer_save_spot: bool = _is_closer_save_spot(inning, score_margin)
+	var closer_four_run_spot: bool = _is_closer_four_run_spot(inning, score_margin)
+	var closer_spot: bool = closer_save_spot or closer_four_run_spot
+	var closer_tie_spot: bool = _is_closer_tie_spot(inning, score_margin)
+	var mop_up_spot: bool = _is_mop_up_spot(inning, score_margin)
 	match role:
 		PSRotationPlanner.RELIEF_ROLE_CLOSER:
-			if prefer_long:
-				return -160.0
-			if close_game and inning >= 9:
-				return 180.0
+			if prefer_long or mop_up_spot:
+				return -180.0
+			if closer_save_spot:
+				return 320.0
+			if closer_four_run_spot:
+				return 235.0
+			if closer_tie_spot:
+				return 175.0
+			if setup_spot or setup_tie_spot:
+				return -45.0
 			if close_game and inning >= 8:
-				return 80.0
+				return 60.0
 			return -35.0
 		PSRotationPlanner.RELIEF_ROLE_SETUP:
-			if prefer_long:
-				return -85.0
-			if close_game and inning >= 7 and inning <= 8:
-				return 130.0
-			if close_game and inning == 6:
-				return 60.0
-			if close_game and inning >= 9:
-				return -20.0
-			return 12.0
+			if prefer_long or mop_up_spot:
+				return -130.0
+			if setup_spot:
+				return 215.0
+			if setup_tie_spot:
+				return 165.0
+			if closer_save_spot:
+				return 15.0
+			if closer_four_run_spot:
+				return 45.0
+			if closer_tie_spot:
+				return 80.0
+			if score_margin < 0:
+				return -60.0
+			return -10.0
 		PSRotationPlanner.RELIEF_ROLE_MIDDLE:
 			if prefer_long:
-				return -30.0
-			if close_game and inning >= 9:
+				return -40.0
+			if setup_spot or setup_tie_spot or closer_spot or closer_tie_spot:
 				return -45.0
-			if inning <= 7 or not close_game:
-				return 45.0
-			return 0.0
+			if mop_up_spot:
+				return -20.0
+			return 85.0
 		PSRotationPlanner.RELIEF_ROLE_LONG:
 			if prefer_long:
-				return 170.0
-			if inning <= 5:
-				return 70.0
-			if close_game and inning >= 7:
-				return -120.0
-			return -20.0
+				return 230.0
+			if mop_up_spot:
+				return 190.0
+			if setup_spot or setup_tie_spot or closer_spot or closer_tie_spot:
+				return -160.0
+			if inning <= 5 and score_margin <= 0:
+				return 90.0
+			return -50.0
 		_:
 			return 0.0
+
+
+static func _can_relax_availability_for_late_role(
+	setup: Dictionary,
+	reliever: PSPlayerSeasonRecord,
+	inning: int,
+	score_margin: int,
+	game_day: int,
+	team_games_played_before: int
+) -> bool:
+	var role: String = _relief_role_for_pitcher(setup, reliever)
+	if role == PSRotationPlanner.RELIEF_ROLE_CLOSER:
+		if not (_is_closer_save_spot(inning, score_margin) or _is_closer_four_run_spot(inning, score_margin) or _is_closer_tie_spot(inning, score_margin)):
+			return false
+	elif role == PSRotationPlanner.RELIEF_ROLE_SETUP:
+		if not (_is_setup_spot(inning, score_margin) or _is_setup_tie_spot(inning, score_margin)):
+			return false
+	else:
+		return false
+	return PSPitcherUsageModel.is_reliever_available(reliever, true, game_day, team_games_played_before)
+
+
+static func _relief_role_for_pitcher(setup: Dictionary, reliever: PSPlayerSeasonRecord) -> String:
+	if reliever == null:
+		return ""
+	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
+	return str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))
+
+
+static func _is_setup_spot(inning: int, score_margin: int) -> bool:
+	return score_margin > 0 and score_margin <= 4 and inning >= 7 and inning <= 8
+
+
+static func _is_setup_tie_spot(inning: int, score_margin: int) -> bool:
+	return score_margin == 0 and inning >= 7 and inning <= 8
+
+
+static func _is_closer_save_spot(inning: int, score_margin: int) -> bool:
+	return score_margin > 0 and score_margin <= 3 and inning >= 9
+
+
+static func _is_closer_four_run_spot(inning: int, score_margin: int) -> bool:
+	return score_margin == 4 and inning >= 9
+
+
+static func _is_closer_tie_spot(inning: int, score_margin: int) -> bool:
+	return score_margin == 0 and inning >= 9
+
+
+static func _is_mop_up_spot(inning: int, score_margin: int) -> bool:
+	return score_margin <= -4 or (inning >= 7 and score_margin <= -3)
 
 
 # setup のチーム視点で3点差以内なら close game とみなす。

@@ -224,6 +224,108 @@ func test_closer_role_is_preferred_in_ninth_close_game() -> void:
 	assert_int(picked.player_id).is_equal(closer.player_id)
 
 
+func test_closer_role_is_preferred_in_ninth_four_run_lead_and_tie() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(121, "Closer", 0.0)
+	var middle: PSPlayerSeasonRecord = _pitcher(122, "Middle", 0.8)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [middle, closer],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var four_run_lead: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 6,
+		"home_score": 2,
+	}
+	var tied: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 3,
+		"home_score": 3,
+	}
+
+	var lead_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, four_run_lead, false)
+	var tie_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, tied, false)
+
+	assert_object(lead_pick).is_not_null()
+	assert_int(lead_pick.player_id).is_equal(closer.player_id)
+	assert_object(tie_pick).is_not_null()
+	assert_int(tie_pick.player_id).is_equal(closer.player_id)
+
+
+func test_closer_role_can_take_third_straight_in_save_spot() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(131, "Closer", 0.0)
+	var middle: PSPlayerSeasonRecord = _pitcher(132, "Middle", 0.9)
+	closer.last_pitched_team_game = 20
+	closer.consecutive_appearances = 2
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [middle, closer],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 25,
+		"team_games_played_before": 20,
+	}
+	var save_spot: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 4,
+		"home_score": 2,
+	}
+
+	var picked: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, save_spot, false)
+
+	assert_object(picked).is_not_null()
+	assert_int(picked.player_id).is_equal(closer.player_id)
+
+
+func test_setup_role_is_preferred_for_late_lead_and_tie() -> void:
+	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(151, "Setup", 0.0)
+	var middle: PSPlayerSeasonRecord = _pitcher(152, "Middle", 0.7)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [middle, setup_pitcher],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			setup_pitcher.player_id: PSRotationPlanner.RELIEF_ROLE_SETUP,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+
+	var leading: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 6,
+		"home_score": 2,
+	}
+	var tied: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 2,
+		"home_score": 2,
+	}
+
+	var lead_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 8, leading, false)
+	var tie_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 8, tied, false)
+
+	assert_object(lead_pick).is_not_null()
+	assert_int(lead_pick.player_id).is_equal(setup_pitcher.player_id)
+	assert_object(tie_pick).is_not_null()
+	assert_int(tie_pick.player_id).is_equal(setup_pitcher.player_id)
+
+
 func test_long_role_is_preferred_when_starter_exits_early() -> void:
 	var long_reliever: PSPlayerSeasonRecord = _pitcher(201, "Long", 0.0)
 	var short_reliever: PSPlayerSeasonRecord = _pitcher(202, "Short", 0.6)
@@ -243,6 +345,85 @@ func test_long_role_is_preferred_when_starter_exits_early() -> void:
 
 	assert_object(picked).is_not_null()
 	assert_int(picked.player_id).is_equal(long_reliever.player_id)
+
+
+func test_long_role_is_preferred_for_mop_up() -> void:
+	var long_reliever: PSPlayerSeasonRecord = _pitcher(251, "Long", 0.0)
+	var middle: PSPlayerSeasonRecord = _pitcher(252, "Middle", 0.7)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [middle, long_reliever],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			long_reliever.player_id: PSRotationPlanner.RELIEF_ROLE_LONG,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var trailing: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 1,
+		"home_score": 6,
+	}
+
+	var picked: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 7, trailing, false)
+
+	assert_object(picked).is_not_null()
+	assert_int(picked.player_id).is_equal(long_reliever.player_id)
+
+
+func test_save_and_hold_conditions_use_official_situations() -> void:
+	var result: Dictionary = {
+		"draw": false,
+		"winning_team_id": 1,
+		"last_lead_change": {"winning_team_id": 1, "event_index": 5, "losing_pitcher_id": 22},
+		"pitcher_outings": [
+			_outing(10, 1, PSPitcherUsageModel.ROLE_STARTER, 0, 4, 18, 0, 0, 0, 0),
+			_outing(11, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 10, 12, 1, 2, 2, 2, 0),
+			_outing(13, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 20, 22, 3, 3, 3, 3, 0),
+			_outing(20, 2, PSPitcherUsageModel.ROLE_STARTER, 0, 4, 12, 0, 0, 0, 0),
+			_outing(21, 2, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 10, 12, 3, 1, 1, 3, 0),
+			_outing(22, 2, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 30, 32, 3, 1, -1, 3, 0),
+		],
+	}
+
+	var decisions: Dictionary = PSGameDecisions.compute_pitching_decisions(result, 1, 2, 10, 20)
+	var holds: Array = decisions.get("hold_pitcher_ids", []) as Array
+
+	assert_int(int(decisions.get("winning_pitcher_id", 0))).is_equal(10)
+	assert_int(int(decisions.get("losing_pitcher_id", 0))).is_equal(22)
+	assert_int(int(decisions.get("save_pitcher_id", 0))).is_equal(13)
+	assert_array(holds).contains(11)
+	assert_array(holds).contains(21)
+	assert_array(holds).not_contains(13)
+	assert_array(holds).not_contains(22)
+
+
+func test_save_situation_counts_tying_run_on_deck() -> void:
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0, 0, 1, 4, 4, 2, 0))).is_true()
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0, 0, 1, 3, 3, 0, 0))).is_false()
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0, 0, 3, 3, 3, 0, 0))).is_true()
+
+
+func test_draw_game_can_record_holds_without_win_loss_save() -> void:
+	var result: Dictionary = {
+		"draw": true,
+		"winning_team_id": 0,
+		"pitcher_outings": [
+			_outing(31, 1, PSPitcherUsageModel.ROLE_STARTER, 0, 4, 18, 0, 0, 0, 0),
+			_outing(32, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 10, 12, 3, 0, 0, 0, 0),
+			_outing(41, 2, PSPitcherUsageModel.ROLE_STARTER, 0, 4, 18, 0, 0, 0, 0),
+		],
+	}
+
+	var decisions: Dictionary = PSGameDecisions.compute_pitching_decisions(result, 1, 2, 31, 41)
+
+	assert_int(int(decisions.get("winning_pitcher_id", 0))).is_equal(0)
+	assert_int(int(decisions.get("losing_pitcher_id", 0))).is_equal(0)
+	assert_int(int(decisions.get("save_pitcher_id", 0))).is_equal(0)
+	assert_array(decisions.get("hold_pitcher_ids", []) as Array).contains(32)
 
 
 func test_saved_relief_roles_are_kept_in_reliever_pool() -> void:
@@ -270,6 +451,21 @@ func test_saved_relief_roles_are_kept_in_reliever_pool() -> void:
 
 	assert_array(ids).contains(role_pick.player_id)
 	assert_int(int(ids[0])).is_equal(role_pick.player_id)
+
+
+func test_default_relief_roles_are_assigned_without_saved_usage() -> void:
+	var relievers: Array = []
+	for i in range(6):
+		relievers.append(_pitcher(360 + i, "Relief %d" % i, 0.5))
+
+	var roles: Dictionary = PSRotationPlanner.relief_role_by_pitcher({}, relievers)
+
+	assert_str(str(roles.get(360, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_SETUP)
+	assert_str(str(roles.get(361, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_SETUP)
+	assert_str(str(roles.get(362, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_CLOSER)
+	assert_str(str(roles.get(363, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_MIDDLE)
+	assert_str(str(roles.get(364, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_LONG)
+	assert_str(str(roles.get(365, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_LONG)
 
 
 func test_is_starter_pitcher_honors_stored_role_over_ability() -> void:
@@ -406,6 +602,33 @@ func _pitcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRe
 		{"type": "slider", "mastery": z - 0.1},
 	]
 	return record
+
+
+func _outing(
+	pitcher_id: int,
+	team_id: int,
+	role: String,
+	start_event: int,
+	end_event: int,
+	outs: int,
+	entry_lead: int,
+	exit_lead: int,
+	entry_base_runners: int,
+	runs: int
+) -> Dictionary:
+	return {
+		"pitcher_id": pitcher_id,
+		"team_id": team_id,
+		"role": role,
+		"start_event_index": start_event,
+		"end_event_index": end_event,
+		"outs": outs,
+		"entry_lead": entry_lead,
+		"exit_lead": exit_lead,
+		"entry_base_runners": entry_base_runners,
+		"inherited_runners": entry_base_runners,
+		"runs": runs,
+	}
 
 
 func _fielder(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:

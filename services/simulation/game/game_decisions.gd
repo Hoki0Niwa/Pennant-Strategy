@@ -12,9 +12,6 @@ static func apply_game_decisions(season: PSSeason, away_team_id: int, home_team_
 
 	merge_game_advanced_stats(season, result)
 
-	if bool(result.get("draw", false)):
-		return
-
 	var away_starter_id: int = int(result.get("away_pitcher_id", 0))
 	var home_starter_id: int = int(result.get("home_pitcher_id", 0))
 	var decisions: Dictionary = compute_pitching_decisions(result, away_team_id, home_team_id, away_starter_id, home_starter_id)
@@ -28,6 +25,13 @@ static func apply_game_decisions(season: PSSeason, away_team_id: int, home_team_
 	result["losing_pitcher_id"] = losing_pitcher_id
 	result["save_pitcher_id"] = save_pitcher_id
 	result["hold_pitcher_ids"] = hold_pitcher_ids
+
+	if bool(result.get("draw", false)):
+		for pid_value in hold_pitcher_ids:
+			var draw_hold_pid: int = int(pid_value)
+			if draw_hold_pid > 0:
+				apply_pitcher_decision(season, draw_hold_pid, "hold")
+		return
 
 	if winning_pitcher_id > 0:
 		apply_pitcher_decision(season, winning_pitcher_id, "win")
@@ -49,6 +53,7 @@ static func compute_pitching_decisions(result: Dictionary, away_team_id: int, ho
 		"hold_pitcher_ids": [],
 	}
 	if bool(result.get("draw", false)):
+		empty["hold_pitcher_ids"] = hold_pitchers_from_outings(result.get("pitcher_outings", []) as Array, 0, 0, 0)
 		return empty
 	var outing_decisions: Dictionary = compute_pitching_decisions_from_outings(result, away_team_id, home_team_id, away_starter_id, home_starter_id)
 	if not outing_decisions.is_empty():
@@ -142,7 +147,7 @@ static func compute_pitching_decisions(result: Dictionary, away_team_id: int, ho
 		if last_pitcher_id != winning_pitcher_id:
 			var entry_lead: int = lead_at_pitcher_entry(innings, winning_is_home, last_pitcher_id)
 			var outs_recorded: int = outs_for_pitcher_in_innings(innings, winning_is_home, last_pitcher_id)
-			if outs_recorded >= 1 and entry_lead >= 1 and entry_lead <= 3:
+			if entry_lead >= 1 and (outs_recorded >= 9 or (entry_lead <= 3 and outs_recorded >= 3)):
 				save_pitcher_id = last_pitcher_id
 
 		for i in range(winning_pitcher_sequence.size()):
@@ -154,7 +159,7 @@ static func compute_pitching_decisions(result: Dictionary, away_team_id: int, ho
 			var entry_lead: int = lead_at_pitcher_entry(innings, winning_is_home, pid)
 			var exit_lead: int = lead_at_pitcher_exit(innings, winning_is_home, pid)
 			var outs_recorded: int = outs_for_pitcher_in_innings(innings, winning_is_home, pid)
-			if outs_recorded >= 1 and entry_lead >= 1 and entry_lead <= 3 and exit_lead >= 1:
+			if entry_lead >= 1 and exit_lead >= 1 and (outs_recorded >= 9 or (entry_lead <= 3 and outs_recorded >= 3)):
 				hold_pitcher_ids.append(pid)
 
 	return {
@@ -198,7 +203,7 @@ static func compute_pitching_decisions_from_outings(
 		losing_pitcher_id = int((losing_outings[0] as Dictionary).get("pitcher_id", 0))
 
 	var save_pitcher_id: int = save_pitcher_from_outings(winning_outings, winning_pitcher_id)
-	var hold_pitcher_ids: Array = hold_pitchers_from_outings(winning_outings, winning_pitcher_id, save_pitcher_id)
+	var hold_pitcher_ids: Array = hold_pitchers_from_outings(outings, winning_pitcher_id, losing_pitcher_id, save_pitcher_id)
 	return {
 		"winning_pitcher_id": winning_pitcher_id,
 		"losing_pitcher_id": losing_pitcher_id,
@@ -249,20 +254,18 @@ static func save_pitcher_from_outings(winning_outings: Array, winning_pitcher_id
 	var exit_lead: int = int(last.get("exit_lead", 0))
 	if outs_recorded <= 0 or entry_lead <= 0 or exit_lead <= 0:
 		return 0
-	if entry_lead <= 3:
-		return pitcher_id
-	if outs_recorded >= 9:
+	if save_situation_from_outing(last):
 		return pitcher_id
 	return 0
 
 
-static func hold_pitchers_from_outings(winning_outings: Array, winning_pitcher_id: int, save_pitcher_id: int) -> Array:
+static func hold_pitchers_from_outings(outings: Array, winning_pitcher_id: int, losing_pitcher_id: int, save_pitcher_id: int) -> Array:
 	var ids: Array = []
 	var seen: Dictionary = {}
-	for outing_value in winning_outings:
+	for outing_value in outings:
 		var outing: Dictionary = outing_value as Dictionary
 		var pitcher_id: int = int(outing.get("pitcher_id", 0))
-		if pitcher_id <= 0 or pitcher_id == winning_pitcher_id or pitcher_id == save_pitcher_id:
+		if pitcher_id <= 0 or pitcher_id == winning_pitcher_id or pitcher_id == losing_pitcher_id or pitcher_id == save_pitcher_id:
 			continue
 		if seen.has(pitcher_id):
 			continue
@@ -271,10 +274,28 @@ static func hold_pitchers_from_outings(winning_outings: Array, winning_pitcher_i
 		var outs_recorded: int = int(outing.get("outs", 0))
 		var entry_lead: int = int(outing.get("entry_lead", 0))
 		var exit_lead: int = int(outing.get("exit_lead", 0))
-		if outs_recorded >= 1 and entry_lead >= 1 and entry_lead <= 3 and exit_lead >= 1:
+		if outs_recorded < 1:
+			continue
+		if entry_lead > 0 and exit_lead > 0 and save_situation_from_outing(outing):
+			ids.append(pitcher_id)
+			seen[pitcher_id] = true
+		elif entry_lead == 0 and exit_lead >= 0 and int(outing.get("runs", 0)) == 0:
 			ids.append(pitcher_id)
 			seen[pitcher_id] = true
 	return ids
+
+
+static func save_situation_from_outing(outing: Dictionary) -> bool:
+	var outs_recorded: int = int(outing.get("outs", 0))
+	var entry_lead: int = int(outing.get("entry_lead", 0))
+	if entry_lead <= 0:
+		return false
+	if outs_recorded >= 9:
+		return true
+	if entry_lead <= 3 and outs_recorded >= 3:
+		return true
+	var base_runners: int = int(outing.get("entry_base_runners", int(outing.get("inherited_runners", 0))))
+	return entry_lead <= base_runners + 2
 
 
 static func lead_at_pitcher_entry(innings: Array, winning_is_home: bool, pitcher_id: int) -> int:

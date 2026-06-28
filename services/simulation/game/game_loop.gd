@@ -159,7 +159,7 @@ static func simulate_half_inning(
 	var pitcher: PSPlayerSeasonRecord = defense["pitcher"] as PSPlayerSeasonRecord
 	var pitcher_usage: Dictionary = PSBullpenManager.pitcher_usage_for(defense, pitcher)
 	var half_start_event_index: int = next_play_event_index(game_result)
-	ensure_pitcher_outing(defense, game_result, inning, half, bases, runs)
+	ensure_pitcher_outing(defense, game_result, inning, half, bases, runs, outs)
 
 	while outs < 3:
 		pitcher = defense["pitcher"] as PSPlayerSeasonRecord
@@ -410,7 +410,8 @@ static func ensure_pitcher_outing(
 	inning: int,
 	half: String,
 	bases: Array,
-	current_half_runs: int
+	current_half_runs: int,
+	current_outs: int = 0
 ) -> void:
 	if game_result.is_empty():
 		return
@@ -447,6 +448,8 @@ static func ensure_pitcher_outing(
 		"inherited_runners": inherited_ids.size(),
 		"inherited_runners_scored": 0,
 		"inherited_runner_ids": inherited_ids,
+		"entry_base_runners": inherited_ids.size(),
+		"entry_outs": current_outs,
 		"entry_lead": int(score.get("lead", 0)),
 		"exit_lead": int(score.get("lead", 0)),
 		"entry_score_for": int(score.get("score_for", 0)),
@@ -564,7 +567,7 @@ static func maybe_change_pitcher_after_pa(
 	if not changed:
 		return
 	finish_active_pitcher_outing(defense, game_result, inning, half, current_half_runs)
-	ensure_pitcher_outing(defense, game_result, inning, half, bases, current_half_runs)
+	ensure_pitcher_outing(defense, game_result, inning, half, bases, current_half_runs, outs)
 	_record_substitution(game_result, inning, half, int(defense.get("team_id", 0)), "pitching", old_pitcher.player_id, int((defense.get("pitcher", null) as PSPlayerSeasonRecord).player_id), 1, -1)
 
 
@@ -980,9 +983,34 @@ static func add_run_to_pitcher_outing(
 		outing["end_inning"] = inning
 		outing["end_half"] = half
 		outing["end_event_index"] = max(int(outing.get("end_event_index", -1)), next_play_event_index(game_result) - 1)
+		update_outing_exit_score_for_team(outing, team_id, game_result, half, _current_half_runs)
 		outings[index] = outing
 		game_result["pitcher_outings"] = outings
 		return
+
+
+static func update_outing_exit_score_for_team(
+	outing: Dictionary,
+	team_id: int,
+	game_result: Dictionary,
+	half: String,
+	current_half_runs: int
+) -> void:
+	var away_team_id: int = int(game_result.get("away_team_id", 0))
+	var home_team_id: int = int(game_result.get("home_team_id", 0))
+	var away_score: int = int(game_result.get("away_score", 0))
+	var home_score: int = int(game_result.get("home_score", 0))
+	if half == "top":
+		away_score += current_half_runs
+	elif half == "bottom":
+		home_score += current_half_runs
+	var score_for: int = away_score if team_id == away_team_id else home_score
+	var score_against: int = home_score if team_id == away_team_id else away_score
+	if team_id != away_team_id and team_id != home_team_id:
+		return
+	outing["exit_lead"] = score_for - score_against
+	outing["exit_score_for"] = score_for
+	outing["exit_score_against"] = score_against
 
 
 static func assign_batter_responsibility_after_plate(

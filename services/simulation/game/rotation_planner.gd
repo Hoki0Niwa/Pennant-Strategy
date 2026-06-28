@@ -295,6 +295,8 @@ static func relief_role_by_pitcher(saved: Dictionary, available_relievers: Array
 	var restrict: bool = not allowed.is_empty()
 	var roles: Dictionary = {}
 	var relief_roles: Dictionary = saved.get("relief_roles", {}) as Dictionary
+	if relief_roles.is_empty():
+		return default_relief_role_by_pitcher(available_relievers)
 	# long は複数可 (long_ids 配列)。旧セーブの単数 long_id も読む。
 	for id_value in _long_ids(relief_roles):
 		_add_role_id(roles, int(id_value), RELIEF_ROLE_LONG, allowed, restrict)
@@ -303,6 +305,23 @@ static func relief_role_by_pitcher(saved: Dictionary, available_relievers: Array
 	for id_value in relief_roles.get("setup_ids", []) as Array:
 		_add_role_id(roles, int(id_value), RELIEF_ROLE_SETUP, allowed, restrict)
 	_add_role_id(roles, int(relief_roles.get("closer_id", 0)), RELIEF_ROLE_CLOSER, allowed, restrict)
+	return roles
+
+
+static func default_relief_role_by_pitcher(available_relievers: Array) -> Dictionary:
+	var roles: Dictionary = {}
+	for i in range(available_relievers.size()):
+		var record: PSPlayerSeasonRecord = available_relievers[i] as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if i == 2:
+			roles[record.player_id] = RELIEF_ROLE_CLOSER
+		elif i <= 1:
+			roles[record.player_id] = RELIEF_ROLE_SETUP
+		elif i == 3:
+			roles[record.player_id] = RELIEF_ROLE_MIDDLE
+		else:
+			roles[record.player_id] = RELIEF_ROLE_LONG
 	return roles
 
 

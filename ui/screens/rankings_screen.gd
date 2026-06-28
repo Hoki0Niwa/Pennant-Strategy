@@ -12,8 +12,8 @@ const LEAGUES: Array = [
 ]
 
 const RANKING_TOP_COUNT: int = 7
-const QUALIFIER_PA_PER_DAY: float = 3.1
-const QUALIFIER_IP_PER_DAY: float = 1.0
+const QUALIFIER_PA_PER_TEAM_GAME: float = 3.1
+const QUALIFIER_OUTS_PER_TEAM_GAME: float = 3.0
 
 const BATTER_CATEGORIES: Array = [
 	{"key": "war",       "label": "WAR",    "min_pa": false},
@@ -238,9 +238,10 @@ func _refresh() -> void:
 	if season == null:
 		return
 
-	var qualifier_pa: int = int(max(1, ceil(QUALIFIER_PA_PER_DAY * float(season.current_day))))
-	var qualifier_outs: int = int(max(1, ceil(QUALIFIER_IP_PER_DAY * 3.0 * float(season.current_day))))
-	_info_text = "各部門 Top%d    規定打席 ≥ %d    規定投球回 ≥ %s 回" % [
+	var max_team_games: int = _max_team_games(season)
+	var qualifier_pa: int = int(max(1, ceil(QUALIFIER_PA_PER_TEAM_GAME * float(max_team_games))))
+	var qualifier_outs: int = int(max(1, ceil(QUALIFIER_OUTS_PER_TEAM_GAME * float(max_team_games))))
+	_info_text = "各部門 Top%d    規定打席 ≥ %d    規定投球回 ≥ %s 回    ※所属球団試合数基準" % [
 		RANKING_TOP_COUNT,
 		qualifier_pa,
 		_format_innings(qualifier_outs),
@@ -258,7 +259,7 @@ func _refresh() -> void:
 			var category: Dictionary = category_row as Dictionary
 			bcats.append({
 				"label": str(category["label"]),
-				"rows": _batter_rows(all_records, category, qualifier_pa, key),
+				"rows": _batter_rows(all_records, category, season, key),
 			})
 		batter[key] = bcats
 		var pcats: Array = []
@@ -266,13 +267,13 @@ func _refresh() -> void:
 			var category: Dictionary = category_row as Dictionary
 			pcats.append({
 				"label": str(category["label"]),
-				"rows": _pitcher_rows(all_records, category, qualifier_outs, key),
+				"rows": _pitcher_rows(all_records, category, season, key),
 			})
 		pitcher[key] = pcats
 	_data = {"batter": batter, "pitcher": pitcher}
 
 
-func _batter_rows(records: Array, category: Dictionary, qualifier_pa: int, league_key: String) -> Array:
+func _batter_rows(records: Array, category: Dictionary, season: PSSeason, league_key: String) -> Array:
 	var key: String = str(category["key"])
 	var require_min_pa: bool = bool(category.get("min_pa", false))
 	var entries: Array = []
@@ -283,7 +284,7 @@ func _batter_rows(records: Array, category: Dictionary, qualifier_pa: int, leagu
 			continue
 		if record.is_pitcher() and record.batter_stats.plate_appearances < 5:
 			continue
-		if require_min_pa and record.batter_stats.plate_appearances < qualifier_pa:
+		if require_min_pa and record.batter_stats.plate_appearances < _required_plate_appearances(record, season):
 			continue
 		if _batter_metric_uses_record(key):
 			if record.is_pitcher():
@@ -318,7 +319,7 @@ func _batter_rows(records: Array, category: Dictionary, qualifier_pa: int, leagu
 	return rows
 
 
-func _pitcher_rows(records: Array, category: Dictionary, qualifier_outs: int, league_key: String) -> Array:
+func _pitcher_rows(records: Array, category: Dictionary, season: PSSeason, league_key: String) -> Array:
 	var key: String = str(category["key"])
 	var require_min_ip: bool = bool(category.get("min_ip", false))
 	var ascending: bool = bool(category.get("ascending", false))
@@ -333,7 +334,7 @@ func _pitcher_rows(records: Array, category: Dictionary, qualifier_outs: int, le
 			continue
 		if record.pitcher_stats.games == 0:
 			continue
-		if require_min_ip and record.pitcher_stats.outs_pitched < qualifier_outs:
+		if require_min_ip and record.pitcher_stats.outs_pitched < _required_pitcher_outs(record, season):
 			continue
 		if key == "woba_allowed" and (record.advanced_stats == null or record.advanced_stats.woba_denominator <= 0):
 			continue
@@ -365,6 +366,38 @@ func _pitcher_rows(records: Array, category: Dictionary, qualifier_outs: int, le
 		})
 		shown += 1
 	return rows
+
+
+func _required_plate_appearances(record: PSPlayerSeasonRecord, season: PSSeason) -> int:
+	var team_games: int = _team_games_for_record(record, season)
+	return int(max(1, ceil(QUALIFIER_PA_PER_TEAM_GAME * float(team_games))))
+
+
+func _required_pitcher_outs(record: PSPlayerSeasonRecord, season: PSSeason) -> int:
+	var team_games: int = _team_games_for_record(record, season)
+	return int(max(1, ceil(QUALIFIER_OUTS_PER_TEAM_GAME * float(team_games))))
+
+
+func _team_games_for_record(record: PSPlayerSeasonRecord, season: PSSeason) -> int:
+	var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(record.team_id, record.year, record.season_number)
+	if team_record != null:
+		return int(team_record.stats.games)
+	if season != null and season.standings.has(record.team_id):
+		var stats: PSStats = season.standings[record.team_id] as PSStats
+		if stats != null:
+			return int(stats.games)
+	return 0
+
+
+func _max_team_games(season: PSSeason) -> int:
+	var result: int = 0
+	if season == null:
+		return result
+	for stats_value in season.standings.values():
+		var stats: PSStats = stats_value as PSStats
+		if stats != null:
+			result = max(result, int(stats.games))
+	return result
 
 
 func _collect_records(season: PSSeason) -> Array:
