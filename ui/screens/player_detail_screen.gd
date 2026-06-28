@@ -48,6 +48,8 @@ const TABLE_RECT: Rect2 = Rect2(262, 562, 1638, 494)
 
 const TABS: Array = [
 	{"id": "season", "label": "今季"},
+	{"id": "games", "label": "試合履歴"},
+	{"id": "monthly", "label": "月間成績"},
 	{"id": "stats", "label": "過去成績"},
 	{"id": "advanced", "label": "過去指標"},
 	{"id": "abilities", "label": "能力の変遷"},
@@ -56,6 +58,9 @@ const TABS: Array = [
 # 能力バーは上から一定間隔で詰める (守備適性は最大7つ想定)。
 const ABILITY_BAR_H: float = 36.0
 const ABILITY_BAR_ROWS: int = 7
+const LOWER_TABLE_ROW_H: float = 30.0
+const SEASON_CARD_H: float = 58.0
+const SEASON_SCROLL_STEP: float = 30.0
 
 var _team_id: int = 0
 var _team_ids: Array = []
@@ -69,6 +74,8 @@ var _records: Array = []                   # 当該選手の全シーズン記�
 var _ratings: Dictionary = {}              # 現在の表示レーティング (ratings_for_record)
 var _candidates: Array = []                # 絞り込み後の選手候補 (records, overall 降順)
 var _basic_rows: Array = []                # 過去成績タブ
+var _game_rows: Array = []                 # 試合履歴タブ (今季)
+var _monthly_rows: Array = []              # 月間成績タブ (今季)
 var _ability_rows: Array = []
 var _advanced_rows: Array = []             # 過去指標タブ (遅延計算)
 var _advanced_built: bool = false
@@ -76,6 +83,8 @@ var _season_groups: Array = []             # 今季タブ (カテゴリ別カー
 var _season_built: bool = false
 var _arsenal_types: Array = []             # 投手: 能力変遷表の変化球カラム順 (全シーズンの和集合)
 var _war_ctx_cache: Dictionary = {}        # "year-sn" -> league_ctx
+var _scroll_zones: Array = []              # [{rect, key, max}] ホイールスクロール領域
+var _scroll: Dictionary = {}
 
 var _team_menu_button: Button = null
 var _player_menu_button: Button = null
@@ -95,6 +104,7 @@ func _ready() -> void:
 func _draw() -> void:
 	_update_transform()
 	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
+	_scroll_zones = []
 
 	var your_team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
@@ -399,20 +409,28 @@ func _draw_season(rect: Rect2) -> void:
 	var inner_x: float = rect.position.x + 16.0
 	var top: float = rect.position.y + 72.0
 	var card_w: float = (rect.size.x - 32.0 - gap * float(cols - 1)) / float(cols)
+	var scroll_key: String = _scroll_key_for_tab("season")
 
-	# カテゴリごとの行数からカード高さを一定に揃える。
+	# カテゴリごとの行数から内容高さを求め、固定カード高さのまま縦スクロールする。
 	var n_sections: int = _season_groups.size()
 	var total_rows: int = 0
 	for group_value in _season_groups:
 		total_rows += int(ceil(float((group_value as Dictionary).get("cards", []).size()) / float(cols)))
-	var avail_h: float = rect.end.y - 16.0 - top
-	var card_h: float = (avail_h - header_h * float(n_sections) - section_gap * float(n_sections - 1) - gap * float(total_rows - n_sections)) / float(max(1, total_rows))
+	var viewport_h: float = rect.end.y - 16.0 - top
+	var content_h: float = header_h * float(n_sections) + section_gap * float(max(0, n_sections - 1))
+	content_h += SEASON_CARD_H * float(total_rows) + gap * float(max(0, total_rows - n_sections))
+	var max_off: int = int(ceil(maxf(0.0, content_h - viewport_h) / SEASON_SCROLL_STEP))
+	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_off)
+	_scroll[scroll_key] = offset
+	if max_off > 0:
+		_scroll_zones.append({"rect": rect, "key": scroll_key, "max": max_off})
 
-	var y: float = top
+	var y: float = top - float(offset) * SEASON_SCROLL_STEP
 	for group_value in _season_groups:
 		var group: Dictionary = group_value as Dictionary
-		_text(str(group.get("title", "")), Vector2(inner_x, y + 19.0), 15, TEXT, 300.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-		_line(Vector2(inner_x, y + 26.0), Vector2(rect.end.x - 16.0, y + 26.0), BORDER_SOFT, 1.0)
+		if y + header_h >= top and y <= rect.end.y - 16.0:
+			_text(str(group.get("title", "")), Vector2(inner_x, y + 19.0), 15, TEXT, 300.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+			_line(Vector2(inner_x, y + 26.0), Vector2(rect.end.x - 16.0, y + 26.0), BORDER_SOFT, 1.0)
 		y += header_h
 		var cards: Array = group.get("cards", []) as Array
 		var grows: int = int(ceil(float(cards.size()) / float(cols)))
@@ -423,12 +441,15 @@ func _draw_season(rect: Rect2) -> void:
 					break
 				var card: Dictionary = cards[idx] as Dictionary
 				var cx: float = inner_x + float(c) * (card_w + gap)
-				var cy: float = y + float(r) * (card_h + gap)
-				_round(Rect2(cx, cy, card_w, card_h), PANEL_2, BORDER_SOFT, 8)
-				_text(str(card["label"]), Vector2(cx + 10.0, cy + 20.0), 12, MUTED, card_w - 14.0)
-				_text(str(card["value"]), Vector2(cx, cy + card_h - 14.0), 24, TEXT, card_w, HORIZONTAL_ALIGNMENT_CENTER)
+				var cy: float = y + float(r) * (SEASON_CARD_H + gap)
+				if cy + SEASON_CARD_H >= top and cy <= rect.end.y - 16.0:
+					_round(Rect2(cx, cy, card_w, SEASON_CARD_H), PANEL_2, BORDER_SOFT, 8)
+					_text(str(card["label"]), Vector2(cx + 10.0, cy + 20.0), 12, MUTED, card_w - 14.0)
+					_text(str(card["value"]), Vector2(cx, cy + SEASON_CARD_H - 14.0), 24, TEXT, card_w, HORIZONTAL_ALIGNMENT_CENTER)
 				idx += 1
-		y += float(grows) * card_h + float(grows - 1) * gap + section_gap
+		y += float(grows) * SEASON_CARD_H + float(grows - 1) * gap + section_gap
+	if max_off > 0:
+		_text_right("%d / %d" % [offset, max_off], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
 # 描画本体は基底 _draw_data_table に集約 (2026-06-24)。タブボタンはヘッダ帯に重なるため見出しは描かず
@@ -436,7 +457,8 @@ func _draw_season(rect: Rect2) -> void:
 func _draw_table(rect: Rect2) -> void:
 	_draw_data_table(rect, _columns_for_tab(), _rows_for_tab(), {
 		"header_top": 84.0, "inner_pad": 16.0, "header_size": 12,
-		"row_h_max": 40.0, "alt_rows": true, "empty_text": "記録がありません",
+		"row_h": LOWER_TABLE_ROW_H, "alt_rows": true, "empty_text": "記録がありません",
+		"scroll_key": _scroll_key_for_tab(_active_tab), "scroll": _scroll, "scroll_zones": _scroll_zones,
 	})
 
 
@@ -444,6 +466,94 @@ func _draw_table(rect: Rect2) -> void:
 func _columns_for_tab() -> Array:
 	var pitcher: bool = _record != null and _record.is_pitcher()
 	match _active_tab:
+		"games":
+			if pitcher:
+				return [
+					{"title": "日付", "key": "date", "w": 82, "align": "l", "fmt": "str"},
+					{"title": "相手", "key": "opp", "w": 58, "align": "l", "fmt": "str"},
+					{"title": "結果", "key": "result", "w": 70, "align": "l", "fmt": "str"},
+					{"title": "出場", "key": "route", "w": 72, "align": "l", "fmt": "str"},
+					{"title": "記録", "key": "decision", "w": 46, "align": "c", "fmt": "str"},
+					{"title": "投球回", "key": "ip", "w": 60, "align": "r", "fmt": "f1"},
+					{"title": "防御率", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
+					{"title": "奪三振", "key": "so", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "与四球", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "与死球", "key": "hbp", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "被安打", "key": "h", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "被本", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "失点", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "自責", "key": "er", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "球数", "key": "pit", "w": 54, "align": "r", "fmt": "int"},
+				]
+			return [
+				{"title": "日付", "key": "date", "w": 82, "align": "l", "fmt": "str"},
+				{"title": "相手", "key": "opp", "w": 58, "align": "l", "fmt": "str"},
+				{"title": "結果", "key": "result", "w": 70, "align": "l", "fmt": "str"},
+				{"title": "出場", "key": "route", "w": 76, "align": "l", "fmt": "str"},
+				{"title": "打席", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
+				{"title": "打数", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "得点", "key": "r", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "安打", "key": "h", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "二塁", "key": "d", "w": 42, "align": "r", "fmt": "int"},
+				{"title": "三塁", "key": "t", "w": 42, "align": "r", "fmt": "int"},
+				{"title": "本", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
+				{"title": "打点", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "盗塁", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "死球", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "三振", "key": "so", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "犠打", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "犠飛", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "併殺", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "失策", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+			]
+		"monthly":
+			if pitcher:
+				return [
+					{"title": "月", "key": "month", "w": 68, "align": "l", "fmt": "str"},
+					{"title": "登板", "key": "g", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "先発", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "勝", "key": "w", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "敗", "key": "l", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int"},
+					{"title": "投球回", "key": "ip", "w": 60, "align": "r", "fmt": "f1"},
+					{"title": "防御率", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
+					{"title": "奪三振", "key": "so", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "与四球", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "与死球", "key": "hbp", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "被安打", "key": "h", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "被本", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "失点", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "自責", "key": "er", "w": 48, "align": "r", "fmt": "int"},
+				]
+			return [
+				{"title": "月", "key": "month", "w": 68, "align": "l", "fmt": "str"},
+				{"title": "試合", "key": "g", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "打席", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
+				{"title": "打数", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "得点", "key": "r", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "安打", "key": "h", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "二塁", "key": "d", "w": 42, "align": "r", "fmt": "int"},
+				{"title": "三塁", "key": "t", "w": 42, "align": "r", "fmt": "int"},
+				{"title": "本", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
+				{"title": "打点", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "盗塁", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "打率", "key": "avg", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "出塁", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "長打", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "死球", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "三振", "key": "so", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "犠打", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "犠飛", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "併殺", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "失策", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+			]
 		"advanced":
 			if pitcher:
 				return [
@@ -566,6 +676,10 @@ func _columns_for_tab() -> Array:
 
 func _rows_for_tab() -> Array:
 	match _active_tab:
+		"games":
+			return _game_rows
+		"monthly":
+			return _monthly_rows
 		"advanced":
 			_ensure_advanced()
 			return _advanced_rows
@@ -573,6 +687,47 @@ func _rows_for_tab() -> Array:
 			return _ability_rows
 		_:  # stats / rates は同じ行データ (列違い)
 			return _basic_rows
+
+
+func _scroll_key_for_tab(tab_id: String) -> String:
+	return "%d_%s" % [_player_id, tab_id]
+
+
+# ============================================================ input
+
+func _gui_input(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton and event.pressed):
+		return
+	_update_transform()
+	var base_pos: Vector2 = _to_base(event.position)
+	match event.button_index:
+		MOUSE_BUTTON_WHEEL_DOWN:
+			if _scroll_at(base_pos, 1):
+				accept_event()
+		MOUSE_BUTTON_WHEEL_UP:
+			if _scroll_at(base_pos, -1):
+				accept_event()
+
+
+func _to_base(pos: Vector2) -> Vector2:
+	if _scale_f <= 0.0:
+		return pos
+	return (pos - _offset) / _scale_f
+
+
+func _scroll_at(base_pos: Vector2, direction: int) -> bool:
+	for zone_value in _scroll_zones:
+		var zone: Dictionary = zone_value as Dictionary
+		if not (zone["rect"] as Rect2).has_point(base_pos):
+			continue
+		var key: String = str(zone.get("key", ""))
+		var max_off: int = int(zone.get("max", 0))
+		var current: int = clampi(int(_scroll.get(key, 0)) + direction, 0, max_off)
+		if current != int(_scroll.get(key, 0)):
+			_scroll[key] = current
+			queue_redraw()
+		return true
+	return false
 
 
 # ============================================================ buttons
@@ -829,6 +984,8 @@ func _refresh() -> void:
 	_records = []
 	_ratings = {}
 	_basic_rows = []
+	_game_rows = []
+	_monthly_rows = []
 	_ability_rows = []
 	_advanced_rows = []
 	_advanced_built = false
@@ -847,6 +1004,7 @@ func _refresh() -> void:
 	_ratings = PSPlayerVisibleRatings.ratings_for_record(_record)
 	_compute_arsenal_types()
 	_build_basic_rows()
+	_build_current_season_log_rows(season)
 	_build_ability_rows()
 
 
@@ -866,6 +1024,181 @@ func _build_basic_rows() -> void:
 		_basic_rows.append(_pitcher_basic_dict("通算", "", RecordStore.get_player_career_pitcher_stats(_player_id), true))
 	else:
 		_basic_rows.append(_batter_basic_dict("通算", "", RecordStore.get_player_career_batter_stats(_player_id), true))
+
+
+func _build_current_season_log_rows(season: PSSeason) -> void:
+	_game_rows = []
+	_monthly_rows = []
+	if season == null or _record == null:
+		return
+	var logs: Array = season.get_player_game_logs(_player_id)
+	var pitcher_view: bool = _record.is_pitcher()
+	var monthly: Dictionary = {}
+	for month_key in _season_month_buckets(season):
+		monthly[int(month_key)] = {
+			"batter": PSBatterStats.new(),
+			"pitcher": PSPitcherStats.new(),
+		}
+	for log_value in logs:
+		var log_row: Dictionary = log_value as Dictionary
+		var batter_stats: PSBatterStats = PSBatterStats.from_dict(log_row.get("batter", {}) as Dictionary)
+		var pitcher_stats: PSPitcherStats = PSPitcherStats.from_dict(log_row.get("pitcher", {}) as Dictionary)
+		if pitcher_view:
+			if not _pitcher_stats_has_any(pitcher_stats):
+				continue
+			_game_rows.append(_pitcher_game_row(log_row, pitcher_stats, season))
+		else:
+			if not _batter_stats_has_any(batter_stats):
+				continue
+			_game_rows.append(_batter_game_row(log_row, batter_stats, season))
+		var month_key: int = _month_bucket_for_log(log_row, season)
+		if not monthly.has(month_key):
+			monthly[month_key] = {
+				"batter": PSBatterStats.new(),
+				"pitcher": PSPitcherStats.new(),
+			}
+		var bucket: Dictionary = monthly[month_key] as Dictionary
+		(bucket["batter"] as PSBatterStats).add_from(batter_stats)
+		(bucket["pitcher"] as PSPitcherStats).add_from(pitcher_stats)
+
+	_game_rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var row_a: Dictionary = a as Dictionary
+		var row_b: Dictionary = b as Dictionary
+		var day_a: int = int(row_a.get("day", 0))
+		var day_b: int = int(row_b.get("day", 0))
+		if day_a == day_b:
+			return int(row_a.get("game_index", 0)) > int(row_b.get("game_index", 0))
+		return day_a > day_b
+	)
+
+	var month_keys: Array = monthly.keys()
+	month_keys.sort()
+	for key_value in month_keys:
+		var month_key: int = int(key_value)
+		var month_bucket: Dictionary = monthly[month_key] as Dictionary
+		if pitcher_view:
+			var ps: PSPitcherStats = month_bucket["pitcher"] as PSPitcherStats
+			var prow: Dictionary = _pitcher_basic_dict("", "", ps, false)
+			prow["month"] = _month_bucket_label(month_key)
+			if not _pitcher_stats_has_any(ps):
+				prow["__color"] = FAINT
+			_monthly_rows.append(prow)
+		else:
+			var bs: PSBatterStats = month_bucket["batter"] as PSBatterStats
+			var brow: Dictionary = _batter_basic_dict("", "", bs, false)
+			brow["month"] = _month_bucket_label(month_key)
+			if not _batter_stats_has_any(bs):
+				brow["__color"] = FAINT
+			_monthly_rows.append(brow)
+
+
+func _batter_game_row(log_row: Dictionary, stats: PSBatterStats, season: PSSeason) -> Dictionary:
+	var row: Dictionary = _batter_basic_dict("", "", stats, false)
+	_add_game_meta(row, log_row, season)
+	return row
+
+
+func _pitcher_game_row(log_row: Dictionary, stats: PSPitcherStats, season: PSSeason) -> Dictionary:
+	var row: Dictionary = _pitcher_basic_dict("", "", stats, false)
+	_add_game_meta(row, log_row, season)
+	row["decision"] = _pitcher_decision_label(stats)
+	return row
+
+
+func _add_game_meta(row: Dictionary, log_row: Dictionary, season: PSSeason) -> void:
+	row["day"] = int(log_row.get("day", 0))
+	row["game_index"] = int(log_row.get("game_index", 0))
+	row["date"] = _game_date_label(log_row, season)
+	row["opp"] = _opponent_label(log_row)
+	row["route"] = str(log_row.get("appearance", ""))
+	if str(row["route"]).is_empty():
+		row["route"] = _fallback_appearance_label(row)
+	row["result"] = "%s %d-%d" % [
+		str(log_row.get("result", "")),
+		int(log_row.get("score_for", 0)),
+		int(log_row.get("score_against", 0)),
+	]
+
+
+func _game_date_label(log_row: Dictionary, season: PSSeason) -> String:
+	var date_text: String = str(log_row.get("date", ""))
+	if date_text.is_empty() and season != null:
+		date_text = SeasonCalendar.date_for_season_day(season, int(log_row.get("day", 1)))
+	return SeasonCalendar.label_for_date(date_text)
+
+
+func _opponent_label(log_row: Dictionary) -> String:
+	var team: PSTeam = GameDb.get_team(int(log_row.get("opponent_id", 0)))
+	var prefix: String = "@" if str(log_row.get("home_away", "")) == "away" else "vs"
+	return "%s %s" % [prefix, team.short_name if team != null else "-"]
+
+
+func _pitcher_decision_label(stats: PSPitcherStats) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	if stats.wins > 0:
+		parts.append("勝")
+	if stats.losses > 0:
+		parts.append("敗")
+	if stats.holds > 0:
+		parts.append("H")
+	if stats.saves > 0:
+		parts.append("S")
+	return " ".join(parts) if not parts.is_empty() else "-"
+
+
+func _fallback_appearance_label(row: Dictionary) -> String:
+	if _record != null and _record.is_pitcher():
+		if int(row.get("gs", 0)) > 0:
+			return "先発"
+		if int(row.get("g", 0)) > 0:
+			return "救援"
+		return "-"
+	return "出場" if int(row.get("g", 0)) > 0 else "-"
+
+
+func _season_month_buckets(season: PSSeason) -> Array:
+	var seen: Dictionary = {}
+	if season != null:
+		for game_value in season.schedule:
+			var game: Dictionary = game_value as Dictionary
+			var date_text: String = str(game.get("date", ""))
+			if date_text.is_empty():
+				date_text = SeasonCalendar.date_for_season_day(season, int(game.get("day", 1)))
+			var parts: PackedStringArray = date_text.split("-")
+			var month: int = int(parts[1]) if parts.size() > 1 else 4
+			seen[4 if month <= 4 else month] = true
+	var keys: Array = seen.keys()
+	keys.sort()
+	if keys.is_empty():
+		keys.append(4)
+	return keys
+
+
+func _month_bucket_for_log(log_row: Dictionary, season: PSSeason) -> int:
+	var date_text: String = str(log_row.get("date", ""))
+	if date_text.is_empty() and season != null:
+		date_text = SeasonCalendar.date_for_season_day(season, int(log_row.get("day", 1)))
+	var parts: PackedStringArray = date_text.split("-")
+	var month: int = int(parts[1]) if parts.size() > 1 else 4
+	return 4 if month <= 4 else month
+
+
+func _month_bucket_label(month_key: int) -> String:
+	return "3-4月" if month_key <= 4 else "%d月" % month_key
+
+
+func _batter_stats_has_any(stats: PSBatterStats) -> bool:
+	for value in stats.to_dict().values():
+		if int(value) != 0:
+			return true
+	return false
+
+
+func _pitcher_stats_has_any(stats: PSPitcherStats) -> bool:
+	for value in stats.to_dict().values():
+		if int(value) != 0:
+			return true
+	return false
 
 
 func _batter_basic_dict(year_label: String, team: String, s: PSBatterStats, is_total: bool) -> Dictionary:

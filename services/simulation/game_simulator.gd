@@ -598,6 +598,7 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	var away_team_id: int = int(game.get("away_team_id", 0))
 	var home_team_id: int = int(game.get("home_team_id", 0))
 	var dh_enabled: bool = bool(game.get("dh_enabled", false))
+	var pre_player_stats: Dictionary = _snapshot_game_player_stats(season, away_team_id, home_team_id)
 	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, away_team_id, dh_enabled)
 	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, home_team_id, dh_enabled)
 	if not bool(away_setup.get("ok", false)):
@@ -614,6 +615,7 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	season.schedule[game_index] = game
 
 	PSGameDecisions.apply_game_decisions(season, away_team_id, home_team_id, result)
+	_record_player_game_logs(season, game_index, game, result, pre_player_stats)
 	var game_day: int = int(game.get("day", season.current_day))
 	PSRotationPlanner.record_rotation_start(season, away_team_id, away_setup, game_day)
 	PSRotationPlanner.record_rotation_start(season, home_team_id, home_setup, game_day)
@@ -649,3 +651,120 @@ static func _team_name(team_id: int) -> String:
 	if team == null:
 		return "Team %d" % team_id
 	return team.short_name
+
+
+static func _snapshot_game_player_stats(season: PSSeason, away_team_id: int, home_team_id: int) -> Dictionary:
+	var out: Dictionary = {}
+	if season == null:
+		return out
+	for team_id in [away_team_id, home_team_id]:
+		for record_value in RecordStore.get_team_player_records(int(team_id), season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record == null:
+				continue
+			out[str(record.player_id)] = {
+				"team_id": int(team_id),
+				"batter": record.batter_stats.to_dict(),
+				"pitcher": record.pitcher_stats.to_dict(),
+			}
+	return out
+
+
+static func _record_player_game_logs(season: PSSeason, game_index: int, game: Dictionary, result: Dictionary, pre_player_stats: Dictionary) -> void:
+	if season == null or pre_player_stats.is_empty():
+		return
+	var away_team_id: int = int(game.get("away_team_id", result.get("away_team_id", 0)))
+	var home_team_id: int = int(game.get("home_team_id", result.get("home_team_id", 0)))
+	var away_score: int = int(result.get("away_score", game.get("away_score", 0)))
+	var home_score: int = int(result.get("home_score", game.get("home_score", 0)))
+	for key_value in pre_player_stats.keys():
+		var player_id: int = int(str(key_value))
+		if player_id <= 0:
+			continue
+		var before: Dictionary = pre_player_stats[key_value] as Dictionary
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
+		if record == null:
+			continue
+		var batter_delta: PSBatterStats = record.batter_stats.subtract_from(PSBatterStats.from_dict(before.get("batter", {}) as Dictionary))
+		var pitcher_delta: PSPitcherStats = record.pitcher_stats.subtract_from(PSPitcherStats.from_dict(before.get("pitcher", {}) as Dictionary))
+		var batter_dict: Dictionary = batter_delta.to_dict()
+		var pitcher_dict: Dictionary = pitcher_delta.to_dict()
+		if not _stats_dict_has_any(batter_dict) and not _stats_dict_has_any(pitcher_dict):
+			continue
+		var team_id: int = int(before.get("team_id", record.team_id))
+		var opponent_id: int = home_team_id if team_id == away_team_id else away_team_id
+		var score_for: int = away_score if team_id == away_team_id else home_score
+		var score_against: int = home_score if team_id == away_team_id else away_score
+		season.append_player_game_log(player_id, {
+			"game_index": game_index,
+			"day": int(game.get("day", season.current_day)),
+			"date": str(game.get("date", "")),
+			"team_id": team_id,
+			"opponent_id": opponent_id,
+			"home_away": "away" if team_id == away_team_id else "home",
+			"appearance": _player_appearance_label(result, player_id, team_id, batter_delta, pitcher_delta),
+			"result": _team_result_label(score_for, score_against),
+			"score_for": score_for,
+			"score_against": score_against,
+			"batter": batter_dict,
+			"pitcher": pitcher_dict,
+		})
+
+
+static func _stats_dict_has_any(stats: Dictionary) -> bool:
+	for value in stats.values():
+		if int(value) != 0:
+			return true
+	return false
+
+
+static func _team_result_label(score_for: int, score_against: int) -> String:
+	if score_for > score_against:
+		return "勝"
+	if score_for < score_against:
+		return "敗"
+	return "分"
+
+
+static func _player_appearance_label(result: Dictionary, player_id: int, team_id: int, batter_stats: PSBatterStats, pitcher_stats: PSPitcherStats) -> String:
+	if pitcher_stats.starts > 0:
+		return "先発"
+	if pitcher_stats.relief_appearances > 0:
+		return "救援"
+	var started: bool = _player_started_for_team(result, player_id, team_id)
+	var sub_kinds: Dictionary = _substitution_kinds_for_player(result, player_id, team_id)
+	if started:
+		return "スタメン"
+	var pinch_hit: bool = bool(sub_kinds.get("pinch_hit", false))
+	var defense: bool = bool(sub_kinds.get("defense", false))
+	if pinch_hit and defense:
+		return "代打→守備"
+	if pinch_hit:
+		return "代打"
+	if defense:
+		return "守備"
+	if batter_stats.plate_appearances > 0 or batter_stats.games > 0:
+		return "途中"
+	return "-"
+
+
+static func _player_started_for_team(result: Dictionary, player_id: int, team_id: int) -> bool:
+	var lineups: Dictionary = result.get("lineups", {}) as Dictionary
+	for key in ["away", "home"]:
+		var lineup: Dictionary = lineups.get(key, {}) as Dictionary
+		if int(lineup.get("team_id", 0)) != team_id:
+			continue
+		for slot_value in (lineup.get("slots", []) as Array):
+			var slot: Dictionary = slot_value as Dictionary
+			if int(slot.get("player_id", 0)) == player_id:
+				return true
+	return false
+
+
+static func _substitution_kinds_for_player(result: Dictionary, player_id: int, team_id: int) -> Dictionary:
+	var kinds: Dictionary = {}
+	for sub_value in (result.get("substitutions", []) as Array):
+		var sub: Dictionary = sub_value as Dictionary
+		if int(sub.get("team_id", 0)) == team_id and int(sub.get("in_id", 0)) == player_id:
+			kinds[str(sub.get("kind", ""))] = true
+	return kinds

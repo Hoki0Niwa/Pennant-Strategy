@@ -23,6 +23,9 @@ var last_auto_swap_day: Dictionary = {}
 # { player_id_str: Array of {"day": int, "batter": Dictionary, "pitcher": Dictionary} }
 # 各選手の時系列スナップショット (day 昇順)。月別成績取得 / 月間MVP 等で利用。
 var player_stat_history: Dictionary = {}
+# { player_id_str: Array of game rows }
+# 試合別の成績差分。PSSeason に属するため新シーズン作成時に自然にリセットされる。
+var player_game_history: Dictionary = {}
 
 
 func setup(team_ids: Array) -> void:
@@ -271,6 +274,49 @@ func get_monthly_stats(player_id: int, current_batter: PSBatterStats, current_pi
 	return {"batter": prev_month_batter, "pitcher": prev_month_pitcher, "source": "previous_month"}
 
 
+# --- 選手別 試合履歴 ----------------------------------------------------------
+
+func append_player_game_log(player_id: int, row: Dictionary) -> void:
+	if player_id <= 0:
+		return
+	var key: String = str(player_id)
+	var history: Array = (player_game_history.get(key, []) as Array).duplicate(true)
+	var game_index: int = int(row.get("game_index", -1))
+	var replaced: bool = false
+	for i in range(history.size()):
+		var existing: Dictionary = history[i] as Dictionary
+		if int(existing.get("game_index", -2)) == game_index:
+			history[i] = row.duplicate(true)
+			replaced = true
+			break
+	if not replaced:
+		history.append(row.duplicate(true))
+	history.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var row_a: Dictionary = a as Dictionary
+		var row_b: Dictionary = b as Dictionary
+		var day_a: int = int(row_a.get("day", 0))
+		var day_b: int = int(row_b.get("day", 0))
+		if day_a == day_b:
+			return int(row_a.get("game_index", 0)) < int(row_b.get("game_index", 0))
+		return day_a < day_b
+	)
+	player_game_history[key] = history
+
+
+func get_player_game_logs(player_id: int) -> Array:
+	var history: Array = (player_game_history.get(str(player_id), []) as Array).duplicate(true)
+	history.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var row_a: Dictionary = a as Dictionary
+		var row_b: Dictionary = b as Dictionary
+		var day_a: int = int(row_a.get("day", 0))
+		var day_b: int = int(row_b.get("day", 0))
+		if day_a == day_b:
+			return int(row_a.get("game_index", 0)) < int(row_b.get("game_index", 0))
+		return day_a < day_b
+	)
+	return history
+
+
 # 消化済み試合の result から、セーブに残す軽量サマリ列だけを抜き出す。
 # 詳細な box score / play-by-play (1 試合 ~166KB) はセーブ後に読み戻されることが無く
 # (game_result_screen / home_screen は下記スカラーしか参照しない)、保存すると season blob が
@@ -305,6 +351,7 @@ func to_dict() -> Dictionary:
 		"team_active_rosters": team_active_rosters,
 		"last_auto_swap_day": last_auto_swap_day,
 		"player_stat_history": player_stat_history,
+		"player_game_history": player_game_history,
 	}
 
 
@@ -362,5 +409,6 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.team_active_rosters = (data.get("team_active_rosters", {}) as Dictionary).duplicate(true)
 	season.last_auto_swap_day = (data.get("last_auto_swap_day", {}) as Dictionary).duplicate(true)
 	season.player_stat_history = (data.get("player_stat_history", {}) as Dictionary).duplicate(true)
+	season.player_game_history = (data.get("player_game_history", {}) as Dictionary).duplicate(true)
 
 	return season

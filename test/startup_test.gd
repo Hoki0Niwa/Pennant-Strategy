@@ -186,7 +186,11 @@ func test_player_detail_screen_builds_with_active_season() -> void:
 	AppState.select_team(team.id)
 	AppState.start_new_season()
 	AppState.current_screen = "player_detail"
-	AppState.current_player_id = 0
+	var GameSimulator = load("res://services/simulation/game_simulator.gd")
+	GameSimulator.simulate_current_day(AppState.current_season, false)
+	var history_keys: Array = AppState.current_season.player_game_history.keys()
+	assert_array(history_keys).is_not_empty()
+	AppState.current_player_id = int(str(history_keys[0]))
 	var test_save_id: String = SaveContext.active_save_id()
 
 	var screen_script: GDScript = load("res://ui/screens/player_detail_screen.gd") as GDScript
@@ -199,11 +203,36 @@ func test_player_detail_screen_builds_with_active_season() -> void:
 	assert_array(screen._candidates).is_not_empty()
 	assert_object(screen._record).is_not_null()
 	assert_array(screen._basic_rows).is_not_empty()
+	assert_array(screen._game_rows).is_not_empty()
+	assert_array(screen._monthly_rows).is_not_empty()
 	assert_array(screen._ability_rows).is_not_empty()
+	var faint_month_found: bool = false
+	for row_value in screen._monthly_rows:
+		var row: Dictionary = row_value as Dictionary
+		if row.has("__color"):
+			faint_month_found = true
+			break
+	assert_bool(faint_month_found).is_true()
 
 	# 今季タブ(既定)はカテゴリ別カードを遅延計算する。
 	screen._ensure_season_cards()
 	assert_array(screen._season_groups).is_not_empty()
+
+	# 試合履歴は出場経路を表示し、単発の試合数/打率列は持たない。
+	screen._active_tab = "games"
+	var game_cols: Array = screen._columns_for_tab()
+	var has_route_col: bool = false
+	var has_game_count_col: bool = false
+	var has_avg_col: bool = false
+	for col_value in game_cols:
+		var col: Dictionary = col_value as Dictionary
+		var key: String = str(col.get("key", ""))
+		has_route_col = has_route_col or key == "route"
+		has_game_count_col = has_game_count_col or key == "g"
+		has_avg_col = has_avg_col or key == "avg"
+	assert_bool(has_route_col).is_true()
+	assert_bool(has_game_count_col).is_false()
+	assert_bool(has_avg_col).is_false()
 
 	# 過去指標タブを開くと WAR/wOBA 集計が遅延計算される (末尾に通算行)。
 	screen._active_tab = "advanced"
