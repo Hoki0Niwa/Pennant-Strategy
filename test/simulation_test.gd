@@ -224,7 +224,7 @@ func test_closer_role_is_preferred_in_ninth_close_game() -> void:
 	assert_int(picked.player_id).is_equal(closer.player_id)
 
 
-func test_closer_role_is_preferred_in_ninth_four_run_lead_and_tie() -> void:
+func test_closer_role_is_preferred_in_ninth_four_run_lead() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(121, "Closer", 0.0)
 	var middle: PSPlayerSeasonRecord = _pitcher(122, "Middle", 0.8)
 	var setup: Dictionary = {
@@ -244,6 +244,94 @@ func test_closer_role_is_preferred_in_ninth_four_run_lead_and_tie() -> void:
 		"away_score": 6,
 		"home_score": 2,
 	}
+
+	var lead_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, four_run_lead, false)
+
+	assert_object(lead_pick).is_not_null()
+	assert_int(lead_pick.player_id).is_equal(closer.player_id)
+
+
+# 4点差リードはクローザーが前日(直前のチーム試合)に登板していたら回避し、ミドルへ回す (ユーザー指定)。
+func test_closer_avoids_four_run_lead_when_pitched_previous_game() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(141, "Closer", 0.5)
+	var middle: PSPlayerSeasonRecord = _pitcher(142, "Middle", 0.0)
+	# 直前のチーム試合 (team_games_played_before=10) に登板済み = 今登板すると連投。
+	closer.last_pitched_team_game = 10
+	closer.consecutive_appearances = 1
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [middle, closer],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var four_run_lead: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 6,
+		"home_score": 2,
+	}
+
+	# 連投回避でクローザーは使わず、ミドルが登板する (能力で勝っていても回避が優先)。
+	var picked: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, four_run_lead, false)
+	assert_int(picked.player_id).is_equal(middle.player_id)
+
+
+# 5点差以上はどの回でもセット/クローザーを温存し、ミドルリリーフを登板させる (ユーザー指定)。
+func test_middle_reliever_covers_blowout_lead() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(161, "Closer", 0.9)
+	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(162, "Setup", 0.9)
+	var middle: PSPlayerSeasonRecord = _pitcher(163, "Middle", 0.0)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [closer, setup_pitcher, middle],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			setup_pitcher.player_id: PSRotationPlanner.RELIEF_ROLE_SETUP,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var blowout_lead: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 7,
+		"home_score": 2,
+	}
+
+	# 9回でも7回でも5点差ならミドル (セット/クローザーは能力で勝っていても温存)。
+	var pick9: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, blowout_lead, false)
+	var pick7: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 7, blowout_lead, false)
+	assert_int(pick9.player_id).is_equal(middle.player_id)
+	assert_int(pick7.player_id).is_equal(middle.player_id)
+
+
+# 9回同点・ビジター: クローザーは12回(最終回)まで温存し、9〜11回は残りリリーフを
+# 評価の高い順で最終回直前に最良が来るよう逆算配置する (ユーザー指定)。
+func test_closer_held_until_twelfth_in_tie_for_visitor() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(601, "Closer", 0.5)
+	var best: PSPlayerSeasonRecord = _pitcher(602, "BestBridge", 0.9)
+	var mid: PSPlayerSeasonRecord = _pitcher(603, "MidBridge", 0.4)
+	var low: PSPlayerSeasonRecord = _pitcher(604, "LowBridge", 0.1)
+	var setup: Dictionary = {
+		"team_id": 1,  # away = ビジター
+		"relievers": [closer, best, mid, low],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			best.player_id: PSRotationPlanner.RELIEF_ROLE_SETUP,
+			mid.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+			low.player_id: PSRotationPlanner.RELIEF_ROLE_LONG,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
 	var tied: Dictionary = {
 		"away_team_id": 1,
 		"home_team_id": 2,
@@ -251,13 +339,112 @@ func test_closer_role_is_preferred_in_ninth_four_run_lead_and_tie() -> void:
 		"home_score": 3,
 	}
 
-	var lead_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, four_run_lead, false)
-	var tie_pick: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, tied, false)
+	# 逆算配置: 9回=3番手(最弱), 10回=2番手, 11回=最良, 12回=クローザー。
+	var pick9: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, tied, false)
+	var pick10: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 10, tied, false)
+	var pick11: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 11, tied, false)
+	var pick12: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 12, tied, false)
 
-	assert_object(lead_pick).is_not_null()
-	assert_int(lead_pick.player_id).is_equal(closer.player_id)
-	assert_object(tie_pick).is_not_null()
-	assert_int(tie_pick.player_id).is_equal(closer.player_id)
+	assert_int(pick9.player_id).is_equal(low.player_id)
+	assert_int(pick10.player_id).is_equal(mid.player_id)
+	assert_int(pick11.player_id).is_equal(best.player_id)
+	assert_int(pick12.player_id).is_equal(closer.player_id)
+
+
+# 9回同点・ホーム: いつも通りクローザーを9回に投入し、以降は能力の高いリリーフ順 (ユーザー指定)。
+func test_closer_used_in_ninth_tie_for_home() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(611, "Closer", 0.3)
+	var middle: PSPlayerSeasonRecord = _pitcher(612, "Middle", 0.9)
+	var setup: Dictionary = {
+		"team_id": 2,  # home
+		"relievers": [closer, middle],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var tied: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 3,
+		"home_score": 3,
+	}
+
+	# 9回はクローザー (能力で劣ってもホーム同点は9回投入)。
+	var pick9: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, tied, false)
+	assert_int(pick9.player_id).is_equal(closer.player_id)
+
+	# クローザーを使い切った10回は能力の高いリリーフを投入。
+	setup["used_pitcher_ids"] = {closer.player_id: true}
+	var pick10: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 10, tied, false)
+	assert_int(pick10.player_id).is_equal(middle.player_id)
+
+
+# セット/クローザーはビハインド時には登板させない (ユーザー指定)。能力で勝ってもミドルへ回す。
+func test_setup_and_closer_excluded_when_behind() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(621, "Closer", 0.8)
+	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(622, "Setup", 0.8)
+	var middle: PSPlayerSeasonRecord = _pitcher(623, "Middle", 0.0)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [closer, setup_pitcher, middle],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			setup_pitcher.player_id: PSRotationPlanner.RELIEF_ROLE_SETUP,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var behind: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 2,
+		"home_score": 4,
+	}
+
+	var pick8: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 8, behind, false)
+	var pick9: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 9, behind, false)
+
+	assert_int(pick8.player_id).is_equal(middle.player_id)
+	assert_int(pick9.player_id).is_equal(middle.player_id)
+
+
+# セットは7回以降・クローザーは9回以降に限定する (ユーザー指定)。担当回より前はミドルへ回す。
+func test_setup_before_seventh_and_closer_before_ninth_are_excluded() -> void:
+	var closer: PSPlayerSeasonRecord = _pitcher(631, "Closer", 0.9)
+	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(632, "Setup", 0.9)
+	var middle: PSPlayerSeasonRecord = _pitcher(633, "Middle", 0.0)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [closer, setup_pitcher, middle],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			closer.player_id: PSRotationPlanner.RELIEF_ROLE_CLOSER,
+			setup_pitcher.player_id: PSRotationPlanner.RELIEF_ROLE_SETUP,
+			middle.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var lead: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 4,
+		"home_score": 2,
+	}
+
+	# 6回リード: セット(7回以降)も抑え(9回以降)も使わずミドルへ。
+	var pick6: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 6, lead, false)
+	assert_int(pick6.player_id).is_equal(middle.player_id)
+
+	# 8回リード: 抑えはまだ使わず、セットを投入。
+	var pick8: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 8, lead, false)
+	assert_int(pick8.player_id).is_equal(setup_pitcher.player_id)
 
 
 func test_closer_role_can_take_third_straight_in_save_spot() -> void:
@@ -324,6 +511,97 @@ func test_setup_role_is_preferred_for_late_lead_and_tie() -> void:
 	assert_int(lead_pick.player_id).is_equal(setup_pitcher.player_id)
 	assert_object(tie_pick).is_not_null()
 	assert_int(tie_pick.player_id).is_equal(setup_pitcher.player_id)
+
+
+# クローザー等の役割割り当ては疲労に依存せず固定する (ユーザ指摘の「日替わり抑え」防止)。
+# エース救援を疲労させても、その投手が引き続きクローザーに割り当てられること。
+func test_relief_role_assignment_is_stable_under_fatigue() -> void:
+	var ace: PSPlayerSeasonRecord = _pitcher(701, "AceReliever", 1.2)
+	var pool: Array = [ace]
+	var z_values: Array = [0.9, 0.6, 0.3, 0.0, -0.3]
+	for i in range(z_values.size()):
+		pool.append(_pitcher(702 + i, "Relief %d" % i, float(z_values[i])))
+
+	# 全員フレッシュ: 能力最上位の ace がクローザー。
+	var fresh_roles: Dictionary = PSRotationPlanner.relief_role_by_pitcher(
+		{}, PSRotationPlanner.select_relievers_for_innings(pool, [], 0, {})
+	)
+	assert_str(str(fresh_roles.get(ace.player_id, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_CLOSER)
+
+	# ace を高疲労にしても、疲労を含まない能力で並べるのでクローザーは ace のまま。
+	ace.fatigue = 150
+	var tired_roles: Dictionary = PSRotationPlanner.relief_role_by_pitcher(
+		{}, PSRotationPlanner.select_relievers_for_innings(pool, [], 0, {})
+	)
+	assert_str(str(tired_roles.get(ace.player_id, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_CLOSER)
+
+
+# 球数モデルのカテゴリ別平均球数とファールが現実的なレンジに収まること(リーグ較正込み)。
+# K≈5球台前半 / BB≈6球前後 / BIP≈3.5球台 / ファール≈1球/打席。旧 80球目標級の沈下や過大化を防ぐガード。
+func test_pitch_model_per_category_counts_are_realistic() -> void:
+	var bip_pitches: float = 0.0
+	var bip_fouls: float = 0.0
+	var k_pitches: float = 0.0
+	var bb_pitches: float = 0.0
+	var n: int = 4000
+	for i in range(n):
+		var precomp: Dictionary = {
+			"event_index": i * 7 + 3,
+			"batter_id": (i * 131) % 9000 + 1,
+			"pitcher_id": (i * 977) % 9000 + 1,
+			"batter_z": {"Bat_BBCreate": 0.95, "Bat_Aggression": 0.3},
+			"pitcher_z": {"Pit_Efficiency": 1.0},
+			"catcher_z": {"C_GameCall": 0.75},
+			"fatigue_factor": 1.0,
+		}
+		var bip: Dictionary = PSPitchAggregateSimulator.simulate("bip", precomp)
+		bip_pitches += float(int(bip.get("pitches", 0)))
+		bip_fouls += float(int(bip.get("fouls", 0)))
+		k_pitches += float(int(PSPitchAggregateSimulator.simulate("k", precomp).get("pitches", 0)))
+		bb_pitches += float(int(PSPitchAggregateSimulator.simulate("bb", precomp).get("pitches", 0)))
+	var bip_avg: float = bip_pitches / float(n)
+	var k_avg: float = k_pitches / float(n)
+	var bb_avg: float = bb_pitches / float(n)
+	var bip_foul_avg: float = bip_fouls / float(n)
+
+	assert_float(bip_avg).is_greater_equal(3.2)
+	assert_float(bip_avg).is_less_equal(4.2)
+	assert_float(k_avg).is_greater_equal(4.6)
+	assert_float(k_avg).is_less_equal(6.0)
+	assert_float(bb_avg).is_greater_equal(5.2)
+	assert_float(bb_avg).is_less_equal(6.6)
+	assert_float(bip_foul_avg).is_greater_equal(0.6)
+	assert_float(bip_foul_avg).is_less_equal(1.6)
+
+
+# 先発の球数目標は平均的投手(z=0)で約90球にセンタリングされていること(旧 80球沈下のガード)。
+func test_starter_pitch_target_centered_at_league_average() -> void:
+	var avg: PSPlayerSeasonRecord = _pitcher(801, "Average", 0.0)
+	var target: int = PSPitcherUsageModel.starter_target_pitches(avg)
+	# 旧式の80球沈下を防ぐガード: 平均的投手はリーグ平均帯(約85-105球)を目標にする。
+	assert_int(target).is_greater_equal(85)
+	assert_int(target).is_less_equal(108)
+
+
+# 「2回3失点程度で降板」を避ける: 序盤の数失点では立て直しを待ち、イニング途中交代は
+# 炎上が止まらない緊急時のみ。通常の降板判断は回またぎで行う。
+func test_starter_not_pulled_on_minor_damage_but_pulled_in_real_blowup() -> void:
+	var starter: PSPlayerSeasonRecord = _pitcher(802, "Starter", 0.5)
+	var usage: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_STARTER)
+	usage["pitches"] = 70
+	var two_on: Array = [_pitcher(901, "R1", 0.0), _pitcher(902, "R2", 0.0), null]
+
+	# 2回3失点(走者あり): イニング途中では降ろさない。
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(starter, usage, 2, 1, two_on, 3, 1)).is_false()
+	# 5回3失点(走者2人)でもイニング途中では降ろさない(回またぎで判断)。
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(starter, usage, 5, 1, two_on, 3, 1)).is_false()
+	# 6失点が止まらない本物の炎上(走者あり)では即交代。
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(starter, usage, 5, 1, two_on, 6, 1)).is_true()
+
+	# 回またぎ: 序盤3失点では続投、5失点(4回以降)では交代。
+	usage["pitches"] = 38
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, usage, 3, 3)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, usage, 5, 5)).is_true()
 
 
 func test_long_role_is_preferred_when_starter_exits_early() -> void:
@@ -405,6 +683,101 @@ func test_save_situation_counts_tying_run_on_deck() -> void:
 	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0, 0, 1, 4, 4, 2, 0))).is_true()
 	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0, 0, 1, 3, 3, 0, 0))).is_false()
 	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0, 0, 3, 3, 3, 0, 0))).is_true()
+
+
+# セーブ条件【B】(2者連続HRで追いつかれる点差) のランナー別境界を公式表どおり判定する。
+# ランナーなし=2点差/1人=3点差/2人=4点差/満塁=5点差まで。outs<3 で【A】を外し【B】単独を検証。
+func test_save_situation_tying_run_table_by_base_runners() -> void:
+	var SHORT: String = PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	# ランナーなし: 2点差まで可、3点差は不可。
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 1, 2, 2, 0, 0))).is_true()
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 1, 3, 3, 0, 0))).is_false()
+	# ランナー1人: 3点差まで可、4点差は不可。
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 1, 3, 3, 1, 0))).is_true()
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 1, 4, 4, 1, 0))).is_false()
+	# 満塁(3人): 5点差まで可、6点差は不可。
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 1, 5, 5, 3, 0))).is_true()
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 1, 6, 6, 3, 0))).is_false()
+	# 【A】3点以内で1イニング以上は可、4点差(ランナーなし)は不可。【C】3イニング以上は点差不問で可。
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 3, 4, 4, 0, 0))).is_false()
+	assert_bool(PSGameDecisions.save_situation_from_outing(_outing(1, 1, SHORT, 0, 0, 9, 10, 10, 0, 0))).is_true()
+
+
+# ホールド: 同点で登板し無失点降板はホールド (NPB特有)。リード時は自分の残した走者で
+# 同点にされたら (exit_lead が 0 以下に更新される) 大前提4によりホールド不成立。
+func test_hold_tie_entry_and_inherited_runner_disqualification() -> void:
+	var STARTER: String = PSPitcherUsageModel.ROLE_STARTER
+	var SHORT: String = PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	var result: Dictionary = {
+		"draw": false,
+		"winning_team_id": 1,
+		"last_lead_change": {"winning_team_id": 1, "event_index": 5, "losing_pitcher_id": 99},
+		"pitcher_outings": [
+			_outing(10, 1, STARTER, 0, 4, 18, 0, 0, 0, 0),
+			# 同点で登板し無失点で降板 → ホールド。
+			_outing(11, 1, SHORT, 10, 12, 3, 0, 0, 0, 0),
+			# +1リードで登板したが残した走者が生還し同点 (exit_lead 0・1失点) → ホールド不成立。
+			_outing(12, 1, SHORT, 20, 22, 3, 1, 0, 2, 1),
+			# +2リードを守って試合終了 → セーブ。
+			_outing(13, 1, SHORT, 30, 32, 3, 2, 2, 0, 0),
+			_outing(99, 2, STARTER, 0, 40, 30, 0, 0, 0, 0),
+		],
+	}
+
+	var decisions: Dictionary = PSGameDecisions.compute_pitching_decisions(result, 1, 2, 10, 99)
+	var holds: Array = decisions.get("hold_pitcher_ids", []) as Array
+
+	assert_int(int(decisions.get("winning_pitcher_id", 0))).is_equal(10)
+	assert_int(int(decisions.get("save_pitcher_id", 0))).is_equal(13)
+	assert_array(holds).contains(11)
+	assert_array(holds).not_contains(12)
+	assert_array(holds).not_contains(13)
+
+
+# サヨナラ勝ち: 最終回の表に登板していたリリーフが勝ち投手 (規則9.17 / NPB特例)。
+# 最終回表の投手は outing が試合終了まで延長されるが、start 基準で pitcher of record になること。
+func test_walkoff_winning_pitcher_is_top_inning_reliever() -> void:
+	var STARTER: String = PSPitcherUsageModel.ROLE_STARTER
+	var SHORT: String = PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	var result: Dictionary = {
+		"draw": false,
+		"walkoff": true,
+		"winning_team_id": 2,
+		"innings": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+		"last_lead_change": {"winning_team_id": 2, "event_index": 88, "losing_pitcher_id": 30},
+		"pitcher_outings": [
+			_outing(20, 2, STARTER, 0, 40, 21, 0, 0, 0, 3),   # ホーム先発 7回で降板
+			_outing(21, 2, SHORT, 50, 90, 9, 0, 0, 0, 0),     # ホーム救援 (最終回表まで)、outing は試合終了=90まで延長
+			_outing(30, 1, STARTER, 0, 95, 24, 0, -1, 0, 4),  # ビジター先発 完投負け
+		],
+	}
+
+	var decisions: Dictionary = PSGameDecisions.compute_pitching_decisions(result, 1, 2, 30, 20)
+	assert_int(int(decisions.get("winning_pitcher_id", 0))).is_equal(21)
+	assert_int(int(decisions.get("losing_pitcher_id", 0))).is_equal(30)
+	assert_int(int(decisions.get("save_pitcher_id", 0))).is_equal(0)
+
+
+# 先発5回条件 (規則9.17b): 先発が5回未満で降りたら勝ち投手になれず、最も効果的な救援へ勝ちが移る。
+func test_winning_pitcher_passes_to_reliever_when_starter_under_five_innings() -> void:
+	var STARTER: String = PSPitcherUsageModel.ROLE_STARTER
+	var SHORT: String = PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	var result: Dictionary = {
+		"draw": false,
+		"winning_team_id": 2,
+		"innings": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+		"last_lead_change": {"winning_team_id": 2, "event_index": 20, "losing_pitcher_id": 30},
+		"pitcher_outings": [
+			_outing(20, 2, STARTER, 0, 25, 12, 1, 1, 0, 2),   # ホーム先発 4回(12アウト)=資格なし
+			_outing(21, 2, SHORT, 30, 50, 6, 1, 1, 0, 0),     # 中継ぎ 2回無失点=最効果
+			_outing(23, 2, SHORT, 75, 90, 3, 2, 2, 0, 0),     # 抑え 1回
+			_outing(30, 1, STARTER, 0, 95, 24, 0, -1, 0, 4),
+		],
+	}
+
+	var decisions: Dictionary = PSGameDecisions.compute_pitching_decisions(result, 1, 2, 30, 20)
+	# 先発(20)ではなく最も効果的な救援(21)に勝ちがつく。
+	assert_int(int(decisions.get("winning_pitcher_id", 0))).is_equal(21)
 
 
 func test_draw_game_can_record_holds_without_win_loss_save() -> void:

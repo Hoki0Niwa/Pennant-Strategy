@@ -199,6 +199,14 @@ static func compute_pitching_decisions_from_outings(
 		winning_pitcher_id = latest_pitcher_before_event(winning_outings, lead_event_index, winning_starter_id)
 	if winning_pitcher_id <= 0:
 		winning_pitcher_id = winning_starter_id
+	# 先発5回条件 (規則9.17b): 勝ち投手が先発で必要イニング (6回以上の試合=5回, 5回成立の短縮試合=4回)
+	# 未満なら勝ち投手になれず、最も効果的な救援投手へ勝ちを移す。サヨナラ勝ちは「最終回の表に投げた
+	# 投手が無条件で勝ち投手」(NPB特例) なので再評価しない。
+	if not bool(result.get("walkoff", false)) and winning_pitcher_id == winning_starter_id:
+		if starter_outs_in_outings(winning_outings, winning_starter_id) < winning_starter_required_outs(result):
+			var reliever_id: int = most_effective_reliever(winning_outings, winning_starter_id)
+			if reliever_id > 0:
+				winning_pitcher_id = reliever_id
 	if losing_pitcher_id <= 0:
 		losing_pitcher_id = int((losing_outings[0] as Dictionary).get("pitcher_id", 0))
 
@@ -226,18 +234,75 @@ static func outings_for_team(outings: Array, team_id: int) -> Array:
 	return rows
 
 
+# 決勝点が入った瞬間の「記録上の投手 (pitcher of record)」= その時点までに登板していた
+# (start_event_index が決勝点イベント以前の) 勝ちチーム投手のうち、最後に登板した投手を返す。
+# サヨナラ勝ちでは最終回の表を投げた投手の outing が試合終了 (決勝点の後) まで延長され
+# end_event_index が決勝点を超えるため、end 基準だとその投手が除外され先発にフォールバックしていた。
+# start 基準にすることで「最終回の表に投げた最後の投手」が正しく勝ち投手 (pitcher of record) になる。
 static func latest_pitcher_before_event(outings: Array, event_index: int, fallback_pitcher_id: int) -> int:
 	var selected_id: int = 0
-	var selected_end: int = -999999
+	var selected_start: int = -999999
 	for outing_value in outings:
 		var outing: Dictionary = outing_value as Dictionary
-		var end_index: int = int(outing.get("end_event_index", -1))
-		if end_index < event_index and end_index >= selected_end:
+		var start_index: int = int(outing.get("start_event_index", 0))
+		if start_index <= event_index and start_index >= selected_start:
 			selected_id = int(outing.get("pitcher_id", 0))
-			selected_end = end_index
+			selected_start = start_index
 	if selected_id > 0:
 		return selected_id
 	return fallback_pitcher_id
+
+
+# 勝ちチーム先発が勝ち投手になるのに必要なアウト数。通常 (6回以上の試合) は15 (5回)、
+# 5回で成立した短縮試合は12 (4回)。innings の数で試合長を判定する。
+static func winning_starter_required_outs(result: Dictionary) -> int:
+	var innings: Array = result.get("innings", []) as Array
+	if innings.size() > 0 and innings.size() < 6:
+		return 12
+	return 15
+
+
+# 指定先発の outing のアウト数を返す。
+static func starter_outs_in_outings(winning_outings: Array, starter_id: int) -> int:
+	for outing_value in winning_outings:
+		var outing: Dictionary = outing_value as Dictionary
+		if int(outing.get("pitcher_id", 0)) == starter_id:
+			return int(outing.get("outs", 0))
+	return 0
+
+
+# 先発が勝ち投手資格を欠くとき (規則9.17b) に勝ちを与える、最も効果的な救援投手を返す。
+# 規則9.17(c): 「短く打たれた救援 (1回未満=3アウト未満 かつ 自責2以上)」は候補から外す。
+# 効果度 = アウト数 - 自責×3 (長く・失点少なく投げたほど高い)。救援が1人ならその投手。
+static func most_effective_reliever(winning_outings: Array, starter_id: int) -> int:
+	var best_id: int = 0
+	var best_score: float = -1000000.0
+	for outing_value in winning_outings:
+		var outing: Dictionary = outing_value as Dictionary
+		var pid: int = int(outing.get("pitcher_id", 0))
+		if pid <= 0 or pid == starter_id or str(outing.get("role", "")) == PSPitcherUsageModel.ROLE_STARTER:
+			continue
+		var outs: int = int(outing.get("outs", 0))
+		var earned: int = int(outing.get("earned_runs", 0))
+		if outs < 3 and earned >= 2:
+			continue  # 9.17(c): brief & ineffective は飛ばす
+		var score: float = float(outs) - float(earned) * 3.0
+		if best_id == 0 or score > best_score:
+			best_id = pid
+			best_score = score
+	# 全救援が brief & ineffective でも勝ちは付くので、最長イニングの救援を拾う。
+	if best_id == 0:
+		var best_outs: int = -1
+		for outing_value in winning_outings:
+			var outing: Dictionary = outing_value as Dictionary
+			var pid: int = int(outing.get("pitcher_id", 0))
+			if pid <= 0 or pid == starter_id or str(outing.get("role", "")) == PSPitcherUsageModel.ROLE_STARTER:
+				continue
+			var outs: int = int(outing.get("outs", 0))
+			if outs > best_outs:
+				best_outs = outs
+				best_id = pid
+	return best_id
 
 
 static func save_pitcher_from_outings(winning_outings: Array, winning_pitcher_id: int) -> int:

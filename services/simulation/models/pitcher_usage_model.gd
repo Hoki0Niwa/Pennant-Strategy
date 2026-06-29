@@ -102,9 +102,13 @@ const ARSENAL_DEPTH_WEIGHTS := {
 static func starter_target_pitches(record: PSPlayerSeasonRecord) -> int:
 	var stamina: float = _ability(record, "Pit_Stamina")
 	var recovery: float = _ability(record, "Pit_FatigueResist")
-	var target: float = 100.0
-	target += (stamina - 1.5) * 20.0
-	target += recovery * 6.0
+	# 平均的な先発(z=0)で約90球を目標にセンタリングする。旧式 (stamina-1.5)*20 はリーグ平均が
+	# 80球に沈み、z=1.5でやっと100球という低めの設定で、平均的先発が5回台で球数到達していた。
+	# z に比例した素直な増減に直す。実際の投球数/先発は回またぎ判定の都合で目標を1イニング分超過しがちで、
+	# 目標90で平均球数/先発が約98球・平均IPが6回前後(NPB水準)に収まる(p/PA 較正後の実測ベース)。
+	var target: float = 90.0
+	target += stamina * 7.0
+	target += recovery * 3.0
 	return int(clamp(round(target), STARTER_TARGET_MIN, STARTER_TARGET_MAX))
 
 
@@ -255,17 +259,21 @@ static func record_plate_appearance(
 	usage["outs"] = int(usage.get("outs", 0)) + outs_added
 	usage["runs"] = int(usage.get("runs", 0)) + runs
 
+	# trouble_score は「今まさに失点が止まらないピンチ」を表す短期指標。1打席ごとの被安打は
+	# 球数増(=ratio による降板判定)で既に表現されるので、ここの加点係数は低く抑え、
+	# 満塁級の連続出塁が続いたときだけ MELTDOWN(6.5) に達するようにする (単発被弾や散発安打では降ろさない)。
+	# 加点(出塁/失点)は控えめ・減点(アウト)は据置で、クリーンな1イニングで trouble がほぼ解消する。
 	var trouble_delta: float = 0.0
 	if category == "hit":
-		trouble_delta += 1.05
+		trouble_delta += 0.6
 		if bases >= 2:
-			trouble_delta += 0.75
+			trouble_delta += 0.32
 		if bases >= 4 or result.contains("home_run"):
-			trouble_delta += 1.15
+			trouble_delta += 0.3
 	elif category == "walk" or category == "hit_by_pitch":
-		trouble_delta += 0.85
+		trouble_delta += 0.5
 	elif category == "error":
-		trouble_delta += 0.45
+		trouble_delta += 0.25
 	elif category == "strikeout":
 		trouble_delta -= 1.05
 	elif category == "double_play":
@@ -274,29 +282,29 @@ static func record_plate_appearance(
 		trouble_delta -= 0.75 * float(outs_added)
 
 	if pitches >= 7:
-		trouble_delta += 0.28
+		trouble_delta += 0.16
 	if pitches >= 10:
-		trouble_delta += 0.34
+		trouble_delta += 0.2
 	if _has_runner_in_scoring_position(bases_before):
-		trouble_delta += 0.35
+		trouble_delta += 0.22
 	if runs > 0:
-		trouble_delta += float(runs) * 0.85
+		trouble_delta += float(runs) * 0.5
 	if reached:
 		var streak: int = int(usage.get("consecutive_reached", 0)) + 1
 		usage["consecutive_reached"] = streak
 		if streak >= 2:
-			trouble_delta += float(streak - 1) * 0.55
+			trouble_delta += float(streak - 1) * 0.35
 	else:
 		usage["consecutive_reached"] = 0
 
 	var quality: Dictionary = outcome.get("contact_quality", {}) as Dictionary
 	var physical: Dictionary = outcome.get("physical_traits", {}) as Dictionary
 	if bool(physical.get("is_hard_hit", false)):
-		trouble_delta += 0.42
+		trouble_delta += 0.16
 	if bool(physical.get("is_barrel", false)):
-		trouble_delta += 0.75
+		trouble_delta += 0.28
 	if float(quality.get("exit_velocity", 0.0)) >= 100.0:
-		trouble_delta += 0.25
+		trouble_delta += 0.08
 
 	var trouble: float = clamp(float(usage.get("trouble_score", 0.0)) + trouble_delta, 0.0, TROUBLE_MAX)
 	usage["trouble_score"] = trouble
@@ -324,23 +332,27 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 			return false
 		if ratio >= 1.05:
 			return true
-		if inning >= 6 and ratio >= 0.92:
+		if inning >= 6 and ratio >= 0.95:
 			return true
-		if inning >= 8 and ratio >= 0.78:
+		if inning >= 8 and ratio >= 0.80:
 			return true
 		# 9回続投(完投挑戦)は「無失点(完封ペース)かつ低球数」のみ許可する。
 		# 旧実装(ratio<0.65なら続投)は球数効率の高いエースがほぼ毎回完投し、リーグ完投率39%・
 		# ホールド消滅を起こした(現実のNPB完投率は2-3%、完投はほぼ完封挑戦時のみ)。
 		# 「1失点以内」緩和ではエースが年15完投してしまうため無失点限定。10回以降は無条件降板。
-		if inning >= 9 and not (runs_allowed == 0 and ratio <= 0.80):
+		if inning >= 9 and not (runs_allowed == 0 and ratio <= 0.74):
 			return true
 		if inning >= 10:
 			return true
 		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD:
 			return true
+		# 失点による回またぎ降板。3失点では降ろさず、段階的に: 6失点はどの回でも限界 /
+		# 5失点は4回以降 / 4失点は7回以降(3失点=クオリティスタート相当は引っぱる)。
+		if runs_allowed >= 6:
+			return true
 		if inning >= 4 and runs_allowed >= 5:
 			return true
-		if inning >= 7 and runs_allowed > 2:
+		if inning >= 7 and runs_allowed >= 4:
 			return true
 		return false
 	if role == ROLE_LONG_RELIEF:
@@ -368,19 +380,23 @@ static func should_pull_after_plate_appearance(
 	var high_leverage: bool = inning >= 7 and abs(defense_lead) <= 3
 
 	if role == ROLE_STARTER:
-		if inning <= 2:
-			return (runs_allowed >= 6 and trouble >= MELTDOWN_THRESHOLD) or ratio >= 1.18
-		if runs_allowed >= 6 and trouble >= TROUBLE_ALERT:
+		# イニング途中の交代は「炎上が止まらない」緊急時のみ。通常の交代は回またぎ
+		# (should_pull_for_next_half) で判断し、序盤の数失点では立て直しのチャンスを与える。
+		if ratio >= 1.15:
+			return true  # 球数が限界(大幅超過)
+		if inning <= 4:
+			# 序盤は大量失点が同一イニングで続くとき(7失点級)だけ即交代。2回3失点程度では降ろさない。
+			return runs_allowed >= 7 and runners_on >= 1
+		# 5回以降のイニング途中交代: 大量失点 / 球数限界+走者 / 満塁級の止まらない連打。
+		if runs_allowed >= 6 and runners_on >= 1:
 			return true
-		if consecutive_reached >= 4 and inning >= 3:
+		if inning >= 7 and runs_allowed >= 5 and runners_on >= 1:
 			return true
-		if trouble >= MELTDOWN_THRESHOLD + 1.0 and runners_on >= 1:
+		if inning >= 6 and ratio >= 0.98 and runners_on >= 1:
 			return true
-		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD and runners_on >= 1:
+		if consecutive_reached >= 5 and runners_on >= 2:
 			return true
-		if inning >= 6 and ratio >= 0.96 and runners_on >= 1:
-			return true
-		if ratio >= 1.08:
+		if trouble >= MELTDOWN_THRESHOLD + 1.5 and runners_on >= 2:
 			return true
 		return false
 

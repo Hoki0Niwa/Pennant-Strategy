@@ -239,8 +239,12 @@ static func select_relievers_for_innings(
 		if pitcher.player_id == exclude_pitcher_id or pitcher.injury_days > 0:
 			continue
 		eligible.append(pitcher)
+	# ブルペン編成と役割割り当ては疲労を含まない素の能力で並べる。fatigue 込みの pitching_score を使うと、
+	# エース救援が疲れた日に評価が下がってクローザーの座が日替わりで入れ替わり、現実離れした「日替わり抑え」と
+	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
+	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。
 	eligible.sort_custom(func(a, b) -> bool:
-		return PlayerValueEvaluator.pitching_score(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score(b as PSPlayerSeasonRecord)
+		return PlayerValueEvaluator.pitching_score_without_fatigue(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score_without_fatigue(b as PSPlayerSeasonRecord)
 	)
 	var top6: Array = []
 	var used_ids: Dictionary = {}
@@ -270,7 +274,7 @@ static func select_relievers_for_innings(
 				continue
 			fallback.append(pitcher)
 		fallback.sort_custom(func(a, b) -> bool:
-			return PlayerValueEvaluator.pitching_score(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score(b as PSPlayerSeasonRecord)
+			return PlayerValueEvaluator.pitching_score_without_fatigue(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score_without_fatigue(b as PSPlayerSeasonRecord)
 		)
 		for p in fallback:
 			if top6.size() >= RELIEF_ROLE_SIZE_MAX:

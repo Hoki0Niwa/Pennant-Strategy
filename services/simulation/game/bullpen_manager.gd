@@ -5,6 +5,14 @@ class_name PSBullpenManager
 # setup は GameLoop が持つ試合中状態で、現在投手、使用済み投手、pitcher_usage、リリーフ役割表を含む。
 # ここで登板数・疲労・怪我判定まで更新し、試合後集計が同じ状態を参照できるようにする。
 
+# 役割別の登板可能イニング (ユーザー指定)。セットは7回以降、クローザーは9回以降に限定する。
+const SETUP_EARLIEST_INNING: int = 7
+const CLOSER_EARLIEST_INNING: int = 9
+# 4点差リードは「前日(直前のチーム試合)に登板していなければ」クローザー、連投ならミドルへ回す (ユーザー指定)。
+const CLOSER_FOUR_RUN_MARGIN: int = 4
+# 5点差以上はどの回でもセット/クローザーを温存し、ミドルリリーフに任せる (ユーザー指定)。
+const BLOWOUT_LEAD_MARGIN: int = 5
+
 # 試合開始時の先発投手とスタメン野手の出場記録を付ける。
 # DH は守備負荷が軽いので疲労/怪我 exposure を下げ、守備についた野手とは分けて扱う。
 static func mark_games_started(setup: Dictionary) -> void:
@@ -113,6 +121,8 @@ static func mark_reliever_appeared(setup: Dictionary, reliever: PSPlayerSeasonRe
 
 # 使用済み投手と登板不可投手を除外し、残り候補を文脈スコアで並べて最上位を返す。
 # まず疲労制限を守り、候補ゼロのときだけ allow_tired=true で非常時登板を許す。
+# 役割別のハードな登板可否 (セット=7回以降/クローザー=9回以降、ともにビハインド除外、
+# 同点延長のクローザーはビジターなら12回まで温存) を絞り込んでから選ぶ。
 static func pick_reliever_for_context(setup: Dictionary, inning: int, game_result: Dictionary = {}, prefer_long: bool = false) -> PSPlayerSeasonRecord:
 	var relievers: Array = setup.get("relievers", []) as Array
 	if relievers.is_empty():
@@ -122,6 +132,7 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	var score_margin: int = score_margin_for_setup(setup, game_result)
 	var game_day: int = int(setup.get("game_day", 0))
 	var team_games_played_before: int = int(setup.get("team_games_played_before", 0))
+	var is_visitor: bool = _is_visitor_setup(setup, game_result)
 	var candidates: Array = []
 	for allow_tired in [false, true]:
 		candidates.clear()
@@ -139,12 +150,114 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 			break
 	if candidates.is_empty():
 		return null
-	candidates.sort_custom(func(a, b) -> bool:
+
+	# 役割別のハードな登板可否で絞り込む。全滅する非常時 (適性役割しか残っていない等) は
+	# 元の候補に戻し、試合が止まらないようにする。
+	var eligible: Array = []
+	for reliever_row in candidates:
+		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
+		if _role_eligible_in_spot(setup, reliever, inning, score_margin, is_visitor, team_games_played_before):
+			eligible.append(reliever)
+	if eligible.is_empty():
+		eligible = candidates
+
+	# 同点で9回以降に入った延長戦の継投方針 (ユーザー指定):
+	#   ビジター: クローザーを12回(最終回)まで温存し、残りリリーフを評価順に逆算配置。
+	#   ホーム: 9回からクローザーを通常どおり投入し、以降は能力の高いリリーフ順。
+	if not prefer_long and score_margin == 0 and inning >= GameSimulator.REGULATION_INNINGS:
+		if is_visitor and inning < GameSimulator.MAX_INNINGS:
+			return _pick_bridge_reliever(eligible, inning, close_game, game_day, team_games_played_before)
+		var closer: PSPlayerSeasonRecord = _find_role_in(setup, eligible, PSRotationPlanner.RELIEF_ROLE_CLOSER)
+		if closer != null:
+			return closer
+		return _highest_ability_reliever(eligible, inning, close_game, game_day, team_games_played_before)
+
+	eligible.sort_custom(func(a, b) -> bool:
 		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
 		return reliever_selection_score_for_setup(setup, pitcher_a, prefer_long, inning, close_game, score_margin, game_day, team_games_played_before) > reliever_selection_score_for_setup(setup, pitcher_b, prefer_long, inning, close_game, score_margin, game_day, team_games_played_before)
 	)
-	return candidates[0] as PSPlayerSeasonRecord
+	return eligible[0] as PSPlayerSeasonRecord
+
+
+# setup の守備チームがビジター (away) なら true。同点延長の継投方針 (温存 vs 即投入) を分岐する。
+static func _is_visitor_setup(setup: Dictionary, game_result: Dictionary) -> bool:
+	if game_result.is_empty():
+		return false
+	return int(setup.get("team_id", 0)) == int(game_result.get("away_team_id", 0))
+
+
+# 役割別のハードな登板可否 (ユーザー指定):
+# - セット: 7回以降かつビハインドでない。5点差以上のリードでは温存 (ミドルへ)。
+# - クローザー: 9回以降かつビハインドでない。同点はホームなら9回から、ビジターは12回(最終回)まで温存。
+#   5点差以上では温存。4点差は前日(直前のチーム試合)に登板していなければ可、連投ならミドルへ回す。
+# - ミドル/ロング/未設定: 常時可。
+static func _role_eligible_in_spot(setup: Dictionary, reliever: PSPlayerSeasonRecord, inning: int, score_margin: int, is_visitor: bool, team_games_played_before: int) -> bool:
+	match _relief_role_for_pitcher(setup, reliever):
+		PSRotationPlanner.RELIEF_ROLE_SETUP:
+			if score_margin >= BLOWOUT_LEAD_MARGIN:
+				return false
+			return inning >= SETUP_EARLIEST_INNING and score_margin >= 0
+		PSRotationPlanner.RELIEF_ROLE_CLOSER:
+			if score_margin < 0 or inning < CLOSER_EARLIEST_INNING:
+				return false
+			if score_margin >= BLOWOUT_LEAD_MARGIN:
+				return false
+			if score_margin == 0 and is_visitor and inning < GameSimulator.MAX_INNINGS:
+				return false
+			if score_margin == CLOSER_FOUR_RUN_MARGIN and _pitched_previous_game(reliever, team_games_played_before):
+				return false
+			return true
+		_:
+			return true
+
+
+# 前日(直前のチーム試合)に登板していたら true。今登板すると連投になる場合を指す。
+static func _pitched_previous_game(reliever: PSPlayerSeasonRecord, team_games_played_before: int) -> bool:
+	return PSPitcherUsageModel.next_consecutive_appearance_count(reliever, team_games_played_before) >= 2
+
+
+# ビジターが同点で延長に入ったときの逆算継投。クローザーは12回まで温存されここには来ないので、
+# 残り候補を評価(能力)降順に並べ、最終回(12回)直前に最良が来るよう逆算インデックスで選ぶ。
+# 例: 9回=3番手, 10回=2番手, 11回=最良, 12回=クローザー。候補が足りなければ末尾(最弱)に丸める。
+static func _pick_bridge_reliever(candidates: Array, inning: int, close_game: bool, game_day: int, team_games_played_before: int) -> PSPlayerSeasonRecord:
+	if candidates.is_empty():
+		return null
+	var ordered: Array = candidates.duplicate()
+	ordered.sort_custom(func(a, b) -> bool:
+		return _reliever_ability_score(a as PSPlayerSeasonRecord, inning, close_game, game_day, team_games_played_before) > _reliever_ability_score(b as PSPlayerSeasonRecord, inning, close_game, game_day, team_games_played_before)
+	)
+	var index: int = clampi(GameSimulator.MAX_INNINGS - 1 - inning, 0, ordered.size() - 1)
+	return ordered[index] as PSPlayerSeasonRecord
+
+
+# 能力(基礎リリーフ評価)が最も高い候補を返す。同点でホームがクローザー投入後の継投に使う。
+static func _highest_ability_reliever(candidates: Array, inning: int, close_game: bool, game_day: int, team_games_played_before: int) -> PSPlayerSeasonRecord:
+	var best: PSPlayerSeasonRecord = null
+	var best_score: float = -INF
+	for reliever_row in candidates:
+		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
+		if reliever == null:
+			continue
+		var ability: float = _reliever_ability_score(reliever, inning, close_game, game_day, team_games_played_before)
+		if best == null or ability > best_score:
+			best = reliever
+			best_score = ability
+	return best
+
+
+# 役割補正を含まない基礎リリーフ評価 (能力 - 疲労等)。同点延長の「評価の高い順」並べ替えに使う。
+static func _reliever_ability_score(reliever: PSPlayerSeasonRecord, inning: int, close_game: bool, game_day: int, team_games_played_before: int) -> float:
+	return PSPitcherUsageModel.reliever_selection_score(reliever, false, inning, close_game, game_day, team_games_played_before)
+
+
+# 指定役割の候補を1人返す (なければ null)。
+static func _find_role_in(setup: Dictionary, candidates: Array, role: String) -> PSPlayerSeasonRecord:
+	for reliever_row in candidates:
+		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
+		if reliever != null and _relief_role_for_pitcher(setup, reliever) == role:
+			return reliever
+	return null
 
 
 # 基礎スコア(能力・疲労・登板間隔)に、ユーザーが設定したリリーフ役割の場面補正を足す。
@@ -164,10 +277,12 @@ static func reliever_selection_score_for_setup(
 	return score + relief_role_context_bonus(role, prefer_long, inning, close_game, score_margin)
 
 
-# 保存された役割と試合状況の噛み合わせ。セットは7-8回の4点以内リード/同点、
+# 保存された役割と試合状況の噛み合わせ (リード時などの優先度付け)。セットは7-8回の4点以内リード/同点、
 # クローザーは9回以降の4点以内リード/同点、ロングは早期降板/敗戦処理、ミドルはそれ以外を担当する。
-# close_game は基礎スコア用に残し、役割判定は score_margin の符号まで見る。
-static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, close_game: bool, score_margin: int) -> float:
+# 回・ビハインドのハードな登板可否 (セット7回以降/クローザー9回以降/ビハインド除外/ビジター同点温存) は
+# pick_reliever_for_context の _role_eligible_in_spot 側が担うので、ここは絞り込み後の優先度のみ扱う。
+# close_game は基礎スコア用に使われ、この補正側では参照しない (符号付き score_margin で判定するため)。
+static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, _close_game: bool, score_margin: int) -> float:
 	var setup_spot: bool = _is_setup_spot(inning, score_margin)
 	var setup_tie_spot: bool = _is_setup_tie_spot(inning, score_margin)
 	var closer_save_spot: bool = _is_closer_save_spot(inning, score_margin)
@@ -177,6 +292,7 @@ static func relief_role_context_bonus(role: String, prefer_long: bool, inning: i
 	var mop_up_spot: bool = _is_mop_up_spot(inning, score_margin)
 	match role:
 		PSRotationPlanner.RELIEF_ROLE_CLOSER:
+			# 9回未満/ビハインド/ビジター同点はハードフィルタで除外済み。ここはリード時の優先度のみ。
 			if prefer_long or mop_up_spot:
 				return -180.0
 			if closer_save_spot:
@@ -185,10 +301,6 @@ static func relief_role_context_bonus(role: String, prefer_long: bool, inning: i
 				return 235.0
 			if closer_tie_spot:
 				return 175.0
-			if setup_spot or setup_tie_spot:
-				return -45.0
-			if close_game and inning >= 8:
-				return 60.0
 			return -35.0
 		PSRotationPlanner.RELIEF_ROLE_SETUP:
 			if prefer_long or mop_up_spot:
@@ -238,7 +350,9 @@ static func _can_relax_availability_for_late_role(
 ) -> bool:
 	var role: String = _relief_role_for_pitcher(setup, reliever)
 	if role == PSRotationPlanner.RELIEF_ROLE_CLOSER:
-		if not (_is_closer_save_spot(inning, score_margin) or _is_closer_four_run_spot(inning, score_margin) or _is_closer_tie_spot(inning, score_margin)):
+		# 4点差は連投なら回避する方針なので relax (連投上限の緩和) 対象から外す。本物のセーブ場面
+		# (1〜3点差) と同点 (ホーム9回/ビジター12回) のみ 3連投目まで候補に残す。
+		if not (_is_closer_save_spot(inning, score_margin) or _is_closer_tie_spot(inning, score_margin)):
 			return false
 	elif role == PSRotationPlanner.RELIEF_ROLE_SETUP:
 		if not (_is_setup_spot(inning, score_margin) or _is_setup_tie_spot(inning, score_margin)):

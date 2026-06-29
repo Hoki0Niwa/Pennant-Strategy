@@ -26,6 +26,10 @@ const AGGRESSION_Z_NEUTRAL: float = 0.3  # Bat_Aggression の野手平均。
 const EFFICIENCY_Z_NEUTRAL: float = 1.0  # Pit_Efficiency の投手平均。
 const GAMECALL_Z_NEUTRAL: float = 0.75   # C_GameCall の捕手平均。
 const FATIGUE_PITCH_COEF: float = 0.4       # 疲労が球数を増やす係数。
+# リーグ一律の球数補正。カテゴリ別 base は neutral 能力で現実的(K4.9/BB5.6/BIP3.45)だが、能力項の
+# 中立点(*_Z_NEUTRAL)が「実際に打席に立つ/登板する稼働選手」の母平均をやや下回るため、シーズン平均
+# p/PA が約0.27 押し下げられていた(実測 3.62 → 目標 3.85-3.90, MLB/NPB 現代水準)。母平均との差を一律で戻す。
+const LEAGUE_PITCH_CALIBRATION: float = 0.27
 const PITCH_SIGMA: float = 1.0              # 球数の乱数ばらつき(正規分布の標準偏差)。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
 const MAX_PITCH_COUNT: int = 14             # 1打席あたり球数の上限クランプ。
@@ -55,6 +59,7 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	pitches_f -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
 	pitches_f -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
 	pitches_f += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
+	pitches_f += LEAGUE_PITCH_CALIBRATION
 	pitches_f += _gauss(precomp) * PITCH_SIGMA
 
 	var min_p: int = max(MIN_PITCH_COUNT, _category_min_pitches(category))
