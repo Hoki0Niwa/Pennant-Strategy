@@ -75,6 +75,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	var batter_players: Array = []
 	var pitcher_players: Array = []
 	var errors: Array = []
+	var war_allocation_seasons: Array = []
 
 	for season_index in range(season_count):
 		var year: int = start_year + int(season_index)
@@ -105,7 +106,15 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var team_rows: Array = season_report.get("teams", []) as Array
 		for row in team_rows:
 			team_seasons.append(row)
-		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary)
+		# WAR context をこのシーズン分だけ構築し、選手別レポートと配分計測で共有する。
+		var war_ctx: Dictionary = WarCalculator.build_league_context(season.year, season.season_number)
+		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary, war_ctx)
+		var war_num_teams: int = GameDb.teams.size()
+		var war_games_per_team: float = _safe_div(int(season_report.get("team_games", 0)), war_num_teams)
+		war_allocation_seasons.append(WarCalculator.league_war_summary(
+			season.year, season.season_number, war_ctx,
+			{"num_teams": war_num_teams, "games_per_team": war_games_per_team}
+		))
 
 	RecordStore.load_from_dict(original_records)
 	# suspend を解除し、復元状態を 1 度だけ新テーブルへ flush して同期させる。
@@ -145,6 +154,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		},
 		"errors": errors,
 	}
+	report["war_allocation"] = _aggregate_war_allocation(war_allocation_seasons)
 	report["distributions"] = ReportHealth.balance_distributions(report)
 	report["health"] = ReportHealth.balance_health(report)
 	return report
@@ -192,6 +202,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var batter_players: Array = []
 	var pitcher_players: Array = []
 	var errors: Array = []
+	var war_allocation_seasons: Array = []
 
 	for season_index in range(season_count):
 		if not cancel_token.is_empty() and bool(cancel_token.get("cancelled", false)):
@@ -232,7 +243,15 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var team_rows: Array = season_report.get("teams", []) as Array
 		for row in team_rows:
 			team_seasons.append(row)
-		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary)
+		# WAR context をこのシーズン分だけ構築し、選手別レポートと配分計測で共有する。
+		var war_ctx: Dictionary = WarCalculator.build_league_context(season.year, season.season_number)
+		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary, war_ctx)
+		var war_num_teams: int = GameDb.teams.size()
+		var war_games_per_team: float = _safe_div(int(season_report.get("team_games", 0)), war_num_teams)
+		war_allocation_seasons.append(WarCalculator.league_war_summary(
+			season.year, season.season_number, war_ctx,
+			{"num_teams": war_num_teams, "games_per_team": war_games_per_team}
+		))
 		if bool(simulation_result.get("cancelled", false)):
 			break
 
@@ -276,6 +295,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		},
 		"errors": errors,
 	}
+	report["war_allocation"] = _aggregate_war_allocation(war_allocation_seasons)
 	report["distributions"] = ReportHealth.balance_distributions(report)
 	report["health"] = ReportHealth.balance_health(report)
 	return report
@@ -458,12 +478,14 @@ func _collect_player_stats(
 	season_number: int,
 	batter_players: Array,
 	pitcher_players: Array,
-	advanced_raw: Dictionary = {}
+	advanced_raw: Dictionary = {},
+	war_ctx_override: Dictionary = {}
 ) -> void:
 	var player_advanced: Dictionary = advanced_raw.get("players", {}) as Dictionary
 	var pitcher_advanced: Dictionary = advanced_raw.get("pitchers", {}) as Dictionary
-	# WAR 計算用リーグ context を 1 度だけ構築 (全選手 advanced_stats 集計)。
-	var war_ctx: Dictionary = WarCalculator.build_league_context(year, season_number)
+	# WAR 計算用リーグ context を 1 度だけ構築 (全選手 advanced_stats 集計)。呼び出し側が
+	# war_allocation 計測と共有するため context を渡してくる場合はそれを再利用する。
+	var war_ctx: Dictionary = war_ctx_override if not war_ctx_override.is_empty() else WarCalculator.build_league_context(year, season_number)
 	for record_row in RecordStore.player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.year != year or record.season_number != season_number:
@@ -504,6 +526,79 @@ func _merge_war_row_into(row: Dictionary, war_row: Dictionary, is_batter: bool) 
 		row["fip"] = float(war_row.get("fip", 0.0))
 		row["war_raa"] = float(war_row.get("raa", 0.0))
 		row["war_replacement_factor"] = float(war_row.get("replacement_factor", 0.0))
+
+
+# Phase 0 計測: 各シーズンの league_war_summary を集計し、配分・per-team・参照目標(57:43/.294)・
+# ベンチマーク選手WAR を 1 ブロックにまとめる。これが「野手は出やすく投手は伸びない」を実数で示す。
+func _aggregate_war_allocation(seasons: Array) -> Dictionary:
+	if seasons.is_empty():
+		return {}
+	var n: int = seasons.size()
+	var batting_war: float = 0.0
+	var pitching_war: float = 0.0
+	var batter_count: int = 0
+	var pitcher_count: int = 0
+	var negative_batters: int = 0
+	var negative_pitchers: int = 0
+	var num_teams: int = 0
+	var games_per_team_sum: float = 0.0
+	var rpw_sum: float = 0.0
+	var bench_batter: float = 0.0
+	var bench_starter: float = 0.0
+	var bench_reliever: float = 0.0
+	for season_value in seasons:
+		var s: Dictionary = season_value as Dictionary
+		batting_war += float(s.get("batting_war_total", 0.0))
+		pitching_war += float(s.get("pitching_war_total", 0.0))
+		batter_count += int(s.get("batter_count", 0))
+		pitcher_count += int(s.get("pitcher_count", 0))
+		negative_batters += int(s.get("negative_batters", 0))
+		negative_pitchers += int(s.get("negative_pitchers", 0))
+		num_teams = max(num_teams, int(s.get("num_teams", 0)))
+		games_per_team_sum += float(s.get("games_per_team", 0.0))
+		rpw_sum += float(s.get("rpw", 0.0))
+		var bench: Dictionary = s.get("benchmarks", {}) as Dictionary
+		bench_batter += float(bench.get("avg_batter_war_per_600_pa", 0.0))
+		bench_starter += float(bench.get("avg_starter_war_per_162_ip", 0.0))
+		bench_reliever += float(bench.get("avg_reliever_war_per_60_ip", 0.0))
+	var total_war: float = batting_war + pitching_war
+	var games_per_team: float = games_per_team_sum / float(n)
+	var team_seasons: float = float(max(1, num_teams * n))
+	# 参照プール: 1 チーム 1 シーズンの「replacement 超の総勝利」= (.500 - REPLACEMENT_WIN_PCT) × 試合数。
+	# 目標は WAR 計算が実際に使う定数(NPB 配分)と一致させ、レポートを「自分の目標に収束しているか」の自己検査にする。
+	var pool_per_team_season: float = (0.5 - WarCalculator.REPLACEMENT_WIN_PCT) * games_per_team
+	var batting_share_target: float = WarCalculator.BATTING_WAR_SHARE
+	return {
+		"seasons": n,
+		"num_teams": num_teams,
+		"batting_war_total": _round_float(batting_war, 1),
+		"pitching_war_total": _round_float(pitching_war, 1),
+		"total_war": _round_float(total_war, 1),
+		"batting_share": _round_float(batting_war / total_war, 3) if total_war > 0.0 else 0.0,
+		"pitching_share": _round_float(pitching_war / total_war, 3) if total_war > 0.0 else 0.0,
+		"batting_war_per_team_season": _round_float(batting_war / team_seasons, 2),
+		"pitching_war_per_team_season": _round_float(pitching_war / team_seasons, 2),
+		"batter_count": batter_count,
+		"pitcher_count": pitcher_count,
+		"negative_batters": negative_batters,
+		"negative_pitchers": negative_pitchers,
+		"negative_batter_rate": _round_float(_safe_div(negative_batters, batter_count), 3),
+		"negative_pitcher_rate": _round_float(_safe_div(negative_pitchers, pitcher_count), 3),
+		"avg_rpw": _round_float(rpw_sum / float(n), 2),
+		"reference": {
+			"replacement_win_pct": WarCalculator.REPLACEMENT_WIN_PCT,
+			"batting_share_target": batting_share_target,
+			"pitching_share_target": _round_float(1.0 - batting_share_target, 3),
+			"pool_per_team_season": _round_float(pool_per_team_season, 2),
+			"batting_target_per_team_season": _round_float(pool_per_team_season * batting_share_target, 2),
+			"pitching_target_per_team_season": _round_float(pool_per_team_season * (1.0 - batting_share_target), 2),
+		},
+		"benchmarks": {
+			"avg_batter_war_per_600_pa": _round_float(bench_batter / float(n), 3),
+			"avg_starter_war_per_162_ip": _round_float(bench_starter / float(n), 3),
+			"avg_reliever_war_per_60_ip": _round_float(bench_reliever / float(n), 3),
+		},
+	}
 
 
 func _qualified_batter(record: PSPlayerSeasonRecord) -> bool:
