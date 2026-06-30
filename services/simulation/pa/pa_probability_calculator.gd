@@ -15,12 +15,12 @@ const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY
 
 # K/BB/HBP/BIP の調整係数。能力差ゼロの平均的対戦を基準に、個々の z 能力で logit を動かす。
 # リーグベースラインは softmax 前の初期値なので、1カテゴリを上げると他カテゴリは相対的に下がる。
-const LEAGUE_K_BASE: float = 0.25    # 三振の基準率。上げるとリーグ全体の三振が増える。
-const LEAGUE_BB_BASE: float = 0.35   # 四球の基準率。上げるとリーグ全体の四球が増える。
+const LEAGUE_K_BASE: float = 0.34    # 三振の基準率。上げるとリーグ全体の三振が増える。
+const LEAGUE_BB_BASE: float = 0.225  # 四球の基準率。上げるとリーグ全体の四球が増える。
 const LEAGUE_HBP_BASE: float = 0.01  # 死球の基準率。通常はほぼ触らない。
-const LEAGUE_BIP_BASE: float = 0.69  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
+const LEAGUE_BIP_BASE: float = 0.72  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
 # K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。
-const K_CREATE_WEIGHT: float = 0.60       # 投手の奪三振力が三振を増やす強さ。
+const K_CREATE_WEIGHT: float = 0.33       # 投手の奪三振力が三振を増やす強さ。
 const K_AVOID_WEIGHT: float = 0.60        # 打者の三振回避力が三振を減らす強さ。
 const ARSENAL_K_BONUS_WEIGHT: float = 0.2 # 投手の球威/制球の鋭さ(EdgeRate)による追加奪三振。
 # 球種構成のK寄り傾向(集計済み・中心化済み)による追加奪三振。**微差**(K_CREATE_WEIGHT=0.60 比で十分小さい)。
@@ -33,7 +33,7 @@ const HIGH_K_RELIEF_WEIGHT: float = 0.20  # 三振回避が極端に低い打者
 const HIGH_K_RELIEF_CEILING: float = 0.08 # 三振軽減が効き始める KAvoid z（野手 KAvoid 平均 0.33 − 0.25）。これ未満の打者を救済。
 # BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
 const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
-const BB_PREVENT_WEIGHT: float = 0.7 # 投手の制球が四球を減らす強さ。
+const BB_PREVENT_WEIGHT: float = 0.32 # 投手の制球が四球を減らす強さ。
 const FRAMING_BB_COEF: float = 1.0    # フレーミングで得たストライクが四球を押し下げる係数。
 const GAMECALL_BB_COEF: float = 0.03  # 捕手の配球が四球に効く係数。
 const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増える量。
@@ -95,7 +95,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	bb_logit -= pit_bb_prevent * _rule_float("bb_prevent_weight", BB_PREVENT_WEIGHT)
 	bb_logit -= framing_strikes * _rule_float("framing_bb_coef", FRAMING_BB_COEF)
 	bb_logit -= c_game_call * _rule_float("gamecall_bb_coef", GAMECALL_BB_COEF)
-	bb_logit -= tto_round_weight * _rule_float("tto_bb_drop", TTO_BB_DROP)
+	bb_logit += tto_round_weight * _rule_float("tto_bb_drop", TTO_BB_DROP)
 	bb_logit += command_leak * _rule_float("command_leak_bb_weight", 0.10)
 
 	var hbp_logit: float = PSBalanceProfile.logit(_rule_float("league_hbp_base", LEAGUE_HBP_BASE))

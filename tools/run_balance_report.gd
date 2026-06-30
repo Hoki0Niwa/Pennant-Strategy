@@ -92,7 +92,10 @@ func _run_multi_seed(reporter: Object, options: Dictionary) -> Dictionary:
 			"runs_per_team_game": ["run_environment", "runs_per_team_game"],
 			"batter_ops_max": ["distributions", "batters", "ops", "max"],
 			"pitcher_era_min": ["distributions", "pitchers", "era", "min"],
+			"pitcher_era_under_2_count": ["distributions", "pitchers", "era_under_2_count"],
+			"pitcher_era_under_2_by_team_max": ["distributions", "pitchers", "era_under_2_by_team_max"],
 		}),
+		"health": ReportHealth.multi_seed_health(reports),
 		"seed_runs": reports,
 	}
 

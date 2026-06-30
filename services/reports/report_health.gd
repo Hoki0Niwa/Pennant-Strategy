@@ -13,6 +13,8 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 	var batters: Array = player_stats.get("batters", []) as Array
 	var pitchers: Array = player_stats.get("pitchers", []) as Array
 	var team_rows: Array = report.get("team_seasons", []) as Array
+	var pitcher_era_dist: Dictionary = _distribution(_positive_float_values(pitchers, "era"), 2)
+	var era_tail: Dictionary = _era_tail_summary(pitchers)
 	return {
 		"batters": {
 			"qualified_count": batters.size(),
@@ -24,7 +26,11 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 		},
 		"pitchers": {
 			"qualified_count": pitchers.size(),
-			"era": _distribution(_positive_float_values(pitchers, "era"), 2),
+			"era": pitcher_era_dist,
+			"qualified_pitcher_era_p10": float(pitcher_era_dist.get("p10", 0.0)),
+			"era_under_2_count": int(era_tail.get("era_under_2_count", 0)),
+			"era_under_2_by_team_max": int(era_tail.get("era_under_2_by_team_max", 0)),
+			"era_under_2_team_multi_count": int(era_tail.get("era_under_2_team_multi_count", 0)),
 			"strikeouts_per_nine": _distribution(_float_values(pitchers, "strikeouts_per_nine"), 2),
 			"walks_per_nine": _distribution(_float_values(pitchers, "walks_per_nine"), 2),
 			"home_runs_per_nine": _distribution(_float_values(pitchers, "home_runs_per_nine"), 2),
@@ -62,6 +68,8 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	var shutout_cg_ratio: float = _safe_div(float(pitching.get("shutouts", 0)), float(max(1, int(pitching.get("complete_games", 0)))))
 	var relief_per_team_game: float = _safe_div(float(pitching.get("relief_appearances", 0)), float(team_games))
 	var holds_per_year: float = _safe_div(float(pitching.get("holds", 0)), float(seasons))
+	var era_under_2_count: int = int(pitcher_dist.get("era_under_2_count", 0))
+	var era_under_2_by_team_max: int = int(pitcher_dist.get("era_under_2_by_team_max", 0))
 	var errors: Array = report.get("errors", []) as Array
 
 	_add_equal_check(checks, "completed_seasons", completed, requested, "all requested seasons completed")
@@ -75,6 +83,8 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "batter_ops_max", _dist_value(batter_dist, "ops", "max"), 1.20, 1.35, "qualified batter OPS max")
 	_add_max_check(checks, "batter_hr_max", _dist_value(batter_dist, "home_runs", "max"), 60.0, 75.0, "single-season HR leader")
 	_add_min_check(checks, "pitcher_era_min", _dist_value(pitcher_dist, "era", "min"), 0.90, 0.50, "qualified pitcher ERA floor")
+	_add_max_check(checks, "pitcher_era_under_2_count", era_under_2_count, 5.0, 7.0, "qualified pitchers with ERA under 2.00")
+	_add_manual_check(checks, "pitcher_era_under_2_by_team_max", STATUS_FAIL if era_under_2_by_team_max >= 3 else STATUS_PASS, era_under_2_by_team_max, "no team should usually have three qualified sub-2 ERA pitchers")
 	_add_max_check(checks, "pitcher_k9_max", _dist_value(pitcher_dist, "strikeouts_per_nine", "max"), 14.0, 17.0, "qualified pitcher K/9 max")
 	_add_max_check(checks, "complete_game_rate", complete_game_rate, 0.12, 0.22, "complete games per start")
 	_add_max_check(checks, "shutout_complete_game_ratio", shutout_cg_ratio, 0.75, 0.90, "shutout share of complete games")
@@ -179,6 +189,27 @@ static func multi_seed_summary(reports: Array, metric_paths: Dictionary = {}) ->
 		var path: Array = metric_paths[metric_name_value] as Array
 		metrics[metric_name] = _distribution(_report_path_values(reports, path), 3)
 	return summary
+
+
+static func multi_seed_health(reports: Array) -> Dictionary:
+	var checks: Array = []
+	var total_under_2: int = 0
+	var max_team_under_2: int = 0
+	for report_value in reports:
+		var report: Dictionary = report_value as Dictionary
+		var pitcher_dist: Dictionary = ((report.get("distributions", {}) as Dictionary).get("pitchers", {}) as Dictionary)
+		total_under_2 += int(pitcher_dist.get("era_under_2_count", 0))
+		max_team_under_2 = maxi(max_team_under_2, int(pitcher_dist.get("era_under_2_by_team_max", 0)))
+	var runs: int = reports.size()
+	var avg_under_2: float = _safe_div(float(total_under_2), float(runs))
+	var avg_status: String = STATUS_PASS
+	if avg_under_2 > 5.0:
+		avg_status = STATUS_FAIL
+	elif avg_under_2 > 3.0:
+		avg_status = STATUS_WARN
+	_add_manual_check(checks, "multi_seed_pitcher_era_under_2_average", avg_status, _round_float(avg_under_2, 3), "3-seed average should stay within 0-3 qualified sub-2 ERA pitchers")
+	_add_manual_check(checks, "multi_seed_pitcher_era_under_2_by_team_max", STATUS_FAIL if max_team_under_2 >= 3 else STATUS_PASS, max_team_under_2, "no single seed should have three qualified sub-2 ERA pitchers on one team")
+	return _health_result(checks)
 
 
 # check 配列全体の代表 status を決める。fail が1つでもあれば fail、fail なし warn ありなら warn。
@@ -310,6 +341,31 @@ static func _positive_float_values(rows: Array, key: String) -> Array:
 		if float(value) > 0.0:
 			values.append(float(value))
 	return values
+
+
+static func _era_tail_summary(pitchers: Array) -> Dictionary:
+	var under_2_count: int = 0
+	var by_team: Dictionary = {}
+	for row_value in pitchers:
+		var row: Dictionary = row_value as Dictionary
+		var era: float = float(row.get("era", 0.0))
+		if era <= 0.0 or era >= 2.0:
+			continue
+		under_2_count += 1
+		var team_key: String = str(row.get("team_id", 0))
+		by_team[team_key] = int(by_team.get(team_key, 0)) + 1
+	var by_team_max: int = 0
+	var multi_team_count: int = 0
+	for count_value in by_team.values():
+		var count: int = int(count_value)
+		by_team_max = maxi(by_team_max, count)
+		if count >= 2:
+			multi_team_count += 1
+	return {
+		"era_under_2_count": under_2_count,
+		"era_under_2_by_team_max": by_team_max,
+		"era_under_2_team_multi_count": multi_team_count,
+	}
 
 
 # ネストした Dictionary path から値を集める。欠損行はスキップする。

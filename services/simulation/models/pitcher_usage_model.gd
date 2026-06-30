@@ -8,7 +8,10 @@ const ROLE_LONG_RELIEF: String = "long_relief"
 const ROLE_SHORT_RELIEF: String = "short_relief"
 
 const STARTER_TARGET_MIN: int = 80
-const STARTER_TARGET_MAX: int = 122  # NPB 現代の先発上限球数(110-125球)に合わせる。
+const STARTER_TARGET_MAX: int = 100  # 通常の交代判断を始める球数レンジ。
+const STARTER_COMPLETE_GAME_LIMIT_MIN: int = 110
+const STARTER_COMPLETE_GAME_LIMIT_MAX: int = 130
+const STARTER_COMPLETE_GAME_PITCHES_PER_OUT: float = 5.6
 const SHORT_RELIEF_TARGET_MIN: int = 15
 const SHORT_RELIEF_TARGET_MAX: int = 32
 const LONG_RELIEF_TARGET_MIN: int = 40
@@ -102,20 +105,25 @@ const ARSENAL_DEPTH_WEIGHTS := {
 static func starter_target_pitches(record: PSPlayerSeasonRecord) -> int:
 	var stamina: float = _ability(record, "Pit_Stamina")
 	var recovery: float = _ability(record, "Pit_FatigueResist")
-	# 平均的な先発(z=0)で約90球を目標にセンタリングする。旧式 (stamina-1.5)*20 はリーグ平均が
-	# 80球に沈み、z=1.5でやっと100球という低めの設定で、平均的先発が5回台で球数到達していた。
-	# z に比例した素直な増減に直す。実際の投球数/先発は回またぎ判定の都合で目標を1イニング分超過しがちで、
-	# 目標90で平均球数/先発が約98球・平均IPが6回前後(NPB水準)に収まる(p/PA 較正後の実測ベース)。
+	# 通常の継投判断は80〜100球に収める。130球級は完投が現実的な終盤だけ別ゲートで許可する。
 	var target: float = 90.0
-	target += stamina * 7.0
-	target += recovery * 3.0
+	target += stamina * 6.0
+	target += recovery * 2.0
 	return int(clamp(round(target), STARTER_TARGET_MIN, STARTER_TARGET_MAX))
 
 
-static func short_relief_target_pitches(record: PSPlayerSeasonRecord) -> int:
+static func starter_complete_game_pitch_limit(record: PSPlayerSeasonRecord) -> int:
 	var stamina: float = _ability(record, "Pit_Stamina")
+	var recovery: float = _ability(record, "Pit_FatigueResist")
+	var limit: float = 118.0
+	limit += stamina * 4.0
+	limit += recovery * 2.0
+	return int(clamp(round(limit), STARTER_COMPLETE_GAME_LIMIT_MIN, STARTER_COMPLETE_GAME_LIMIT_MAX))
+
+
+static func short_relief_target_pitches(_record: PSPlayerSeasonRecord) -> int:
+	# 短い救援は1イニング前提。スタミナはロング/回跨ぎ適性で使い、短い救援の目標球数には使わない。
 	var target: float = 22.0
-	target += stamina * 2.0
 	return int(clamp(round(target), SHORT_RELIEF_TARGET_MIN, SHORT_RELIEF_TARGET_MAX))
 
 
@@ -330,19 +338,16 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 	if role == ROLE_STARTER:
 		if inning <= 1:
 			return false
+		if inning >= 10:
+			return true
+		if inning >= 9:
+			return not _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
 		if ratio >= 1.05:
 			return true
-		if inning >= 6 and ratio >= 0.95:
+		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
+		if inning >= 6 and ratio >= 0.95 and not complete_game_chase:
 			return true
-		if inning >= 8 and ratio >= 0.80:
-			return true
-		# 9回続投(完投挑戦)は「無失点(完封ペース)かつ低球数」のみ許可する。
-		# 旧実装(ratio<0.65なら続投)は球数効率の高いエースがほぼ毎回完投し、リーグ完投率39%・
-		# ホールド消滅を起こした(現実のNPB完投率は2-3%、完投はほぼ完封挑戦時のみ)。
-		# 「1失点以内」緩和ではエースが年15完投してしまうため無失点限定。10回以降は無条件降板。
-		if inning >= 9 and not (runs_allowed == 0 and ratio <= 0.74):
-			return true
-		if inning >= 10:
+		if inning >= 8 and ratio >= 0.80 and not complete_game_chase:
 			return true
 		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD:
 			return true
@@ -382,7 +387,8 @@ static func should_pull_after_plate_appearance(
 	if role == ROLE_STARTER:
 		# イニング途中の交代は「炎上が止まらない」緊急時のみ。通常の交代は回またぎ
 		# (should_pull_for_next_half) で判断し、序盤の数失点では立て直しのチャンスを与える。
-		if ratio >= 1.15:
+		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
+		if ratio >= 1.15 and not complete_game_chase:
 			return true  # 球数が限界(大幅超過)
 		if inning <= 4:
 			# 序盤は大量失点が同一イニングで続くとき(7失点級)だけ即交代。2回3失点程度では降ろさない。
@@ -425,6 +431,26 @@ static func should_pull_when_pitcher_spot_bats(record: PSPlayerSeasonRecord, usa
 	if next_defensive_inning < 5:
 		return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed) and float(usage.get("trouble_score", 0.0)) >= MELTDOWN_THRESHOLD
 	return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed)
+
+
+static func _starter_can_chase_complete_game(record: PSPlayerSeasonRecord, usage: Dictionary, inning: int, runs_allowed: int) -> bool:
+	if record == null or usage.is_empty():
+		return false
+	if inning < 8 or inning >= 10:
+		return false
+	var max_runs: int = 1 if inning <= 8 else 2
+	if runs_allowed > max_runs:
+		return false
+	if float(usage.get("trouble_score", 0.0)) >= TROUBLE_ALERT:
+		return false
+	var outs_recorded: int = int(usage.get("outs", 0))
+	var remaining_outs: int = max(0, 27 - outs_recorded)
+	if inning >= 9:
+		remaining_outs = min(remaining_outs, 3)
+	else:
+		remaining_outs = min(remaining_outs, 6)
+	var projected_pitches: float = float(int(usage.get("pitches", 0))) + float(remaining_outs) * STARTER_COMPLETE_GAME_PITCHES_PER_OUT
+	return projected_pitches <= float(starter_complete_game_pitch_limit(record))
 
 
 static func post_game_fatigue_gain(record: PSPlayerSeasonRecord, usage: Dictionary) -> int:

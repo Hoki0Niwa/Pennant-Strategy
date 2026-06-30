@@ -9,12 +9,33 @@ class_name PSPitchAggregateSimulator
 const CATEGORY_K: String = "k"
 const CATEGORY_BB: String = "bb"
 const CATEGORY_HBP: String = "hbp"
-# 球数生成の調整係数。カテゴリごとの基本球数に、打者/投手/捕手能力と疲労の補正を足し引きする。
-# カテゴリ別の基本球数。リーグ平均でおよそ 3.9 球/打席(NPB 実水準)になるよう設定。
-const BASE_PITCHES_K: float = 4.9    # 三振で終わる打席の基本球数。
-const BASE_PITCHES_BB: float = 5.6   # 四球で終わる打席の基本球数。
-const BASE_PITCHES_HBP: float = 3.0  # 死球で終わる打席の基本球数。
-const BASE_PITCHES_BIP: float = 3.45 # インプレーで終わる打席の基本球数。
+# 球数生成の調整係数。THT/FanGraphs の 1988-2013 MLB 全PA球数分布を土台に、
+# 三振/四球の最低球数制約を満たすカテゴリ別分布へ分解している。
+# https://tht.fangraphs.com/tht-live/just-how-rare-is-a-14-pitch-plate-appearance/
+const BIP_PITCH_WEIGHTS: Array = [
+	0.1430, 0.2881, 0.1695, 0.1584, 0.1201,
+	0.0829, 0.0280, 0.0077, 0.0020, 0.0001,
+	0.0, 0.0, 0.0, 0.0, 0.0,
+	0.0, 0.0, 0.0, 0.0, 0.0,
+]
+const K_PITCH_WEIGHTS: Array = [
+	0.0, 0.0, 0.2000, 0.2800, 0.2500,
+	0.1500, 0.0700, 0.0300, 0.0120, 0.0050,
+	0.0020, 0.0008, 0.0002, 0.0, 0.0,
+	0.0, 0.0, 0.0, 0.0, 0.0,
+]
+const BB_PITCH_WEIGHTS: Array = [
+	0.0, 0.0, 0.0, 0.2800, 0.3000,
+	0.2000, 0.1100, 0.0550, 0.0250, 0.0120,
+	0.0060, 0.0030, 0.0015, 0.0008, 0.0004,
+	0.0002, 0.0001, 0.0, 0.0, 0.0,
+]
+const HBP_PITCH_WEIGHTS: Array = [
+	0.5500, 0.2500, 0.1200, 0.0500, 0.0200,
+	0.0070, 0.0030, 0.0, 0.0, 0.0,
+	0.0, 0.0, 0.0, 0.0, 0.0,
+	0.0, 0.0, 0.0, 0.0, 0.0,
+]
 # 球数を増減させる能力係数。
 const PATIENCE_COEF: float = 0.4            # 打者の選球眼が球数を増やす係数。
 const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減らす係数。
@@ -26,13 +47,9 @@ const AGGRESSION_Z_NEUTRAL: float = 0.3  # Bat_Aggression の野手平均。
 const EFFICIENCY_Z_NEUTRAL: float = 1.0  # Pit_Efficiency の投手平均。
 const GAMECALL_Z_NEUTRAL: float = 0.75   # C_GameCall の捕手平均。
 const FATIGUE_PITCH_COEF: float = 0.4       # 疲労が球数を増やす係数。
-# リーグ一律の球数補正。カテゴリ別 base は neutral 能力で現実的(K4.9/BB5.6/BIP3.45)だが、能力項の
-# 中立点(*_Z_NEUTRAL)が「実際に打席に立つ/登板する稼働選手」の母平均をやや下回るため、シーズン平均
-# p/PA が約0.27 押し下げられていた(実測 3.62 → 目標 3.85-3.90, MLB/NPB 現代水準)。母平均との差を一律で戻す。
-const LEAGUE_PITCH_CALIBRATION: float = 0.27
-const PITCH_SIGMA: float = 1.0              # 球数の乱数ばらつき(正規分布の標準偏差)。
+const LEAGUE_PITCH_DELTA_CALIBRATION: float = 0.35 # 実 roster の短球数寄り能力分布をTHT型へ戻す一律補正。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
-const MAX_PITCH_COUNT: int = 14             # 1打席あたり球数の上限クランプ。
+const MAX_PITCH_COUNT: int = 20             # 1打席あたり球数の上限クランプ。
 
 
 # precomp は以下を期待:
@@ -52,19 +69,17 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	var pit_efficiency: float = float(pitcher_z.get("Pit_Efficiency", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 
-	var base_pitches: float = _base_pitches_for_category(category)
-	var pitches_f: float = base_pitches
-	pitches_f += (bat_bb_create - PATIENCE_Z_NEUTRAL) * PATIENCE_COEF
-	pitches_f -= (bat_aggression - AGGRESSION_Z_NEUTRAL) * AGGRESSION_COEF
-	pitches_f -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
-	pitches_f -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
-	pitches_f += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
-	pitches_f += LEAGUE_PITCH_CALIBRATION
-	pitches_f += _gauss(precomp) * PITCH_SIGMA
+	var pitch_delta: float = 0.0
+	pitch_delta += (bat_bb_create - PATIENCE_Z_NEUTRAL) * PATIENCE_COEF
+	pitch_delta -= (bat_aggression - AGGRESSION_Z_NEUTRAL) * AGGRESSION_COEF
+	pitch_delta -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
+	pitch_delta -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
+	pitch_delta += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
+	pitch_delta += LEAGUE_PITCH_DELTA_CALIBRATION
 
 	var min_p: int = max(MIN_PITCH_COUNT, _category_min_pitches(category))
 	var max_p: int = MAX_PITCH_COUNT
-	var pitches: int = int(clamp(round(pitches_f), float(min_p), float(max_p)))
+	var pitches: int = _apply_pitch_delta(_roll_base_pitch_count(category, precomp), pitch_delta, precomp, min_p, max_p)
 
 	var balls: int
 	var strikes: int
@@ -128,15 +143,48 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	}
 
 
-static func _base_pitches_for_category(category: String) -> float:
+static func _pitch_weights_for_category(category: String) -> Array:
 	match category:
 		CATEGORY_K:
-			return BASE_PITCHES_K
+			return K_PITCH_WEIGHTS
 		CATEGORY_BB:
-			return BASE_PITCHES_BB
+			return BB_PITCH_WEIGHTS
 		CATEGORY_HBP:
-			return BASE_PITCHES_HBP
-	return BASE_PITCHES_BIP
+			return HBP_PITCH_WEIGHTS
+	return BIP_PITCH_WEIGHTS
+
+
+static func _roll_base_pitch_count(category: String, precomp: Dictionary) -> int:
+	var weights: Array = _pitch_weights_for_category(category)
+	var total: float = 0.0
+	for value in weights:
+		total += max(0.0, float(value))
+	if total <= 0.0:
+		return _category_min_pitches(category)
+	var roll: float = _deterministic_unit(precomp, "pitch_count_dist") * total
+	var cumulative: float = 0.0
+	for index in range(weights.size()):
+		cumulative += max(0.0, float(weights[index]))
+		if roll <= cumulative:
+			return index + 1
+	return min(weights.size(), MAX_PITCH_COUNT)
+
+
+static func _apply_pitch_delta(
+	base_pitches: int,
+	pitch_delta: float,
+	precomp: Dictionary,
+	min_pitches: int,
+	max_pitches: int
+) -> int:
+	var whole: int = int(floor(abs(pitch_delta)))
+	var fraction: float = abs(pitch_delta) - float(whole)
+	var movement: int = whole
+	if _deterministic_unit(precomp, "pitch_delta_fraction") < fraction:
+		movement += 1
+	if pitch_delta < 0.0:
+		movement = -movement
+	return int(clamp(base_pitches + movement, min_pitches, max_pitches))
 
 
 # カテゴリごとに最低限必要な球数。HBP=1, BB=4, K=3, BIP=1。
@@ -164,15 +212,7 @@ static func _foul_count_for(category: String, pitches: int) -> int:
 		_:
 			slack = pitches - 1
 	@warning_ignore("integer_division")
-	return int(clamp(slack / 2, 0, 4))
-
-
-static func _gauss(precomp: Dictionary) -> float:
-	# 4 個の deterministic ロールから 0..1 → 中心化して [-2, 2]
-	var total: float = 0.0
-	for i in range(4):
-		total += _deterministic_unit(precomp, "gauss_%d" % i)
-	return total - 2.0
+	return int(clamp(slack / 2, 0, 10))
 
 
 static func _deterministic_unit(precomp: Dictionary, salt: String) -> float:

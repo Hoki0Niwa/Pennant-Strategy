@@ -8,9 +8,9 @@ class_name PSContactQualityModel
 # 打球初速(EV)の基準値と、能力・球速・状況による各種補正の重み。
 const EV_BASE: float = 91.0                  # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
-const EV_HOME_RUN_POWER_WEIGHT: float = 0.9375 # 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
+const EV_HOME_RUN_POWER_WEIGHT: float = 0.98 # 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
-const EV_STUFF_WEIGHT: float = 1.5           # 投手の球威 z が中立点から 1.0 高いごとに EV を下げる量(mph)。
+const EV_STUFF_MAX_REDUCTION: float = 0.205  # 球威 curve が最大級の投手でも EV 低下を0.2mph前後へ飽和させる。
 const EV_FATIGUE_WEIGHT: float = 0.035
 const EV_CHASE_PENALTY: float = 3.50
 const EV_TWO_STRIKE_PENALTY: float = 1.25
@@ -20,7 +20,7 @@ const EV_RANDOM_SPREAD: float = 9.5
 const EV_MIN: float = 48.0
 const EV_MAX: float = 119.0
 # 全打球の初速(EV)へ一律加算するリーグ補正。上げると打率・長打が増える。
-const CONTACT_EV_BIAS: float = 0.45
+const CONTACT_EV_BIAS: float = 0.20
 
 # 芯で捉えた打球(perfect contact)の発生率と、その際のEV上昇・角度をバレル角へ寄せる強さ。
 const PERFECT_CONTACT_BASE_RATE: float = 0.048
@@ -32,7 +32,7 @@ const GAP_LINER_TARGET_LA: float = 16.0
 const GAP_LINER_LA_PULL: float = 0.34
 
 # 本塁打向きの理想打球角(ideal power)の発生率・目標角・EV上乗せ・飛距離ボーナス。
-const POWER_IDEAL_LA_BASE_RATE: float = 0.045
+const POWER_IDEAL_LA_BASE_RATE: float = 0.040
 const POWER_IDEAL_LA_PULL: float = 0.52
 const POWER_IDEAL_LA_TARGET: float = 28.0
 const POWER_IDEAL_LA_EV_BOOST: float = 1.4
@@ -45,10 +45,9 @@ const MISHIT_EV_PENALTY: float = 7.5
 const MISHIT_LA_SCATTER: float = 7.0
 
 # 投手の球威(stuff)が EV・芯・詰まり・理想角の各判定に効く重み。
-const STUFF_EV_WEIGHT: float = 0.45
-const STUFF_PERFECT_LOGIT_WEIGHT: float = 0.45
-const STUFF_MISHIT_LOGIT_WEIGHT: float = 0.35
-const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 0.50
+const STUFF_PERFECT_LOGIT_WEIGHT: float = 0.02
+const STUFF_MISHIT_LOGIT_WEIGHT: float = 0.01
+const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 0.02
 
 # 打球角度(LA)の基準値・投球コース別オフセット・ばらつき範囲とクランプ。
 const LA_BASE: float = 11.5
@@ -143,10 +142,11 @@ static func generate(
 	# 打者の長打力・球速で EV を上げ、投手の球威・打者疲労で下げ、投手の被弾傾向で上げる。
 	ev += (batter_hr_z - bat_hr_z_neutral) * _rule_float("ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
 	ev += (float(pitch_velocity) - _rule_float("pitch_velocity_base", PITCH_VELOCITY_BASE)) * _rule_float("ev_pitch_velocity_weight", EV_PITCH_VELOCITY_WEIGHT)
-	ev -= (pitcher_stuff_z - pit_stuff_z_neutral) * _rule_float("ev_stuff_weight", EV_STUFF_WEIGHT)
-	ev -= stuff_curve * _rule_float("stuff_ev_weight", STUFF_EV_WEIGHT)
+	# 旧式は pitcher_stuff_z の生値線形減算 + stuff_curve 減算の二重効果で、上位投手だけ被打球を
+	# 強く殺しすぎていた。EV への球威効果は curve だけに集約し、最大級でも0.5mph前後で飽和させる。
+	ev -= stuff_curve * _rule_float("ev_stuff_max_reduction", EV_STUFF_MAX_REDUCTION)
 	ev -= float(batter_fatigue) * _rule_float("ev_fatigue_weight", EV_FATIGUE_WEIGHT)
-	ev += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ev_weight", 1.35)
+	ev += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ev_weight", 0.75)
 	# 追いかけ・2ストライク防御・強制アウト・投手打者の各状況で EV を減らす。
 	if chase:
 		ev -= _rule_float("ev_chase_penalty", EV_CHASE_PENALTY)
@@ -195,7 +195,7 @@ static func generate(
 	var perfect_logit: float = PSBalanceProfile.logit(_rule_float("perfect_contact_base_rate", PERFECT_CONTACT_BASE_RATE))
 	perfect_logit += contact_curve * _rule_float("perfect_contact_curve_weight", 1.00)
 	perfect_logit -= stuff_curve * _rule_float("stuff_perfect_logit_weight", STUFF_PERFECT_LOGIT_WEIGHT)
-	perfect_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_perfect_weight", 0.10)
+	perfect_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_perfect_weight", 0.05)
 	perfect_logit += arsenal_hr_bias * _rule_float("arsenal_hr_perfect_weight", ARSENAL_HR_PERFECT_WEIGHT)  # 被弾寄り球種で芯を微増(微差)。
 	if two_strike:
 		perfect_logit -= _rule_float("perfect_two_strike_penalty", 0.35)
@@ -207,7 +207,7 @@ static func generate(
 	var mishit_logit: float = PSBalanceProfile.logit(_rule_float("mishit_base_rate", MISHIT_BASE_RATE))
 	mishit_logit -= contact_curve * _rule_float("mishit_contact_curve_weight", 0.95)
 	mishit_logit += stuff_curve * _rule_float("stuff_mishit_logit_weight", STUFF_MISHIT_LOGIT_WEIGHT)
-	mishit_logit -= pitcher_contact_damage * _rule_float("pitcher_contact_damage_mishit_weight", 0.08)
+	mishit_logit -= pitcher_contact_damage * _rule_float("pitcher_contact_damage_mishit_weight", 0.04)
 	if two_strike:
 		mishit_logit += _rule_float("mishit_two_strike_penalty", 0.28)
 		mishit_logit += max(0.0, avoid_k_curve) * _rule_float("mishit_two_strike_avoid_k_weight", 0.20)
@@ -233,7 +233,7 @@ static func generate(
 	var ideal_power_logit: float = PSBalanceProfile.logit(_rule_float("power_ideal_la_base_rate", POWER_IDEAL_LA_BASE_RATE))
 	ideal_power_logit += home_run_curve * _rule_float("ideal_power_curve_weight", 1.20)
 	ideal_power_logit -= stuff_curve * _rule_float("stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
-	ideal_power_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ideal_weight", 0.08)
+	ideal_power_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ideal_weight", 0.04)
 	ideal_power_logit += arsenal_hr_bias * _rule_float("arsenal_hr_ideal_weight", ARSENAL_HR_IDEAL_WEIGHT)  # 被弾寄り球種で理想角を微増(微差)。
 	if chase:
 		ideal_power_logit -= _rule_float("ideal_power_chase_penalty", 0.38)

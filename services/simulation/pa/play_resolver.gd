@@ -16,8 +16,8 @@ const RESULT_FOUL_BACK: String = "_foul_back_to_sequence"
 const FIELDER_ABILITY_CACHE_KEY: String = "_pa_fielder_ability_cache"
 
 # 打率・本塁打の大きな水準を動かす調整係数。
-const HR_DISTANCE_SCALE: float = 1.09    # 本塁打フェンスまでの距離の乗算。1未満で本塁打が増える。
-const SINGLE_TO_OUT_CHANCE: float = 0.27 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
+const HR_DISTANCE_SCALE: float = 1.135   # 本塁打フェンスまでの距離の乗算。1未満で本塁打が増える。
+const SINGLE_TO_OUT_CHANCE: float = 0.33 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
 
 const FIELD_NAMES: Dictionary = {
 	1: "pitcher",
@@ -43,15 +43,15 @@ const HR_LINE_KNEE_SPRAY: float = 20.0
 # 非力打者はラインが遠ざかり(本塁打↓)、強打者は近づく(本塁打↑)。S 字なので「ある程度のパワーから
 # 増え始め、高パワー域では伸びが飽和(頭打ち)」する。3 つの定数だけで形を決める。
 # 現データの野手パワー z は中央値≈1.8 / p75≈2.6 / p90≈3.3 / 最大≈5.1（投手はずっと低い）。
-const HR_POWER_LINE_AMPLITUDE: float = 12.0 # ライン補正の最大振れ幅(ft)。非力で最大 +AMP(遠い)、強打者で最大 -AMP(近い)。大きいほど強弱差が拡大。
-const HR_POWER_LINE_CENTER: float = 2.3     # S 字の中心パワー z(補正0)。野手 p67 付近。上げると HR が増え始めるパワーが上がり HR が減る。
-const HR_POWER_LINE_WIDTH: float = 1.1      # S 字の広がり(z)。野手分布の幅(sd≈1.3)に合わせる。小さいほど閾値的に急、大きいほど緩やか。
+const HR_POWER_LINE_AMPLITUDE: float = 14.0 # ライン補正の最大振れ幅(ft)。非力で最大 +AMP(遠い)、強打者で最大 -AMP(近い)。大きいほど強弱差が拡大。
+const HR_POWER_LINE_CENTER: float = 2.55    # S 字の中心パワー z(補正0)。中位のHRを抑え、上位長打力へHRを寄せる。
+const HR_POWER_LINE_WIDTH: float = 1.00     # S 字の広がり(z)。小さいほど上位長打力へHRが集中し、低パワーはより出にくい。
 
-const HR_UPGRADE_WINDOW: float = 54.0
+const HR_UPGRADE_WINDOW: float = 48.0
 # 本塁打昇格の長打力ゲート（打者パワー z で評価）。FLOOR 以下は昇格率 0、FLOOR+WIDTH で最大。
 # 野手パワー z 分布(中央値≈1.8, p90≈3.3)に合わせ、下位の打者は昇格させず上位で最大にする。
-const HR_UPGRADE_POWER_FLOOR: float = 1.0 # この長打力 z(≈野手 p27)未満は惜しい当たりでも本塁打に昇格しない。
-const HR_UPGRADE_POWER_WIDTH: float = 2.3 # 長打力 z がこの幅ぶん上がる(≈p90)と昇格係数が 0→1 まで立ち上がる。
+const HR_UPGRADE_POWER_FLOOR: float = 1.20 # この長打力 z 未満は惜しい当たりでも本塁打に昇格しない。
+const HR_UPGRADE_POWER_WIDTH: float = 2.10 # 長打力 z がこの幅ぶん上がると昇格係数が 0→1 まで立ち上がる。
 
 # --- ゾーン内（横方向）難度 ---
 # 1球ごとの2D座標は持たず、spray を横軸として「担当野手の定位置からの横ズレ」で難度を表す。

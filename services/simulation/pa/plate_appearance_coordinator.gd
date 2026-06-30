@@ -22,12 +22,17 @@ const INTENTIONAL_WALK_BASE_DENOMINATOR: int = 1000
 # 巡目・捕手影響・球威テール圧縮の調整係数。打席カテゴリ抽選と打球品質の両方へ効く。
 # 巡目(times-through-order)ペナルティは 1巡目→2→3… の順で、3巡目以降にじわっと効く。
 const TTO_PENALTY_PER_ROUND: Array = [0.0, 0.0, 0.05, 0.10, 0.15]
+const TTO_PENALTY_Z_SCALE: float = 0.04 # PitcherUsageModel の display 点相当ペナルティをPAのlogit重みへ変換する。
 const FRAMING_SCALE: float = 0.05         # 捕手フレーミング能力を「奪ったストライク数」へ変換する倍率。
 const GAMECALL_CONTACT_COEF: float = 0.04 # 捕手の配球が打球の質(被コンタクト抑制)に効く係数。
+# 救援は短い登板で最初から出力を上げられる。球数比率が上がるほど fade し、ロングは半分だけ効かせる。
+const RELIEF_OUTPUT_BONUS_Z: float = 0.16
+const RELIEF_OUTPUT_FADE_RATIO: float = 0.95
+const LONG_RELIEF_OUTPUT_MULTIPLIER: float = 0.45
 # 球威合成 z (Pit_BarrelDeny + 0.5*Pit_ImpactLimit, 投手平均 ≈ +1.5) のテール圧縮。
 # ContactQualityModel の EV 線形項が無圧縮だとエースの被打球抑制が K/BB 支配と重なり ERA 0点台を作る。
 const STUFF_TAIL_PIVOT: float = 2.0
-const STUFF_TAIL_SPAN: float = 0.8
+const STUFF_TAIL_SPAN: float = 0.25
 
 
 static func resolve(
@@ -344,16 +349,21 @@ static func _build_precomp(
 	# pitching_context を z 空間へ翻訳
 	var usage_penalty: int = int(pitching_context.get("pitcher_usage_penalty", 0))
 	var tto_round: int = int(pitching_context.get("pitcher_tto_round", 0))
+	var tto_penalty: int = int(pitching_context.get("pitcher_tto_penalty", 0))
 	var arsenal_bonus: int = int(pitching_context.get("pitcher_arsenal_bonus", 0))
-	var command_leak: float = float(pitching_context.get("pitcher_command_leak", 0.0))
-	var contact_damage: float = float(pitching_context.get("pitcher_contact_damage", 0.0))
+	var command_leak: float = float(pitching_context.get("pitcher_command_leak", 0.0)) * 0.60
+	var contact_damage: float = float(pitching_context.get("pitcher_contact_damage", 0.0)) * 0.55
+	var pitcher_role: String = str(pitching_context.get("pitcher_role", ""))
+	var outing_ratio: float = float(pitching_context.get("pitcher_fatigue_ratio", 0.0))
 	# 球種傾向(微差): K寄り/ゴロ寄り/被弾の集計スカラー。
 	var arsenal_k_bias: float = float(pitching_context.get("pitcher_arsenal_k_bias", 0.0))
 	var arsenal_gb_bias: float = float(pitching_context.get("pitcher_arsenal_gb_bias", 0.0))
 	var arsenal_hr_bias: float = float(pitching_context.get("pitcher_arsenal_hr_bias", 0.0))
 	var tto_array: Array = TTO_PENALTY_PER_ROUND
 	var tto_round_weight: float = 0.0
-	if tto_round >= 0 and tto_round < tto_array.size():
+	if tto_penalty > 0:
+		tto_round_weight = float(tto_penalty) * TTO_PENALTY_Z_SCALE
+	elif tto_round >= 0 and tto_round < tto_array.size():
 		tto_round_weight = float(tto_array[tto_round])
 	# z 空間 delta (1 display point ≈ 0.08σ)
 	var pitcher_z: Dictionary = pitcher_z_raw.duplicate(true)
@@ -365,6 +375,8 @@ static func _build_precomp(
 	var outing_pitches: int = int(pitching_context.get("pitcher_outing_pitches", 0))
 	var fatigue_factor: float = PSFatigueCalculator.factor_for_pitcher(pitcher, is_reliever, outing_pitches)
 	pitcher_z = PSFatigueCalculator.apply_drops(pitcher_z, fatigue_factor)
+	if is_reliever:
+		_apply_relief_output_bonus(pitcher_z, pitcher_role, outing_ratio)
 
 	# 利き腕プラトーン: 同利き腕なら -1（不利）、逆なら +1
 	var platoon_sign: float = _platoon_sign(batter, pitcher)
@@ -421,6 +433,19 @@ static func _build_precomp(
 	}
 
 
+static func _apply_relief_output_bonus(pitcher_z: Dictionary, role: String, outing_ratio: float) -> void:
+	var fade: float = clamp(1.0 - max(0.0, outing_ratio) / RELIEF_OUTPUT_FADE_RATIO, 0.0, 1.0)
+	if fade <= 0.0:
+		return
+	var multiplier: float = LONG_RELIEF_OUTPUT_MULTIPLIER if role == PSPitcherUsageModel.ROLE_LONG_RELIEF else 1.0
+	var bonus: float = _rule_float("relief_output_bonus_z", RELIEF_OUTPUT_BONUS_Z) * fade * multiplier
+	pitcher_z["Pit_KCreate"] = float(pitcher_z.get("Pit_KCreate", 0.0)) + bonus
+	pitcher_z["Pit_BBPrevent"] = float(pitcher_z.get("Pit_BBPrevent", 0.0)) + bonus * 0.5
+	pitcher_z["Pit_EdgeRate"] = float(pitcher_z.get("Pit_EdgeRate", 0.0)) + bonus * 0.625
+	pitcher_z["Pit_ImpactLimit"] = float(pitcher_z.get("Pit_ImpactLimit", 0.0)) + bonus * 0.5
+	pitcher_z["Pit_BarrelDeny"] = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + bonus * 0.5
+
+
 static func _platoon_sign(batter: PSPlayerSeasonRecord, pitcher: PSPlayerSeasonRecord) -> float:
 	if batter == null or pitcher == null:
 		return 0.0
@@ -445,3 +470,7 @@ static func _catcher_record(defense: Dictionary) -> PSPlayerSeasonRecord:
 		if int(slot.get("position", 0)) == 2:
 			return slot.get("record", null) as PSPlayerSeasonRecord
 	return null
+
+
+static func _rule_float(name: String, fallback: float) -> float:
+	return ModManager.rule_float("simulation.plate_appearance.%s" % name, fallback)

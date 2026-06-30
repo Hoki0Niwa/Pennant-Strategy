@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_complete_game_pitch_distribution.gd" id="1_run_complete_game_pitch_distribution"]
+
+[node name="RunCompleteGamePitchDistribution" type="Node"]
+script = ExtResource("1_run_complete_game_pitch_distribution")
