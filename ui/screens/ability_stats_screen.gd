@@ -37,7 +37,6 @@ const FILTERS: Array = [
 	{"id": "p_all", "label": "投手", "mode": "pitcher"},
 	{"id": "p_sp", "label": "先発", "mode": "pitcher"},
 	{"id": "p_rp", "label": "中継", "mode": "pitcher"},
-	{"id": "p_cl", "label": "抑え", "mode": "pitcher"},
 	{"id": "b_all", "label": "野手", "mode": "batter"},
 	{"id": "b_2", "label": "捕", "mode": "batter", "pos": 2},
 	{"id": "b_3", "label": "一", "mode": "batter", "pos": 3},
@@ -62,8 +61,13 @@ const ALL_TEAMS_MENU_ID: int = 0
 const CHIP_Y: float = 110.0                # 絞り込みチップ行の上端
 const TABLE_RECT: Rect2 = Rect2(262, 164, 1638, 896)
 
+# 規定打席/規定投球回 (rankings_screen と同じ定義: 所属球団の試合数 * 係数)。
+const QUALIFIER_PA_PER_TEAM_GAME: float = 3.1
+const QUALIFIER_OUTS_PER_TEAM_GAME: float = 3.0
+
 var _team_ids: Array = []
 var _view_team_id: int = ALL_TEAMS_ID
+var _qualified_only: bool = false          # 規定打席/投球回到達者のみに絞り込むか
 var _filter_id: String = "b_all"
 var _active_tab: String = "abilities"
 var _sort_key: String = ""
@@ -364,6 +368,13 @@ func _build_buttons() -> void:
 			func(target: String = fid) -> void: _on_filter_pressed(target), "chip_active" if active else "chip")
 		x += w + 8.0
 
+	# 規定打席/投球回到達者のみ (絞り込みチップ群の右にトグルとして置く)。
+	x += 14.0
+	var qual_label: String = "規定到達のみ"
+	var qual_w: float = _measure(qual_label, 13) + 24.0
+	_add_button("flt_qualified", qual_label, Rect2(x, CHIP_Y, qual_w, 30.0),
+		func() -> void: _on_qualified_toggle(), "chip_active" if _qualified_only else "chip")
+
 	# タブ (能力値 / 成績 / 高度な指標)。
 	var tx: float = TABLE_RECT.position.x + 16.0
 	for tab_value in TABS:
@@ -393,12 +404,22 @@ func _on_filter_pressed(filter_id: String) -> void:
 	queue_redraw()
 
 
+# 規定打席/投球回のトグル。列セット (タブ/mode) は変わらず母集団だけが変わるので、
+# 球団プルダウン (_on_team_selected) と同様にソートはリセットせずそのまま _refresh する。
+func _on_qualified_toggle() -> void:
+	_qualified_only = not _qualified_only
+	_refresh()
+	_build_buttons()
+	queue_redraw()
+
+
 func _on_tab_pressed(tab_id: String) -> void:
 	if _active_tab == tab_id:
 		return
 	_active_tab = tab_id
-	_reset_sort()
-	_refresh()
+	# タブ切替は列セットが変わるだけなので、ソートをやり直さず現在の並び順を維持する
+	# (絞り込み変更 _on_filter_pressed は母集団自体が変わるので従来通りソートし直す)。
+	_refresh(true)
 	_build_buttons()
 	queue_redraw()
 
@@ -625,12 +646,40 @@ func _build_team_order() -> void:
 			_team_ids.append(int(id_value))
 
 
-func _refresh() -> void:
+func _refresh(preserve_order: bool = false) -> void:
+	var prev_order: Array = _row_meta_order() if preserve_order else []
 	_collect_records()
 	_build_rows()
-	_sort_rows()
+	if preserve_order:
+		_apply_meta_order(prev_order)
+	else:
+		_sort_rows()
 	# 母集団が変わったらスクロール位置を先頭へ戻す。
 	_scroll["main"] = 0
+
+
+# 現在の表示順 (__meta = player_id) を配列で返す。タブ切替時の並び順維持に使う。
+func _row_meta_order() -> Array:
+	var metas: Array = []
+	for row_value in _rows:
+		metas.append((row_value as Dictionary).get("__meta"))
+	return metas
+
+
+# _rows を given の __meta 順に並べ替える (タブ切替でソートをやり直さず並び順を保つ)。
+# order に無い行 (母集団が変わった場合) は元の相対順のまま末尾へ送る。
+func _apply_meta_order(order: Array) -> void:
+	if order.is_empty() or _rows.is_empty():
+		return
+	var index_by_meta: Dictionary = {}
+	for i in range(order.size()):
+		index_by_meta[order[i]] = i
+	var fallback: int = order.size()
+	_rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var ia: int = int(index_by_meta.get((a as Dictionary).get("__meta"), fallback))
+		var ib: int = int(index_by_meta.get((b as Dictionary).get("__meta"), fallback))
+		return ia < ib
+	)
 
 
 func _collect_records() -> void:
@@ -643,8 +692,11 @@ func _collect_records() -> void:
 	for tid_value in team_list:
 		for record_row in RecordStore.get_team_player_records(int(tid_value), season.year, season.season_number):
 			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-			if _filter_match(record, fdef):
-				_filtered.append(record)
+			if not _filter_match(record, fdef):
+				continue
+			if _qualified_only and not _is_qualified(record):
+				continue
+			_filtered.append(record)
 
 
 func _build_rows() -> void:
@@ -887,16 +939,27 @@ func _sort_rows() -> void:
 	var asc: bool = _sort_asc
 	# 欠損 ("-" 等) は昇順/降順どちらでも末尾へ送る (sentinel を向きに合わせて極大/極小にする)。
 	var sentinel: float = INF if asc else -INF
+	# 主キーが同値のとき (例: 本塁打0の選手同士) に今季出場なしの選手が挟まらないよう、
+	# 出場量 (打者は打席数、投手は投球回) が多い方を向きに関係なく先に出す。
+	var tiebreak_key: String = "ip" if _current_mode() == "pitcher" else "pa"
 	_rows.sort_custom(func(a: Variant, b: Variant) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
 		if textual:
 			var sa: String = str(da.get(eff_key, ""))
 			var sb: String = str(db.get(eff_key, ""))
-			return sa < sb if asc else sa > sb
-		var fa: float = _num_or(da.get(eff_key, sentinel), sentinel)
-		var fb: float = _num_or(db.get(eff_key, sentinel), sentinel)
-		return fa < fb if asc else fa > fb
+			if sa != sb:
+				return sa < sb if asc else sa > sb
+		else:
+			var fa: float = _num_or(da.get(eff_key, sentinel), sentinel)
+			var fb: float = _num_or(db.get(eff_key, sentinel), sentinel)
+			if not is_equal_approx(fa, fb):
+				return fa < fb if asc else fa > fb
+		var ta: float = _num_or(da.get(tiebreak_key, 0.0), 0.0)
+		var tb: float = _num_or(db.get(tiebreak_key, 0.0), 0.0)
+		if not is_equal_approx(ta, tb):
+			return ta > tb
+		return str(da.get("name", "")) < str(db.get("name", ""))
 	)
 
 
@@ -936,9 +999,7 @@ func _filter_match(record: PSPlayerSeasonRecord, fdef: Dictionary) -> bool:
 			"p_sp":
 				return record.is_starter_pitcher()
 			"p_rp":
-				return not record.is_starter_pitcher() and record.role != "closer"
-			"p_cl":
-				return record.role == "closer"
+				return not record.is_starter_pitcher()
 			_:  # p_all
 				return true
 	if record.is_pitcher():
@@ -948,14 +1009,32 @@ func _filter_match(record: PSPlayerSeasonRecord, fdef: Dictionary) -> bool:
 	return record.position == int(fdef.get("pos", 0))
 
 
+# 規定打席/規定投球回 = 所属球団の(その時点の)試合数 * 係数 (rankings_screen と同じ定義)。
+func _is_qualified(record: PSPlayerSeasonRecord) -> bool:
+	var team_games: int = _team_games_for_record(record)
+	if record.is_pitcher():
+		var required_outs: int = int(max(1, ceil(QUALIFIER_OUTS_PER_TEAM_GAME * float(team_games))))
+		return record.pitcher_stats.outs_pitched >= required_outs
+	var required_pa: int = int(max(1, ceil(QUALIFIER_PA_PER_TEAM_GAME * float(team_games))))
+	return record.batter_stats.plate_appearances >= required_pa
+
+
+func _team_games_for_record(record: PSPlayerSeasonRecord) -> int:
+	var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(record.team_id, record.year, record.season_number)
+	if team_record != null:
+		return int(team_record.stats.games)
+	var season: PSSeason = AppState.current_season
+	if season != null and season.standings.has(record.team_id):
+		var stats: PSStats = season.standings[record.team_id] as PSStats
+		if stats != null:
+			return int(stats.games)
+	return 0
+
+
 func _role_badge(role: String) -> Dictionary:
-	match role:
-		"starter":
-			return {"text": "先", "color": PINK, "sort": 0}
-		"closer":
-			return {"text": "抑", "color": AMBER, "sort": 2}
-		_:
-			return {"text": "中", "color": RED, "sort": 1}
+	if role == "starter":
+		return {"text": "先", "color": PINK, "sort": 0}
+	return {"text": "中", "color": RED, "sort": 1}
 
 
 func _position_aptitude(record: PSPlayerSeasonRecord, pos: int) -> int:

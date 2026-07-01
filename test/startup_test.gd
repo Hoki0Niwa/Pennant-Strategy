@@ -279,6 +279,17 @@ func test_ability_stats_screen_builds_each_tab_and_mode() -> void:
 	assert_str(screen._current_mode()).is_equal("batter")
 	assert_array(screen._header_hits).is_not_empty()
 
+	# 規定打席/投球回トグル: このシーズンはまだ1試合も消化していないので、規定到達者のみに
+	# 絞ると全員 (PA=0) が対象外になり空になる。もう一度押すと元の人数に戻る。
+	var rows_before_qualifier: int = screen._rows.size()
+	screen._on_qualified_toggle()
+	assert_bool(screen._qualified_only).is_true()
+	assert_array(screen._filtered).is_empty()
+	assert_array(screen._rows).is_empty()
+	screen._on_qualified_toggle()
+	assert_bool(screen._qualified_only).is_false()
+	assert_int(screen._rows.size()).is_equal(rows_before_qualifier)
+
 	# 行の左クリック=単独選択 / Ctrl=複数トグル / Shift=範囲選択 / 選択解除でゼロへ。
 	assert_int(screen._rows.size()).is_greater_equal(4)
 	var pid_a: int = int((screen._rows[0] as Dictionary).get("__meta", 0))
@@ -306,13 +317,18 @@ func test_ability_stats_screen_builds_each_tab_and_mode() -> void:
 	assert_array(screen._rows).is_not_empty()
 	assert_array(screen._pitch_types).is_not_empty()
 
-	# 成績タブ。
+	# 成績タブへの切替: タブは列セットが変わるだけで母集団は同じなので、ソートをやり直さず
+	# 直前の並び順 (player_id 列) を維持する。
+	var order_before_stats: Array = screen._row_meta_order()
 	screen._on_tab_pressed("stats")
 	assert_array(screen._rows).is_not_empty()
+	assert_array(screen._row_meta_order()).is_equal(order_before_stats)
 
-	# 高度な指標タブ (WAR のリーグ文脈集計を行う経路)。
+	# 高度な指標タブ (WAR のリーグ文脈集計を行う経路) でも同様に並び順を維持する。
+	var order_before_advanced: Array = screen._row_meta_order()
 	screen._on_tab_pressed("advanced")
 	assert_array(screen._rows).is_not_empty()
+	assert_array(screen._row_meta_order()).is_equal(order_before_advanced)
 
 	# ヘッダクリックのソート: 別カラムを選ぶと降順から始まり、同カラム再クリックで昇順へトグルする。
 	screen._on_header_clicked("ip")
@@ -334,6 +350,62 @@ func test_ability_stats_screen_builds_each_tab_and_mode() -> void:
 	assert_int(screen._view_team_id).is_equal(sample_team)
 	screen._on_team_selected(screen.ALL_TEAMS_MENU_ID)
 	assert_int(screen._view_team_id).is_equal(screen.ALL_TEAMS_ID)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func test_ability_stats_screen_sort_tiebreaks_by_playing_time() -> void:
+	# 本塁打などの加算統計が同値 (=0) のとき、今季出場なしの選手が出場ありの選手の
+	# 間に挟まる回帰の防止: 同値時は出場量 (打者は打席数) の多い方を向きに関係なく先に出す。
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "ability_stats"
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var screen_script: GDScript = load("res://ui/screens/ability_stats_screen.gd") as GDScript
+	var screen: Control = screen_script.new()
+	screen.size = Vector2(1920, 1080)
+	add_child(screen)
+	await get_tree().process_frame
+
+	assert_str(screen._current_mode()).is_equal("batter")
+	screen._rows = [
+		{"name": "Active0HR", "hr": 0, "pa": 350, "__meta": 1},
+		{"name": "NoGames", "hr": 0, "pa": 0, "__meta": 2},
+		{"name": "PowerHitter", "hr": 30, "pa": 500, "__meta": 3},
+	]
+	screen._sort_key = "hr"
+	screen._sort_asc = false
+	screen._sort_rows()
+	var names_desc: Array = []
+	for row_value in screen._rows:
+		names_desc.append(str((row_value as Dictionary).get("name", "")))
+	assert_array(names_desc).is_equal(["PowerHitter", "Active0HR", "NoGames"])
+
+	# 昇順にトグルしても、出場なし選手が出場ありの選手より前に出ることはない。
+	screen._sort_asc = true
+	screen._sort_rows()
+	var names_asc: Array = []
+	for row_value in screen._rows:
+		names_asc.append(str((row_value as Dictionary).get("name", "")))
+	assert_array(names_asc).is_equal(["Active0HR", "NoGames", "PowerHitter"])
 	screen.queue_free()
 
 	AppState.selected_team_id = old_team_id
