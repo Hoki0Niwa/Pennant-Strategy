@@ -16,8 +16,8 @@ CLAUDE.md
 /build/
 /exports/
 
-# Project notes, tools, and generated reports kept out of public source
-ROADMAP.md
+# Project notes and generated reports kept out of public source.
+# docs/ is its own private git repo (docs/.git); AGENTS.md / CLAUDE.md at root are untracked stubs.
 /docs/
 /reports/
 
