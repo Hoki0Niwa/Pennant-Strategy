@@ -61,6 +61,174 @@ func test_released_market_respects_foreign_held_cap() -> void:
 	assert_int((capped_team_players[capped_team_players.size() - 1] as PSPlayer).team_id).is_equal(0)
 
 
+func test_released_market_development_track_chance_rises_with_age_and_falls_with_value() -> void:
+	# 年齢が上がるほど育成寄りになり、能力(value)が高いほど支配下側に戻る。
+	var young: float = ReleasedMarket._development_track_chance(24, 55)
+	var prime: float = ReleasedMarket._development_track_chance(29, 55)
+	var old: float = ReleasedMarket._development_track_chance(38, 55)
+	assert_float(young).is_less_equal(prime)
+	assert_float(prime).is_less(old)
+	var old_high_value: float = ReleasedMarket._development_track_chance(38, 90)
+	assert_float(old_high_value).is_less(old)
+
+
+func test_released_market_development_track_bypasses_shienka_limit() -> void:
+	# 育成track の候補は支配下枠(70)が埋まっていても獲得でき、支配下枠を消費しない。
+	var players: Array = _support_players(1, TeamFinance.SHIENKA_LIMIT)
+	var released: PSPlayer = _player({"id": 9300, "team_id": 0, "age": 40, "source_data": {"released": true}})
+	players.append(released)
+	var entry: Dictionary = {
+		"player_id": 9300,
+		"foreign_player": false,
+		"track": ReleasedMarket.TRACK_DEVELOPMENT,
+	}
+	assert_bool(ReleasedMarket._can_team_accept_candidate(players, 1, entry)).is_true()
+	entry["track"] = ReleasedMarket.TRACK_SHIENKA
+	assert_bool(ReleasedMarket._can_team_accept_candidate(players, 1, entry)).is_false()
+
+
+func test_released_market_apply_signing_sets_development_flags_from_track() -> void:
+	var players: Array = [_player({"id": 9301, "team_id": 0, "age": 40, "source_data": {"released": true}})]
+	var state: Dictionary = {"signings": []}
+	var entry: Dictionary = {"player_id": 9301, "track": ReleasedMarket.TRACK_DEVELOPMENT, "value": 40}
+	ReleasedMarket._apply_signing(state, players, null, entry, 2, "cpu")
+	var signed: PSPlayer = players[0] as PSPlayer
+	assert_int(signed.team_id).is_equal(2)
+	assert_bool(signed.development_player).is_true()
+	assert_str(signed.registered_roster).is_equal("育成")
+
+
+# --- 戦力外選定 (動的キーパー水準、人数目標なし) ------------------------------
+
+func test_compute_primary_protected_ids_does_not_blanket_protect_scarce_position() -> void:
+	# 捕手4人构成、うち1人だけ高能力。旧実装は在籍数(4)<=keep(6)で全員無条件保護していたが、
+	# 新実装は能力/年齢の実力基準を満たす選手だけを保護する(2026-07-02、捕手聖域化バグの修正)。
+	var strong: PSPlayer = _player_with_z(9200, 1, 2, false, 1.0)
+	strong.age = 28
+	var weak1: PSPlayer = _player_with_z(9201, 1, 2, false, -2.0)
+	weak1.age = 34
+	var weak2: PSPlayer = _player_with_z(9202, 1, 2, false, -2.0)
+	weak2.age = 33
+	var weak3: PSPlayer = _player_with_z(9203, 1, 2, false, -2.0)
+	weak3.age = 35
+	var roster_records: Array = []
+	for p in [strong, weak1, weak2, weak3]:
+		roster_records.append({"player": p, "record": null})
+	var protected_ids: Dictionary = Offseason._compute_primary_protected_ids(roster_records)
+	assert_bool(protected_ids.has(strong.id)).is_true()
+	assert_bool(protected_ids.has(weak1.id)).is_false()
+	assert_bool(protected_ids.has(weak2.id)).is_false()
+	assert_bool(protected_ids.has(weak3.id)).is_false()
+
+
+func test_primary_protection_excludes_noshow_veteran_keeps_active_veteran() -> void:
+	# 出場ゼロの30代選手は、本職上位かつ overall>=45 でも潜在能力だけでは本職保護されない
+	# (2026-07-02、「出場ゼロの30代非捕手が毎年生き残る」再発バグの修正)。
+	# 同能力・同年齢でも実際に出場している選手は従来どおり保護される。
+	var noshow: PSPlayer = _player_with_z(9210, 1, 6, false, 1.0)
+	noshow.age = 33
+	var noshow_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(noshow, 0, 0)
+	noshow_record.batter_stats.games = 0
+	var active: PSPlayer = _player_with_z(9211, 1, 6, false, 1.0)
+	active.age = 33
+	var active_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(active, 0, 0)
+	active_record.batter_stats.games = 100
+	var roster_records: Array = [
+		{"player": noshow, "record": noshow_record},
+		{"player": active, "record": active_record},
+	]
+	var protected_ids: Dictionary = Offseason._compute_primary_protected_ids(roster_records)
+	assert_bool(protected_ids.has(noshow.id)).is_false()
+	assert_bool(protected_ids.has(active.id)).is_true()
+
+
+func test_compute_release_candidates_cuts_noshow_thirties_fielder() -> void:
+	# 「出場ゼロの30代非捕手」が本職上位 (その位置で唯一) という理由だけで生き残っていた
+	# 再発バグの回帰テスト。Phase 1 (age>=30 AND 少試合) の常時カットを本職保護が妨げないこと
+	# (season=null → record=null = 出場ゼロ扱い)。
+	var players: Array = []
+	var noshow: PSPlayer = _player_with_z(9220, 1, 6, false, 1.0)
+	noshow.age = 33
+	players.append(noshow)
+	for i in range(10):
+		var filler: PSPlayer = _player_with_z(9230 + i, 1, 3, false, 0.0)
+		filler.age = 28
+		players.append(filler)
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	assert_array(cut_ids).contains(9220)
+
+
+# --- 編成計画ベースの戦力外 (2026-07-03 刷新) ---------------------------------
+# 放出数 = 現在籍 + 見込み補強 − 開幕目標 (TeamFinance.OPENING_ROSTER_TARGET±1)。
+# 以下のテストでは外国人0・育成0なので、見込み補強 = ドラフト見込み7 + 外国人不足4 + 補強予約2 = 13。
+
+func _plan_team(team_id: int, count: int, base_id: int, z_value: float, age: int = 29) -> Array:
+	var players: Array = []
+	for i in range(count):
+		var p: PSPlayer = _player_with_z(base_id + i, team_id, 3, false, z_value + float(i) * 0.01)
+		p.age = age
+		players.append(p)
+	return players
+
+
+func test_release_plan_counts_scale_with_roster_size() -> void:
+	# 在籍が多い球団ほど多く切られ、開幕目標に対して余裕のある球団は少ない (計画ベース)。
+	var deep_team: Array = _plan_team(1, 70, 9500, -1.0)
+	var lean_team: Array = _plan_team(2, 60, 9600, -1.0)
+	var all_players: Array = deep_team + lean_team
+	var deep_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 1, null, false)
+	var lean_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 2, null, false)
+	# deep: 70+13-(68±1) = 14〜16 → 上限15。lean: 60+13-(68±1) = 4〜6。
+	assert_int(deep_cut.size()).is_between(14, Offseason.RELEASE_PLAN_MAX_PER_TEAM)
+	assert_int(lean_cut.size()).is_between(4, 6)
+	assert_int(deep_cut.size()).is_greater(lean_cut.size())
+
+
+func test_release_targets_opening_roster_and_is_idempotent() -> void:
+	# 放出後の残り人数は「開幕目標 − 見込み補強」近辺に落ちる。さらに放出を確定した後で
+	# もう一度計算しても追加カットはほぼ出ない (冪等 = セーブ再開などで二重実行しても壊れない)。
+	var players: Array = _plan_team(1, 70, 9700, -1.0)
+	var first_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	var remaining: int = players.size() - first_cut.size()
+	assert_int(remaining).is_between(54, 57)
+	for pid_value in first_cut:
+		var player: PSPlayer = null
+		for row in players:
+			if (row as PSPlayer).id == int(pid_value):
+				player = row as PSPlayer
+				break
+		Offseason._apply_release_mutation(player)
+	# 目標ゆらぎ (±1) の分だけ最大1人出ることはあるが、二重実行しても大量カットにはならない。
+	var second_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	assert_int(second_cut.size()).is_less_equal(1)
+
+
+func test_release_plan_bounded_even_when_stats_missing() -> void:
+	# 成績レコードが欠損 (record=null=全員出場ゼロ扱い) でも、放出数は
+	# 常時カット上限 (RELEASE_ALWAYS_CUT_MAX) + 計画数に収まり、大量放出へ暴走しない
+	# (2026-07-03、成績消失セーブから再開して支配下が激減した事故の再発防止)。
+	var players: Array = _plan_team(1, 66, 9750, 0.0, 32)  # 全員30代・record null = 全員「無出場」に見える
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	# 計画: 66+13-(68±1) = 10〜12。全員が常時カット該当に見えても合計は計画数で止まる。
+	assert_int(cut_ids.size()).is_between(10, 12)
+	assert_int(players.size() - cut_ids.size()).is_greater_equal(54)
+
+
+func test_compute_release_candidates_returns_empty_when_all_protected() -> void:
+	# 全員 rookie 保護なら、能力が低くてもキーパー水準に関わらず誰も切られない。
+	# 旧 Phase5 は「最終手段」として保護を無視し人数目標まで強制的に削っていたが、今は撤廃済み
+	# (2026-07-02、目標人数を先に決めて切る設計そのものをやめた)。
+	var players: Array = []
+	for i in range(60):
+		var p: PSPlayer = _player_with_z(9700 + i, 1, 3, false, -2.0)
+		p.age = 30
+		p.years = 1
+		p.source_data["draft_year"] = 2025
+		players.append(p)
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	assert_array(cut_ids).is_empty()
+
+
 # --- 降格 (支配下 → 育成) ----------------------------------------------------
 
 func test_process_demotion_marks_development_and_frees_slot() -> void:
@@ -229,58 +397,55 @@ func test_injury_value_penalty_scales_and_caps() -> void:
 
 # --- 支配下→育成 降格の3類型 -------------------------------------------------
 
-func test_should_demote_prospect_injured_not_veteran() -> void:
-	# 素材保持型: 若く将来価値が残る → 降格
-	var prospect: PSPlayer = _player_with_z(95, 1, 3, false, 0.5)
-	prospect.age = 22
-	assert_bool(Offseason._should_demote_to_development(prospect)).is_true()
-	# 低価値ベテラン (故障なし) → 降格せず (= 戦力外側)
-	var veteran: PSPlayer = _player_with_z(96, 1, 3, false, -0.5)
-	veteran.age = 33
-	assert_bool(Offseason._should_demote_to_development(veteran)).is_false()
-	# 長期故障/再調整型: 復帰すれば戦力 → 降格
+func test_should_demote_only_for_long_injury() -> void:
+	# CPU の育成降格は長期故障のリハビリ型のみ (2026-07-03 ユーザー方針
+	# 「怪我以外での育成落ちはなくす」。旧・素材保持型/ベテラン確率型は撤廃)。
+	# 健康な若手素材は降格しない (戦力外候補なら release へ)。
+	var healthy_prospect: PSPlayer = _player_with_z(95, 1, 3, false, 0.5)
+	healthy_prospect.age = 22
+	assert_bool(Offseason._should_demote_to_development(healthy_prospect)).is_false()
+	# 健康なベテランも降格しない。
+	var healthy_veteran: PSPlayer = _player_with_z(96, 1, 3, false, 0.3)
+	healthy_veteran.age = 33
+	assert_bool(Offseason._should_demote_to_development(healthy_veteran)).is_false()
+	# 長期故障/再調整型: 復帰すれば戦力 → 降格。年齢を問わない。
 	var injured: PSPlayer = _player_with_z(97, 1, 3, false, 0.5)
 	injured.age = 29
 	injured.injury_days = 150
 	assert_bool(Offseason._should_demote_to_development(injured)).is_true()
-	# 同じ故障でも高齢すぎる (>31) → 降格対象外
-	var injured_old: PSPlayer = _player_with_z(98, 1, 3, false, 0.5)
+	var injured_old: PSPlayer = _player_with_z(98, 1, 3, false, 1.0)
 	injured_old.age = 34
 	injured_old.injury_days = 150
-	assert_bool(Offseason._should_demote_to_development(injured_old)).is_false()
+	assert_bool(Offseason._should_demote_to_development(injured_old)).is_true()
+	# 長期故障でも将来価値が残らない選手は降格せず戦力外のまま。
+	var injured_washed: PSPlayer = _player_with_z(99, 1, 3, false, -2.5)
+	injured_washed.age = 36
+	injured_washed.injury_days = 150
+	assert_bool(Offseason._should_demote_to_development(injured_washed)).is_false()
 
 
-func test_demotion_age30_requires_serious_injury() -> void:
-	# 30歳・大怪我 (重傷) → 降格可
-	var serious: PSPlayer = _player_with_z(100, 1, 3, false, 0.5)
-	serious.age = 30
-	serious.injury_days = 150
-	serious.injury_severity = PSInjuryModel.TIER_MAJOR
-	assert_bool(Offseason._should_demote_to_development(serious)).is_true()
-	# 30歳・大怪我でない (中度) → 降格しない (長期離脱日数でも severity で弾く)
-	var minor: PSPlayer = _player_with_z(101, 1, 3, false, 0.5)
-	minor.age = 30
-	minor.injury_days = 150
-	minor.injury_severity = PSInjuryModel.TIER_MODERATE
-	assert_bool(Offseason._should_demote_to_development(minor)).is_false()
-	# 29歳は長期故障なら大怪我でなくても降格可 (30歳境界の確認)
-	var young: PSPlayer = _player_with_z(102, 1, 3, false, 0.5)
-	young.age = 29
-	young.injury_days = 150
-	young.injury_severity = PSInjuryModel.TIER_MODERATE
-	assert_bool(Offseason._should_demote_to_development(young)).is_true()
+func test_is_protected_from_release_protects_100_game_regular_regardless_of_age() -> void:
+	# 100試合出場・高能力の選手は年齢を問わず出場実績で保護される。
+	# Phase5(最終手段)もこの保護を無視しないため、好成績の選手が相対順位だけで
+	# 戦力外にされることはない(2026-07-02、ユーザー報告「3割20本の選手が戦力外になる」の修正)。
+	var star: PSPlayer = _player_with_z(9950, 1, 3, false, 2.0)
+	star.age = 35
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(star, 0, 0)
+	record.batter_stats.games = 100
+	assert_bool(Offseason._is_protected_from_release(star, record)).is_true()
 
 
-func test_development_release_cuts_aged_out_26plus() -> void:
-	# 26歳以上・健康・昇格水準未満 (failed) → 優先放出
+func test_development_release_cuts_faded_prospect_keeps_ready_and_rehab() -> void:
+	# 猶予明け・健康・昇格見込みなし (projected_ceiling が即戦力基準未満) → 優先放出
 	var aged_failed: PSPlayer = _player_with_z(103, 1, 3, true, -1.0)
 	aged_failed.age = 27
 	aged_failed.years = 3
-	# 26歳以上でも昇格水準 (value≥48) の即戦力は保持 (満枠で昇格できなかっただけ)
+	# 素材年齢 (<=26) の即戦力は満枠で昇格できなかっただけなので保持
+	# (27歳以上は1年ルールで保持されない → test_development_release_one_year_rule_for_midcareer)
 	var aged_ready: PSPlayer = _player_with_z(105, 1, 3, true, 2.5)
-	aged_ready.age = 27
+	aged_ready.age = 25
 	aged_ready.years = 3
-	# 故障リハビリ中の26+は保持 (故障回復待ち)
+	# 故障リハビリ中は保持 (故障回復待ち)
 	var rehab: PSPlayer = _player_with_z(104, 1, 3, true, 0.6)
 	rehab.age = 27
 	rehab.years = 3
@@ -304,6 +469,128 @@ func test_development_release_keeps_many_viable_young() -> void:
 	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
 	assert_int(int(result.get("released_count", 0))).is_equal(0)
 	assert_int(TeamFinance.development_count(players, 1)).is_equal(20)
+
+
+func test_development_release_uses_growth_projection_not_fixed_age() -> void:
+	# 現在能力が同じでも、成長期待(年齢とともに縮む)を加味した projected_ceiling が
+	# 即戦力基準に届くかどうかで昇格見込みを判定する(2026-07-02、固定26歳カットオフを撤廃し
+	# 成長予測ベースに変更)。猶予(大社3年)は在籍4年で超えているので3人とも projection で判定される。
+	# 同じ現在能力(z=0.0)でも22-24歳は成長期待でギリギリ即戦力基準を上回り保持、25歳は下回り放出。
+	var young: PSPlayer = _player_with_z(9800, 1, 3, true, 0.0)
+	young.age = 22
+	young.years = 4
+	var still_ok: PSPlayer = _player_with_z(9801, 1, 3, true, 0.0)
+	still_ok.age = 24
+	still_ok.years = 4
+	var faded: PSPlayer = _player_with_z(9802, 1, 3, true, 0.0)
+	faded.age = 25
+	faded.years = 4
+	var players: Array = [young, still_ok, faded]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(result.get("released_count", 0))).is_equal(1)
+	assert_bool(young.is_retired()).is_false()
+	assert_bool(still_ok.is_retired()).is_false()
+	assert_bool(faded.is_retired()).is_true()
+
+
+func test_development_release_one_year_rule_for_midcareer() -> void:
+	# 中堅以上 (>DEMOTE_PROSPECT_MAX_AGE=26) の育成は「再調整は1年」: 昇格ステップで支配下に
+	# 戻れなければ、即戦力水準の能力があっても放出される (2026-07-02 ユーザー要望。
+	# 旧実装は「即戦力は満枠待ちで保持」が年齢無制限で、降格ベテランが育成に何年も居座れた)。
+	var midcareer_ready: PSPlayer = _player_with_z(9600, 1, 3, true, 2.5)
+	midcareer_ready.age = 30
+	midcareer_ready.years = 8
+	# 同じ即戦力級でも素材年齢 (<=26) は満枠待ちとして保持される。
+	var prospect_ready: PSPlayer = _player_with_z(9601, 1, 3, true, 2.5)
+	prospect_ready.age = 26
+	prospect_ready.years = 5
+	var players: Array = [midcareer_ready, prospect_ready]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(result.get("released_count", 0))).is_equal(1)
+	assert_bool(midcareer_ready.is_retired()).is_true()
+	assert_bool(prospect_ready.is_retired()).is_false()
+
+
+func test_released_market_dev_track_signing_gets_one_offseason_hold() -> void:
+	# 戦力外獲得の育成track署名は dev_demote_hold が付き、獲得した同オフの育成整理
+	# (成長ステップ内) で即放出されない。翌オフは中堅1年ルールで、昇格が無ければ放出される。
+	var veteran: PSPlayer = _player_with_z(9610, 0, 3, false, 0.5)
+	veteran.age = 31
+	veteran.years = 9
+	veteran.source_data = {"released": true}
+	var players: Array = [veteran]
+	var entry: Dictionary = {"player_id": 9610, "track": ReleasedMarket.TRACK_DEVELOPMENT, "value": 50}
+	ReleasedMarket._apply_signing({"signings": []}, players, null, entry, 1, "cpu")
+	assert_bool(veteran.development_player).is_true()
+	assert_bool(bool(veteran.source_data.get("dev_demote_hold", false))).is_true()
+	# 獲得同オフ: hold を消費して保持。
+	var first_result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(first_result.get("released_count", 0))).is_equal(0)
+	assert_bool(veteran.is_retired()).is_false()
+	# 翌オフ (昇格されなかった): 中堅1年ルールで放出。
+	var second_result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(second_result.get("released_count", 0))).is_equal(1)
+	assert_bool(veteran.is_retired()).is_true()
+
+
+func test_compute_development_release_candidates_for_user_team_recommendation() -> void:
+	# 自軍は process_development_releases から除外されるため、戦力外エディタの推奨が
+	# この候補列挙を合流させる (2026-07-02、「条件を満たす初期育成選手が自軍で戦力外に
+	# ならない」報告の修正)。CPU の育成整理と同じ基準・非破壊 (hold は消費しない)。
+	var midcareer: PSPlayer = _player_with_z(9620, 1, 3, true, 0.5)
+	midcareer.age = 30
+	midcareer.years = 6
+	var held: PSPlayer = _player_with_z(9621, 1, 3, true, 0.5)
+	held.age = 30
+	held.years = 6
+	held.source_data["dev_demote_hold"] = true
+	var young_viable: PSPlayer = _player_with_z(9622, 1, 3, true, 0.6)
+	young_viable.age = 20
+	young_viable.years = 2
+	var players: Array = [midcareer, held, young_viable]
+	var ids: Array = Offseason.compute_development_release_candidates_for_team(players, 1)
+	assert_array(ids).contains(9620)
+	assert_array(ids).not_contains(9621)
+	assert_array(ids).not_contains(9622)
+	# 非破壊: hold は消費されず、選手状態も変わらない。
+	assert_bool(bool(held.source_data.get("dev_demote_hold", false))).is_true()
+	assert_bool(midcareer.is_retired()).is_false()
+
+
+func test_process_development_releases_consumes_hold_for_excluded_team() -> void:
+	# 自軍 (excluded_team_id) は放出されないが hold は消費される。消費しないと自軍の
+	# 降格/育成track獲得選手が翌オフ以降も hold で保持され続け、1年ルールが効かない。
+	var held: PSPlayer = _player_with_z(9630, 1, 3, true, 0.5)
+	held.age = 30
+	held.years = 6
+	held.source_data["dev_demote_hold"] = true
+	var players: Array = [held]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 1)
+	assert_int(int(result.get("released_count", 0))).is_equal(0)
+	assert_bool(held.is_retired()).is_false()
+	assert_bool(bool(held.source_data.get("dev_demote_hold", false))).is_false()
+	# 消費後 (=翌オフ相当) は推奨候補に入る。
+	var ids: Array = Offseason.compute_development_release_candidates_for_team(players, 1)
+	assert_array(ids).contains(9630)
+
+
+func test_development_release_holds_the_offseason_a_player_was_demoted() -> void:
+	# 支配下→育成に降格した選手は、その同じオフの育成整理では即放出されない
+	# (dev_demote_hold、2026-07-02)。翌年以降は通常の projection 判定に戻る。
+	var demoted: PSPlayer = _player_with_z(9803, 1, 3, false, -2.0)
+	demoted.age = 30
+	demoted.years = 5
+	Offseason._apply_demotion_to_development(demoted)
+	assert_bool(bool(demoted.source_data.get("dev_demote_hold", false))).is_true()
+	var players: Array = [demoted]
+	var first_result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(first_result.get("released_count", 0))).is_equal(0)
+	assert_bool(demoted.is_retired()).is_false()
+	assert_bool(bool(demoted.source_data.get("dev_demote_hold", false))).is_false()
+	# 翌年 (フラグ消費済み): 見込みが無ければ通常通り放出される。
+	var second_result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	assert_int(int(second_result.get("released_count", 0))).is_equal(1)
+	assert_bool(demoted.is_retired()).is_true()
 
 
 # --- 一軍出場不可 ------------------------------------------------------------
@@ -342,6 +629,17 @@ func test_development_fields_round_trip() -> void:
 	var restored: PSPlayer = PSPlayer.from_dict(player.to_dict())
 	assert_bool(restored.development_player).is_true()
 	assert_str(restored.registered_roster).is_equal("育成")
+
+
+# 若手の年齢保護境界: age<=23 は戦力外から常に保護される (素材保持型の自動降格は
+# 2026-07-03 に撤廃されたため、24歳以上の健康な選手は保護外=通常の戦力外判定に乗る)。
+func test_young_development_protection_boundary() -> void:
+	var protected_young: PSPlayer = _player_with_z(9523, 1, 3, false, 0.5)
+	protected_young.age = 23
+	assert_bool(Offseason._is_young_development_protected(protected_young)).is_true()
+	var unprotected: PSPlayer = _player_with_z(9524, 1, 3, false, 0.5)
+	unprotected.age = 24
+	assert_bool(Offseason._is_young_development_protected(unprotected)).is_false()
 
 
 # --- helpers -----------------------------------------------------------------

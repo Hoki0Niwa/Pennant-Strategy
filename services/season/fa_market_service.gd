@@ -22,12 +22,15 @@ const FA_SIGN_VALUE_PENALTY: float = 0.012
 const FA_SIGN_WAR_PENALTY: float = 0.055
 const FA_SIGN_USAGE_PENALTY: float = 0.16
 const FA_SIGN_NEED_BONUS: float = 0.015
-const BASE_DECLARE_CHANCE: float = 0.48
-const NEW_FA_DECLARE_BONUS: float = 0.35
-const PASS_DECAY_1: float = 0.15
-const PASS_DECAY_PER_YEAR: float = 0.10
-const MIN_DECLARE_CHANCE: float = 0.03
-const MAX_DECLARE_CHANCE: float = 0.90
+# 現実のNPB宣言率(2022-24年、資格保有者の6.6-8.1%のみが実際に宣言)に合わせた低確率。
+# 新規FA権保持者へのボーナス込みでも初年度2割程度に留め、TARGET_DECLARATIONS の
+# 上限に毎年機械的に張り付かない(=年によって0人に近い年もあれば上限に届く年もある)ようにする。
+const BASE_DECLARE_CHANCE: float = 0.10
+const NEW_FA_DECLARE_BONUS: float = 0.12
+const PASS_DECAY_1: float = 0.04
+const PASS_DECAY_PER_YEAR: float = 0.02
+const MIN_DECLARE_CHANCE: float = 0.02
+const MAX_DECLARE_CHANCE: float = 0.30
 const FA_RANK_A_COMPENSATION_RATE: float = 0.80
 const FA_RANK_B_COMPENSATION_RATE: float = 0.60
 const FA_RANK_A_OFFER_MULT: float = 1.25

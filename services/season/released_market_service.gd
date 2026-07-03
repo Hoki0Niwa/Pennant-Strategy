@@ -6,8 +6,27 @@ class_name ReleasedMarketService
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const MAX_SIGNINGS_PER_TEAM: int = 2
-const MIN_NEED_TO_SIGN: float = 0.5
+# 0.5 だと大半の球団がどこかのポジションで僅かでも need を持ち毎年上限の2人まで埋まってしまうため、
+# 「明確な穴」だけが対象になる水準まで上げる (=球団によって0人の年もあれば2人埋める年もある)。
+const MIN_NEED_TO_SIGN: float = 4.0
 const OVER_BUDGET_SCORE_FACTOR: float = 0.7
+
+# 支配下/育成は「誰を獲得するか決めてから振り分ける」のではなく、候補ごとに別判定する。
+# 年齢が上がるほど「今すぐ支配下で通用するか」を疑われ育成寄りになり、能力(value)が高い
+# 選手は年齢が高くても支配下に残りやすい(実績組は年齢だけで即戦力性を疑われない)。
+# 育成判定は支配下枠(SHIENKA_LIMIT)を消費しない。
+# 基準(30歳・value50=典型的な戦力外候補)で五分五分になるよう調整。Web調査した実績
+# (2023-24年16支配下/12育成、2024-25年9支配下/13育成)の支配下/育成比率(概ね半々)に
+# 揃えている。
+const TRACK_SHIENKA: String = "支配下"
+const TRACK_DEVELOPMENT: String = "育成"
+const DEV_TRACK_BASE_CHANCE: float = 0.45
+const DEV_TRACK_AGE_PIVOT: int = 30
+const DEV_TRACK_AGE_CHANCE_PER_YEAR: float = 0.05
+const DEV_TRACK_VALUE_PIVOT: int = 50
+const DEV_TRACK_VALUE_OFFSET: float = 0.012
+const DEV_TRACK_CHANCE_MIN: float = 0.05
+const DEV_TRACK_CHANCE_MAX: float = 0.90
 
 
 static func process_released_market(players: Array, teams: Array, season: PSSeason, release_result: Dictionary, user_team_id: int = 0) -> Dictionary:
@@ -167,6 +186,7 @@ static func finalize_released_market(state: Dictionary) -> Dictionary:
 			"from_team": int(entry.get("from_team", 0)),
 			"value": int(entry.get("value", 0)),
 			"war": float(entry.get("war", 0.0)),
+			"track": str(entry.get("track", TRACK_SHIENKA)),
 		})
 	var result: Dictionary = {
 		"candidates": candidates_summary,
@@ -226,6 +246,7 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 			games = record.batter_stats.games
 			pa = record.batter_stats.plate_appearances
 	var war: float = _record_war(record, league_ctx)
+	var value: int = OffseasonService.player_value_score(player)
 	return {
 		"player_id": player.id,
 		"name": player.name,
@@ -235,7 +256,7 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"from_team": from_team,
 		"foreign_player": player.foreign_player,
 		"salary": player.salary,
-		"value": OffseasonService.player_value_score(player),
+		"value": value,
 		"war": snapped(war, 0.01),
 		"games": games,
 		"plate_appearances": pa,
@@ -243,7 +264,20 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"relief_appearances": relief,
 		"outs_pitched": outs,
 		"available": true,
+		"track": _determine_track(player.age, value),
 	}
+
+
+# 年齢が上がるほど育成寄りになる確率を計算し、候補作成時に一度だけ支配下/育成の
+# 獲得track を決める(成立後に振り分けるのではなく、獲得可否の判定自体をtrackごとに行う)。
+static func _development_track_chance(age: int, value: int) -> float:
+	var chance: float = DEV_TRACK_BASE_CHANCE + float(age - DEV_TRACK_AGE_PIVOT) * DEV_TRACK_AGE_CHANCE_PER_YEAR
+	chance -= float(value - DEV_TRACK_VALUE_PIVOT) * DEV_TRACK_VALUE_OFFSET
+	return clampf(chance, DEV_TRACK_CHANCE_MIN, DEV_TRACK_CHANCE_MAX)
+
+
+static func _determine_track(age: int, value: int) -> String:
+	return TRACK_DEVELOPMENT if Rng.roll_float() <= _development_track_chance(age, value) else TRACK_SHIENKA
 
 
 static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, entry: Dictionary, to_team_id: int, method: String) -> void:
@@ -251,12 +285,20 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 	if not _is_released_market_player(player):
 		return
 	var year: int = season.year if season != null else int(state.get("year", 0))
+	var track: String = str(entry.get("track", TRACK_SHIENKA))
 	player.team_id = to_team_id
 	player.source_data.erase("released")
 	player.source_data.erase("retired")
 	player.source_data.erase("retired_age")
 	player.source_data["released_signed_year"] = year
 	player.source_data["released_from_team"] = int(entry.get("from_team", 0))
+	player.development_player = track == TRACK_DEVELOPMENT
+	player.registered_roster = track
+	if player.development_player:
+		# 獲得した同オフの育成整理 (成長ステップ内) で即放出されないよう1オフ分保持する。
+		# フラグは OffseasonService.process_development_releases が読んで消費する (育成降格と同じ機構)。
+		# 中堅以上はここから1年、翌オフの昇格ステップで支配下に戻れなければ放出される。
+		player.source_data["dev_demote_hold"] = true
 	entry["available"] = false
 	entry["signed"] = true
 	entry["to_team"] = to_team_id
@@ -274,6 +316,8 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 		"value": int(entry.get("value", 0)),
 		"war": float(entry.get("war", 0.0)),
 		"method": method,
+		"track": track,
+		"development_player": track == TRACK_DEVELOPMENT,
 	})
 	state["signings"] = signings
 
@@ -303,12 +347,14 @@ static func _signings_for_team(state: Dictionary, team_id: int) -> int:
 
 
 static func _can_team_accept_candidate(players: Array, team_id: int, entry: Dictionary = {}) -> bool:
-	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
-	if _active_count_for_team(players, team_id) >= TeamFinance.SHIENKA_LIMIT:
-		return false
 	if bool(entry.get("foreign_player", false)):
-		return _foreign_count_for_team(players, team_id) < ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM
-	return true
+		if _foreign_count_for_team(players, team_id) >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM:
+			return false
+	# 育成track は支配下枠(SHIENKA_LIMIT)を消費しないが、育成ロスターの運用上限は消費する。
+	if str(entry.get("track", TRACK_SHIENKA)) == TRACK_DEVELOPMENT:
+		return TeamFinance.has_development_room(players, team_id)
+	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
+	return _active_count_for_team(players, team_id) < TeamFinance.SHIENKA_LIMIT
 
 
 static func _can_sign_entry(players: Array, entry: Dictionary) -> bool:

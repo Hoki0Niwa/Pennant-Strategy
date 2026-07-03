@@ -118,16 +118,20 @@ static func stat_score_pitcher(stats: PSPitcherStats, pitcher_role: String = "")
 	return score
 
 
-# 戦力外用: 能力(総合評価) + 投手の出場数 - 年齢ペナルティ。低いほど切られやすい。
+# 戦力外用: 能力(総合評価) + 出場数 - 年齢ペナルティ。低いほど切られやすい。
 # **成績(ERA/勝敗等の実績)は使わない**。能力が高く出場機会を得たが成績不振だった選手を、
 # 出場ゼロの格下選手より先に切ってしまう問題があったため、能力ベースに統一する。
-# ただし投手は「年齢・出場数・能力の総合判断」というユーザー方針に従い、出場数(登板数)を
-# 加点する (登板が多いほど切られにくい)。出場数=登板回数であって成績ではない点に注意。
+# 出場数(登板数/試合数)は「起用されている=編成上の価値がある」として加点する
+# (出場数であって成績ではない点に注意)。旧実装は投手だけ加点があり、中間層の野手が
+# 構造的に先へ切られて戦力外の投手:野手が約1:2に偏っていたため、野手にも同スケール
+# (最大24点前後) の加点を追加した (2026-07-03)。
 # (一二軍入替の _swap_one_team は引き続き perf_score=成績ベースで判断する)
 const PITCHER_USAGE_STARTER_WEIGHT: float = 3.0
 const PITCHER_USAGE_RELIEVER_WEIGHT: float = 1.5
-const PITCHER_USAGE_STARTER_CAP: int = 8       # RELEASE_PROTECT_STARTER_STARTS と同水準
-const PITCHER_USAGE_RELIEVER_CAP: int = 15     # RELEASE_PROTECT_RELIEVER_APPEARANCES と同水準
+const PITCHER_USAGE_STARTER_CAP: int = 8
+const PITCHER_USAGE_RELIEVER_CAP: int = 15
+const FIELDER_USAGE_WEIGHT: float = 0.4
+const FIELDER_USAGE_CAP: int = 60
 
 static func cut_score(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
 	var base: float = 0.0
@@ -136,6 +140,8 @@ static func cut_score(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
 		base = overall_prior(record)
 		if record.is_pitcher():
 			base += _pitcher_usage_bonus(record)
+		else:
+			base += float(mini(record.batter_stats.games, FIELDER_USAGE_CAP)) * FIELDER_USAGE_WEIGHT
 	else:
 		base = float(PlayerValueEvaluator.overall_score(PSPlayerSeasonRecord.from_player(player, 0, 0)))
 	var age_pen: float = max(0.0, float(player.age) - 30.0) * 8.0
@@ -143,7 +149,7 @@ static func cut_score(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
 
 
 # 投手の出場数(登板数)ボーナス。先発登板/救援登板のうち貢献の大きい方を採用し、
-# 保護水準 (先発8/中継15) で頭打ちにする。登板が多い投手ほど cut_score が上がり切られにくい。
+# cap で頭打ちにする。登板が多い投手ほど cut_score が上がり切られにくい。
 static func _pitcher_usage_bonus(record: PSPlayerSeasonRecord) -> float:
 	var starter_bonus: float = float(min(record.pitcher_stats.starts, PITCHER_USAGE_STARTER_CAP)) * PITCHER_USAGE_STARTER_WEIGHT
 	var reliever_bonus: float = float(min(record.pitcher_stats.relief_appearances, PITCHER_USAGE_RELIEVER_CAP)) * PITCHER_USAGE_RELIEVER_WEIGHT

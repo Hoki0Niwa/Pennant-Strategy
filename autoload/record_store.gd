@@ -240,6 +240,11 @@ func save_records() -> bool:
 	if _suspend_persistence:
 		return true
 	ensure_loaded()
+	# ロード失敗中 (DB が開けない等) は永続化済みの実データを守るため書き込みを拒否する。
+	# SaveService.save_state はここが false を返すとセーブ全体を中止してエラーを出す。
+	if not _records_loaded:
+		push_error("Record store is not loaded; refusing to overwrite persisted records.")
+		return false
 
 	var payload: Dictionary = to_dict()
 	# blob (team_records / season_archives) + 正規化テーブル (player_records) を
@@ -266,6 +271,18 @@ func load_records() -> void:
 	_team_records.clear()
 	_season_archives.clear()
 	_records_loaded = true
+
+	# 実データ保護: DB ファイルが存在するのに開けない (ロック等の一時故障) 場合、「セーブが空」と
+	# 誤認してはならない。空の RecordStore を正として進むと、ensure_season_records が当該シーズンの
+	# 空白レコードを再生成し、次の autosave が実データを空白で上書きして全成績が失われる
+	# (2026-07-03 ユーザー実セーブで発生: 順位表は143試合消化済みなのに全成績レコードが0)。
+	# ロード失敗として扱い (_records_loaded=false → save_records がブロック)、次アクセスで再試行する。
+	if SQLiteStoreService.is_available() and SQLiteStoreService.runtime_db_file_exists() \
+			and not SQLiteStoreService.can_open_runtime_db():
+		_records_loaded = false
+		push_error("Record store DB exists but could not be opened; keeping records unloaded to protect saved data.")
+		records_changed.emit()
+		return
 
 	# 新テーブルが populated ならそこから hydrate (検索高速化の本命)。
 	# team_records / season_archives はまだ blob 管理なので、その分は後段で blob から拾う。

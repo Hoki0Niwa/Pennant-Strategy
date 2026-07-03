@@ -63,6 +63,25 @@ static func load_record_store() -> Dictionary:
 	return _load_blob("record_store")
 
 
+# 実データ保護: ランタイム DB ファイルが「存在するのに開けない」(ロック等の一時故障) 状態を
+# 「データが無い」と区別するためのプローブ。RecordStore.load_records はこれが false のとき
+# hydration を失敗扱いにする (空の RecordStore を正として保存すると、ensure_season_records が
+# 再生成した空白レコードで実データが上書きされ全成績が失われるため)。
+static func runtime_db_file_exists() -> bool:
+	var path: String = runtime_db_path()
+	return not path.is_empty() and FileAccess.file_exists(ProjectSettings.globalize_path(path))
+
+
+static func can_open_runtime_db() -> bool:
+	if not is_available():
+		return false
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return false
+	_close(db)
+	return true
+
+
 # -----------------------------------------------------------------------------
 # 選手年度記録は検索・集計しやすいよう、選手本体/打撃成績/投手成績の3テーブルに正規化する。
 # -----------------------------------------------------------------------------

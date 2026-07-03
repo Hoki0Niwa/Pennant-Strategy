@@ -41,10 +41,11 @@ const UTILITY_SUBPOS_WEIGHT: float = 0.6
 const ROSTER_LIMIT: int = 70
 # ドラフトは本指名(支配下)のあと育成ドラフトへ進む2フェーズ制。
 # AppState では別ステップとして表示するが、レポート/テスト用の直接実行では通しで処理できる。
-# 本指名数は固定ではなく、支配下人数・補強予約枠・育成昇格見込みからチームごとに決まる。
-# 基本は6人、薄い球団は最大9人、多い球団や昇格候補が多い球団は4〜5人へ抑える。
-const MAIN_DRAFT_MAX_PICKS: int = 9
-const MAIN_DRAFT_BASE_PICKS: int = 6
+# 本指名数は編成計画ベース (2026-07-03): 来季開幕支配下の目標 (TeamFinance.OPENING_ROSTER_TARGET)
+# との差分を埋める人数を指名する。戦力外 (offseason_service._release_plan_count) と同じ目標を
+# 共有するため、放出→指名の収支が連動して現実の人数感 (6〜8人前後) に落ち着く。
+# 旧「基本N人+在籍帯の加算表」は撤廃 (差分埋めが在籍帯の役割を兼ねる)。
+const MAIN_DRAFT_MAX_PICKS: int = 10
 const MAIN_DRAFT_MIN_PICKS: int = 4
 # FA・外国人・戦力外獲得で使うため、本指名後に可能なら残す hard 枠の最低値。
 const DRAFT_SIGNING_RESERVE: int = 2
@@ -633,11 +634,15 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	var profile: Dictionary = profiles.get(str(team_id), {}) as Dictionary
 	if str(state.get("segment", "main")) == "development":
-		# 育成ドラフト: 育成は人数無制限なので、球団ごとの appetite (team_dev_targets) と上限のみで制限。
+		# 育成ドラフト: 球団ごとの appetite (team_dev_targets) と上限に加え、
+		# 育成ロスターの運用上限 (TeamFinance.DEVELOPMENT_ROSTER_LIMIT) も超えない。
 		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
 		var dev_picked: int = int(dev_counts.get(str(team_id), 0))
 		var targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
 		var target: int = int(targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
+		var current_development: int = int(profile.get("initial_development_total", 0))
+		if current_development + dev_picked >= TeamFinance.DEVELOPMENT_ROSTER_LIMIT:
+			return false
 		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS
 	# 本指名: 支配下 hard 空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。
 	# ドラフトは年1回の主補強なので soft 67 では止めず、3人程度で終わる年を避ける。
@@ -869,9 +874,12 @@ static func _compute_main_draft_targets(players: Array, profiles: Dictionary) ->
 		var team_id: int = int(str(key))
 		var expected_promo: int = min(DRAFT_PROMO_RESERVE_CAP, int(promo_by_team.get(team_id, 0)))
 		var promotion_reduction: int = min(DRAFT_PROMO_TARGET_REDUCTION_CAP, expected_promo)
-		var raw: int = MAIN_DRAFT_BASE_PICKS + _main_draft_roster_adjustment(current) - promotion_reduction
+		# 編成計画: 開幕目標 − 在籍 − 後段補強予約 (FA/戦力外獲得 + 外国人不足分) − 昇格見込み。
+		# 戦力外で在籍が減った分だけ自然に指名が増える (放出と指名が同じ目標で連動する)。
+		var reserve: int = _main_draft_signing_reserve(profile)
+		var gap: int = TeamFinance.OPENING_ROSTER_TARGET - current - reserve - promotion_reduction
 		var capacity: int = _main_draft_capacity(current, profile)
-		var target: int = clampi(raw, MAIN_DRAFT_MIN_PICKS, MAIN_DRAFT_MAX_PICKS)
+		var target: int = clampi(gap, MAIN_DRAFT_MIN_PICKS, MAIN_DRAFT_MAX_PICKS)
 		targets[key] = min(target, capacity)
 	return targets
 
@@ -891,20 +899,6 @@ static func _main_draft_signing_reserve(profile: Dictionary) -> int:
 	return DRAFT_SIGNING_RESERVE + foreign_need
 
 
-static func _main_draft_roster_adjustment(current_shienka: int) -> int:
-	if current_shienka <= 56:
-		return 3
-	if current_shienka <= 59:
-		return 2
-	if current_shienka <= 62:
-		return 1
-	if current_shienka <= 65:
-		return 0
-	if current_shienka <= 67:
-		return -1
-	return -2
-
-
 static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 	var profiles: Dictionary = {}
 	for team_row in teams:
@@ -912,6 +906,7 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		profiles[str(team.id)] = {
 			"total": 0,
 			"initial_total": 0,
+			"initial_development_total": 0,
 			"pitcher": 0,
 			"catcher": 0,
 			"infield": 0,
@@ -927,9 +922,13 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired():
 			continue
-		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外する
-		# (育成は人数無制限なので別途のカウントは不要)。
+		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外するが、
+		# 育成ドラフトの運用上限判定用に initial_development_total だけは別途集計する。
 		if player.development_player:
+			var key_dev: String = str(player.team_id)
+			if profiles.has(key_dev):
+				var profile_dev: Dictionary = profiles[key_dev] as Dictionary
+				profile_dev["initial_development_total"] = int(profile_dev.get("initial_development_total", 0)) + 1
 			continue
 		var key: String = str(player.team_id)
 		if not profiles.has(key):

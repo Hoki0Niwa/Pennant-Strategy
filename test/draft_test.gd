@@ -65,7 +65,7 @@ func test_generation_role_ratio_roughly_balanced() -> void:
 
 
 func test_main_and_development_segments_split() -> void:
-	# hard capacity 15 (在籍55) の球団は本指名上限9まで、capacity 2 (在籍68) の球団は2まで。
+	# 在籍55 (外国人0) の球団: gap = 目標68−55−予約(2+外国人不足4) = 7。在籍68の球団は hard 空き2まで。
 	var teams: Array = [
 		_team(1, "central", 1),
 		_team(2, "central", 2),
@@ -96,10 +96,10 @@ func test_main_and_development_segments_split() -> void:
 		else:
 			main_by_team[tid] = int(main_by_team.get(tid, 0)) + 1
 
-	# 本指名: 在籍55の3球団は上限9、在籍68の球団はhard空き2。すべて MAIN 上限以下。
-	assert_int(int(main_by_team.get(1, 0))).is_equal(9)
-	assert_int(int(main_by_team.get(2, 0))).is_equal(9)
-	assert_int(int(main_by_team.get(3, 0))).is_equal(9)
+	# 本指名: 在籍55の3球団は gap=7、在籍68の球団は hard 空き2。すべて MAIN 上限以下。
+	assert_int(int(main_by_team.get(1, 0))).is_equal(7)
+	assert_int(int(main_by_team.get(2, 0))).is_equal(7)
+	assert_int(int(main_by_team.get(3, 0))).is_equal(7)
 	assert_int(int(main_by_team.get(4, 0))).is_equal(2)
 
 	# 育成: 各球団 0〜3。
@@ -237,7 +237,8 @@ func test_main_draft_can_complete_before_development_step() -> void:
 
 
 func test_draft_target_scales_with_roster_need() -> void:
-	# 戦力外が多く在籍が少ない球団は大量指名。通常は6人、後段補強枠を残すため在籍が多い球団は4〜5人へ控える。
+	# 編成計画: 指名数 = 開幕目標68 − 在籍 − 補強予約2 (外国人4人充足時)。
+	# 戦力外で在籍が減った球団ほど多く指名し、目標との差分がそのまま指名数になる。
 	var teams: Array = [
 		_team(1, "central", 1),
 		_team(2, "pacific", 2),
@@ -245,17 +246,17 @@ func test_draft_target_scales_with_roster_need() -> void:
 		_team(4, "pacific", 4),
 	]
 	var players: Array = []
-	_fill_team(players, 1, 56)  # 大量放出後 → 空きが多い
-	_fill_team(players, 2, 62)  # 通常帯 → 基本6人
-	_fill_team(players, 3, 63)  # 補強枠を2つ残して5人
-	_fill_team(players, 4, 64)  # 補強枠を2つ残して4人
+	_fill_team(players, 1, 56)  # gap = 68-56-2 = 10
+	_fill_team(players, 2, 58)  # gap = 68-58-2 = 8
+	_fill_team(players, 3, 60)  # gap = 68-60-2 = 6
+	_fill_team(players, 4, 62)  # gap = 68-62-2 = 4
 	for tid in [1, 2, 3, 4]:
 		_mark_foreign(players, tid, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
 	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
 	assert_int(int(targets.get("1", 0))).is_equal(DraftService.MAIN_DRAFT_MAX_PICKS)
-	assert_int(int(targets.get("2", 0))).is_equal(DraftService.MAIN_DRAFT_BASE_PICKS)
-	assert_int(int(targets.get("3", 0))).is_equal(DraftService.MAIN_DRAFT_BASE_PICKS - 1)
+	assert_int(int(targets.get("2", 0))).is_equal(8)
+	assert_int(int(targets.get("3", 0))).is_equal(6)
 	assert_int(int(targets.get("4", 0))).is_equal(DraftService.MAIN_DRAFT_MIN_PICKS)
 	assert_int(int(targets.get("1", 0))).is_greater(int(targets.get("2", 0)))
 
@@ -273,29 +274,32 @@ func test_draft_reserves_slots_for_foreign_roster_shortage() -> void:
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
 	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
 
+	# 在籍58 → gap = 68−58−予約。外国人が足りない球団ほど予約が増え指名が減る (2/5/6)。
 	assert_int(int(targets.get("1", 0))).is_equal(8)
-	assert_int(int(targets.get("2", 0))).is_equal(7)
-	assert_int(int(targets.get("3", 0))).is_equal(6)
+	assert_int(int(targets.get("2", 0))).is_equal(5)
+	assert_int(int(targets.get("3", 0))).is_equal(4)
 
 
 func test_draft_target_accounts_for_promotions() -> void:
-	# 昇格見込みの育成が多い球団は基本6人から最大2人控える。
+	# 昇格見込みの育成が多い球団は目標から最大2人控える。capacity にマスクされないよう
+	# 在籍58 (capacity 10) で比較する (在籍63だと capacity=5 で縮小が見えない)。
 	var teams: Array = [_team(1, "central", 1)]
 	var base_players: Array = []
-	_fill_team(base_players, 1, 63)
+	_fill_team(base_players, 1, 58)
 	_mark_foreign(base_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	var base_state: Dictionary = DraftService.create_draft_state(base_players, teams, null, 0)
 	var base_target: int = int((base_state.get("team_main_targets", {}) as Dictionary).get("1", 0))
 
 	var promo_players: Array = []
-	_fill_team(promo_players, 1, 63)
+	_fill_team(promo_players, 1, 58)
 	_mark_foreign(promo_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	_add_dev(promo_players, 1, 4)  # 昇格水準の育成4人 (value>=昇格閾値)
 	var promo_state: Dictionary = DraftService.create_draft_state(promo_players, teams, null, 0)
 	var promo_target: int = int((promo_state.get("team_main_targets", {}) as Dictionary).get("1", 0))
 
-	assert_int(base_target).is_equal(DraftService.MAIN_DRAFT_BASE_PICKS - 1)
-	assert_int(promo_target).is_equal(DraftService.MAIN_DRAFT_MIN_PICKS)
+	# 在籍58・外国人4 → gap = 68−58−2 = 8。昇格見込みで −DRAFT_PROMO_TARGET_REDUCTION_CAP。
+	assert_int(base_target).is_equal(8)
+	assert_int(promo_target).is_equal(base_target - DraftService.DRAFT_PROMO_TARGET_REDUCTION_CAP)
 
 
 # --- helpers -----------------------------------------------------------------

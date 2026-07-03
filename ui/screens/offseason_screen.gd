@@ -2223,6 +2223,10 @@ func _build_release_recommendation() -> Dictionary:
 			demote_ids.append(pid)
 		else:
 			release_ids.append(pid)
+	# 自軍の育成整理 (CPU は成長ステップの process_development_releases で自動、自軍はここで推奨)。
+	# 中堅は「育成1年で昇格なし」、素材年齢は成長予測ベース。候補は支配下と重複しない。
+	for pid_value in OffseasonService.compute_development_release_candidates_for_team(GameDb.players, team_id):
+		release_ids.append(int(pid_value))
 	return {"ok": true, "release_ids": release_ids, "demote_ids": demote_ids}
 
 

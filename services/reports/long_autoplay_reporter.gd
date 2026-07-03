@@ -443,6 +443,9 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	GameDb.rebuild_player_indices()
 	var release_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, 0, season)
 	GameDb.rebuild_player_indices()
+	# 戦力外フェーズ直後に残った「30歳以上・今季出場ゼロ・入団3年目以降」の支配下選手数。
+	# 本職保護が実績ゼロのベテランを生き残らせる再発バグ (2026-07-02 修正) の監視用で、期待値はほぼ 0。
+	var noshow_thirties_survivors: int = _count_noshow_thirties_survivors(season)
 	var merged_release_result: Dictionary = release_result.duplicate(true)
 	var merged_released: Array = []
 	merged_released.append_array(release_result.get("released", []) as Array)
@@ -490,9 +493,19 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# 実フローと同様 advance_players_one_year の直前に実行する。
 	var contract_result: Dictionary = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, season)
 
+	# 戦力外の投手/野手内訳 (position==1 が投手)。現実の NPB はおおむね 1:1〜投手やや多で、
+	# 野手側へ大きく偏っていないかの監視用 (2026-07-03、実測 1:2 の偏り報告を受けて追加)。
+	var released_pitcher_count: int = 0
+	for released_row in release_result.get("released", []) as Array:
+		if int((released_row as Dictionary).get("position", 0)) == 1:
+			released_pitcher_count += 1
+
 	return {
 		"retired_count": int(retirement_result.get("retired_count", 0)),
 		"released_count": int(release_result.get("released_count", 0)),
+		"released_pitcher_count": released_pitcher_count,
+		"released_fielder_count": int(release_result.get("released_count", 0)) - released_pitcher_count,
+		"noshow_thirties_survivors": noshow_thirties_survivors,
 		"demoted_count": int(release_result.get("demoted_count", 0)),
 		"promoted_count": int(promotion_result.get("promoted_count", 0)),
 		"dev_released_count": int(dev_release_result.get("released_count", 0)),
@@ -514,6 +527,32 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"camp_actions_count": int(camp_result.get("actions_count", 0)),
 		"camp_pitch_learning_count": int(camp_result.get("normal_pitch_learning_count", 0)),
 	}
+
+
+# 戦力外ステップ後に残った「30歳以上・今季出場ゼロ・入団3年目以降 (rookie保護外)」の日本人支配下選手数。
+# 本来 Phase 1 (age>=30 AND 少試合) で常時カットされるはずの層で、本職保護などが実績ゼロの
+# ベテランを生き残らせる再発バグの監視指標。怪我ゲート保護 (高能力かつ怪我30日+、
+# RELEASE_PROTECT_INJURY_*) の該当者は意図的な残留なので数えない。
+func _count_noshow_thirties_survivors(season: PSSeason) -> int:
+	var count: int = 0
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id <= 0 or player.is_retired():
+			continue
+		if player.development_player or player.foreign_player:
+			continue
+		if player.age < 30 or player.years <= 2:
+			continue
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		if record != null:
+			var games: int = record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
+			if games > 0:
+				continue
+			if record.season_injury_days >= OffseasonService.RELEASE_PROTECT_INJURY_DAYS \
+					and OffseasonService.player_value_score(player) >= OffseasonService.RELEASE_PROTECT_INJURY_OVERALL:
+				continue
+		count += 1
+	return count
 
 
 func _leaderboards_for_season(season: PSSeason) -> Dictionary:
@@ -1032,6 +1071,9 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"walks_per_nine": _round_float(_mean_nested(rows, ["season", "pitching", "walks_per_nine"]), 2),
 		"home_runs_per_nine": _round_float(_mean_nested(rows, ["season", "pitching", "home_runs_per_nine"]), 2),
 		"released_per_year": _round_float(_mean_nested(rows, ["offseason", "released_count"]), 2),
+		"released_pitchers_per_year": _round_float(_mean_nested(rows, ["offseason", "released_pitcher_count"]), 2),
+		"released_fielders_per_year": _round_float(_mean_nested(rows, ["offseason", "released_fielder_count"]), 2),
+		"noshow_thirties_survivors_per_year": _round_float(_mean_nested(rows, ["offseason", "noshow_thirties_survivors"]), 2),
 		"retired_per_year": _round_float(_mean_nested(rows, ["offseason", "retired_count"]), 2),
 		"rookies_per_year": _round_float(_mean_nested(rows, ["offseason", "rookies_count"]), 2),
 	}

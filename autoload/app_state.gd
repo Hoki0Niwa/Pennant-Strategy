@@ -1243,6 +1243,31 @@ func _apply_dh_settings_to_current_schedule() -> void:
 		game["dh_enabled"] = is_dh_enabled_for_league(league_key)
 
 
+# 当該シーズンが 50 試合以上消化済みなのに、シーズン成績レコードの出場が全選手 0 なら
+# 「成績消失セーブ」とみなす (restore_from_save の破損検知用)。
+func _season_records_look_wiped(season: PSSeason) -> bool:
+	if season == null:
+		return false
+	var played: int = 0
+	for game_value in season.schedule:
+		if bool((game_value as Dictionary).get("played", false)):
+			played += 1
+	if played < 50:
+		return false
+	var checked_any: bool = false
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record.year != season.year or record.season_number != season.season_number:
+			continue
+		checked_any = true
+		if record.is_pitcher():
+			if record.pitcher_stats.games > 0:
+				return false
+		elif record.batter_stats.games > 0:
+			return false
+	return checked_any
+
+
 func restore_from_save(data: Dictionary) -> bool:
 	if data.is_empty():
 		return false
@@ -1293,6 +1318,11 @@ func restore_from_save(data: Dictionary) -> bool:
 	RecordStore.load_records()
 	if current_season != null:
 		RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, false)
+		# 破損検知: シーズンが進んでいるのに当該シーズンの選手成績が全て0なら、過去に成績
+		# レコードが空白上書きで失われたセーブの可能性が高い (2026-07-03 実発生)。ロスターは
+		# 無事なので続行は可能だが、出場実績ベースの判定の質が落ちるため痕跡を警告する。
+		if _season_records_look_wiped(current_season):
+			push_warning("Saved season stats are all zero despite played games; this save likely lost its record data earlier.")
 		if postseason_active and current_postseason != null and not PostseasonService.is_complete(current_postseason):
 			PostseasonService.sync_to_next_postseason_day(current_postseason, current_season)
 

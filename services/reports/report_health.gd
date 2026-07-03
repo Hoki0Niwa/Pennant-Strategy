@@ -157,6 +157,11 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "teamless_active_players", int(final_roster.get("teamless_active_players", 0)), 0.0, 0.0, "teamless active players")
 	_add_max_check(checks, "free_agent_orphans", int(final_roster.get("free_agent_orphans", 0)), 0.0, 0.0, "unresolved FA pool players")
 	_add_max_check(checks, "released_orphans", int(final_roster.get("released_orphans", 0)), 0.0, 0.0, "unresolved released players outside retirement")
+	# 戦力外フェーズ後に残る「30歳以上・出場ゼロ・rookie保護外」の支配下選手 (年平均)。
+	# 編成計画ベース (2026-07-03) では常時カットに安全上限 (RELEASE_ALWAYS_CUT_MAX) があるため
+	# リーグ全体で年1〜2人の裾は正常 (翌年に整理される)。二桁に増えたら本職保護等が
+	# 実績ゼロのベテランを生き残らせる再発バグ (2026-07-02 修正) の再発を疑う。
+	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 3.0, 8.0, "zero-appearance 30+ players surviving the release phase")
 	_add_range_check(checks, "last10_ops", float(last_10.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "last-10-year OPS")
 	_add_range_check(checks, "last10_era", float(last_10.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "last-10-year ERA")
 	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.0, 30.0, 23.0, 32.0, "last-10-year average age")

@@ -13,7 +13,10 @@ const NORMAL_CAMP_VETERAN_PENALTY: float = 0.01
 const FAILURE_PENALTY_CHANCE: float = 0.65
 # CPU/自動が特別練習を行う最低 expected。これ未満は「やる価値が薄い」とみなし実施しない。
 # 高めに設定することで、明確な需要のある球団だけが (需要分だけ) 練習し、不要な球団は0件になる。
-const MIN_AI_EXPECTED_VALUE: float = 25.0
+# 25 だと _position_need_score の holder_shortage だけ (控え0人で最大24) でほぼ全球団が
+# 毎年 MAX_SPECIAL_TRAININGS_PER_TEAM に機械的に張り付いてしまうため、holder_shortage 単独では
+# 届かず ability_bonus/top_shortage 等の追加要因が伴う場合だけ実施される水準まで上げる。
+const MIN_AI_EXPECTED_VALUE: float = 45.0
 
 # CPU/自動のキャンプ転向が目指す球団全体の先発比率 (先発:中継 = 2:3 = 先発 40%)。
 const STARTER_TARGET_RATIO: float = 0.4

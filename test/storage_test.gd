@@ -145,6 +145,40 @@ func test_unsaved_next_season_progress_does_not_persist_records() -> void:
 	_restore_app_state(old_state, test_save_id)
 
 
+func test_player_season_stats_round_trip_through_normalized_tables() -> void:
+	# ユーザー報告「ポストシーズン終了セーブから再開すると支配下が激減」の根本原因調査:
+	# 実セーブの batter_stats / pitcher_stats 正規化テーブルが全行 0 だった。
+	# 選手個人成績が save_records → load_records (正規化テーブル経由) を往復できることを検証する。
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+
+	var season: PSSeason = AppState.current_season
+	var target: PSPlayerSeasonRecord = null
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record.year == season.year and record.season_number == season.season_number and not record.is_pitcher():
+			target = record
+			break
+	assert_object(target).is_not_null()
+	target.batter_stats.games = 123
+	target.batter_stats.hits = 145
+	var target_id: int = target.player_id
+
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	RecordStore.load_records()
+	var reloaded: PSPlayerSeasonRecord = RecordStore.get_player_record(target_id, season.year, season.season_number)
+	assert_object(reloaded).is_not_null()
+	assert_int(reloaded.batter_stats.games).is_equal(123)
+	assert_int(reloaded.batter_stats.hits).is_equal(145)
+
+	_restore_app_state(old_state, test_save_id)
+
+
 func _capture_app_state() -> Dictionary:
 	return {
 		"selected_team_id": AppState.selected_team_id,
