@@ -2,7 +2,7 @@ extends RefCounted
 class_name PSAbilityReference
 
 # PA シミュレーションが「平均的な能力」として扱う固定リファレンス母平均。
-# data/initial_players.csv の 2026-07-04 実測から作った値で、動的なリーグ平均との差し替えはしない。
+# リーグ平均との差し替えはせず、同じ能力値の対戦結果を同じ入力で安定させる。
 
 const BAT_CONTACT_Z_NEUTRAL: float = 1.1432      # Bat_Barrel の野手平均。
 const BAT_GAP_Z_NEUTRAL: float = 1.4929          # Bat_Impact の野手平均。
@@ -14,7 +14,6 @@ const AGGRESSION_Z_NEUTRAL: float = 0.3090       # Bat_Aggression の野手平�
 const EFFICIENCY_Z_NEUTRAL: float = 1.0287       # Pit_Efficiency の投手平均。
 const GAMECALL_Z_NEUTRAL: float = 2.3417         # 一軍捕手候補の C_GameCall 平均。
 const PITCHER_TAIL_PIVOT: float = 1.6722         # Pit_KCreate 平均 + 0.5σ。
-const HIGH_K_RELIEF_CEILING: float = BAT_AVOID_K_Z_NEUTRAL - 0.25
 
 const DRIFT_WARN_ABS: float = 0.25
 const DRIFT_FAIL_ABS: float = 0.50
@@ -32,7 +31,6 @@ static func reference_values() -> Dictionary:
 		"efficiency_z_neutral": EFFICIENCY_Z_NEUTRAL,
 		"gamecall_z_neutral": GAMECALL_Z_NEUTRAL,
 		"pitcher_tail_pivot": PITCHER_TAIL_PIVOT,
-		"high_k_relief_ceiling": HIGH_K_RELIEF_CEILING,
 	}
 
 

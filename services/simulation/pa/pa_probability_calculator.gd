@@ -31,8 +31,6 @@ const ARSENAL_TENDENCY_K_WEIGHT: float = 0.06
 const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たストライクが三振を押し上げる係数。
 const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
 const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
-const HIGH_K_RELIEF_WEIGHT: float = 0.20  # 三振回避が極端に低い打者へ閾値超の分だけ与える三振軽減。
-const HIGH_K_RELIEF_CEILING: float = AbilityReference.HIGH_K_RELIEF_CEILING
 # BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
 const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
 const BB_PREVENT_WEIGHT: float = 0.32 # 投手の制球が四球を減らす強さ。
@@ -91,8 +89,6 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	k_logit += c_game_call * _rule_float("gamecall_k_coef", GAMECALL_K_COEF)
 	k_logit -= tto_round_weight * _rule_float("tto_k_drop", TTO_K_DROP)
 	k_logit -= platoon_term
-	# 三振回避が固定リファレンス平均より 0.25 以上低い打者ほど三振を軽減する。
-	k_logit -= max(0.0, _rule_float("high_k_relief_ceiling", HIGH_K_RELIEF_CEILING) - bat_k_avoid) * _rule_float("high_k_relief_weight", HIGH_K_RELIEF_WEIGHT)
 
 	var bb_logit: float = PSBalanceProfile.logit(_rule_float("league_bb_base", LEAGUE_BB_BASE))
 	bb_logit += bat_bb_create * _rule_float("bb_create_weight", BB_CREATE_WEIGHT)

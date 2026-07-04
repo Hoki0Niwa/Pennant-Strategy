@@ -15,8 +15,6 @@ const CATEGORY_ERROR: String = "error"
 const RESULT_FOUL_BACK: String = "_foul_back_to_sequence"
 const FIELDER_ABILITY_CACHE_KEY: String = "_pa_fielder_ability_cache"
 
-# 打率の大きな水準を動かす調整係数。
-const SINGLE_TO_OUT_CHANCE: float = 0.38 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
 # 球場サイズの mod 用乗算(park factor)。**バランス調整ノブではない** — HR量の較正は
 # 物理層の飛距離(batted_ball_physics_resolver の air_factor)と、パワー→EV の経路
 # (contact_quality の ev_home_run_power_weight / power_ideal_*)で行う。
@@ -444,10 +442,8 @@ static func resolve(
 	if trajectory == PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
 		var grounder_hit: Dictionary = _grounder_hit_outcome(batter, bases, outs, physics, position, ability_arm)
 		_apply_double_play_context(grounder_hit, double_play_opportunity, double_play_probability)
-		grounder_hit = _maybe_downgrade_single_to_out(grounder_hit, batter, trajectory, position)
 		return _enrich(grounder_hit, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 	var hit_outcome: Dictionary = _airball_hit_outcome(batter, bases, outs, physics, ability_arm, position)
-	hit_outcome = _maybe_downgrade_single_to_out(hit_outcome, batter, trajectory, position)
 	return _enrich(hit_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 
 
@@ -1886,46 +1882,6 @@ static func _airball_hit_outcome(
 	}
 	outcome.merge(plan, true)
 	return outcome
-
-
-static func _maybe_downgrade_single_to_out(
-	outcome: Dictionary,
-	batter: PSPlayerSeasonRecord,
-	trajectory: String,
-	position: int
-) -> Dictionary:
-	var single_to_out_chance: float = _rule_float("single_to_out_chance", SINGLE_TO_OUT_CHANCE)
-	if single_to_out_chance <= 0.0:
-		return outcome
-	if str(outcome.get("category", "")) != CATEGORY_HIT:
-		return outcome
-	if int(outcome.get("bases", 0)) != 1:
-		return outcome
-	var chance: float = clamp(single_to_out_chance * _single_to_out_quality_multiplier(batter), 0.0, 0.95)
-	if chance <= 0.0:
-		return outcome
-	if Rng.roll_float() >= chance:
-		return outcome
-	var downgraded: Dictionary = _out_outcome(trajectory, position)
-	downgraded["single_to_out_chance"] = chance
-	downgraded["single_to_out_source"] = str(outcome.get("result", "single"))
-	return downgraded
-
-
-# シングルをアウトに格下げする確率の倍率。打球の質が低い打者ほど大きくする。
-# 打者の芯・長打力・三振回避の z を加重平均した打球品質 z で評価する。
-static func _single_to_out_quality_multiplier(batter: PSPlayerSeasonRecord) -> float:
-	if batter == null:
-		return 0.0
-	var barrel: float = batter.z_ability("Bat_Barrel", 0.0)
-	var impact: float = batter.z_ability("Bat_Impact", 0.0)
-	var avoid_k: float = batter.z_ability("Bat_KAvoid", 0.0)
-	# 打球品質 z（重み合計 1.0）。現データの野手は中央値≈0.73。
-	var quality: float = barrel * 0.45 + impact * 0.35 + avoid_k * 0.20
-	# 品質 z が 0.75(≈野手中央値)を下回るほど格下げを上乗せする（弱い打球ほどアウトになりやすい）。
-	# span 0.8 は野手品質の広がり(sd≈0.55)に合わせ、下位ほど急に格下げが増える。
-	var low_quality_extra: float = clamp((0.75 - quality) / 0.8, 0.0, 0.70)
-	return clamp(0.45 + low_quality_extra, 0.0, 1.15)
 
 
 static func _hit_result_name(bases_taken: int, position: int, infield_single: bool = false) -> String:

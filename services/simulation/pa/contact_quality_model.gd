@@ -7,11 +7,10 @@ const AbilityReference = preload("res://services/simulation/pa/ability_reference
 # 飛距離・滞空時間・守備・最終結果は後段の別モデルが解決する。
 
 # 打球初速(EV)の基準値と、能力・球速・状況による各種補正の重み。
-const EV_BASE: float = 91.0                  # 打球初速の基準値(mph)。
+const EV_BASE: float = 91.20                 # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
-# 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。実測の打者間平均EV差(リーグ中位≈88-89 /
-# 上位≈92-96 mph)に合わせる。HR判定を固定フェンス×物理飛距離へ移行(2026-07-03)して以降、
-# パワー→HR の差はフェンス補正ではなく全てこの EV 経路と理想角(power_ideal_*)で表現する。
+# 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
+# パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
 const EV_HOME_RUN_POWER_WEIGHT: float = 2.90
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
 const EV_STUFF_MAX_REDUCTION: float = 0.205  # 球威 curve が最大級の投手でも EV 低下を0.2mph前後へ飽和させる。
@@ -23,9 +22,6 @@ const EV_FORCED_PROTECTIVE_OUT_PENALTY: float = 8.0
 const EV_RANDOM_SPREAD: float = 9.5
 const EV_MIN: float = 48.0
 const EV_MAX: float = 119.0
-# 全打球の初速(EV)へ一律加算するリーグ補正。上げると打率・長打が増える。
-const CONTACT_EV_BIAS: float = 0.20
-
 # 芯で捉えた打球(perfect contact)の発生率と、その際のEV上昇・角度をバレル角へ寄せる強さ。
 const PERFECT_CONTACT_BASE_RATE: float = 0.048
 const PERFECT_CONTACT_EV_BOOST: float = 8.5
@@ -155,8 +151,7 @@ static func generate(
 	# 打者の長打力・球速で EV を上げ、投手の球威・打者疲労で下げ、投手の被弾傾向で上げる。
 	ev += (batter_hr_z - bat_hr_z_neutral) * _rule_float("ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
 	ev += (float(pitch_velocity) - _rule_float("pitch_velocity_base", PITCH_VELOCITY_BASE)) * _rule_float("ev_pitch_velocity_weight", EV_PITCH_VELOCITY_WEIGHT)
-	# 旧式は pitcher_stuff_z の生値線形減算 + stuff_curve 減算の二重効果で、上位投手だけ被打球を
-	# 強く殺しすぎていた。EV への球威効果は curve だけに集約し、最大級でも0.5mph前後で飽和させる。
+	# EV への球威効果は stuff_curve だけで表し、最大級の投手でも小幅な低下に飽和させる。
 	ev -= stuff_curve * _rule_float("ev_stuff_max_reduction", EV_STUFF_MAX_REDUCTION)
 	ev -= float(batter_fatigue) * _rule_float("ev_fatigue_weight", EV_FATIGUE_WEIGHT)
 	ev += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ev_weight", 0.75)
@@ -175,8 +170,7 @@ static func generate(
 	ev -= contact_weakness * _rule_float("ev_contact_weak_penalty", EV_CONTACT_WEAK_PENALTY)
 	# ギャップ能力に応じて、後で打球角度をライナーへ寄せる量を先に算出しておく。
 	var gap_liner_pull: float = clamp(max(0.0, gap_curve) * _rule_float("gap_liner_la_pull", GAP_LINER_LA_PULL), 0.0, 0.42)
-	# リーグ補正を加え、最後に正規乱数で EV を散らばらせる。
-	ev += _rule_float("contact_ev_bias", CONTACT_EV_BIAS)
+	# 最後に正規乱数で EV を散らばらせる。
 	ev += _gaussian(_rule_float("ev_random_spread", EV_RANDOM_SPREAD) * variance_multiplier)
 
 	# LA(打球角度)を基準値から組み立て、投球コースの高さでオフセットを加える。
@@ -245,8 +239,7 @@ static func generate(
 
 	# 本塁打向きの理想角(ideal power)を引く確率を、長打力・球威・状況から算出する。
 	var ideal_power_logit: float = PSBalanceProfile.logit(_rule_float("power_ideal_la_base_rate", POWER_IDEAL_LA_BASE_RATE))
-	# 長打力ゲート。フェンス補正の廃止(2026-07-03)以降、パワー帯別のHR差はEV経路とこの
-	# 「スラッガーほど理想角に入れる」重みで作る。上げると上位打者へHRが集中し裾が伸びる。
+	# 長打力ゲート。上げると上位打者ほど本塁打向きの理想角に入りやすくなる。
 	ideal_power_logit += home_run_curve * _rule_float("ideal_power_curve_weight", 1.55)
 	ideal_power_logit -= stuff_curve * _rule_float("stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
 	ideal_power_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ideal_weight", 0.04)

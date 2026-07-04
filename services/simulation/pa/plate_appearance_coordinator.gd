@@ -207,7 +207,7 @@ static func _bunt_pitch_summary(was_strike_thrown: bool) -> Dictionary:
 	}
 
 
-# 敬遠判定 (z_abilities 評価へ移行)。
+# 敬遠判定。
 # 強打者 = Bat_Impact + Bat_Barrel + Bat_BBCreate の合算。
 # 投手の自信 = Pit_BBPrevent + Pit_LoftControl。
 static func _should_intentionally_walk(
@@ -227,7 +227,7 @@ static func _should_intentionally_walk(
 	# z 値合算: 強打者ほど + 投手自信ほど -
 	var batter_threat_z: float = batter.z_ability("Bat_Impact", 0.0) * 2.0 + batter.z_ability("Bat_Barrel", 0.0) + batter.z_ability("Bat_BBCreate", 0.0) * 0.5
 	var pitcher_confidence_z: float = pitcher.z_ability("Pit_BBPrevent", 0.0) + pitcher.z_ability("Pit_LoftControl", 0.0) * 0.5
-	# z 1σ ≒ display 12.5pt ≒ 旧 chance 4 相当の影響度
+	# z 1σ あたりの影響を整数確率スケールへ変換する。
 	var chance_f: float = (batter_threat_z - pitcher_confidence_z - 0.5) * 8.0
 	if _has_runner(bases, 1) and _has_runner(bases, 2):
 		chance_f += 8.0
@@ -235,7 +235,7 @@ static func _should_intentionally_walk(
 	return Rng.range_int(0, INTENTIONAL_WALK_BASE_DENOMINATOR - 1) < chance
 
 
-# バント判定 (z_abilities 評価へ移行)。
+# バント判定。
 # bunt_z = 0.5*Bat_Spray + 0.3*Bat_KAvoid - 0.4*Bat_Impact - 0.2*Bat_Barrel
 # 投手バンド (+220 バイアス) は維持。
 static func _should_bunt(batter: PSPlayerSeasonRecord, bases: Array, outs: int) -> bool:

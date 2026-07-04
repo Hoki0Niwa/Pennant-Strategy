@@ -49,7 +49,6 @@ const AGGRESSION_Z_NEUTRAL: float = AbilityReference.AGGRESSION_Z_NEUTRAL
 const EFFICIENCY_Z_NEUTRAL: float = AbilityReference.EFFICIENCY_Z_NEUTRAL
 const GAMECALL_Z_NEUTRAL: float = AbilityReference.GAMECALL_Z_NEUTRAL
 const FATIGUE_PITCH_COEF: float = 0.4       # 疲労が球数を増やす係数。
-const LEAGUE_PITCH_DELTA_CALIBRATION: float = 0.35 # 実 roster の短球数寄り能力分布をTHT型へ戻す一律補正。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
 const MAX_PITCH_COUNT: int = 20             # 1打席あたり球数の上限クランプ。
 
@@ -77,7 +76,6 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	pitch_delta -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
 	pitch_delta -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
 	pitch_delta += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
-	pitch_delta += LEAGUE_PITCH_DELTA_CALIBRATION
 
 	var min_p: int = max(MIN_PITCH_COUNT, _category_min_pitches(category))
 	var max_p: int = MAX_PITCH_COUNT

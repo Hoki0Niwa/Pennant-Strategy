@@ -79,11 +79,11 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 
 	assert_int(starters.size()).is_greater(0)
 	assert_int(relievers.size()).is_greater(0)
-	# 先発は野手と同スケール (平均差 <= 5)。旧実装は +7 高かった。
+	# 先発は野手と同スケール (平均差 <= 5)。
 	assert_float(absf(starter_mean - fielder_mean)).is_less_equal(5.0)
 	# 中継は先発と同スケール (平均差 <= 5)。
 	assert_float(absf(reliever_mean - starter_mean)).is_less_equal(5.0)
-	# 先発の上位帯が野手を大きく上回らない (旧 p90 88 > 野手 80 / max 99 の是正)。
+	# 先発の上位帯が野手を大きく上回らない。
 	assert_int(_pctl(starters, 0.90)).is_less_equal(_pctl(fielders, 0.90) + 4)
 	assert_int(_max(starters)).is_less_equal(_max(fielders) + 2)
 
@@ -265,7 +265,7 @@ func test_closer_role_is_preferred_in_ninth_four_run_lead() -> void:
 	assert_int(lead_pick.player_id).is_equal(closer.player_id)
 
 
-# 4点差リードはクローザーが前日(直前のチーム試合)に登板していたら回避し、ミドルへ回す (ユーザー指定)。
+# 4点差リードはクローザーが前日(直前のチーム試合)に登板していたら回避し、ミドルへ回す。
 func test_closer_avoids_four_run_lead_when_pitched_previous_game() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(141, "Closer", 0.5)
 	var middle: PSPlayerSeasonRecord = _pitcher(142, "Middle", 0.0)
@@ -295,7 +295,7 @@ func test_closer_avoids_four_run_lead_when_pitched_previous_game() -> void:
 	assert_int(picked.player_id).is_equal(middle.player_id)
 
 
-# 5点差以上はどの回でもセット/クローザーを温存し、ミドルリリーフを登板させる (ユーザー指定)。
+# 5点差以上はどの回でもセット/クローザーを温存し、ミドルリリーフを登板させる。
 func test_middle_reliever_covers_blowout_lead() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(161, "Closer", 0.9)
 	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(162, "Setup", 0.9)
@@ -327,7 +327,7 @@ func test_middle_reliever_covers_blowout_lead() -> void:
 
 
 # 9回同点・ビジター: クローザーは12回(最終回)まで温存し、9〜11回は残りリリーフを
-# 評価の高い順で最終回直前に最良が来るよう逆算配置する (ユーザー指定)。
+# 評価の高い順で最終回直前に最良が来るよう逆算配置する。
 func test_closer_held_until_twelfth_in_tie_for_visitor() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(601, "Closer", 0.5)
 	var best: PSPlayerSeasonRecord = _pitcher(602, "BestBridge", 0.9)
@@ -365,7 +365,7 @@ func test_closer_held_until_twelfth_in_tie_for_visitor() -> void:
 	assert_int(pick12.player_id).is_equal(closer.player_id)
 
 
-# 9回同点・ホーム: いつも通りクローザーを9回に投入し、以降は能力の高いリリーフ順 (ユーザー指定)。
+# 9回同点・ホーム: クローザーを9回に投入し、以降は能力の高いリリーフ順。
 func test_closer_used_in_ninth_tie_for_home() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(611, "Closer", 0.3)
 	var middle: PSPlayerSeasonRecord = _pitcher(612, "Middle", 0.9)
@@ -397,7 +397,7 @@ func test_closer_used_in_ninth_tie_for_home() -> void:
 	assert_int(pick10.player_id).is_equal(middle.player_id)
 
 
-# セット/クローザーはビハインド時には登板させない (ユーザー指定)。能力で勝ってもミドルへ回す。
+# セット/クローザーはビハインド時には登板させない。能力で勝ってもミドルへ回す。
 func test_setup_and_closer_excluded_when_behind() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(621, "Closer", 0.8)
 	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(622, "Setup", 0.8)
@@ -428,7 +428,7 @@ func test_setup_and_closer_excluded_when_behind() -> void:
 	assert_int(pick9.player_id).is_equal(middle.player_id)
 
 
-# セットは7回以降・クローザーは9回以降に限定する (ユーザー指定)。担当回より前はミドルへ回す。
+# セットは7回以降・クローザーは9回以降に限定する。担当回より前はミドルへ回す。
 func test_setup_before_seventh_and_closer_before_ninth_are_excluded() -> void:
 	var closer: PSPlayerSeasonRecord = _pitcher(631, "Closer", 0.9)
 	var setup_pitcher: PSPlayerSeasonRecord = _pitcher(632, "Setup", 0.9)
@@ -606,10 +606,10 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 			"event_index": i * 11 + 5,
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
-			# Active roster の実測は中立値より短球数寄りなので、分布ガードもその前提で見る。
+			# 分布ガードは固定リファレンス中立値の平均的な対戦で見る。
 			"batter_z": {
 				"Bat_BBCreate": PSPitchAggregateSimulator.PATIENCE_Z_NEUTRAL,
-				"Bat_Aggression": 1.175,
+				"Bat_Aggression": PSPitchAggregateSimulator.AGGRESSION_Z_NEUTRAL,
 			},
 			"pitcher_z": {"Pit_Efficiency": PSPitchAggregateSimulator.EFFICIENCY_Z_NEUTRAL},
 			"catcher_z": {"C_GameCall": PSPitchAggregateSimulator.GAMECALL_Z_NEUTRAL},
@@ -661,8 +661,7 @@ func test_pitcher_stuff_contact_quality_ev_effect_is_saturated() -> void:
 	Rng.generator.state = old_state
 
 	print("STUFFEV avg=%.2f ace=%.2f diff=%.2f" % [average_ev, ace_ev, diff])
-	# 期待効果は ev_stuff_max_reduction(0.205) 相当。EV-LA ドーム結合(2026-07-03)の
-	# クランプ相互作用で実効差が数百分の一縮むため、下限は 0.1 に置く(効果の存在と飽和を検証)。
+	# 球威によるEV低下は小幅に飽和し、極端な投手でも過大にならない。
 	assert_float(diff).is_greater_equal(0.1)
 	assert_float(diff).is_less_equal(1.8)
 

@@ -24,7 +24,6 @@
       "framing_k_coef": 1.0,
       "gamecall_k_coef": 0.06,
       "tto_k_drop": 0.5,
-      "high_k_relief_weight": 0.2,
       "bb_create_weight": 0.4,
       "bb_prevent_weight": 0.32,
       "framing_bb_coef": 1.0,
@@ -40,7 +39,7 @@
       "relief_output_bonus_z": 0.16
     },
     "contact_quality": {
-      "ev_base": 91.0,
+      "ev_base": 91.2,
       "ev_contact_weak_penalty": 1.4,
       "ev_home_run_power_weight": 2.9,
       "ev_pitch_velocity_weight": 0.08,
@@ -53,7 +52,6 @@
       "ev_random_spread": 9.5,
       "ev_min": 48.0,
       "ev_max": 119.0,
-      "contact_ev_bias": 0.2,
       "perfect_contact_base_rate": 0.048,
       "perfect_contact_ev_boost": 8.5,
       "perfect_contact_la_pull_to_barrel": 0.1,
@@ -127,7 +125,6 @@
       "la_ev_low_falloff": 0.12
     },
     "play_resolver": {
-      "single_to_out_chance": 0.38,
       "field_error_base_grounder": 0.017,
       "field_error_base_liner": 0.0022,
       "field_error_base_fly": 0.0013,
