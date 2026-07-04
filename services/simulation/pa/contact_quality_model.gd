@@ -1,6 +1,7 @@
 extends RefCounted
 class_name PSContactQualityModel
 
+const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
 
 # 投球がインプレー(BIP)になった後に、打球の質(初速・角度・方向)を生成するモデル。
 # 飛距離・滞空時間・守備・最終結果は後段の別モデルが解決する。
@@ -97,12 +98,12 @@ const PITCH_VELOCITY_BASE: float = 145.0
 
 # 能力値(z-score)を計算へ投入するための変換定数。
 # 各能力カーブ/EV補正の「中立点(=平均選手の z)」。能力ごとに分布平均が違うため別々に持つ。
-# 値は現データの平均（野手 or 投手）。中立点を上げるとその能力で平均扱いされる選手が増える。
-const BAT_CONTACT_Z_NEUTRAL: float = 0.65 # 芯(Bat_Barrel)の野手平均。これを基準に巧打/拙打を判定。
-const BAT_GAP_Z_NEUTRAL: float = 1.18     # ギャップ長打(Bat_Impact)の野手平均。
-const BAT_HR_Z_NEUTRAL: float = 1.71      # 本塁打パワー(Bat_Impact+0.5*Bat_Loft)の野手平均。
-const BAT_AVOID_K_Z_NEUTRAL: float = 0.33 # 三振回避(Bat_KAvoid)の野手平均。
-const PIT_STUFF_Z_NEUTRAL: float = 1.14   # 球威(Pit_BarrelDeny+0.5*Pit_ImpactLimit)の投手平均。
+# 値は PSAbilityReference の固定リファレンスを正準とする。
+const BAT_CONTACT_Z_NEUTRAL: float = AbilityReference.BAT_CONTACT_Z_NEUTRAL
+const BAT_GAP_Z_NEUTRAL: float = AbilityReference.BAT_GAP_Z_NEUTRAL
+const BAT_HR_Z_NEUTRAL: float = AbilityReference.BAT_HR_Z_NEUTRAL
+const BAT_AVOID_K_Z_NEUTRAL: float = AbilityReference.BAT_AVOID_K_Z_NEUTRAL
+const PIT_STUFF_Z_NEUTRAL: float = AbilityReference.PIT_STUFF_Z_NEUTRAL
 const CURVE_WIDTH_Z: float = 1.6          # 能力カーブの標準的な幅（z スケール）。
 const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭めの幅。
 

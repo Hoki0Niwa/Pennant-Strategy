@@ -563,9 +563,12 @@ func test_pitch_model_per_category_counts_are_realistic() -> void:
 			"event_index": i * 7 + 3,
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
-			"batter_z": {"Bat_BBCreate": 0.95, "Bat_Aggression": 0.3},
-			"pitcher_z": {"Pit_Efficiency": 1.0},
-			"catcher_z": {"C_GameCall": 0.75},
+			"batter_z": {
+				"Bat_BBCreate": PSPitchAggregateSimulator.PATIENCE_Z_NEUTRAL,
+				"Bat_Aggression": PSPitchAggregateSimulator.AGGRESSION_Z_NEUTRAL,
+			},
+			"pitcher_z": {"Pit_Efficiency": PSPitchAggregateSimulator.EFFICIENCY_Z_NEUTRAL},
+			"catcher_z": {"C_GameCall": PSPitchAggregateSimulator.GAMECALL_Z_NEUTRAL},
 			"fatigue_factor": 1.0,
 		}
 		var bip: Dictionary = PSPitchAggregateSimulator.simulate("bip", precomp)
@@ -604,9 +607,12 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
 			# Active roster の実測は中立値より短球数寄りなので、分布ガードもその前提で見る。
-			"batter_z": {"Bat_BBCreate": 0.95, "Bat_Aggression": 1.175},
-			"pitcher_z": {"Pit_Efficiency": 1.0},
-			"catcher_z": {"C_GameCall": 0.75},
+			"batter_z": {
+				"Bat_BBCreate": PSPitchAggregateSimulator.PATIENCE_Z_NEUTRAL,
+				"Bat_Aggression": 1.175,
+			},
+			"pitcher_z": {"Pit_Efficiency": PSPitchAggregateSimulator.EFFICIENCY_Z_NEUTRAL},
+			"catcher_z": {"C_GameCall": PSPitchAggregateSimulator.GAMECALL_Z_NEUTRAL},
 			"fatigue_factor": 1.0,
 		}
 		var pitches: int = int(PSPitchAggregateSimulator.simulate(category, precomp).get("pitches", 0))
@@ -629,6 +635,19 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 	assert_float(ten_plus_rate).is_greater_equal(0.002)
 	assert_float(ten_plus_rate).is_less_equal(0.008)
 	assert_int(_max_pitch_count(counts)).is_less_equal(20)
+
+
+func test_ability_reference_snapshot_matches_initial_pool() -> void:
+	GameDb.load_initial_data()
+	var snapshot: Dictionary = PSAbilityReference.pool_snapshot(GameDb.players)
+	var counts: Dictionary = snapshot.get("counts", {}) as Dictionary
+	var delta: Dictionary = snapshot.get("delta", {}) as Dictionary
+
+	assert_int(int(counts.get("batters", 0))).is_greater(400)
+	assert_int(int(counts.get("pitchers", 0))).is_greater(400)
+	assert_int(int(counts.get("catchers", 0))).is_greater(60)
+	for key_value in delta.keys():
+		assert_float(absf(float(delta.get(key_value, 0.0)))).is_less_equal(0.01)
 
 
 func test_pitcher_stuff_contact_quality_ev_effect_is_saturated() -> void:

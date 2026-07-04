@@ -622,6 +622,163 @@ func test_high_fatigue_record_is_not_auto_demotion_candidate() -> void:
 	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 1.0, 100, 70.0, 70.0, 70.0)).is_true()
 
 
+func test_repair_active_roster_injuries_demotes_and_promotes_replacement() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.current_day = 42
+	var active_ids: Array = []
+	var player_records: Array = []
+	var positions: Array = [2, 3, 4, 5, 6, 7, 8, 9]
+	var injured_id: int = 1005
+	for i in range(TeamAutoAIRef.TARGET_TOTAL):
+		var position: int = int(positions[i % positions.size()])
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			_player_with_z(1000 + i, 1, position, false, 0.2),
+			season.year,
+			season.season_number
+		)
+		if record.player_id == injured_id:
+			record.injury_days = TeamAutoAIRef.INJURY_SHORT_ABSENCE_STASH_DAYS + 1
+		active_ids.append(record.player_id)
+		player_records.append(record.to_dict())
+
+	var replacement: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_player_with_z(2000, 1, 3, false, 2.0),
+		season.year,
+		season.season_number
+	)
+	player_records.append(replacement.to_dict())
+	var development_reserve: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_player_with_z(2001, 1, 3, true, 3.0),
+		season.year,
+		season.season_number
+	)
+	player_records.append(development_reserve.to_dict())
+
+	RecordStore.load_from_dict({
+		"player_records": player_records,
+		"team_records": [],
+		"season_archives": [],
+	})
+	season.set_active_roster(1, {"player_ids": active_ids})
+
+	var result: Dictionary = TeamAutoAIRef.repair_active_roster_injuries(season, 1, season.current_day)
+	var roster_ids: Array = (season.get_active_roster(1).get("player_ids", []) as Array).duplicate()
+	var demotion_days: Dictionary = season.get_demotion_days(1).duplicate(true)
+	RecordStore.load_from_dict(original_records)
+
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(result.get("changed", false))).is_true()
+	assert_array(roster_ids).not_contains(injured_id)
+	assert_array(roster_ids).contains(2000)
+	assert_array(roster_ids).not_contains(2001)
+	assert_int(roster_ids.size()).is_equal(TeamAutoAIRef.TARGET_TOTAL)
+	assert_int(int(demotion_days.get(str(injured_id), 0))).is_equal(season.current_day)
+
+
+func test_repair_active_roster_injuries_keeps_short_absence_active() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.current_day = 43
+	var active_ids: Array = []
+	var player_records: Array = []
+	var positions: Array = [2, 3, 4, 5, 6, 7, 8, 9]
+	var injured_id: int = 1012
+	for i in range(TeamAutoAIRef.TARGET_TOTAL):
+		var position: int = int(positions[i % positions.size()])
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			_player_with_z(1000 + i, 1, position, false, 0.2),
+			season.year,
+			season.season_number
+		)
+		if record.player_id == injured_id:
+			record.injury_days = TeamAutoAIRef.INJURY_SHORT_ABSENCE_STASH_DAYS
+		active_ids.append(record.player_id)
+		player_records.append(record.to_dict())
+
+	var replacement: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_player_with_z(2000, 1, 3, false, 2.0),
+		season.year,
+		season.season_number
+	)
+	player_records.append(replacement.to_dict())
+
+	RecordStore.load_from_dict({
+		"player_records": player_records,
+		"team_records": [],
+		"season_archives": [],
+	})
+	season.set_active_roster(1, {"player_ids": active_ids})
+
+	var result: Dictionary = TeamAutoAIRef.repair_active_roster_injuries(season, 1, season.current_day)
+	var roster_ids: Array = (season.get_active_roster(1).get("player_ids", []) as Array).duplicate()
+	var demotion_days: Dictionary = season.get_demotion_days(1).duplicate(true)
+	RecordStore.load_from_dict(original_records)
+
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(result.get("changed", true))).is_false()
+	assert_array(roster_ids).contains(injured_id)
+	assert_array(roster_ids).not_contains(2000)
+	assert_int(roster_ids.size()).is_equal(TeamAutoAIRef.TARGET_TOTAL)
+	assert_bool(demotion_days.has(str(injured_id))).is_false()
+	assert_array(result.get("short_injury_stashes", []) as Array).contains(injured_id)
+
+
+func test_repair_active_roster_injuries_keeps_core_player_until_max_stash_days() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.current_day = 44
+	var active_ids: Array = []
+	var player_records: Array = []
+	var positions: Array = [2, 3, 4, 5, 6, 7, 8, 9]
+	var injured_id: int = 1020
+	for i in range(TeamAutoAIRef.TARGET_TOTAL):
+		var position: int = int(positions[i % positions.size()])
+		var z_value: float = 2.8 if 1000 + i == injured_id else 0.0
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			_player_with_z(1000 + i, 1, position, false, z_value),
+			season.year,
+			season.season_number
+		)
+		if record.player_id == injured_id:
+			record.injury_days = TeamAutoAIRef.INJURY_MAINSTAY_STASH_MAX_DAYS
+		active_ids.append(record.player_id)
+		player_records.append(record.to_dict())
+
+	var replacement: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_player_with_z(2000, 1, 3, false, 2.0),
+		season.year,
+		season.season_number
+	)
+	player_records.append(replacement.to_dict())
+
+	RecordStore.load_from_dict({
+		"player_records": player_records,
+		"team_records": [],
+		"season_archives": [],
+	})
+	season.set_active_roster(1, {"player_ids": active_ids})
+
+	var result: Dictionary = TeamAutoAIRef.repair_active_roster_injuries(season, 1, season.current_day)
+	var roster_ids: Array = (season.get_active_roster(1).get("player_ids", []) as Array).duplicate()
+	var demotion_days: Dictionary = season.get_demotion_days(1).duplicate(true)
+	RecordStore.load_from_dict(original_records)
+
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(result.get("changed", true))).is_false()
+	assert_array(roster_ids).contains(injured_id)
+	assert_array(roster_ids).not_contains(2000)
+	assert_int(roster_ids.size()).is_equal(TeamAutoAIRef.TARGET_TOTAL)
+	assert_bool(demotion_days.has(str(injured_id))).is_false()
+	assert_array(result.get("short_injury_stashes", []) as Array).contains(injured_id)
+
+
 # --- 永続化 ------------------------------------------------------------------
 
 func test_development_fields_round_trip() -> void:

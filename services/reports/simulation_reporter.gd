@@ -2,6 +2,7 @@ extends RefCounted
 class_name SimulationReporter
 
 const AdvancedStatsRecord = preload("res://services/simulation/reducers/advanced_stats_record.gd")
+const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const ReportHealth = preload("res://services/reports/report_health.gd")
@@ -135,6 +136,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
 		"player_count": GameDb.players.size(),
+		"ability_reference_drift": AbilityReference.pool_snapshot(GameDb.players),
 		"run_environment": {
 			"games": total_games,
 			"team_games": total_team_games,
@@ -276,6 +278,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
 		"player_count": GameDb.players.size(),
+		"ability_reference_drift": AbilityReference.pool_snapshot(GameDb.players),
 		"run_environment": {
 			"games": total_games,
 			"team_games": total_team_games,

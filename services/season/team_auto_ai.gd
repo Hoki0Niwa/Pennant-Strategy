@@ -8,6 +8,10 @@ const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const SWAP_INTERVAL_DAYS: int = 7
 const DEMOTION_COOLDOWN_DAYS: int = 10
+const INJURY_SHORT_ABSENCE_STASH_DAYS: int = 3
+const INJURY_MAINSTAY_STASH_MAX_DAYS: int = 5
+const INJURY_MAINSTAY_STASH_SCORE_MIN: float = 70.0
+const INJURY_CORE_STASH_SCORE_MIN: float = 82.0
 const MAX_SWAPS_PER_RUN: int = 4
 const QUALIFIER_PA: int = 200
 const QUALIFIER_OUTS: int = 180
@@ -189,6 +193,8 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 	# Callable は int を値キャプチャするため、参照型 Array に包んで更新可能にする。
 	var foreign_count_ref: Array = [0]
 	var add_player: Callable = func(record: PSPlayerSeasonRecord) -> bool:
+		if record == null or record.injury_days > 0:
+			return false
 		if selected.size() >= TARGET_TOTAL:
 			return false
 		for selected_row in selected:
@@ -249,6 +255,300 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 		"ok": true,
 		"player_ids": player_ids,
 	}
+
+
+# ---- 故障者の即時一軍枠修復 -------------------------------------------------
+
+# 試合中に発生した故障者が一軍31枠を長期占有し続けないよう、離脱見込みが長い故障者を
+# 当日降格扱いで外し、健康な支配下候補を補充する。3日程度の離脱は出場不可のまま一軍に置き、
+# 主力級ほど最大5日まで保持する。成績不振による週次入替とは別物なので、成績比較や最大4人制限は使わない。
+static func repair_active_roster_injuries(season: PSSeason, team_id: int, current_day: int = -1) -> Dictionary:
+	if season == null:
+		return {"ok": false, "message": "season is null", "changed": false}
+
+	var roster: Dictionary = season.get_active_roster(team_id)
+	var active_id_list: Array = (roster.get("player_ids", []) as Array).duplicate()
+	var all_records: Array = []
+	if active_id_list.is_empty():
+		all_records = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+		if all_records.is_empty():
+			return {"ok": false, "message": "選手データがありません", "changed": false}
+		var preview: Dictionary = preview_perf_based_active_roster(season, team_id)
+		if not bool(preview.get("ok", false)):
+			return {"ok": false, "message": str(preview.get("message", "一軍ロスターを作成できません")), "changed": false}
+		active_id_list = (preview.get("player_ids", []) as Array).duplicate()
+		season.set_active_roster(team_id, {"player_ids": active_id_list.duplicate()})
+		roster = season.get_active_roster(team_id)
+
+	var record_by_id: Dictionary = {}
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record != null:
+			record_by_id[record.player_id] = record
+
+	var active_set: Dictionary = {}
+	var injured_demotions: Array = []
+	var short_injury_stashes: Array = []
+	var removed_role_counts: Dictionary = {
+		"starter": 0,
+		"reliever": 0,
+		"fielder": 0,
+	}
+	for id_value in active_id_list:
+		var player_id: int = int(id_value)
+		if active_set.has(player_id):
+			continue
+		var active_record: PSPlayerSeasonRecord = record_by_id.get(player_id, null) as PSPlayerSeasonRecord
+		if active_record == null:
+			active_record = RecordStore.get_player_record(player_id, season.year, season.season_number)
+			if active_record != null:
+				record_by_id[player_id] = active_record
+		if active_record != null and active_record.injury_days > 0:
+			if not _should_demote_active_injury(active_record):
+				short_injury_stashes.append(player_id)
+				active_set[player_id] = true
+				continue
+			injured_demotions.append(player_id)
+			var role_key: String = _active_roster_role_key(active_record)
+			removed_role_counts[role_key] = int(removed_role_counts.get(role_key, 0)) + 1
+			continue
+		active_set[player_id] = true
+
+	if injured_demotions.is_empty():
+		return {
+			"ok": true,
+			"team_id": team_id,
+			"changed": false,
+			"injured_demotions": [],
+			"short_injury_stashes": short_injury_stashes,
+			"promotions": [],
+		}
+
+	if all_records.is_empty():
+		all_records = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+		if all_records.is_empty():
+			return {"ok": false, "message": "選手データがありません", "changed": false}
+		for record_row in all_records:
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			if record != null:
+				record_by_id[record.player_id] = record
+
+	var healthy_roster_records: Array = []
+	var promote_pool: Array = []
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not _is_healthy_active_roster_candidate(record):
+			continue
+		healthy_roster_records.append(record)
+		if not active_set.has(record.player_id):
+			promote_pool.append(record)
+	promote_pool.sort_custom(func(a, b) -> bool:
+		return _active_roster_selection_score(a as PSPlayerSeasonRecord) > _active_roster_selection_score(b as PSPlayerSeasonRecord)
+	)
+
+	var target_size: int = mini(TARGET_TOTAL, healthy_roster_records.size())
+	var required_catchers: int = mini(MIN_ACTIVE_CATCHERS, _catcher_count_in_records(healthy_roster_records))
+	var promotions: Array = []
+
+	_repair_fill_required_catchers(promote_pool, active_set, record_by_id, promotions, target_size, required_catchers)
+	_repair_fill_position_coverage(promote_pool, active_set, record_by_id, promotions, target_size, required_catchers, healthy_roster_records)
+	for role_key in ["starter", "reliever", "fielder"]:
+		_repair_fill_role(promote_pool, active_set, record_by_id, promotions, target_size, required_catchers, role_key, int(removed_role_counts.get(role_key, 0)))
+	_repair_fill_best(promote_pool, active_set, record_by_id, promotions, target_size, required_catchers)
+
+	var new_roster: Dictionary = roster.duplicate(true)
+	new_roster["player_ids"] = _ordered_active_ids_after_repair(active_id_list, active_set, promotions)
+	season.set_active_roster(team_id, new_roster)
+	var day: int = season.current_day if current_day < 0 else current_day
+	season.record_demotions(team_id, injured_demotions, day)
+
+	return {
+		"ok": true,
+		"team_id": team_id,
+		"changed": true,
+		"injured_demotions": injured_demotions,
+		"short_injury_stashes": short_injury_stashes,
+		"promotions": promotions,
+		"active_count": (new_roster["player_ids"] as Array).size(),
+	}
+
+
+static func _should_demote_active_injury(record: PSPlayerSeasonRecord) -> bool:
+	return record != null and record.injury_days > _active_injury_stash_limit(record)
+
+
+static func _active_injury_stash_limit(record: PSPlayerSeasonRecord) -> int:
+	if record == null:
+		return 0
+	var mainstay_score: float = perf_score(record)
+	if mainstay_score >= INJURY_CORE_STASH_SCORE_MIN:
+		return INJURY_MAINSTAY_STASH_MAX_DAYS
+	if mainstay_score >= INJURY_MAINSTAY_STASH_SCORE_MIN:
+		return INJURY_SHORT_ABSENCE_STASH_DAYS + 1
+	return INJURY_SHORT_ABSENCE_STASH_DAYS
+
+
+static func _is_healthy_active_roster_candidate(record: PSPlayerSeasonRecord) -> bool:
+	return record != null and record.player_id > 0 and record.injury_days <= 0 and not record.development_player
+
+
+static func _active_roster_role_key(record: PSPlayerSeasonRecord) -> String:
+	if record == null or not record.is_pitcher():
+		return "fielder"
+	return "starter" if _is_starting_pitcher(record) else "reliever"
+
+
+static func _repair_fill_required_catchers(
+	promote_pool: Array,
+	active_set: Dictionary,
+	record_by_id: Dictionary,
+	promotions: Array,
+	target_size: int,
+	required_catchers: int
+) -> void:
+	while _active_catcher_count(active_set, record_by_id) < required_catchers and active_set.size() < target_size:
+		var added: bool = false
+		for record_row in promote_pool:
+			var candidate: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			if candidate == null or not _is_catcher(candidate):
+				continue
+			if _repair_try_promote(candidate, active_set, record_by_id, promotions, target_size, required_catchers, false):
+				added = true
+				break
+		if not added:
+			break
+
+
+static func _repair_fill_position_coverage(
+	promote_pool: Array,
+	active_set: Dictionary,
+	record_by_id: Dictionary,
+	promotions: Array,
+	target_size: int,
+	required_catchers: int,
+	healthy_roster_records: Array
+) -> void:
+	for position in DEFENSIVE_POSITIONS:
+		if active_set.size() >= target_size:
+			return
+		var required_holders: int = mini(2, _records_cover_position_count(healthy_roster_records, int(position)))
+		while _active_position_count(active_set, record_by_id, int(position)) < required_holders and active_set.size() < target_size:
+			var added: bool = false
+			for record_row in promote_pool:
+				var candidate: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+				if candidate == null or _position_aptitude(candidate, int(position)) <= 0:
+					continue
+				if _repair_try_promote(candidate, active_set, record_by_id, promotions, target_size, required_catchers):
+					added = true
+					break
+			if not added:
+				break
+
+
+static func _repair_fill_role(
+	promote_pool: Array,
+	active_set: Dictionary,
+	record_by_id: Dictionary,
+	promotions: Array,
+	target_size: int,
+	required_catchers: int,
+	role_key: String,
+	needed: int
+) -> void:
+	if needed <= 0:
+		return
+	var added_count: int = 0
+	for record_row in promote_pool:
+		if added_count >= needed or active_set.size() >= target_size:
+			break
+		var candidate: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if _active_roster_role_key(candidate) != role_key:
+			continue
+		if _repair_try_promote(candidate, active_set, record_by_id, promotions, target_size, required_catchers):
+			added_count += 1
+
+
+static func _repair_fill_best(
+	promote_pool: Array,
+	active_set: Dictionary,
+	record_by_id: Dictionary,
+	promotions: Array,
+	target_size: int,
+	required_catchers: int
+) -> void:
+	for record_row in promote_pool:
+		if active_set.size() >= target_size:
+			break
+		_repair_try_promote(record_row as PSPlayerSeasonRecord, active_set, record_by_id, promotions, target_size, required_catchers)
+
+
+static func _repair_try_promote(
+	candidate: PSPlayerSeasonRecord,
+	active_set: Dictionary,
+	record_by_id: Dictionary,
+	promotions: Array,
+	target_size: int,
+	required_catchers: int,
+	enforce_catcher_min: bool = true
+) -> bool:
+	if not _is_healthy_active_roster_candidate(candidate):
+		return false
+	if active_set.size() >= target_size or active_set.has(candidate.player_id):
+		return false
+	var candidate_set: Dictionary = active_set.duplicate()
+	candidate_set[candidate.player_id] = true
+	if _active_foreign_count(candidate_set, record_by_id) > MAX_FOREIGN:
+		return false
+	if enforce_catcher_min and _active_catcher_count(candidate_set, record_by_id) < required_catchers:
+		return false
+	active_set[candidate.player_id] = true
+	promotions.append(candidate.player_id)
+	return true
+
+
+static func _active_foreign_count(active_set: Dictionary, record_by_id: Dictionary) -> int:
+	var count: int = 0
+	for pid_value in active_set.keys():
+		var record: PSPlayerSeasonRecord = record_by_id.get(int(pid_value), null) as PSPlayerSeasonRecord
+		if record != null and record.foreign_player:
+			count += 1
+	return count
+
+
+static func _active_catcher_count(active_set: Dictionary, record_by_id: Dictionary) -> int:
+	var count: int = 0
+	for pid_value in active_set.keys():
+		var record: PSPlayerSeasonRecord = record_by_id.get(int(pid_value), null) as PSPlayerSeasonRecord
+		if _is_catcher(record):
+			count += 1
+	return count
+
+
+static func _active_position_count(active_set: Dictionary, record_by_id: Dictionary, position: int) -> int:
+	var count: int = 0
+	for pid_value in active_set.keys():
+		var record: PSPlayerSeasonRecord = record_by_id.get(int(pid_value), null) as PSPlayerSeasonRecord
+		if _position_aptitude(record, position) > 0:
+			count += 1
+	return count
+
+
+static func _ordered_active_ids_after_repair(previous_ids: Array, active_set: Dictionary, promotions: Array) -> Array:
+	var out: Array = []
+	var written: Dictionary = {}
+	for id_value in previous_ids:
+		var player_id: int = int(id_value)
+		if written.has(player_id) or not active_set.has(player_id):
+			continue
+		out.append(player_id)
+		written[player_id] = true
+	for id_value in promotions:
+		var player_id: int = int(id_value)
+		if written.has(player_id) or not active_set.has(player_id):
+			continue
+		out.append(player_id)
+		written[player_id] = true
+	return out
 
 
 static func _ensure_minimum_catchers(selected: Array, fielders: Array, add_player: Callable, minimum: int) -> void:

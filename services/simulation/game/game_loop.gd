@@ -19,6 +19,7 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 		"play_events": [],
 		"pitcher_outings": [],
 		"substitutions": [],
+		"injury_events": [],
 		"next_play_event_index": 0,
 		"advanced_stats": PSAdvancedStatReducer.empty_advanced_stats(),
 		"walkoff": false,
@@ -92,6 +93,8 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 	PSGameDecisions.finalize_pitcher_stats(home_setup, result)
 	PSBullpenManager.finalize_pitcher_usage(away_setup)
 	PSBullpenManager.finalize_pitcher_usage(home_setup)
+	_collect_injury_events(result, away_setup)
+	_collect_injury_events(result, home_setup)
 	result["advanced_stats"] = PSAdvancedStatReducer.to_dict_container(result.get("advanced_stats", {}) as Dictionary)
 	return result
 
@@ -106,6 +109,16 @@ static func _capture_lineup(setup: Dictionary) -> Dictionary:
 		"dh": dh,
 		"slots": lineup.get("batting_order", []),
 	}
+
+
+static func _collect_injury_events(result: Dictionary, setup: Dictionary) -> void:
+	var collected: Array = PSScoringHelpers.drain_injury_events(setup)
+	if collected.is_empty():
+		return
+	var events: Array = result.get("injury_events", []) as Array
+	for event_value in collected:
+		events.append(event_value)
+	result["injury_events"] = events
 
 
 # 交代ログ。result["substitutions"] に 1 件追記する (out_id==in_id は無視)。

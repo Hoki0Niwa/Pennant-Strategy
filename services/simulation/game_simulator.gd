@@ -658,6 +658,13 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 		var now_logs: int = Time.get_ticks_usec()
 		_profile_add("game_logs", now_logs - profile_start)
 		profile_start = now_logs
+	var injury_repair_team_ids: Dictionary = _injury_repair_team_ids(result, away_team_id, home_team_id)
+	for repair_team_id in injury_repair_team_ids.keys():
+		TeamAutoAI.repair_active_roster_injuries(season, int(repair_team_id), season.current_day)
+	if _profile_enabled:
+		var now_roster_repair: int = Time.get_ticks_usec()
+		_profile_add("roster_repair", now_roster_repair - profile_start)
+		profile_start = now_roster_repair
 	var game_day: int = int(game.get("day", season.current_day))
 	PSRotationPlanner.record_rotation_start(season, away_team_id, away_setup, game_day)
 	PSRotationPlanner.record_rotation_start(season, home_team_id, home_setup, game_day)
@@ -687,6 +694,17 @@ static func _next_unplayed_game_index(season: PSSeason) -> int:
 		if not bool(game.get("played", false)):
 			return index
 	return -1
+
+
+static func _injury_repair_team_ids(result: Dictionary, away_team_id: int, home_team_id: int) -> Dictionary:
+	var out: Dictionary = {}
+	var events: Array = result.get("injury_events", []) as Array
+	for event_value in events:
+		var event: Dictionary = event_value as Dictionary
+		var team_id: int = int(event.get("team_id", 0))
+		if team_id == away_team_id or team_id == home_team_id:
+			out[team_id] = true
+	return out
 
 
 static func _result_summary(away_team_id: int, home_team_id: int, result: Dictionary) -> String:

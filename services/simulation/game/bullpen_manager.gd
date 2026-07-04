@@ -32,7 +32,7 @@ static func mark_games_started(setup: Dictionary) -> void:
 		var fatigue_gain: int = GameSimulator.FIELDER_START_FATIGUE_GAIN if is_fielder else GameSimulator.DH_START_FATIGUE_GAIN
 		var exposure: float = 1.0 if is_fielder else 0.65
 		batter.fatigue = int(min(GameSimulator.FATIGUE_MAX, batter.fatigue + fatigue_gain))
-		PSScoringHelpers.maybe_injure(batter, false, exposure)
+		PSScoringHelpers.maybe_injure_for_setup(setup, batter, false, exposure)
 
 
 # イニング間の継投。usage と inning から続投可否を判定し、必要なら文脈に合うリリーフへ差し替える。
@@ -475,7 +475,7 @@ static func finalize_pitcher_usage(setup: Dictionary) -> void:
 		if fatigue_gain <= 0:
 			continue
 		pitcher.fatigue = int(min(GameSimulator.FATIGUE_MAX, pitcher.fatigue + fatigue_gain))
-		PSScoringHelpers.maybe_injure(pitcher, true)
+		PSScoringHelpers.maybe_injure_for_setup(setup, pitcher, true)
 
 
 # 先発が降板した時点のアウト数と失点を固定する。

@@ -412,7 +412,7 @@ static func mark_substitute_appeared(setup: Dictionary, substitute: PSPlayerSeas
 	var fatigue_gain: int = GameSimulator.DEFENSIVE_SUB_FATIGUE_GAIN if took_field else GameSimulator.PINCH_HITTER_FATIGUE_GAIN
 	var exposure: float = 0.45 if took_field else 0.25
 	substitute.fatigue = int(min(GameSimulator.FATIGUE_MAX, substitute.fatigue + fatigue_gain))
-	PSScoringHelpers.maybe_injure(substitute, false, exposure)
+	PSScoringHelpers.maybe_injure_for_setup(setup, substitute, false, exposure)
 	appeared[substitute.player_id] = true
 	setup["substitute_ids"] = appeared
 

@@ -1,6 +1,8 @@
 extends RefCounted
 class_name PSPaProbabilityCalculator
 
+const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
+
 # 打席結果カテゴリ (K/BB/HBP/BIP) の確率を作る。
 # 入力 precomp は PSPlateAppearanceCoordinator が組み立てた、疲労・巡目・捕手影響を反映済みの能力辞書。
 # 各カテゴリの logit を z 能力と調整係数から作り、softmax で相対確率へ変換する。
@@ -30,7 +32,7 @@ const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たス
 const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
 const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
 const HIGH_K_RELIEF_WEIGHT: float = 0.20  # 三振回避が極端に低い打者へ閾値超の分だけ与える三振軽減。
-const HIGH_K_RELIEF_CEILING: float = 0.08 # 三振軽減が効き始める KAvoid z（野手 KAvoid 平均 0.33 − 0.25）。これ未満の打者を救済。
+const HIGH_K_RELIEF_CEILING: float = AbilityReference.HIGH_K_RELIEF_CEILING
 # BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
 const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
 const BB_PREVENT_WEIGHT: float = 0.32 # 投手の制球が四球を減らす強さ。
@@ -42,7 +44,7 @@ const PLATOON_WEIGHT: float = 0.3
 # 投手テール圧縮: 投手集団の KCreate/BBPrevent は平均 ≈ +1.3 / σ ≈ 0.75 で、エースは z+3 超に達する。
 # 生 z を線形に logit へ入れると K%45% / BB%≈0 級の支配(ERA 0点台)が出るため、
 # pivot 超過分を tanh で漸近圧縮する(平均帯の能力差は不変)。打球品質側の ability_curve_z 圧縮と対をなす。
-const PITCHER_TAIL_PIVOT: float = 1.65  # 投手平均 +0.5σ 付近から圧縮開始。
+const PITCHER_TAIL_PIVOT: float = AbilityReference.PITCHER_TAIL_PIVOT
 const PITCHER_TAIL_SPAN: float = 0.6    # 超過分の漸近上限(z)。
 
 static var _rule_paths: Dictionary = {}
@@ -89,7 +91,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	k_logit += c_game_call * _rule_float("gamecall_k_coef", GAMECALL_K_COEF)
 	k_logit -= tto_round_weight * _rule_float("tto_k_drop", TTO_K_DROP)
 	k_logit -= platoon_term
-	# 三振回避が平均より 0.25 以上低い打者ほど三振を軽減する（HIGH_K_RELIEF_CEILING = 野手 KAvoid 平均 0.33 − 0.25）。
+	# 三振回避が固定リファレンス平均より 0.25 以上低い打者ほど三振を軽減する。
 	k_logit -= max(0.0, _rule_float("high_k_relief_ceiling", HIGH_K_RELIEF_CEILING) - bat_k_avoid) * _rule_float("high_k_relief_weight", HIGH_K_RELIEF_WEIGHT)
 
 	var bb_logit: float = PSBalanceProfile.logit(_rule_float("league_bb_base", LEAGUE_BB_BASE))

@@ -1,6 +1,8 @@
 extends RefCounted
 class_name PSPitchAggregateSimulator
 
+const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
+
 # 打席カテゴリと能力から、球数・ボール/ストライク・空振りなどの集計 PitchSummary を生成する。
 # 出力スキーマ:
 # {pitches, balls, strikes, final_count, swings, whiffs, called_strikes, fouls,
@@ -42,10 +44,10 @@ const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減�
 const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が球数を減らす係数。
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
 # 能力 z は集団平均が0とは限らないため、平均的な選手で補正ゼロになる中立点を引いてから係数を適用する。
-const PATIENCE_Z_NEUTRAL: float = 0.95   # Bat_BBCreate の野手平均。
-const AGGRESSION_Z_NEUTRAL: float = 0.3  # Bat_Aggression の野手平均。
-const EFFICIENCY_Z_NEUTRAL: float = 1.0  # Pit_Efficiency の投手平均。
-const GAMECALL_Z_NEUTRAL: float = 0.75   # C_GameCall の捕手平均。
+const PATIENCE_Z_NEUTRAL: float = AbilityReference.PATIENCE_Z_NEUTRAL
+const AGGRESSION_Z_NEUTRAL: float = AbilityReference.AGGRESSION_Z_NEUTRAL
+const EFFICIENCY_Z_NEUTRAL: float = AbilityReference.EFFICIENCY_Z_NEUTRAL
+const GAMECALL_Z_NEUTRAL: float = AbilityReference.GAMECALL_Z_NEUTRAL
 const FATIGUE_PITCH_COEF: float = 0.4       # 疲労が球数を増やす係数。
 const LEAGUE_PITCH_DELTA_CALIBRATION: float = 0.35 # 実 roster の短球数寄り能力分布をTHT型へ戻す一律補正。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
