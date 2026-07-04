@@ -806,6 +806,12 @@ static func run_charges_for_runner_events(
 	var charges: Array = []
 	for event_value in runner_events:
 		var event: Dictionary = event_value as Dictionary
+		# state_already_applied の生還イベントは打席処理で得点計上済みの描写用で、
+		# 失点チャージも run_charges_for_plate 側で完了している。ここで再チャージすると
+		# 投手の失点/自責だけが二重計上される(チーム得点は apply_runner_events が
+		# 同フラグでスキップするため正しく、投手側だけずれる)。
+		if bool(event.get("state_already_applied", false)):
+			continue
 		if bool(event.get("is_out", false)):
 			continue
 		if int(event.get("to_base", 0)) < 4:

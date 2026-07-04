@@ -15,9 +15,12 @@ const CATEGORY_ERROR: String = "error"
 const RESULT_FOUL_BACK: String = "_foul_back_to_sequence"
 const FIELDER_ABILITY_CACHE_KEY: String = "_pa_fielder_ability_cache"
 
-# 打率・本塁打の大きな水準を動かす調整係数。
-const HR_DISTANCE_SCALE: float = 1.135   # 本塁打フェンスまでの距離の乗算。1未満で本塁打が増える。
-const SINGLE_TO_OUT_CHANCE: float = 0.33 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
+# 打率の大きな水準を動かす調整係数。
+const SINGLE_TO_OUT_CHANCE: float = 0.38 # シングルになるはずの打球をこの確率でアウト化。上げると打率が下がる。
+# 球場サイズの mod 用乗算(park factor)。**バランス調整ノブではない** — HR量の較正は
+# 物理層の飛距離(batted_ball_physics_resolver の air_factor)と、パワー→EV の経路
+# (contact_quality の ev_home_run_power_weight / power_ideal_*)で行う。
+const PARK_DISTANCE_SCALE: float = 1.0
 
 const FIELD_NAMES: Dictionary = {
 	1: "pitcher",
@@ -35,23 +38,15 @@ const FAIR_HALF_ANGLE_DEG: float = 45.0
 const INFIELD_DISTANCE_THRESHOLD: float = 38.0
 const NEAR_HOME_DISTANCE_THRESHOLD: float = 12.0
 
-const HR_LINE_CENTER: float = 120.0
-const HR_LINE_LINE: float = 105.0
+# 本塁打フェンス距離(m)。実在 NPB 球場準拠で固定(中堅 122m / 両翼 100m、膝点から線形補間)。
+# HR 判定は「物理飛距離 >= フェンス距離 + 壁越えマージン」のみで、打者ごとにフェンスを動かす補正や
+# 惜しい打球の昇格抽選は行わない(パワー差は EV/理想角経由で自然に飛距離へ反映される)。
+const HR_LINE_CENTER: float = 122.0
+const HR_LINE_LINE: float = 100.0
 const HR_LINE_KNEE_SPRAY: float = 20.0
-
-# 打者パワー(z = Bat_Impact + 0.5*Bat_Loft)による本塁打ラインの補正。パワーに対して S 字カーブで効く。
-# 非力打者はラインが遠ざかり(本塁打↓)、強打者は近づく(本塁打↑)。S 字なので「ある程度のパワーから
-# 増え始め、高パワー域では伸びが飽和(頭打ち)」する。3 つの定数だけで形を決める。
-# 現データの野手パワー z は中央値≈1.8 / p75≈2.6 / p90≈3.3 / 最大≈5.1（投手はずっと低い）。
-const HR_POWER_LINE_AMPLITUDE: float = 14.0 # ライン補正の最大振れ幅(ft)。非力で最大 +AMP(遠い)、強打者で最大 -AMP(近い)。大きいほど強弱差が拡大。
-const HR_POWER_LINE_CENTER: float = 2.55    # S 字の中心パワー z(補正0)。中位のHRを抑え、上位長打力へHRを寄せる。
-const HR_POWER_LINE_WIDTH: float = 1.00     # S 字の広がり(z)。小さいほど上位長打力へHRが集中し、低パワーはより出にくい。
-
-const HR_UPGRADE_WINDOW: float = 48.0
-# 本塁打昇格の長打力ゲート（打者パワー z で評価）。FLOOR 以下は昇格率 0、FLOOR+WIDTH で最大。
-# 野手パワー z 分布(中央値≈1.8, p90≈3.3)に合わせ、下位の打者は昇格させず上位で最大にする。
-const HR_UPGRADE_POWER_FLOOR: float = 1.20 # この長打力 z 未満は惜しい当たりでも本塁打に昇格しない。
-const HR_UPGRADE_POWER_WIDTH: float = 2.10 # 長打力 z がこの幅ぶん上がると昇格係数が 0→1 まで立ち上がる。
+# 壁越えマージン(m)。飛距離=無障害の着地点換算なので、フェンス高(NPB 2.5-4.4m)を越えて入るには
+# 着地距離がフェンスより数m先である必要がある。ちょうどフェンス付近の打球は壁直撃(長打)になる。
+const HR_WALL_CLEARANCE: float = 6.0
 
 # --- ゾーン内（横方向）難度 ---
 # 1球ごとの2D座標は持たず、spray を横軸として「担当野手の定位置からの横ズレ」で難度を表す。
@@ -192,13 +187,13 @@ const INFIELD_THROW_BEAT_DEPTH_WEIGHT: float = 0.050
 const INFIELD_THROW_BEAT_LATERAL_WEIGHT: float = 0.060
 const INFIELD_THROW_BEAT_HARD_CONTACT_PENALTY: float = 0.015
 const INFIELD_THROW_BEAT_MAX: float = 0.34
-const GROUNDOUT_THIRD_SCORE_BASE: float = 0.10
+const GROUNDOUT_THIRD_SCORE_BASE: float = 0.46
 const GROUNDOUT_THIRD_SCORE_SPEED_WEIGHT_Z: float = 0.045
 const GROUNDOUT_THIRD_SCORE_JUDGMENT_WEIGHT_Z: float = 0.045
 const GROUNDOUT_THIRD_SCORE_SOFT_WEIGHT: float = 0.085
 const GROUNDOUT_THIRD_SCORE_DEPTH_WEIGHT: float = 0.040
 const GROUNDOUT_THIRD_SCORE_ARM_WEIGHT_Z: float = 0.045
-const GROUNDOUT_SECOND_ADVANCE_BASE: float = 0.12
+const GROUNDOUT_SECOND_ADVANCE_BASE: float = 0.26
 const GROUNDOUT_SECOND_ADVANCE_SPEED_WEIGHT_Z: float = 0.040
 const GROUNDOUT_SECOND_ADVANCE_JUDGMENT_WEIGHT_Z: float = 0.045
 const GROUNDOUT_SECOND_ADVANCE_SOFT_WEIGHT: float = 0.060
@@ -267,7 +262,7 @@ const DOUBLE_PLAY_COMPLETION_WEIGHT_Z: float = 0.04375 # 守備側の併殺完�
 const DOUBLE_PLAY_SPEED_WEIGHT: float = 0.03125   # 打者走力 z 1.0 あたり併殺確率を下げる量（速いほど併殺回避）。
 const FIELDERS_CHOICE_SECOND_BASE: float = 0.34
 const FIELDERS_CHOICE_THIRD_BASE: float = 0.16
-const FIELDERS_CHOICE_HOME_BASE: float = 0.20
+const FIELDERS_CHOICE_HOME_BASE: float = 0.14
 const FIELDERS_CHOICE_ARM_WEIGHT_Z: float = 0.035
 const FIELDERS_CHOICE_TEAMWORK_WEIGHT_Z: float = 0.030
 const FIELDERS_CHOICE_BATTER_SPEED_WEIGHT_Z: float = 0.035
@@ -286,15 +281,15 @@ const SACRIFICE_FLY_DISTANCE_MIN: float = 54.0    # これ未満の浅い飛球�
 const SACRIFICE_FLY_DISTANCE_FULL: float = 96.0   # この深さ付近で距離要因が最大化する。
 const SACRIFICE_FLY_HANG_MIN: float = 2.0         # 最低限の滞空時間。短すぎる飛球では帰塁・スタートが間に合わない。
 const SACRIFICE_FLY_HANG_FULL: float = 4.4        # 十分な滞空時間。深いフライでタッチアップ準備が整う。
-const SACRIFICE_FLY_BASE: float = 0.08
-const SACRIFICE_FLY_DEPTH_WEIGHT: float = 0.52
+const SACRIFICE_FLY_BASE: float = 0.30
+const SACRIFICE_FLY_DEPTH_WEIGHT: float = 0.60
 const SACRIFICE_FLY_HANG_WEIGHT: float = 0.13
 const SACRIFICE_FLY_SPEED_WEIGHT_Z: float = 0.055
 const SACRIFICE_FLY_JUDGMENT_WEIGHT_Z: float = 0.040
 const SACRIFICE_FLY_ARM_REFERENCE_Z: float = 0.8
 const SACRIFICE_FLY_ARM_WEIGHT_Z: float = 0.065
 const SACRIFICE_FLY_INFIELD_MAX: float = 0.05
-const SACRIFICE_FLY_MAX: float = 0.90
+const SACRIFICE_FLY_MAX: float = 0.96
 const SACRIFICE_FLY_SECOND_BASE_BASE: float = 0.07
 const SACRIFICE_FLY_SECOND_BASE_DEPTH_WEIGHT: float = 0.24
 const SACRIFICE_FLY_SECOND_BASE_HANG_WEIGHT: float = 0.08
@@ -325,9 +320,9 @@ static func resolve(
 	if absf(spray) > FAIR_HALF_ANGLE_DEG:
 		return {"result": RESULT_FOUL_BACK, "category": RESULT_FOUL_BACK, "bases": 0}
 
-	var hr_line: float = _hr_line(spray) * _rule_float("hr_distance_scale", HR_DISTANCE_SCALE)
-	var adjusted_hr_line: float = _power_adjusted_hr_line(hr_line, batter)
-	if distance >= adjusted_hr_line and trajectory != PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
+	var hr_line: float = _hr_line(spray) * _rule_float("park_distance_scale", PARK_DISTANCE_SCALE)
+	hr_line += _rule_float("hr_wall_clearance", HR_WALL_CLEARANCE)
+	if distance >= hr_line and trajectory != PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
 		var hr_field: int = _outfield_position_for_spray(spray, distance, trajectory)
 		var hr_field_name: String = "left" if hr_field == 7 else ("right" if hr_field == 9 else "center")
 		return {
@@ -452,7 +447,6 @@ static func resolve(
 		grounder_hit = _maybe_downgrade_single_to_out(grounder_hit, batter, trajectory, position)
 		return _enrich(grounder_hit, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 	var hit_outcome: Dictionary = _airball_hit_outcome(batter, bases, outs, physics, ability_arm, position)
-	hit_outcome = _maybe_upgrade_hit_to_home_run(hit_outcome, batter, physics, contact_quality)
 	hit_outcome = _maybe_downgrade_single_to_out(hit_outcome, batter, trajectory, position)
 	return _enrich(hit_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 
@@ -569,7 +563,7 @@ static func _catch_probability_neutral(
 	var base: float = 0.50
 	match trajectory:
 		PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
-			base = _grounder_catch_probability(position, distance, lateral, hard, soft)
+			base = _grounder_catch_probability(position, distance, spray, hard, soft)
 		PSBattedBallPhysicsResolver.TRAJECTORY_LINER:
 			base = _liner_catch_probability(position, distance, hang_time, lateral, hard)
 		PSBattedBallPhysicsResolver.TRAJECTORY_FLY:
@@ -583,7 +577,7 @@ static func _catch_probability_neutral(
 static func _grounder_catch_probability(
 	position: int,
 	distance: float,
-	lateral: float,
+	spray: float,
 	hard: float,
 	soft: float
 ) -> float:
@@ -601,8 +595,17 @@ static func _grounder_catch_probability(
 		0.0,
 		1.0
 	)
-	var hole_penalty: float = lateral * (0.34 + hard * 0.10 + depth * 0.05)
-	return 0.990 + soft * 0.020 - hard * 0.080 - depth * 0.050 - hole_penalty
+	# ゴロの「穴」は共通 _lateral_difficulty(40%緩衝)を使わず生の横ズレから計算する。
+	# 担当割付の都合で横ズレが最大でも半区画(≈0.5)しか出ず、緩衝40%だとほぼ常に0になり
+	# 三遊間・一二塁間を抜ける安打が構造的に消えるため。実測ゴロ BABIP ≈ .236 の再現ノブ。
+	var raw_offset: float = clamp(
+		absf(spray - float(FIELDER_SPRAY_NOMINAL.get(position, 0.0))) / LATERAL_RANGE_DEG,
+		0.0,
+		1.0
+	)
+	var hole_factor: float = clamp((raw_offset - 0.12) / 0.60, 0.0, 1.0)
+	var hole_penalty: float = hole_factor * (0.55 + hard * 0.10 + depth * 0.05)
+	return 0.955 + soft * 0.020 - hard * 0.125 - depth * 0.050 - hole_penalty
 
 
 static func _liner_catch_probability(
@@ -617,7 +620,7 @@ static func _liner_catch_probability(
 	if position >= 7:
 		var deep: float = clamp((distance - OUTFIELD_LINER_DISTANCE_DEEP) / 44.0, 0.0, 1.0)
 		return (
-			0.48
+			0.26
 			+ hang_ease * 0.28
 			- sinker * 0.10
 			- hard * 0.075
@@ -626,7 +629,7 @@ static func _liner_catch_probability(
 		)
 
 	var infield_depth: float = clamp(distance / INFIELD_DISTANCE_THRESHOLD, 0.0, 1.0)
-	return 0.30 + hang_ease * 0.13 - hard * 0.080 - infield_depth * 0.045 - lateral * 0.18
+	return 0.22 + hang_ease * 0.13 - hard * 0.080 - infield_depth * 0.045 - lateral * 0.18
 
 
 static func _fly_catch_probability(
@@ -647,11 +650,11 @@ static func _fly_catch_probability(
 		)
 		var wall_depth: float = clamp((distance - OUTFIELD_FLY_DISTANCE_DEEP) / 28.0, 0.0, 1.0)
 		return (
-			0.835
+			0.850
 			+ hang_ease * 0.205
 			- low_hang * 0.120
-			- range_depth * 0.125
-			- wall_depth * 0.060
+			- range_depth * 0.060
+			- wall_depth * 0.030
 			- hard * 0.030
 			- lateral * (0.200 + low_hang * 0.120)
 		)
@@ -1088,7 +1091,7 @@ static func _groundout_third_score_probability(
 			chance += 0.05
 		6:
 			chance += 0.02
-	return clamp(chance, 0.0, 0.58)
+	return clamp(chance, 0.0, 0.80)
 
 
 static func _groundout_second_to_third_probability(
@@ -1885,60 +1888,6 @@ static func _airball_hit_outcome(
 	return outcome
 
 
-static func _maybe_upgrade_hit_to_home_run(
-	outcome: Dictionary,
-	batter: PSPlayerSeasonRecord,
-	physics: Dictionary,
-	contact_quality: Dictionary
-) -> Dictionary:
-	if str(outcome.get("category", "")) != CATEGORY_HIT:
-		return outcome
-	var bases_taken: int = int(outcome.get("bases", 0))
-	if bases_taken <= 0 or bases_taken >= 4:
-		return outcome
-
-	var trajectory: String = str(physics.get("trajectory_bucket", "liner"))
-	if trajectory == PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER or trajectory == PSBattedBallPhysicsResolver.TRAJECTORY_POPUP:
-		return outcome
-
-	var spray: float = float(physics.get("spray_angle", 0.0))
-	var distance: float = float(physics.get("distance", 0.0))
-	var ev: float = float(physics.get("exit_velocity", 80.0))
-	var launch_angle: float = float(physics.get("launch_angle", 12.0))
-	var hr_line: float = _hr_line(spray) * _rule_float("hr_distance_scale", HR_DISTANCE_SCALE)
-	hr_line = _power_adjusted_hr_line(hr_line, batter)
-	var shortfall: float = hr_line - distance
-	var hr_upgrade_window: float = _rule_float("hr_upgrade_window", HR_UPGRADE_WINDOW)
-	if shortfall < 0.0 or shortfall > hr_upgrade_window:
-		return outcome
-
-	# 打者パワー z をゲートに通し、0(非力)〜1(強打者)の昇格係数にする。
-	var power: float = _home_run_power(batter)
-	var power_factor: float = clamp(
-		(power - _rule_float("hr_upgrade_power_floor", HR_UPGRADE_POWER_FLOOR)) / _rule_float("hr_upgrade_power_width", HR_UPGRADE_POWER_WIDTH),
-		0.0,
-		1.0
-	)
-
-	var closeness: float = pow(1.0 - shortfall / hr_upgrade_window, 1.25)
-	var ev_bonus: float = clamp((ev - 90.0) * 0.014, 0.0, 0.22)
-	var angle_bonus: float = 0.10 if launch_angle >= 18.0 and launch_angle <= 38.0 else 0.0
-	var ideal_bonus: float = 0.36 if bool(contact_quality.get("ideal_power_launch", false)) else 0.0
-	var trajectory_bonus: float = 0.08 if trajectory == PSBattedBallPhysicsResolver.TRAJECTORY_FLY else 0.0
-	var chance: float = power_factor * (0.060 + closeness * 0.58 + ev_bonus + angle_bonus + ideal_bonus + trajectory_bonus)
-	chance = clamp(chance, 0.0, 0.90)
-	if Rng.roll_float() >= chance:
-		return outcome
-
-	var hr_field: int = _outfield_position_for_spray(spray, distance, trajectory)
-	var hr_field_name: String = "left" if hr_field == 7 else ("right" if hr_field == 9 else "center")
-	outcome["result"] = "home_run_%s" % hr_field_name
-	outcome["bases"] = 4
-	outcome["fielder_position"] = hr_field
-	outcome["home_run_upgrade_chance"] = chance
-	return outcome
-
-
 static func _maybe_downgrade_single_to_out(
 	outcome: Dictionary,
 	batter: PSPlayerSeasonRecord,
@@ -2004,22 +1953,6 @@ static func _hit_field_name(position: int) -> String:
 
 static func _has_runner(bases: Array, base_index: int) -> bool:
 	return base_index >= 0 and base_index < bases.size() and bases[base_index] != null
-
-
-# 打者の本塁打パワーを z で返す。長打力(Bat_Impact)に打球を上げる力(Bat_Loft)を半分加味する。
-static func _home_run_power(batter: PSPlayerSeasonRecord) -> float:
-	if batter == null:
-		return 0.0
-	return batter.z_ability("Bat_Impact", 0.0) + batter.z_ability("Bat_Loft", 0.0) * 0.5
-
-
-# 本塁打に必要な飛距離ラインを打者パワー(z)で調整する。
-# パワーを S 字カーブに通し、非力な打者はライン+(遠い=本塁打↓)、強打者はライン-(近い=本塁打↑)にする。
-# s は 0(非力)〜1(強打者)で、中心付近で急に立ち上がり両端で飽和するため、本塁打数は S 字で増える。
-static func _power_adjusted_hr_line(base_line: float, batter: PSPlayerSeasonRecord) -> float:
-	var power: float = _home_run_power(batter)
-	var s: float = 1.0 / (1.0 + exp(-(power - _rule_float("hr_power_line_center", HR_POWER_LINE_CENTER)) / _rule_float("hr_power_line_width", HR_POWER_LINE_WIDTH)))
-	return base_line + _rule_float("hr_power_line_amplitude", HR_POWER_LINE_AMPLITUDE) * (1.0 - 2.0 * s)
 
 
 static func _fielder_record(defense: Dictionary, position: int) -> PSPlayerSeasonRecord:

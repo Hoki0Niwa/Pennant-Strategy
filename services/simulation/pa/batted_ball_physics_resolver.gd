@@ -56,17 +56,22 @@ static func _distance(ev: float, la: float, trajectory: String) -> float:
 		# ゴロは射出公式ではなく転がり近似 (内野〜外野前)
 		return clamp(18.0 + (ev - 70.0) * 0.55, 5.0, 85.0)
 
-	var clamped_la: float = clamp(la, 1.0, 55.0)
+	# 上限75°: ポップフライ(>50°)は射出角に応じて自然に水平距離が縮む(sin(2θ)減衰)。
+	# 55°で頭打ちにすると真上に近いポップまで外野前へ飛んでしまう。
+	var clamped_la: float = clamp(la, 1.0, 75.0)
 	var angle_radians: float = deg_to_rad(clamped_la)
 	var speed_mps: float = ev * METERS_PER_SECOND_PER_MPH
 	var raw_distance: float = speed_mps * speed_mps * sin(2.0 * angle_radians) / GRAVITY
-	# air_factor は raw (空気抵抗なし) からの減衰係数。MLB / NPB のフェンス越え距離 (100mph 28° で 120m)
-	# に合わせて 0.66 base、EV 100mph 付近で 0.68。
-	var air_factor: float = 0.66 + clamp((ev - 90.0) * 0.0030, -0.06, 0.08)
+	# air_factor は raw (空気抵抗なし) からの減衰係数。Statcast の実測飛距離
+	# (28°付近: 90mph≈98m / 100mph≈114m / 105mph≈122m / 110mph≈130m ≒ +1.5m/mph) にフィット。
+	# 抗力は速度とともに増えるため、EV が高いほど raw からの減衰は大きい(係数は負の傾き)。
+	var air_factor: float = 0.705 - clamp((ev - 90.0) * 0.0034, -0.05, 0.10)
+	# 高角度の打球は滞空が長く抗力損失が大きい(実測: 100mph は 28°≈114m に対し 45°≈100-104m)。
+	air_factor -= clamp((clamped_la - 32.0) * 0.004, 0.0, 0.12)
 	if trajectory == TRAJECTORY_LINER:
 		air_factor += 0.05
 	elif trajectory == TRAJECTORY_POPUP:
-		air_factor -= 0.22
+		air_factor -= 0.26
 	return clamp(raw_distance * air_factor, 4.0, 150.0)
 
 

@@ -40,7 +40,7 @@ const FIELD_NAMES: Dictionary = {
 	9: "right",
 }
 
-const DOUBLE_RATE_SCALE: float = 0.43
+const DOUBLE_RATE_SCALE: float = 0.42
 
 
 static func resolve_hit(
@@ -496,24 +496,31 @@ static func _extra_advance_probability(
 	var distance: float = float(physics.get("distance", 0.0))
 	var hang_time: float = float(physics.get("hang_time", 1.8))
 	var spray: float = float(physics.get("spray_angle", 0.0))
+	# 状況別の基準進塁率。MLB/NPB の走塁実測(単打の二塁走者生還≈60% / 単打の一塁→三塁≈28% /
+	# 二塁打の一塁走者生還≈42%)へ寄せる。二塁打は距離・ギャップ補正が乗りやすいので基準は低めに置く。
 	var probability: float = 0.08
+	if batter_bases == 1 and from_base == 2 and to_base >= 4:
+		probability = 0.60
+	elif batter_bases == 1 and from_base == 1 and to_base == 3:
+		probability = 0.27
+	elif batter_bases >= 2 and from_base == 1 and to_base >= 4:
+		probability = 0.30
 	# 走力 z(中立0.78)・走塁判断 z(中立0.42)が高いほど追加進塁を増やす。守備肩も z のまま、強いほど減らす。
-	probability += (speed - 0.78) * 0.04
-	probability += (baserunning - 0.42) * 0.01875
+	probability += (speed - 0.78) * 0.06
+	probability += (baserunning - 0.42) * 0.03
 	probability -= (fielder_arm - FIELDER_ARM_NEUTRAL_Z) * FIELDER_ARM_EXTRA_ADVANCE_WEIGHT_Z
-	probability += clamp((distance - 70.0) * 0.0030, -0.05, 0.18)
+	probability += clamp((distance - 70.0) * 0.0045, -0.10, 0.20)
 	probability += clamp((hang_time - 2.0) * 0.035, -0.04, 0.12)
 	if _in_gap(spray):
 		probability += 0.08
 	if outs_before == 2:
-		probability += 0.10
-	if to_base >= 4:
-		probability -= 0.03
-	if batter_bases >= 2 and from_base == 1 and to_base >= 4:
-		probability += 0.08
+		probability += 0.14
 	if fielder_position == 8:
-		probability -= 0.03
-	return clamp(probability, 0.0, 0.56)
+		probability -= 0.04
+	if fielder_position <= 6:
+		# 内野で処理された打球(内野安打等)では次の塁を狙う余地がほぼ無い。
+		probability *= 0.15
+	return clamp(probability, 0.0, 0.95)
 
 
 static func _advance_out_probability(

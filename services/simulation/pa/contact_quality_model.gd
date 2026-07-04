@@ -8,7 +8,10 @@ class_name PSContactQualityModel
 # 打球初速(EV)の基準値と、能力・球速・状況による各種補正の重み。
 const EV_BASE: float = 91.0                  # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
-const EV_HOME_RUN_POWER_WEIGHT: float = 0.98 # 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
+# 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。実測の打者間平均EV差(リーグ中位≈88-89 /
+# 上位≈92-96 mph)に合わせる。HR判定を固定フェンス×物理飛距離へ移行(2026-07-03)して以降、
+# パワー→HR の差はフェンス補正ではなく全てこの EV 経路と理想角(power_ideal_*)で表現する。
+const EV_HOME_RUN_POWER_WEIGHT: float = 2.90
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
 const EV_STUFF_MAX_REDUCTION: float = 0.205  # 球威 curve が最大級の投手でも EV 低下を0.2mph前後へ飽和させる。
 const EV_FATIGUE_WEIGHT: float = 0.035
@@ -32,7 +35,7 @@ const GAP_LINER_TARGET_LA: float = 16.0
 const GAP_LINER_LA_PULL: float = 0.34
 
 # 本塁打向きの理想打球角(ideal power)の発生率・目標角・EV上乗せ・飛距離ボーナス。
-const POWER_IDEAL_LA_BASE_RATE: float = 0.040
+const POWER_IDEAL_LA_BASE_RATE: float = 0.024
 const POWER_IDEAL_LA_PULL: float = 0.52
 const POWER_IDEAL_LA_TARGET: float = 28.0
 const POWER_IDEAL_LA_EV_BOOST: float = 1.4
@@ -50,14 +53,21 @@ const STUFF_MISHIT_LOGIT_WEIGHT: float = 0.01
 const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 0.02
 
 # 打球角度(LA)の基準値・投球コース別オフセット・ばらつき範囲とクランプ。
+# LA_RANDOM_SPREAD は _gaussian の係数(実効σ ≈ spread×0.577)。Statcast 実測の打球角は
+# 平均≈11-12° / σ≈25°(2017-19: 25.0-25.3)なので spread 42 で σ≈24 を実現し、
+# バケット比率(ゴロ<10° ≈44% / ライナー10-25° ≈24% / フライ25-50° ≈24% / ポップ>50° ≈7%)を再現する。
 const LA_BASE: float = 11.5
 const LA_HEIGHT_LOW_OFFSET: float = -7.0
 const LA_HEIGHT_MIDDLE_OFFSET: float = 1.0
 const LA_HEIGHT_HIGH_OFFSET: float = 8.0
-const LA_RANDOM_SPREAD: float = 10.5
+const LA_RANDOM_SPREAD: float = 42.0
 const LA_CHASE_NOISE_BOOST: float = 2.75
-const LA_MIN: float = -42.0
+const LA_MIN: float = -60.0
 const LA_MAX: float = 78.0
+# EV-LA 結合(Statcast 実測のドーム形状): EVはLD帯(≈10-30°)で最大、帯から離れるほど低下(≈2mph/5°)。
+# ポップフライや極端なチョッパーが平均EVのまま飛びすぎるのを防ぐ。
+const LA_EV_HIGH_FALLOFF: float = 0.20  # LA が30°を超えた1°あたりのEV低下(mph)。
+const LA_EV_LOW_FALLOFF: float = 0.12   # LA が-5°を下回った1°あたりのEV低下(mph)。
 
 # 球種構成の傾向(集計済み・中心化済み)による打球補正。**いずれも微差**(較正フェーズで強める前提)。
 const LA_GB_WEIGHT: float = 1.2          # ゴロ寄り球種ほど打球角度(LA)をわずかに下げ、フライ率を下げる。
@@ -178,8 +188,9 @@ static func generate(
 	# 球種のゴロ寄り傾向で打球角度をわずかに下げる(微差)。
 	la -= arsenal_gb_bias * _rule_float("la_gb_weight", LA_GB_WEIGHT)
 	# 接触能力が高いほど角度のばらつきを抑え、低い・追いかけ・2ストライク・強制アウトで広げる。
+	# 実測の打者間 LA σ は ~22-28° の幅なので、能力による増減は ±1割程度に留める。
 	var la_spread: float = _rule_float("la_random_spread", LA_RANDOM_SPREAD)
-	la_spread *= 1.0 - max(0.0, contact_curve) * _rule_float("contact_la_control_weight", 0.32) + contact_weakness * _rule_float("contact_weak_la_spread_weight", 0.20)
+	la_spread *= 1.0 - max(0.0, contact_curve) * _rule_float("contact_la_control_weight", 0.12) + contact_weakness * _rule_float("contact_weak_la_spread_weight", 0.08)
 	if chase:
 		la_spread += _rule_float("la_chase_noise_boost", LA_CHASE_NOISE_BOOST)
 	if two_strike:
@@ -231,7 +242,9 @@ static func generate(
 
 	# 本塁打向きの理想角(ideal power)を引く確率を、長打力・球威・状況から算出する。
 	var ideal_power_logit: float = PSBalanceProfile.logit(_rule_float("power_ideal_la_base_rate", POWER_IDEAL_LA_BASE_RATE))
-	ideal_power_logit += home_run_curve * _rule_float("ideal_power_curve_weight", 1.20)
+	# 長打力ゲート。フェンス補正の廃止(2026-07-03)以降、パワー帯別のHR差はEV経路とこの
+	# 「スラッガーほど理想角に入れる」重みで作る。上げると上位打者へHRが集中し裾が伸びる。
+	ideal_power_logit += home_run_curve * _rule_float("ideal_power_curve_weight", 1.55)
 	ideal_power_logit -= stuff_curve * _rule_float("stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
 	ideal_power_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ideal_weight", 0.04)
 	ideal_power_logit += arsenal_hr_bias * _rule_float("arsenal_hr_ideal_weight", ARSENAL_HR_IDEAL_WEIGHT)  # 被弾寄り球種で理想角を微増(微差)。
@@ -249,9 +262,11 @@ static func generate(
 		var ideal_angle: float = _rule_float("power_ideal_la_target", POWER_IDEAL_LA_TARGET)
 		la = lerp(la, ideal_angle, _rule_float("power_ideal_la_pull", POWER_IDEAL_LA_PULL))
 
-	# EV と LA を物理的に妥当な範囲へクランプする。
-	ev = clamp(ev, _rule_float("ev_min", EV_MIN), _rule_float("ev_max", EV_MAX))
+	# LA を確定してから EV-LA 結合(ドーム形状)を適用し、両方を物理的に妥当な範囲へクランプする。
 	la = clamp(la, _rule_float("la_min", LA_MIN), _rule_float("la_max", LA_MAX))
+	ev -= max(0.0, la - 30.0) * _rule_float("la_ev_high_falloff", LA_EV_HIGH_FALLOFF)
+	ev -= max(0.0, -5.0 - la) * _rule_float("la_ev_low_falloff", LA_EV_LOW_FALLOFF)
+	ev = clamp(ev, _rule_float("ev_min", EV_MIN), _rule_float("ev_max", EV_MAX))
 
 	# 打球方向(spray角)を生成し、理想角ヒット時は飛距離(carry)を伸ばす。
 	var spray_gap_curve: float = gap_curve if la >= 8.0 and la <= 24.0 else min(0.0, gap_curve)
