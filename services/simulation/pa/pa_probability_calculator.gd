@@ -45,6 +45,8 @@ const PLATOON_WEIGHT: float = 0.3
 const PITCHER_TAIL_PIVOT: float = 1.65  # 投手平均 +0.5σ 付近から圧縮開始。
 const PITCHER_TAIL_SPAN: float = 0.6    # 超過分の漸近上限(z)。
 
+static var _rule_paths: Dictionary = {}
+
 
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
 # precomp は以下のキーを持つ想定（PlateAppearanceCoordinator が組み立てる）:
@@ -113,16 +115,37 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 
 
 static func _rule_float(name: String, fallback: float) -> float:
-	return ModManager.rule_float("simulation.pa_probability.%s" % name, fallback)
+	var path: String = str(_rule_paths.get(name, ""))
+	if path.is_empty():
+		path = "simulation.pa_probability." + name
+		_rule_paths[name] = path
+	return ModManager.rule_float(path, fallback)
 
 
 # softmax で 1 カテゴリを抽選する。
 static func pick(weights: Dictionary) -> String:
-	var rows: Array = []
-	for outcome in OUTCOMES:
-		rows.append({"result": outcome, "logit": float(weights.get(outcome, 0.0))})
-	var picked: Dictionary = PSBalanceProfile.weighted_softmax_pick(rows)
-	return str(picked.get("result", OUTCOME_BIP))
+	var k_logit: float = float(weights.get(OUTCOME_STRIKEOUT, 0.0))
+	var bb_logit: float = float(weights.get(OUTCOME_WALK, 0.0))
+	var hbp_logit: float = float(weights.get(OUTCOME_HIT_BY_PITCH, 0.0))
+	var bip_logit: float = float(weights.get(OUTCOME_BIP, 0.0))
+	var max_logit: float = max(max(k_logit, bb_logit), max(hbp_logit, bip_logit))
+	var k_weight: float = exp(clamp(k_logit - max_logit, -30.0, 30.0))
+	var bb_weight: float = exp(clamp(bb_logit - max_logit, -30.0, 30.0))
+	var hbp_weight: float = exp(clamp(hbp_logit - max_logit, -30.0, 30.0))
+	var bip_weight: float = exp(clamp(bip_logit - max_logit, -30.0, 30.0))
+	var total: float = k_weight + bb_weight + hbp_weight + bip_weight
+	if total <= 0.0:
+		return OUTCOME_BIP
+	var roll: float = Rng.roll_float() * total
+	if roll <= k_weight:
+		return OUTCOME_STRIKEOUT
+	roll -= k_weight
+	if roll <= bb_weight:
+		return OUTCOME_WALK
+	roll -= bb_weight
+	if roll <= hbp_weight:
+		return OUTCOME_HIT_BY_PITCH
+	return OUTCOME_BIP
 
 
 # weights を確率分布に正規化したコピーを返す（テスト/レポート用）。

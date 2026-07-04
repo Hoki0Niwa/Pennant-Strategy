@@ -831,6 +831,7 @@ func _probe_offense(subject: PSPlayerSeasonRecord) -> Dictionary:
 
 
 func _advanced_summary_for_subject(advanced_stats: Dictionary, subject: PSPlayerSeasonRecord, pitcher_view: bool) -> Dictionary:
+	advanced_stats = AdvancedStatReducer.to_dict_container(advanced_stats)
 	var bucket_name: String = AdvancedStatReducer.BUCKET_PITCHERS if pitcher_view else AdvancedStatReducer.BUCKET_PLAYERS
 	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
 	var record: Dictionary = bucket.get(str(subject.player_id), {}) as Dictionary

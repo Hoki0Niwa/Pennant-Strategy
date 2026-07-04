@@ -34,6 +34,27 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 	9: "right",
 }
 
+static var _profile_enabled: bool = false
+static var _profile_totals_usec: Dictionary = {}
+
+
+static func reset_profile(enabled: bool = true) -> void:
+	_profile_enabled = enabled
+	_profile_totals_usec = {}
+
+
+static func profile_totals_msec() -> Dictionary:
+	var out: Dictionary = {}
+	for key_value in _profile_totals_usec.keys():
+		out[str(key_value)] = float(_profile_totals_usec[key_value]) / 1000.0
+	return out
+
+
+static func _profile_add(label: String, elapsed_usec: int) -> void:
+	if not _profile_enabled:
+		return
+	_profile_totals_usec[label] = int(_profile_totals_usec.get(label, 0)) + elapsed_usec
+
 
 # プレビュー系 (UI から呼ばれる) は PSTeamSetupBuilder へ委譲。
 static func preview_lineup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
@@ -588,6 +609,7 @@ static func simulate_until_day_async(
 
 
 static func simulate_game_at_index(season: PSSeason, game_index: int, persist: bool = true) -> Dictionary:
+	var profile_start: int = Time.get_ticks_usec() if _profile_enabled else 0
 	if game_index < 0 or game_index >= season.schedule.size():
 		return {"ok": false, "message": "試合番号が不正です"}
 
@@ -598,15 +620,27 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	var away_team_id: int = int(game.get("away_team_id", 0))
 	var home_team_id: int = int(game.get("home_team_id", 0))
 	var dh_enabled: bool = bool(game.get("dh_enabled", false))
-	var pre_player_stats: Dictionary = _snapshot_game_player_stats(season, away_team_id, home_team_id)
 	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, away_team_id, dh_enabled)
 	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, home_team_id, dh_enabled)
 	if not bool(away_setup.get("ok", false)):
 		return away_setup
 	if not bool(home_setup.get("ok", false)):
 		return home_setup
+	if _profile_enabled:
+		var now_setup: int = Time.get_ticks_usec()
+		_profile_add("setup", now_setup - profile_start)
+		profile_start = now_setup
+	var pre_player_stats: Dictionary = _snapshot_game_player_stats(season, away_setup, home_setup)
+	if _profile_enabled:
+		var now_snapshot: int = Time.get_ticks_usec()
+		_profile_add("snapshot", now_snapshot - profile_start)
+		profile_start = now_snapshot
 
 	var result: Dictionary = PSGameLoop.simulate_game(away_setup, home_setup)
+	if _profile_enabled:
+		var now_loop: int = Time.get_ticks_usec()
+		_profile_add("loop", now_loop - profile_start)
+		profile_start = now_loop
 	game["away_score"] = int(result.get("away_score", 0))
 	game["home_score"] = int(result.get("home_score", 0))
 	game["played"] = true
@@ -615,13 +649,28 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	season.schedule[game_index] = game
 
 	PSGameDecisions.apply_game_decisions(season, away_team_id, home_team_id, result)
+	if _profile_enabled:
+		var now_decisions: int = Time.get_ticks_usec()
+		_profile_add("decisions", now_decisions - profile_start)
+		profile_start = now_decisions
 	_record_player_game_logs(season, game_index, game, result, pre_player_stats)
+	if _profile_enabled:
+		var now_logs: int = Time.get_ticks_usec()
+		_profile_add("game_logs", now_logs - profile_start)
+		profile_start = now_logs
 	var game_day: int = int(game.get("day", season.current_day))
 	PSRotationPlanner.record_rotation_start(season, away_team_id, away_setup, game_day)
 	PSRotationPlanner.record_rotation_start(season, home_team_id, home_setup, game_day)
 	PSGameDecisions.advance_current_day(season)
+	if _profile_enabled:
+		var now_after_day: int = Time.get_ticks_usec()
+		_profile_add("after_day", now_after_day - profile_start)
+		profile_start = now_after_day
 	if persist:
 		_persist_simulation_outputs(season)
+	if _profile_enabled:
+		var now_persist: int = Time.get_ticks_usec()
+		_profile_add("persist", now_persist - profile_start)
 
 	var summary: String = _result_summary(away_team_id, home_team_id, result)
 	return {
@@ -653,21 +702,93 @@ static func _team_name(team_id: int) -> String:
 	return team.short_name
 
 
-static func _snapshot_game_player_stats(season: PSSeason, away_team_id: int, home_team_id: int) -> Dictionary:
+static func _snapshot_game_player_stats(season: PSSeason, away_setup: Dictionary, home_setup: Dictionary) -> Dictionary:
 	var out: Dictionary = {}
 	if season == null:
 		return out
-	for team_id in [away_team_id, home_team_id]:
-		for record_value in RecordStore.get_team_player_records(int(team_id), season.year, season.season_number):
-			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
-			if record == null:
-				continue
-			out[str(record.player_id)] = {
-				"team_id": int(team_id),
-				"batter": record.batter_stats.to_dict(),
-				"pitcher": record.pitcher_stats.to_dict(),
-			}
+	_snapshot_setup_player_stats(out, away_setup)
+	_snapshot_setup_player_stats(out, home_setup)
 	return out
+
+
+static func _snapshot_setup_player_stats(out: Dictionary, setup: Dictionary) -> void:
+	if setup.is_empty():
+		return
+	var team_id: int = int(setup.get("team_id", 0))
+	_snapshot_player_record_stats(out, setup.get("pitcher", null) as PSPlayerSeasonRecord, team_id)
+	_snapshot_player_record_stats(out, setup.get("starter_pitcher", null) as PSPlayerSeasonRecord, team_id)
+	for key in ["batters", "bench", "relievers"]:
+		for record_value in (setup.get(key, []) as Array):
+			_snapshot_player_record_stats(out, record_value as PSPlayerSeasonRecord, team_id)
+	for assignment_value in (setup.get("fielders", []) as Array):
+		var assignment: Dictionary = assignment_value as Dictionary
+		_snapshot_player_record_stats(out, assignment.get("record", null) as PSPlayerSeasonRecord, team_id)
+
+
+static func _snapshot_player_record_stats(out: Dictionary, record: PSPlayerSeasonRecord, team_id: int) -> void:
+	if record == null or record.player_id <= 0:
+		return
+	var key: String = str(record.player_id)
+	if out.has(key):
+		return
+	out[key] = {
+		"team_id": team_id,
+		"batter": _clone_batter_stats(record.batter_stats),
+		"pitcher": _clone_pitcher_stats(record.pitcher_stats),
+	}
+
+
+static func _clone_batter_stats(stats: PSBatterStats) -> PSBatterStats:
+	var copy: PSBatterStats = PSBatterStats.new()
+	if stats == null:
+		return copy
+	copy.games = stats.games
+	copy.plate_appearances = stats.plate_appearances
+	copy.at_bats = stats.at_bats
+	copy.hits = stats.hits
+	copy.doubles = stats.doubles
+	copy.triples = stats.triples
+	copy.home_runs = stats.home_runs
+	copy.runs_batted_in = stats.runs_batted_in
+	copy.runs = stats.runs
+	copy.walks = stats.walks
+	copy.hit_by_pitches = stats.hit_by_pitches
+	copy.strikeouts = stats.strikeouts
+	copy.pitches_seen = stats.pitches_seen
+	copy.stolen_base_attempts = stats.stolen_base_attempts
+	copy.stolen_bases = stats.stolen_bases
+	copy.sacrifices = stats.sacrifices
+	copy.sacrifice_flies = stats.sacrifice_flies
+	copy.double_plays = stats.double_plays
+	copy.errors = stats.errors
+	return copy
+
+
+static func _clone_pitcher_stats(stats: PSPitcherStats) -> PSPitcherStats:
+	var copy: PSPitcherStats = PSPitcherStats.new()
+	if stats == null:
+		return copy
+	copy.games = stats.games
+	copy.starts = stats.starts
+	copy.relief_appearances = stats.relief_appearances
+	copy.wins = stats.wins
+	copy.losses = stats.losses
+	copy.holds = stats.holds
+	copy.saves = stats.saves
+	copy.outs_pitched = stats.outs_pitched
+	copy.batters_faced = stats.batters_faced
+	copy.pitches_thrown = stats.pitches_thrown
+	copy.hits_allowed = stats.hits_allowed
+	copy.home_runs_allowed = stats.home_runs_allowed
+	copy.walks = stats.walks
+	copy.hit_batters = stats.hit_batters
+	copy.strikeouts = stats.strikeouts
+	copy.runs_allowed = stats.runs_allowed
+	copy.earned_runs = stats.earned_runs
+	copy.complete_games = stats.complete_games
+	copy.shutouts = stats.shutouts
+	copy.quality_starts = stats.quality_starts
+	return copy
 
 
 static func _record_player_game_logs(season: PSSeason, game_index: int, game: Dictionary, result: Dictionary, pre_player_stats: Dictionary) -> void:
@@ -677,16 +798,25 @@ static func _record_player_game_logs(season: PSSeason, game_index: int, game: Di
 	var home_team_id: int = int(game.get("home_team_id", result.get("home_team_id", 0)))
 	var away_score: int = int(result.get("away_score", game.get("away_score", 0)))
 	var home_score: int = int(result.get("home_score", game.get("home_score", 0)))
-	for key_value in pre_player_stats.keys():
-		var player_id: int = int(str(key_value))
+	for id_value in _player_game_log_candidate_ids(result, pre_player_stats):
+		var player_id: int = int(id_value)
 		if player_id <= 0:
+			continue
+		var key_value: String = str(player_id)
+		if not pre_player_stats.has(key_value):
 			continue
 		var before: Dictionary = pre_player_stats[key_value] as Dictionary
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
 		if record == null:
 			continue
-		var batter_delta: PSBatterStats = record.batter_stats.subtract_from(PSBatterStats.from_dict(before.get("batter", {}) as Dictionary))
-		var pitcher_delta: PSPitcherStats = record.pitcher_stats.subtract_from(PSPitcherStats.from_dict(before.get("pitcher", {}) as Dictionary))
+		var before_batter: PSBatterStats = before.get("batter", null) as PSBatterStats
+		var before_pitcher: PSPitcherStats = before.get("pitcher", null) as PSPitcherStats
+		if before_batter == null:
+			before_batter = PSBatterStats.new()
+		if before_pitcher == null:
+			before_pitcher = PSPitcherStats.new()
+		var batter_delta: PSBatterStats = record.batter_stats.subtract_from(before_batter)
+		var pitcher_delta: PSPitcherStats = record.pitcher_stats.subtract_from(before_pitcher)
 		var batter_dict: Dictionary = batter_delta.to_dict()
 		var pitcher_dict: Dictionary = pitcher_delta.to_dict()
 		if not _stats_dict_has_any(batter_dict) and not _stats_dict_has_any(pitcher_dict):
@@ -709,6 +839,67 @@ static func _record_player_game_logs(season: PSSeason, game_index: int, game: Di
 			"batter": batter_dict,
 			"pitcher": pitcher_dict,
 		})
+
+
+static func _player_game_log_candidate_ids(result: Dictionary, pre_player_stats: Dictionary) -> Array:
+	var ids: Dictionary = {}
+	_collect_lineup_player_ids(ids, result)
+	_collect_substitution_player_ids(ids, result)
+	_collect_pitcher_outing_ids(ids, result)
+	_collect_advanced_stat_player_ids(ids, result)
+	_add_player_id(ids, int(result.get("winning_pitcher_id", 0)))
+	_add_player_id(ids, int(result.get("losing_pitcher_id", 0)))
+	_add_player_id(ids, int(result.get("save_pitcher_id", 0)))
+	for pid_value in (result.get("hold_pitcher_ids", []) as Array):
+		_add_player_id(ids, int(pid_value))
+	if ids.is_empty():
+		var fallback: Array = []
+		for key_value in pre_player_stats.keys():
+			fallback.append(int(str(key_value)))
+		return fallback
+	return ids.keys()
+
+
+static func _collect_lineup_player_ids(ids: Dictionary, result: Dictionary) -> void:
+	var lineups: Dictionary = result.get("lineups", {}) as Dictionary
+	for key in ["away", "home"]:
+		var lineup: Dictionary = lineups.get(key, {}) as Dictionary
+		for slot_value in (lineup.get("slots", []) as Array):
+			var slot: Dictionary = slot_value as Dictionary
+			_add_player_id(ids, int(slot.get("player_id", 0)))
+
+
+static func _collect_substitution_player_ids(ids: Dictionary, result: Dictionary) -> void:
+	for sub_value in (result.get("substitutions", []) as Array):
+		var sub: Dictionary = sub_value as Dictionary
+		_add_player_id(ids, int(sub.get("in_id", 0)))
+		_add_player_id(ids, int(sub.get("out_id", 0)))
+
+
+static func _collect_pitcher_outing_ids(ids: Dictionary, result: Dictionary) -> void:
+	_add_player_id(ids, int(result.get("away_pitcher_id", 0)))
+	_add_player_id(ids, int(result.get("home_pitcher_id", 0)))
+	for outing_value in (result.get("pitcher_outings", []) as Array):
+		var outing: Dictionary = outing_value as Dictionary
+		_add_player_id(ids, int(outing.get("pitcher_id", 0)))
+
+
+static func _collect_advanced_stat_player_ids(ids: Dictionary, result: Dictionary) -> void:
+	var advanced_stats: Dictionary = result.get("advanced_stats", {}) as Dictionary
+	for bucket_name in ["players", "pitchers"]:
+		var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
+		for key_value in bucket.keys():
+			var entry: Dictionary = bucket.get(key_value, {}) as Dictionary
+			var player_id: int = int(entry.get("player_id", 0))
+			var key: String = str(key_value)
+			if player_id <= 0 and key.is_valid_int():
+				player_id = int(key)
+			_add_player_id(ids, player_id)
+
+
+static func _add_player_id(ids: Dictionary, player_id: int) -> void:
+	if player_id > 0:
+		ids[player_id] = true
 
 
 static func _stats_dict_has_any(stats: Dictionary) -> bool:

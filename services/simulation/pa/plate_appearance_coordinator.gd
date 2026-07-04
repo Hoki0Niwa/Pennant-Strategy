@@ -34,6 +34,8 @@ const LONG_RELIEF_OUTPUT_MULTIPLIER: float = 0.45
 const STUFF_TAIL_PIVOT: float = 2.0
 const STUFF_TAIL_SPAN: float = 0.25
 
+static var _rule_paths: Dictionary = {}
+
 
 static func resolve(
 	batter: PSPlayerSeasonRecord,
@@ -473,4 +475,8 @@ static func _catcher_record(defense: Dictionary) -> PSPlayerSeasonRecord:
 
 
 static func _rule_float(name: String, fallback: float) -> float:
-	return ModManager.rule_float("simulation.plate_appearance.%s" % name, fallback)
+	var path: String = str(_rule_paths.get(name, ""))
+	if path.is_empty():
+		path = "simulation.plate_appearance." + name
+		_rule_paths[name] = path
+	return ModManager.rule_float(path, fallback)

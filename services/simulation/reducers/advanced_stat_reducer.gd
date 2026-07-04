@@ -35,6 +35,22 @@ static func empty_advanced_stats() -> Dictionary:
 	}
 
 
+static func to_dict_container(advanced_stats: Dictionary) -> Dictionary:
+	var out: Dictionary = empty_advanced_stats()
+	for bucket_name in [BUCKET_PLAYERS, BUCKET_PITCHERS]:
+		var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
+		var out_bucket: Dictionary = {}
+		for key_value in bucket.keys():
+			var key: String = str(key_value)
+			var value = bucket.get(key_value)
+			if value is PSAdvancedStats:
+				out_bucket[key] = (value as PSAdvancedStats).to_dict()
+			elif value is Dictionary:
+				out_bucket[key] = (value as Dictionary).duplicate(true)
+		out[bucket_name] = out_bucket
+	return out
+
+
 # 1プレー分のイベントを高度指標へ反映する入口。
 # plate_event / runner_events / fielding_events / defense_alignment が同じ play_event に同居している前提。
 static func apply_play_event(advanced_stats: Dictionary, play_event: Dictionary) -> void:
@@ -225,6 +241,7 @@ static func smoke_test_woba_formula() -> bool:
 		"batted_ball_event": {},
 		"runner_events": [],
 	})
+	stats = to_dict_container(stats)
 	var players: Dictionary = stats.get(BUCKET_PLAYERS, {}) as Dictionary
 	var batter: Dictionary = players.get("10", {}) as Dictionary
 	return is_equal_approx(float(batter.get("woba_numerator", 0.0)), WOBA_WALK) and int(batter.get("woba_denominator", 0)) == 1
@@ -256,6 +273,7 @@ static func smoke_test_runner_fielding_error_metrics() -> bool:
 		}],
 		"defense_alignment": [{"player_id": 303, "position": 9, "oaa_zone": "outfield"}],
 	})
+	stats = to_dict_container(stats)
 	var players: Dictionary = stats.get(BUCKET_PLAYERS, {}) as Dictionary
 	var catcher: Dictionary = players.get("202", {}) as Dictionary
 	var right_fielder: Dictionary = players.get("303", {}) as Dictionary
@@ -291,16 +309,25 @@ static func _ensure_shape(advanced_stats: Dictionary) -> void:
 static func _record_for(advanced_stats: Dictionary, bucket_name: String, player_id: int):
 	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
 	var key: String = _player_key(player_id)
+	var value = bucket.get(key, null)
+	if value is PSAdvancedStats:
+		var existing: PSAdvancedStats = value as PSAdvancedStats
+		if existing.player_id == 0:
+			existing.player_id = player_id
+		return existing
 	var stats = AdvancedStatsRecord.new()
-	stats.load_from_dict(bucket.get(key, {}) as Dictionary)
+	if value is Dictionary:
+		stats.load_from_dict(value as Dictionary)
 	stats.player_id = player_id
+	bucket[key] = stats
+	advanced_stats[bucket_name] = bucket
 	return stats
 
 
-# AdvancedStatsRecord を Dictionary 化して bucket へ戻す。キーは JSON 保存しやすい文字列 id。
+# AdvancedStatsRecord は試合中だけ object のまま bucket へ戻し、試合終了時にまとめて Dictionary 化する。
 static func _store_record(advanced_stats: Dictionary, bucket_name: String, stats) -> void:
 	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
-	bucket[_player_key(stats.player_id)] = stats.to_dict()
+	bucket[_player_key(stats.player_id)] = stats
 	advanced_stats[bucket_name] = bucket
 
 

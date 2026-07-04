@@ -106,6 +106,8 @@ const PIT_STUFF_Z_NEUTRAL: float = 1.14   # 球威(Pit_BarrelDeny+0.5*Pit_Impact
 const CURVE_WIDTH_Z: float = 1.6          # 能力カーブの標準的な幅（z スケール）。
 const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭めの幅。
 
+static var _rule_paths: Dictionary = {}
+
 
 static func generate(
 	batter: PSPlayerSeasonRecord,
@@ -392,4 +394,8 @@ static func _round_float(value: float, digits: int) -> float:
 
 
 static func _rule_float(name: String, fallback: float) -> float:
-	return ModManager.rule_float("simulation.contact_quality.%s" % name, fallback)
+	var path: String = str(_rule_paths.get(name, ""))
+	if path.is_empty():
+		path = "simulation.contact_quality." + name
+		_rule_paths[name] = path
+	return ModManager.rule_float(path, fallback)

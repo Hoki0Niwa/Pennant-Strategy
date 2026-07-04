@@ -92,6 +92,7 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 	PSGameDecisions.finalize_pitcher_stats(home_setup, result)
 	PSBullpenManager.finalize_pitcher_usage(away_setup)
 	PSBullpenManager.finalize_pitcher_usage(home_setup)
+	result["advanced_stats"] = PSAdvancedStatReducer.to_dict_container(result.get("advanced_stats", {}) as Dictionary)
 	return result
 
 
