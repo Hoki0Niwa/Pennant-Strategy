@@ -13,7 +13,10 @@ const PATIENCE_Z_NEUTRAL: float = 0.9772         # Bat_BBCreate の野手平均�
 const AGGRESSION_Z_NEUTRAL: float = 0.3090       # Bat_Aggression の野手平均。
 const EFFICIENCY_Z_NEUTRAL: float = 1.0287       # Pit_Efficiency の投手平均。
 const GAMECALL_Z_NEUTRAL: float = 2.3417         # 一軍捕手候補の C_GameCall 平均。
-const PITCHER_TAIL_PIVOT: float = 1.6722         # Pit_KCreate 平均 + 0.5σ。
+const PITCHER_TAIL_PIVOT: float = 1.6722         # Pit_KCreate の高能力テール圧縮開始点。
+const PITCHER_STUFF_TAIL_PIVOT: float = 2.0372   # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の高能力テール圧縮開始点。
+const BAT_HR_TAIL_PIVOT: float = 2.8133          # Bat_Impact + 0.5 * Bat_Loft の高能力テール圧縮開始点。
+const BAT_AVOID_K_TAIL_PIVOT: float = 1.2536     # Bat_KAvoid の高能力テール圧縮開始点。
 
 const DRIFT_WARN_ABS: float = 0.25
 const DRIFT_FAIL_ABS: float = 0.50
@@ -31,6 +34,9 @@ static func reference_values() -> Dictionary:
 		"efficiency_z_neutral": EFFICIENCY_Z_NEUTRAL,
 		"gamecall_z_neutral": GAMECALL_Z_NEUTRAL,
 		"pitcher_tail_pivot": PITCHER_TAIL_PIVOT,
+		"pitcher_stuff_tail_pivot": PITCHER_STUFF_TAIL_PIVOT,
+		"bat_hr_tail_pivot": BAT_HR_TAIL_PIVOT,
+		"bat_avoid_k_tail_pivot": BAT_AVOID_K_TAIL_PIVOT,
 	}
 
 
@@ -58,6 +64,10 @@ static func pool_snapshot(players: Array) -> Dictionary:
 		"aggression_z_neutral": _mean_z(batters, "Bat_Aggression"),
 		"efficiency_z_neutral": _mean_z(pitchers, "Pit_Efficiency"),
 		"gamecall_z_neutral": _mean_z(catchers, "C_GameCall"),
+		"pitcher_tail_pivot": _mean_plus_stddev_z(pitchers, "Pit_KCreate", 0.5),
+		"pitcher_stuff_tail_pivot": _mean_plus_stddev_composite(pitchers, [["Pit_BarrelDeny", 1.0], ["Pit_ImpactLimit", 0.5]], 0.5),
+		"bat_hr_tail_pivot": _mean_plus_stddev_composite(batters, [["Bat_Impact", 1.0], ["Bat_Loft", 0.5]], 0.5),
+		"bat_avoid_k_tail_pivot": _mean_plus_stddev_z(batters, "Bat_KAvoid", 0.5),
 	}
 	var reference: Dictionary = reference_values()
 	var delta: Dictionary = {}
@@ -93,6 +103,14 @@ static func _mean_z(players: Array, key: String) -> float:
 	return total / float(players.size())
 
 
+static func _mean_plus_stddev_z(players: Array, key: String, stddev_factor: float) -> float:
+	var values: Array = []
+	for player_value in players:
+		var player: PSPlayer = player_value as PSPlayer
+		values.append(player.z_ability(key, 0.0) if player != null else 0.0)
+	return _mean_plus_stddev(values, stddev_factor)
+
+
 static func _mean_composite(players: Array, terms: Array) -> float:
 	if players.is_empty():
 		return 0.0
@@ -107,3 +125,33 @@ static func _mean_composite(players: Array, terms: Array) -> float:
 			value += player.z_ability(str(term[0]), 0.0) * float(term[1])
 		total += value
 	return total / float(players.size())
+
+
+static func _mean_plus_stddev_composite(players: Array, terms: Array, stddev_factor: float) -> float:
+	var values: Array = []
+	for player_value in players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player == null:
+			values.append(0.0)
+			continue
+		var value: float = 0.0
+		for term_value in terms:
+			var term: Array = term_value as Array
+			value += player.z_ability(str(term[0]), 0.0) * float(term[1])
+		values.append(value)
+	return _mean_plus_stddev(values, stddev_factor)
+
+
+static func _mean_plus_stddev(values: Array, stddev_factor: float) -> float:
+	if values.is_empty():
+		return 0.0
+	var mean: float = 0.0
+	for value in values:
+		mean += float(value)
+	mean /= float(values.size())
+	var variance: float = 0.0
+	for value in values:
+		var delta: float = float(value) - mean
+		variance += delta * delta
+	variance /= float(values.size())
+	return mean + sqrt(variance) * stddev_factor

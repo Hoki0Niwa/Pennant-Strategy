@@ -13,7 +13,7 @@ const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げ�
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
 const EV_HOME_RUN_POWER_WEIGHT: float = 2.90
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
-const EV_STUFF_MAX_REDUCTION: float = 0.205  # 球威 curve が最大級の投手でも EV 低下を0.2mph前後へ飽和させる。
+const EV_STUFF_WEIGHT: float = 0.205         # 球威 curve が EV を下げる強さ。
 const EV_FATIGUE_WEIGHT: float = 0.035
 const EV_CHASE_PENALTY: float = 3.50
 const EV_TWO_STRIKE_PENALTY: float = 1.25
@@ -32,12 +32,12 @@ const GAP_LINER_TARGET_LA: float = 16.0
 const GAP_LINER_LA_PULL: float = 0.34
 
 # 本塁打向きの理想打球角(ideal power)の発生率・目標角・EV上乗せ・飛距離ボーナス。
-const POWER_IDEAL_LA_BASE_RATE: float = 0.024
+const POWER_IDEAL_LA_BASE_RATE: float = 0.045
 const POWER_IDEAL_LA_PULL: float = 0.52
 const POWER_IDEAL_LA_TARGET: float = 28.0
 const POWER_IDEAL_LA_EV_BOOST: float = 1.4
-const POWER_IDEAL_LA_EXTRA_EV: float = 1.1
-const POWER_IDEAL_CARRY_BONUS: float = 0.035
+const POWER_IDEAL_LA_EXTRA_EV: float = 1.45
+const POWER_IDEAL_CARRY_BONUS: float = 0.070
 
 # 詰まり/芯外し(mishit)の発生率と、その際のEV低下・角度の散らばり。
 const MISHIT_BASE_RATE: float = 0.13
@@ -151,8 +151,7 @@ static func generate(
 	# 打者の長打力・球速で EV を上げ、投手の球威・打者疲労で下げ、投手の被弾傾向で上げる。
 	ev += (batter_hr_z - bat_hr_z_neutral) * _rule_float("ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
 	ev += (float(pitch_velocity) - _rule_float("pitch_velocity_base", PITCH_VELOCITY_BASE)) * _rule_float("ev_pitch_velocity_weight", EV_PITCH_VELOCITY_WEIGHT)
-	# EV への球威効果は stuff_curve だけで表し、最大級の投手でも小幅な低下に飽和させる。
-	ev -= stuff_curve * _rule_float("ev_stuff_max_reduction", EV_STUFF_MAX_REDUCTION)
+	ev -= stuff_curve * _rule_float("ev_stuff_weight", EV_STUFF_WEIGHT)
 	ev -= float(batter_fatigue) * _rule_float("ev_fatigue_weight", EV_FATIGUE_WEIGHT)
 	ev += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ev_weight", 0.75)
 	# 追いかけ・2ストライク防御・強制アウト・投手打者の各状況で EV を減らす。
@@ -269,7 +268,7 @@ static func generate(
 	var spray: float = _generate_spray(batter, pitcher, location_height, spray_gap_curve, chase, variance_multiplier)
 	var carry_multiplier: float = 1.0
 	if ideal_power_launch:
-		carry_multiplier += _rule_float("power_ideal_carry_bonus", POWER_IDEAL_CARRY_BONUS) + max(0.0, home_run_curve) * _rule_float("ideal_power_curve_carry_weight", 0.050)
+		carry_multiplier += _rule_float("power_ideal_carry_bonus", POWER_IDEAL_CARRY_BONUS) + max(0.0, home_run_curve) * _rule_float("ideal_power_curve_carry_weight", 0.090)
 
 	# 確定した打球の質(EV/LA/spray/carry と状況フラグ)を辞書で返す。
 	return {

@@ -650,6 +650,40 @@ func test_ability_reference_snapshot_matches_initial_pool() -> void:
 		assert_float(absf(float(delta.get(key_value, 0.0)))).is_less_equal(0.01)
 
 
+func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
+	var pitcher: PSPlayerSeasonRecord = _pitcher(802, "Tail Pitcher", 4.0)
+	var batter: PSPlayerSeasonRecord = _fielder(812, "Tail Batter", 4.0)
+	var precomp: Dictionary = PSPlateAppearanceCoordinator._build_precomp(batter, pitcher, {}, {}, false)
+	var pitcher_z: Dictionary = precomp.get("pitcher_z", {}) as Dictionary
+	var batter_z: Dictionary = precomp.get("batter_z", {}) as Dictionary
+	var pitcher_output_span: float = ModManager.rule_float("simulation.plate_appearance.pitcher_output_tail_span", PSPlateAppearanceCoordinator.PITCHER_OUTPUT_TAIL_SPAN)
+	var pitcher_stuff_span: float = ModManager.rule_float("simulation.plate_appearance.pitcher_stuff_tail_span", PSPlateAppearanceCoordinator.PITCHER_STUFF_TAIL_SPAN)
+	var batter_avoid_k_span: float = ModManager.rule_float("simulation.plate_appearance.batter_avoid_k_tail_span", PSPlateAppearanceCoordinator.BATTER_AVOID_K_TAIL_SPAN)
+	var batter_hr_span: float = ModManager.rule_float("simulation.plate_appearance.batter_hr_tail_span", PSPlateAppearanceCoordinator.BATTER_HR_TAIL_SPAN)
+
+	assert_float(float(pitcher_z.get("Pit_KCreate", 0.0))).is_less(4.0)
+	assert_float(float(pitcher_z.get("Pit_KCreate", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.PITCHER_OUTPUT_TAIL_PIVOT + pitcher_output_span + 0.01)
+	assert_float(float(pitcher_z.get("Pit_BBPrevent", 0.0))).is_less(4.0)
+	assert_float(float(precomp.get("pitcher_stuff_z", 0.0))).is_less(6.0)
+	assert_float(float(precomp.get("pitcher_stuff_z", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.PITCHER_STUFF_TAIL_PIVOT + pitcher_stuff_span + 0.01)
+	assert_float(float(batter_z.get("Bat_KAvoid", 0.0))).is_less(4.0)
+	assert_float(float(batter_z.get("Bat_KAvoid", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.BATTER_AVOID_K_TAIL_PIVOT + batter_avoid_k_span + 0.01)
+	assert_float(float(precomp.get("batter_hr_z", 0.0))).is_less(6.0)
+	assert_float(float(precomp.get("batter_hr_z", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.BATTER_HR_TAIL_PIVOT + batter_hr_span + 0.01)
+
+	var average_precomp: Dictionary = PSPlateAppearanceCoordinator._build_precomp(_fielder(813, "Average Batter", 0.0), _pitcher(803, "Average Pitcher", 0.0), {}, {}, false)
+	var average_pitcher_z: Dictionary = average_precomp.get("pitcher_z", {}) as Dictionary
+	var average_batter_z: Dictionary = average_precomp.get("batter_z", {}) as Dictionary
+	assert_float(float(average_pitcher_z.get("Pit_KCreate", 0.0))).is_equal(0.0)
+	assert_float(float(average_batter_z.get("Bat_KAvoid", 0.0))).is_equal(0.0)
+	assert_float(float(average_precomp.get("batter_hr_z", 0.0))).is_equal(0.0)
+	assert_float(float(average_precomp.get("pitcher_stuff_z", 0.0))).is_equal(0.0)
+
+
 func test_pitcher_stuff_contact_quality_ev_effect_is_saturated() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state
@@ -690,6 +724,19 @@ func test_tto_penalty_flows_into_pa_weights() -> void:
 
 func test_short_reliever_gets_initial_output_bonus() -> void:
 	var pitcher: PSPlayerSeasonRecord = _pitcher(804, "Max Effort", 0.0)
+	var direct_z: Dictionary = {
+		"Pit_KCreate": 0.0,
+		"Pit_BBPrevent": 0.0,
+		"Pit_EdgeRate": 0.0,
+		"Pit_ImpactLimit": 0.0,
+		"Pit_BarrelDeny": 0.0,
+	}
+	PSPlateAppearanceCoordinator._apply_relief_output_bonus(
+		direct_z, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 0.0)
+	assert_float(float(direct_z.get("Pit_KCreate", 0.0))).is_greater(0.04)
+	assert_float(float(direct_z.get("Pit_BBPrevent", 0.0))).is_greater(0.015)
+	assert_float(float(direct_z.get("Pit_EdgeRate", 0.0))).is_greater(0.02)
+
 	var starter_context: Dictionary = PSPitcherUsageModel.plate_context(
 		pitcher,
 		PSPitcherUsageModel.create_outing(pitcher, PSPitcherUsageModel.ROLE_STARTER)
@@ -704,11 +751,9 @@ func test_short_reliever_gets_initial_output_bonus() -> void:
 	var relief_z: Dictionary = relief_precomp.get("pitcher_z", {}) as Dictionary
 
 	assert_float(float(relief_z.get("Pit_KCreate", 0.0))).is_greater(
-		float(starter_z.get("Pit_KCreate", 0.0)) + 0.05)
-	assert_float(float(relief_z.get("Pit_BBPrevent", 0.0))).is_greater(
-		float(starter_z.get("Pit_BBPrevent", 0.0)) + 0.02)
+		float(starter_z.get("Pit_KCreate", 0.0)) + 0.005)
 	assert_float(float(relief_z.get("Pit_EdgeRate", 0.0))).is_greater(
-		float(starter_z.get("Pit_EdgeRate", 0.0)) + 0.10)
+		float(starter_z.get("Pit_EdgeRate", 0.0)) + 0.005)
 
 
 func test_pitcher_stamina_affects_starter_fatigue_and_long_relief_usage() -> void:
@@ -719,15 +764,14 @@ func test_pitcher_stamina_affects_starter_fatigue_and_long_relief_usage() -> voi
 
 	assert_float(PSFatigueCalculator.start_threshold(high_stamina, false)).is_greater(
 		PSFatigueCalculator.start_threshold(low_stamina, false) + 5.0)
-	assert_float(PSFatigueCalculator.start_threshold(low_stamina, false)).is_less(
-		float(PSPitcherUsageModel.starter_target_pitches(low_stamina)))
+	assert_int(PSPitcherUsageModel.starter_stamina_limit_pitches(high_stamina)).is_greater(
+		PSPitcherUsageModel.starter_stamina_limit_pitches(low_stamina) + 20)
 	assert_float(PSFatigueCalculator.start_threshold(high_stamina, false)).is_less(
-		float(PSPitcherUsageModel.starter_target_pitches(high_stamina)))
+		float(PSPitcherUsageModel.starter_stamina_limit_pitches(high_stamina)))
 	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 50)).is_greater_equal(0.98)
-	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 75)).is_greater(0.90)
-	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 95)).is_less(0.65)
-	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 115)).is_less(
-		PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 100))
+	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 95)).is_greater(0.70)
+	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 115)).is_less(0.45)
+	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 130)).is_equal(0.0)
 	assert_float(PSFatigueCalculator.start_threshold(high_stamina, true)).is_equal(
 		PSFatigueCalculator.start_threshold(low_stamina, true))
 	assert_int(PSPitcherUsageModel.short_relief_target_pitches(high_stamina)).is_equal(
@@ -764,23 +808,23 @@ func _contact_quality_average_ev(pitcher_stuff_z: float) -> float:
 	return total_ev / float(n)
 
 
-# 先発の通常球数目標は80〜100球に収め、完投挑戦上限は別に持つ。
-func test_starter_pitch_target_centered_at_league_average() -> void:
+func test_starter_stamina_window_varies_by_pitcher() -> void:
 	var avg: PSPlayerSeasonRecord = _pitcher(801, "Average", 0.0)
-	var target: int = PSPitcherUsageModel.starter_target_pitches(avg)
-	assert_int(target).is_greater_equal(88)
-	assert_int(target).is_less_equal(94)
+	assert_int(PSPitcherUsageModel.starter_fatigue_start_pitches(avg)).is_equal(66)
+	assert_int(PSPitcherUsageModel.starter_stamina_limit_pitches(avg)).is_equal(110)
 
-	var low: PSPlayerSeasonRecord = _pitcher(807, "Low Target", 0.0)
-	low.z_abilities_snapshot["Pit_Stamina"] = -1.4
-	low.z_abilities_snapshot["Pit_FatigueResist"] = -0.8
-	assert_int(PSPitcherUsageModel.starter_target_pitches(low)).is_equal(80)
+	var low: PSPlayerSeasonRecord = _pitcher(807, "Low Stamina", 0.0)
+	low.z_abilities_snapshot["Pit_Stamina"] = -2.2
+	low.z_abilities_snapshot["Pit_FatigueResist"] = -1.6
+	assert_int(PSPitcherUsageModel.starter_fatigue_start_pitches(low)).is_equal(53)
+	assert_int(PSPitcherUsageModel.starter_stamina_limit_pitches(low)).is_equal(88)
 
 	var workhorse: PSPlayerSeasonRecord = _pitcher(808, "Workhorse", 0.0)
 	workhorse.z_abilities_snapshot["Pit_Stamina"] = 3.1
 	workhorse.z_abilities_snapshot["Pit_FatigueResist"] = 2.0
-	assert_int(PSPitcherUsageModel.starter_target_pitches(workhorse)).is_equal(100)
-	assert_int(PSPitcherUsageModel.starter_complete_game_pitch_limit(workhorse)).is_equal(130)
+	assert_int(PSPitcherUsageModel.starter_fatigue_start_pitches(workhorse)).is_equal(83)
+	assert_int(PSPitcherUsageModel.starter_stamina_limit_pitches(workhorse)).is_equal(145)
+	assert_int(PSPitcherUsageModel.starter_complete_game_pitch_limit(workhorse)).is_equal(145)
 
 
 func test_starter_complete_game_chase_is_late_low_run_only() -> void:
@@ -789,16 +833,41 @@ func test_starter_complete_game_chase_is_late_low_run_only() -> void:
 	workhorse.z_abilities_snapshot["Pit_FatigueResist"] = 2.0
 	var usage: Dictionary = PSPitcherUsageModel.create_outing(workhorse, PSPitcherUsageModel.ROLE_STARTER)
 
-	usage["target_pitches"] = PSPitcherUsageModel.starter_target_pitches(workhorse)
-	usage["pitches"] = 95
+	usage["pitches"] = 58
+	usage["outs"] = 15
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 6, 1)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 6, 2)).is_false()
+
+	usage["pitches"] = 78
+	usage["outs"] = 18
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 7, 1)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 7, 2)).is_false()
+
+	usage["pitches"] = 84
 	usage["outs"] = 21
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 2)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 3)).is_false()
+
+	usage["batters_faced"] = 27
+	usage["pitches"] = 94
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_true()
+	usage["batters_faced"] = 0
+
+	usage["pitches"] = 103
+	usage["outs"] = 21
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_true()
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 2)).is_true()
 
-	usage["pitches"] = 112
+	usage["pitches"] = 92
 	usage["outs"] = 24
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 1)).is_false()
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 2)).is_false()
-	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 3)).is_true()
+
+	usage["pitches"] = 114
+	usage["outs"] = 24
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 1)).is_true()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 2)).is_true()
 
 
 # 「2回3失点程度で降板」を避ける: 序盤の数失点では立て直しを待ち、イニング途中交代は
@@ -841,6 +910,8 @@ func test_long_role_is_preferred_when_starter_exits_early() -> void:
 
 	assert_object(picked).is_not_null()
 	assert_int(picked.player_id).is_equal(long_reliever.player_id)
+	assert_bool(PSBullpenManager.should_prefer_long_relief_for_starter_exit(5)).is_true()
+	assert_bool(PSBullpenManager.should_prefer_long_relief_for_starter_exit(6)).is_false()
 
 
 func test_long_role_is_preferred_for_mop_up() -> void:

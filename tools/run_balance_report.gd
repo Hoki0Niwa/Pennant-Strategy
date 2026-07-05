@@ -94,6 +94,8 @@ func _run_multi_seed(reporter: Object, options: Dictionary) -> Dictionary:
 			"pitcher_era_min": ["distributions", "pitchers", "era", "min"],
 			"pitcher_era_under_2_count": ["distributions", "pitchers", "era_under_2_count"],
 			"pitcher_era_under_2_by_team_max": ["distributions", "pitchers", "era_under_2_by_team_max"],
+			"batter_war_max": ["distributions", "batters", "war", "max"],
+			"pitcher_war_max": ["distributions", "pitchers", "war", "max"],
 		}),
 		"health": ReportHealth.multi_seed_health(reports),
 		"seed_runs": reports,
@@ -225,22 +227,19 @@ func _print_summary(report: Dictionary, output_path: String) -> void:
 		])
 
 
-# Phase 0 計測: リーグ WAR 配分・per-team・ベンチマーク選手WAR・負WAR率を、参照目標(57:43/.294)と並べて表示。
+# リーグ WAR 配分・per-team・ベンチマーク選手WAR・負WAR率を表示する。
 func _print_war_allocation(war_alloc: Dictionary) -> void:
 	if war_alloc.is_empty():
 		return
 	var reference: Dictionary = war_alloc.get("reference", {}) as Dictionary
 	var benchmarks: Dictionary = war_alloc.get("benchmarks", {}) as Dictionary
-	var batting_target_share: float = float(reference.get("batting_share_target", 0.0)) * 100.0
-	var pitching_target_share: float = float(reference.get("pitching_share_target", 0.0)) * 100.0
-	print("WAR split: batting %.1f (%.0f%%) / pitching %.1f (%.0f%%)  [target %.0f%% / %.0f%%]" % [
+	var method: Dictionary = war_alloc.get("method", {}) as Dictionary
+	print("WAR split: batting %.1f (%.0f%%) / pitching %.1f (%.0f%%)" % [
 		float(war_alloc.get("batting_war_total", 0.0)), float(war_alloc.get("batting_share", 0.0)) * 100.0,
 		float(war_alloc.get("pitching_war_total", 0.0)), float(war_alloc.get("pitching_share", 0.0)) * 100.0,
-		batting_target_share, pitching_target_share,
 	])
-	print("WAR per team-season: batting %.2f / pitching %.2f  [target bat %.2f / pit %.2f, pool %.2f]" % [
+	print("WAR per team-season: batting %.2f / pitching %.2f  [.294 pool reference %.2f]" % [
 		float(war_alloc.get("batting_war_per_team_season", 0.0)), float(war_alloc.get("pitching_war_per_team_season", 0.0)),
-		float(reference.get("batting_target_per_team_season", 0.0)), float(reference.get("pitching_target_per_team_season", 0.0)),
 		float(reference.get("pool_per_team_season", 0.0)),
 	])
 	print("WAR benchmarks (avg player): batter(600PA) %.2f / starter(162IP) %.2f / reliever(60IP) %.2f" % [
@@ -251,6 +250,14 @@ func _print_war_allocation(war_alloc: Dictionary) -> void:
 	print("WAR negatives: pitchers %d/%d (%.0f%%) / batters %d/%d (%.0f%%)" % [
 		int(war_alloc.get("negative_pitchers", 0)), int(war_alloc.get("pitcher_count", 0)), float(war_alloc.get("negative_pitcher_rate", 0.0)) * 100.0,
 		int(war_alloc.get("negative_batters", 0)), int(war_alloc.get("batter_count", 0)), float(war_alloc.get("negative_batter_rate", 0.0)) * 100.0,
+	])
+	print("WAR method: %s | batter %s pool %.1f fielding %s | pitcher %s correction/IP %.5f" % [
+		str(method.get("system", "")),
+		str(method.get("batter_run_metric", "")),
+		float(method.get("batter_replacement_pool", 0.0)),
+		str(method.get("batter_fielding_component", "")),
+		str(method.get("pitcher_run_metric", "")),
+		float(method.get("pitcher_war_ip_correction", 0.0)),
 	])
 
 

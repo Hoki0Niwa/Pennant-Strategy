@@ -2,7 +2,7 @@ extends RefCounted
 class_name PSAdvancedStats
 
 const LEAGUE_WOBA: float = 0.315
-const WOBA_SCALE: float = 1.20
+const WOBA_SCALE: float = 1.24
 const LEAGUE_RUNS_PER_PA: float = 0.115
 const POSITION_ADJUSTMENT_FULL_SEASON_OUTS: float = 162.0 * 27.0
 const POSITION_ADJUSTMENT_RUNS_PER_162: Dictionary = {
@@ -14,12 +14,12 @@ const POSITION_ADJUSTMENT_RUNS_PER_162: Dictionary = {
 	7: -7.5,
 	8: 2.5,
 	9: -7.5,
+	10: -17.5,
 }
-# 1 アウト奪取の平均ラン価値。FanGraphs UZR primer の係数。
-# 守備ラン (def_runs) は OAA × RUN_PER_OUT + 守備位置補正 で算出する。
-# OAA を守備指標の主力に据える (MLB 公式の現行方針) ため、UZR 系合計
-# (fielding_runs) は分析用に残しつつ WAR の守備成分は OAA ベースで計算する。
-const RUN_PER_OUT: float = 0.83
+# OAA を Statcast Fielding Run Value に近いラン単位へ換算する係数。
+const RUN_PER_OUT: float = 0.75
+const INFIELD_OAA_RUNS_PER_OUT: float = 0.75
+const OUTFIELD_OAA_RUNS_PER_OUT: float = 0.90
 
 var player_id: int = 0
 var plate_appearances: int = 0
@@ -234,12 +234,9 @@ func to_dict() -> Dictionary:
 	var errr_display: float = float(errr_by_position.get(position_key, 0.0))
 	var dpr_display: float = float(dpr_by_position.get(position_key, 0.0))
 	var uzr_display: float = rngr_display + errr_display + dpr_display
-	# fielding_runs は UZR 系合計 (RngR + ErrR + DPR) の伝統指標。分析用に残置。
-	var fielding_runs: float = _sum_float_map(uzr_by_position)
-	# oaa_runs は OAA (アウト平均比) を 1 アウト = RUN_PER_OUT でラン換算したもの。
-	# WAR の守備成分はこちらを使う (現行 MLB 方針)。
 	var oaa_total: float = float(oaa_by_zone.get("infield", 0.0)) + float(oaa_by_zone.get("outfield", 0.0))
-	var oaa_runs: float = oaa_total * RUN_PER_OUT
+	var oaa_runs: float = _oaa_runs_from_zones(oaa_by_zone)
+	var fielding_runs: float = oaa_runs
 	var positional_adjustment: float = _position_adjustment_from_outs(defensive_outs_by_position)
 	return {
 		"player_id": player_id,
@@ -283,7 +280,7 @@ func to_dict() -> Dictionary:
 		"drs": _round_float(uzr_display, 3),
 		"fielding_runs": _round_float(fielding_runs, 3),
 		"positional_adjustment_runs": _round_float(positional_adjustment, 3),
-		"def_runs": _round_float(oaa_runs + positional_adjustment, 3),
+		"def_runs": _round_float(fielding_runs + positional_adjustment, 3),
 	}
 
 
@@ -348,6 +345,11 @@ func _sum_float_map(source: Dictionary) -> float:
 	for key_value in source.keys():
 		total += float(source[key_value])
 	return total
+
+
+func _oaa_runs_from_zones(source: Dictionary) -> float:
+	return float(source.get("infield", 0.0)) * INFIELD_OAA_RUNS_PER_OUT \
+		+ float(source.get("outfield", 0.0)) * OUTFIELD_OAA_RUNS_PER_OUT
 
 
 func _position_adjustment_from_outs(source: Dictionary) -> float:

@@ -1,6 +1,8 @@
 extends RefCounted
 class_name PSPlateAppearanceCoordinator
 
+const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
+
 # 1打席の司令塔。打席結果カテゴリを softmax で1回抽選し、球数集計と打球処理を後段へ渡す。
 # 処理順は 敬遠/バントの早期判定 → K/BB/HBP/BIP の抽選 → 球数 summary 生成 →
 # BIP のみ ContactQualityModel/PhysicsResolver/PlayResolver へ接続。
@@ -19,7 +21,7 @@ const CATEGORY_SACRIFICE: String = "sacrifice"
 # 敬遠判定
 const INTENTIONAL_WALK_BASE_DENOMINATOR: int = 1000
 
-# 巡目・捕手影響・球威テール圧縮の調整係数。打席カテゴリ抽選と打球品質の両方へ効く。
+# 巡目・捕手影響・能力テール圧縮の調整係数。打席カテゴリ抽選と打球品質の両方へ効く。
 # 巡目(times-through-order)ペナルティは 1巡目→2→3… の順で、3巡目以降にじわっと効く。
 const TTO_PENALTY_PER_ROUND: Array = [0.0, 0.0, 0.05, 0.10, 0.15]
 const TTO_PENALTY_Z_SCALE: float = 0.04 # PitcherUsageModel の display 点相当ペナルティをPAのlogit重みへ変換する。
@@ -29,10 +31,14 @@ const GAMECALL_CONTACT_COEF: float = 0.04 # 捕手の配球が打球の質(被�
 const RELIEF_OUTPUT_BONUS_Z: float = 0.16
 const RELIEF_OUTPUT_FADE_RATIO: float = 0.95
 const LONG_RELIEF_OUTPUT_MULTIPLIER: float = 0.45
-# 球威合成 z (Pit_BarrelDeny + 0.5*Pit_ImpactLimit, 投手平均 ≈ +1.5) のテール圧縮。
-# ContactQualityModel の EV 線形項が無圧縮だとエースの被打球抑制が K/BB 支配と重なり ERA 0点台を作る。
-const STUFF_TAIL_PIVOT: float = 2.0
-const STUFF_TAIL_SPAN: float = 0.25
+const PITCHER_OUTPUT_TAIL_PIVOT: float = AbilityReference.PITCHER_TAIL_PIVOT
+const PITCHER_OUTPUT_TAIL_SPAN: float = 100.0
+const PITCHER_STUFF_TAIL_PIVOT: float = AbilityReference.PITCHER_STUFF_TAIL_PIVOT
+const PITCHER_STUFF_TAIL_SPAN: float = 100.0
+const BATTER_HR_TAIL_PIVOT: float = AbilityReference.BAT_HR_TAIL_PIVOT
+const BATTER_HR_TAIL_SPAN: float = 1.20
+const BATTER_AVOID_K_TAIL_PIVOT: float = AbilityReference.BAT_AVOID_K_TAIL_PIVOT
+const BATTER_AVOID_K_TAIL_SPAN: float = 0.80
 
 static var _rule_paths: Dictionary = {}
 
@@ -387,14 +393,14 @@ static func _build_precomp(
 	pitcher_z["Pit_ImpactLimit"] = float(pitcher_z.get("Pit_ImpactLimit", 0.0)) + game_call_z * GAMECALL_CONTACT_COEF
 	pitcher_z["Pit_BarrelDeny"] = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + game_call_z * GAMECALL_CONTACT_COEF
 
-	# ContactQualityModel 用の z 派生（Phase B: display への往復変換を廃止し z を直接渡す）。
+	_apply_pa_tail_limits(batter_z, pitcher_z)
+
+	# ContactQualityModel 用の z 派生。
 	var batter_contact_z: float = float(batter_z.get("Bat_Barrel", 0.0))
 	var batter_gap_z: float = float(batter_z.get("Bat_Impact", 0.0))
-	var batter_hr_z: float = float(batter_z.get("Bat_Impact", 0.0)) + 0.5 * float(batter_z.get("Bat_Loft", 0.0))
+	var batter_hr_z: float = _limited_batter_hr_z(batter_z)
 	var batter_avoid_k_z: float = float(batter_z.get("Bat_KAvoid", 0.0))
-	var pitcher_stuff_z: float = PSBalanceProfile.compress_z_tail(
-		float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + 0.5 * float(pitcher_z.get("Pit_ImpactLimit", 0.0)),
-		STUFF_TAIL_PIVOT, STUFF_TAIL_SPAN)
+	var pitcher_stuff_z: float = _limited_pitcher_stuff_z(pitcher_z)
 
 	# pitcher 派生情報。pitch_velocity は ContactQualityModel の EV 補正で使う球速 proxy(km/h)。
 	var pitch_velocity_proxy: int = 142 + int(round(float(pitcher_z.get("Pit_EdgeRate", 0.0)) * 4.0))
@@ -446,6 +452,42 @@ static func _apply_relief_output_bonus(pitcher_z: Dictionary, role: String, outi
 	pitcher_z["Pit_EdgeRate"] = float(pitcher_z.get("Pit_EdgeRate", 0.0)) + bonus * 0.625
 	pitcher_z["Pit_ImpactLimit"] = float(pitcher_z.get("Pit_ImpactLimit", 0.0)) + bonus * 0.5
 	pitcher_z["Pit_BarrelDeny"] = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + bonus * 0.5
+
+
+static func _apply_pa_tail_limits(batter_z: Dictionary, pitcher_z: Dictionary) -> void:
+	batter_z["Bat_KAvoid"] = PSBalanceProfile.compress_z_tail(
+		float(batter_z.get("Bat_KAvoid", 0.0)),
+		_rule_float("batter_avoid_k_tail_pivot", BATTER_AVOID_K_TAIL_PIVOT),
+		_rule_float("batter_avoid_k_tail_span", BATTER_AVOID_K_TAIL_SPAN)
+	)
+	pitcher_z["Pit_KCreate"] = PSBalanceProfile.compress_z_tail(
+		float(pitcher_z.get("Pit_KCreate", 0.0)),
+		_rule_float("pitcher_output_tail_pivot", PITCHER_OUTPUT_TAIL_PIVOT),
+		_rule_float("pitcher_output_tail_span", PITCHER_OUTPUT_TAIL_SPAN)
+	)
+	pitcher_z["Pit_BBPrevent"] = PSBalanceProfile.compress_z_tail(
+		float(pitcher_z.get("Pit_BBPrevent", 0.0)),
+		_rule_float("pitcher_output_tail_pivot", PITCHER_OUTPUT_TAIL_PIVOT),
+		_rule_float("pitcher_output_tail_span", PITCHER_OUTPUT_TAIL_SPAN)
+	)
+
+
+static func _limited_batter_hr_z(batter_z: Dictionary) -> float:
+	var raw: float = float(batter_z.get("Bat_Impact", 0.0)) + 0.5 * float(batter_z.get("Bat_Loft", 0.0))
+	return PSBalanceProfile.compress_z_tail(
+		raw,
+		_rule_float("batter_hr_tail_pivot", BATTER_HR_TAIL_PIVOT),
+		_rule_float("batter_hr_tail_span", BATTER_HR_TAIL_SPAN)
+	)
+
+
+static func _limited_pitcher_stuff_z(pitcher_z: Dictionary) -> float:
+	var raw: float = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + 0.5 * float(pitcher_z.get("Pit_ImpactLimit", 0.0))
+	return PSBalanceProfile.compress_z_tail(
+		raw,
+		_rule_float("pitcher_stuff_tail_pivot", PITCHER_STUFF_TAIL_PIVOT),
+		_rule_float("pitcher_stuff_tail_span", PITCHER_STUFF_TAIL_SPAN)
+	)
 
 
 static func _platoon_sign(batter: PSPlayerSeasonRecord, pitcher: PSPlayerSeasonRecord) -> float:

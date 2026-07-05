@@ -153,6 +153,7 @@ static func apply_plate_outcome(
 				batter.batter_stats.runs_batted_in += runs
 
 	if track_pitcher and pitcher != null:
+		_record_pitcher_batted_ball(pitcher.pitcher_stats, outcome)
 		pitcher.pitcher_stats.outs_pitched += outs_added
 		if charge_pitcher_runs:
 			pitcher.pitcher_stats.runs_allowed += runs
@@ -165,3 +166,55 @@ static func apply_plate_outcome(
 		"earned_runs": earned_runs,
 		"pitches": pitches,
 	}
+
+
+static func _record_pitcher_batted_ball(stats: PSPitcherStats, outcome: Dictionary) -> void:
+	if stats == null:
+		return
+	if not _is_batted_ball_outcome(outcome):
+		return
+	if _is_home_run_outcome(outcome):
+		return
+	match _batted_ball_type(outcome):
+		"grounder":
+			stats.ground_balls_allowed += 1
+		"liner":
+			stats.line_drives_allowed += 1
+		"popup":
+			stats.infield_flies_allowed += 1
+		"fly":
+			stats.outfield_flies_allowed += 1
+
+
+static func _is_batted_ball_outcome(outcome: Dictionary) -> bool:
+	var category: String = str(outcome.get("category", "out"))
+	return category != "strikeout" and category != "walk" and category != "hit_by_pitch"
+
+
+static func _is_home_run_outcome(outcome: Dictionary) -> bool:
+	return int(outcome.get("bases", 0)) >= 4 or str(outcome.get("result", "")).contains("home_run")
+
+
+static func _batted_ball_type(outcome: Dictionary) -> String:
+	var physical_traits: Dictionary = outcome.get("physical_traits", {}) as Dictionary
+	var trajectory: String = str(physical_traits.get("trajectory_bucket", ""))
+	match trajectory:
+		"grounder", "liner", "fly", "popup":
+			return trajectory
+	var result: String = str(outcome.get("result", ""))
+	var category: String = str(outcome.get("category", ""))
+	if category == "sacrifice":
+		return "grounder"
+	if category == "sacrifice_fly":
+		return "fly"
+	if result.contains("ground") or result.contains("bunt") or result.contains("infield_single"):
+		return "grounder"
+	if result.contains("line"):
+		return "liner"
+	if result.contains("infield_fly") or result.contains("popup"):
+		return "popup"
+	if result.contains("fly"):
+		return "fly"
+	if result.contains("double") or result.contains("triple"):
+		return "liner"
+	return ""

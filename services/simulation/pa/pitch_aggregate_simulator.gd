@@ -43,12 +43,13 @@ const PATIENCE_COEF: float = 0.4            # 打者の選球眼が球数を増�
 const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減らす係数。
 const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が球数を減らす係数。
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
+const TTO_PITCH_COEF: float = 4.6           # 打順3巡目以降の粘られやすさを球数へ反映する係数。
 # 能力 z は集団平均が0とは限らないため、平均的な選手で補正ゼロになる中立点を引いてから係数を適用する。
 const PATIENCE_Z_NEUTRAL: float = AbilityReference.PATIENCE_Z_NEUTRAL
 const AGGRESSION_Z_NEUTRAL: float = AbilityReference.AGGRESSION_Z_NEUTRAL
 const EFFICIENCY_Z_NEUTRAL: float = AbilityReference.EFFICIENCY_Z_NEUTRAL
 const GAMECALL_Z_NEUTRAL: float = AbilityReference.GAMECALL_Z_NEUTRAL
-const FATIGUE_PITCH_COEF: float = 0.4       # 疲労が球数を増やす係数。
+const FATIGUE_PITCH_COEF: float = 1.6       # 疲労が球数を増やす係数。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
 const MAX_PITCH_COUNT: int = 20             # 1打席あたり球数の上限クランプ。
 
@@ -69,6 +70,7 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	var bat_aggression: float = float(batter_z.get("Bat_Aggression", 0.0))
 	var pit_efficiency: float = float(pitcher_z.get("Pit_Efficiency", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
+	var tto_round_weight: float = float(precomp.get("tto_round_weight", 0.0))
 
 	var pitch_delta: float = 0.0
 	pitch_delta += (bat_bb_create - PATIENCE_Z_NEUTRAL) * PATIENCE_COEF
@@ -76,6 +78,7 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	pitch_delta -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
 	pitch_delta -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
 	pitch_delta += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
+	pitch_delta += tto_round_weight * TTO_PITCH_COEF
 
 	var min_p: int = max(MIN_PITCH_COUNT, _category_min_pitches(category))
 	var max_p: int = MAX_PITCH_COUNT

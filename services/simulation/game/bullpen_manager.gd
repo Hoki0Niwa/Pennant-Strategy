@@ -12,6 +12,8 @@ const CLOSER_EARLIEST_INNING: int = 9
 const CLOSER_FOUR_RUN_MARGIN: int = 4
 # 5点差以上はどの回でもセット/クローザーを温存し、ミドルリリーフに任せる (ユーザー指定)。
 const BLOWOUT_LEAD_MARGIN: int = 5
+# 5回以前の先発降板は長い穴埋めを優先し、6回以降は通常の中継ぎリレーへ渡す。
+const LONG_RELIEF_PREFERRED_BEFORE_INNING: int = 6
 
 # 試合開始時の先発投手とスタメン野手の出場記録を付ける。
 # DH は守備負荷が軽いので疲労/怪我 exposure を下げ、守備についた野手とは分けて扱う。
@@ -56,7 +58,7 @@ static func substitute_reliever(setup: Dictionary, inning: int, game_result: Dic
 	if not should_pull:
 		return
 
-	var prefer_long: bool = current == starter and inning < GameSimulator.STARTER_EXTEND_START_INNING
+	var prefer_long: bool = current == starter and should_prefer_long_relief_for_starter_exit(inning)
 	var reliever: PSPlayerSeasonRecord = pick_reliever_for_context(setup, inning, game_result, prefer_long)
 	if reliever == null:
 		return
@@ -89,7 +91,7 @@ static func substitute_reliever_mid_inning(
 	if not PSPitcherUsageModel.should_pull_after_plate_appearance(current, usage, inning, outs, bases, runs_allowed, defense_lead):
 		return false
 
-	var prefer_long: bool = current == starter and inning < GameSimulator.STARTER_EXTEND_START_INNING
+	var prefer_long: bool = current == starter and should_prefer_long_relief_for_starter_exit(inning)
 	var reliever: PSPlayerSeasonRecord = pick_reliever_for_context(setup, inning, game_result, prefer_long)
 	if reliever == null or reliever == current:
 		return false
@@ -407,6 +409,10 @@ static func is_close_game_for_setup(setup: Dictionary, game_result: Dictionary) 
 	if team_id == home_team_id:
 		return abs(home_score - away_score) <= 3
 	return false
+
+
+static func should_prefer_long_relief_for_starter_exit(inning: int) -> bool:
+	return inning < LONG_RELIEF_PREFERRED_BEFORE_INNING
 
 
 # setup のチーム視点の得失点差。正ならリード、負ならビハインド。

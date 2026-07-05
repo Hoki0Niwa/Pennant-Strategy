@@ -7,15 +7,25 @@ const ROLE_STARTER: String = "starter"
 const ROLE_LONG_RELIEF: String = "long_relief"
 const ROLE_SHORT_RELIEF: String = "short_relief"
 
-const STARTER_TARGET_MIN: int = 80
-const STARTER_TARGET_MAX: int = 100  # 通常の交代判断を始める球数レンジ。
-const STARTER_COMPLETE_GAME_LIMIT_MIN: int = 110
-const STARTER_COMPLETE_GAME_LIMIT_MAX: int = 130
+const STARTER_FATIGUE_START_MIN: int = 52
+const STARTER_FATIGUE_START_MAX: int = 88
+const STARTER_STAMINA_LIMIT_MIN: int = 88
+const STARTER_STAMINA_LIMIT_MAX: int = 145
+const STARTER_COMPLETE_GAME_LIMIT_MIN: int = 104
+const STARTER_COMPLETE_GAME_LIMIT_MAX: int = 145
 const STARTER_COMPLETE_GAME_PITCHES_PER_OUT: float = 5.6
+const STARTER_NEXT_INNING_BASE_PITCHES: float = 16.0
+const STARTER_CURRENT_FATIGUE_FLOOR: float = 0.20
+const STARTER_MID_INNING_FATIGUE_FLOOR: float = 0.16
+const STARTER_COMPLETE_GAME_FATIGUE_FLOOR: float = 0.48
 const SHORT_RELIEF_TARGET_MIN: int = 15
 const SHORT_RELIEF_TARGET_MAX: int = 32
-const LONG_RELIEF_TARGET_MIN: int = 40
-const LONG_RELIEF_TARGET_MAX: int = 78
+const LONG_RELIEF_TARGET_MIN: int = 32
+const LONG_RELIEF_TARGET_MAX: int = 58
+const STARTER_NEXT_INNING_PROJECTED_BATTERS: float = 4.0
+const STARTER_TTO_HOOK_START_BF: float = 24.0
+const STARTER_TTO_HOOK_RISK_PER_BF: float = 0.024
+const STARTER_TTO_HOOK_RISK_MAX: float = 0.18
 
 const TROUBLE_ALERT: float = 4.0
 const MELTDOWN_THRESHOLD: float = 6.5
@@ -102,38 +112,42 @@ const ARSENAL_DEPTH_WEIGHTS := {
 }
 
 
-static func starter_target_pitches(record: PSPlayerSeasonRecord) -> int:
+static func starter_fatigue_start_pitches(record: PSPlayerSeasonRecord) -> int:
 	var stamina: float = _ability(record, "Pit_Stamina")
 	var recovery: float = _ability(record, "Pit_FatigueResist")
-	# 通常の継投判断は80〜100球に収める。130球級は完投が現実的な終盤だけ別ゲートで許可する。
-	var target: float = 90.0
-	target += stamina * 6.0
-	target += recovery * 2.0
-	return int(clamp(round(target), STARTER_TARGET_MIN, STARTER_TARGET_MAX))
+	var start: float = 66.0
+	start += stamina * 4.0
+	start += recovery * 2.5
+	return int(clamp(round(start), STARTER_FATIGUE_START_MIN, STARTER_FATIGUE_START_MAX))
+
+
+static func starter_stamina_limit_pitches(record: PSPlayerSeasonRecord) -> int:
+	var stamina: float = _ability(record, "Pit_Stamina")
+	var recovery: float = _ability(record, "Pit_FatigueResist")
+	var limit: float = 110.0
+	limit += stamina * 9.0
+	limit += recovery * 5.0
+	return int(clamp(round(limit), STARTER_STAMINA_LIMIT_MIN, STARTER_STAMINA_LIMIT_MAX))
 
 
 static func starter_complete_game_pitch_limit(record: PSPlayerSeasonRecord) -> int:
-	var stamina: float = _ability(record, "Pit_Stamina")
-	var recovery: float = _ability(record, "Pit_FatigueResist")
-	var limit: float = 118.0
-	limit += stamina * 4.0
-	limit += recovery * 2.0
+	var limit: float = float(starter_stamina_limit_pitches(record)) + 4.0
 	return int(clamp(round(limit), STARTER_COMPLETE_GAME_LIMIT_MIN, STARTER_COMPLETE_GAME_LIMIT_MAX))
 
 
 static func short_relief_target_pitches(_record: PSPlayerSeasonRecord) -> int:
 	# 短い救援は1イニング前提。スタミナはロング/回跨ぎ適性で使い、短い救援の目標球数には使わない。
-	var target: float = 22.0
-	return int(clamp(round(target), SHORT_RELIEF_TARGET_MIN, SHORT_RELIEF_TARGET_MAX))
+	var workload: float = 22.0
+	return int(clamp(round(workload), SHORT_RELIEF_TARGET_MIN, SHORT_RELIEF_TARGET_MAX))
 
 
 static func long_relief_target_pitches(record: PSPlayerSeasonRecord) -> int:
 	var stamina: float = _ability(record, "Pit_Stamina")
 	var recovery: float = _ability(record, "Pit_FatigueResist")
-	var target: float = 54.0
-	target += (stamina - 1.0) * 7.0
-	target += recovery * 1.0
-	return int(clamp(round(target), LONG_RELIEF_TARGET_MIN, LONG_RELIEF_TARGET_MAX))
+	var workload: float = 44.0
+	workload += (stamina - 1.0) * 5.0
+	workload += recovery * 0.8
+	return int(clamp(round(workload), LONG_RELIEF_TARGET_MIN, LONG_RELIEF_TARGET_MAX))
 
 
 static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Dictionary:
@@ -142,7 +156,7 @@ static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Diction
 		"record": record,
 		"pitcher_id": 0 if record == null else record.player_id,
 		"role": resolved_role,
-		"target_pitches": outing_target_pitches(record, resolved_role),
+		"workload_pitches": outing_workload_pitches(record, resolved_role),
 		"pitches": 0,
 		"batters_faced": 0,
 		"outs": 0,
@@ -155,10 +169,10 @@ static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Diction
 	}
 
 
-static func outing_target_pitches(record: PSPlayerSeasonRecord, role: String) -> int:
+static func outing_workload_pitches(record: PSPlayerSeasonRecord, role: String) -> int:
 	match _normalized_role(role):
 		ROLE_STARTER:
-			return starter_target_pitches(record)
+			return starter_stamina_limit_pitches(record)
 		ROLE_LONG_RELIEF:
 			return long_relief_target_pitches(record)
 		_:
@@ -171,18 +185,20 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
 	var arsenal: Dictionary = arsenal_summary(record)
 	var ratio: float = outing_ratio(record, usage)
+	var fatigue_load: float = outing_fatigue_load(record, usage)
 	var usage_penalty: int = in_game_usage_penalty(record, usage)
 	var tto_penalty: int = times_through_order_penalty(record, usage)
 	var arsenal_bonus: int = role_arsenal_bonus(role, arsenal)
 	# 球種構成の傾向(微差)。type 別 K寄り/ゴロ寄り/被弾を mastery 加重で集計し中心化済み。
 	var arsenal_biases: Dictionary = PSPitchTypes.aggregate_biases(arsenal.get("arsenal", []) as Array)
 	var trouble: float = float(usage.get("trouble_score", 0.0))
-	var command_leak: float = clamp(max(0.0, trouble - 3.0) * 0.55 + max(0.0, ratio - 0.92) * 3.0, 0.0, 5.0)
-	var contact_damage: float = clamp(max(0.0, trouble - 3.5) * 0.48 + max(0.0, ratio - 1.0) * 3.6, 0.0, 5.0)
+	var stamina_pressure: float = fatigue_load if role == ROLE_STARTER else max(0.0, ratio - 0.92)
+	var command_leak: float = clamp(max(0.0, trouble - 3.0) * 0.55 + stamina_pressure * 2.4, 0.0, 5.0)
+	var contact_damage: float = clamp(max(0.0, trouble - 3.5) * 0.48 + max(0.0, stamina_pressure - 0.15) * 3.0, 0.0, 5.0)
 	return {
 		"pitcher_role": role,
 		"pitcher_outing_pitches": int(usage.get("pitches", 0)),
-		"pitcher_outing_target": int(usage.get("target_pitches", outing_target_pitches(record, role))),
+		"pitcher_outing_workload": _usage_workload_pitches(record, usage, role),
 		"pitcher_fatigue_ratio": ratio,
 		"pitcher_usage_penalty": usage_penalty,
 		"pitcher_tto_penalty": tto_penalty,
@@ -207,8 +223,17 @@ static func in_game_usage_penalty(record: PSPlayerSeasonRecord, usage: Dictionar
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
 	var ratio: float = outing_ratio(record, usage)
 	var trouble: float = float(usage.get("trouble_score", 0.0))
-	var early_line: float = 0.82 if role == ROLE_STARTER else 0.74
 	var penalty: float = 0.0
+	if role == ROLE_STARTER:
+		var fatigue_load: float = outing_fatigue_load(record, usage)
+		if fatigue_load > 0.25:
+			penalty += (fatigue_load - 0.25) * 24.0
+		if fatigue_load > 0.55:
+			penalty += (fatigue_load - 0.55) * 34.0
+		if trouble > TROUBLE_ALERT:
+			penalty += (trouble - TROUBLE_ALERT) * 1.45
+		return int(clamp(round(penalty), 0.0, 42.0))
+	var early_line: float = 0.74
 	if ratio > early_line:
 		penalty += (ratio - early_line) * (18.0 if role == ROLE_STARTER else 24.0)
 	if ratio > 1.0:
@@ -342,26 +367,30 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 			return true
 		if inning >= 9:
 			return not _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
-		if ratio >= 1.05:
-			return true
 		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
-		if inning >= 6 and ratio >= 0.95 and not complete_game_chase:
+		if _starter_stamina_is_spent(record, usage) and not complete_game_chase:
 			return true
-		if inning >= 8 and ratio >= 0.80 and not complete_game_chase:
+		if _starter_next_inning_would_exhaust(record, usage, inning, runs_allowed) and not complete_game_chase:
 			return true
 		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD:
 			return true
-		# 失点による回またぎ降板。3失点では降ろさず、段階的に: 6失点はどの回でも限界 /
-		# 5失点は4回以降 / 4失点は7回以降(3失点=クオリティスタート相当は引っぱる)。
+		# 失点による回またぎ降板。3失点では降ろさず、4回4失点や終盤4失点から段階的に替える。
 		if runs_allowed >= 6:
 			return true
 		if inning >= 4 and runs_allowed >= 5:
+			return true
+		if inning == 5 and runs_allowed >= 4:
 			return true
 		if inning >= 7 and runs_allowed >= 4:
 			return true
 		return false
 	if role == ROLE_LONG_RELIEF:
-		return ratio >= 1.05 or (pitches >= 34 and trouble >= MELTDOWN_THRESHOLD) or inning >= 9
+		var outs: int = int(usage.get("outs", 0))
+		if outs >= 6:
+			return true
+		if outs >= 3 and inning >= 6:
+			return true
+		return ratio >= 1.0 or (pitches >= 30 and trouble >= MELTDOWN_THRESHOLD) or inning >= 9
 	return int(usage.get("outs", 0)) >= 3 or ratio >= 0.95 or pitches >= 28 or trouble >= MELTDOWN_THRESHOLD
 
 
@@ -388,17 +417,23 @@ static func should_pull_after_plate_appearance(
 		# イニング途中の交代は「炎上が止まらない」緊急時のみ。通常の交代は回またぎ
 		# (should_pull_for_next_half) で判断し、序盤の数失点では立て直しのチャンスを与える。
 		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
-		if ratio >= 1.15 and not complete_game_chase:
-			return true  # 球数が限界(大幅超過)
+		if PSFatigueCalculator.factor_for_pitcher(record, false, pitches) <= STARTER_MID_INNING_FATIGUE_FLOOR and not complete_game_chase:
+			return true
 		if inning <= 4:
-			# 序盤は大量失点が同一イニングで続くとき(7失点級)だけ即交代。2回3失点程度では降ろさない。
-			return runs_allowed >= 7 and runners_on >= 1
+			# 序盤は5〜6失点級の炎上が続くときだけ即交代。2回3失点程度では降ろさない。
+			if runs_allowed >= 6 and runners_on >= 1:
+				return true
+			return runs_allowed >= 5 and runners_on >= 2
 		# 5回以降のイニング途中交代: 大量失点 / 球数限界+走者 / 満塁級の止まらない連打。
+		if inning == 5 and runs_allowed >= 5 and runners_on >= 1:
+			return true
+		if inning == 5 and runs_allowed >= 4 and runners_on >= 2:
+			return true
 		if runs_allowed >= 6 and runners_on >= 1:
 			return true
-		if inning >= 7 and runs_allowed >= 5 and runners_on >= 1:
+		if inning >= 6 and runs_allowed >= 5 and runners_on >= 1:
 			return true
-		if inning >= 6 and ratio >= 0.98 and runners_on >= 1:
+		if inning >= 6 and starter_projected_fatigue_factor(record, usage, 8.0) <= 0.20 and runners_on >= 1:
 			return true
 		if consecutive_reached >= 5 and runners_on >= 2:
 			return true
@@ -433,12 +468,85 @@ static func should_pull_when_pitcher_spot_bats(record: PSPlayerSeasonRecord, usa
 	return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed)
 
 
+static func starter_projected_fatigue_factor(record: PSPlayerSeasonRecord, usage: Dictionary, extra_pitches: float) -> float:
+	if record == null or usage.is_empty():
+		return 1.0
+	var projected_pitches: int = int(round(float(int(usage.get("pitches", 0))) + max(0.0, extra_pitches)))
+	return PSFatigueCalculator.factor_for_pitcher(record, false, projected_pitches)
+
+
+static func starter_projected_next_inning_effective_factor(record: PSPlayerSeasonRecord, usage: Dictionary) -> float:
+	if record == null or usage.is_empty():
+		return 1.0
+	var projected: float = starter_projected_fatigue_factor(record, usage, starter_expected_next_inning_pitches(usage))
+	return clamp(projected - _starter_next_inning_tto_risk(usage), 0.0, 1.0)
+
+
+static func starter_expected_next_inning_pitches(usage: Dictionary) -> float:
+	if usage.is_empty():
+		return STARTER_NEXT_INNING_BASE_PITCHES
+	var pitches: int = int(usage.get("pitches", 0))
+	var outs: int = int(usage.get("outs", 0))
+	var expected: float = STARTER_NEXT_INNING_BASE_PITCHES
+	if outs > 0:
+		var outing_pitches_per_inning: float = float(pitches) / max(1.0, float(outs)) * 3.0
+		expected = lerp(expected, clamp(outing_pitches_per_inning, 12.0, 27.0), 0.35)
+	var trouble: float = float(usage.get("trouble_score", 0.0))
+	var reached: int = int(usage.get("consecutive_reached", 0))
+	expected += max(0.0, trouble - 2.0) * 1.6
+	expected += max(0.0, float(reached - 1)) * 1.8
+	return clamp(expected, 12.0, 30.0)
+
+
+static func outing_fatigue_load(record: PSPlayerSeasonRecord, usage: Dictionary) -> float:
+	if record == null or usage.is_empty():
+		return 0.0
+	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
+	if role != ROLE_STARTER:
+		return max(0.0, outing_ratio(record, usage) - 0.82)
+	return 1.0 - PSFatigueCalculator.factor_for_pitcher(record, false, int(usage.get("pitches", 0)))
+
+
+static func _starter_stamina_is_spent(record: PSPlayerSeasonRecord, usage: Dictionary) -> bool:
+	return PSFatigueCalculator.factor_for_pitcher(record, false, int(usage.get("pitches", 0))) <= STARTER_CURRENT_FATIGUE_FLOOR
+
+
+static func _starter_next_inning_would_exhaust(record: PSPlayerSeasonRecord, usage: Dictionary, inning: int, runs_allowed: int) -> bool:
+	if inning <= 4:
+		return false
+	var projected: float = starter_projected_next_inning_effective_factor(record, usage)
+	return projected <= _starter_projected_fatigue_floor(inning, runs_allowed)
+
+
+static func _starter_projected_fatigue_floor(inning: int, runs_allowed: int) -> float:
+	var floor_value: float = 0.30
+	if inning >= 6:
+		floor_value = 0.74
+	if inning >= 7:
+		floor_value = 0.58
+	if inning >= 8:
+		floor_value = 0.62
+	if runs_allowed >= 3:
+		floor_value += 0.08
+	return floor_value
+
+
+static func _starter_next_inning_tto_risk(usage: Dictionary) -> float:
+	if usage.is_empty():
+		return 0.0
+	var projected_batters: float = float(int(usage.get("batters_faced", 0))) + STARTER_NEXT_INNING_PROJECTED_BATTERS
+	var risk: float = max(0.0, projected_batters - STARTER_TTO_HOOK_START_BF) * STARTER_TTO_HOOK_RISK_PER_BF
+	return clamp(risk, 0.0, STARTER_TTO_HOOK_RISK_MAX)
+
+
 static func _starter_can_chase_complete_game(record: PSPlayerSeasonRecord, usage: Dictionary, inning: int, runs_allowed: int) -> bool:
 	if record == null or usage.is_empty():
 		return false
 	if inning < 8 or inning >= 10:
 		return false
-	var max_runs: int = 1 if inning <= 8 else 2
+	var max_runs: int = 1
+	if inning >= 9:
+		max_runs = 2
 	if runs_allowed > max_runs:
 		return false
 	if float(usage.get("trouble_score", 0.0)) >= TROUBLE_ALERT:
@@ -447,10 +555,16 @@ static func _starter_can_chase_complete_game(record: PSPlayerSeasonRecord, usage
 	var remaining_outs: int = max(0, 27 - outs_recorded)
 	if inning >= 9:
 		remaining_outs = min(remaining_outs, 3)
-	else:
+	elif inning == 8:
 		remaining_outs = min(remaining_outs, 6)
+	elif inning == 7:
+		remaining_outs = min(remaining_outs, 9)
+	else:
+		remaining_outs = min(remaining_outs, 12)
 	var projected_pitches: float = float(int(usage.get("pitches", 0))) + float(remaining_outs) * STARTER_COMPLETE_GAME_PITCHES_PER_OUT
-	return projected_pitches <= float(starter_complete_game_pitch_limit(record))
+	if projected_pitches > float(starter_complete_game_pitch_limit(record)):
+		return false
+	return PSFatigueCalculator.factor_for_pitcher(record, false, int(round(projected_pitches))) >= STARTER_COMPLETE_GAME_FATIGUE_FLOOR
 
 
 static func post_game_fatigue_gain(record: PSPlayerSeasonRecord, usage: Dictionary) -> int:
@@ -460,24 +574,24 @@ static func post_game_fatigue_gain(record: PSPlayerSeasonRecord, usage: Dictiona
 	if pitches <= 0:
 		return 0
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
-	var target: float = float(max(1, int(usage.get("target_pitches", outing_target_pitches(record, role)))))
+	var workload: float = float(max(1, _usage_workload_pitches(record, usage, role)))
 	var stress: float = float(usage.get("stress_score", 0.0))
 	var consecutive_count: int = int(usage.get("consecutive_count", 0))
 	var outs: int = int(usage.get("outs", 0))
 	var extra_inning_segments: int = max(0, int(ceil(float(max(0, outs)) / 3.0)) - 1)
 	var gain: float
 	if role == ROLE_STARTER:
-		gain = float(pitches) * (100.0 / target)
+		gain = float(pitches) * (100.0 / workload)
 		gain += stress * 0.38
-		gain += max(0.0, float(pitches) / target - 1.0) * 24.0
+		gain += max(0.0, float(pitches) / workload - 1.0) * 24.0
 		return int(clamp(round(gain), 18.0, 165.0))
 	if role == ROLE_LONG_RELIEF:
-		gain = float(pitches) * (60.0 / target) * 1.04
+		gain = float(pitches) * (60.0 / workload) * 1.04
 		gain += stress * 0.44
 		gain += consecutive_appearance_fatigue(consecutive_count)
 		gain += float(extra_inning_segments) * 7.0
 		return int(clamp(round(gain), 12.0, 100.0))
-	gain = float(pitches) * (22.0 / target) * 0.96
+	gain = float(pitches) * (22.0 / workload) * 0.96
 	gain += stress * 0.36
 	gain += consecutive_appearance_fatigue(consecutive_count)
 	gain += float(extra_inning_segments) * 14.0
@@ -556,8 +670,14 @@ static func is_reliever_available(
 static func outing_ratio(record: PSPlayerSeasonRecord, usage: Dictionary) -> float:
 	if record == null or usage.is_empty():
 		return 0.0
-	var target: int = int(usage.get("target_pitches", outing_target_pitches(record, str(usage.get("role", "")))))
-	return float(usage.get("pitches", 0)) / float(max(1, target))
+	var workload: int = _usage_workload_pitches(record, usage, str(usage.get("role", "")))
+	return float(usage.get("pitches", 0)) / float(max(1, workload))
+
+
+static func _usage_workload_pitches(record: PSPlayerSeasonRecord, usage: Dictionary, role: String) -> int:
+	if usage.has("workload_pitches"):
+		return int(usage.get("workload_pitches", 0))
+	return outing_workload_pitches(record, role)
 
 
 static func record_runner_event_result(usage: Dictionary, outs_added: int, runs: int, earned_runs: int) -> void:

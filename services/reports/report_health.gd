@@ -85,10 +85,12 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	_add_min_check(checks, "hard_hit_rate", float(batted_ball.get("hard_hit_rate", 0.0)), 0.20, 0.10, "hard-hit rate should not collapse")
 	_add_max_check(checks, "batter_ops_max", _dist_value(batter_dist, "ops", "max"), 1.20, 1.35, "qualified batter OPS max")
 	_add_max_check(checks, "batter_hr_max", _dist_value(batter_dist, "home_runs", "max"), 60.0, 75.0, "single-season HR leader")
+	_add_range_check(checks, "batter_war_max", _dist_value(batter_dist, "war", "max"), 6.5, 12.2, 4.5, 13.5, "qualified batter WAR leader")
 	_add_min_check(checks, "pitcher_era_min", _dist_value(pitcher_dist, "era", "min"), 0.90, 0.50, "qualified pitcher ERA floor")
 	_add_max_check(checks, "pitcher_era_under_2_count", era_under_2_count, 5.0, 7.0, "qualified pitchers with ERA under 2.00")
 	_add_manual_check(checks, "pitcher_era_under_2_by_team_max", STATUS_FAIL if era_under_2_by_team_max >= 3 else STATUS_PASS, era_under_2_by_team_max, "no team should usually have three qualified sub-2 ERA pitchers")
 	_add_max_check(checks, "pitcher_k9_max", _dist_value(pitcher_dist, "strikeouts_per_nine", "max"), 14.0, 17.0, "qualified pitcher K/9 max")
+	_add_range_check(checks, "pitcher_war_max", _dist_value(pitcher_dist, "war", "max"), 4.3, 7.2, 2.8, 9.0, "qualified pitcher WAR leader")
 	_add_max_check(checks, "complete_game_rate", complete_game_rate, 0.12, 0.22, "complete games per start")
 	_add_max_check(checks, "shutout_complete_game_ratio", shutout_cg_ratio, 0.75, 0.90, "shutout share of complete games")
 	_add_range_check(checks, "relief_appearances_per_team_game", relief_per_team_game, 2.4, 4.2, 1.8, 5.2, "bullpen usage volume")
@@ -160,10 +162,8 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "teamless_active_players", int(final_roster.get("teamless_active_players", 0)), 0.0, 0.0, "teamless active players")
 	_add_max_check(checks, "free_agent_orphans", int(final_roster.get("free_agent_orphans", 0)), 0.0, 0.0, "unresolved FA pool players")
 	_add_max_check(checks, "released_orphans", int(final_roster.get("released_orphans", 0)), 0.0, 0.0, "unresolved released players outside retirement")
-	# 戦力外フェーズ後に残る「30歳以上・出場ゼロ・rookie保護外」の支配下選手 (年平均)。
-	# 編成計画ベース (2026-07-03) では常時カットに安全上限 (RELEASE_ALWAYS_CUT_MAX) があるため
-	# リーグ全体で年1〜2人の裾は正常 (翌年に整理される)。二桁に増えたら本職保護等が
-	# 実績ゼロのベテランを生き残らせる再発バグ (2026-07-02 修正) の再発を疑う。
+	# 戦力外フェーズ後に残る「30歳以上・出場ゼロ・rookie保護外」の支配下選手を年平均で監視する。
+	# 少数の残留は安全上限つき整理の許容範囲だが、二桁規模なら保護条件が強すぎる。
 	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 3.0, 8.0, "zero-appearance 30+ players surviving the release phase")
 	_add_range_check(checks, "last10_ops", float(last_10.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "last-10-year OPS")
 	_add_range_check(checks, "last10_era", float(last_10.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "last-10-year ERA")

@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_starter_outing_distribution.gd" id="1_run_starter_outing_distribution"]
+
+[node name="RunStarterOutingDistribution" type="Node"]
+script = ExtResource("1_run_starter_outing_distribution")

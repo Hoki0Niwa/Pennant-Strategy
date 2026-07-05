@@ -97,7 +97,8 @@ static func maybe_select_pitcher_spot_pinch_hitter(
 	)
 	if not should_hit_for_pitcher:
 		return batter
-	if not already_relieved and PSBullpenManager.pick_reliever_for_context(setup, next_defensive_inning, {}, next_defensive_inning < GameSimulator.STARTER_EXTEND_START_INNING) == null:
+	var prefer_long: bool = PSBullpenManager.should_prefer_long_relief_for_starter_exit(next_defensive_inning)
+	if not already_relieved and PSBullpenManager.pick_reliever_for_context(setup, next_defensive_inning, {}, prefer_long) == null:
 		return batter
 
 	var minimum_score: int = pinch_hit_batting_score(batter) + 8
@@ -154,15 +155,13 @@ static func starter_should_be_hit_for_in_scoring_chance(
 	if chance_score < 8:
 		return false
 	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(setup, starter, PSPitcherUsageModel.ROLE_STARTER)
-	var target: int = int(usage.get("target_pitches", PSPitcherUsageModel.starter_target_pitches(starter)))
-	var pitches: int = int(usage.get("pitches", 0))
-	var remaining_pitches: int = target - pitches
-	var ratio: float = PSPitcherUsageModel.outing_ratio(starter, usage)
-	if remaining_pitches <= 24:
+	var projected_factor: float = PSPitcherUsageModel.starter_projected_next_inning_effective_factor(starter, usage)
+	var current_factor: float = PSFatigueCalculator.factor_for_pitcher(starter, false, int(usage.get("pitches", 0)))
+	if projected_factor <= 0.28:
 		return true
-	if ratio >= 0.78:
+	if current_factor <= 0.30:
 		return true
-	return next_defensive_inning >= 7 and ratio >= 0.68
+	return next_defensive_inning >= 7 and projected_factor <= 0.48
 
 
 static func select_best_pinch_hitter(setup: Dictionary, minimum_score: int = -999999) -> PSPlayerSeasonRecord:
@@ -719,8 +718,7 @@ static func defense_only_score(record: PSPlayerSeasonRecord, position: int) -> i
 	return 0
 
 
-# 閾値は z 化後のスケール。各ポジションで「リーグ平均能力 (z=0) の選手」が旧 display 式と
-# 同じ pass/fail 境界になるよう、旧閾値から 50·Σ(能力 weight) を引いた値。適性項は据え置き。
+# 閾値は z 化後の守備スコア。各ポジションの守備固め候補として信頼できる下限を表す。
 static func minimum_trusted_defense_score(position: int) -> int:
 	match position:
 		2:

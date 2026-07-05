@@ -4,12 +4,9 @@ class_name SQLiteStore
 const SaveContext = preload("res://services/storage/save_context.gd")
 const RUNTIME_TEMPLATE_DB_PATH = "res://data/pennant_strategy.sqlite"
 
-# 永続化スキーマ世代。SQLite の user_version に保存し、足りない列やテーブルを起動時に補う。
-#   0: blob (runtime_blobs) のみ
-#   1: 正規化テーブル (player_season_records / batter_stats / pitcher_stats) 追加済
-#   2: player_season_records に advanced_stats_json 列追加 (wRAA / BSR / OAA / 守備など)
-#   3: player_season_records に fa_eligible_years 列追加
-const SCHEMA_VERSION: int = 3
+# SQLite の user_version に保存する永続化スキーマ世代。
+# required columns と indexes が揃っているかを起動時に確認する。
+const SCHEMA_VERSION: int = 4
 
 # スキーマ構築 (CREATE TABLE / INDEX / レガシー検出 / PRAGMA table_info) はプロセス内で
 # 一度実行できれば十分。毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -119,6 +116,8 @@ const PITCHER_STATS_COLUMNS: Array = [
 	"outs_pitched", "batters_faced", "pitches_thrown",
 	"hits_allowed", "home_runs_allowed",
 	"walks", "hit_batters", "strikeouts",
+	"ground_balls_allowed", "line_drives_allowed",
+	"infield_flies_allowed", "outfield_flies_allowed",
 	"runs_allowed", "earned_runs",
 	"complete_games", "shutouts", "quality_starts",
 ]
@@ -794,6 +793,10 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			walks INTEGER NOT NULL DEFAULT 0,
 			hit_batters INTEGER NOT NULL DEFAULT 0,
 			strikeouts INTEGER NOT NULL DEFAULT 0,
+			ground_balls_allowed INTEGER NOT NULL DEFAULT 0,
+			line_drives_allowed INTEGER NOT NULL DEFAULT 0,
+			infield_flies_allowed INTEGER NOT NULL DEFAULT 0,
+			outfield_flies_allowed INTEGER NOT NULL DEFAULT 0,
 			runs_allowed INTEGER NOT NULL DEFAULT 0,
 			earned_runs INTEGER NOT NULL DEFAULT 0,
 			complete_games INTEGER NOT NULL DEFAULT 0,
@@ -824,6 +827,8 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 	if not _ensure_player_season_injury_severity_column(db):
 		return false
 	if not _ensure_player_season_fa_eligible_years_column(db):
+		return false
+	if not _ensure_pitcher_batted_ball_columns(db):
 		return false
 	return true
 
@@ -889,6 +894,31 @@ static func _ensure_player_season_injury_severity_column(db: Object) -> bool:
 		if str(col.get("name", "")) == "injury_severity":
 			return true
 	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_severity INTEGER NOT NULL DEFAULT 0")
+
+
+static func _ensure_pitcher_batted_ball_columns(db: Object) -> bool:
+	return _ensure_table_columns(db, "pitcher_stats", {
+		"ground_balls_allowed": "INTEGER NOT NULL DEFAULT 0",
+		"line_drives_allowed": "INTEGER NOT NULL DEFAULT 0",
+		"infield_flies_allowed": "INTEGER NOT NULL DEFAULT 0",
+		"outfield_flies_allowed": "INTEGER NOT NULL DEFAULT 0",
+	})
+
+
+static func _ensure_table_columns(db: Object, table_name: String, column_defs: Dictionary) -> bool:
+	var cols: Array = _query(db, "PRAGMA table_info(%s)" % table_name)
+	var existing: Dictionary = {}
+	for col_value in cols:
+		var col: Dictionary = col_value as Dictionary
+		existing[str(col.get("name", ""))] = true
+	for column_value in column_defs.keys():
+		var column_name: String = str(column_value)
+		if bool(existing.get(column_name, false)):
+			continue
+		var column_def: String = str(column_defs[column_value])
+		if not _execute(db, "ALTER TABLE %s ADD COLUMN %s %s" % [table_name, column_name, column_def]):
+			return false
+	return true
 
 
 # PRAGMA user_version を読む (= 既に適用済のスキーマ世代)。

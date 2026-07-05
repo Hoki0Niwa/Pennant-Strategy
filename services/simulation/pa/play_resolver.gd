@@ -44,7 +44,7 @@ const HR_LINE_LINE: float = 100.0
 const HR_LINE_KNEE_SPRAY: float = 20.0
 # 壁越えマージン(m)。飛距離=無障害の着地点換算なので、フェンス高(NPB 2.5-4.4m)を越えて入るには
 # 着地距離がフェンスより数m先である必要がある。ちょうどフェンス付近の打球は壁直撃(長打)になる。
-const HR_WALL_CLEARANCE: float = 6.0
+const HR_WALL_CLEARANCE: float = 3.5
 
 # --- ゾーン内（横方向）難度 ---
 # 1球ごとの2D座標は持たず、spray を横軸として「担当野手の定位置からの横ズレ」で難度を表す。
@@ -67,7 +67,7 @@ const LATERAL_EASY_FRACTION: float = 0.40 # 横ズレがこの割合までは正
 # catch_prob_neutral は out/hit 判定、OAA 基準、失策 makeable の土台なので、守備者能力はここでは混ぜない。
 const CATCH_PROB_MIN: float = 0.04
 const CATCH_PROB_MAX: float = 0.985
-const CATCH_PROB_CALIBRATION_BIAS: float = 0.035
+const CATCH_PROB_CALIBRATION_BIAS: float = 0.070
 const CATCH_EV_SOFT: float = 78.0
 const CATCH_EV_HARD: float = 106.0
 const INFIELD_GROUNDER_DEPTH_EASY: float = 18.0
@@ -567,7 +567,7 @@ static func _catch_probability_neutral(
 		PSBattedBallPhysicsResolver.TRAJECTORY_POPUP:
 			base = _popup_catch_probability(position, hang_time, lateral, hard)
 
-	return clamp(base + CATCH_PROB_CALIBRATION_BIAS, CATCH_PROB_MIN, CATCH_PROB_MAX)
+	return clamp(base + _rule_float("catch_prob_calibration_bias", CATCH_PROB_CALIBRATION_BIAS), CATCH_PROB_MIN, CATCH_PROB_MAX)
 
 
 static func _grounder_catch_probability(

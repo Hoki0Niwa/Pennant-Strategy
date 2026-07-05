@@ -17,6 +17,10 @@ var home_runs_allowed: int
 var walks: int
 var hit_batters: int
 var strikeouts: int
+var ground_balls_allowed: int
+var line_drives_allowed: int
+var infield_flies_allowed: int
+var outfield_flies_allowed: int
 var runs_allowed: int
 var earned_runs: int
 var complete_games: int
@@ -41,6 +45,10 @@ static func from_dict(data: Dictionary) -> PSPitcherStats:
 	stats.walks = int(data.get("walks", 0))
 	stats.hit_batters = int(data.get("hit_batters", 0))
 	stats.strikeouts = int(data.get("strikeouts", 0))
+	stats.ground_balls_allowed = int(data.get("ground_balls_allowed", 0))
+	stats.line_drives_allowed = int(data.get("line_drives_allowed", 0))
+	stats.infield_flies_allowed = int(data.get("infield_flies_allowed", 0))
+	stats.outfield_flies_allowed = int(data.get("outfield_flies_allowed", 0))
 	stats.runs_allowed = int(data.get("runs_allowed", 0))
 	stats.earned_runs = int(data.get("earned_runs", 0))
 	stats.complete_games = int(data.get("complete_games", 0))
@@ -66,6 +74,10 @@ func add_from(other: PSPitcherStats) -> void:
 	walks += other.walks
 	hit_batters += other.hit_batters
 	strikeouts += other.strikeouts
+	ground_balls_allowed += other.ground_balls_allowed
+	line_drives_allowed += other.line_drives_allowed
+	infield_flies_allowed += other.infield_flies_allowed
+	outfield_flies_allowed += other.outfield_flies_allowed
 	runs_allowed += other.runs_allowed
 	earned_runs += other.earned_runs
 	complete_games += other.complete_games
@@ -91,6 +103,10 @@ func subtract_from(other: PSPitcherStats) -> PSPitcherStats:
 	diff.walks = walks - other.walks
 	diff.hit_batters = hit_batters - other.hit_batters
 	diff.strikeouts = strikeouts - other.strikeouts
+	diff.ground_balls_allowed = ground_balls_allowed - other.ground_balls_allowed
+	diff.line_drives_allowed = line_drives_allowed - other.line_drives_allowed
+	diff.infield_flies_allowed = infield_flies_allowed - other.infield_flies_allowed
+	diff.outfield_flies_allowed = outfield_flies_allowed - other.outfield_flies_allowed
 	diff.runs_allowed = runs_allowed - other.runs_allowed
 	diff.earned_runs = earned_runs - other.earned_runs
 	diff.complete_games = complete_games - other.complete_games
@@ -142,6 +158,10 @@ func to_dict() -> Dictionary:
 		"walks": walks,
 		"hit_batters": hit_batters,
 		"strikeouts": strikeouts,
+		"ground_balls_allowed": ground_balls_allowed,
+		"line_drives_allowed": line_drives_allowed,
+		"infield_flies_allowed": infield_flies_allowed,
+		"outfield_flies_allowed": outfield_flies_allowed,
 		"runs_allowed": runs_allowed,
 		"earned_runs": earned_runs,
 		"complete_games": complete_games,

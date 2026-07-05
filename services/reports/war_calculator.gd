@@ -3,78 +3,42 @@ class_name PSWarCalculator
 
 # WAR (Wins Above Replacement) 算出モジュール。
 #
-# 設計方針:
-# - リーグ実測から定数を自動校正 (得点環境への自動追従)。固定の RPW やリプレイスメント
-#   は持たない (野球シーズン長 = 143 試合, NPB 型)。
-# - 野手 WAR = (wRAA + BSR + OAA_runs + 守備位置補正 + リプレイスメント) / RPW
-#   - wRAA は当該シーズンの lg_woba をセンタリングに使用
-#   - OAA_runs / 守備位置補正 は PSAdvancedStats.to_dict() の値を使用 (OAA × 0.83 + Pos)
-# - 投手 WAR = ((lgFIP × replacement_factor - FIP) / 9 × IP) / RPW
-#   - FIP = (13·HR + 3·(BB+HBP) - 2·K) / IP + cFIP
-#   - cFIP は当該シーズンの lgERA から自動算出
-# - RPW (Runs Per Win, 1 勝の限界得点) は Tom Tango 式の近似:
-#   RPW = 1.5 + sqrt(((lg_runs_per_team_game × 2) / 9) × 18) を簡略化して
-#   RPW ≈ 9 × √(R/G/inning × 2) + 0.5 のような形を取らず、より素直に
-#   RPW = lg_runs_per_team_game + 3.0 で近似 (NPB 環境では ~7-10、検証で調整)。
-# - リプレイスメント水準: 平均選手 ≈ +2 WAR / シーズン (600 PA) になるよう
-#   replacement_runs_per_pa を逆算。
-#
-# 主要 API:
-#   build_league_context(year, season_number) -> Dictionary
-#   season_war(record, league_ctx)             -> Dictionary  (batter/pitcher dispatch)
-#   calculate_batter_war(record, league_ctx)   -> Dictionary
-#   calculate_pitcher_war(record, league_ctx)  -> Dictionary
-#   team_position_war(team_id, year, season_number, league_ctx) -> Dictionary
-#   season_war_table(year, season_number, league_ctx) -> Array
+# - 野手 WAR は wRAA、BsR、OAA ラン、守備位置補正、league adjustment、replacement を RPW で勝利換算する。
+# - 投手 WAR は ifFIP 由来の FIPR9、投手別 RPW、役割別 replacement、救援 leverage、リーグ補正で求める。
+# - WAR プールは .294 replacement、162試合30球団=1000 WAR、野手57%・投手43%を試合数で比例配分する。
 
 const AdvancedStatsRecord = preload("res://services/simulation/reducers/advanced_stats_record.gd")
 
-# wOBA 重みは PSAdvancedStats と同期。リーグ平均 wOBA は実測から算出するので
-# WOBA_SCALE のみここに置く (= 1 標準偏差 wOBA = 1.20 runs/PA というFanGraphs定数)。
-const WOBA_SCALE: float = 1.20
-# 投手 replacement の役割比 (FanGraphs: 先発 0.12 / 救援 0.03 wins/9IP, 比 4:1)。
-# 絶対値は build_league_context が pitching プールに合わせ pitcher_replacement_scale で正規化するので、
-# ここは「先発:救援の相対比」を表す参照値(=救援は先発の 1/4 しか replacement クッションを得ない)。
-const PITCHER_REPL_STARTER_PER_9: float = 0.12
-const PITCHER_REPL_RELIEVER_PER_9: float = 0.03
+# wOBA scale はシーズン定数相当。シム内では固定し、リーグ平均との差だけを season context で再計算する。
+const WOBA_SCALE: float = 1.24
 
-# --- replacement 枠組み (現実準拠: 目標を決めて正規化) ---
-# 現実の WAR(FanGraphs/B-Ref)は「replacement 勝率 .294 → リーグ総 WAR プール」を入力前提とし、
-# 野手/投手の配分を正規化で強制する。ここでも同思想を採り、毎季リーグ実測(総投球回)から
-# プールを算出し、野手 replacement_runs_per_pa と投手 replacement_factor を逆算して配分を合わせる。
-# プール = (0.500 - REPLACEMENT_WIN_PCT) × リーグ総チーム試合数。総チーム試合数 = 総IP/9 なので
-# num_teams/試合数の外部入力なしに league context だけで自動校正できる(分布ドリフトにも追従)。
-const REPLACEMENT_WIN_PCT: float = 0.294    # replacement チームの勝率 (MLB/NPB 共通の標準)。
-# 野手 : 投手 の WAR 配分。NPB は投手分業が濃いため MLB(57:43)より投手寄せの 54:46 を採用。
-const BATTING_WAR_SHARE: float = 0.54
+# FanGraphs と Baseball-Reference が共有する replacement 枠組み。
+const REPLACEMENT_WIN_PCT: float = 0.294
+const FULL_MLB_GAMES: float = 2430.0
+const TOTAL_WAR_POOL_FULL_SEASON: float = 1000.0
+const POSITION_PLAYER_WAR_POOL_FULL_SEASON: float = 570.0
+const PITCHER_WAR_POOL_FULL_SEASON: float = 430.0
+
+# FanGraphs の投手 replacement は wins/game 単位で、先発と救援を GS/G で按分する。
+const PITCHER_STARTER_REPLACEMENT_WPG: float = 0.12
+const PITCHER_RELIEVER_REPLACEMENT_WPG: float = 0.03
+
+# Statcast Fielding Run Value の OAA→runs 変換。捕手固有指標は未保持のため range 相当のみ扱う。
+const OAA_INFIELD_RUNS_PER_OUT: float = 0.75
+const OAA_OUTFIELD_RUNS_PER_OUT: float = 0.90
+
 # 平均選手ベンチマーク表示用の参照稼働量(WAR 算出には使わない)。
 const BENCHMARK_BATTER_PA: float = 600.0    # 「平均的フル稼働野手」の参照打席数。
 const BENCHMARK_STARTER_IP: float = 162.0   # 「平均的フル稼働先発」の参照投球回。
 const BENCHMARK_RELIEVER_IP: float = 60.0   # 「平均的フル稼働救援」の参照投球回。
+
 # 当該シーズンのリーグ全体集計からリーグコンテキストを構築する。
-# 戻り値は以下のキーを持つ Dictionary:
-#   year, season_number
-#   total_pa            (リーグ全打席)
-#   total_woba_num      (野手のwOBA分子合計, 投手打撃は除外)
-#   total_woba_denom    (野手のwOBA分母合計, 投手打撃は除外)
-#   lg_woba             (打席加重リーグwOBA = 野手のみ。wRAA センタリングの基準)
-#   lg_runs             (リーグ総得点)
-#   lg_outs             (リーグ総アウト)
-#   lg_ip               (リーグ総イニング)
-#   lg_runs_per_inning, lg_runs_per_team_game
-#   rpw                 (Runs Per Win)
-#   lg_hr, lg_bb, lg_hbp, lg_k (FIP用、投手側集計)
-#   lg_fip_raw          (FIP 式の右辺一次項 = (13HR+3(BB+HBP)-2K)/IP)
-#   lg_era              (リーグERA)
-#   lg_fip_constant     (cFIP = lgERA - lg_fip_raw)
-#   replacement_runs_per_pa     (野手 replacement, batting_pool 逆算)
-#   pitcher_replacement_scale   (投手 役割別 replacement の正規化スケール, pitching_pool 逆算)
-#   lg_bsr_per_pa               (BsR ゼロセンタリング係数)
-static func build_league_context(year: int, season_number: int) -> Dictionary:
+static func build_league_context(year: int, season_number: int, meta: Dictionary = {}) -> Dictionary:
 	var total_pa: int = 0
 	var total_woba_num: float = 0.0
 	var total_woba_denom: int = 0
-	# 投手側集計 (FIP / ERA の母集団)
+	var total_batter_pa: int = 0
+	var total_batter_bsr: float = 0.0
 	var total_outs: int = 0
 	var total_earned_runs: int = 0
 	var total_runs_allowed: int = 0
@@ -83,25 +47,24 @@ static func build_league_context(year: int, season_number: int) -> Dictionary:
 	var total_hbp_allowed: int = 0
 	var total_k_thrown: int = 0
 	var total_batters_faced: int = 0
-	# 役割按分した replacement クッションの正規化用: Σ (役割重み × IP)。役割重みは GS/G で
-	# 先発(0.12)/救援(0.03)をブレンドした値。pitcher_replacement_scale の逆算に使う。
-	var total_pitcher_role_ip: float = 0.0
-	# 野手 WAR を受ける選手(=投手登板以外)の PA と BsR 合計。replacement_runs_per_pa の逆算と
-	# BsR のゼロセンタリングに使う。投手の打撃は野手 WAR に混ぜないので除外する。
-	var total_batter_pa: int = 0
-	var total_batter_bsr: float = 0.0
-	# 守備指標センタリング用: ポジション別のリーグ合計（OAA/RngR/ErrR/DPR と守備機会）。
+	var total_ground_balls_allowed: int = 0
+	var total_line_drives_allowed: int = 0
+	var total_infield_flies_allowed: int = 0
+	var total_outfield_flies_allowed: int = 0
 	var lg_oaa_by_pos: Dictionary = {}
 	var lg_rngr_by_pos: Dictionary = {}
 	var lg_errr_by_pos: Dictionary = {}
 	var lg_dpr_by_pos: Dictionary = {}
 	var lg_chances_by_pos: Dictionary = {}
+	var player_team_ids: Dictionary = {}
 	for record_value in RecordStore.player_records.values():
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
 			continue
 		if record.year != year or record.season_number != season_number:
 			continue
+		if record.team_id > 0:
+			player_team_ids[record.team_id] = true
 		var pitcher: PSPitcherStats = record.pitcher_stats
 		var is_pitcher_war: bool = record.is_pitcher() and pitcher != null and pitcher.outs_pitched > 0
 		var ad: PSAdvancedStats = record.advanced_stats
@@ -112,8 +75,6 @@ static func build_league_context(year: int, season_number: int) -> Dictionary:
 			_accumulate_float_map(lg_errr_by_pos, ad.errr_by_position)
 			_accumulate_float_map(lg_dpr_by_pos, ad.dpr_by_position)
 			_accumulate_int_map(lg_chances_by_pos, ad.fielding_chances_by_position)
-			# 野手 WAR を受ける選手のみ(投手登板者は除外)を lg_wOBA / replacement / BsR の母集団とする。
-			# 投手の打撃(no-DH)を lg_wOBA に混ぜると野手の wRAA が一律かさ上げされるため除外する。
 			if not is_pitcher_war:
 				total_woba_num += ad.woba_numerator
 				total_woba_denom += ad.woba_denominator
@@ -128,9 +89,10 @@ static func build_league_context(year: int, season_number: int) -> Dictionary:
 			total_hbp_allowed += pitcher.hit_batters
 			total_k_thrown += pitcher.strikeouts
 			total_batters_faced += pitcher.batters_faced
-			var p_ip: float = float(pitcher.outs_pitched) / 3.0
-			var gss: float = clamp(float(pitcher.starts) / float(pitcher.games), 0.0, 1.0) if pitcher.games > 0 else 0.0
-			total_pitcher_role_ip += (PITCHER_REPL_STARTER_PER_9 * gss + PITCHER_REPL_RELIEVER_PER_9 * (1.0 - gss)) * p_ip
+			total_ground_balls_allowed += pitcher.ground_balls_allowed
+			total_line_drives_allowed += pitcher.line_drives_allowed
+			total_infield_flies_allowed += pitcher.infield_flies_allowed
+			total_outfield_flies_allowed += pitcher.outfield_flies_allowed
 
 	var lg_woba: float = 0.0
 	if total_woba_denom > 0:
@@ -140,57 +102,56 @@ static func build_league_context(year: int, season_number: int) -> Dictionary:
 	var lg_runs_per_inning: float = 0.0
 	if total_outs > 0:
 		lg_runs_per_inning = float(total_runs_allowed) * 3.0 / float(total_outs)
-	# 1 試合 = 9 イニングで両軍合計 = lg_runs_per_inning × 9 × 2、
-	# 1 チーム 1 試合あたり = lg_runs_per_inning × 9
 	var lg_runs_per_team_game: float = lg_runs_per_inning * 9.0
-	# Tom Tango 近似: RPW = 9 × √(2 × R/I + 0.06) を素直に。
-	# 得点環境 R/G/team ≈ 4.5 (MLB) なら RPW ≈ 9.6、
-	# R/G/team ≈ 3.5 なら RPW ≈ 8.3。
-	var rpw: float = 9.0 * sqrt(max(0.001, 2.0 * lg_runs_per_inning + 0.06))
+	var rpw: float = 10.0 * sqrt(max(0.001, 2.0 * lg_runs_per_inning))
 	rpw = clamp(rpw, 6.0, 14.0)
 
 	var lg_era: float = 0.0
 	if total_outs > 0:
 		lg_era = float(total_earned_runs) * 27.0 / float(total_outs)
+	var lg_ra9: float = 0.0
+	if total_outs > 0:
+		lg_ra9 = float(total_runs_allowed) * 27.0 / float(total_outs)
 	var lg_fip_raw: float = 0.0
 	if lg_ip > 0.0:
-		lg_fip_raw = (13.0 * float(total_hr_allowed) + 3.0 * float(total_bb_allowed + total_hbp_allowed) - 2.0 * float(total_k_thrown)) / lg_ip
-	# cFIP: リーグ平均 FIP が リーグ ERA に一致するようにオフセット。
-	var lg_fip_constant: float = lg_era - lg_fip_raw
+		lg_fip_raw = _fip_raw_from_counts(total_hr_allowed, total_bb_allowed, total_hbp_allowed, total_k_thrown, lg_ip)
+	var lg_fip_era_constant: float = lg_era - lg_fip_raw
+	var lg_fip: float = lg_fip_raw + lg_fip_era_constant
 
-	# --- replacement を「目標プールへ正規化」で逆算する (現実準拠) ---
-	# プール = (0.500 - REPLACEMENT_WIN_PCT) × 総チーム試合数。総チーム試合数 = 総IP/9。
-	var total_team_games: float = lg_ip / 9.0
-	var war_pool: float = max(0.0, (0.5 - REPLACEMENT_WIN_PCT)) * total_team_games
-	var batting_pool: float = war_pool * BATTING_WAR_SHARE
-	var pitching_pool: float = war_pool * (1.0 - BATTING_WAR_SHARE)
-	# 野手: wRAA/BsR(センタ後)/OAA/守備位置補正の総和は ≈0 なので、リーグ野手 WAR 総和は
-	# replacement 成分のみで決まる。Σ(rppa × PA)/RPW = batting_pool となるよう rppa を逆算。
+	var batted_ball_events: int = total_ground_balls_allowed + total_line_drives_allowed + total_infield_flies_allowed + total_outfield_flies_allowed
+	var lg_iffip_raw: float = 0.0
+	if lg_ip > 0.0:
+		lg_iffip_raw = _iffip_raw_from_counts(total_hr_allowed, total_bb_allowed, total_hbp_allowed, total_k_thrown, total_infield_flies_allowed, lg_ip)
+	var lg_iffip_constant: float = lg_era - lg_iffip_raw
+	var fipr9_adjustment: float = lg_ra9 - lg_era
+	var lg_fipr9: float = lg_ra9
+
+	var season_meta: Dictionary = _season_meta(year, season_number, player_team_ids, meta)
+	var num_teams: int = int(season_meta.get("num_teams", 0))
+	var games_per_team: float = float(season_meta.get("games_per_team", 0.0))
+	var league_games: float = float(num_teams) * games_per_team / 2.0
+	var war_pool_scale: float = league_games / FULL_MLB_GAMES if FULL_MLB_GAMES > 0.0 else 0.0
+	var position_player_war_pool: float = POSITION_PLAYER_WAR_POOL_FULL_SEASON * war_pool_scale
+	var pitcher_war_pool: float = PITCHER_WAR_POOL_FULL_SEASON * war_pool_scale
+	var total_war_pool: float = TOTAL_WAR_POOL_FULL_SEASON * war_pool_scale
+
 	var replacement_runs_per_pa: float = 0.0
-	if total_batter_pa > 0 and rpw > 0.0:
-		replacement_runs_per_pa = batting_pool * rpw / float(total_batter_pa)
-	# BsR ゼロセンタリング係数 (リーグ平均走塁/PA)。各野手から PA 比例で引きリーグ合計を 0 にする。
+	if total_batter_pa > 0:
+		replacement_runs_per_pa = position_player_war_pool * rpw / float(total_batter_pa)
 	var lg_bsr_per_pa: float = 0.0
 	if total_batter_pa > 0:
 		lg_bsr_per_pa = total_batter_bsr / float(total_batter_pa)
-	# 投手: 役割別 replacement(先発0.12:救援0.03)を pitching_pool に合わせ正規化する scale を逆算。
-	# 平均比 (lgFIP-FIP) の総和は 0 なので、Σ投手WAR = (scale/9)×Σ(役割重み×IP) = pitching_pool。
-	# → scale = 9 × pitching_pool / Σ(役割重み×IP)。これで投手プール総量は保ちつつ先発厚め/救援薄めに再配分。
-	var pitcher_replacement_scale: float = 0.0
-	if total_pitcher_role_ip > 0.0:
-		pitcher_replacement_scale = pitching_pool * 9.0 / total_pitcher_role_ip
 
-	# ポジション別「守備機会あたり平均」= センタリング係数。これを機会数倍して各選手から引くと
-	# リーグ合計が各ポジションで 0 になる（実 UZR/OAA のゼロセンタリングと同義）。
-	return {
+	var fielding_center: Dictionary = {
+		"oaa_per_chance_by_position": _per_chance_map(lg_oaa_by_pos, lg_chances_by_pos),
+		"rngr_per_chance_by_position": _per_chance_map(lg_rngr_by_pos, lg_chances_by_pos),
+		"errr_per_chance_by_position": _per_chance_map(lg_errr_by_pos, lg_chances_by_pos),
+		"dpr_per_chance_by_position": _per_chance_map(lg_dpr_by_pos, lg_chances_by_pos),
+	}
+	var ctx: Dictionary = {
 		"year": year,
 		"season_number": season_number,
-		"fielding_center": {
-			"oaa_per_chance_by_position": _per_chance_map(lg_oaa_by_pos, lg_chances_by_pos),
-			"rngr_per_chance_by_position": _per_chance_map(lg_rngr_by_pos, lg_chances_by_pos),
-			"errr_per_chance_by_position": _per_chance_map(lg_errr_by_pos, lg_chances_by_pos),
-			"dpr_per_chance_by_position": _per_chance_map(lg_dpr_by_pos, lg_chances_by_pos),
-		},
+		"fielding_center": fielding_center,
 		"total_pa": total_pa,
 		"total_woba_num": total_woba_num,
 		"total_woba_denom": total_woba_denom,
@@ -209,15 +170,267 @@ static func build_league_context(year: int, season_number: int) -> Dictionary:
 		"lg_k": total_k_thrown,
 		"lg_batters_faced": total_batters_faced,
 		"lg_era": lg_era,
+		"lg_ra9": lg_ra9,
 		"lg_fip_raw": lg_fip_raw,
-		"lg_fip_constant": lg_fip_constant,
+		"lg_fip": lg_fip,
+		"lg_fip_era_constant": lg_fip_era_constant,
+		"lg_iffip_raw": lg_iffip_raw,
+		"lg_iffip_constant": lg_iffip_constant,
+		"fipr9_adjustment": fipr9_adjustment,
+		"lg_fipr9": lg_fipr9,
+		"lg_ground_balls_allowed": total_ground_balls_allowed,
+		"lg_line_drives_allowed": total_line_drives_allowed,
+		"lg_infield_flies_allowed": total_infield_flies_allowed,
+		"lg_outfield_flies_allowed": total_outfield_flies_allowed,
+		"batted_ball_events": batted_ball_events,
+		"num_teams": num_teams,
+		"games_per_team": games_per_team,
+		"league_games": league_games,
+		"war_pool_scale": war_pool_scale,
+		"total_war_pool": total_war_pool,
+		"position_player_war_pool": position_player_war_pool,
+		"pitcher_war_pool": pitcher_war_pool,
 		"total_batter_pa": total_batter_pa,
 		"lg_bsr_per_pa": lg_bsr_per_pa,
-		"war_pool": war_pool,
-		"batting_pool": batting_pool,
-		"pitching_pool": pitching_pool,
 		"replacement_runs_per_pa": replacement_runs_per_pa,
-		"pitcher_replacement_scale": pitcher_replacement_scale,
+		"pitcher_war_ip_correction": 0.0,
+		"batter_league_adjustment_runs_per_pa": 0.0,
+	}
+	ctx["batter_league_adjustment_runs_per_pa"] = _batter_league_adjustment_per_pa(year, season_number, ctx)
+	ctx["pitcher_war_ip_correction"] = _pitcher_war_ip_correction(year, season_number, ctx)
+	ctx["war_method"] = {
+		"system": "FanGraphs fWAR adapted",
+		"batter_run_metric": "wRAA",
+		"batter_woba_scale": WOBA_SCALE,
+		"batter_replacement_pool": position_player_war_pool,
+		"batter_fielding_component": "OAA_runs",
+		"pitcher_run_metric": "FIPR9",
+		"pitcher_replacement_starter_wpg": PITCHER_STARTER_REPLACEMENT_WPG,
+		"pitcher_replacement_reliever_wpg": PITCHER_RELIEVER_REPLACEMENT_WPG,
+		"pitcher_war_ip_correction": ctx["pitcher_war_ip_correction"],
+		"replacement_win_pct": REPLACEMENT_WIN_PCT,
+		"full_mlb_games": FULL_MLB_GAMES,
+		"position_player_war_share": POSITION_PLAYER_WAR_POOL_FULL_SEASON / TOTAL_WAR_POOL_FULL_SEASON,
+		"pitcher_war_share": PITCHER_WAR_POOL_FULL_SEASON / TOTAL_WAR_POOL_FULL_SEASON,
+	}
+	return ctx
+
+
+static func _season_meta(year: int, season_number: int, player_team_ids: Dictionary, meta: Dictionary) -> Dictionary:
+	var team_ids: Dictionary = {}
+	var team_games_sum: int = 0
+	for record_value in RecordStore.team_records.values():
+		var record: PSTeamSeasonRecord = record_value as PSTeamSeasonRecord
+		if record == null:
+			continue
+		if record.year != year or record.season_number != season_number:
+			continue
+		if record.team_id > 0:
+			team_ids[record.team_id] = true
+			team_games_sum += record.stats.games
+	var num_teams: int = int(meta.get("num_teams", 0))
+	if num_teams <= 0:
+		num_teams = team_ids.size()
+	if num_teams <= 0:
+		num_teams = player_team_ids.size()
+	var games_per_team: float = float(meta.get("games_per_team", 0.0))
+	if games_per_team <= 0.0 and num_teams > 0 and team_games_sum > 0:
+		games_per_team = float(team_games_sum) / float(num_teams)
+	if games_per_team <= 0.0:
+		games_per_team = 162.0
+	return {
+		"num_teams": max(1, num_teams),
+		"games_per_team": games_per_team,
+	}
+
+
+static func _batter_league_adjustment_per_pa(year: int, season_number: int, league_ctx: Dictionary) -> float:
+	var total_runs: float = 0.0
+	var total_pa: int = 0
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if record.year != year or record.season_number != season_number:
+			continue
+		var pitcher: PSPitcherStats = record.pitcher_stats
+		var is_pitcher_war: bool = record.is_pitcher() and pitcher != null and pitcher.outs_pitched > 0
+		if is_pitcher_war:
+			continue
+		var components: Dictionary = _batter_war_components(record, league_ctx)
+		var pa: int = int(components.get("pa", 0))
+		if pa <= 0:
+			continue
+		total_pa += pa
+		total_runs += float(components.get("performance_runs_no_league_adjustment", 0.0))
+	if total_pa <= 0:
+		return 0.0
+	return -total_runs / float(total_pa)
+
+
+static func _batter_war_components(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> Dictionary:
+	if record == null or record.advanced_stats == null:
+		return {}
+	var ad: PSAdvancedStats = record.advanced_stats
+	var pa: int = ad.plate_appearances
+	if pa <= 0:
+		return {}
+	var lg_woba: float = float(league_ctx.get("lg_woba", 0.315))
+	var woba_denom: int = ad.woba_denominator
+	var woba: float = ad.woba()
+	var wraa: float = 0.0
+	if woba_denom > 0:
+		wraa = ((woba - lg_woba) / WOBA_SCALE) * float(pa)
+	var bsr: float = ad.bsr_sum - float(league_ctx.get("lg_bsr_per_pa", 0.0)) * float(pa)
+	var ad_dict: Dictionary = ad.to_dict()
+	var centered_fielding: Dictionary = recenter_fielding(ad_dict, league_ctx)
+	var fielding_runs: float = float(centered_fielding.get("fielding_runs", ad_dict.get("fielding_runs", 0.0)))
+	var oaa_runs: float = float(centered_fielding.get("oaa_runs", ad_dict.get("oaa_runs", 0.0)))
+	var pos_adj: float = float(ad_dict.get("positional_adjustment_runs", 0.0))
+	var league_adjustment_runs: float = float(league_ctx.get("batter_league_adjustment_runs_per_pa", 0.0)) * float(pa)
+	var performance_runs_no_league_adjustment: float = wraa + bsr + fielding_runs + pos_adj
+	return {
+		"pa": pa,
+		"wraa": wraa,
+		"bsr": bsr,
+		"fielding_runs": fielding_runs,
+		"oaa_runs": oaa_runs,
+		"pos_adj": pos_adj,
+		"league_adjustment_runs": league_adjustment_runs,
+		"performance_runs_no_league_adjustment": performance_runs_no_league_adjustment,
+		"performance_runs": performance_runs_no_league_adjustment + league_adjustment_runs,
+		"primary_uzr_position": int(ad_dict.get("primary_uzr_position", record.position)),
+	}
+
+
+static func _fip_raw_from_counts(hr: int, bb: int, hbp: int, k: int, ip: float) -> float:
+	if ip <= 0.0:
+		return 0.0
+	return (13.0 * float(hr) + 3.0 * float(bb + hbp) - 2.0 * float(k)) / ip
+
+
+static func _iffip_raw_from_counts(hr: int, bb: int, hbp: int, k: int, iffb: int, ip: float) -> float:
+	if ip <= 0.0:
+		return 0.0
+	return (13.0 * float(hr) + 3.0 * float(bb + hbp) - 2.0 * float(k + iffb)) / ip
+
+
+static func _pitcher_fip(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:
+	var ps: PSPitcherStats = record.pitcher_stats
+	var ip: float = ps.innings_pitched()
+	return _fip_raw_from_counts(ps.home_runs_allowed, ps.walks, ps.hit_batters, ps.strikeouts, ip) \
+		+ float(league_ctx.get("lg_fip_era_constant", 0.0))
+
+
+static func _pitcher_iffip(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:
+	var ps: PSPitcherStats = record.pitcher_stats
+	var ip: float = ps.innings_pitched()
+	return _iffip_raw_from_counts(ps.home_runs_allowed, ps.walks, ps.hit_batters, ps.strikeouts, ps.infield_flies_allowed, ip) \
+		+ float(league_ctx.get("lg_iffip_constant", 0.0))
+
+
+static func _pitcher_fipr9(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:
+	return _pitcher_iffip(record, league_ctx) + float(league_ctx.get("fipr9_adjustment", 0.0))
+
+
+static func _pitcher_dynamic_rpw(fipr9: float, lg_fipr9: float, ip_per_game: float) -> float:
+	var pitcher_ip_share: float = clamp(ip_per_game, 0.0, 9.0)
+	return max(1.0, ((((18.0 - pitcher_ip_share) * lg_fipr9) + (pitcher_ip_share * fipr9)) / 18.0 + 2.0) * 1.5)
+
+
+static func _pitcher_replacement_wpg(starter_share: float) -> float:
+	return PITCHER_STARTER_REPLACEMENT_WPG * starter_share + PITCHER_RELIEVER_REPLACEMENT_WPG * (1.0 - starter_share)
+
+
+static func _estimated_pitcher_gmli(record: PSPlayerSeasonRecord) -> float:
+	var ps: PSPitcherStats = record.pitcher_stats
+	if ps == null:
+		return 1.0
+	var relief_games: int = max(0, ps.games - ps.starts)
+	if relief_games <= 0:
+		return 1.0
+	var save_share: float = clamp(float(ps.saves) / float(relief_games), 0.0, 1.0)
+	var hold_share: float = clamp(float(ps.holds) / float(relief_games), 0.0, 1.0)
+	var role_base: float = 1.05
+	if record.role == "closer":
+		role_base = 1.55
+	return clamp(role_base + 0.25 * hold_share + 0.35 * save_share, 0.85, 1.90)
+
+
+static func _pitcher_leverage_multiplier(record: PSPlayerSeasonRecord, starter_share: float) -> float:
+	var reliever_share: float = 1.0 - starter_share
+	if reliever_share <= 0.0:
+		return 1.0
+	var reliever_multiplier: float = (1.0 + _estimated_pitcher_gmli(record)) / 2.0
+	return starter_share + reliever_share * reliever_multiplier
+
+
+static func _pitcher_war_ip_correction(year: int, season_number: int, league_ctx: Dictionary) -> float:
+	var target_pool: float = float(league_ctx.get("pitcher_war_pool", 0.0))
+	var raw_war: float = 0.0
+	var total_ip: float = 0.0
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if record.year != year or record.season_number != season_number:
+			continue
+		if not record.is_pitcher() or record.pitcher_stats == null or record.pitcher_stats.outs_pitched <= 0:
+			continue
+		var components: Dictionary = _pitcher_war_components(record, league_ctx, false)
+		raw_war += float(components.get("war_before_correction", 0.0))
+		total_ip += float(components.get("ip", 0.0))
+	if total_ip <= 0.0:
+		return 0.0
+	return (target_pool - raw_war) / total_ip
+
+
+static func _pitcher_war_components(record: PSPlayerSeasonRecord, league_ctx: Dictionary, include_correction: bool = true) -> Dictionary:
+	if record == null or record.pitcher_stats == null:
+		return {}
+	var ps: PSPitcherStats = record.pitcher_stats
+	if ps.outs_pitched <= 0:
+		return {}
+	var ip: float = ps.innings_pitched()
+	var fip: float = _pitcher_fip(record, league_ctx)
+	var iffip: float = _pitcher_iffip(record, league_ctx)
+	var fipr9: float = _pitcher_fipr9(record, league_ctx)
+	var lg_fipr9: float = float(league_ctx.get("lg_fipr9", league_ctx.get("lg_ra9", 0.0)))
+	var games: int = max(1, ps.games)
+	var gs_share: float = clamp(float(ps.starts) / float(games), 0.0, 1.0)
+	var ip_per_game: float = ip / float(games)
+	var dynamic_rpw: float = _pitcher_dynamic_rpw(fipr9, lg_fipr9, ip_per_game)
+	var wins_above_avg_per_game: float = (lg_fipr9 - fipr9) / dynamic_rpw if dynamic_rpw > 0.0 else 0.0
+	var replacement_wpg: float = _pitcher_replacement_wpg(gs_share)
+	var pre_leverage_war: float = (wins_above_avg_per_game + replacement_wpg) * (ip / 9.0)
+	var leverage_multiplier: float = _pitcher_leverage_multiplier(record, gs_share)
+	var war_before_correction: float = pre_leverage_war * leverage_multiplier
+	var correction_per_ip: float = float(league_ctx.get("pitcher_war_ip_correction", 0.0)) if include_correction else 0.0
+	var correction: float = correction_per_ip * ip
+	var war: float = war_before_correction + correction
+	var raa_runs: float = (lg_fipr9 - fipr9) / 9.0 * ip
+	var replacement_runs: float = replacement_wpg * dynamic_rpw * (ip / 9.0)
+	return {
+		"ip": ip,
+		"fip": fip,
+		"iffip": iffip,
+		"fipr9": fipr9,
+		"run_metric": fipr9,
+		"run_metric_name": "FIPR9",
+		"lg_run_metric": lg_fipr9,
+		"gs_share": gs_share,
+		"ip_per_game": ip_per_game,
+		"dynamic_rpw": dynamic_rpw,
+		"wins_above_avg_per_game": wins_above_avg_per_game,
+		"replacement_wpg": replacement_wpg,
+		"role_replacement_runs_per_9": replacement_wpg * dynamic_rpw,
+		"leverage_multiplier": leverage_multiplier,
+		"war_before_correction": war_before_correction,
+		"war_correction": correction,
+		"raa_runs": raa_runs,
+		"replacement_runs": replacement_runs,
+		"rar_runs": raa_runs + replacement_runs,
+		"war": war,
 	}
 
 
@@ -232,48 +445,41 @@ static func season_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> 
 	return calculate_batter_war(record, league_ctx)
 
 
-# 野手 WAR を算出。advanced_stats の wraa / bsr / oaa_runs / positional_adjustment_runs と
-# リプレイスメントを合計して RPW で除す。
+# 野手 WAR を算出。wRAA / BsR / UZR 系守備ラン / 守備位置補正 / リプレイスメントを RPW で勝利換算する。
 static func calculate_batter_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> Dictionary:
 	var result: Dictionary = _empty_war_result()
 	result["role"] = "batter"
 	if record == null or record.advanced_stats == null:
 		return result
-	var ad: PSAdvancedStats = record.advanced_stats
-	var pa: int = ad.plate_appearances
+	var components: Dictionary = _batter_war_components(record, league_ctx)
+	var pa: int = int(components.get("pa", 0))
 	if pa <= 0:
 		return result
-	var lg_woba: float = float(league_ctx.get("lg_woba", 0.315))
-	var woba_denom: int = ad.woba_denominator
-	var woba: float = ad.woba()
-	# wRAA はリーグ平均 wOBA をセンタリングに使う (PSAdvancedStats の固定 LEAGUE_WOBA ではなく
-	# 当該シーズンの実測値を使うことで「リーグ合計 wRAA ≈ 0」を担保する)。
-	var wraa: float = 0.0
-	if woba_denom > 0:
-		wraa = ((woba - lg_woba) / WOBA_SCALE) * float(woba_denom)
-	# BsR(走塁ラン)はリーグ平均をゼロセンタリングしてから WAR に使う(守備指標と同様、平均=0基準)。
-	# 旧実装は ad.bsr_sum を素通しでリーグ合計が系統的に正となり野手 WAR を底上げしていた。
-	var bsr: float = ad.bsr_sum - float(league_ctx.get("lg_bsr_per_pa", 0.0)) * float(pa)
-	var ad_dict: Dictionary = ad.to_dict()
-	# 守備指標はポジション別にゼロセンタリングしてから WAR に使う（リーグ平均0基準＝実 UZR/OAA 準拠）。
-	var centered_fielding: Dictionary = recenter_fielding(ad_dict, league_ctx)
-	var oaa_runs: float = float(centered_fielding.get("oaa_runs", ad_dict.get("oaa_runs", 0.0)))
-	var pos_adj: float = float(ad_dict.get("positional_adjustment_runs", 0.0))
+	var wraa: float = float(components.get("wraa", 0.0))
+	var bsr: float = float(components.get("bsr", 0.0))
+	var fielding_runs: float = float(components.get("fielding_runs", 0.0))
+	var oaa_runs: float = float(components.get("oaa_runs", 0.0))
+	var pos_adj: float = float(components.get("pos_adj", 0.0))
+	var league_adjustment_runs: float = float(components.get("league_adjustment_runs", 0.0))
+	var performance_runs: float = float(components.get("performance_runs", 0.0))
 	var replacement_runs: float = float(league_ctx.get("replacement_runs_per_pa", 0.0)) * float(pa)
 	var rpw: float = float(league_ctx.get("rpw", 10.0))
-	var total_runs: float = wraa + bsr + oaa_runs + pos_adj + replacement_runs
+	var total_runs: float = performance_runs + replacement_runs
 	var war: float = total_runs / rpw if rpw > 0.0 else 0.0
 
 	result["role"] = "batter"
 	result["player_id"] = record.player_id
 	result["name"] = record.name
 	result["position"] = record.position
-	result["primary_uzr_position"] = int(ad_dict.get("primary_uzr_position", record.position))
+	result["primary_uzr_position"] = int(components.get("primary_uzr_position", record.position))
 	result["pa"] = pa
 	result["wraa"] = _round3(wraa)
 	result["bsr"] = _round3(bsr)
+	result["fielding_runs"] = _round3(fielding_runs)
 	result["oaa_runs"] = _round3(oaa_runs)
 	result["pos_adj"] = _round3(pos_adj)
+	result["league_adjustment_runs"] = _round3(league_adjustment_runs)
+	result["performance_runs"] = _round3(performance_runs)
 	result["replacement_runs"] = _round3(replacement_runs)
 	result["total_runs"] = _round3(total_runs)
 	result["rpw"] = _round3(rpw)
@@ -281,9 +487,7 @@ static func calculate_batter_war(record: PSPlayerSeasonRecord, league_ctx: Dicti
 	return result
 
 
-# 投手 WAR を算出。FIP を当該シーズン cFIP で組み立て、
-# RAA9 = (lgFIP × replacement_factor - FIP) を 9 イニング当たりとして
-# (RAA9 / 9) × IP / RPW で WAR を求める。
+# 投手 WAR を算出。ifFIP/FIPR9 と役割別 replacement を勝利単位で合算する。
 static func calculate_pitcher_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> Dictionary:
 	var result: Dictionary = _empty_war_result()
 	result["role"] = "pitcher"
@@ -292,40 +496,49 @@ static func calculate_pitcher_war(record: PSPlayerSeasonRecord, league_ctx: Dict
 	var ps: PSPitcherStats = record.pitcher_stats
 	if ps.outs_pitched <= 0:
 		return result
-	var ip: float = ps.innings_pitched()
-	var lg_fip_constant: float = float(league_ctx.get("lg_fip_constant", 0.0))
-	var fip: float = (13.0 * float(ps.home_runs_allowed) + 3.0 * float(ps.walks + ps.hit_batters) - 2.0 * float(ps.strikeouts)) / ip + lg_fip_constant
-	var lg_era: float = float(league_ctx.get("lg_era", 0.0))
-	var lg_fip: float = lg_era  # cFIP の定義により lgFIP ≡ lgERA
+	var components: Dictionary = _pitcher_war_components(record, league_ctx)
+	var ip: float = float(components.get("ip", 0.0))
+	var fipr9: float = float(components.get("fipr9", 0.0))
+	var lg_metric: float = float(components.get("lg_run_metric", 0.0))
 	var rpw: float = float(league_ctx.get("rpw", 10.0))
-	# 役割別 replacement: 先発と救援で replacement 水準が違う(FanGraphs: 先発0.12 / 救援0.03 wins/9IP)。
-	# 比 0.12:0.03 を pitching プールに合わせて pitcher_replacement_scale で正規化した値を、
-	# 平均比 (lgFIP-FIP) の勝利換算に足す。GS/G で先発寄り/救援寄りをブレンドする。
-	var repl_scale: float = float(league_ctx.get("pitcher_replacement_scale", 0.0))
-	var gs_share: float = clamp(float(ps.starts) / float(ps.games), 0.0, 1.0) if ps.games > 0 else 0.0
-	var role_repl_per_9: float = repl_scale * (PITCHER_REPL_STARTER_PER_9 * gs_share + PITCHER_REPL_RELIEVER_PER_9 * (1.0 - gs_share))  # wins / 9IP
-	var wins_above_avg_per_9: float = (lg_fip - fip) / rpw if rpw > 0.0 else 0.0
-	var war_per_9: float = wins_above_avg_per_9 + role_repl_per_9
-	var war: float = war_per_9 * ip / 9.0
-	# レポート継続用に runs ベースの raa も残す (raa9 = replacement 超のラン/9)。
-	var raa9: float = war_per_9 * rpw
-	var raa: float = raa9 * ip / 9.0
+	var war: float = float(components.get("war", 0.0))
+	var raw_runs_above_avg_per_9: float = lg_metric - fipr9
+	var dynamic_rpw: float = float(components.get("dynamic_rpw", rpw))
+	var wins_above_avg_per_9: float = raw_runs_above_avg_per_9 / dynamic_rpw if dynamic_rpw > 0.0 else 0.0
+	var role_replacement_runs_per_9: float = float(components.get("role_replacement_runs_per_9", 0.0))
+	var rar: float = float(components.get("rar_runs", 0.0)) + float(components.get("war_correction", 0.0)) * rpw
 
 	result["role"] = "pitcher"
 	result["player_id"] = record.player_id
 	result["name"] = record.name
 	result["position"] = record.position
 	result["ip"] = _round3(ip)
-	result["fip"] = _round3(fip)
+	result["metric_ip"] = _round3(ip)
+	result["fip"] = _round3(float(components.get("fip", 0.0)))
+	result["iffip"] = _round3(float(components.get("iffip", 0.0)))
+	result["fipr9"] = _round3(fipr9)
+	result["run_metric"] = _round3(fipr9)
+	result["run_metric_name"] = "FIPR9"
 	result["era"] = _round3(ps.era())
-	result["lg_fip"] = _round3(lg_fip)
-	result["lg_fip_constant"] = _round3(lg_fip_constant)
-	result["gs_share"] = _round3(gs_share)
-	result["role_replacement_runs_per_9"] = _round3(role_repl_per_9 * rpw)
-	# 旧フィールド互換: 実効 replacement 係数 (lgFIP 比)。役割で先発>救援 になる。
-	result["replacement_factor"] = _round3(1.0 + (role_repl_per_9 * rpw) / lg_fip) if lg_fip > 0.0 else 0.0
-	result["raa9"] = _round3(raa9)
-	result["raa"] = _round3(raa)
+	result["lg_fip"] = _round3(float(league_ctx.get("lg_fip", 0.0)))
+	result["lg_fip_constant"] = _round3(float(league_ctx.get("lg_fip_era_constant", 0.0)))
+	result["lg_iffip_constant"] = _round3(float(league_ctx.get("lg_iffip_constant", 0.0)))
+	result["lg_fipr9"] = _round3(float(league_ctx.get("lg_fipr9", 0.0)))
+	result["lg_run_metric"] = _round3(lg_metric)
+	result["gs_share"] = _round3(float(components.get("gs_share", 0.0)))
+	result["ip_per_game"] = _round3(float(components.get("ip_per_game", 0.0)))
+	result["dynamic_rpw"] = _round3(dynamic_rpw)
+	result["role_replacement_runs_per_9"] = _round3(role_replacement_runs_per_9)
+	result["replacement_wpg"] = _round3(float(components.get("replacement_wpg", 0.0)))
+	result["leverage_multiplier"] = _round3(float(components.get("leverage_multiplier", 1.0)))
+	result["war_before_correction"] = _round3(float(components.get("war_before_correction", 0.0)))
+	result["war_correction"] = _round3(float(components.get("war_correction", 0.0)))
+	result["raw_runs_above_avg_per_9"] = _round3(raw_runs_above_avg_per_9)
+	result["wins_above_avg_per_9"] = _round3(wins_above_avg_per_9)
+	result["replacement_factor"] = _round3((lg_metric + role_replacement_runs_per_9) / lg_metric) if lg_metric > 0.0 else 0.0
+	result["raa9"] = _round3(raw_runs_above_avg_per_9)
+	result["raa"] = _round3(float(components.get("raa_runs", 0.0)))
+	result["rar"] = _round3(rar)
 	result["rpw"] = _round3(rpw)
 	result["war"] = _round3(war)
 	return result
@@ -354,13 +567,11 @@ static func season_war_table(year: int, season_number: int, league_ctx: Dictiona
 	return rows
 
 
-# --- Phase 0 計測: リーグ WAR 配分サマリ ---
-# 「野手は出やすく投手は伸びない/負が多い」を実数で確認するための計測。WAR 算出は変更しない。
-# 当該シーズンの全選手 WAR を野手/投手で合計し、配分・per-team・負WAR率・参照目標(57:43)・
-# ベンチマーク選手WAR を返す。RecordStore に当該シーズンの記録が存在する間に呼ぶこと。
+# 当該シーズンの全選手 WAR を野手/投手で合計し、配分・per-team・負WAR率・参照目標・
+# ベンチマーク選手WARを返す。RecordStore に当該シーズンの記録が存在する間に呼ぶこと。
 #   meta: {num_teams: int, games_per_team: float} を渡すと参照プール(.294基準)も計算する。
 static func league_war_summary(year: int, season_number: int, league_ctx: Dictionary = {}, meta: Dictionary = {}) -> Dictionary:
-	var ctx: Dictionary = league_ctx if not league_ctx.is_empty() else build_league_context(year, season_number)
+	var ctx: Dictionary = league_ctx if not league_ctx.is_empty() else build_league_context(year, season_number, meta)
 	var batting_war_total: float = 0.0
 	var pitching_war_total: float = 0.0
 	var batter_count: int = 0
@@ -403,8 +614,8 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 				negative_batters += 1
 
 	var total_war: float = batting_war_total + pitching_war_total
-	var num_teams: int = int(meta.get("num_teams", team_ids.size()))
-	var games_per_team: float = float(meta.get("games_per_team", 0.0))
+	var num_teams: int = int(meta.get("num_teams", ctx.get("num_teams", team_ids.size())))
+	var games_per_team: float = float(meta.get("games_per_team", ctx.get("games_per_team", 0.0)))
 	var team_divisor: float = float(max(1, num_teams))
 	return {
 		"year": year,
@@ -426,26 +637,25 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 		"negative_batters": negative_batters,
 		"negative_pitchers": negative_pitchers,
 		"benchmarks": average_player_war_benchmarks(ctx),
+		"method": ctx.get("war_method", {}) as Dictionary,
 	}
 
 
-# 計測: 「平均的な選手」の WAR をリーグ context から解析的に求める。平均投手(FIP=lgFIP)は
-# 平均比が 0 なので役割別 replacement クッションだけが残る。先発(GS/G=1)と救援(GS/G=0)で
-# 値が分かれ、野手(600PA)との釣り合いを可視化する。
+# 計測: 平均的な選手の参照 WAR をリーグ context から解析的に求める。
 static func average_player_war_benchmarks(league_ctx: Dictionary) -> Dictionary:
 	var rpw: float = float(league_ctx.get("rpw", 0.0))
 	var replacement_runs_per_pa: float = float(league_ctx.get("replacement_runs_per_pa", 0.0))
-	var repl_scale: float = float(league_ctx.get("pitcher_replacement_scale", 0.0))
 	var batter_war_per_600: float = 0.0
+	var starter_war_per_162: float = 0.0
+	var reliever_war_per_60: float = 0.0
 	if rpw > 0.0:
 		batter_war_per_600 = replacement_runs_per_pa * BENCHMARK_BATTER_PA / rpw
-	# 平均投手は wins/9IP = 役割別 replacement のみ。先発=scale×0.12 / 救援=scale×0.03。
-	var starter_war_per_9: float = repl_scale * PITCHER_REPL_STARTER_PER_9
-	var reliever_war_per_9: float = repl_scale * PITCHER_REPL_RELIEVER_PER_9
+		starter_war_per_162 = PITCHER_STARTER_REPLACEMENT_WPG * (BENCHMARK_STARTER_IP / 9.0)
+		reliever_war_per_60 = PITCHER_RELIEVER_REPLACEMENT_WPG * (BENCHMARK_RELIEVER_IP / 9.0)
 	return {
 		"avg_batter_war_per_600_pa": _round3(batter_war_per_600),
-		"avg_starter_war_per_162_ip": _round3(starter_war_per_9 * BENCHMARK_STARTER_IP / 9.0),
-		"avg_reliever_war_per_60_ip": _round3(reliever_war_per_9 * BENCHMARK_RELIEVER_IP / 9.0),
+		"avg_starter_war_per_162_ip": _round3(starter_war_per_162),
+		"avg_reliever_war_per_60_ip": _round3(reliever_war_per_60),
 	}
 
 
@@ -453,7 +663,7 @@ static func average_player_war_benchmarks(league_ctx: Dictionary) -> Dictionary:
 # - 各選手の WAR を主守備位置 (advanced_stats.primary_uzr_position が >0 ならそれ、
 #   なければ record.position) に帰属させる。
 # - position 別に war_total / starter_war (= 主力 1 名分) / depth_war / players 配列を返す。
-# - 投手は position=1 にまとめる (役割別の分割は Phase D 以降で詳細化)。
+# - 投手は position=1 にまとめる。
 #
 # 戻り値:
 #   {
@@ -659,7 +869,7 @@ static func _per_chance_map(totals: Dictionary, chances: Dictionary) -> Dictiona
 
 # 1選手の守備指標を、ctx の fielding_center を使ってポジション別にゼロセンタリングする。
 # 各ポジションで「値 − 平均/機会 × 当該選手の機会数」を引き、リーグ合計が 0 になるようにする。
-# 返す dict は ad_dict にマージして表示/WAR に使う（oaa_runs / uzr / def_runs などを上書き）。
+# 返す dict は ad_dict にマージして表示/WAR に使う。
 static func recenter_fielding(ad_dict: Dictionary, league_ctx: Dictionary) -> Dictionary:
 	var center: Dictionary = league_ctx.get("fielding_center", {}) as Dictionary
 	var chances_by_pos: Dictionary = ad_dict.get("fielding_chances_by_position", {}) as Dictionary
@@ -679,6 +889,7 @@ static func recenter_fielding(ad_dict: Dictionary, league_ctx: Dictionary) -> Di
 	var dpr_total: float = 0.0
 	var oaa_infield: float = 0.0
 	var oaa_outfield: float = 0.0
+	var oaa_runs: float = 0.0
 	for key_value in chances_by_pos.keys():
 		var key: String = str(key_value)
 		var position: int = int(key)
@@ -688,15 +899,15 @@ static func recenter_fielding(ad_dict: Dictionary, league_ctx: Dictionary) -> Di
 		var errr_c: float = float(errr_by_pos.get(key, 0.0)) - float(errr_center.get(key, 0.0)) * c
 		var dpr_c: float = float(dpr_by_pos.get(key, 0.0)) - float(dpr_center.get(key, 0.0)) * c
 		oaa_total += oaa_c
+		oaa_runs += oaa_c * _oaa_run_value_for_position(position)
 		rngr_total += rngr_c
 		errr_total += errr_c
 		dpr_total += dpr_c
-		if position >= 3 and position <= 6:
+		if position >= 2 and position <= 6:
 			oaa_infield += oaa_c
 		elif position >= 7 and position <= 9:
 			oaa_outfield += oaa_c
 
-	var oaa_runs: float = oaa_total * PSAdvancedStats.RUN_PER_OUT
 	var uzr: float = rngr_total + errr_total + dpr_total
 	var pos_adj: float = float(ad_dict.get("positional_adjustment_runs", 0.0))
 	return {
@@ -710,6 +921,12 @@ static func recenter_fielding(ad_dict: Dictionary, league_ctx: Dictionary) -> Di
 		"dpr": _round3(dpr_total),
 		"uzr": _round3(uzr),
 		"drs": _round3(uzr),
-		"fielding_runs": _round3(uzr),
+		"fielding_runs": _round3(oaa_runs),
 		"def_runs": _round3(oaa_runs + pos_adj),
 	}
+
+
+static func _oaa_run_value_for_position(position: int) -> float:
+	if position >= 7 and position <= 9:
+		return OAA_OUTFIELD_RUNS_PER_OUT
+	return OAA_INFIELD_RUNS_PER_OUT

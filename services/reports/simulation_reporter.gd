@@ -14,7 +14,7 @@ const DEFAULT_START_YEAR: int = 2026
 const BATTER_QUALIFIED_PLATE_APPEARANCES_PER_TEAM_GAME: float = 3.1
 const PITCHER_QUALIFIED_OUTS_PER_TEAM_GAME: int = 3
 const ADVANCED_LEAGUE_WOBA: float = 0.315
-const ADVANCED_WOBA_SCALE: float = 1.20
+const ADVANCED_WOBA_SCALE: float = 1.24
 const ADVANCED_LEAGUE_RUNS_PER_PA: float = 0.115
 const POSITION_ADJUSTMENT_FULL_SEASON_OUTS: float = 162.0 * 27.0
 const POSITION_ADJUSTMENT_RUNS_PER_162: Dictionary = {
@@ -26,10 +26,11 @@ const POSITION_ADJUSTMENT_RUNS_PER_162: Dictionary = {
 	7: -7.5,
 	8: 2.5,
 	9: -7.5,
+	10: -17.5,
 }
-# 1 アウト奪取の平均ラン価値 (FanGraphs UZR primer)。
-# WAR の守備成分 (def_runs) は OAA × ADVANCED_RUN_PER_OUT + 守備位置補正 で算出する。
-const ADVANCED_RUN_PER_OUT: float = 0.83
+# OAA を Statcast Fielding Run Value に近いラン単位へ換算する係数。
+const ADVANCED_INFIELD_OAA_RUNS_PER_OUT: float = 0.75
+const ADVANCED_OUTFIELD_OAA_RUNS_PER_OUT: float = 0.90
 
 
 func _dh_settings_from_options(options: Dictionary) -> Dictionary:
@@ -107,11 +108,14 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var team_rows: Array = season_report.get("teams", []) as Array
 		for row in team_rows:
 			team_seasons.append(row)
-		# WAR context をこのシーズン分だけ構築し、選手別レポートと配分計測で共有する。
-		var war_ctx: Dictionary = WarCalculator.build_league_context(season.year, season.season_number)
-		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary, war_ctx)
 		var war_num_teams: int = GameDb.teams.size()
 		var war_games_per_team: float = _safe_div(int(season_report.get("team_games", 0)), war_num_teams)
+		# WAR context をこのシーズン分だけ構築し、選手別レポートと配分計測で共有する。
+		var war_ctx: Dictionary = WarCalculator.build_league_context(
+			season.year, season.season_number,
+			{"num_teams": war_num_teams, "games_per_team": war_games_per_team}
+		)
+		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary, war_ctx)
 		war_allocation_seasons.append(WarCalculator.league_war_summary(
 			season.year, season.season_number, war_ctx,
 			{"num_teams": war_num_teams, "games_per_team": war_games_per_team}
@@ -245,11 +249,14 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var team_rows: Array = season_report.get("teams", []) as Array
 		for row in team_rows:
 			team_seasons.append(row)
-		# WAR context をこのシーズン分だけ構築し、選手別レポートと配分計測で共有する。
-		var war_ctx: Dictionary = WarCalculator.build_league_context(season.year, season.season_number)
-		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary, war_ctx)
 		var war_num_teams: int = GameDb.teams.size()
 		var war_games_per_team: float = _safe_div(int(season_report.get("team_games", 0)), war_num_teams)
+		# WAR context をこのシーズン分だけ構築し、選手別レポートと配分計測で共有する。
+		var war_ctx: Dictionary = WarCalculator.build_league_context(
+			season.year, season.season_number,
+			{"num_teams": war_num_teams, "games_per_team": war_games_per_team}
+		)
+		_collect_player_stats(season.year, season.season_number, batter_players, pitcher_players, season_report.get("advanced_records", {}) as Dictionary, war_ctx)
 		war_allocation_seasons.append(WarCalculator.league_war_summary(
 			season.year, season.season_number, war_ctx,
 			{"num_teams": war_num_teams, "games_per_team": war_games_per_team}
@@ -513,7 +520,6 @@ func _collect_player_stats(
 
 
 # WAR 行 (WarCalculator.season_war の出力) をプレイヤーレポート行へマージする。
-# 投手は fip / war / raa など、野手は war / wraa / oaa_runs / pos_adj / replacement_runs など。
 func _merge_war_row_into(row: Dictionary, war_row: Dictionary, is_batter: bool) -> void:
 	if war_row.is_empty():
 		return
@@ -522,17 +528,25 @@ func _merge_war_row_into(row: Dictionary, war_row: Dictionary, is_batter: bool) 
 	if is_batter:
 		row["war_wraa"] = float(war_row.get("wraa", 0.0))
 		row["war_bsr"] = float(war_row.get("bsr", 0.0))
+		row["war_fielding_runs"] = float(war_row.get("fielding_runs", 0.0))
 		row["war_oaa_runs"] = float(war_row.get("oaa_runs", 0.0))
 		row["war_pos_adj"] = float(war_row.get("pos_adj", 0.0))
+		row["war_league_adjustment_runs"] = float(war_row.get("league_adjustment_runs", 0.0))
+		row["war_performance_runs"] = float(war_row.get("performance_runs", 0.0))
 		row["war_replacement_runs"] = float(war_row.get("replacement_runs", 0.0))
 	else:
 		row["fip"] = float(war_row.get("fip", 0.0))
+		row["iffip"] = float(war_row.get("iffip", 0.0))
+		row["fipr9"] = float(war_row.get("fipr9", 0.0))
+		row["war_run_metric"] = float(war_row.get("run_metric", 0.0))
+		row["war_run_metric_name"] = str(war_row.get("run_metric_name", ""))
 		row["war_raa"] = float(war_row.get("raa", 0.0))
 		row["war_replacement_factor"] = float(war_row.get("replacement_factor", 0.0))
+		row["war_leverage_multiplier"] = float(war_row.get("leverage_multiplier", 1.0))
+		row["war_correction"] = float(war_row.get("war_correction", 0.0))
 
 
-# Phase 0 計測: 各シーズンの league_war_summary を集計し、配分・per-team・参照目標(57:43/.294)・
-# ベンチマーク選手WAR を 1 ブロックにまとめる。これが「野手は出やすく投手は伸びない」を実数で示す。
+# 各シーズンの league_war_summary を集計し、配分・per-team・参照目標・ベンチマーク選手WARをまとめる。
 func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 	if seasons.is_empty():
 		return {}
@@ -549,6 +563,7 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 	var bench_batter: float = 0.0
 	var bench_starter: float = 0.0
 	var bench_reliever: float = 0.0
+	var method: Dictionary = {}
 	for season_value in seasons:
 		var s: Dictionary = season_value as Dictionary
 		batting_war += float(s.get("batting_war_total", 0.0))
@@ -564,13 +579,16 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 		bench_batter += float(bench.get("avg_batter_war_per_600_pa", 0.0))
 		bench_starter += float(bench.get("avg_starter_war_per_162_ip", 0.0))
 		bench_reliever += float(bench.get("avg_reliever_war_per_60_ip", 0.0))
+		if method.is_empty():
+			method = s.get("method", {}) as Dictionary
 	var total_war: float = batting_war + pitching_war
 	var games_per_team: float = games_per_team_sum / float(n)
 	var team_seasons: float = float(max(1, num_teams * n))
-	# 参照プール: 1 チーム 1 シーズンの「replacement 超の総勝利」= (.500 - REPLACEMENT_WIN_PCT) × 試合数。
-	# 目標は WAR 計算が実際に使う定数(NPB 配分)と一致させ、レポートを「自分の目標に収束しているか」の自己検査にする。
-	var pool_per_team_season: float = (0.5 - WarCalculator.REPLACEMENT_WIN_PCT) * games_per_team
-	var batting_share_target: float = WarCalculator.BATTING_WAR_SHARE
+	var league_games: float = float(num_teams) * games_per_team / 2.0
+	var war_pool_scale: float = league_games / WarCalculator.FULL_MLB_GAMES if WarCalculator.FULL_MLB_GAMES > 0.0 else 0.0
+	var total_pool_reference: float = WarCalculator.TOTAL_WAR_POOL_FULL_SEASON * war_pool_scale
+	var batting_pool_reference: float = WarCalculator.POSITION_PLAYER_WAR_POOL_FULL_SEASON * war_pool_scale
+	var pitching_pool_reference: float = WarCalculator.PITCHER_WAR_POOL_FULL_SEASON * war_pool_scale
 	return {
 		"seasons": n,
 		"num_teams": num_teams,
@@ -590,17 +608,18 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 		"avg_rpw": _round_float(rpw_sum / float(n), 2),
 		"reference": {
 			"replacement_win_pct": WarCalculator.REPLACEMENT_WIN_PCT,
-			"batting_share_target": batting_share_target,
-			"pitching_share_target": _round_float(1.0 - batting_share_target, 3),
-			"pool_per_team_season": _round_float(pool_per_team_season, 2),
-			"batting_target_per_team_season": _round_float(pool_per_team_season * batting_share_target, 2),
-			"pitching_target_per_team_season": _round_float(pool_per_team_season * (1.0 - batting_share_target), 2),
+			"league_games": _round_float(league_games, 1),
+			"pool_total": _round_float(total_pool_reference, 2),
+			"pool_batting": _round_float(batting_pool_reference, 2),
+			"pool_pitching": _round_float(pitching_pool_reference, 2),
+			"pool_per_team_season": _round_float(total_pool_reference / float(max(1, num_teams)), 2),
 		},
 		"benchmarks": {
 			"avg_batter_war_per_600_pa": _round_float(bench_batter / float(n), 3),
 			"avg_starter_war_per_162_ip": _round_float(bench_starter / float(n), 3),
 			"avg_reliever_war_per_60_ip": _round_float(bench_reliever / float(n), 3),
 		},
+		"method": method,
 	}
 
 
@@ -1342,23 +1361,19 @@ func _position_adjustment_from_outs(defensive_outs_by_position: Dictionary) -> f
 
 
 func _apply_defense_value_adjustment(row: Dictionary) -> void:
-	# fielding_runs (= UZR 系合計) は伝統指標として残置。分析・互換性のため出力する。
-	var uzr_by_position: Dictionary = row.get("uzr_by_position", {}) as Dictionary
-	var fielding_runs: float = _sum_float_map(uzr_by_position) if not uzr_by_position.is_empty() else float(row.get("uzr", 0.0))
-	# WAR の守備成分は OAA ベース (oaa_total × RUN_PER_OUT + 守備位置補正)。
-	# row.oaa_by_zone か oaa_infield / oaa_outfield のいずれかが揃っていれば算出可能。
 	var oaa_by_zone: Dictionary = row.get("oaa_by_zone", {}) as Dictionary
-	var oaa_infield: float = float(oaa_by_zone.get("infield", row.get("oaa_infield", 0.0)))
-	var oaa_outfield: float = float(oaa_by_zone.get("outfield", row.get("oaa_outfield", 0.0)))
+	var oaa_infield: float = float(row.get("oaa_infield", oaa_by_zone.get("infield", 0.0)))
+	var oaa_outfield: float = float(row.get("oaa_outfield", oaa_by_zone.get("outfield", 0.0)))
 	var oaa_total: float = oaa_infield + oaa_outfield
-	var oaa_runs: float = oaa_total * ADVANCED_RUN_PER_OUT
+	var oaa_runs: float = oaa_infield * ADVANCED_INFIELD_OAA_RUNS_PER_OUT + oaa_outfield * ADVANCED_OUTFIELD_OAA_RUNS_PER_OUT
+	var fielding_runs: float = oaa_runs
 	var defensive_outs_by_position: Dictionary = row.get("defensive_outs_by_position", {}) as Dictionary
 	var positional_adjustment: float = _position_adjustment_from_outs(defensive_outs_by_position)
 	row["fielding_runs"] = _round_float(fielding_runs, 3)
 	row["oaa_total"] = _round_float(oaa_total, 3)
 	row["oaa_runs"] = _round_float(oaa_runs, 3)
 	row["positional_adjustment_runs"] = _round_float(positional_adjustment, 3)
-	row["def_runs"] = _round_float(oaa_runs + positional_adjustment, 3)
+	row["def_runs"] = _round_float(fielding_runs + positional_adjustment, 3)
 
 
 func _safe_div(numerator: int, denominator: int) -> float:
