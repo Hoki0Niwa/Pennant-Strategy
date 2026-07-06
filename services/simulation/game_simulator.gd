@@ -209,6 +209,13 @@ static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dict
 	var user_team_id: int = int(ctx.get("user_team_id", 0))
 	var include_user: bool = bool(ctx.get("include_user_team", false))
 	TeamAutoAI.run_periodic_roster_swaps(season, GameDb.teams, day, user_team_id, include_user)
+	# シーズン中トレード (交換期限まで週次・低頻度)。成立時は players の team_id が動くので
+	# インデックスを再構築する。自軍もCPU自動管理のとき (オートプレイ/自動入替ON) は
+	# 自軍宛て提案を作らず、自軍もCPU間マッチングに参加させる。
+	var trade_user_id: int = 0 if include_user else user_team_id
+	var trade_result: Dictionary = TradeService.run_periodic_trade_check(season, GameDb.players, GameDb.teams, day, trade_user_id)
+	if not (trade_result.get("executed", []) as Array).is_empty():
+		GameDb.rebuild_player_indices()
 
 
 static func _persist_simulation_outputs(season: PSSeason) -> void:

@@ -54,6 +54,7 @@ const NAV_GROUPS: Array = [
 		{"id": "lineup_editor", "label": "打順・守備位置", "icon": "lineup"},
 		{"id": "rotation_editor", "label": "投手起用法", "icon": "pitch"},
 		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
+		{"id": "trade", "label": "トレード", "icon": "swap"},
 	]},
 	{"title": "設定・その他", "items": [
 		{"id": "options", "label": "オプション", "icon": "options"},

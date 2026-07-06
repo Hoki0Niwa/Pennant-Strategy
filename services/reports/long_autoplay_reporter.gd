@@ -88,7 +88,9 @@ func run(options: Dictionary = {}) -> Dictionary:
 
 		var roster_before: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
 		GameLogService.enabled = false  # 長期レポートは試合ログを書かない (大量ファイル回避)
-		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(season, false)
+		# 実プレイ経路 (AppState) と同じ週次入替/トレードのフックを有効にする
+		# (ctx 無しだと一二軍入替AI・シーズン中トレードが一切走らず、実挙動から乖離する)。
+		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(season, false, _auto_swap_ctx(selected_team_id))
 		GameLogService.enabled = true
 		if not bool(simulation_result.get("ok", false)):
 			errors.append({
@@ -101,6 +103,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var season_report: Dictionary = simulation_reporter.call("_season_report", season) as Dictionary
 		var season_summary: Dictionary = simulation_reporter.call("_public_season_summary", season_report) as Dictionary
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
+		var trades_summary: Dictionary = _trade_summary(season)
 		var offseason_result: Dictionary = _run_auto_offseason(season, selected_team_id)
 		GameDb.advance_players_one_year()
 		GameDb.rebuild_player_indices()
@@ -120,6 +123,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 			"roster_before_season": roster_before,
 			"season": season_summary,
 			"leaderboards": leaderboards,
+			"trades": trades_summary,
 			"offseason": offseason_result,
 			"roster_after_offseason_next_year": roster_after,
 			"simulated_games": int(simulation_result.get("simulated_count", 0)),
@@ -226,7 +230,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 				outer_progress_cb.call(scaled_done, total_progress_units, season_label)
 		GameLogService.enabled = false  # 長期レポートは試合ログを書かない (大量ファイル回避)
 		var simulation_result: Dictionary = await GameSimulator.simulate_remaining_season_async(
-			season, false, {}, tree, inner_cb, cancel_token
+			season, false, _auto_swap_ctx(selected_team_id), tree, inner_cb, cancel_token
 		)
 		GameLogService.enabled = true
 		if bool(simulation_result.get("cancelled", false)) or _is_cancelled(cancel_token):
@@ -242,6 +246,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var season_report: Dictionary = simulation_reporter.call("_season_report", season) as Dictionary
 		var season_summary: Dictionary = simulation_reporter.call("_public_season_summary", season_report) as Dictionary
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
+		var trades_summary: Dictionary = _trade_summary(season)
 		if outer_progress_cb.is_valid():
 			outer_progress_cb.call(progress_base + season_total_games, total_progress_units, "offseason %d" % season.year)
 		var offseason_result: Dictionary = _run_auto_offseason(season, selected_team_id)
@@ -263,6 +268,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			"roster_before_season": roster_before,
 			"season": season_summary,
 			"leaderboards": leaderboards,
+			"trades": trades_summary,
 			"offseason": offseason_result,
 			"roster_after_offseason_next_year": roster_after,
 			"simulated_games": int(simulation_result.get("simulated_count", 0)),
@@ -321,9 +327,27 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	return report
 
 
+# 実プレイ (AppState._build_auto_swap_ctx) と同等の日次フック設定。自軍もCPU自動管理する。
+func _auto_swap_ctx(selected_team_id: int) -> Dictionary:
+	return {"user_team_id": selected_team_id, "include_user_team": true}
+
+
+# 当季のシーズン中トレード集計 (source 別内訳つき)。
+func _trade_summary(season: PSSeason) -> Dictionary:
+	var executed: Array = TradeService.executed_trades(season)
+	var by_source: Dictionary = {}
+	for entry_value in executed:
+		var source: String = str((entry_value as Dictionary).get("source", ""))
+		by_source[source] = int(by_source.get(source, 0)) + 1
+	return {
+		"count": executed.size(),
+		"by_source": by_source,
+	}
+
+
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,retired,released,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio")
+	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -403,6 +427,7 @@ func csv_text(report: Dictionary) -> String:
 			_leader_name(leaderboards, "pitching", "era"),
 			_leader_value(leaderboards, "pitching", "strikeouts"),
 			_leader_name(leaderboards, "pitching", "strikeouts"),
+			int((row.get("trades", {}) as Dictionary).get("count", 0)),
 			int(offseason.get("retired_count", 0)),
 			int(offseason.get("released_count", 0)),
 			int(offseason.get("demoted_count", 0)),

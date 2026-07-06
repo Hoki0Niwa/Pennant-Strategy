@@ -73,6 +73,38 @@ func test_home_screen_builds_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_trade_screen_builds_with_active_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var trade_script: GDScript = load("res://ui/screens/trade_screen.gd") as GDScript
+	var screen: Control = trade_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	assert_int(screen.get_child_count()).is_greater(0)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_rotation_editor_screen_builds_with_active_season() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season

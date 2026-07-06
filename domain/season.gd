@@ -26,6 +26,9 @@ var player_stat_history: Dictionary = {}
 # { player_id_str: Array of game rows }
 # 試合別の成績差分。PSSeason に属するため新シーズン作成時に自然にリセットされる。
 var player_game_history: Dictionary = {}
+# シーズン中トレードの状態 (成立ログ / 自軍宛て提案 / 週次チェック日 / 球団別成立数)。
+# スキーマと更新は TradeService に集約。新シーズン作成で自然にリセットされる。
+var trade_state: Dictionary = {}
 
 
 func setup(team_ids: Array) -> void:
@@ -143,6 +146,30 @@ func get_active_roster_days(team_id: int, player_id: int) -> int:
 	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	var days_by_player: Dictionary = roster.get("fa_active_days", {}) as Dictionary
 	return int(days_by_player.get(str(player_id), 0))
+
+
+# シーズン中の球団間移籍 (トレード) 用: 移籍元で積算済みのFA日数を当日まで締めて
+# 移籍先の台帳へ移す。契約更新 (_apply_fa_service_days) は record.team_id の1球団分しか
+# 読まないため、移管しないと移籍元で積んだ当季日数が失われる。
+func transfer_active_roster_days(from_team_id: int, to_team_id: int, player_id: int) -> void:
+	accrue_active_roster_days(from_team_id, current_day)
+	var player_key: String = str(player_id)
+	var from_roster: Dictionary = team_active_rosters.get(str(from_team_id), {}) as Dictionary
+	var from_days: Dictionary = (from_roster.get("fa_active_days", {}) as Dictionary).duplicate(true)
+	var moved_days: int = int(from_days.get(player_key, 0))
+	if moved_days > 0:
+		from_days.erase(player_key)
+		from_roster["fa_active_days"] = from_days
+		team_active_rosters[str(from_team_id)] = from_roster
+	# 移籍先も当日まで締めてから加算する (加算後に旧 updated_at_day 起点で accrue されると過大になる)。
+	accrue_active_roster_days(to_team_id, current_day)
+	var to_roster: Dictionary = team_active_rosters.get(str(to_team_id), {}) as Dictionary
+	var to_days: Dictionary = (to_roster.get("fa_active_days", {}) as Dictionary).duplicate(true)
+	to_days[player_key] = int(to_days.get(player_key, 0)) + moved_days
+	to_roster["fa_active_days"] = to_days
+	if not to_roster.has("updated_at_day"):
+		to_roster["updated_at_day"] = current_day
+	team_active_rosters[str(to_team_id)] = to_roster
 
 
 # --- 一二軍 自動入替 用ヘルパ ------------------------------------------------
@@ -353,6 +380,7 @@ func to_dict() -> Dictionary:
 		"last_auto_swap_day": last_auto_swap_day,
 		"player_stat_history": player_stat_history,
 		"player_game_history": player_game_history,
+		"trade_state": trade_state,
 	}
 
 
@@ -411,5 +439,6 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.last_auto_swap_day = (data.get("last_auto_swap_day", {}) as Dictionary).duplicate(true)
 	season.player_stat_history = (data.get("player_stat_history", {}) as Dictionary).duplicate(true)
 	season.player_game_history = (data.get("player_game_history", {}) as Dictionary).duplicate(true)
+	season.trade_state = (data.get("trade_state", {}) as Dictionary).duplicate(true)
 
 	return season

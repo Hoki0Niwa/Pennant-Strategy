@@ -139,6 +139,10 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 			"era": _distribution(leader_era, 2),
 			"strikeouts": _distribution(leader_k, 0),
 		},
+		"flows": {
+			"trades": _distribution(_nested_values(rows, ["trades", "count"]), 1),
+			"fa_declared": _distribution(_nested_values(rows, ["offseason", "fa_declared_count"]), 1),
+		},
 	}
 
 
@@ -169,6 +173,11 @@ static func long_health(report: Dictionary) -> Dictionary:
 	# 戦力外フェーズ後に残る「30歳以上・出場ゼロ・rookie保護外」の支配下選手を年平均で監視する。
 	# 少数の残留は安全上限つき整理の許容範囲だが、二桁規模なら保護条件が強すぎる。
 	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 3.0, 8.0, "zero-appearance 30+ players surviving the release phase")
+	# 選手流動の沈黙/過熱検知。2026-07-06 の「FA宣言が15年間全ゼロでも health pass」の盲点を受けて追加。
+	# 平均0 (完全停止) は warn 側に倒して可視化する (初期データのFA日数過少による立ち上がり遅れは許容)。
+	var flow_dist: Dictionary = distributions.get("flows", {}) as Dictionary
+	_add_range_check(checks, "trades_per_year", _dist_value(flow_dist, "trades", "mean"), 1.0, 8.0, 0.0, 15.0, "in-season trades per year")
+	_add_range_check(checks, "fa_declared_per_year", _dist_value(flow_dist, "fa_declared", "mean"), 1.0, 10.0, 0.0, 20.0, "FA declarations per year")
 	_add_range_check(checks, "last10_ops", float(last_10.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "last-10-year OPS")
 	_add_range_check(checks, "last10_era", float(last_10.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "last-10-year ERA")
 	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.0, 30.0, 23.0, 32.0, "last-10-year average age")
