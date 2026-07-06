@@ -85,12 +85,16 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	_add_min_check(checks, "hard_hit_rate", float(batted_ball.get("hard_hit_rate", 0.0)), 0.20, 0.10, "hard-hit rate should not collapse")
 	_add_max_check(checks, "batter_ops_max", _dist_value(batter_dist, "ops", "max"), 1.20, 1.35, "qualified batter OPS max")
 	_add_max_check(checks, "batter_hr_max", _dist_value(batter_dist, "home_runs", "max"), 60.0, 75.0, "single-season HR leader")
-	_add_range_check(checks, "batter_war_max", _dist_value(batter_dist, "war", "max"), 6.5, 12.2, 4.5, 13.5, "qualified batter WAR leader")
+	# MLB fWAR 実測 (2015-24): 年間最高は通常 8.5-9.5、10 超は Judge/Witt 級で10年に4回
+	# (最大 11.33)。143試合換算 (x143/162) でリーダー帯 ~7.5-10.0。
+	_add_range_check(checks, "batter_war_max", _dist_value(batter_dist, "war", "max"), 5.5, 10.2, 4.0, 12.0, "qualified batter WAR leader")
 	_add_min_check(checks, "pitcher_era_min", _dist_value(pitcher_dist, "era", "min"), 0.90, 0.50, "qualified pitcher ERA floor")
 	_add_max_check(checks, "pitcher_era_under_2_count", era_under_2_count, 5.0, 7.0, "qualified pitchers with ERA under 2.00")
 	_add_manual_check(checks, "pitcher_era_under_2_by_team_max", STATUS_FAIL if era_under_2_by_team_max >= 3 else STATUS_PASS, era_under_2_by_team_max, "no team should usually have three qualified sub-2 ERA pitchers")
 	_add_max_check(checks, "pitcher_k9_max", _dist_value(pitcher_dist, "strikeouts_per_nine", "max"), 14.0, 17.0, "qualified pitcher K/9 max")
-	_add_range_check(checks, "pitcher_war_max", _dist_value(pitcher_dist, "war", "max"), 4.3, 7.2, 2.8, 9.0, "qualified pitcher WAR leader")
+	# MLB fWAR 実測 (2015-24): 投手の年間最高は通常 6.5-7.5、10年最大 9.04 (deGrom 2018, 217IP)。
+	# 本リーグのエースは 6 人ローテで ~165IP のため IP 比 (~0.79) で換算しリーダー帯 ~4.5-7.1。
+	_add_range_check(checks, "pitcher_war_max", _dist_value(pitcher_dist, "war", "max"), 4.0, 7.5, 2.8, 9.0, "qualified pitcher WAR leader")
 	_add_max_check(checks, "complete_game_rate", complete_game_rate, 0.12, 0.22, "complete games per start")
 	_add_max_check(checks, "shutout_complete_game_ratio", shutout_cg_ratio, 0.75, 0.90, "shutout share of complete games")
 	_add_range_check(checks, "relief_appearances_per_team_game", relief_per_team_game, 2.4, 4.2, 1.8, 5.2, "bullpen usage volume")

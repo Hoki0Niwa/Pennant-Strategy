@@ -42,6 +42,43 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 	9: "right",
 }
 
+# --- 守備実績 (シーズン累積 OAA) の配置反映 ---
+# 能力推定ではなく「その守備位置で実際に出た OAA」を配置スコアへ加減算する。
+# 生 OAA には小さな残バイアス (2026-07-06 実測 ≈ -0.004/機会) があるが、rating 換算 ~1 点なので
+# センタリングなしで使う (WAR 側は従来どおり recenter_fielding 経由)。
+# サンプル不足の暴れは prior chances で縮約し、FIELDING_RESULT_MIN_CHANCES 未満は無視する
+# (up-the-middle の守備機会は年 ~1000-1200 なので 120 は 2-3 週間相当)。
+const FIELDING_RESULT_MIN_CHANCES: int = 120
+const FIELDING_RESULT_PRIOR_CHANCES: float = 150.0
+const FIELDING_RESULT_RATING_SCALE: float = 300.0
+const FIELDING_RESULT_RATING_MIN: float = -8.0
+const FIELDING_RESULT_RATING_MAX: float = 5.0
+# 実績が「崩壊」とみなす rating 換算値 (フルシーズン OAA -13 前後に相当) と、
+# 崩壊時に配置 AI が自動降格の対象にする守備負荷の高い位置 (C/2B/SS/CF)。
+const FIELDING_COLLAPSE_RATING_DELTA: float = -6.0
+const FIELDING_COLLAPSE_POSITIONS: Dictionary = {2: true, 4: true, 6: true, 8: true}
+
+
+# 当該守備位置でのシーズン実績 OAA を rating 点 (blend と同スケール) へ換算する。
+static func realized_fielding_rating_delta(record: PSPlayerSeasonRecord, position: int) -> float:
+	if record == null or record.advanced_stats == null:
+		return 0.0
+	var key: String = str(position)
+	var chances: int = int(record.advanced_stats.fielding_chances_by_position.get(key, 0))
+	if chances < FIELDING_RESULT_MIN_CHANCES:
+		return 0.0
+	var oaa: float = float(record.advanced_stats.oaa_by_position.get(key, 0.0))
+	var delta: float = oaa / (float(chances) + FIELDING_RESULT_PRIOR_CHANCES) * FIELDING_RESULT_RATING_SCALE
+	return clampf(delta, FIELDING_RESULT_RATING_MIN, FIELDING_RESULT_RATING_MAX)
+
+
+# 守備負荷の高い位置で実績が崩壊しているか。配置 AI (ai_generated usage) の自動降格と
+# オフのコンバート AI が共有する判定。
+static func fielding_collapsed_at_position(record: PSPlayerSeasonRecord, position: int) -> bool:
+	if not FIELDING_COLLAPSE_POSITIONS.has(position):
+		return false
+	return realized_fielding_rating_delta(record, position) <= FIELDING_COLLAPSE_RATING_DELTA
+
 
 # 画面表示・ロスター査定で使う基礎評価。累積疲労による一時的な低下は含めない。
 static func overall_score(record: PSPlayerSeasonRecord) -> int:
@@ -284,6 +321,9 @@ static func starter_assignment_score(
 	var defense_weight: float = starter_defense_weight_for_position(position)
 	var position_overall: float = float(offense) * offense_weight + float(position_defense) * defense_weight
 	var score: int = int(round(position_overall * 100.0))
+	# 守備実績: その位置で実際に出た OAA (縮約済み) を rating 点のまま加減算する。
+	# 能力ブレンドの defense weight は掛けない — 実績はその位置で失った/稼いだ run の直接証拠のため。
+	score += int(round(realized_fielding_rating_delta(record, position) * 100.0))
 	score += aptitude
 	# 在籍(同一守備位置)ボーナスはタイブレーク規模 (+250 ≒ 2.5 ブレンド点) に留める。
 	# 旧 +1500 は格下の現レギュラーを固定し「惰性」を生んでいた。挑戦者が ~2.5 点以上

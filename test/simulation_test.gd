@@ -31,10 +31,10 @@ func test_camp_training_count_varies_by_need() -> void:
 	if not test_save_id.is_empty() and test_save_id != old_save_id:
 		SaveContext.delete_current_save_data()
 
-	# 需要連動: 一律にならず変動する (最少 < 最多)。需要の薄い球団は少なく (<=1)、需要のある球団は実施する。
-	assert_int(int(counts[0])).is_less(int(counts[counts.size() - 1]))
+	# 需要連動: 機械的に全球団が上限 (3) へ張り付かないこと。初期データの構成が均衡していて
+	# 開幕時点の需要が無ければ全球団 0 もあり得る (2026-07-06 ポジション構成リバランス後は正常挙動)。
+	assert_int(int(counts[counts.size() - 1])).is_less_equal(CampServiceRef.MAX_SPECIAL_TRAININGS_PER_TEAM)
 	assert_int(int(counts[0])).is_less_equal(1)
-	assert_int(int(counts[counts.size() - 1])).is_greater(0)
 
 
 # 表示評価値 (overall_score) は 野手 / 先発 / 中継 で同スケールであること。
@@ -160,6 +160,92 @@ func test_usage_backup_ids_take_priority_over_profile() -> void:
 			catcher_id = (slot.get("record", null) as PSPlayerSeasonRecord).player_id
 	# usage の backup_ids (B) が profile.backup_priority (X) より優先される。
 	assert_int(catcher_id).is_equal(usage_backup.player_id)
+
+
+# 守備実績 (シーズン累積 OAA) が配置スコアへ反映され、崩壊水準では collapse 判定になる。
+func test_starter_assignment_score_uses_realized_oaa() -> void:
+	var apt_keys: Dictionary = PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS
+	var mk: Callable = func(pid: int) -> PSPlayerSeasonRecord:
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		r.player_id = pid
+		r.position = 6
+		r.position_aptitudes_snapshot = {str(apt_keys[6]): 100}
+		return r
+	var neutral: PSPlayerSeasonRecord = mk.call(1)
+	var bad: PSPlayerSeasonRecord = mk.call(2)
+	bad.advanced_stats.fielding_chances_by_position = {"6": 300}
+	bad.advanced_stats.oaa_by_position = {"6": -15.0}
+	var good: PSPlayerSeasonRecord = mk.call(3)
+	good.advanced_stats.fielding_chances_by_position = {"6": 300}
+	good.advanced_stats.oaa_by_position = {"6": 12.0}
+
+	var neutral_score: int = PSPlayerValueEvaluator.starter_assignment_score(neutral, 6)
+	assert_int(PSPlayerValueEvaluator.starter_assignment_score(bad, 6)).is_less(neutral_score)
+	assert_int(PSPlayerValueEvaluator.starter_assignment_score(good, 6)).is_greater(neutral_score)
+	# -15 OAA / 300 chances → rating -10 → 守備負荷の高い位置では崩壊扱い。
+	assert_bool(PSPlayerValueEvaluator.fielding_collapsed_at_position(bad, 6)).is_true()
+	assert_bool(PSPlayerValueEvaluator.fielding_collapsed_at_position(good, 6)).is_false()
+	# 左翼 (低負荷) は崩壊対象外。
+	assert_bool(PSPlayerValueEvaluator.fielding_collapsed_at_position(bad, 7)).is_false()
+	# サンプル不足 (40 chances 未満) は無視。
+	var tiny: PSPlayerSeasonRecord = mk.call(4)
+	tiny.advanced_stats.fielding_chances_by_position = {"6": 20}
+	tiny.advanced_stats.oaa_by_position = {"6": -10.0}
+	assert_bool(PSPlayerValueEvaluator.fielding_collapsed_at_position(tiny, 6)).is_false()
+
+
+# AI 管理チーム (usage.ai_generated) では、実績 OAA が崩壊した固定スタメンを外して
+# 貪欲補充へ落とす。ユーザー設定 (ai_generated なし) はそのまま尊重する。
+func test_ai_alignment_demotes_collapsed_premium_starter() -> void:
+	var apt_keys: Dictionary = PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS
+	var mk: Callable = func(pid: int, pos: int, aptitude: int) -> PSPlayerSeasonRecord:
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		r.player_id = pid
+		r.position = pos
+		r.name = "P%d" % pid
+		r.position_aptitudes_snapshot = {str(apt_keys.get(pos, "catcher")): aptitude}
+		return r
+
+	var positions: Array = [2, 6, 8, 4, 5, 3, 7, 9]
+	var fielders: Array = []
+	var template: Dictionary = {}
+	var collapsed_ss: PSPlayerSeasonRecord = mk.call(400, 6, 100)
+	collapsed_ss.advanced_stats.fielding_chances_by_position = {"6": 300}
+	collapsed_ss.advanced_stats.oaa_by_position = {"6": -15.0}
+	fielders.append(collapsed_ss)
+	template[6] = collapsed_ss.player_id
+	var next_id: int = 410
+	for pos_row in positions:
+		var pos: int = int(pos_row)
+		if pos == 6:
+			continue
+		var rec: PSPlayerSeasonRecord = mk.call(next_id, pos, 100)
+		fielders.append(rec)
+		template[pos] = rec.player_id
+		next_id += 1
+	var spare_ss: PSPlayerSeasonRecord = mk.call(450, 6, 85)
+	fielders.append(spare_ss)
+
+	var profile: PSDefenseAlignmentProfile = PSDefenseAlignmentProfile.build_default(9998)
+	profile.starting_positions = template.duplicate()
+	var slot_six: Dictionary = {"starter_id": collapsed_ss.player_id, "sub_id": 0, "sub_start_interval": 0, "backup_ids": []}
+
+	var ai_usage: Dictionary = {"position_slots": {"6": slot_six.duplicate(true)}, "ai_generated": true}
+	var ai_slots: Array = PSDefenseAlignmentService.assign_defensive_starters(fielders, profile, ai_usage, 1)
+	assert_int(_assigned_player_id(ai_slots, 6)).is_equal(spare_ss.player_id)
+
+	var user_usage: Dictionary = {"position_slots": {"6": slot_six.duplicate(true)}}
+	var user_slots: Array = PSDefenseAlignmentService.assign_defensive_starters(fielders, profile, user_usage, 1)
+	assert_int(_assigned_player_id(user_slots, 6)).is_equal(collapsed_ss.player_id)
+
+
+func _assigned_player_id(slots: Array, position: int) -> int:
+	for slot_row in slots:
+		var slot: Dictionary = slot_row as Dictionary
+		if int(slot.get("position", 0)) == position:
+			var record: PSPlayerSeasonRecord = slot.get("record", null) as PSPlayerSeasonRecord
+			return 0 if record == null else record.player_id
+	return 0
 
 
 func _dist(values: Array) -> String:

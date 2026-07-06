@@ -11,7 +11,7 @@ const EV_BASE: float = 91.20                 # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
 # 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
-const EV_HOME_RUN_POWER_WEIGHT: float = 2.90
+const EV_HOME_RUN_POWER_WEIGHT: float = 3.15
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
 const EV_STUFF_WEIGHT: float = 0.205         # 球威 curve が EV を下げる強さ。
 const EV_FATIGUE_WEIGHT: float = 0.035
@@ -239,7 +239,7 @@ static func generate(
 	# 本塁打向きの理想角(ideal power)を引く確率を、長打力・球威・状況から算出する。
 	var ideal_power_logit: float = PSBalanceProfile.logit(_rule_float("power_ideal_la_base_rate", POWER_IDEAL_LA_BASE_RATE))
 	# 長打力ゲート。上げると上位打者ほど本塁打向きの理想角に入りやすくなる。
-	ideal_power_logit += home_run_curve * _rule_float("ideal_power_curve_weight", 1.55)
+	ideal_power_logit += home_run_curve * _rule_float("ideal_power_curve_weight", 1.70)
 	ideal_power_logit -= stuff_curve * _rule_float("stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
 	ideal_power_logit += pitcher_contact_damage * _rule_float("pitcher_contact_damage_ideal_weight", 0.04)
 	ideal_power_logit += arsenal_hr_bias * _rule_float("arsenal_hr_ideal_weight", ARSENAL_HR_IDEAL_WEIGHT)  # 被弾寄り球種で理想角を微増(微差)。

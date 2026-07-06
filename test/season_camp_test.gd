@@ -175,6 +175,84 @@ func test_idle_fraction_prioritizes_unused_pitchers() -> void:
 	assert_float(CampServiceRef._idle_fraction(idle_reliever)).is_greater(0.5)
 
 
+# 前季の本職 (遊撃) で守備実績 OAA が崩壊した野手には、より易しい既存サブポジ (三塁) への
+# 本職変更が「守備実績圧力」で AI 実施水準 (MIN_AI_EXPECTED_VALUE) を超えて提案される。
+func test_bad_primary_defense_creates_convert_pressure_candidate() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 9000
+	season.season_number = 0
+	var fielder: PSPlayer = _player({
+		"id": 801,
+		"name": "BadGlove",
+		"team_id": 1,
+		"position": 6,
+		"role": "fielder",
+		"position_aptitudes": {"shortstop": 100, "third": 70},
+	})
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 9000, 0)
+	record.advanced_stats.fielding_chances_by_position = {"6": 300}
+	record.advanced_stats.oaa_by_position = {"6": -15.0}
+	var key: String = "801:9000:0"
+	RecordStore.player_records[key] = record
+
+	# 補強需要はゼロに飽和させ、守備実績圧力だけで提案されることを確認する。
+	var profile: Dictionary = _saturated_profile()
+	var rows: Array = CampServiceRef._fielder_candidates(fielder, profile, season)
+	RecordStore.player_records.erase(key)
+
+	var convert_expected: float = -1.0
+	var harder_pressure_found: bool = false
+	for row in rows:
+		var entry: Dictionary = row as Dictionary
+		if str(entry.get("training_type", "")) != CampServiceRef.TRAIN_POSITION_CONVERT:
+			continue
+		var target: int = int(entry.get("target_position", 0))
+		if target == 5:
+			convert_expected = max(convert_expected, float(entry.get("expected_value", 0.0)))
+		elif not CampServiceRef._is_easier_position(target, 6) and float(entry.get("expected_value", 0.0)) >= CampServiceRef.MIN_AI_EXPECTED_VALUE:
+			harder_pressure_found = true
+	assert_float(convert_expected).is_greater_equal(CampServiceRef.MIN_AI_EXPECTED_VALUE)
+	assert_bool(harder_pressure_found).is_false()
+
+	# 実績が普通なら圧力ゼロ → 需要ゼロ環境では三塁転向は提案されない。
+	var ok_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 9000, 0)
+	ok_record.advanced_stats.fielding_chances_by_position = {"6": 300}
+	ok_record.advanced_stats.oaa_by_position = {"6": 1.0}
+	RecordStore.player_records[key] = ok_record
+	var ok_rows: Array = CampServiceRef._fielder_candidates(fielder, profile, season)
+	RecordStore.player_records.erase(key)
+	for row in ok_rows:
+		var entry: Dictionary = row as Dictionary
+		if str(entry.get("training_type", "")) == CampServiceRef.TRAIN_POSITION_CONVERT:
+			assert_int(int(entry.get("target_position", 0))).is_not_equal(5)
+
+
+# 本職が飽和している位置 (一塁は快適水準3) への転向は surplus penalty で抑制される。
+func test_convert_surplus_penalty_suppresses_saturated_positions() -> void:
+	var profile: Dictionary = {"position_primary_count": {3: 6, 6: 2}}
+	assert_float(CampServiceRef._primary_surplus_penalty(profile, 3)).is_equal(36.0)
+	assert_float(CampServiceRef._primary_surplus_penalty(profile, 6)).is_equal(0.0)
+
+
+func _saturated_profile() -> Dictionary:
+	var holders: Dictionary = {}
+	var primary: Dictionary = {}
+	var top: Dictionary = {}
+	var deficit: Dictionary = {}
+	for pos_row in CampServiceRef.DEFENSIVE_POSITIONS:
+		var pos: int = int(pos_row)
+		holders[pos] = 5
+		primary[pos] = 5
+		top[pos] = 99
+		deficit[pos] = 0.0
+	return {
+		"position_holders": holders,
+		"position_primary_count": primary,
+		"position_top_overall": top,
+		"war_deficit": deficit,
+	}
+
+
 func _camp_state() -> Dictionary:
 	return {
 		"complete": false,

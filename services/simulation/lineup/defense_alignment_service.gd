@@ -5,6 +5,11 @@ class_name PSDefenseAlignmentService
 # 保存済み starter/sub 設定を優先し、欠員や重複があればポジション順に最適候補を補充する。
 # 不在判定は injury_days > 0 のみ。疲労は候補除外ではなくスコア減点として扱う。
 # 初回などテンプレートが空のときは、健康な野手から greedy に標準配置を作って profile へ保存する。
+#
+# 守備実績による自動降格: AI 管理チーム (usage.ai_generated) では、守備負荷の高い位置
+# (C/2B/SS/CF) でシーズン実績 OAA が崩壊した選手は starter/テンプレ/バックアップの固定を
+# 無視して貪欲補充に落とす (現実のコンバート/スタメン剥奪に相当)。ユーザーが打順設定画面で
+# 保存した usage には ai_generated が付かないため、手動配置は上書きしない。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 
@@ -53,6 +58,8 @@ static func assign_defensive_starters(
 	# 守備負荷の高い順に、保存設定・休養ローテ・補充候補を解決していく。
 	var assignments: Array = []
 	var used_ids: Dictionary = {}
+	# AI 管理チームだけ、実績崩壊選手の固定 (starter/sub/テンプレ/バックアップ) を外す。
+	var ai_managed: bool = bool(usage_settings.get("ai_generated", false))
 
 	for position_row in POSITIONS:
 		var position: int = int(position_row)
@@ -63,20 +70,21 @@ static func assign_defensive_starters(
 		var should_start_sub: bool = _sub_should_start(slot_settings, record_by_id, next_game_number)
 
 		if should_start_sub:
-			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "sub_id", position)
+			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "sub_id", position, ai_managed)
 			if chosen != null:
 				var rested_starter_id: int = int(slot_settings.get("starter_id", 0))
 				if rested_starter_id > 0 and rested_starter_id != chosen.player_id:
 					used_ids[rested_starter_id] = true
 
 		if chosen == null:
-			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "starter_id", position)
+			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "starter_id", position, ai_managed)
 
 		# a. template の指定選手 (健康かつ未使用)
 		var tmpl_id: int = int(template.get(position, template.get(str(position), 0)))
 		if chosen == null and tmpl_id > 0 and record_by_id.has(tmpl_id) and not used_ids.has(tmpl_id):
 			var tmpl_rec: PSPlayerSeasonRecord = record_by_id[tmpl_id] as PSPlayerSeasonRecord
-			if tmpl_rec.injury_days <= 0 and _can_play_position(tmpl_rec, position):
+			if tmpl_rec.injury_days <= 0 and _can_play_position(tmpl_rec, position) \
+					and not (ai_managed and PlayerValueEvaluator.fielding_collapsed_at_position(tmpl_rec, position)):
 				chosen = tmpl_rec
 
 		# b. 補充優先順。ユーザが「控え」画面で設定した backup_ids (usage 経由) を最優先し、
@@ -92,17 +100,18 @@ static func assign_defensive_starters(
 				var backup_id: int = int(backup_id_row)
 				if record_by_id.has(backup_id) and not used_ids.has(backup_id):
 					var b_rec: PSPlayerSeasonRecord = record_by_id[backup_id] as PSPlayerSeasonRecord
-					if b_rec.injury_days <= 0 and _can_play_position(b_rec, position):
+					if b_rec.injury_days <= 0 and _can_play_position(b_rec, position) \
+							and not (ai_managed and PlayerValueEvaluator.fielding_collapsed_at_position(b_rec, position)):
 						chosen = b_rec
 						break
 
 		if chosen == null and not should_start_sub:
-			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "sub_id", position)
+			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "sub_id", position, ai_managed)
 
 		# c. 残候補から starter_assignment_score 最高値で貪欲補充
 		# (打撃/守備の position 別ブレンド。純守備版は defensive_assignment_score を参照)
 		if chosen == null:
-			chosen = _best_remaining_for_position(healthy, used_ids, position, true, batting_cache)
+			chosen = _best_remaining_for_position(healthy, used_ids, position, true, batting_cache, ai_managed)
 
 		# d. 守備不能 (適性保持者が 1 人も残っていない) のときだけ、任意の健康・未使用選手を
 		# その守備位置に就ける。ただしポジション適性は 1 として扱う (record snapshot を 1 に
@@ -182,7 +191,8 @@ static func _best_remaining_for_position(
 	used_ids: Dictionary,
 	position: int,
 	require_aptitude: bool,
-	batting_cache: Dictionary = {}
+	batting_cache: Dictionary = {},
+	block_collapsed: bool = false
 ) -> PSPlayerSeasonRecord:
 	var best: PSPlayerSeasonRecord = null
 	var best_score: int = -2147483647
@@ -191,6 +201,8 @@ static func _best_remaining_for_position(
 		if rec == null or used_ids.has(rec.player_id):
 			continue
 		if not _can_play_position(rec, position):
+			continue
+		if block_collapsed and PlayerValueEvaluator.fielding_collapsed_at_position(rec, position):
 			continue
 		var bat_override: int = int(batting_cache.get(rec.player_id, -1))
 		var score: int = PlayerValueEvaluator.starter_assignment_score(rec, position, require_aptitude, bat_override)
@@ -242,7 +254,8 @@ static func _configured_record_for_position(
 	used_ids: Dictionary,
 	slot_settings: Dictionary,
 	key: String,
-	position: int
+	position: int,
+	block_collapsed: bool = false
 ) -> PSPlayerSeasonRecord:
 	var player_id: int = int(slot_settings.get(key, 0))
 	if player_id <= 0 or used_ids.has(player_id) or not record_by_id.has(player_id):
@@ -251,6 +264,8 @@ static func _configured_record_for_position(
 	if record == null or record.injury_days > 0:
 		return null
 	if not _can_play_position(record, position):
+		return null
+	if block_collapsed and PlayerValueEvaluator.fielding_collapsed_at_position(record, position):
 		return null
 	return record
 

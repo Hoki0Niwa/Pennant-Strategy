@@ -3,20 +3,25 @@ class_name PSAbilityReference
 
 # PA シミュレーションが「平均的な能力」として扱う固定リファレンス母平均。
 # リーグ平均との差し替えはせず、同じ能力値の対戦結果を同じ入力で安定させる。
+# 値は initial_players.csv の母集団スナップショット。シード世界を再生成 (オプション画面の
+# 書き出し / run_export_seed_world) したら再スナップショットが必要 (drift テストが検知する)。
+# 現行値は 2026-07-06 再生成世界 (野手455/投手430/捕手82) の実測。
 
-const BAT_CONTACT_Z_NEUTRAL: float = 1.1432      # Bat_Barrel の野手平均。
-const BAT_GAP_Z_NEUTRAL: float = 1.4929          # Bat_Impact の野手平均。
-const BAT_HR_Z_NEUTRAL: float = 2.1865           # Bat_Impact + 0.5 * Bat_Loft の野手平均。
-const BAT_AVOID_K_Z_NEUTRAL: float = 0.8297      # Bat_KAvoid の野手平均。
-const PIT_STUFF_Z_NEUTRAL: float = 1.5427        # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の投手平均。
-const PATIENCE_Z_NEUTRAL: float = 0.9772         # Bat_BBCreate の野手平均。
-const AGGRESSION_Z_NEUTRAL: float = 0.3090       # Bat_Aggression の野手平均。
-const EFFICIENCY_Z_NEUTRAL: float = 1.0287       # Pit_Efficiency の投手平均。
-const GAMECALL_Z_NEUTRAL: float = 2.3417         # 一軍捕手候補の C_GameCall 平均。
-const PITCHER_TAIL_PIVOT: float = 1.6722         # Pit_KCreate の高能力テール圧縮開始点。
-const PITCHER_STUFF_TAIL_PIVOT: float = 2.0372   # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の高能力テール圧縮開始点。
-const BAT_HR_TAIL_PIVOT: float = 2.8133          # Bat_Impact + 0.5 * Bat_Loft の高能力テール圧縮開始点。
-const BAT_AVOID_K_TAIL_PIVOT: float = 1.2536     # Bat_KAvoid の高能力テール圧縮開始点。
+const BAT_CONTACT_Z_NEUTRAL: float = 1.0630      # Bat_Barrel の野手平均。
+const BAT_GAP_Z_NEUTRAL: float = 1.4097          # Bat_Impact の野手平均。
+const BAT_HR_Z_NEUTRAL: float = 2.0509           # Bat_Impact + 0.5 * Bat_Loft の野手平均。
+const BAT_AVOID_K_Z_NEUTRAL: float = 0.7116      # Bat_KAvoid の野手平均。
+const PIT_STUFF_Z_NEUTRAL: float = 1.5450        # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の投手平均。
+const PATIENCE_Z_NEUTRAL: float = 0.8515         # Bat_BBCreate の野手平均。
+const AGGRESSION_Z_NEUTRAL: float = 0.2982       # Bat_Aggression の野手平均。
+const EFFICIENCY_Z_NEUTRAL: float = 0.9774       # Pit_Efficiency の投手平均。
+const GAMECALL_Z_NEUTRAL: float = 2.5330         # 一軍捕手候補の C_GameCall 平均。
+const PIT_K_CREATE_Z_NEUTRAL: float = 1.3134     # Pit_KCreate の投手平均。K/BB確率モデルの中立点。
+const PIT_BB_PREVENT_Z_NEUTRAL: float = 1.2981   # Pit_BBPrevent の投手平均。K/BB確率モデルの中立点。
+const PITCHER_TAIL_PIVOT: float = 1.6832         # Pit_KCreate の高能力テール圧縮開始点。
+const PITCHER_STUFF_TAIL_PIVOT: float = 2.0696   # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の高能力テール圧縮開始点。
+const BAT_HR_TAIL_PIVOT: float = 2.6666          # Bat_Impact + 0.5 * Bat_Loft の高能力テール圧縮開始点。
+const BAT_AVOID_K_TAIL_PIVOT: float = 1.1241     # Bat_KAvoid の高能力テール圧縮開始点。
 
 const DRIFT_WARN_ABS: float = 0.25
 const DRIFT_FAIL_ABS: float = 0.50
@@ -33,6 +38,8 @@ static func reference_values() -> Dictionary:
 		"aggression_z_neutral": AGGRESSION_Z_NEUTRAL,
 		"efficiency_z_neutral": EFFICIENCY_Z_NEUTRAL,
 		"gamecall_z_neutral": GAMECALL_Z_NEUTRAL,
+		"pit_k_create_z_neutral": PIT_K_CREATE_Z_NEUTRAL,
+		"pit_bb_prevent_z_neutral": PIT_BB_PREVENT_Z_NEUTRAL,
 		"pitcher_tail_pivot": PITCHER_TAIL_PIVOT,
 		"pitcher_stuff_tail_pivot": PITCHER_STUFF_TAIL_PIVOT,
 		"bat_hr_tail_pivot": BAT_HR_TAIL_PIVOT,
@@ -64,6 +71,8 @@ static func pool_snapshot(players: Array) -> Dictionary:
 		"aggression_z_neutral": _mean_z(batters, "Bat_Aggression"),
 		"efficiency_z_neutral": _mean_z(pitchers, "Pit_Efficiency"),
 		"gamecall_z_neutral": _mean_z(catchers, "C_GameCall"),
+		"pit_k_create_z_neutral": _mean_z(pitchers, "Pit_KCreate"),
+		"pit_bb_prevent_z_neutral": _mean_z(pitchers, "Pit_BBPrevent"),
 		"pitcher_tail_pivot": _mean_plus_stddev_z(pitchers, "Pit_KCreate", 0.5),
 		"pitcher_stuff_tail_pivot": _mean_plus_stddev_composite(pitchers, [["Pit_BarrelDeny", 1.0], ["Pit_ImpactLimit", 0.5]], 0.5),
 		"bat_hr_tail_pivot": _mean_plus_stddev_composite(batters, [["Bat_Impact", 1.0], ["Bat_Loft", 0.5]], 0.5),

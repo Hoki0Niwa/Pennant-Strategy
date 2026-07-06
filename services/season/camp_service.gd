@@ -68,6 +68,24 @@ const POSITION_DIFFICULTY_PENALTY: Dictionary = {
 	4: 0.08,
 	6: 0.10,
 }
+# 転向方向の判定用の守備難易度 (大きいほど難しい)。POSITION_DIFFICULTY_PENALTY + 捕手。
+# 守備実績由来の転向圧力は「現本職より易しい位置」へのみ働く。
+const POSITION_CONVERT_DIFFICULTY: Dictionary = {
+	2: 0.12,
+	6: 0.10,
+	4: 0.08,
+	8: 0.08,
+	5: 0.05,
+	9: 0.03,
+	7: 0.02,
+	3: 0.00,
+}
+# 守備実績によるコンバート圧力: 前季の本職での実績 OAA (rating 換算) が
+# DEFENSE_PRESSURE_MIN_RATING_DELTA を下回った分に比例して expected_value を押し上げる。
+# rating -6 (配置AIの崩壊ライン) で 30+36=66 となり MIN_AI_EXPECTED_VALUE(45) を超える。
+const DEFENSE_PRESSURE_MIN_RATING_DELTA: float = -4.0
+const DEFENSE_PRESSURE_BASE: float = 30.0
+const DEFENSE_PRESSURE_WEIGHT: float = 18.0
 const POSITION_LABELS: Dictionary = {
 	1: "投手",
 	2: "捕手",
@@ -453,30 +471,51 @@ static func _idle_fraction(record: PSPlayerSeasonRecord) -> float:
 static func _fielder_candidates(player: PSPlayer, profile: Dictionary, season: PSSeason) -> Array:
 	var rows: Array = []
 	var record: PSPlayerSeasonRecord = _record_for_player(player, season)
+	# 前季の本職での守備実績 (OAA) が悪い選手は、より易しい位置への転向/習得を優先候補にする。
+	var primary_pressure: float = _primary_defense_pressure(record, player.position)
 	for position in DEFENSIVE_POSITIONS:
 		if position == player.position:
 			continue
+		var easier_than_primary: bool = _is_easier_position(position, player.position)
+		var pressure: float = primary_pressure if easier_than_primary else 0.0
 		var current_aptitude: int = _player_position_aptitude(player, position)
 		var ability_bonus: int = _position_ability_bonus(record, position)
 		var position_need: float = _position_need_score(profile, position)
+		# 既に本職が飽和している位置への転向/習得は抑制する (1B/LF へ一方通行で溜まるのを防ぐ)。
+		var surplus_penalty: float = _primary_surplus_penalty(profile, position)
 		if current_aptitude <= 0:
-			var expected: float = position_need + float(ability_bonus) * 1.8 + float(OffseasonService.player_value_score(player)) * 0.04
-			if position_need > 0.0 or ability_bonus >= 2:
-				var entry: Dictionary = _candidate_base(player, TRAIN_POSITION_LEARN, expected, _position_learn_success_chance(record, position, ability_bonus), "守備可人数不足 %.1f / 適性補正 %+d" % [position_need, ability_bonus])
+			var expected: float = position_need + pressure * 0.5 - surplus_penalty * 0.5 + float(ability_bonus) * 1.8 + float(OffseasonService.player_value_score(player)) * 0.04
+			if position_need > 0.0 or ability_bonus >= 2 or pressure > 0.0:
+				var entry: Dictionary = _candidate_base(player, TRAIN_POSITION_LEARN, expected, _position_learn_success_chance(record, position, ability_bonus), "守備可人数不足 %.1f / 適性補正 %+d / 守備実績圧力 %.0f" % [position_need, ability_bonus, pressure * 0.5])
 				entry["target_position"] = position
 				entry["target_position_name"] = _position_label(position)
 				entry["projected_aptitude"] = _target_aptitude(record, position, false)
 				rows.append(entry)
 		elif current_aptitude >= 55:
 			var convert_need: float = _primary_need_score(profile, position) + position_need * 0.5
-			var expected_convert: float = convert_need + float(current_aptitude - 55) * 0.18 + float(ability_bonus) * 1.2
-			if convert_need > 0.0 or current_aptitude >= 82:
-				var convert_entry: Dictionary = _candidate_base(player, TRAIN_POSITION_CONVERT, expected_convert, _position_convert_success_chance(record, position, current_aptitude, ability_bonus), "本職不足 %.1f / 現適性 %d / 適性補正 %+d" % [convert_need, current_aptitude, ability_bonus])
+			var expected_convert: float = convert_need + pressure - surplus_penalty + float(current_aptitude - 55) * 0.18 + float(ability_bonus) * 1.2
+			if convert_need > 0.0 or current_aptitude >= 82 or pressure > 0.0:
+				var convert_entry: Dictionary = _candidate_base(player, TRAIN_POSITION_CONVERT, expected_convert, _position_convert_success_chance(record, position, current_aptitude, ability_bonus), "本職不足 %.1f / 現適性 %d / 適性補正 %+d / 守備実績圧力 %.0f" % [convert_need, current_aptitude, ability_bonus, pressure])
 				convert_entry["target_position"] = position
 				convert_entry["target_position_name"] = _position_label(position)
 				convert_entry["projected_aptitude"] = _target_aptitude(record, position, true)
 				rows.append(convert_entry)
 	return rows
+
+
+# 前季の本職守備実績によるコンバート圧力。realized_fielding_rating_delta が
+# DEFENSE_PRESSURE_MIN_RATING_DELTA を下回るほど大きくなる (下回らなければ 0)。
+static func _primary_defense_pressure(record: PSPlayerSeasonRecord, primary_position: int) -> float:
+	if record == null or primary_position < 2 or primary_position > 9:
+		return 0.0
+	var delta: float = PlayerValueEvaluator.realized_fielding_rating_delta(record, primary_position)
+	if delta >= DEFENSE_PRESSURE_MIN_RATING_DELTA:
+		return 0.0
+	return DEFENSE_PRESSURE_BASE + (DEFENSE_PRESSURE_MIN_RATING_DELTA - delta) * DEFENSE_PRESSURE_WEIGHT
+
+
+static func _is_easier_position(target_position: int, primary_position: int) -> bool:
+	return float(POSITION_CONVERT_DIFFICULTY.get(target_position, 0.0)) < float(POSITION_CONVERT_DIFFICULTY.get(primary_position, 0.0))
 
 
 static func _user_training_options(player: PSPlayer, season: PSSeason) -> Array:
@@ -819,6 +858,20 @@ static func _primary_need_score(profile: Dictionary, position: int) -> float:
 	var shortage: int = max(0, 2 - int(primary.get(position, 0)))
 	var war_deficit: Dictionary = profile.get("war_deficit", {}) as Dictionary
 	return float(shortage) * 16.0 + float(war_deficit.get(position, 0.0)) * 10.0
+
+
+# 本職在籍が快適水準 (一塁3 / それ以外4) を超えている位置への転向抑制ペナルティ。
+const CONVERT_POSITION_COMFORT: Dictionary = {3: 3}
+const CONVERT_SURPLUS_PENALTY_WEIGHT: float = 12.0
+
+
+static func _primary_surplus_penalty(profile: Dictionary, position: int) -> float:
+	var primary: Dictionary = profile.get("position_primary_count", {}) as Dictionary
+	var comfort: int = int(CONVERT_POSITION_COMFORT.get(position, 4))
+	var surplus: int = int(primary.get(position, 0)) - comfort
+	if surplus <= 0:
+		return 0.0
+	return float(surplus) * CONVERT_SURPLUS_PENALTY_WEIGHT
 
 
 # 先発⇄中継の役割転向は「必ず成功」(能力に依らず 100%)。役割の付け替えは失敗する性質のものではない。

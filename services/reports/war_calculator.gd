@@ -103,7 +103,9 @@ static func build_league_context(year: int, season_number: int, meta: Dictionary
 	if total_outs > 0:
 		lg_runs_per_inning = float(total_runs_allowed) * 3.0 / float(total_outs)
 	var lg_runs_per_team_game: float = lg_runs_per_inning * 9.0
-	var rpw: float = 10.0 * sqrt(max(0.001, 2.0 * lg_runs_per_inning))
+	# FanGraphs の野手 RPW: 9*(lgR/IP)*1.5 + 3。投手側 dRPW (平均投手で (lgFIPR9+2)*1.5) と
+	# 同族の式で、投打の「runs→wins」換算が一致する。GUTS 実値 (1968: R/W 8.130) と一致を確認済み。
+	var rpw: float = 9.0 * lg_runs_per_inning * 1.5 + 3.0
 	rpw = clamp(rpw, 6.0, 14.0)
 
 	var lg_era: float = 0.0

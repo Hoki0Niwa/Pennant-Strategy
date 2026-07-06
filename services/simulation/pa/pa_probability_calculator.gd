@@ -1,9 +1,13 @@
 extends RefCounted
 class_name PSPaProbabilityCalculator
 
+const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
+
 # 打席結果カテゴリ (K/BB/HBP/BIP) の確率を作る。
 # 入力 precomp は PSPlateAppearanceCoordinator が組み立てた、疲労・巡目・捕手影響を反映済みの能力辞書。
 # 各カテゴリの logit を z 能力と調整係数から作り、softmax で相対確率へ変換する。
+# Bat_KAvoid/Bat_BBCreate/Pit_KCreate/Pit_BBPrevent は生成プールの絶対水準が変わりうる raw z
+# なので、PSAbilityReference の固定母平均を引いてから重みを掛ける(中立点は測定値、較正で動かすのは重み)。
 
 
 const OUTCOME_STRIKEOUT: String = "k"
@@ -21,7 +25,7 @@ const LEAGUE_HBP_BASE: float = 0.01  # 死球の基準率。通常はほぼ触�
 const LEAGUE_BIP_BASE: float = 0.72  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
 # K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。
 const K_CREATE_WEIGHT: float = 0.33       # 投手の奪三振力が三振を増やす強さ。
-const K_AVOID_WEIGHT: float = 0.60        # 打者の三振回避力が三振を減らす強さ。
+const K_AVOID_WEIGHT: float = 0.66        # 打者の三振回避力が三振を減らす強さ。
 const ARSENAL_K_BONUS_WEIGHT: float = 0.2 # 投手の球威/制球の鋭さ(EdgeRate)による追加奪三振。
 # 球種構成のK寄り傾向(集計済み・中心化済み)による追加奪三振。**微差**(K_CREATE_WEIGHT=0.60 比で十分小さい)。
 # 球種差はわずかに留める方針。較正フェーズで強める前提。
@@ -29,6 +33,11 @@ const ARSENAL_TENDENCY_K_WEIGHT: float = 0.06
 const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たストライクが三振を押し上げる係数。
 const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
 const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
+# K/BB モデルの中立点(=生成プールの母平均)。PSAbilityReference を正準とする単一ソース。
+const BAT_AVOID_K_Z_NEUTRAL: float = AbilityReference.BAT_AVOID_K_Z_NEUTRAL
+const BAT_BB_CREATE_Z_NEUTRAL: float = AbilityReference.PATIENCE_Z_NEUTRAL
+const PIT_K_CREATE_Z_NEUTRAL: float = AbilityReference.PIT_K_CREATE_Z_NEUTRAL
+const PIT_BB_PREVENT_Z_NEUTRAL: float = AbilityReference.PIT_BB_PREVENT_Z_NEUTRAL
 # BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
 const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
 const BB_PREVENT_WEIGHT: float = 0.32 # 投手の制球が四球を減らす強さ。
@@ -60,11 +69,11 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	var catcher_z: Dictionary = precomp.get("catcher_z", {}) as Dictionary
 	var platoon_weight: float = _rule_float("platoon_weight", PLATOON_WEIGHT)
 
-	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
-	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0))
+	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0)) - _rule_float("bat_avoid_k_z_neutral", BAT_AVOID_K_Z_NEUTRAL)
+	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0)) - _rule_float("bat_bb_create_z_neutral", BAT_BB_CREATE_Z_NEUTRAL)
 	var bat_platoon: float = float(batter_z.get("Bat_Platoon", 0.0))
-	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0))
-	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0))
+	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0)) - _rule_float("pit_k_create_z_neutral", PIT_K_CREATE_Z_NEUTRAL)
+	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0)) - _rule_float("pit_bb_prevent_z_neutral", PIT_BB_PREVENT_Z_NEUTRAL)
 	var pit_edge_rate: float = float(pitcher_z.get("Pit_EdgeRate", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 

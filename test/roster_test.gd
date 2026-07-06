@@ -198,9 +198,10 @@ func test_release_targets_opening_roster_and_is_idempotent() -> void:
 				player = row as PSPlayer
 				break
 		Offseason._apply_release_mutation(player)
-	# 目標ゆらぎ (±1) の分だけ最大1人出ることはあるが、二重実行しても大量カットにはならない。
+	# 目標ゆらぎ (±1) が1回目と2回目で逆向きに出ると最大2人出る (例: 1回目+1で少なく切り、
+	# 2回目-1で目標が下がる)。二重実行しても大量カットにはならないことが本質。
 	var second_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
-	assert_int(second_cut.size()).is_less_equal(1)
+	assert_int(second_cut.size()).is_less_equal(2)
 
 
 func test_release_plan_bounded_even_when_stats_missing() -> void:
@@ -212,6 +213,20 @@ func test_release_plan_bounded_even_when_stats_missing() -> void:
 	# 計画: 66+13-(68±1) = 10〜12。全員が常時カット該当に見えても合計は計画数で止まる。
 	assert_int(cut_ids.size()).is_between(10, 12)
 	assert_int(players.size() - cut_ids.size()).is_greater_equal(54)
+
+
+# ポジション構成補正: 本職が飽和した位置 (快適水準超え) の選手は cut_score が下がり
+# 切られやすくなる。希少ポジションの選手には補正なし。
+func test_release_penalizes_surplus_position_players() -> void:
+	var surplus_1b: PSPlayer = _player_with_z(9770, 1, 3, false, 0.0)
+	var scarce_ss: PSPlayer = _player_with_z(9771, 1, 6, false, 0.0)
+	var counts: Dictionary = {3: 6, 6: 2}
+	# 一塁は快適水準3 → 6人在籍で (6-3)*6=18 の減点。遊撃2人は補正なし。
+	assert_float(Offseason._position_surplus_release_penalty(counts, surplus_1b)).is_equal(18.0)
+	assert_float(Offseason._position_surplus_release_penalty(counts, scarce_ss)).is_equal(0.0)
+	# 投手は対象外。
+	var pitcher: PSPlayer = _player_with_z(9772, 1, 1, true, 0.0)
+	assert_float(Offseason._position_surplus_release_penalty({1: 40}, pitcher)).is_equal(0.0)
 
 
 func test_compute_release_candidates_returns_empty_when_all_protected() -> void:

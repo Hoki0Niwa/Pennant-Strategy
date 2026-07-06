@@ -912,20 +912,29 @@ static func _best_sub_for_position(available_fielders: Array, starter_ids: Dicti
 	return best
 
 
-static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, _position: int) -> int:
+# 正捕手でも守備負荷ゆえ定期休養させる上限間隔。7 試合に 1 度の控え先発で
+# 143 試合中の先発は約 122 試合 (MLB のフル稼働正捕手 ~120-130 先発と同水準) になる。
+const CATCHER_SUB_INTERVAL_MAX: int = 7
+
+
+static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, position: int) -> int:
 	if starter == null or sub == null:
 		return 0
 	var gap: int = max(0, PlayerValueEvaluator.overall_score(starter) - PlayerValueEvaluator.overall_score(sub))
 	# 能力差(gap)に応じた控えの定期スタメン間隔。差が小さいほど頻繁に起用する。
+	var interval: int = SUB_INTERVAL_FATIGUE_EMERGENCY  # 5 点差以上 → 疲労/緊急時のみ
 	if gap <= 1:
-		return 2  # ほぼ互角 → 2 試合に 1 度
-	if gap <= 2:
-		return 3
-	if gap <= 3:
-		return 4
-	if gap <= 4:
-		return 6
-	return SUB_INTERVAL_FATIGUE_EMERGENCY  # 5 点差以上 → 疲労/緊急時のみ
+		interval = 2  # ほぼ互角 → 2 試合に 1 度
+	elif gap <= 2:
+		interval = 3
+	elif gap <= 3:
+		interval = 4
+	elif gap <= 4:
+		interval = 6
+	# 捕手は能力差が大きくても「休養なし」にはしない (現実の正捕手は年 120 先発前後が上限)。
+	if position == 2 and (interval <= 0 or interval > CATCHER_SUB_INTERVAL_MAX):
+		interval = CATCHER_SUB_INTERVAL_MAX
+	return interval
 
 
 static func _record_by_id(records: Array, player_id: int) -> PSPlayerSeasonRecord:

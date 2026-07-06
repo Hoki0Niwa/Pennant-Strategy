@@ -6,6 +6,20 @@ extends GdUnitTestSuite
 const DraftService = preload("res://services/season/draft_service.gd")
 
 
+# ドラフト候補の野手位置分布は up-the-middle (遊撃/中堅) 偏重で、一塁/左翼は稀。
+# 旧実装 (内野一様/外野一様) は 1B/LF を過剰供給し、リーグ構成が現実と逆転していた。
+func test_candidate_positions_favor_up_the_middle() -> void:
+	Rng.set_seed_value(20260706)
+	var counts: Dictionary = {}
+	for _i in range(4000):
+		var pos: int = DraftService._candidate_position()
+		counts[pos] = int(counts.get(pos, 0)) + 1
+	assert_int(int(counts.get(6, 0))).is_greater(int(counts.get(3, 0)))  # SS > 1B
+	assert_int(int(counts.get(8, 0))).is_greater(int(counts.get(7, 0)))  # CF > LF
+	assert_int(int(counts.get(6, 0))).is_greater(int(counts.get(7, 0)))  # SS > LF
+	assert_int(int(counts.get(1, 0))).is_between(1900, 2450)  # 投手 ~54%
+
+
 func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
 	Rng.set_seed_value(20260615)
 	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]

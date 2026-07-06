@@ -1210,6 +1210,8 @@ static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> v
 		_shift_z(z, "Run_Speed", 0.16, -2.4, 3.2)
 
 	_apply_position_ability_bias(z, position)
+	# 打撃再ロール後にも C/SS の打撃テール上限 (守備スペクトラム制約) を保証する。
+	Offseason.apply_fielder_bat_spectrum_cap(z, position)
 
 
 # ポジション別の打撃/守備傾向バイアス (ユーザー要件)。
@@ -1387,15 +1389,29 @@ static func _age_for_source(source_type: String) -> int:
 			return Rng.range_int(ROOKIE_MIN_AGE, 22)
 
 
+# ドラフト候補の守備位置分布。投手54% / 捕手8% は従来どおり、野手は up-the-middle 偏重にする。
+# 現実のドラフトはアマの主戦ポジ (遊撃/中堅/捕手) が大半で、一塁/左翼の指名は稀
+# (プロ入り後にコンバートで下るのが通常方向)。旧実装の内野一様/外野一様は 1B/LF を
+# 過剰供給し、リーグのポジション構成が現実 (SS/CF 厚め・コーナー薄め) と逆転していた。
 static func _candidate_position() -> int:
 	var roll: int = Rng.roll_percent()
 	if roll <= 54:
 		return 1
 	if roll <= 62:
-		return 2
+		return 2   # 捕手 8%
+	if roll <= 70:
+		return 6   # 遊撃 8%
+	if roll <= 75:
+		return 4   # 二塁 5%
+	if roll <= 80:
+		return 5   # 三塁 5%
 	if roll <= 82:
-		return Rng.range_int(3, 6)
-	return Rng.range_int(7, 9)
+		return 3   # 一塁 2%
+	if roll <= 90:
+		return 8   # 中堅 8%
+	if roll <= 96:
+		return 9   # 右翼 6%
+	return 7       # 左翼 4%
 
 
 # サブ守備適性のポジション別付与ルール (2026-06-02 の動的守備適性仕様に対応)。

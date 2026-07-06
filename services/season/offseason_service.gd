@@ -450,6 +450,15 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			cut_ids.append(fp.id)
 			cut_set[fp.id] = true
 
+	# ポジション構成: 本職の在籍数が快適水準を超えるポジションの選手は切られやすくする
+	# (cut_score へ減点)。打撃偏重の総合値だけで切ると守備型 (SS/CF/2B) が先に消えて
+	# コーナー (1B/LF) が蓄積するため、現実の球団運用どおり構成バランスを考慮する。
+	var primary_position_counts: Dictionary = {}
+	for row in roster_records_all:
+		var count_player: PSPlayer = (row as Dictionary)["player"] as PSPlayer
+		if count_player != null and not count_player.is_pitcher():
+			primary_position_counts[count_player.position] = int(primary_position_counts.get(count_player.position, 0)) + 1
+
 	# (2) 保護されていない選手を「常時カット該当」と「通常プール」に振り分ける。
 	var always_cut_pool: Array = []
 	var normal_pool: Array = []
@@ -468,7 +477,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		var entry: Dictionary = {
 			"player": player,
 			"zero_app": _zero_appearances(record),
-			"cut_score": _release_cut_score(player, record),
+			"cut_score": _release_cut_score(player, record) - _position_surplus_release_penalty(primary_position_counts, player),
 		}
 		if _is_always_cut_candidate(player, record):
 			always_cut_pool.append(entry)
@@ -523,6 +532,22 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 	for entry in scored:
 		result_ids.append(int((entry as Dictionary)["player_id"]))
 	return result_ids
+
+
+# ポジション別の本職在籍「快適水準」。これを超える分だけ戦力外優先度が上がる。
+# 捕手はブルペン捕手/第3捕手需要で多め、一塁は最少 (コンバート受け皿なので抱えすぎない)。
+const RELEASE_POSITION_COMFORT: Dictionary = {2: 6, 3: 3, 4: 4, 5: 4, 6: 4, 7: 4, 8: 4, 9: 4}
+const RELEASE_POSITION_SURPLUS_PENALTY: float = 6.0
+
+
+static func _position_surplus_release_penalty(primary_position_counts: Dictionary, player: PSPlayer) -> float:
+	if player == null or player.is_pitcher():
+		return 0.0
+	var comfort: int = int(RELEASE_POSITION_COMFORT.get(player.position, 4))
+	var surplus: int = int(primary_position_counts.get(player.position, 0)) - comfort
+	if surplus <= 0:
+		return 0.0
+	return float(surplus) * RELEASE_POSITION_SURPLUS_PENALTY
 
 
 # 常時カット該当か: 出場ゼロ/極少のベテラン (age>=30 AND 少試合)、投手は26歳以上で登板ゼロ。
@@ -1080,6 +1105,65 @@ static func expected_development_score_bonus(age: int, horizon: int = 6, _positi
 	return clamp(total, -8.0, 12.0)
 
 
+# 守備スペクトラムの打撃テール制約。捕手/遊撃 (守備負荷最重量の2位置) の打撃合成
+# (Bat_Impact + 0.5*Bat_Loft + Bat_KAvoid + Bat_BBCreate) に上限を置く。
+# 現実 (NPB) では C/SS の打撃テールは坂本勇人/阿部慎之助のピーク級 (リーグ4-8位の打力) が上限で、
+# 「リーグ最強打者が守備位置補正+守備ランをフルに積む」状況は起きない。上限超過分は
+# 4チャンネルを比例縮小して吸収する (WAR テール監査 2026-07-06)。
+const FIELDER_BAT_SPECTRUM_CAP_BY_POSITION: Dictionary = {2: 8.0, 6: 8.0}
+
+# 二刀流フロンティア: 打撃合成が高いほど、捕手/内野の守備合成の上限を下げる。
+# 現実では打撃 +3σ と premium 守備 +3σ の共存はほぼ存在しない (Witt Jr. 級で10年に1人)。
+# 打撃合成 BAT_PIVOT 以下は守備上限 DEF_BASE、超過 1.0 ごとに上限が SLOPE 下がる (下限 DEF_FLOOR)。
+const TWO_WAY_DEF_BASE: float = 3.5
+const TWO_WAY_BAT_PIVOT: float = 4.0
+const TWO_WAY_SLOPE: float = 0.5
+const TWO_WAY_DEF_FLOOR: float = 0.8
+const TWO_WAY_IF_KEYS: Array = ["IF_Reach", "IF_Secure", "IF_ThrowPower", "IF_ThrowAccuracy", "IF_Exchange"]
+const TWO_WAY_C_KEYS: Array = ["C_Framing", "C_Blocking", "C_Throw", "C_FieldSecure"]
+const TWO_WAY_OF_KEYS: Array = ["OF_Reach", "OF_Route", "OF_Secure"]
+
+
+static func _fielder_bat_spectrum_score(z: Dictionary) -> float:
+	return float(z.get("Bat_Impact", 0.0)) + 0.5 * float(z.get("Bat_Loft", 0.0)) \
+		+ float(z.get("Bat_KAvoid", 0.0)) + float(z.get("Bat_BBCreate", 0.0))
+
+
+static func apply_fielder_bat_spectrum_cap(z: Dictionary, position: int) -> void:
+	if position == 1:
+		return
+	if FIELDER_BAT_SPECTRUM_CAP_BY_POSITION.has(position):
+		var cap: float = float(FIELDER_BAT_SPECTRUM_CAP_BY_POSITION[position])
+		var score: float = _fielder_bat_spectrum_score(z)
+		if score > cap and score > 0.0:
+			var factor: float = cap / score
+			z["Bat_Impact"] = float(z.get("Bat_Impact", 0.0)) * factor
+			z["Bat_Loft"] = float(z.get("Bat_Loft", 0.0)) * factor
+			z["Bat_KAvoid"] = float(z.get("Bat_KAvoid", 0.0)) * factor
+			z["Bat_BBCreate"] = float(z.get("Bat_BBCreate", 0.0)) * factor
+	_apply_two_way_frontier(z)
+
+
+# 打撃合成に応じた premium 守備 (捕手/内野) の上限。超過グループは比例縮小する。
+# 守備配置 AI は打撃+守備ブレンドで遊撃などへ動的に置くため、position 列ではなく
+# 全野手の z 自体に制約を掛ける必要がある。
+static func _apply_two_way_frontier(z: Dictionary) -> void:
+	var bat_score: float = _fielder_bat_spectrum_score(z)
+	var def_cap: float = TWO_WAY_DEF_BASE - TWO_WAY_SLOPE * max(0.0, bat_score - TWO_WAY_BAT_PIVOT)
+	def_cap = max(def_cap, TWO_WAY_DEF_FLOOR)
+	for keys_row in [TWO_WAY_IF_KEYS, TWO_WAY_C_KEYS, TWO_WAY_OF_KEYS]:
+		var keys: Array = keys_row as Array
+		var total: float = 0.0
+		for key in keys:
+			total += float(z.get(key, 0.0))
+		var composite: float = total / float(keys.size())
+		if composite <= def_cap or composite <= 0.0:
+			continue
+		var factor: float = def_cap / composite
+		for key in keys:
+			z[key] = float(z.get(key, 0.0)) * factor
+
+
 static func generated_z_abilities(position: int, center: int, max_display: int = 88, ability_variance: int = 12) -> Dictionary:
 	var z: Dictionary = {}
 	var batting_center: int = center - 12 if position == 1 else center
@@ -1134,6 +1218,7 @@ static func generated_z_abilities(position: int, center: int, max_display: int =
 	z["OF_ArmAccuracy"] = _rand_z(center, core_variance, 25, max_display)
 	z["OF_Release"] = _rand_z(center, core_variance, 25, max_display)
 	z["OF_PositionFit"] = _rand_z(center, secondary_variance, 25, max_display)
+	apply_fielder_bat_spectrum_cap(z, position)
 	return z
 
 
@@ -1442,6 +1527,11 @@ static func _mutate_abilities(player: PSPlayer) -> Dictionary:
 			var current_velocity: int = int(round(float(player.raw_abilities.get("max_velocity", _generated_max_velocity_from_z(player.z_abilities)))))
 			player.raw_abilities["max_velocity"] = clampi(current_velocity + raw_velocity_delta, RAW_MAX_VELOCITY_MIN, RAW_MAX_VELOCITY_MAX)
 			changed_keys += 1
+	else:
+		# 成長で守備 z が上がり続けると、生成時の二刀流フロンティア (打撃エリートは premium 守備
+		# を持てない) を数年で突き破り、10+ WAR の両刀スターが再発する。成長後にも同じ上限を保つ。
+		# 位置別の打撃キャップ (C/SS) は既存スターの打撃を削る方向なので成長時には適用しない。
+		_apply_two_way_frontier(player.z_abilities)
 	return {
 		"kind": growth_kind,
 		"label": development_kind_label(growth_kind),
