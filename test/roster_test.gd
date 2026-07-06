@@ -637,6 +637,34 @@ func test_high_fatigue_record_is_not_auto_demotion_candidate() -> void:
 	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 1.0, 100, 70.0, 70.0, 70.0)).is_true()
 
 
+# FA日数台帳: 入替時に get_active_roster の複製 (古い台帳入り) を渡しても、set_active_roster 内で
+# accrue した区間が巻き戻らないこと。週次入替のたびに直前区間が消え、長期で FA権取得者が
+# 全くいなくなる回帰 (2026-07-06 の15年検証で fa_declared 全ゼロ) の再発防止。
+func test_active_roster_fa_days_survive_swap_with_stale_ledger_copy() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.current_day = 1
+	season.set_active_roster(1, {"player_ids": [10, 11]})
+
+	# 週次入替を模す: 日を進め、古い台帳の入った複製を編集して保存し直す (team_auto_ai と同じ形)
+	season.current_day = 8
+	var stale: Dictionary = season.get_active_roster(1).duplicate(true)
+	stale["player_ids"] = [10, 12]
+	season.set_active_roster(1, stale)
+
+	assert_int(season.get_active_roster_days(1, 10)).is_equal(7)
+	assert_int(season.get_active_roster_days(1, 11)).is_equal(7)
+	assert_int(season.get_active_roster_days(1, 12)).is_equal(0)
+
+	# シーズン末フラッシュ (契約更新時の accrue_all 相当) で残り区間も積算される
+	season.current_day = 15
+	season.accrue_all_active_roster_days([1], season.current_day)
+	assert_int(season.get_active_roster_days(1, 10)).is_equal(14)
+	assert_int(season.get_active_roster_days(1, 11)).is_equal(7)
+	assert_int(season.get_active_roster_days(1, 12)).is_equal(7)
+
+
 func test_repair_active_roster_injuries_demotes_and_promotes_replacement() -> void:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var season: PSSeason = PSSeason.new()

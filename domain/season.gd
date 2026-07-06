@@ -105,8 +105,9 @@ func set_active_roster(team_id: int, roster: Dictionary) -> void:
 	accrue_active_roster_days(team_id, current_day)
 	var previous: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	var stored: Dictionary = roster.duplicate(true)
-	if not stored.has("fa_active_days"):
-		stored["fa_active_days"] = (previous.get("fa_active_days", {}) as Dictionary).duplicate(true)
+	# FA日数台帳はシーズン側の保持分 (直前の accrue 済み) が常に正。呼び出し側が
+	# get_active_roster の複製 (古い台帳入り) を渡しても積算が巻き戻らないよう必ず上書きする。
+	stored["fa_active_days"] = (previous.get("fa_active_days", {}) as Dictionary).duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_active_rosters[str(team_id)] = stored
 
