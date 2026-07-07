@@ -528,6 +528,7 @@ static func _move_players(season: PSSeason, moving: Array, from_team_id: int, to
 		player.team_id = to_team_id
 		player.source_data["traded_year"] = season.year
 		player.source_data["traded_from_team"] = from_team_id
+		PSCareerLog.log_trade(player, season.year, from_team_id, to_team_id)
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		if record != null:
 			record.team_id = to_team_id

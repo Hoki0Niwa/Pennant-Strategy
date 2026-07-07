@@ -198,6 +198,7 @@ static func simulate_half_inning(
 		)
 		var pre_applied: Dictionary = apply_runner_events(pre_runner_events, bases, outs, pre_bases_before)
 		credit_runner_event_errors(defense, pre_runner_events)
+		tally_runner_events(game_result, pre_runner_events)
 		if not pre_runner_events.is_empty():
 			outs += int(pre_applied.get("outs", 0))
 			runs += int(pre_applied.get("runs", 0))
@@ -316,6 +317,7 @@ static func simulate_half_inning(
 		if not plate_reached_run_limit:
 			var runner_applied: Dictionary = apply_runner_events(runner_events, bases, outs, bases_before)
 			credit_runner_event_errors(defense, runner_events)
+			tally_runner_events(game_result, runner_events)
 			outs += int(runner_applied.get("outs", 0))
 			runs += int(runner_applied.get("runs", 0))
 			post_runner_charges = run_charges_for_runner_events(runner_events, runner_responsibility, pitcher, earned_outs)
@@ -1102,6 +1104,24 @@ static func runner_event_context(game_result: Dictionary, inning: int, half: Str
 		"defense_score": defense_score,
 		"defense_lead": defense_score - offense_score,
 	}
+
+
+# 走塁・守備イベントのリーグ頻度検証用に、result 種別ごとの件数を試合結果へ集計する。
+# 適用済みイベント (apply_runner_events を通ったもの) だけを数える。集計は
+# balance_report の running_defense セクション (simulation_reporter) が読む。
+static func tally_runner_events(game_result: Dictionary, runner_events: Array) -> void:
+	if game_result.is_empty() or runner_events.is_empty():
+		return
+	var counts: Dictionary = game_result.get("runner_event_counts", {}) as Dictionary
+	for event_value in runner_events:
+		var event: Dictionary = event_value as Dictionary
+		var key: String = str(event.get("result", ""))
+		if key.is_empty():
+			continue
+		counts[key] = int(counts.get(key, 0)) + 1
+		if bool(event.get("is_steal_attempt", false)):
+			counts["steal_attempt"] = int(counts.get("steal_attempt", 0)) + 1
+	game_result["runner_event_counts"] = counts
 
 
 static func apply_runner_events(

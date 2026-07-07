@@ -507,11 +507,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	GameDb.rebuild_player_indices()
 
 	# roadmap #3: 育った育成選手を全球団自動で支配下登録 (長期検証では自軍も自動扱い)。
-	var promotion_result: Dictionary = OffseasonService.process_development_promotions(GameDb.players, GameDb.teams, 0)
+	var promotion_result: Dictionary = OffseasonService.process_development_promotions(GameDb.players, GameDb.teams, 0, season.year)
 	GameDb.rebuild_player_indices()
 
 	# 育成の整理 (失敗プロスペクト/枠超過を放出し pipeline を循環)。累積で player 数が膨れるのを防ぐ。
-	var dev_release_result: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, 0)
+	var dev_release_result: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, 0, season.year)
 	GameDb.rebuild_player_indices()
 
 	# R4 Step1: 契約更新 (年俸再査定 + FA権遷移 + 予算会計)。長期検証で FA権到達が累積するよう

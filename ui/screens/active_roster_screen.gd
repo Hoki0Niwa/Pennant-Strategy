@@ -833,6 +833,7 @@ func _commit_pending_shienka(season: PSSeason) -> void:
 		var player: PSPlayer = GameDb.get_player(pid)
 		if player == null:
 			continue
+		PSCareerLog.log_dev_promote(player, season.year, player.team_id)
 		player.development_player = false
 		player.registered_roster = "支配下"
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(pid, season.year, season.season_number)

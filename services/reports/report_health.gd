@@ -82,6 +82,18 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "league_era", float(pitching.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "league ERA")
 	_add_range_check(checks, "pitches_per_batter_faced", float(pitching.get("pitches_per_batter_faced", 0.0)), 3.45, 4.10, 3.25, 4.35, "pitch count environment")
 	_add_range_check(checks, "stolen_base_attempts_per_game", float(batting.get("stolen_base_attempts_per_game", 0.0)), 0.35, 1.40, 0.15, 2.20, "stolen base attempt volume")
+	# 走塁・守備イベントの頻度 (チーム試合あたり)。基準は NPB 2023 実測:
+	# 盗塁0.46/成功率~67%/犠打0.71/犠飛0.22/併殺打0.68/失策0.47/暴投0.20/捕逸0.03-0.05。
+	var running: Dictionary = report.get("running_defense", {}) as Dictionary
+	if not running.is_empty():
+		_add_range_check(checks, "stolen_bases_per_team_game", float(running.get("stolen_bases_per_team_game", 0.0)), 0.30, 0.65, 0.10, 1.00, "stolen bases per team game (NPB ~0.46)")
+		_add_range_check(checks, "stolen_base_success_rate", float(running.get("stolen_base_success_rate", 0.0)), 0.58, 0.78, 0.45, 0.90, "stolen base success rate (NPB ~0.67)")
+		_add_range_check(checks, "sacrifices_per_team_game", float(running.get("sacrifices_per_team_game", 0.0)), 0.40, 1.00, 0.10, 1.60, "sacrifice bunts per team game (NPB ~0.71)")
+		_add_range_check(checks, "sacrifice_flies_per_team_game", float(running.get("sacrifice_flies_per_team_game", 0.0)), 0.12, 0.35, 0.04, 0.60, "sacrifice flies per team game (NPB ~0.22)")
+		_add_range_check(checks, "double_plays_per_team_game", float(running.get("double_plays_per_team_game", 0.0)), 0.45, 0.95, 0.25, 1.40, "GDP per team game (NPB ~0.68)")
+		_add_range_check(checks, "errors_per_team_game", float(running.get("errors_per_team_game", 0.0)), 0.30, 0.70, 0.12, 1.10, "errors per team game (NPB ~0.47)")
+		_add_range_check(checks, "wild_pitches_per_team_game", float(running.get("wild_pitches_per_team_game", 0.0)), 0.10, 0.35, 0.02, 0.60, "wild pitches per team game (NPB ~0.20)")
+		_add_range_check(checks, "passed_balls_per_team_game", float(running.get("passed_balls_per_team_game", 0.0)), 0.010, 0.100, 0.0, 0.250, "passed balls per team game (NPB ~0.03-0.05)")
 	_add_min_check(checks, "hard_hit_rate", float(batted_ball.get("hard_hit_rate", 0.0)), 0.20, 0.10, "hard-hit rate should not collapse")
 	_add_max_check(checks, "batter_ops_max", _dist_value(batter_dist, "ops", "max"), 1.20, 1.35, "qualified batter OPS max")
 	_add_max_check(checks, "batter_hr_max", _dist_value(batter_dist, "home_runs", "max"), 60.0, 75.0, "single-season HR leader")

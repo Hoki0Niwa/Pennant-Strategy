@@ -665,6 +665,7 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 		var now_logs: int = Time.get_ticks_usec()
 		_profile_add("game_logs", now_logs - profile_start)
 		profile_start = now_logs
+	_log_long_injuries_to_career(season, result)
 	var injury_repair_team_ids: Dictionary = _injury_repair_team_ids(result, away_team_id, home_team_id)
 	for repair_team_id in injury_repair_team_ids.keys():
 		TeamAutoAI.repair_active_roster_injuries(season, int(repair_team_id), season.current_day)
@@ -701,6 +702,17 @@ static func _next_unplayed_game_index(season: PSSeason) -> int:
 		if not bool(game.get("played", false)):
 			return index
 	return -1
+
+
+# 長期離脱 (PSCareerLog.INJURY_LOG_MIN_DAYS 以上) だけ選手経歴へ記録する (R7)。
+static func _log_long_injuries_to_career(season: PSSeason, result: Dictionary) -> void:
+	for event_value in result.get("injury_events", []) as Array:
+		var event: Dictionary = event_value as Dictionary
+		var days: int = int(event.get("days", event.get("injury_days", 0)))
+		if days < PSCareerLog.INJURY_LOG_MIN_DAYS:
+			continue
+		var player: PSPlayer = GameDb.get_player(int(event.get("player_id", 0)))
+		PSCareerLog.log_injury(player, season.year, days, str(event.get("label", "故障")))
 
 
 static func _injury_repair_team_ids(result: Dictionary, away_team_id: int, home_team_id: int) -> Dictionary:

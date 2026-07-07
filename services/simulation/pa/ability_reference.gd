@@ -5,23 +5,23 @@ class_name PSAbilityReference
 # リーグ平均との差し替えはせず、同じ能力値の対戦結果を同じ入力で安定させる。
 # 値は initial_players.csv の母集団スナップショット。シード世界を再生成 (オプション画面の
 # 書き出し / run_export_seed_world) したら再スナップショットが必要 (drift テストが検知する)。
-# 現行値は 2026-07-06 再生成世界 (野手455/投手430/捕手82) の実測。
+# 現行値は 2026-07-06 23:28 再生成世界 (FA日数台帳修正後の再エクスポート、野手453/投手425/捕手90) の実測。
 
-const BAT_CONTACT_Z_NEUTRAL: float = 1.0630      # Bat_Barrel の野手平均。
-const BAT_GAP_Z_NEUTRAL: float = 1.4097          # Bat_Impact の野手平均。
-const BAT_HR_Z_NEUTRAL: float = 2.0509           # Bat_Impact + 0.5 * Bat_Loft の野手平均。
-const BAT_AVOID_K_Z_NEUTRAL: float = 0.7116      # Bat_KAvoid の野手平均。
-const PIT_STUFF_Z_NEUTRAL: float = 1.5450        # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の投手平均。
-const PATIENCE_Z_NEUTRAL: float = 0.8515         # Bat_BBCreate の野手平均。
-const AGGRESSION_Z_NEUTRAL: float = 0.2982       # Bat_Aggression の野手平均。
-const EFFICIENCY_Z_NEUTRAL: float = 0.9774       # Pit_Efficiency の投手平均。
-const GAMECALL_Z_NEUTRAL: float = 2.5330         # 一軍捕手候補の C_GameCall 平均。
-const PIT_K_CREATE_Z_NEUTRAL: float = 1.3134     # Pit_KCreate の投手平均。K/BB確率モデルの中立点。
-const PIT_BB_PREVENT_Z_NEUTRAL: float = 1.2981   # Pit_BBPrevent の投手平均。K/BB確率モデルの中立点。
-const PITCHER_TAIL_PIVOT: float = 1.6832         # Pit_KCreate の高能力テール圧縮開始点。
-const PITCHER_STUFF_TAIL_PIVOT: float = 2.0696   # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の高能力テール圧縮開始点。
-const BAT_HR_TAIL_PIVOT: float = 2.6666          # Bat_Impact + 0.5 * Bat_Loft の高能力テール圧縮開始点。
-const BAT_AVOID_K_TAIL_PIVOT: float = 1.1241     # Bat_KAvoid の高能力テール圧縮開始点。
+const BAT_CONTACT_Z_NEUTRAL: float = 0.9995      # Bat_Barrel の野手平均。
+const BAT_GAP_Z_NEUTRAL: float = 1.3568          # Bat_Impact の野手平均。
+const BAT_HR_Z_NEUTRAL: float = 2.0017           # Bat_Impact + 0.5 * Bat_Loft の野手平均。
+const BAT_AVOID_K_Z_NEUTRAL: float = 0.7213      # Bat_KAvoid の野手平均。
+const PIT_STUFF_Z_NEUTRAL: float = 1.5804        # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の投手平均。
+const PATIENCE_Z_NEUTRAL: float = 0.8291         # Bat_BBCreate の野手平均。
+const AGGRESSION_Z_NEUTRAL: float = 0.2957       # Bat_Aggression の野手平均。
+const EFFICIENCY_Z_NEUTRAL: float = 1.0177       # Pit_Efficiency の投手平均。
+const GAMECALL_Z_NEUTRAL: float = 2.4021         # 一軍捕手候補の C_GameCall 平均。
+const PIT_K_CREATE_Z_NEUTRAL: float = 1.4096     # Pit_KCreate の投手平均。K/BB確率モデルの中立点。
+const PIT_BB_PREVENT_Z_NEUTRAL: float = 1.3151   # Pit_BBPrevent の投手平均。K/BB確率モデルの中立点。
+const PITCHER_TAIL_PIVOT: float = 1.7843         # Pit_KCreate の高能力テール圧縮開始点。
+const PITCHER_STUFF_TAIL_PIVOT: float = 2.0684   # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の高能力テール圧縮開始点。
+const BAT_HR_TAIL_PIVOT: float = 2.6190          # Bat_Impact + 0.5 * Bat_Loft の高能力テール圧縮開始点。
+const BAT_AVOID_K_TAIL_PIVOT: float = 1.1550     # Bat_KAvoid の高能力テール圧縮開始点。
 
 const DRIFT_WARN_ABS: float = 0.25
 const DRIFT_FAIL_ABS: float = 0.50

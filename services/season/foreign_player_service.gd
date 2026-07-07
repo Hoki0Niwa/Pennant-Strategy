@@ -192,6 +192,7 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, _se
 	data["sensyu_num"] = player_id
 	data["team_id"] = team_id
 	var player: PSPlayer = PSPlayer.from_dict(data)
+	PSCareerLog.log_foreign_join(player, _season.year if _season != null else int(state.get("year", 0)), team_id, player.salary)
 	players.append(player)
 	candidate["available"] = false
 	candidate["signed"] = true

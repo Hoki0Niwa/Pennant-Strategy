@@ -1291,6 +1291,7 @@ static func _player_data_from_candidate(candidate: Dictionary, player_id: int, t
 	source["draft_candidate_id"] = int(candidate.get("candidate_id", 0))
 	source["draft_method"] = str(pick.get("method", ""))
 	source["draft_lottery"] = bool(pick.get("lottery", false))
+	PSCareerLog.seed_draft_entry(source, draft_year, team_id, round_no, is_dev)
 	data["source_data"] = source
 	return data
 

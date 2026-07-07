@@ -215,6 +215,7 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 		player.source_data["fa_pass_count"] = 0
 		if not player.source_data.has("fa_eligible_year"):
 			player.source_data["fa_eligible_year"] = int(entry.get("fa_eligible_year", year))
+		PSCareerLog.log_fa_stay(player, year, player.team_id, player.salary)
 		entry["available"] = false
 		entry["returned"] = true
 		returned_count += 1
@@ -552,6 +553,7 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, sea
 	player.source_data["fa_pass_count"] = 0
 	if not player.source_data.has("fa_eligible_year"):
 		player.source_data["fa_eligible_year"] = int(entry.get("fa_eligible_year", year))
+	PSCareerLog.log_fa_move(player, year, int(entry.get("from_team", 0)), to_team_id, player.salary)
 	entry["available"] = false
 	entry["signed"] = true
 	entry["to_team"] = to_team_id

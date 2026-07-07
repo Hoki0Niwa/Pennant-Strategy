@@ -180,7 +180,7 @@ const GEN_MAX_VELOCITY_MAX: int = 160
 
 # --- STEP 1 (user-driven): Release ---
 
-static func process_release(players: Array, team_id: int, player_ids: Array) -> Dictionary:
+static func process_release(players: Array, team_id: int, player_ids: Array, year: int = 0) -> Dictionary:
 	var release_set: Dictionary = {}
 	for id_value in player_ids:
 		release_set[int(id_value)] = true
@@ -195,7 +195,7 @@ static func process_release(players: Array, team_id: int, player_ids: Array) -> 
 		if player.is_retired():
 			continue
 		var original_team_id: int = player.team_id
-		_apply_release_mutation(player)
+		_apply_release_mutation(player, year)
 		released.append({
 			"player_id": player.id,
 			"name": player.name,
@@ -256,10 +256,10 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 			}
 			# roadmap #3: 若く価値の残る選手は release ではなく育成降格 (育成枠に空きがある間)。
 			if _should_demote_to_development(player) and TeamFinance.has_development_room(players, team.id):
-				_apply_demotion_to_development(player)
+				_apply_demotion_to_development(player, season.year if season != null else 0)
 				demoted.append(entry)
 			else:
-				_apply_release_mutation(player)
+				_apply_release_mutation(player, season.year if season != null else 0)
 				team_released_count += 1
 				released.append(entry)
 		if team_released_count > 0:
@@ -305,7 +305,7 @@ static func process_foreign_releases(players: Array, teams: Array, season: PSSea
 		for entry_row in _foreign_release_entries_for_team(players, team.id, season):
 			var entry: Dictionary = entry_row as Dictionary
 			var player: PSPlayer = entry["player"] as PSPlayer
-			_apply_release_mutation(player)
+			_apply_release_mutation(player, season.year if season != null else 0)
 			team_released += 1
 			released.append({
 				"player_id": player.id,
@@ -736,7 +736,8 @@ static func _find_player_by_id(players: Array, pid: int) -> PSPlayer:
 	return null
 
 
-static func _apply_release_mutation(player: PSPlayer) -> void:
+static func _apply_release_mutation(player: PSPlayer, year: int = 0) -> void:
+	PSCareerLog.log_released(player, year, player.team_id)
 	player.source_data["released"] = true
 	player.source_data["retired"] = true
 	player.source_data["retired_age"] = player.age
@@ -748,7 +749,8 @@ static func _apply_release_mutation(player: PSPlayer) -> void:
 # dev_demote_hold は「降格した同オフに育成整理で即放出されない」保証。
 # process_development_releases が1回読んで消費する (=1オフ分の保持)。
 # 同じフラグを ReleasedMarketService._apply_signing (育成track獲得) も設定する。
-static func _apply_demotion_to_development(player: PSPlayer) -> void:
+static func _apply_demotion_to_development(player: PSPlayer, year: int = 0) -> void:
+	PSCareerLog.log_dev_demote(player, year, player.team_id)
 	player.development_player = true
 	player.registered_roster = "育成"
 	player.source_data["dev_demote_hold"] = true
@@ -781,14 +783,15 @@ static func _is_high_school_origin(player: PSPlayer) -> bool:
 
 
 # roadmap #3: 支配下登録 (昇格)。育成選手を支配下に戻す。一軍登録可・70枠を消費する。
-static func _apply_promotion_to_shienka(player: PSPlayer) -> void:
+static func _apply_promotion_to_shienka(player: PSPlayer, year: int = 0) -> void:
+	PSCareerLog.log_dev_promote(player, year, player.team_id)
 	player.development_player = false
 	player.registered_roster = "支配下"
 
 
 # CPU 自動: 育成選手のうち value が閾値以上の者を、支配下に空きがある範囲で昇格する。
 # excluded_team_id (自軍) は対話プレイではユーザーが手動昇格するため除外する。
-static func process_development_promotions(players: Array, teams: Array, excluded_team_id: int = 0) -> Dictionary:
+static func process_development_promotions(players: Array, teams: Array, excluded_team_id: int = 0, year: int = 0) -> Dictionary:
 	var promoted: Array = []
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
@@ -814,7 +817,7 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 			# オフの自動昇格は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す。
 			if not TeamFinance.has_shienka_soft_room(players, team.id):
 				break
-			_apply_promotion_to_shienka(dev)
+			_apply_promotion_to_shienka(dev, year)
 			promoted.append({
 				"player_id": dev.id,
 				"name": dev.name,
@@ -888,7 +891,7 @@ static func compute_development_release_candidates_for_team(players: Array, team
 # excluded_team_id (自軍) は放出しないが、dev_demote_hold の消費だけは行う
 # (hold=「1オフ分の保持」。自軍の整理は戦力外エディタの推奨経由で行うため、ここで
 # 消費しないと自軍の hold が永久に残り翌オフ以降も保持され続けてしまう)。
-static func process_development_releases(players: Array, teams: Array, excluded_team_id: int = 0) -> Dictionary:
+static func process_development_releases(players: Array, teams: Array, excluded_team_id: int = 0, year: int = 0) -> Dictionary:
 	var released: Array = []
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
@@ -916,7 +919,7 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 				continue
 			if not _should_release_development_player(dev, ready_threshold):
 				continue
-			_apply_release_mutation(dev)
+			_apply_release_mutation(dev, year)
 			released.append({
 				"player_id": dev.id,
 				"name": dev.name,
@@ -935,7 +938,7 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 
 
 # 自軍の指定選手を育成降格する (戦力外エディタの「育成降格」選択)。育成は人数無制限なので枠制限なし。
-static func process_demotion(players: Array, team_id: int, player_ids: Array) -> Dictionary:
+static func process_demotion(players: Array, team_id: int, player_ids: Array, year: int = 0) -> Dictionary:
 	var demote_set: Dictionary = {}
 	for id_value in player_ids:
 		demote_set[int(id_value)] = true
@@ -949,7 +952,7 @@ static func process_demotion(players: Array, team_id: int, player_ids: Array) ->
 			continue
 		if player.is_retired() or player.development_player:
 			continue
-		_apply_demotion_to_development(player)
+		_apply_demotion_to_development(player, year)
 		demoted.append({
 			"player_id": player.id,
 			"name": player.name,
@@ -986,6 +989,7 @@ static func process_retirement(players: Array, season: PSSeason) -> Dictionary:
 			# _apply_release_mutation (戦力外側) と対称な扱いにすることで、
 			# team_id == X で集計する画面に引退選手が残らないようにする。
 			var original_team_id: int = player.team_id
+			PSCareerLog.log_retired(player, season.year if season != null else 0, original_team_id, player.age)
 			player.source_data["retired"] = true
 			player.source_data["retired_age"] = player.age
 			player.team_id = 0
@@ -1872,6 +1876,7 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 			var new_salary: int = _compute_new_salary(player, record, war)
 			if new_salary != old_salary:
 				player.salary = new_salary
+				PSCareerLog.log_salary(player, year, new_salary)
 				changes.append({
 					"player_id": player.id,
 					"name": player.name,

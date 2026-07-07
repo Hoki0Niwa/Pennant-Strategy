@@ -1,11 +1,11 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# シーズン履歴画面。season_archives から過去年度を選び、最終順位・ポストシーズン・表彰を復元表示する。
-# - 年度セレクタ: ◀/▶ チップで過去シーズンを切り替え (新しい順)。
-# - 上段: 第1/第2リーグの最終順位表 (アーカイブの standings から再構築、左右2枚)。
-# - 下段左: ポストシーズン結果 (日本一バナー + 各シリーズの対戦/勝者)。
-# - 下段右: 最優秀選手・新人王 (4カード) + 打撃タイトル + 投手タイトル。
-# 重い集計は _refresh で1度だけ行いキャッシュし、_draw は描画専念。
+# シーズン履歴画面。3ビューを右上チップで切り替える (R7 記録・履歴基盤)。
+# - 年度別: season_archives から過去年度を選び、最終順位・ポストシーズン・表彰を復元表示。
+# - 歴代記録: 全選手の通算リーダーとシーズン最高記録 (RecordStore の全年度レコードを集計、
+#   カウント系部門のみ。率系は規定の扱いが年度横断で曖昧なため対象外)。
+# - タイトル履歴: 部門を選んで年度×両リーグの歴代受賞者を一覧。
+# 重い集計は _refresh / _build_alltime で1度だけ行いキャッシュし、_draw は描画専念。
 
 const STAGE_LABELS: Dictionary = {
 	"cs1_central": "CS1 第1", "cs1_pacific": "CS1 第2",
@@ -61,6 +61,65 @@ const HIST_COLUMNS: Array = [
 	{"title": "得失", "key": "diff", "w": 70,  "align": "r", "fmt": "diff"},
 ]
 
+# --- 歴代記録 / タイトル履歴 ビュー ---
+const VIEW_YEAR: String = "year"
+const VIEW_ALLTIME: String = "alltime"
+const VIEW_TITLES: String = "titles"
+const VIEW_CHIPS: Array = [
+	{"key": VIEW_YEAR, "label": "年度別"},
+	{"key": VIEW_ALLTIME, "label": "歴代記録"},
+	{"key": VIEW_TITLES, "label": "タイトル履歴"},
+]
+
+const ALLTIME_TOP_N: int = 12
+const ALLTIME_BAT_CATEGORIES: Array = [
+	{"key": "hits", "label": "安打"},
+	{"key": "home_runs", "label": "本塁打"},
+	{"key": "runs_batted_in", "label": "打点"},
+	{"key": "stolen_bases", "label": "盗塁"},
+	{"key": "games", "label": "出場"},
+]
+const ALLTIME_PIT_CATEGORIES: Array = [
+	{"key": "wins", "label": "勝利"},
+	{"key": "saves", "label": "S"},
+	{"key": "holds", "label": "H"},
+	{"key": "strikeouts", "label": "奪三振"},
+	{"key": "games", "label": "登板"},
+]
+const TITLE_HISTORY_CATEGORIES: Array = [
+	{"key": "mvp", "label": "MVP"},
+	{"key": "rookie", "label": "新人王"},
+	{"key": "bat_average", "label": "首位打者"},
+	{"key": "bat_home_runs", "label": "本塁打王"},
+	{"key": "bat_rbi", "label": "打点王"},
+	{"key": "bat_stolen_bases", "label": "盗塁王"},
+	{"key": "bat_hits", "label": "最多安打"},
+	{"key": "pit_wins", "label": "最多勝利"},
+	{"key": "pit_era", "label": "最優秀防御率"},
+	{"key": "pit_strikeouts", "label": "最多奪三振"},
+	{"key": "pit_saves", "label": "最多セーブ"},
+	{"key": "pit_holds", "label": "最多ホールド"},
+	{"key": "pit_win_rate", "label": "最高勝率"},
+]
+
+const CAREER_BAT_RECT: Rect2 = Rect2(262, 150, 808, 448)
+const CAREER_PIT_RECT: Rect2 = Rect2(1092, 150, 808, 448)
+const SEASON_BAT_RECT: Rect2 = Rect2(262, 610, 808, 448)
+const SEASON_PIT_RECT: Rect2 = Rect2(1092, 610, 808, 448)
+const TITLE_TABLE_RECT: Rect2 = Rect2(262, 190, 1240, 868)
+
+const ALLTIME_COLUMNS: Array = [
+	{"title": "順",   "key": "rank",   "w": 44,  "align": "l", "fmt": "rank"},
+	{"title": "選手", "key": "player", "w": 220, "align": "l", "fmt": "str"},
+	{"title": "在籍", "key": "span",   "w": 120, "align": "l", "fmt": "str"},
+	{"title": "記録", "key": "value",  "w": 90,  "align": "r", "fmt": "int"},
+]
+const TITLE_COLUMNS: Array = [
+	{"title": "年度",       "key": "year",    "w": 120, "align": "l", "fmt": "str"},
+	{"title": "第1リーグ", "key": "central", "w": 320, "align": "l", "fmt": "str"},
+	{"title": "第2リーグ", "key": "pacific", "w": 320, "align": "l", "fmt": "str"},
+]
+
 # 集計キャッシュ
 var _archives: Array = []                   # 古い順 (RecordStore 由来)
 var _sel: int = 0                           # 0 = 最新。表示対象 = _archives[size-1-_sel]
@@ -72,6 +131,17 @@ var _post_by_stage: Dictionary = {}         # stage_key → シリーズ行 Dict
 var _award_cards: Array = []                # MVP/新人王 カード Dictionary
 var _bat_rows: Array = []                   # 打撃タイトル行 {label, central, pacific}
 var _pit_rows: Array = []                   # 投手タイトル行
+
+var _view: String = VIEW_YEAR
+var _alltime_bat_key: String = "hits"
+var _alltime_pit_key: String = "wins"
+var _title_key: String = "mvp"
+var _alltime_built: bool = false
+var _career_bat_by_key: Dictionary = {}     # category key → 行 Array
+var _career_pit_by_key: Dictionary = {}
+var _season_bat_by_key: Dictionary = {}
+var _season_pit_by_key: Dictionary = {}
+var _title_rows: Array = []                 # タイトル履歴 (選択部門の年度別行、新しい順)
 
 
 func _ready() -> void:
@@ -91,6 +161,14 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	_draw_shell("シーズン履歴", team, season)
 
+	match _view:
+		VIEW_ALLTIME:
+			_draw_alltime_view()
+			return
+		VIEW_TITLES:
+			_draw_titles_view()
+			return
+
 	if not _has_data:
 		_round(Rect2(560, 380, 800, 240), PANEL, BORDER, 12)
 		_text("まだ完了したシーズンがありません", Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
@@ -108,6 +186,50 @@ func _draw() -> void:
 	_draw_awards(AWARD_RECT)
 	_draw_titles(BAT_RECT, "打撃タイトル", _bat_rows)
 	_draw_titles(PIT_RECT, "投手タイトル", _pit_rows)
+
+
+# ============================================================ 歴代記録 / タイトル履歴 ビュー
+
+func _draw_alltime_view() -> void:
+	_build_alltime()
+	if (_career_bat_by_key.get(_alltime_bat_key, []) as Array).is_empty() \
+			and (_career_pit_by_key.get(_alltime_pit_key, []) as Array).is_empty():
+		_round(Rect2(560, 380, 800, 240), PANEL, BORDER, 12)
+		_text("まだ成績の記録がありません", Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
+		return
+	var bat_label: String = _category_label(ALLTIME_BAT_CATEGORIES, _alltime_bat_key)
+	var pit_label: String = _category_label(ALLTIME_PIT_CATEGORIES, _alltime_pit_key)
+	_draw_alltime_table(CAREER_BAT_RECT, "通算打撃リーダー: %s" % bat_label, _career_bat_by_key.get(_alltime_bat_key, []) as Array)
+	_draw_alltime_table(CAREER_PIT_RECT, "通算投手リーダー: %s" % pit_label, _career_pit_by_key.get(_alltime_pit_key, []) as Array)
+	_draw_alltime_table(SEASON_BAT_RECT, "シーズン打撃記録: %s" % bat_label, _season_bat_by_key.get(_alltime_bat_key, []) as Array)
+	_draw_alltime_table(SEASON_PIT_RECT, "シーズン投手記録: %s" % pit_label, _season_pit_by_key.get(_alltime_pit_key, []) as Array)
+
+
+func _draw_alltime_table(rect: Rect2, title: String, rows: Array) -> void:
+	_draw_data_table(rect, ALLTIME_COLUMNS, rows, {
+		"title": title, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
+		"cell_size": 13, "empty_text": "記録がありません",
+	})
+
+
+func _draw_titles_view() -> void:
+	var label: String = _category_label(TITLE_HISTORY_CATEGORIES, _title_key)
+	if _title_rows.is_empty():
+		_round(Rect2(560, 380, 800, 240), PANEL, BORDER, 12)
+		_text("まだ完了したシーズンがありません", Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
+		return
+	_draw_data_table(TITLE_TABLE_RECT, TITLE_COLUMNS, _title_rows, {
+		"title": "タイトル履歴: %s" % label, "header_top": 58.0, "row_h": 30.0, "alt_rows": true,
+		"cell_size": 14, "empty_text": "記録がありません",
+	})
+
+
+func _category_label(categories: Array, key: String) -> String:
+	for category_value in categories:
+		var category: Dictionary = category_value as Dictionary
+		if str(category.get("key", "")) == key:
+			return str(category.get("label", key))
+	return key
 
 
 # ============================================================ 順位表 (順位表画面から流用)
@@ -347,14 +469,87 @@ func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
 func _build_buttons() -> void:
 	_clear_buttons()
 	_build_nav_buttons()
-	if _has_data and _archives.size() > 1:
-		var at_newest: bool = _sel <= 0
-		var at_oldest: bool = _sel >= _archives.size() - 1
-		_add_button("year_prev", "◀", NAV_PREV,
-			func() -> void: _step_year(1), "chip" if not at_oldest else "nav")
-		_add_button("year_next", "▶", NAV_NEXT,
-			func() -> void: _step_year(-1), "chip" if not at_newest else "nav")
+
+	# ビュー切替チップ (右上、全ビュー共通)。
+	var vx: float = 1900.0 - 116.0 * VIEW_CHIPS.size()
+	for chip_value in VIEW_CHIPS:
+		var chip: Dictionary = chip_value as Dictionary
+		var key: String = str(chip.get("key", ""))
+		_add_button("view_%s" % key, str(chip.get("label", "")), Rect2(vx, 96, 108, 30),
+			func() -> void: _set_view(key), "chip_active" if _view == key else "chip")
+		vx += 116.0
+
+	match _view:
+		VIEW_YEAR:
+			if _has_data and _archives.size() > 1:
+				var at_newest: bool = _sel <= 0
+				var at_oldest: bool = _sel >= _archives.size() - 1
+				_add_button("year_prev", "◀", NAV_PREV,
+					func() -> void: _step_year(1), "chip" if not at_oldest else "nav")
+				_add_button("year_next", "▶", NAV_NEXT,
+					func() -> void: _step_year(-1), "chip" if not at_newest else "nav")
+		VIEW_ALLTIME:
+			_build_category_chips("bat", ALLTIME_BAT_CATEGORIES, _alltime_bat_key, CAREER_BAT_RECT.position.x, 108.0,
+				func(key: String) -> void: _set_alltime_key(true, key))
+			_build_category_chips("pit", ALLTIME_PIT_CATEGORIES, _alltime_pit_key, CAREER_PIT_RECT.position.x, 108.0,
+				func(key: String) -> void: _set_alltime_key(false, key))
+		VIEW_TITLES:
+			var tx: float = TITLE_TABLE_RECT.position.x
+			var ty: float = 96.0
+			for category_value in TITLE_HISTORY_CATEGORIES:
+				var category: Dictionary = category_value as Dictionary
+				var t_key: String = str(category.get("key", ""))
+				var t_label: String = str(category.get("label", ""))
+				var w: float = max(76.0, _measure(t_label, 12) + 30.0)
+				if tx + w > 1560.0:
+					tx = TITLE_TABLE_RECT.position.x
+					ty += 38.0
+				_add_button("title_%s" % t_key, t_label, Rect2(tx, ty, w, 30),
+					func() -> void: _set_title_key(t_key), "chip_active" if _title_key == t_key else "chip")
+				tx += w + 8.0
+
 	_layout_buttons()
+
+
+# 歴代記録ビューの部門チップ (打者/投手テーブルの上に横並び)。
+func _build_category_chips(prefix: String, categories: Array, active_key: String, x: float, y: float, on_pick: Callable) -> void:
+	var cx: float = x
+	for category_value in categories:
+		var category: Dictionary = category_value as Dictionary
+		var key: String = str(category.get("key", ""))
+		var label: String = str(category.get("label", ""))
+		var w: float = max(64.0, _measure(label, 12) + 28.0)
+		_add_button("%s_%s" % [prefix, key], label, Rect2(cx, y, w, 30),
+			func() -> void: on_pick.call(key), "chip_active" if active_key == key else "chip")
+		cx += w + 8.0
+
+
+func _set_view(view: String) -> void:
+	if _view == view:
+		return
+	_view = view
+	if view == VIEW_TITLES:
+		_build_title_history_rows()
+	_build_buttons()
+	queue_redraw()
+
+
+func _set_alltime_key(batting: bool, key: String) -> void:
+	if batting:
+		_alltime_bat_key = key
+	else:
+		_alltime_pit_key = key
+	_build_buttons()
+	queue_redraw()
+
+
+func _set_title_key(key: String) -> void:
+	if _title_key == key:
+		return
+	_title_key = key
+	_build_title_history_rows()
+	_build_buttons()
+	queue_redraw()
 
 
 func _step_year(delta: int) -> void:
@@ -392,6 +587,127 @@ func _refresh() -> void:
 
 	_build_postseason(archive)
 	_build_awards(archive)
+	_build_title_history_rows()
+
+
+# 全年度の選手レコードから通算リーダーとシーズン最高記録を部門別に構築する。
+# 画面インスタンス生成ごとに1回だけ (10年×~900レコードで数ms、初回は RecordStore の
+# 全履歴 hydrate が乗るため歴代記録ビューを開いたときに限り実行する)。
+func _build_alltime() -> void:
+	if _alltime_built:
+		return
+	_alltime_built = true
+	var career: Dictionary = {}          # player_id → {name, first, last, bat, pit}
+	var season_bat: Dictionary = {}      # category key → Array[{value, name, year}]
+	var season_pit: Dictionary = {}
+	for category_value in ALLTIME_BAT_CATEGORIES:
+		season_bat[str((category_value as Dictionary)["key"])] = []
+	for category_value in ALLTIME_PIT_CATEGORIES:
+		season_pit[str((category_value as Dictionary)["key"])] = []
+
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		var entry: Dictionary = career.get(record.player_id, {}) as Dictionary
+		if entry.is_empty():
+			entry = {"name": record.name, "first": record.year, "last": record.year,
+				"bat": PSBatterStats.new(), "pit": PSPitcherStats.new()}
+		entry["first"] = mini(int(entry["first"]), record.year)
+		if record.year >= int(entry["last"]):
+			entry["last"] = record.year
+			entry["name"] = record.name
+		(entry["bat"] as PSBatterStats).add_from(record.batter_stats)
+		(entry["pit"] as PSPitcherStats).add_from(record.pitcher_stats)
+		career[record.player_id] = entry
+
+		for category_value in ALLTIME_BAT_CATEGORIES:
+			var key: String = str((category_value as Dictionary)["key"])
+			var value: int = int(record.batter_stats.get(key))
+			if value > 0:
+				(season_bat[key] as Array).append({"value": value, "name": record.name, "year": record.year})
+		for category_value in ALLTIME_PIT_CATEGORIES:
+			var key: String = str((category_value as Dictionary)["key"])
+			var value: int = int(record.pitcher_stats.get(key))
+			if value > 0:
+				(season_pit[key] as Array).append({"value": value, "name": record.name, "year": record.year})
+
+	for category_value in ALLTIME_BAT_CATEGORIES:
+		var key: String = str((category_value as Dictionary)["key"])
+		_career_bat_by_key[key] = _career_leader_rows(career, "bat", key)
+		_season_bat_by_key[key] = _season_best_rows(season_bat[key] as Array)
+	for category_value in ALLTIME_PIT_CATEGORIES:
+		var key: String = str((category_value as Dictionary)["key"])
+		_career_pit_by_key[key] = _career_leader_rows(career, "pit", key)
+		_season_pit_by_key[key] = _season_best_rows(season_pit[key] as Array)
+
+
+func _career_leader_rows(career: Dictionary, stats_key: String, category_key: String) -> Array:
+	var entries: Array = []
+	for player_id in career.keys():
+		var entry: Dictionary = career[player_id] as Dictionary
+		var value: int = int((entry[stats_key] as Object).get(category_key))
+		if value <= 0:
+			continue
+		entries.append({"value": value, "name": str(entry["name"]), "first": int(entry["first"]), "last": int(entry["last"])})
+	entries.sort_custom(func(a, b) -> bool:
+		return int((a as Dictionary)["value"]) > int((b as Dictionary)["value"]))
+	var rows: Array = []
+	for i in range(mini(ALLTIME_TOP_N, entries.size())):
+		var entry: Dictionary = entries[i] as Dictionary
+		rows.append({
+			"rank": i + 1,
+			"player": str(entry["name"]),
+			"span": "%d-%d" % [int(entry["first"]), int(entry["last"])],
+			"value": int(entry["value"]),
+		})
+	return rows
+
+
+func _season_best_rows(entries: Array) -> Array:
+	entries.sort_custom(func(a, b) -> bool:
+		return int((a as Dictionary)["value"]) > int((b as Dictionary)["value"]))
+	var rows: Array = []
+	for i in range(mini(ALLTIME_TOP_N, entries.size())):
+		var entry: Dictionary = entries[i] as Dictionary
+		rows.append({
+			"rank": i + 1,
+			"player": str(entry["name"]),
+			"span": "%d年" % int(entry["year"]),
+			"value": int(entry["value"]),
+		})
+	return rows
+
+
+# 選択中のタイトル部門について、年度×両リーグの受賞者一覧を作る (新しい順)。
+func _build_title_history_rows() -> void:
+	_title_rows = []
+	var archives: Array = RecordStore.get_season_archives()
+	for i in range(archives.size() - 1, -1, -1):
+		var archive: PSSeasonArchive = archives[i] as PSSeasonArchive
+		var central_id: int = 0
+		var pacific_id: int = 0
+		if archive.awards != null:
+			var a: PSAwards = archive.awards
+			if _title_key == "mvp":
+				central_id = a.mvp_central_player_id
+				pacific_id = a.mvp_pacific_player_id
+			elif _title_key == "rookie":
+				central_id = a.rookie_central_player_id
+				pacific_id = a.rookie_pacific_player_id
+			elif _title_key.begins_with("bat_"):
+				var bat_key: String = _title_key.substr(4)
+				central_id = int((a.batting_titles.get("central", {}) as Dictionary).get(bat_key, 0))
+				pacific_id = int((a.batting_titles.get("pacific", {}) as Dictionary).get(bat_key, 0))
+			elif _title_key.begins_with("pit_"):
+				var pit_key: String = _title_key.substr(4)
+				central_id = int((a.pitching_titles.get("central", {}) as Dictionary).get(pit_key, 0))
+				pacific_id = int((a.pitching_titles.get("pacific", {}) as Dictionary).get(pit_key, 0))
+		_title_rows.append({
+			"year": "%d年" % archive.year,
+			"central": _player_label(central_id),
+			"pacific": _player_label(pacific_id),
+		})
 
 
 func _build_league_rows(archive: PSSeasonArchive, league_key: String) -> Array:

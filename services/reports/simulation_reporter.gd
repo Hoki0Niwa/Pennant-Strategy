@@ -68,6 +68,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	var aggregate_pitching: PSPitcherStats = PSPitcherStats.new()
 	var aggregate_batted_ball: Dictionary = _empty_batted_ball_aggregate()
 	var aggregate_advanced: Dictionary = _empty_advanced_aggregate()
+	var aggregate_runner_events: Dictionary = {}
 	var total_games: int = 0
 	var total_team_games: int = 0
 	var total_runs: int = 0
@@ -102,6 +103,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		total_runs += int(season_report.get("runs", 0))
 		_accumulate_batted_ball(aggregate_batted_ball, season_report.get("batted_ball_raw", {}) as Dictionary)
 		_accumulate_advanced(aggregate_advanced, season_report.get("advanced_raw", {}) as Dictionary)
+		_accumulate_runner_events(aggregate_runner_events, season_report.get("runner_events_raw", {}) as Dictionary)
 		completed_seasons += 1
 
 		season_summaries.append(_public_season_summary(season_report))
@@ -152,6 +154,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"pitching": _pitching_summary(aggregate_pitching),
 		"batted_ball": _batted_ball_summary(aggregate_batted_ball),
 		"advanced": _advanced_summary(aggregate_advanced),
+		"running_defense": _running_defense_summary(aggregate_runner_events, aggregate_batting, total_team_games),
 		"season_summaries": season_summaries,
 		"team_seasons": team_seasons,
 		"player_stats": {
@@ -199,6 +202,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var aggregate_pitching: PSPitcherStats = PSPitcherStats.new()
 	var aggregate_batted_ball: Dictionary = _empty_batted_ball_aggregate()
 	var aggregate_advanced: Dictionary = _empty_advanced_aggregate()
+	var aggregate_runner_events: Dictionary = {}
 	var total_games: int = 0
 	var total_team_games: int = 0
 	var total_runs: int = 0
@@ -243,6 +247,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		total_runs += int(season_report.get("runs", 0))
 		_accumulate_batted_ball(aggregate_batted_ball, season_report.get("batted_ball_raw", {}) as Dictionary)
 		_accumulate_advanced(aggregate_advanced, season_report.get("advanced_raw", {}) as Dictionary)
+		_accumulate_runner_events(aggregate_runner_events, season_report.get("runner_events_raw", {}) as Dictionary)
 		completed_seasons += 1
 
 		season_summaries.append(_public_season_summary(season_report))
@@ -297,6 +302,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"pitching": _pitching_summary(aggregate_pitching),
 		"batted_ball": _batted_ball_summary(aggregate_batted_ball),
 		"advanced": _advanced_summary(aggregate_advanced),
+		"running_defense": _running_defense_summary(aggregate_runner_events, aggregate_batting, total_team_games),
 		"season_summaries": season_summaries,
 		"team_seasons": team_seasons,
 		"player_stats": {
@@ -336,6 +342,7 @@ func _season_report(season: PSSeason) -> Dictionary:
 	var batted_ball_raw: Dictionary = _batted_ball_aggregate_for_season(season)
 	var advanced_raw: Dictionary = _advanced_aggregate_for_season(season)
 	var advanced_records: Dictionary = _advanced_records_for_season(season)
+	var runner_events_raw: Dictionary = _runner_event_counts_for_season(season)
 	return {
 		"year": season.year,
 		"season_number": season.season_number,
@@ -347,6 +354,8 @@ func _season_report(season: PSSeason) -> Dictionary:
 		"batting": _batting_summary(batting_total, total_games),
 		"pitching": _pitching_summary(pitching_total),
 		"batted_ball": _batted_ball_summary(batted_ball_raw),
+		"running_defense": _running_defense_summary(runner_events_raw, batting_total, total_team_games),
+		"runner_events_raw": runner_events_raw,
 		"batted_ball_raw": batted_ball_raw,
 		"advanced": _advanced_summary(advanced_raw),
 		"advanced_raw": advanced_raw,
@@ -369,6 +378,7 @@ func _public_season_summary(season_report: Dictionary) -> Dictionary:
 		"pitching": season_report.get("pitching", {}) as Dictionary,
 		"batted_ball": season_report.get("batted_ball", {}) as Dictionary,
 		"advanced": season_report.get("advanced", {}) as Dictionary,
+		"running_defense": season_report.get("running_defense", {}) as Dictionary,
 		"injuries": season_report.get("injuries", {}) as Dictionary,
 	}
 
@@ -1214,6 +1224,44 @@ func _batted_ball_aggregate_for_season(season: PSSeason) -> Dictionary:
 				if bool(batted_ball_event.get("is_barrel", false)):
 					aggregate["home_run_barrels"] = int(aggregate.get("home_run_barrels", 0)) + 1
 	return aggregate
+
+
+# 試合結果に集計された走者イベント件数 (game_loop.tally_runner_events) をシーズン合算する。
+func _runner_event_counts_for_season(season: PSSeason) -> Dictionary:
+	var totals: Dictionary = {}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("played", false)):
+			continue
+		var result: Dictionary = game.get("result", {}) as Dictionary
+		_accumulate_runner_events(totals, result.get("runner_event_counts", {}) as Dictionary)
+	return totals
+
+
+func _accumulate_runner_events(target: Dictionary, source: Dictionary) -> void:
+	for key in source.keys():
+		target[key] = int(target.get(key, 0)) + int(source[key])
+
+
+# 走塁・守備イベントのリーグ頻度 (チーム試合あたり)。NPB 2023 実測の目安:
+# 盗塁0.46 / 企図0.69 (成功率~67%) / 犠打0.71 / 犠飛0.22 / 併殺打0.68 / 失策0.47 /
+# 暴投0.20 / 捕逸0.03-0.05 / ボーク0.014 / 牽制死~0.04。health のレンジもこれ基準。
+func _running_defense_summary(counts: Dictionary, stats: PSBatterStats, team_games: int) -> Dictionary:
+	return {
+		"team_games": team_games,
+		"stolen_bases_per_team_game": _round_float(_safe_div(stats.stolen_bases, team_games), 3),
+		"stolen_base_attempts_per_team_game": _round_float(_safe_div(stats.stolen_base_attempts, team_games), 3),
+		"stolen_base_success_rate": _round_float(_safe_div(stats.stolen_bases, stats.stolen_base_attempts), 3),
+		"sacrifices_per_team_game": _round_float(_safe_div(stats.sacrifices, team_games), 3),
+		"sacrifice_flies_per_team_game": _round_float(_safe_div(stats.sacrifice_flies, team_games), 3),
+		"double_plays_per_team_game": _round_float(_safe_div(stats.double_plays, team_games), 3),
+		"errors_per_team_game": _round_float(_safe_div(stats.errors, team_games), 3),
+		"wild_pitches_per_team_game": _round_float(_safe_div(int(counts.get("wild_pitch", 0)), team_games), 3),
+		"passed_balls_per_team_game": _round_float(_safe_div(int(counts.get("passed_ball", 0)), team_games), 3),
+		"balks_per_team_game": _round_float(_safe_div(int(counts.get("balk", 0)), team_games), 3),
+		"pickoffs_per_team_game": _round_float(_safe_div(int(counts.get("pickoff", 0)), team_games), 3),
+		"runner_event_counts": counts.duplicate(true),
+	}
 
 
 func _empty_batted_ball_aggregate() -> Dictionary:

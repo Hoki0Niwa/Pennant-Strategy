@@ -53,6 +53,7 @@ const TABS: Array = [
 	{"id": "stats", "label": "過去成績"},
 	{"id": "advanced", "label": "過去指標"},
 	{"id": "abilities", "label": "能力の変遷"},
+	{"id": "career", "label": "経歴"},
 ]
 
 # 能力バーは上から一定間隔で詰める (守備適性は最大7つ想定)。
@@ -77,6 +78,7 @@ var _basic_rows: Array = []                # 過去成績タブ
 var _game_rows: Array = []                 # 試合履歴タブ (今季)
 var _monthly_rows: Array = []              # 月間成績タブ (今季)
 var _ability_rows: Array = []
+var _career_rows: Array = []               # 経歴タブ (PSCareerLog、新しい順)
 var _advanced_rows: Array = []             # 過去指標タブ (遅延計算)
 var _advanced_built: bool = false
 var _season_groups: Array = []             # 今季タブ (カテゴリ別カード, 遅延計算)
@@ -466,6 +468,12 @@ func _draw_table(rect: Rect2) -> void:
 func _columns_for_tab() -> Array:
 	var pitcher: bool = _record != null and _record.is_pitcher()
 	match _active_tab:
+		"career":
+			return [
+				{"title": "年度", "key": "year", "w": 90, "align": "l", "fmt": "str"},
+				{"title": "出来事", "key": "label", "w": 170, "align": "l", "fmt": "str"},
+				{"title": "内容", "key": "detail", "w": 560, "align": "l", "fmt": "str"},
+			]
 		"games":
 			if pitcher:
 				return [
@@ -685,12 +693,33 @@ func _rows_for_tab() -> Array:
 			return _advanced_rows
 		"abilities":
 			return _ability_rows
+		"career":
+			return _career_rows
 		_:  # stats / rates は同じ行データ (列違い)
 			return _basic_rows
 
 
 func _scroll_key_for_tab(tab_id: String) -> String:
 	return "%d_%s" % [_player_id, tab_id]
+
+
+# 経歴タブの行 (PSCareerLog、新しい順)。入団/移籍/契約更改/長期離脱/引退などの経歴イベント。
+func _build_career_rows() -> Array:
+	var player: PSPlayer = GameDb.get_player(_player_id)
+	if player == null:
+		return []
+	var rows: Array = []
+	var entries: Array = PSCareerLog.entries(player)
+	for i in range(entries.size() - 1, -1, -1):
+		var described: Dictionary = PSCareerLog.describe(entries[i] as Dictionary)
+		rows.append({
+			"year": str(described.get("year", "")),
+			"label": str(described.get("label", "")),
+			"detail": str(described.get("detail", "")),
+		})
+	if rows.is_empty():
+		rows.append({"year": "-", "label": "記録なし", "detail": "入団・移籍・契約更改などの経歴はこれから記録されます"})
+	return rows
 
 
 # ============================================================ input
@@ -992,6 +1021,7 @@ func _refresh() -> void:
 	_season_groups = []
 	_season_built = false
 	_arsenal_types = []
+	_career_rows = _build_career_rows()
 
 	var season: PSSeason = AppState.current_season
 	if season == null or _player_id <= 0:

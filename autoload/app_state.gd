@@ -435,8 +435,9 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	# 自軍外国人は戦力外エディタの選択だけを尊重し、確定時に裏で追加解雇しない。
 	var foreign_result: Dictionary = OffseasonService.process_foreign_releases(GameDb.players, GameDb.teams, current_season, selected_team_id)
 	# roadmap #3: 自軍の育成降格 (release ではなく育成化) を release より先に適用し支配下枠を空ける。
-	var demote_result: Dictionary = OffseasonService.process_demotion(GameDb.players, selected_team_id, demote_ids)
-	var user_result: Dictionary = OffseasonService.process_release(GameDb.players, selected_team_id, player_ids)
+	var offseason_year: int = current_season.year if current_season != null else 0
+	var demote_result: Dictionary = OffseasonService.process_demotion(GameDb.players, selected_team_id, demote_ids, offseason_year)
+	var user_result: Dictionary = OffseasonService.process_release(GameDb.players, selected_team_id, player_ids, offseason_year)
 	var cpu_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, selected_team_id, current_season)
 
 	# 自軍と CPU 全球団を合算した結果を step_2 として保存する。
@@ -554,11 +555,11 @@ func advance_offseason() -> Dictionary:
 			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
 			step_result["title"] = "成長 / 衰え"
 			# roadmap #3: 成長で育った育成選手を CPU 球団は自動で支配下登録 (自軍は手動)。
-			var promo: Dictionary = OffseasonService.process_development_promotions(GameDb.players, GameDb.teams, selected_team_id)
+			var promo: Dictionary = OffseasonService.process_development_promotions(GameDb.players, GameDb.teams, selected_team_id, current_season.year if current_season != null else 0)
 			step_result["promoted"] = promo.get("promoted", [])
 			step_result["promoted_count"] = int(promo.get("promoted_count", 0))
 			# 続けて CPU 球団の育成を整理 (失敗プロスペクト/枠超過を放出し pipeline を循環)。
-			var dev_rel: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, selected_team_id)
+			var dev_rel: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, selected_team_id, current_season.year if current_season != null else 0)
 			step_result["dev_released_count"] = int(dev_rel.get("released_count", 0))
 			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_CONTRACT_UPDATE:

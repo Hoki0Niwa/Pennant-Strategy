@@ -294,6 +294,7 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 	player.source_data["released_from_team"] = int(entry.get("from_team", 0))
 	player.development_player = track == TRACK_DEVELOPMENT
 	player.registered_roster = track
+	PSCareerLog.log_released_signed(player, year, int(entry.get("from_team", 0)), to_team_id, player.development_player)
 	if player.development_player:
 		# 獲得した同オフの育成整理 (成長ステップ内) で即放出されないよう1オフ分保持する。
 		# フラグは OffseasonService.process_development_releases が読んで消費する (育成降格と同じ機構)。

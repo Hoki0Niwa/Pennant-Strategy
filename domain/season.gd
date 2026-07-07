@@ -354,6 +354,7 @@ const PERSISTED_RESULT_KEYS: Array = [
 	"winning_pitcher_id", "losing_pitcher_id", "save_pitcher_id", "hold_pitcher_ids",
 	"away_pitcher_id", "home_pitcher_id",
 	"pitcher_outings", "last_lead_change",
+	"runner_event_counts",
 ]
 
 
