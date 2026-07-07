@@ -41,8 +41,6 @@ const BATTER_HR_TAIL_SPAN: float = 1.20
 const BATTER_AVOID_K_TAIL_PIVOT: float = 1.1550
 const BATTER_AVOID_K_TAIL_SPAN: float = 0.80
 
-static var _rule_paths: Dictionary = {}
-
 
 static func resolve(
 	batter: PSPlayerSeasonRecord,
@@ -518,8 +516,4 @@ static func _catcher_record(defense: Dictionary) -> PSPlayerSeasonRecord:
 
 
 static func _rule_float(name: String, fallback: float) -> float:
-	var path: String = str(_rule_paths.get(name, ""))
-	if path.is_empty():
-		path = "simulation.plate_appearance." + name
-		_rule_paths[name] = path
-	return ModManager.rule_float(path, fallback)
+	return ModManager.rule_float("simulation.plate_appearance." + name, fallback)

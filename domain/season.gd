@@ -30,6 +30,12 @@ var player_game_history: Dictionary = {}
 # スキーマと更新は TradeService に集約。新シーズン作成で自然にリセットされる。
 var trade_state: Dictionary = {}
 
+# 1日分の試合を並列計算する際、team_setup_builder.gd が計算フェーズ内で
+# lineup/fielder_usage/rotation/active_roster の各Dictionaryへ書き込みうる
+# (初回アクセス時のデフォルト生成・ロースター再編成)。Mutexは再入可能なので、
+# set_active_roster内部からaccrue_active_roster_daysを呼ぶような既存の入れ子呼び出しも安全。
+var _mutex: Mutex = Mutex.new()
+
 
 func setup(team_ids: Array) -> void:
 	standings.clear()
@@ -66,46 +72,65 @@ func total_games() -> int:
 
 
 func get_lineup(team_id: int, dh_enabled: bool) -> Dictionary:
+	_mutex.lock()
 	var team_entry: Dictionary = team_lineups.get(str(team_id), {}) as Dictionary
 	var key: String = "dh" if dh_enabled else "non_dh"
-	return team_entry.get(key, {}) as Dictionary
+	var out: Dictionary = team_entry.get(key, {}) as Dictionary
+	_mutex.unlock()
+	return out
 
 
 func set_lineup(team_id: int, dh_enabled: bool, lineup: Dictionary) -> void:
+	_mutex.lock()
 	var team_entry: Dictionary = team_lineups.get(str(team_id), {}) as Dictionary
 	var key: String = "dh" if dh_enabled else "non_dh"
 	var stored: Dictionary = lineup.duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_entry[key] = stored
 	team_lineups[str(team_id)] = team_entry
+	_mutex.unlock()
 
 
 func get_fielder_usage(team_id: int) -> Dictionary:
-	return team_fielder_usages.get(str(team_id), {}) as Dictionary
+	_mutex.lock()
+	var out: Dictionary = team_fielder_usages.get(str(team_id), {}) as Dictionary
+	_mutex.unlock()
+	return out
 
 
 func set_fielder_usage(team_id: int, usage: Dictionary) -> void:
+	_mutex.lock()
 	var stored: Dictionary = usage.duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_fielder_usages[str(team_id)] = stored
+	_mutex.unlock()
 
 
 func get_rotation(team_id: int) -> Dictionary:
-	return team_rotations.get(str(team_id), {}) as Dictionary
+	_mutex.lock()
+	var out: Dictionary = team_rotations.get(str(team_id), {}) as Dictionary
+	_mutex.unlock()
+	return out
 
 
 func set_rotation(team_id: int, rotation: Dictionary) -> void:
+	_mutex.lock()
 	var stored: Dictionary = rotation.duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_rotations[str(team_id)] = stored
+	_mutex.unlock()
 
 
 func get_active_roster(team_id: int) -> Dictionary:
-	return team_active_rosters.get(str(team_id), {}) as Dictionary
+	_mutex.lock()
+	var out: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	_mutex.unlock()
+	return out
 
 
 func set_active_roster(team_id: int, roster: Dictionary) -> void:
-	accrue_active_roster_days(team_id, current_day)
+	_mutex.lock()
+	_accrue_active_roster_days_locked(team_id, current_day)
 	var previous: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	var stored: Dictionary = roster.duplicate(true)
 	# FA日数台帳はシーズン側の保持分 (直前の accrue 済み) が常に正。呼び出し側が
@@ -113,14 +138,25 @@ func set_active_roster(team_id: int, roster: Dictionary) -> void:
 	stored["fa_active_days"] = (previous.get("fa_active_days", {}) as Dictionary).duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_active_rosters[str(team_id)] = stored
+	_mutex.unlock()
 
 
 func clear_active_roster(team_id: int) -> void:
-	accrue_active_roster_days(team_id, current_day)
+	_mutex.lock()
+	_accrue_active_roster_days_locked(team_id, current_day)
 	team_active_rosters.erase(str(team_id))
+	_mutex.unlock()
 
 
 func accrue_active_roster_days(team_id: int, to_day: int) -> void:
+	_mutex.lock()
+	_accrue_active_roster_days_locked(team_id, to_day)
+	_mutex.unlock()
+
+
+# _mutex を既にロックした状態でのみ呼ぶ内部実装 (Mutexは再入可能だが、ロック区間を
+# 最小化するため set_active_roster/clear_active_roster からは直接この版を呼ぶ)。
+func _accrue_active_roster_days_locked(team_id: int, to_day: int) -> void:
 	var key: String = str(team_id)
 	var roster: Dictionary = team_active_rosters.get(key, {}) as Dictionary
 	if roster.is_empty():
@@ -138,21 +174,27 @@ func accrue_active_roster_days(team_id: int, to_day: int) -> void:
 
 
 func accrue_all_active_roster_days(team_ids: Array, to_day: int) -> void:
+	_mutex.lock()
 	for team_id_value in team_ids:
-		accrue_active_roster_days(int(team_id_value), to_day)
+		_accrue_active_roster_days_locked(int(team_id_value), to_day)
+	_mutex.unlock()
 
 
 func get_active_roster_days(team_id: int, player_id: int) -> int:
+	_mutex.lock()
 	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	var days_by_player: Dictionary = roster.get("fa_active_days", {}) as Dictionary
-	return int(days_by_player.get(str(player_id), 0))
+	var out: int = int(days_by_player.get(str(player_id), 0))
+	_mutex.unlock()
+	return out
 
 
 # シーズン中の球団間移籍 (トレード) 用: 移籍元で積算済みのFA日数を当日まで締めて
 # 移籍先の台帳へ移す。契約更新 (_apply_fa_service_days) は record.team_id の1球団分しか
 # 読まないため、移管しないと移籍元で積んだ当季日数が失われる。
 func transfer_active_roster_days(from_team_id: int, to_team_id: int, player_id: int) -> void:
-	accrue_active_roster_days(from_team_id, current_day)
+	_mutex.lock()
+	_accrue_active_roster_days_locked(from_team_id, current_day)
 	var player_key: String = str(player_id)
 	var from_roster: Dictionary = team_active_rosters.get(str(from_team_id), {}) as Dictionary
 	var from_days: Dictionary = (from_roster.get("fa_active_days", {}) as Dictionary).duplicate(true)
@@ -162,7 +204,7 @@ func transfer_active_roster_days(from_team_id: int, to_team_id: int, player_id: 
 		from_roster["fa_active_days"] = from_days
 		team_active_rosters[str(from_team_id)] = from_roster
 	# 移籍先も当日まで締めてから加算する (加算後に旧 updated_at_day 起点で accrue されると過大になる)。
-	accrue_active_roster_days(to_team_id, current_day)
+	_accrue_active_roster_days_locked(to_team_id, current_day)
 	var to_roster: Dictionary = team_active_rosters.get(str(to_team_id), {}) as Dictionary
 	var to_days: Dictionary = (to_roster.get("fa_active_days", {}) as Dictionary).duplicate(true)
 	to_days[player_key] = int(to_days.get(player_key, 0)) + moved_days
@@ -170,29 +212,37 @@ func transfer_active_roster_days(from_team_id: int, to_team_id: int, player_id: 
 	if not to_roster.has("updated_at_day"):
 		to_roster["updated_at_day"] = current_day
 	team_active_rosters[str(to_team_id)] = to_roster
+	_mutex.unlock()
 
 
 # --- 一二軍 自動入替 用ヘルパ ------------------------------------------------
 
 func get_demotion_days(team_id: int) -> Dictionary:
+	_mutex.lock()
 	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
-	return roster.get("demotion_day", {}) as Dictionary
+	var out: Dictionary = roster.get("demotion_day", {}) as Dictionary
+	_mutex.unlock()
+	return out
 
 
 # 指定選手達を当日付で「降格」として記録する。
 func record_demotions(team_id: int, demoted_player_ids: Array, day: int) -> void:
+	_mutex.lock()
 	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	var demotion_day: Dictionary = (roster.get("demotion_day", {}) as Dictionary).duplicate(true)
 	for id_value in demoted_player_ids:
 		demotion_day[str(int(id_value))] = day
 	roster["demotion_day"] = demotion_day
 	team_active_rosters[str(team_id)] = roster
+	_mutex.unlock()
 
 
 # 10日以上経過したクールダウンレコードを除去する。
 func clear_stale_demotions(team_id: int, day: int) -> void:
+	_mutex.lock()
 	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
 	if not roster.has("demotion_day"):
+		_mutex.unlock()
 		return
 	var demotion_day: Dictionary = roster.get("demotion_day", {}) as Dictionary
 	var fresh: Dictionary = {}
@@ -202,6 +252,7 @@ func clear_stale_demotions(team_id: int, day: int) -> void:
 			fresh[key] = d
 	roster["demotion_day"] = fresh
 	team_active_rosters[str(team_id)] = roster
+	_mutex.unlock()
 
 
 func get_last_auto_swap_day(team_id: int) -> int:

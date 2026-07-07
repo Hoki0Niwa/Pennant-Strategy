@@ -46,8 +46,6 @@ const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増え�
 # 左右(プラトーン)相性が三振 logit に効く強さ。
 const PLATOON_WEIGHT: float = 0.3
 
-static var _rule_paths: Dictionary = {}
-
 
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
 # precomp は以下のキーを持つ想定（PlateAppearanceCoordinator が組み立てる）:
@@ -111,11 +109,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 
 
 static func _rule_float(name: String, fallback: float) -> float:
-	var path: String = str(_rule_paths.get(name, ""))
-	if path.is_empty():
-		path = "simulation.pa_probability." + name
-		_rule_paths[name] = path
-	return ModManager.rule_float(path, fallback)
+	return ModManager.rule_float("simulation.pa_probability." + name, fallback)
 
 
 # softmax で 1 カテゴリを抽選する。

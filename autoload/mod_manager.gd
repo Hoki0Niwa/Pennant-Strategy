@@ -37,6 +37,26 @@ func reload_mods() -> void:
 			continue
 		_apply_manifest(manifests[mod_id] as Dictionary)
 
+	_prewarm_rule_cache()
+
+
+# マージ済み _rules の全リーフを事前に _rule_cache へ書き込む。以後 rule_value() は
+# シミュレーション中(複数スレッドから並列に呼ばれうる)常にキャッシュヒットの読み取り専用
+# アクセスになり、遅延書き込みによるDictionary構造変更の競合が構造的に起きなくなる。
+func _prewarm_rule_cache() -> void:
+	_prewarm_rule_cache_node(_rules, "")
+
+
+func _prewarm_rule_cache_node(node: Dictionary, prefix: String) -> void:
+	for key_value in node.keys():
+		var key: String = str(key_value)
+		var path: String = key if prefix.is_empty() else "%s.%s" % [prefix, key]
+		var value: Variant = node[key_value]
+		if value is Dictionary:
+			_prewarm_rule_cache_node(value as Dictionary, path)
+		else:
+			_rule_cache[path] = value
+
 
 # データファイルの差し替え解決。未指定ならプロジェクト同梱の fallback_path をそのまま使う。
 func resolve_data_path(key: String, fallback_path: String) -> String:

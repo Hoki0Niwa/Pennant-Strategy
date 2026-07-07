@@ -36,24 +36,34 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 
 static var _profile_enabled: bool = false
 static var _profile_totals_usec: Dictionary = {}
+static var _profile_mutex: Mutex = Mutex.new()
 
 
 static func reset_profile(enabled: bool = true) -> void:
 	_profile_enabled = enabled
+	_profile_mutex.lock()
 	_profile_totals_usec = {}
+	_profile_mutex.unlock()
 
 
 static func profile_totals_msec() -> Dictionary:
+	_profile_mutex.lock()
+	var snapshot: Dictionary = _profile_totals_usec.duplicate()
+	_profile_mutex.unlock()
 	var out: Dictionary = {}
-	for key_value in _profile_totals_usec.keys():
-		out[str(key_value)] = float(_profile_totals_usec[key_value]) / 1000.0
+	for key_value in snapshot.keys():
+		out[str(key_value)] = float(snapshot[key_value]) / 1000.0
 	return out
 
 
+# 並列実行される試合計算スレッドから呼ばれうるため Mutex で保護する
+# (プロファイル計測は1試合あたり数回のみで頻度が低く、ロックのオーバーヘッドは無視できる)。
 static func _profile_add(label: String, elapsed_usec: int) -> void:
 	if not _profile_enabled:
 		return
+	_profile_mutex.lock()
 	_profile_totals_usec[label] = int(_profile_totals_usec.get(label, 0)) + elapsed_usec
+	_profile_mutex.unlock()
 
 
 # プレビュー系 (UI から呼ばれる) は PSTeamSetupBuilder へ委譲。
@@ -88,24 +98,26 @@ static func simulate_next_unplayed_game(season: PSSeason, persist: bool = true, 
 	return result
 
 
-static func simulate_current_day(season: PSSeason, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
+# force_sequential=true は決定性テスト/比較用の逐次経路。標準的な1日は必ず全チームが稼働する
+# (セ・パ各3試合=6試合)ため、通常はチームが完全に排反な複数試合を WorkerThreadPool で並列計算する。
+static func simulate_current_day(season: PSSeason, persist: bool = true, auto_swap_ctx: Dictionary = {}, force_sequential: bool = false) -> Dictionary:
 	var day: int = season.current_day
-	var results: Array = []
+	var today_indices: Array = []
 	for index in range(season.schedule.size()):
 		var game: Dictionary = season.schedule[index] as Dictionary
 		if bool(game.get("played", false)):
 			continue
 		if int(game.get("day", 0)) != day:
 			continue
-		var game_result: Dictionary = simulate_game_at_index(season, index, false)
-		if not bool(game_result.get("ok", false)):
-			if not results.is_empty() and persist:
-				_persist_simulation_outputs(season)
-			return game_result
-		results.append(game_result)
+		today_indices.append(index)
 
-	if results.is_empty():
+	if today_indices.is_empty():
 		return simulate_next_unplayed_game(season, persist, auto_swap_ctx)
+
+	var day_result: Dictionary = _simulate_day_games(season, today_indices, persist, force_sequential or today_indices.size() <= 1)
+	if not bool(day_result.get("ok", false)):
+		return day_result
+	var results: Array = day_result.get("results", []) as Array
 
 	if not auto_swap_ctx.is_empty():
 		_run_periodic_roster_swap_hook(season, day, auto_swap_ctx)
@@ -120,6 +132,42 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 			SeasonCalendar.day_status_label(season, day), results.size(), str(last_result.get("message", ""))
 		],
 	}
+
+
+# today_indices の試合を計算する。sequential=true でも各試合には並列時と同じレーンID
+# (today_indices内の相対位置)を割り当てて逐次実行し、Rngのシードストリームを完全に一致させる
+# (これにより並列/逐次のどちらで実行しても同一試合が同一結果になることをテストで比較できる)。
+# sequential=false は WorkerThreadPool で並列計算し、完了後にメインスレッドで schedule順
+# (=today_indices順、逐次実行と同じ順序)に状態反映フェーズを適用する。
+# 途中の試合が失敗した場合、それ以前に反映済みの試合は persist しつつ失敗dictを返す
+# (逐次実装の「最初の失敗で打ち切り」挙動を踏襲。ただし失敗した試合以降の計算フェーズは
+# 並列時は既に終わってしまっている場合がある。season側の副作用はMutex保護されているため安全)。
+static func _simulate_day_games(season: PSSeason, today_indices: Array, persist: bool, sequential: bool) -> Dictionary:
+	var calc_results: Array = []
+	calc_results.resize(today_indices.size())
+	if sequential:
+		for local_index in range(today_indices.size()):
+			calc_results[local_index] = _simulate_game_calculation(season, int(today_indices[local_index]), local_index)
+	else:
+		var task: Callable = _calc_task_body.bind(season, today_indices, calc_results)
+		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size())
+		WorkerThreadPool.wait_for_group_task_completion(group_id)
+
+	var applied_results: Array = []
+	for local_index in range(today_indices.size()):
+		var calc: Dictionary = calc_results[local_index] as Dictionary
+		if not bool(calc.get("ok", false)):
+			if not applied_results.is_empty() and persist:
+				_persist_simulation_outputs(season)
+			return {"ok": false, "message": str(calc.get("message", ""))}
+		applied_results.append(_apply_game_result(season, calc, false))
+	return {"ok": true, "results": applied_results}
+
+
+# WorkerThreadPool.add_group_task のコールバック本体。local_index がそのままレーンIDになる
+# (同一インデックスは同時に2つ動かないため排他は自明)。
+static func _calc_task_body(local_index: int, season: PSSeason, indices: Array, out_results: Array) -> void:
+	out_results[local_index] = _simulate_game_calculation(season, int(indices[local_index]), local_index)
 
 
 static func simulate_days(season: PSSeason, days: int, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
@@ -293,25 +341,43 @@ static func simulate_current_day_async(
 	progress_total: int = 0
 ) -> Dictionary:
 	var day: int = season.current_day
-	var results: Array = []
+	var today_indices: Array = []
 	for index in range(season.schedule.size()):
-		if _is_cancelled(cancel_token):
-			break
 		var game: Dictionary = season.schedule[index] as Dictionary
 		if bool(game.get("played", false)):
 			continue
 		if int(game.get("day", 0)) != day:
 			continue
-		var game_result: Dictionary = simulate_game_at_index(season, index, false)
-		if not bool(game_result.get("ok", false)):
-			if not results.is_empty() and persist:
-				_persist_simulation_outputs(season)
-			return game_result
-		results.append(game_result)
-		if progress_cb.is_valid():
-			progress_cb.call(progress_baseline + results.size(), progress_total, SeasonCalendar.day_status_label(season, day))
-		if tree != null:
+		today_indices.append(index)
+
+	# 計算フェーズをWorkerThreadPoolで並列起動し、完了をポーリングしながらUIのフレームを解放する。
+	# キャンセルは計算フェーズを中断できない(その日の試合はいずれ全て計算される)が、
+	# 状態反映フェーズは1試合ごとにキャンセルを確認し、検知した時点で以降の反映を打ち切る。
+	var results: Array = []
+	if not today_indices.is_empty():
+		var calc_results: Array = []
+		calc_results.resize(today_indices.size())
+		var task: Callable = _calc_task_body.bind(season, today_indices, calc_results)
+		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size())
+		while not WorkerThreadPool.is_group_task_completed(group_id):
+			if tree == null:
+				break
 			await tree.process_frame
+		WorkerThreadPool.wait_for_group_task_completion(group_id)
+
+		for local_index in range(today_indices.size()):
+			if _is_cancelled(cancel_token):
+				break
+			var calc: Dictionary = calc_results[local_index] as Dictionary
+			if not bool(calc.get("ok", false)):
+				if not results.is_empty() and persist:
+					_persist_simulation_outputs(season)
+				return calc
+			results.append(_apply_game_result(season, calc, false))
+			if progress_cb.is_valid():
+				progress_cb.call(progress_baseline + results.size(), progress_total, SeasonCalendar.day_status_label(season, day))
+			if tree != null:
+				await tree.process_frame
 
 	if results.is_empty():
 		return simulate_next_unplayed_game(season, persist, auto_swap_ctx)
@@ -616,6 +682,19 @@ static func simulate_until_day_async(
 
 
 static func simulate_game_at_index(season: PSSeason, game_index: int, persist: bool = true) -> Dictionary:
+	# lane_id=-1: レーン機構を使わない(Rngは従来の共有generatorへフォールバック)。
+	# 逐次呼び出し(postseason/単発デバッグツール/このラッパー自身)の挙動は一切変わらない。
+	var calc: Dictionary = _simulate_game_calculation(season, game_index, -1)
+	if not bool(calc.get("ok", false)):
+		return calc
+	return _apply_game_result(season, calc, persist)
+
+
+# 1試合の計算フェーズ。setup構築とPSGameLoop.simulate_gameのみを行い、season/RecordStore/GameDb
+# の共有コンテナへは(排他所有が保証されたPSPlayerSeasonRecord/PSPlayer以外は)書き込まない。
+# 1日分の試合はチームが完全に排反なので、WorkerThreadPoolで複数試合を並列に呼んでも安全。
+# lane_id >= 0 のときだけ Rng のレーンストリームを開始/終了する(-1 は従来の共有generatorのまま)。
+static func _simulate_game_calculation(season: PSSeason, game_index: int, lane_id: int) -> Dictionary:
 	var profile_start: int = Time.get_ticks_usec() if _profile_enabled else 0
 	if game_index < 0 or game_index >= season.schedule.size():
 		return {"ok": false, "message": "試合番号が不正です"}
@@ -633,6 +712,11 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 		return away_setup
 	if not bool(home_setup.get("ok", false)):
 		return home_setup
+
+	if lane_id >= 0:
+		var seed_key: int = hash([Rng.current_seed, season.year, season.season_number, game_index])
+		Rng.begin_game_stream(lane_id, seed_key)
+
 	if _profile_enabled:
 		var now_setup: int = Time.get_ticks_usec()
 		_profile_add("setup", now_setup - profile_start)
@@ -647,7 +731,36 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	if _profile_enabled:
 		var now_loop: int = Time.get_ticks_usec()
 		_profile_add("loop", now_loop - profile_start)
-		profile_start = now_loop
+
+	if lane_id >= 0:
+		Rng.end_game_stream()
+
+	return {
+		"ok": true,
+		"game_index": game_index,
+		"game": game,
+		"away_team_id": away_team_id,
+		"home_team_id": home_team_id,
+		"away_setup": away_setup,
+		"home_setup": home_setup,
+		"result": result,
+		"pre_player_stats": pre_player_stats,
+	}
+
+
+# 状態反映フェーズ。season/RecordStore/GameDbへの書き込みを行うため、必ずメインスレッドで
+# (並列計算した試合であれば全試合の計算完了=join後に)逐次呼ぶこと。
+static func _apply_game_result(season: PSSeason, calc: Dictionary, persist: bool) -> Dictionary:
+	var profile_start: int = Time.get_ticks_usec() if _profile_enabled else 0
+	var game_index: int = int(calc.get("game_index", -1))
+	var game: Dictionary = calc.get("game", {}) as Dictionary
+	var away_team_id: int = int(calc.get("away_team_id", 0))
+	var home_team_id: int = int(calc.get("home_team_id", 0))
+	var away_setup: Dictionary = calc.get("away_setup", {}) as Dictionary
+	var home_setup: Dictionary = calc.get("home_setup", {}) as Dictionary
+	var result: Dictionary = calc.get("result", {}) as Dictionary
+	var pre_player_stats: Dictionary = calc.get("pre_player_stats", {}) as Dictionary
+
 	game["away_score"] = int(result.get("away_score", 0))
 	game["home_score"] = int(result.get("home_score", 0))
 	game["played"] = true
