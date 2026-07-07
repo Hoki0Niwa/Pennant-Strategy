@@ -13,9 +13,9 @@
   },
   "simulation": {
     "pa_probability": {
-      "league_k_base": 0.34,
-      "league_bb_base": 0.225,
-      "league_hbp_base": 0.01,
+      "k_logit_base": -0.6524042174102638,
+      "bb_logit_base": -1.1475706271489265,
+      "hbp_logit_base": -4.20058985013459,
       "league_bip_base": 0.72,
       "k_create_weight": 0.33,
       "k_avoid_weight": 0.66,
@@ -42,7 +42,7 @@
       "batter_avoid_k_tail_span": 0.8
     },
     "contact_quality": {
-      "ev_base": 91.2,
+      "ev_base": 84.894645,
       "ev_contact_weak_penalty": 1.4,
       "ev_home_run_power_weight": 3.15,
       "ev_pitch_velocity_weight": 0.08,
@@ -102,6 +102,11 @@
       "pitch_velocity_base": 145.0,
       "curve_width_z": 1.6,
       "avoid_k_curve_width_z": 1.44,
+      "bat_contact_curve_center": 0.9995,
+      "bat_gap_curve_center": 1.3568,
+      "bat_hr_curve_center": 2.0017,
+      "bat_avoid_k_curve_center": 0.7213,
+      "pit_stuff_curve_center": 1.5804,
       "pitcher_contact_damage_ev_weight": 0.75,
       "pitcher_contact_damage_perfect_weight": 0.05,
       "pitcher_contact_damage_mishit_weight": 0.04,

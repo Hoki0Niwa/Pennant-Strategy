@@ -1,50 +1,15 @@
 extends RefCounted
 class_name PSAbilityReference
 
-# PA シミュレーションが「平均的な能力」として扱う固定リファレンス母平均。
-# リーグ平均との差し替えはせず、同じ能力値の対戦結果を同じ入力で安定させる。
-# 値は initial_players.csv の母集団スナップショット。シード世界を再生成 (オプション画面の
-# 書き出し / run_export_seed_world) したら再スナップショットが必要 (drift テストが検知する)。
-# 現行値は 2026-07-06 23:28 再生成世界 (FA日数台帳修正後の再エクスポート、野手453/投手425/捕手90) の実測。
-
-const BAT_CONTACT_Z_NEUTRAL: float = 0.9995      # Bat_Barrel の野手平均。
-const BAT_GAP_Z_NEUTRAL: float = 1.3568          # Bat_Impact の野手平均。
-const BAT_HR_Z_NEUTRAL: float = 2.0017           # Bat_Impact + 0.5 * Bat_Loft の野手平均。
-const BAT_AVOID_K_Z_NEUTRAL: float = 0.7213      # Bat_KAvoid の野手平均。
-const PIT_STUFF_Z_NEUTRAL: float = 1.5804        # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の投手平均。
-const PATIENCE_Z_NEUTRAL: float = 0.8291         # Bat_BBCreate の野手平均。
-const AGGRESSION_Z_NEUTRAL: float = 0.2957       # Bat_Aggression の野手平均。
-const EFFICIENCY_Z_NEUTRAL: float = 1.0177       # Pit_Efficiency の投手平均。
-const GAMECALL_Z_NEUTRAL: float = 2.4021         # 一軍捕手候補の C_GameCall 平均。
-const PIT_K_CREATE_Z_NEUTRAL: float = 1.4096     # Pit_KCreate の投手平均。K/BB確率モデルの中立点。
-const PIT_BB_PREVENT_Z_NEUTRAL: float = 1.3151   # Pit_BBPrevent の投手平均。K/BB確率モデルの中立点。
-const PITCHER_TAIL_PIVOT: float = 1.7843         # Pit_KCreate の高能力テール圧縮開始点。
-const PITCHER_STUFF_TAIL_PIVOT: float = 2.0684   # Pit_BarrelDeny + 0.5 * Pit_ImpactLimit の高能力テール圧縮開始点。
-const BAT_HR_TAIL_PIVOT: float = 2.6190          # Bat_Impact + 0.5 * Bat_Loft の高能力テール圧縮開始点。
-const BAT_AVOID_K_TAIL_PIVOT: float = 1.1550     # Bat_KAvoid の高能力テール圧縮開始点。
-
-const DRIFT_WARN_ABS: float = 0.25
-const DRIFT_FAIL_ABS: float = 0.50
-
-
-static func reference_values() -> Dictionary:
-	return {
-		"bat_contact_z_neutral": BAT_CONTACT_Z_NEUTRAL,
-		"bat_gap_z_neutral": BAT_GAP_Z_NEUTRAL,
-		"bat_hr_z_neutral": BAT_HR_Z_NEUTRAL,
-		"bat_avoid_k_z_neutral": BAT_AVOID_K_Z_NEUTRAL,
-		"pit_stuff_z_neutral": PIT_STUFF_Z_NEUTRAL,
-		"patience_z_neutral": PATIENCE_Z_NEUTRAL,
-		"aggression_z_neutral": AGGRESSION_Z_NEUTRAL,
-		"efficiency_z_neutral": EFFICIENCY_Z_NEUTRAL,
-		"gamecall_z_neutral": GAMECALL_Z_NEUTRAL,
-		"pit_k_create_z_neutral": PIT_K_CREATE_Z_NEUTRAL,
-		"pit_bb_prevent_z_neutral": PIT_BB_PREVENT_Z_NEUTRAL,
-		"pitcher_tail_pivot": PITCHER_TAIL_PIVOT,
-		"pitcher_stuff_tail_pivot": PITCHER_STUFF_TAIL_PIVOT,
-		"bat_hr_tail_pivot": BAT_HR_TAIL_PIVOT,
-		"bat_avoid_k_tail_pivot": BAT_AVOID_K_TAIL_PIVOT,
-	}
+# PA モデルはもう母集団の「中立点」を参照しない(K/BB/EV/テールピボットの各定数は
+# pa_probability_calculator.gd / contact_quality_model.gd / pitch_aggregate_simulator.gd /
+# plate_appearance_coordinator.gd 側にただのチューニング定数として直接持たせてある。値は
+# 母集団を追跡・再計算する仕組みの一部ではなく、通常の較正(LEAGUE_K_BASE 等と同じ)で
+# 手動調整する対象)。
+#
+# このファイルは balance_report / long_autoplay_report が「まとめて较正」セッションで
+# 参考にするための observational な計測(現在のプールの能力平均・テール位置)だけを提供する。
+# pass/fail の判定基準は持たない。
 
 
 static func pool_snapshot(players: Array) -> Dictionary:
@@ -62,35 +27,29 @@ static func pool_snapshot(players: Array) -> Dictionary:
 			if _is_catcher(player):
 				catchers.append(player)
 	var observed: Dictionary = {
-		"bat_contact_z_neutral": _mean_z(batters, "Bat_Barrel"),
-		"bat_gap_z_neutral": _mean_z(batters, "Bat_Impact"),
-		"bat_hr_z_neutral": _mean_composite(batters, [["Bat_Impact", 1.0], ["Bat_Loft", 0.5]]),
-		"bat_avoid_k_z_neutral": _mean_z(batters, "Bat_KAvoid"),
-		"pit_stuff_z_neutral": _mean_composite(pitchers, [["Pit_BarrelDeny", 1.0], ["Pit_ImpactLimit", 0.5]]),
-		"patience_z_neutral": _mean_z(batters, "Bat_BBCreate"),
-		"aggression_z_neutral": _mean_z(batters, "Bat_Aggression"),
-		"efficiency_z_neutral": _mean_z(pitchers, "Pit_Efficiency"),
-		"gamecall_z_neutral": _mean_z(catchers, "C_GameCall"),
-		"pit_k_create_z_neutral": _mean_z(pitchers, "Pit_KCreate"),
-		"pit_bb_prevent_z_neutral": _mean_z(pitchers, "Pit_BBPrevent"),
-		"pitcher_tail_pivot": _mean_plus_stddev_z(pitchers, "Pit_KCreate", 0.5),
-		"pitcher_stuff_tail_pivot": _mean_plus_stddev_composite(pitchers, [["Pit_BarrelDeny", 1.0], ["Pit_ImpactLimit", 0.5]], 0.5),
-		"bat_hr_tail_pivot": _mean_plus_stddev_composite(batters, [["Bat_Impact", 1.0], ["Bat_Loft", 0.5]], 0.5),
-		"bat_avoid_k_tail_pivot": _mean_plus_stddev_z(batters, "Bat_KAvoid", 0.5),
+		"bat_contact_z_mean": _mean_z(batters, "Bat_Barrel"),
+		"bat_gap_z_mean": _mean_z(batters, "Bat_Impact"),
+		"bat_hr_z_mean": _mean_composite(batters, [["Bat_Impact", 1.0], ["Bat_Loft", 0.5]]),
+		"bat_avoid_k_z_mean": _mean_z(batters, "Bat_KAvoid"),
+		"pit_stuff_z_mean": _mean_composite(pitchers, [["Pit_BarrelDeny", 1.0], ["Pit_ImpactLimit", 0.5]]),
+		"patience_z_mean": _mean_z(batters, "Bat_BBCreate"),
+		"aggression_z_mean": _mean_z(batters, "Bat_Aggression"),
+		"efficiency_z_mean": _mean_z(pitchers, "Pit_Efficiency"),
+		"gamecall_z_mean": _mean_z(catchers, "C_GameCall"),
+		"pit_k_create_z_mean": _mean_z(pitchers, "Pit_KCreate"),
+		"pit_bb_prevent_z_mean": _mean_z(pitchers, "Pit_BBPrevent"),
+		"pitcher_z_mean_plus_half_stddev": _mean_plus_stddev_z(pitchers, "Pit_KCreate", 0.5),
+		"pitcher_stuff_z_mean_plus_half_stddev": _mean_plus_stddev_composite(pitchers, [["Pit_BarrelDeny", 1.0], ["Pit_ImpactLimit", 0.5]], 0.5),
+		"bat_hr_z_mean_plus_half_stddev": _mean_plus_stddev_composite(batters, [["Bat_Impact", 1.0], ["Bat_Loft", 0.5]], 0.5),
+		"bat_avoid_k_z_mean_plus_half_stddev": _mean_plus_stddev_z(batters, "Bat_KAvoid", 0.5),
 	}
-	var reference: Dictionary = reference_values()
-	var delta: Dictionary = {}
-	for key in observed.keys():
-		delta[key] = float(observed.get(key, 0.0)) - float(reference.get(key, 0.0))
 	return {
 		"counts": {
 			"batters": batters.size(),
 			"pitchers": pitchers.size(),
 			"catchers": catchers.size(),
 		},
-		"reference": reference,
 		"observed": observed,
-		"delta": delta,
 	}
 
 

@@ -1,13 +1,13 @@
 extends RefCounted
 class_name PSPaProbabilityCalculator
 
-const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
-
 # 打席結果カテゴリ (K/BB/HBP/BIP) の確率を作る。
 # 入力 precomp は PSPlateAppearanceCoordinator が組み立てた、疲労・巡目・捕手影響を反映済みの能力辞書。
-# 各カテゴリの logit を z 能力と調整係数から作り、softmax で相対確率へ変換する。
-# Bat_KAvoid/Bat_BBCreate/Pit_KCreate/Pit_BBPrevent は生成プールの絶対水準が変わりうる raw z
-# なので、PSAbilityReference の固定母平均を引いてから重みを掛ける(中立点は測定値、較正で動かすのは重み)。
+# 各カテゴリの logit を raw z 能力と調整係数からそのまま作り、softmax で相対確率へ変換する。
+# K_LOGIT_BASE/BB_LOGIT_BASE/HBP_LOGIT_BASE は「能力差ゼロの平均的対戦」を基準にした
+# LEAGUE_*_BASE の logit に、Bat_KAvoid/Bat_BBCreate/Pit_KCreate/Pit_BBPrevent の実測母平均分の
+# 補正項を1回だけ畳み込んだ定数(旧: raw z から母平均を引いてから重みを掛ける2段階の式だったものを、
+# 代数的に「raw z に重みを掛けてベース定数へ足すだけ」の1段階の式へ整理したもの。数式として同一)。
 
 
 const OUTCOME_STRIKEOUT: String = "k"
@@ -17,11 +17,15 @@ const OUTCOME_BIP: String = "bip"
 
 const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY_PITCH, OUTCOME_BIP]
 
-# K/BB/HBP/BIP の調整係数。能力差ゼロの平均的対戦を基準に、個々の z 能力で logit を動かす。
+# K/BB/HBP/BIP の調整係数。個々の raw z 能力で logit を動かす。
 # リーグベースラインは softmax 前の初期値なので、1カテゴリを上げると他カテゴリは相対的に下がる。
-const LEAGUE_K_BASE: float = 0.34    # 三振の基準率。上げるとリーグ全体の三振が増える。
-const LEAGUE_BB_BASE: float = 0.225  # 四球の基準率。上げるとリーグ全体の四球が増える。
-const LEAGUE_HBP_BASE: float = 0.01  # 死球の基準率。通常はほぼ触らない。
+# K_LOGIT_BASE/BB_LOGIT_BASE/HBP_LOGIT_BASE は元々「平均的な対戦での基準率」を確率で持ち、
+# raw z から実測母平均を引いてから重みを掛けていたものを代数的に1つの logit 定数へ畳み込んだ値
+# (K_LOGIT_BASE = logit(0.34) - Pit_KCreate母平均*K_CREATE_WEIGHT + Bat_KAvoid母平均*K_AVOID_WEIGHT 等)。
+# BIP だけは能力補正を持たないため、確率のまま(較正で直接いじる基準率)。
+const K_LOGIT_BASE: float = -0.6524042174102638
+const BB_LOGIT_BASE: float = -1.1475706271489265
+const HBP_LOGIT_BASE: float = -4.20058985013459
 const LEAGUE_BIP_BASE: float = 0.72  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
 # K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。
 const K_CREATE_WEIGHT: float = 0.33       # 投手の奪三振力が三振を増やす強さ。
@@ -33,11 +37,6 @@ const ARSENAL_TENDENCY_K_WEIGHT: float = 0.06
 const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たストライクが三振を押し上げる係数。
 const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
 const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
-# K/BB モデルの中立点(=生成プールの母平均)。PSAbilityReference を正準とする単一ソース。
-const BAT_AVOID_K_Z_NEUTRAL: float = AbilityReference.BAT_AVOID_K_Z_NEUTRAL
-const BAT_BB_CREATE_Z_NEUTRAL: float = AbilityReference.PATIENCE_Z_NEUTRAL
-const PIT_K_CREATE_Z_NEUTRAL: float = AbilityReference.PIT_K_CREATE_Z_NEUTRAL
-const PIT_BB_PREVENT_Z_NEUTRAL: float = AbilityReference.PIT_BB_PREVENT_Z_NEUTRAL
 # BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
 const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
 const BB_PREVENT_WEIGHT: float = 0.32 # 投手の制球が四球を減らす強さ。
@@ -69,17 +68,17 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	var catcher_z: Dictionary = precomp.get("catcher_z", {}) as Dictionary
 	var platoon_weight: float = _rule_float("platoon_weight", PLATOON_WEIGHT)
 
-	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0)) - _rule_float("bat_avoid_k_z_neutral", BAT_AVOID_K_Z_NEUTRAL)
-	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0)) - _rule_float("bat_bb_create_z_neutral", BAT_BB_CREATE_Z_NEUTRAL)
+	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
+	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0))
 	var bat_platoon: float = float(batter_z.get("Bat_Platoon", 0.0))
-	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0)) - _rule_float("pit_k_create_z_neutral", PIT_K_CREATE_Z_NEUTRAL)
-	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0)) - _rule_float("pit_bb_prevent_z_neutral", PIT_BB_PREVENT_Z_NEUTRAL)
+	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0))
+	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0))
 	var pit_edge_rate: float = float(pitcher_z.get("Pit_EdgeRate", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 
 	var platoon_term: float = bat_platoon * platoon_sign * platoon_weight
 
-	var k_logit: float = PSBalanceProfile.logit(_rule_float("league_k_base", LEAGUE_K_BASE))
+	var k_logit: float = _rule_float("k_logit_base", K_LOGIT_BASE)
 	k_logit += pit_k_create * _rule_float("k_create_weight", K_CREATE_WEIGHT)
 	k_logit -= bat_k_avoid * _rule_float("k_avoid_weight", K_AVOID_WEIGHT)
 	k_logit += pit_edge_rate * _rule_float("arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
@@ -89,7 +88,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	k_logit -= tto_round_weight * _rule_float("tto_k_drop", TTO_K_DROP)
 	k_logit -= platoon_term
 
-	var bb_logit: float = PSBalanceProfile.logit(_rule_float("league_bb_base", LEAGUE_BB_BASE))
+	var bb_logit: float = _rule_float("bb_logit_base", BB_LOGIT_BASE)
 	bb_logit += bat_bb_create * _rule_float("bb_create_weight", BB_CREATE_WEIGHT)
 	bb_logit -= pit_bb_prevent * _rule_float("bb_prevent_weight", BB_PREVENT_WEIGHT)
 	bb_logit -= framing_strikes * _rule_float("framing_bb_coef", FRAMING_BB_COEF)
@@ -97,7 +96,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	bb_logit += tto_round_weight * _rule_float("tto_bb_drop", TTO_BB_DROP)
 	bb_logit += command_leak * _rule_float("command_leak_bb_weight", 0.10)
 
-	var hbp_logit: float = PSBalanceProfile.logit(_rule_float("league_hbp_base", LEAGUE_HBP_BASE))
+	var hbp_logit: float = _rule_float("hbp_logit_base", HBP_LOGIT_BASE)
 	hbp_logit -= pit_bb_prevent * _rule_float("hbp_bb_prevent_weight", 0.30)
 	hbp_logit += command_leak * _rule_float("command_leak_hbp_weight", 0.06)
 

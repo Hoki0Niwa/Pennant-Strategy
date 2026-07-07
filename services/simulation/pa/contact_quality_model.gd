@@ -1,15 +1,15 @@
 extends RefCounted
 class_name PSContactQualityModel
 
-const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
-
 # 投球がインプレー(BIP)になった後に、打球の質(初速・角度・方向)を生成するモデル。
 # 飛距離・滞空時間・守備・最終結果は後段の別モデルが解決する。
 
 # 打球初速(EV)の基準値と、能力・球速・状況による各種補正の重み。
-const EV_BASE: float = 91.20                 # 打球初速の基準値(mph)。
+# EV_BASE は「raw z のHR項を実測母平均分だけ引いてから重みを掛ける」旧式を代数的に畳み込んだ値
+# (旧 EV_BASE=91.20 から BAT_HR_Z_NEUTRAL(2.0017)*EV_HOME_RUN_POWER_WEIGHT(3.15) 分を1回だけ差し引き済み)。
+const EV_BASE: float = 84.894645             # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
-# 長打力 z が中立点から 1.0 高いごとに EV を上げる量(mph)。
+# 長打力 z が 1.0 高いごとに EV を上げる量(mph)。
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
 const EV_HOME_RUN_POWER_WEIGHT: float = 3.15
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
@@ -93,13 +93,14 @@ const SPRAY_MAX: float = 52.0
 const PITCH_VELOCITY_BASE: float = 145.0
 
 # 能力値(z-score)を計算へ投入するための変換定数。
-# 各能力カーブ/EV補正の「中立点(=平均選手の z)」。能力ごとに分布平均が違うため別々に持つ。
-# 値は PSAbilityReference の固定リファレンスを正準とする。
-const BAT_CONTACT_Z_NEUTRAL: float = AbilityReference.BAT_CONTACT_Z_NEUTRAL
-const BAT_GAP_Z_NEUTRAL: float = AbilityReference.BAT_GAP_Z_NEUTRAL
-const BAT_HR_Z_NEUTRAL: float = AbilityReference.BAT_HR_Z_NEUTRAL
-const BAT_AVOID_K_Z_NEUTRAL: float = AbilityReference.BAT_AVOID_K_Z_NEUTRAL
-const PIT_STUFF_Z_NEUTRAL: float = AbilityReference.PIT_STUFF_Z_NEUTRAL
+# 各能力カーブの中心値。raw z の分布平均は能力ごとに異なるため、カーブが最も敏感に反応する
+# 位置(中心)をここで個別に指定する(player_value_evaluator.gd の _ability_curve(center=0.4) と
+# 同種の、ただのチューニング定数。母集団の実測値を追跡・更新する仕組みではない)。
+const BAT_CONTACT_CURVE_CENTER: float = 0.9995
+const BAT_GAP_CURVE_CENTER: float = 1.3568
+const BAT_HR_CURVE_CENTER: float = 2.0017
+const BAT_AVOID_K_CURVE_CENTER: float = 0.7213
+const PIT_STUFF_CURVE_CENTER: float = 1.5804
 const CURVE_WIDTH_Z: float = 1.6          # 能力カーブの標準的な幅（z スケール）。
 const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭めの幅。
 
@@ -122,18 +123,18 @@ static func generate(
 	# 球種傾向(微差): ゴロ寄り→LA微減 / 被弾寄り→芯・理想角を微増。
 	var arsenal_gb_bias: float = float(precomp.get("pitcher_gb_bias", 0.0))
 	var arsenal_hr_bias: float = float(precomp.get("pitcher_hr_bias", 0.0))
-	var bat_contact_z_neutral: float = _rule_float("bat_contact_z_neutral", BAT_CONTACT_Z_NEUTRAL)
-	var bat_gap_z_neutral: float = _rule_float("bat_gap_z_neutral", BAT_GAP_Z_NEUTRAL)
-	var bat_hr_z_neutral: float = _rule_float("bat_hr_z_neutral", BAT_HR_Z_NEUTRAL)
-	var bat_avoid_k_z_neutral: float = _rule_float("bat_avoid_k_z_neutral", BAT_AVOID_K_Z_NEUTRAL)
-	var pit_stuff_z_neutral: float = _rule_float("pit_stuff_z_neutral", PIT_STUFF_Z_NEUTRAL)
+	var bat_contact_curve_center: float = _rule_float("bat_contact_curve_center", BAT_CONTACT_CURVE_CENTER)
+	var bat_gap_curve_center: float = _rule_float("bat_gap_curve_center", BAT_GAP_CURVE_CENTER)
+	var bat_hr_curve_center: float = _rule_float("bat_hr_curve_center", BAT_HR_CURVE_CENTER)
+	var bat_avoid_k_curve_center: float = _rule_float("bat_avoid_k_curve_center", BAT_AVOID_K_CURVE_CENTER)
+	var pit_stuff_curve_center: float = _rule_float("pit_stuff_curve_center", PIT_STUFF_CURVE_CENTER)
 	var curve_width_z: float = _rule_float("curve_width_z", CURVE_WIDTH_Z)
 	# 各能力 z を [-1, 1] のカーブへ変換する（接触/ギャップ/本塁打/三振回避/球威）。
-	var contact_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_contact_z", 0.0)), bat_contact_z_neutral, curve_width_z)
-	var gap_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_gap_z", 0.0)), bat_gap_z_neutral, curve_width_z)
-	var home_run_curve: float = PSBalanceProfile.ability_curve_z(batter_hr_z, bat_hr_z_neutral, curve_width_z)
-	var avoid_k_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_avoid_k_z", 0.0)), bat_avoid_k_z_neutral, _rule_float("avoid_k_curve_width_z", AVOID_K_CURVE_WIDTH_Z))
-	var stuff_curve: float = PSBalanceProfile.ability_curve_z(pitcher_stuff_z, pit_stuff_z_neutral, curve_width_z)
+	var contact_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_contact_z", 0.0)), bat_contact_curve_center, curve_width_z)
+	var gap_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_gap_z", 0.0)), bat_gap_curve_center, curve_width_z)
+	var home_run_curve: float = PSBalanceProfile.ability_curve_z(batter_hr_z, bat_hr_curve_center, curve_width_z)
+	var avoid_k_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_avoid_k_z", 0.0)), bat_avoid_k_curve_center, _rule_float("avoid_k_curve_width_z", AVOID_K_CURVE_WIDTH_Z))
+	var stuff_curve: float = PSBalanceProfile.ability_curve_z(pitcher_stuff_z, pit_stuff_curve_center, curve_width_z)
 
 	# 投球結果(球速・コース・ゾーン内外・2ストライク防御・強制アウト)を取り出す。
 	var pitch_velocity: int = int(pitch_outcome.get("pitch_velocity", 142))
@@ -149,7 +150,7 @@ static func generate(
 	# EV(打球初速)を基準値から組み立てる。
 	var ev: float = _rule_float("ev_base", EV_BASE)
 	# 打者の長打力・球速で EV を上げ、投手の球威・打者疲労で下げ、投手の被弾傾向で上げる。
-	ev += (batter_hr_z - bat_hr_z_neutral) * _rule_float("ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
+	ev += batter_hr_z * _rule_float("ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
 	ev += (float(pitch_velocity) - _rule_float("pitch_velocity_base", PITCH_VELOCITY_BASE)) * _rule_float("ev_pitch_velocity_weight", EV_PITCH_VELOCITY_WEIGHT)
 	ev -= stuff_curve * _rule_float("ev_stuff_weight", EV_STUFF_WEIGHT)
 	ev -= float(batter_fatigue) * _rule_float("ev_fatigue_weight", EV_FATIGUE_WEIGHT)

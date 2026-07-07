@@ -2,7 +2,6 @@ extends RefCounted
 
 # balance_report / long_autoplay_report の数値を分布と health check に整形する。
 # health は pass/warn/fail の閾値付きチェック配列で、バランス調整中の異常検知を機械的に行う。
-const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
 
 const STATUS_PASS: String = "pass"
 const STATUS_WARN: String = "warn"
@@ -76,7 +75,6 @@ static func balance_health(report: Dictionary) -> Dictionary:
 
 	_add_equal_check(checks, "completed_seasons", completed, requested, "all requested seasons completed")
 	_add_max_check(checks, "simulation_errors", errors.size(), 0.0, 0.0, "simulation errors should be absent")
-	_add_ability_reference_drift_checks(checks, report.get("ability_reference_drift", {}) as Dictionary)
 	_add_range_check(checks, "runs_per_team_game", float(run_env.get("runs_per_team_game", 0.0)), 2.8, 5.2, 2.2, 6.2, "league scoring environment")
 	_add_range_check(checks, "league_ops", float(batting.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "league OPS")
 	_add_range_check(checks, "league_era", float(pitching.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "league ERA")
@@ -243,24 +241,6 @@ static func multi_seed_health(reports: Array) -> Dictionary:
 	_add_manual_check(checks, "multi_seed_pitcher_era_under_2_average", avg_status, _round_float(avg_under_2, 3), "3-seed average should stay within 0-3 qualified sub-2 ERA pitchers")
 	_add_manual_check(checks, "multi_seed_pitcher_era_under_2_by_team_max", STATUS_FAIL if max_team_under_2 >= 3 else STATUS_PASS, max_team_under_2, "no single seed should have three qualified sub-2 ERA pitchers on one team")
 	return _health_result(checks)
-
-
-static func _add_ability_reference_drift_checks(checks: Array, drift: Dictionary) -> void:
-	if drift.is_empty():
-		return
-	var delta: Dictionary = drift.get("delta", {}) as Dictionary
-	for key_value in delta.keys():
-		var key: String = str(key_value)
-		_add_range_check(
-			checks,
-			"ability_reference_drift_%s" % key,
-			float(delta.get(key_value, 0.0)),
-			-AbilityReference.DRIFT_WARN_ABS,
-			AbilityReference.DRIFT_WARN_ABS,
-			-AbilityReference.DRIFT_FAIL_ABS,
-			AbilityReference.DRIFT_FAIL_ABS,
-			"current player pool should stay near fixed PA ability reference"
-		)
 
 
 # check 配列全体の代表 status を決める。fail が1つでもあれば fail、fail なし warn ありなら warn。

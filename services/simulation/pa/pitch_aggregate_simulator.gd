@@ -1,8 +1,6 @@
 extends RefCounted
 class_name PSPitchAggregateSimulator
 
-const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
-
 # 打席カテゴリと能力から、球数・ボール/ストライク・空振りなどの集計 PitchSummary を生成する。
 # 出力スキーマ:
 # {pitches, balls, strikes, final_count, swings, whiffs, called_strikes, fouls,
@@ -44,11 +42,10 @@ const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減�
 const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が球数を減らす係数。
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
 const TTO_PITCH_COEF: float = 4.6           # 打順3巡目以降の粘られやすさを球数へ反映する係数。
-# 能力 z は集団平均が0とは限らないため、平均的な選手で補正ゼロになる中立点を引いてから係数を適用する。
-const PATIENCE_Z_NEUTRAL: float = AbilityReference.PATIENCE_Z_NEUTRAL
-const AGGRESSION_Z_NEUTRAL: float = AbilityReference.AGGRESSION_Z_NEUTRAL
-const EFFICIENCY_Z_NEUTRAL: float = AbilityReference.EFFICIENCY_Z_NEUTRAL
-const GAMECALL_Z_NEUTRAL: float = AbilityReference.GAMECALL_Z_NEUTRAL
+# 球数デルタの基準値。raw z の各項 (bat_bb_create*PATIENCE_COEF 等) を中立点なしでそのまま
+# 合算するための定数項 (旧: 各項を「実測母平均を引いてから係数を掛ける」形にしていたものを、
+# 母平均*係数の合計として1回だけここに畳み込んだもの。数式は代数的に同一、平均の実行時参照は無い)。
+const PITCH_DELTA_BASE: float = 0.57237
 const FATIGUE_PITCH_COEF: float = 1.6       # 疲労が球数を増やす係数。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
 const MAX_PITCH_COUNT: int = 20             # 1打席あたり球数の上限クランプ。
@@ -72,11 +69,11 @@ static func simulate(category: String, precomp: Dictionary) -> Dictionary:
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 	var tto_round_weight: float = float(precomp.get("tto_round_weight", 0.0))
 
-	var pitch_delta: float = 0.0
-	pitch_delta += (bat_bb_create - PATIENCE_Z_NEUTRAL) * PATIENCE_COEF
-	pitch_delta -= (bat_aggression - AGGRESSION_Z_NEUTRAL) * AGGRESSION_COEF
-	pitch_delta -= (pit_efficiency - EFFICIENCY_Z_NEUTRAL) * EFFICIENCY_COEF
-	pitch_delta -= (c_game_call - GAMECALL_Z_NEUTRAL) * GAMECALL_EFFICIENCY_COEF
+	var pitch_delta: float = PITCH_DELTA_BASE
+	pitch_delta += bat_bb_create * PATIENCE_COEF
+	pitch_delta -= bat_aggression * AGGRESSION_COEF
+	pitch_delta -= pit_efficiency * EFFICIENCY_COEF
+	pitch_delta -= c_game_call * GAMECALL_EFFICIENCY_COEF
 	pitch_delta += (1.0 - fatigue_factor) * FATIGUE_PITCH_COEF
 	pitch_delta += tto_round_weight * TTO_PITCH_COEF
 

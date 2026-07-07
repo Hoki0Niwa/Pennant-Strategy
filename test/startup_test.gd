@@ -34,7 +34,7 @@ func test_autoloads_registered() -> void:
 func test_mod_manager_default_rules_and_paths() -> void:
 	assert_str(ModManager.resolve_data_path("initial_players", "res://fallback.csv")).is_equal("res://fallback.csv")
 	assert_int(ModManager.rule_int("season.schedule.pennant_games_per_team", 0)).is_equal(PSSchedule.PENNANT_GAMES_PER_TEAM)
-	assert_float(ModManager.rule_float("simulation.pa_probability.league_k_base", -1.0)).is_equal(PSPaProbabilityCalculator.LEAGUE_K_BASE)
+	assert_float(ModManager.rule_float("simulation.pa_probability.k_logit_base", -999.0)).is_equal(PSPaProbabilityCalculator.K_LOGIT_BASE)
 	var metadata: Dictionary = ModManager.save_metadata()
 	assert_str(str(metadata.get("rules_profile_id", ""))).is_equal("pennant_strategy_default")
 	assert_int(int(metadata.get("rules_schema_version", 0))).is_equal(1)

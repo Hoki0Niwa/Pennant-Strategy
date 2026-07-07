@@ -142,7 +142,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
 		"player_count": GameDb.players.size(),
-		"ability_reference_drift": AbilityReference.pool_snapshot(GameDb.players),
+		"ability_pool_snapshot": AbilityReference.pool_snapshot(GameDb.players),
 		"run_environment": {
 			"games": total_games,
 			"team_games": total_team_games,
@@ -290,7 +290,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		"data_source": GameDb.data_source,
 		"team_count": GameDb.teams.size(),
 		"player_count": GameDb.players.size(),
-		"ability_reference_drift": AbilityReference.pool_snapshot(GameDb.players),
+		"ability_pool_snapshot": AbilityReference.pool_snapshot(GameDb.players),
 		"run_environment": {
 			"games": total_games,
 			"team_games": total_team_games,

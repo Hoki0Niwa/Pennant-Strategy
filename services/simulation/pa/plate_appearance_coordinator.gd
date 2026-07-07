@@ -1,8 +1,6 @@
 extends RefCounted
 class_name PSPlateAppearanceCoordinator
 
-const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
-
 # 1打席の司令塔。打席結果カテゴリを softmax で1回抽選し、球数集計と打球処理を後段へ渡す。
 # 処理順は 敬遠/バントの早期判定 → K/BB/HBP/BIP の抽選 → 球数 summary 生成 →
 # BIP のみ ContactQualityModel/PhysicsResolver/PlayResolver へ接続。
@@ -31,13 +29,16 @@ const GAMECALL_CONTACT_COEF: float = 0.04 # 捕手の配球が打球の質(被�
 const RELIEF_OUTPUT_BONUS_Z: float = 0.16
 const RELIEF_OUTPUT_FADE_RATIO: float = 0.95
 const LONG_RELIEF_OUTPUT_MULTIPLIER: float = 0.45
-const PITCHER_OUTPUT_TAIL_PIVOT: float = AbilityReference.PITCHER_TAIL_PIVOT
+# テール圧縮の開始点(pivot)。母集団平均+0.5σ相当として一度実測した固定値であり、
+# player_value_evaluator.gd の _ability_curve(center=0.4) と同種のただのチューニング定数
+# (母集団を追跡・再計算する仕組みではない)。
+const PITCHER_OUTPUT_TAIL_PIVOT: float = 1.7843
 const PITCHER_OUTPUT_TAIL_SPAN: float = 100.0
-const PITCHER_STUFF_TAIL_PIVOT: float = AbilityReference.PITCHER_STUFF_TAIL_PIVOT
+const PITCHER_STUFF_TAIL_PIVOT: float = 2.0684
 const PITCHER_STUFF_TAIL_SPAN: float = 100.0
-const BATTER_HR_TAIL_PIVOT: float = AbilityReference.BAT_HR_TAIL_PIVOT
+const BATTER_HR_TAIL_PIVOT: float = 2.6190
 const BATTER_HR_TAIL_SPAN: float = 1.20
-const BATTER_AVOID_K_TAIL_PIVOT: float = AbilityReference.BAT_AVOID_K_TAIL_PIVOT
+const BATTER_AVOID_K_TAIL_PIVOT: float = 1.1550
 const BATTER_AVOID_K_TAIL_SPAN: float = 0.80
 
 static var _rule_paths: Dictionary = {}

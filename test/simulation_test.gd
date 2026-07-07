@@ -649,12 +649,14 @@ func test_pitch_model_per_category_counts_are_realistic() -> void:
 			"event_index": i * 7 + 3,
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
+			# 平均的な対戦の raw z (旧中立点定数と同じ実測値。中立点機構は廃止済みで
+			# raw z をそのまま使うため、ここでは「平均的選手」を表す具体値を直接渡す)。
 			"batter_z": {
-				"Bat_BBCreate": PSPitchAggregateSimulator.PATIENCE_Z_NEUTRAL,
-				"Bat_Aggression": PSPitchAggregateSimulator.AGGRESSION_Z_NEUTRAL,
+				"Bat_BBCreate": 0.8291,
+				"Bat_Aggression": 0.2957,
 			},
-			"pitcher_z": {"Pit_Efficiency": PSPitchAggregateSimulator.EFFICIENCY_Z_NEUTRAL},
-			"catcher_z": {"C_GameCall": PSPitchAggregateSimulator.GAMECALL_Z_NEUTRAL},
+			"pitcher_z": {"Pit_Efficiency": 1.0177},
+			"catcher_z": {"C_GameCall": 2.4021},
 			"fatigue_factor": 1.0,
 		}
 		var bip: Dictionary = PSPitchAggregateSimulator.simulate("bip", precomp)
@@ -693,12 +695,14 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
 			# 分布ガードは固定リファレンス中立値の平均的な対戦で見る。
+			# 平均的な対戦の raw z (旧中立点定数と同じ実測値。中立点機構は廃止済みで
+			# raw z をそのまま使うため、ここでは「平均的選手」を表す具体値を直接渡す)。
 			"batter_z": {
-				"Bat_BBCreate": PSPitchAggregateSimulator.PATIENCE_Z_NEUTRAL,
-				"Bat_Aggression": PSPitchAggregateSimulator.AGGRESSION_Z_NEUTRAL,
+				"Bat_BBCreate": 0.8291,
+				"Bat_Aggression": 0.2957,
 			},
-			"pitcher_z": {"Pit_Efficiency": PSPitchAggregateSimulator.EFFICIENCY_Z_NEUTRAL},
-			"catcher_z": {"C_GameCall": PSPitchAggregateSimulator.GAMECALL_Z_NEUTRAL},
+			"pitcher_z": {"Pit_Efficiency": 1.0177},
+			"catcher_z": {"C_GameCall": 2.4021},
 			"fatigue_factor": 1.0,
 		}
 		var pitches: int = int(PSPitchAggregateSimulator.simulate(category, precomp).get("pitches", 0))
@@ -723,17 +727,20 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 	assert_int(_max_pitch_count(counts)).is_less_equal(20)
 
 
+# 中立点機構は撤去済み。pool_snapshot は balance_report 向けの observational な計測のみを
+# 提供するスモークテスト(件数が妥当な範囲か・全キーが浮動小数として返るかだけを確認する)。
 func test_ability_reference_snapshot_matches_initial_pool() -> void:
 	GameDb.load_initial_data()
 	var snapshot: Dictionary = PSAbilityReference.pool_snapshot(GameDb.players)
 	var counts: Dictionary = snapshot.get("counts", {}) as Dictionary
-	var delta: Dictionary = snapshot.get("delta", {}) as Dictionary
+	var observed: Dictionary = snapshot.get("observed", {}) as Dictionary
 
 	assert_int(int(counts.get("batters", 0))).is_greater(400)
 	assert_int(int(counts.get("pitchers", 0))).is_greater(400)
 	assert_int(int(counts.get("catchers", 0))).is_greater(60)
-	for key_value in delta.keys():
-		assert_float(absf(float(delta.get(key_value, 0.0)))).is_less_equal(0.01)
+	assert_bool(observed.is_empty()).is_false()
+	for key_value in observed.keys():
+		assert_bool(typeof(observed.get(key_value)) == TYPE_FLOAT or typeof(observed.get(key_value)) == TYPE_INT).is_true()
 
 
 func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
@@ -773,7 +780,7 @@ func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
 func test_pitcher_stuff_contact_quality_ev_effect_is_saturated() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state
-	var average_ev: float = _contact_quality_average_ev(PSContactQualityModel.PIT_STUFF_Z_NEUTRAL)
+	var average_ev: float = _contact_quality_average_ev(PSContactQualityModel.PIT_STUFF_CURVE_CENTER)
 	var ace_ev: float = _contact_quality_average_ev(3.0)
 	var diff: float = average_ev - ace_ev
 	Rng.current_seed = old_seed
@@ -879,10 +886,10 @@ func _contact_quality_average_ev(pitcher_stuff_z: float) -> float:
 	}
 	for _i in range(n):
 		var quality: Dictionary = PSContactQualityModel.generate(null, null, pitch_outcome, {}, {
-			"batter_contact_z": PSContactQualityModel.BAT_CONTACT_Z_NEUTRAL,
-			"batter_gap_z": PSContactQualityModel.BAT_GAP_Z_NEUTRAL,
-			"batter_hr_z": PSContactQualityModel.BAT_HR_Z_NEUTRAL,
-			"batter_avoid_k_z": PSContactQualityModel.BAT_AVOID_K_Z_NEUTRAL,
+			"batter_contact_z": PSContactQualityModel.BAT_CONTACT_CURVE_CENTER,
+			"batter_gap_z": PSContactQualityModel.BAT_GAP_CURVE_CENTER,
+			"batter_hr_z": PSContactQualityModel.BAT_HR_CURVE_CENTER,
+			"batter_avoid_k_z": PSContactQualityModel.BAT_AVOID_K_CURVE_CENTER,
 			"pitcher_stuff_z": pitcher_stuff_z,
 			"batter_fatigue": 0,
 			"batter_is_pitcher": false,
