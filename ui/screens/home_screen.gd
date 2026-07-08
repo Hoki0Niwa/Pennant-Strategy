@@ -193,7 +193,8 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 
 	if games.is_empty():
 		if _calendar_filter == "team" or _calendar_filter == "all":
-			_text("休養", Vector2(rect.position.x + 10, rect.position.y + 54), 12, FAINT)
+			var label: String = "休養" if _is_within_season_schedule_range(date_text, season) else "オフシーズン"
+			_text(label, Vector2(rect.position.x + 10, rect.position.y + 54), 12, FAINT)
 		return
 
 	# 自軍1試合は添付画像どおり大きく (対戦カード+スコア+白星/黒星/三角)、
@@ -809,6 +810,18 @@ func _date_for_game(game: Dictionary, season: PSSeason) -> String:
 
 func _is_team_game(game: Dictionary, team_id: int) -> bool:
 	return int(game.get("away_team_id", 0)) == team_id or int(game.get("home_team_id", 0)) == team_id
+
+
+# schedule は day 昇順で保持される (PSSchedule.sort_by_day) ため、先頭/末尾の date が
+# シーズンの開幕日/最終戦日になる。この範囲外の空セルは月内休養日ではなくオフシーズン。
+func _is_within_season_schedule_range(date_text: String, season: PSSeason) -> bool:
+	if season.schedule.is_empty():
+		return false
+	var first_date: String = str((season.schedule[0] as Dictionary).get("date", ""))
+	var last_date: String = str((season.schedule[season.schedule.size() - 1] as Dictionary).get("date", ""))
+	if first_date.is_empty() or last_date.is_empty():
+		return true
+	return date_text >= first_date and date_text <= last_date
 
 
 func _matchup_for_team(game: Dictionary, team_id: int) -> String:

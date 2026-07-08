@@ -73,6 +73,50 @@ func test_home_screen_builds_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_home_screen_calendar_distinguishes_offseason_from_rest_day() -> void:
+	# シーズン期間外(日本シーズン終了〜翌年開幕まで)の空セルは「休養」ではなく「オフシーズン」と
+	# 表示する。シーズン期間内の空セル(交流戦後の休養カード等)は従来どおり「休養」のまま。
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	var season: PSSeason = AppState.current_season
+
+	var home_script: GDScript = load("res://ui/screens/home_screen.gd") as GDScript
+	var screen: Control = home_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var first_date: String = str((season.schedule[0] as Dictionary).get("date", ""))
+	var last_date: String = str((season.schedule[season.schedule.size() - 1] as Dictionary).get("date", ""))
+	var after_season_date: String = SeasonCalendar.add_days(last_date, 30)
+	var before_season_date: String = SeasonCalendar.add_days(first_date, -30)
+
+	assert_bool(bool(screen.call("_is_within_season_schedule_range", first_date, season))).is_true()
+	assert_bool(bool(screen.call("_is_within_season_schedule_range", last_date, season))).is_true()
+	assert_bool(bool(screen.call("_is_within_season_schedule_range", after_season_date, season))).is_false()
+	assert_bool(bool(screen.call("_is_within_season_schedule_range", before_season_date, season))).is_false()
+
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_trade_screen_builds_with_active_season() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
