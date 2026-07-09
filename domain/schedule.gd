@@ -387,15 +387,29 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 	var slot_is_holiday_monday: Array = _slot_is_holiday_monday_flags(intra_days, target_opening)
 
 	var cycle_length_seed: int = bucket_seed_for_season(year, season_number)
-	var central_gw_protected: Array = _gw_protected_cycles_by_round_index(central_round_orders, intra_days, target_opening)
-	var pacific_gw_protected: Array = _gw_protected_cycles_by_round_index(pacific_round_orders, intra_days, target_opening)
+	var central_protected_cycles: Array = _gw_protected_cycles_by_round_index(central_round_orders, intra_days, target_opening)
+	var pacific_protected_cycles: Array = _gw_protected_cycles_by_round_index(pacific_round_orders, intra_days, target_opening)
 	# 祝日月曜始まりのカードは短縮対象から除外する(火/金カードと違い「前寄せ/後ろ寄せ」の
 	# 内部アンカーを別途持たせずに済むよう、稀な祝日月曜カードは常に3連戦のままにする)。
-	_mark_holiday_monday_slots_protected(central_gw_protected, central_round_orders, slot_is_holiday_monday)
-	_mark_holiday_monday_slots_protected(pacific_gw_protected, pacific_round_orders, slot_is_holiday_monday)
+	_mark_holiday_monday_slots_protected(central_protected_cycles, central_round_orders, slot_is_holiday_monday)
+	_mark_holiday_monday_slots_protected(pacific_protected_cycles, pacific_round_orders, slot_is_holiday_monday)
+	# 開幕戦・交流戦明け・オールスター明けは長い休養の直後なので、必ず3連戦にする
+	# (短縮カードだと不自然、ユーザー指摘)。intra_days は両リーグ共通なので判定も共通。
+	var long_break_protected_block_indices: Dictionary = _long_break_protected_block_indices(intra_days)
+	_mark_long_break_slots_protected(central_protected_cycles, central_round_orders, long_break_protected_block_indices)
+	_mark_long_break_slots_protected(pacific_protected_cycles, pacific_round_orders, long_break_protected_block_indices)
+	# 単独1試合(length=1)は9月以降限定で組む(ユーザー指摘、2026-07-08)。
+	var central_is_september: Array = _is_september_or_later_by_round_index(central_round_orders, intra_days, target_opening)
+	var pacific_is_september: Array = _is_september_or_later_by_round_index(pacific_round_orders, intra_days, target_opening)
 
-	var central_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, central_round_orders, cycle_length_seed + 88001, central_gw_protected, same_week_as_next)
-	var pacific_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, pacific_round_orders, cycle_length_seed + 271828, pacific_gw_protected, same_week_as_next)
+	var central_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, central_round_orders, cycle_length_seed + 88001, central_protected_cycles, same_week_as_next, central_is_september)
+	var pacific_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, pacific_round_orders, cycle_length_seed + 271828, pacific_protected_cycles, same_week_as_next, pacific_is_september)
+	# 単独1試合は実際には「他の対戦カードがその窓の残り日へ相乗りする」ことが多い
+	# (ユーザー指摘: 木曜移動日の2連戦相当を単独戦と誤認していた、という反省を踏まえた再設計)。
+	# 相乗り元(ドナー)は同じ9月以降のどこかの巡にある別 round_index の length=3 を
+	# 1試合分だけ2に短縮して提供する(ドナー自身の総試合数は変わらない)。
+	var central_companions: Dictionary = _assign_single_game_companions(central_cycle_plans, central_round_orders, central_protected_cycles, central_is_september, same_week_as_next, cycle_length_seed + 313111)
+	var pacific_companions: Dictionary = _assign_single_game_companions(pacific_cycle_plans, pacific_round_orders, pacific_protected_cycles, pacific_is_september, same_week_as_next, cycle_length_seed + 707909)
 
 	for block_index in range(INTRALEAGUE_BLOCK_COUNT):
 		var position_in_cycle: int = block_index % ROUNDS_PER_CYCLE
@@ -408,14 +422,29 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 		var central_length: int = int((central_plan.get("lengths", []) as Array)[cycle_index])
 		var central_designated_home: bool = bool((central_plan.get("designated_home", []) as Array)[cycle_index])
 		var central_specs: Array = []
-		series_id = _append_intraleague_series_specs(
-			central_specs,
-			central_rounds[central_round_index] as Array,
-			cycle_number,
-			series_id,
-			central_length,
-			central_designated_home
-		)
+		if central_companions.has(block_index):
+			var central_companion: Dictionary = central_companions[block_index] as Dictionary
+			series_id = _append_intraleague_series_specs_with_day_offset(
+				central_specs, central_rounds[central_round_index] as Array, cycle_number, series_id,
+				central_designated_home, int(central_companion.get("recipient_day_offset", 0))
+			)
+			var central_donor_round_index: int = int(central_companion.get("donor_round_index", 0))
+			var central_donor_plan: Dictionary = central_cycle_plans[central_donor_round_index] as Dictionary
+			var central_donor_cycle_index: int = int(central_companion.get("donor_cycle_index", cycle_index))
+			var central_donor_designated_home: bool = bool((central_donor_plan.get("designated_home", []) as Array)[central_donor_cycle_index])
+			series_id = _append_intraleague_series_specs_with_day_offset(
+				central_specs, central_rounds[central_donor_round_index] as Array, cycle_number, series_id,
+				central_donor_designated_home, int(central_companion.get("companion_day_offset", 1))
+			)
+		else:
+			series_id = _append_intraleague_series_specs(
+				central_specs,
+				central_rounds[central_round_index] as Array,
+				cycle_number,
+				series_id,
+				central_length,
+				central_designated_home
+			)
 		_append_series_rows(rows, int(intra_days[block_index]), central_specs, target_opening)
 
 		var pacific_round_index: int = int((pacific_round_orders[cycle_index] as Array)[position_in_cycle])
@@ -423,14 +452,29 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 		var pacific_length: int = int((pacific_plan.get("lengths", []) as Array)[cycle_index])
 		var pacific_designated_home: bool = bool((pacific_plan.get("designated_home", []) as Array)[cycle_index])
 		var pacific_specs: Array = []
-		series_id = _append_intraleague_series_specs(
-			pacific_specs,
-			pacific_rounds[pacific_round_index] as Array,
-			cycle_number,
-			series_id,
-			pacific_length,
-			pacific_designated_home
-		)
+		if pacific_companions.has(block_index):
+			var pacific_companion: Dictionary = pacific_companions[block_index] as Dictionary
+			series_id = _append_intraleague_series_specs_with_day_offset(
+				pacific_specs, pacific_rounds[pacific_round_index] as Array, cycle_number, series_id,
+				pacific_designated_home, int(pacific_companion.get("recipient_day_offset", 0))
+			)
+			var pacific_donor_round_index: int = int(pacific_companion.get("donor_round_index", 0))
+			var pacific_donor_plan: Dictionary = pacific_cycle_plans[pacific_donor_round_index] as Dictionary
+			var pacific_donor_cycle_index: int = int(pacific_companion.get("donor_cycle_index", cycle_index))
+			var pacific_donor_designated_home: bool = bool((pacific_donor_plan.get("designated_home", []) as Array)[pacific_donor_cycle_index])
+			series_id = _append_intraleague_series_specs_with_day_offset(
+				pacific_specs, pacific_rounds[pacific_donor_round_index] as Array, cycle_number, series_id,
+				pacific_donor_designated_home, int(pacific_companion.get("companion_day_offset", 1))
+			)
+		else:
+			series_id = _append_intraleague_series_specs(
+				pacific_specs,
+				pacific_rounds[pacific_round_index] as Array,
+				cycle_number,
+				series_id,
+				pacific_length,
+				pacific_designated_home
+			)
 		_append_series_rows(rows, int(intra_days[block_index]), pacific_specs, target_opening)
 
 	for card_index in range(interleague_days.size()):
@@ -542,10 +586,11 @@ static func _slot_is_holiday_monday_flags(intra_days: Array, target_opening: Str
 	return flags
 
 
-# 祝日月曜始まりのカードを、GW保護と同じ仕組み(protected_cycles_by_round)で短縮対象から
-# 除外する。火/金カードのような前寄せ/後ろ寄せの内部アンカーを別途持たせずに済むよう、
-# 稀な祝日月曜カードは常に3連戦のまま扱う。
-static func _mark_holiday_monday_slots_protected(protected_cycles_by_round: Array, round_orders: Array, slot_is_holiday_monday: Array) -> void:
+# block_index(全リーグ共通の intra_days 上のインデックス)ベースの判定を
+# protected_cycles_by_round(round_index×cycle_index ベース)へ変換する共通ヘルパー。
+# GW保護・祝日月曜・開幕/交流戦明け/オールスター明けの保護は、いずれも「特定の
+# block_index を短縮対象から除外したい」という同じ形の要求なのでこれに載せる。
+static func _mark_blocks_protected(protected_cycles_by_round: Array, round_orders: Array, block_is_protected: Callable) -> void:
 	var cycles_count: int = round_orders.size()
 	for round_index in range(ROUNDS_PER_CYCLE):
 		var flags: Array = protected_cycles_by_round[round_index] as Array
@@ -553,8 +598,45 @@ static func _mark_holiday_monday_slots_protected(protected_cycles_by_round: Arra
 			var order: Array = round_orders[cycle_index] as Array
 			var position: int = order.find(round_index)
 			var block_index: int = cycle_index * ROUNDS_PER_CYCLE + position
-			if bool(slot_is_holiday_monday[block_index]):
+			if block_is_protected.call(block_index):
 				flags[cycle_index] = true
+
+
+# 祝日月曜始まりのカードを短縮対象から除外する。火/金カードのような前寄せ/後ろ寄せの
+# 内部アンカーを別途持たせずに済むよう、稀な祝日月曜カードは常に3連戦のまま扱う。
+static func _mark_holiday_monday_slots_protected(protected_cycles_by_round: Array, round_orders: Array, slot_is_holiday_monday: Array) -> void:
+	_mark_blocks_protected(protected_cycles_by_round, round_orders, func(block_index: int) -> bool:
+		return bool(slot_is_holiday_monday[block_index])
+	)
+
+
+# 開幕戦・交流戦明け・オールスター明けは、長い休養(オフシーズン/交流戦の休養カード/
+# オールスター休養)の直後に短縮カード(1・2連戦)が来ると不自然なため、必ず3連戦にする
+# (ユーザー指摘、2026-07-08)。該当する block_index を intra_days(全リーグ共通の固定
+# 週間隔カレンダー)から特定する: 開幕戦は intra_days の先頭、交流戦明け/オールスター明けは
+# その期間の終了日より後で最初に来る intra ブロック。
+static func _long_break_protected_block_indices(intra_days: Array) -> Dictionary:
+	var base_opening: String = SeasonCalendar.opening_date_for_year(TEMPLATE_BASE_YEAR)
+	var interleague_end_offset: int = SeasonCalendar.days_between(base_opening, TEMPLATE_INTERLEAGUE_END_DATE) + 1
+	var all_star_end_offset: int = SeasonCalendar.days_between(base_opening, TEMPLATE_ALL_STAR_END_DATE) + 1
+	var protected_indices: Dictionary = {}
+	if intra_days.size() > 0:
+		protected_indices[0] = true
+	for i in range(intra_days.size()):
+		if int(intra_days[i]) > interleague_end_offset:
+			protected_indices[i] = true
+			break
+	for i in range(intra_days.size()):
+		if int(intra_days[i]) > all_star_end_offset:
+			protected_indices[i] = true
+			break
+	return protected_indices
+
+
+static func _mark_long_break_slots_protected(protected_cycles_by_round: Array, round_orders: Array, long_break_protected_block_indices: Dictionary) -> void:
+	_mark_blocks_protected(protected_cycles_by_round, round_orders, func(block_index: int) -> bool:
+		return long_break_protected_block_indices.has(block_index)
+	)
 
 
 # TEMPLATE_BASE_YEAR 基準の日付定数(交流戦/オールスター期間の境界など)を、対象年度の
@@ -587,17 +669,34 @@ static func _append_intraleague_series_specs(specs: Array, pairs: Array, cycle_n
 	return series_id
 
 
+# _assign_single_game_companions が相乗りを割り当てたブロック用: 窓内の特定の1日
+# (day_offset)だけを使う単独戦カードを追加する(_append_intraleague_series_specs の
+# day_offset 指定版)。
+static func _append_intraleague_series_specs_with_day_offset(specs: Array, pairs: Array, cycle_number: int, start_series_id: int, designated_home: bool, day_offset: int) -> int:
+	var series_id: int = start_series_id
+	for pair_value in pairs:
+		var pair: Array = pair_value as Array
+		var ha: Array = _intraleague_home_pair(str(pair[0]), str(pair[1]), designated_home)
+		specs.append(_series_spec(str(ha[1]), str(ha[0]), false, series_id, cycle_number, 1, day_offset))
+		series_id += 1
+	return series_id
+
+
 # specs は 1〜GAMES_PER_SERIES 試合の可変長カード(_intraleague_cycle_plans 参照)。
 # カードの開始日(=次カードの開始日)は短縮の有無に関わらず不変な固定週間隔カレンダー
 # (intra_days)なので、圧縮は行わない。短縮時にどの曜日を休むかだけをここで決める:
-# 火曜始まりカード(火水木)は前寄せ(先頭から詰めて末尾を休む)、金曜始まりカード
-# (金土日)は後ろ寄せ(末尾から詰めて先頭を休む)。ユーザー指摘通り、火水木の2連戦は
-# 火水で行い木曜休養、金土日の2連戦は土日で行い金曜休養とすることで、同じ週に
-# もう一方が短縮されない限り休養は常に1日以内に収まる(2つの週境界のうち、火→金は
-# 間隔0日で無バッファ、金→翌週火は月曜移動日で1日分のバッファがあるため、後ろ寄せ/
-# 前寄せの選び方は非対称: 火曜カードは月曜バッファ側=前を詰めずに残し、金曜カードは
-# 月曜バッファ側=後ろを詰めずに残す)。同じ週の両カードを同時に短縮しない制約は
-# _intraleague_cycle_plans の same_week_as_next で担保する。
+# 火曜始まりカード(火水木)は前寄せ(先頭から詰めて末尾を休む: 2連戦=火水、単独1試合=火のみ)。
+# 金曜始まりカード(金土日)は土曜始まりに固定する(2連戦=土日で金曜のみ休む、単独1試合=
+# 土曜のみで金・日を休む)。ユーザー指摘通り、火水木の2連戦は火水で行い木曜休養、
+# 金土日の2連戦は土日で行い金曜休養とすることで、同じ週にもう一方が短縮されない限り
+# 休養は常に1日以内に収まる(2つの週境界のうち、火→金は間隔0日で無バッファ、金→翌週火は
+# 月曜移動日で1日分のバッファがあるため、後ろ寄せ/前寄せの選び方は非対称: 火曜カードは
+# 月曜バッファ側=前を詰めずに残し、金曜カードは月曜バッファ側=後ろを詰めずに残す)。
+# 同じ週の両カードを同時に短縮しない制約は _intraleague_cycle_plans の same_week_as_next で
+# 担保する。単独1試合(2日休む)は「日曜のみ」だと直前が祝日月曜カード(水曜終わり、通常の
+# 木曜終わりより1日早い)の場合に休養3日になる罠がある(2100年で実際に発生した回帰)ため、
+# 「土曜のみ」に固定し前後とも休養2日以内に収める(火曜カードの単独1試合は前後とも
+# 休養2日以内に収まることを確認済みなので、こちらは前寄せのままでよい)。
 # 祝日月曜始まりカードは _mark_holiday_monday_slots_protected で短縮対象から除外済みなので
 # 常に length==GAMES_PER_SERIES で呼ばれ、以下のアンカー分岐は素通りする。
 static func _append_series_rows(rows: Array, start_day: int, specs: Array, target_opening: String) -> void:
@@ -606,9 +705,19 @@ static func _append_series_rows(rows: Array, start_day: int, specs: Array, targe
 	for spec_value in specs:
 		var spec: Dictionary = spec_value as Dictionary
 		var length: int = int(spec.get("length", GAMES_PER_SERIES))
+		var explicit_day_offset: int = int(spec.get("day_offset", -1))
 		var date_text: String = slot_start_date
-		if is_friday_slot and length < GAMES_PER_SERIES:
-			date_text = SeasonCalendar.add_days(slot_start_date, GAMES_PER_SERIES - length)
+		if explicit_day_offset >= 0:
+			# 相乗り単独戦(_assign_single_game_companions)など、窓内のどの日を使うか
+			# 明示的に指定されている場合はそれに従う(以下の自動アンカーは使わない)。
+			date_text = SeasonCalendar.add_days(slot_start_date, explicit_day_offset)
+		elif is_friday_slot and length < GAMES_PER_SERIES:
+			# 2連戦(土日)は金曜を休むだけで前後とも休養1日以内に収まる。単独1試合は
+			# 「日曜のみ」(金土を休む)だと、直前が祝日月曜カード(水曜終わり、通常の
+			# 木曜終わりより1日早い)の場合に休養3日になってしまう(2100年で実際に発生した
+			# 回帰)。「土曜のみ」(金を休み・日を休む)なら前後とも休養2日以内に収まり、
+			# 直前カードの終わり方に関わらず安全なため、土曜へ固定する。
+			date_text = SeasonCalendar.add_days(slot_start_date, 1)
 		var placed: int = 0
 		while placed < length:
 			if SeasonCalendar.weekday_for_date(date_text) == WEEKDAY_MONDAY and not JapaneseHolidays.is_holiday(date_text):
@@ -627,7 +736,10 @@ static func _append_series_rows(rows: Array, start_day: int, specs: Array, targe
 			date_text = SeasonCalendar.add_days(date_text, 1)
 
 
-static func _series_spec(away_bucket: String, home_bucket: String, is_interleague: bool, series_id: int, cycle_number: int, length: int = GAMES_PER_SERIES) -> Dictionary:
+# day_offset は窓(3日間)内での明示的な開始位置(0=初日等)。-1 なら _append_series_rows が
+# 従来通り length/曜日種別から自動決定する。相乗り単独戦(_assign_single_game_companions)の
+# ように、同じ窓内で複数カードが「どの日を使うか」を明示的に指定したい場合に使う。
+static func _series_spec(away_bucket: String, home_bucket: String, is_interleague: bool, series_id: int, cycle_number: int, length: int = GAMES_PER_SERIES, day_offset: int = -1) -> Dictionary:
 	return {
 		"away_bucket": away_bucket,
 		"home_bucket": home_bucket,
@@ -635,6 +747,7 @@ static func _series_spec(away_bucket: String, home_bucket: String, is_interleagu
 		"series_id": series_id,
 		"cycle_number": cycle_number,
 		"length": length,
+		"day_offset": day_offset,
 	}
 
 
@@ -726,7 +839,8 @@ static func _round_orders_for_cycles(cycles_count: int, seed: int) -> Array:
 # 安定する。
 #
 # protected_cycles_by_round は round_index ごとに cycles_count 個の bool 配列を持ち、
-# true の巡(ゴールデンウィークに重なる巡・祝日月曜始まりの巡)は短縮対象から除外する。
+# true の巡(ゴールデンウィークに重なる巡・祝日月曜始まりの巡・開幕戦/交流戦明け/
+# オールスター明けの巡)は短縮対象から除外する。
 #
 # round_orders(巡ごとのカード順シャッフル)と same_week_as_next(_same_week_as_next_flags、
 # 火カード→直後の金カードが同じ週かどうか)を渡すことで、「同じ週の火水木カードと金土日
@@ -734,11 +848,19 @@ static func _round_orders_for_cycles(cycles_count: int, seed: int) -> Array:
 # 木曜を休み・金土日側は金曜を休むため、木・金と2日連続の休養日になってしまう
 # (ユーザー指摘、2026-07-08)。round_index を 0..4 の順に処理し、既に他の round_index が
 # 短縮済みのブロックと同じ週なら候補から除外する形でこの制約を保証する。
-static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, seed: int, protected_cycles_by_round: Array, same_week_as_next: Array) -> Array:
+# フォールバックの優先順位: 候補が尽きた場合、週制約より先に protected_cycles_by_round を
+# 無視する(=まれに保護対象が短縮される方が、休養3日以上という深刻な回帰より軽微なため)。
+#
+# is_september_or_later は round_index ごとに cycles_count 個の bool 配列を持ち、単独1試合
+# (length=1、use_two_reductions==false のパターン)はこれが true の巡にしか割り当てない
+# (ユーザー指摘、2026-07-08: 単独戦は9月以降に限定する)。2連戦(length=2)にはこの制約は
+# 適用しない(実データで4-9月に渡って分散していることを確認済みのため)。
+static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, seed: int, protected_cycles_by_round: Array, same_week_as_next: Array, is_september_or_later: Array) -> Array:
 	var reduced_blocks: Dictionary = {}
 	var result: Array = []
 	for round_index in range(ROUNDS_PER_CYCLE):
 		var protected_cycles: Array = protected_cycles_by_round[round_index] as Array
+		var september_flags: Array = is_september_or_later[round_index] as Array
 		var block_index_for_cycle: Array = []
 		for cycle_index in range(cycles_count):
 			var order: Array = round_orders[cycle_index] as Array
@@ -752,6 +874,7 @@ static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, see
 			indices.append(i)
 		var shuffled: Array = _deterministic_shuffle(indices, seed + round_index * 7919)
 		var use_two_reductions: bool = (int(shuffled[shuffled.size() - 1]) % 5) < 3
+		var is_single_game_pattern: bool = not use_two_reductions
 		var reduced: Dictionary = {}
 		var reductions_needed: int = 2 if use_two_reductions else 1
 		for idx_value in shuffled:
@@ -760,23 +883,48 @@ static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, see
 				break
 			if bool(protected_cycles[idx]):
 				continue
+			if is_single_game_pattern and not bool(september_flags[idx]):
+				continue
 			if _week_partner_already_reduced(int(block_index_for_cycle[idx]), same_week_as_next, reduced_blocks):
 				continue
 			reduced[idx] = true
 			reduced_blocks[int(block_index_for_cycle[idx])] = true
 			reductions_needed -= 1
-		# 保護巡・週の相方短縮済みだけで埋まってしまう(実際上ほぼ起きない)ケースへの
-		# フォールバック: まず週制約を無視し、それでも足りなければ保護も無視して埋める。
+		# 保護巡・週の相方短縮済みだけで埋まってしまう(GW保護に加えて祝日月曜・開幕/交流戦明け/
+		# オールスター明けの保護も乗るため、稀に起きうる)ケースへのフォールバック: 週制約
+		# (同じ週の二重短縮=木・金と2日連続休養)は絶対に破らず、まず保護の方を先に無視する。
+		# 週制約を破ると「休養3日以上」という、より深刻な回帰を再導入してしまうため。
+		# 9月限定制約(単独1試合のみ)は、週制約より後・保護より先には緩めない
+		# (「9月以降」自体はユーザー指摘の直接の要件なので、週制約の次に守る)。
 		if reductions_needed > 0:
 			for idx_value in shuffled:
 				var idx: int = int(idx_value)
 				if reductions_needed <= 0:
 					break
-				if reduced.has(idx) or bool(protected_cycles[idx]):
+				if reduced.has(idx):
+					continue
+				if is_single_game_pattern and not bool(september_flags[idx]):
+					continue
+				if _week_partner_already_reduced(int(block_index_for_cycle[idx]), same_week_as_next, reduced_blocks):
 					continue
 				reduced[idx] = true
 				reduced_blocks[int(block_index_for_cycle[idx])] = true
 				reductions_needed -= 1
+		# それでも埋まらない場合、9月限定制約も緩める(保護は既にtier2で緩めている。週制約は維持)。
+		if reductions_needed > 0:
+			for idx_value in shuffled:
+				var idx: int = int(idx_value)
+				if reductions_needed <= 0:
+					break
+				if reduced.has(idx):
+					continue
+				if _week_partner_already_reduced(int(block_index_for_cycle[idx]), same_week_as_next, reduced_blocks):
+					continue
+				reduced[idx] = true
+				reduced_blocks[int(block_index_for_cycle[idx])] = true
+				reductions_needed -= 1
+		# それでも埋まらない(保護・9月限定を無視しても週制約だけで9巡全滅する)場合のみ、
+		# 最後の手段として週制約も無視する。
 		if reductions_needed > 0:
 			for idx_value in shuffled:
 				var idx: int = int(idx_value)
@@ -816,6 +964,94 @@ static func _week_partner_already_reduced(block_index: int, same_week_as_next: A
 	return false
 
 
+# 単独1試合(length=1、9月以降限定)は、実際には「その1試合だけで火水木/金土日の残り2日を
+# 空けたまま待つ」のではなく、他の対戦カード(別の round_index)がその窓の空いた1日へ
+# 相乗りすることが多い(ユーザー指摘、2026-07-08: 木曜が移動日になっていただけの2連戦相当を
+# 単独戦と誤認していた、という指摘を踏まえた再設計)。相乗り元(ドナー)は同じ9月以降の
+# どこかの巡で length=3 の別 round_index を1試合分だけ 2 に短縮して提供する(ドナー自身の
+# 総試合数=25は変わらず、ドナー自身の窓では通常の2連戦としてそのまま処理される。相乗り分は
+# ドナーの本来の窓とは別の暦日=単独戦側の窓に「テレポート」して1試合だけ行われる)。
+# 相乗りが成立するかどうか、どちらが先の日になるか(火水/火木/水木の3パターン)は
+# 決定的シードでランダムに決め、成立しないケースも残す(本当に1試合だけで終わる単独戦)。
+# 戻り値は recipient 側の block_index -> {"donor_round_index", "donor_cycle_index",
+# "recipient_day_offset", "companion_day_offset"} の Dictionary。
+static func _assign_single_game_companions(cycle_plans: Array, round_orders: Array, protected_cycles_by_round: Array, is_september_or_later: Array, same_week_as_next: Array, seed: int) -> Dictionary:
+	var cycles_count: int = round_orders.size()
+	var reduced_blocks: Dictionary = {}
+	var recipients: Array = []
+	for round_index in range(ROUNDS_PER_CYCLE):
+		var plan: Dictionary = cycle_plans[round_index] as Dictionary
+		var lengths: Array = plan.get("lengths", []) as Array
+		for cycle_index in range(cycles_count):
+			var order: Array = round_orders[cycle_index] as Array
+			var position: int = order.find(round_index)
+			var block_index: int = cycle_index * ROUNDS_PER_CYCLE + position
+			if int(lengths[cycle_index]) < GAMES_PER_SERIES:
+				reduced_blocks[block_index] = true
+			if int(lengths[cycle_index]) == 1:
+				recipients.append({"round_index": round_index, "cycle_index": cycle_index, "block_index": block_index})
+
+	var day_patterns: Array = [[0, 1], [0, 2], [1, 2]]
+	var companions: Dictionary = {}
+	for recipient_value in recipients:
+		var recipient: Dictionary = recipient_value as Dictionary
+		var r_round: int = int(recipient.get("round_index", 0))
+		var r_cycle: int = int(recipient.get("cycle_index", 0))
+		var r_block: int = int(recipient.get("block_index", 0))
+
+		var roll_seed: int = seed + r_round * 131 + r_cycle * 977 + 5
+		if int(_deterministic_shuffle([0, 1], roll_seed)[0]) != 0:
+			continue # 確率的に相乗りさせない(本当に1試合だけの単独戦のまま)
+
+		var donor_round_indices: Array = []
+		for i in range(ROUNDS_PER_CYCLE):
+			donor_round_indices.append(i)
+		var donor_seed: int = seed + r_round * 5081 + r_cycle * 6151 + 11
+		var shuffled_donor_rounds: Array = _deterministic_shuffle(donor_round_indices, donor_seed)
+		var donor_found: bool = false
+		for donor_round_value in shuffled_donor_rounds:
+			if donor_found:
+				break
+			var donor_round: int = int(donor_round_value)
+			if donor_round == r_round:
+				continue
+			var donor_plan: Dictionary = cycle_plans[donor_round] as Dictionary
+			var donor_lengths: Array = donor_plan.get("lengths", []) as Array
+			var donor_protected: Array = protected_cycles_by_round[donor_round] as Array
+			var donor_september: Array = is_september_or_later[donor_round] as Array
+			var donor_cycle_indices: Array = []
+			for i in range(cycles_count):
+				donor_cycle_indices.append(i)
+			var shuffled_donor_cycles: Array = _deterministic_shuffle(donor_cycle_indices, donor_seed + donor_round * 293)
+			for donor_cycle_value in shuffled_donor_cycles:
+				var donor_cycle: int = int(donor_cycle_value)
+				if int(donor_lengths[donor_cycle]) != GAMES_PER_SERIES:
+					continue
+				if bool(donor_protected[donor_cycle]):
+					continue
+				if not bool(donor_september[donor_cycle]):
+					continue
+				var donor_order: Array = round_orders[donor_cycle] as Array
+				var donor_position: int = int(donor_order.find(donor_round))
+				var donor_block: int = donor_cycle * ROUNDS_PER_CYCLE + donor_position
+				if _week_partner_already_reduced(donor_block, same_week_as_next, reduced_blocks):
+					continue
+				# ドナー確定: 自身の窓では通常の2連戦として2に短縮する(総試合数は変わらない)。
+				donor_lengths[donor_cycle] = 2
+				reduced_blocks[donor_block] = true
+				var pattern: Array = (_deterministic_shuffle(day_patterns, roll_seed + 17)[0]) as Array
+				var recipient_first: bool = int(_deterministic_shuffle([0, 1], roll_seed + 29)[0]) == 0
+				companions[r_block] = {
+					"donor_round_index": donor_round,
+					"donor_cycle_index": donor_cycle,
+					"recipient_day_offset": int(pattern[0]) if recipient_first else int(pattern[1]),
+					"companion_day_offset": int(pattern[1]) if recipient_first else int(pattern[0]),
+				}
+				donor_found = true
+				break
+	return companions
+
+
 # round_index(0..ROUNDS_PER_CYCLE-1)ごとに、その巡が INTRALEAGUE_CYCLES 回のうちどの
 # cycle_index でゴールデンウィーク期間に重なるかを判定する。round_index の実際の日付は
 # サイクルごとの並び替え(_round_orders_for_cycles)に乗るため、round_orders を逆引きして
@@ -832,6 +1068,26 @@ static func _gw_protected_cycles_by_round_index(round_orders: Array, intra_days:
 			var day_offset: int = int(intra_days[block_index])
 			var target_date: String = SeasonCalendar.date_for_day(target_opening, day_offset)
 			flags.append(_template_block_overlaps_golden_week(target_date))
+		result.append(flags)
+	return result
+
+
+# round_index(0..ROUNDS_PER_CYCLE-1)ごとに、各 cycle_index の実際の開始日が9月以降かどうかを
+# 判定する(_gw_protected_cycles_by_round_index と同じ逆引き手順)。単独1試合(length=1)は
+# 9月以降限定で組む、というユーザー指摘の実装に使う(_intraleague_cycle_plans 参照)。
+static func _is_september_or_later_by_round_index(round_orders: Array, intra_days: Array, target_opening: String) -> Array:
+	var cycles_count: int = round_orders.size()
+	var result: Array = []
+	for round_index in range(ROUNDS_PER_CYCLE):
+		var flags: Array = []
+		for cycle_index in range(cycles_count):
+			var order: Array = round_orders[cycle_index] as Array
+			var position: int = order.find(round_index)
+			var block_index: int = cycle_index * ROUNDS_PER_CYCLE + position
+			var day_offset: int = int(intra_days[block_index])
+			var target_date: String = SeasonCalendar.date_for_day(target_opening, day_offset)
+			var month: int = int(target_date.split("-")[1])
+			flags.append(month >= 9)
 		result.append(flags)
 	return result
 

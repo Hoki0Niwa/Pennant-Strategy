@@ -211,6 +211,27 @@ func test_intraleague_series_lengths_mix_one_to_three_games() -> void:
 	assert_int(int(length_counts.get(3, 0))).override_failure_message("Expected most series to remain three-game").is_greater(0)
 
 
+func test_single_game_series_only_occur_in_september_or_later() -> void:
+	# 単独1試合(length=1)は9月以降限定で組む(ユーザー指摘、2026-07-08: 火水木カードの
+	# 「水曜移動日」を単独戦と誤認していたことの反省を踏まえ、真の単独戦は9月以降にのみ
+	# 現れるよう再設計した)。2連戦にはこの制約は適用しない(4-9月に分散するのが正しい実データ、
+	# 既存の派生調査を参照)。
+	for year in [2026, 2027, 2028, 2029, 2030, 2100]:
+		var season_number: int = year - 2025
+		var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, year, season_number)
+		var groups: Dictionary = _series_groups(schedule)
+		for series_key in groups.keys():
+			var series_games: Array = groups.get(series_key, []) as Array
+			var sample: Dictionary = series_games[0] as Dictionary
+			if bool(sample.get("is_interleague", false)) or series_games.size() != 1:
+				continue
+			var date_text: String = str(sample.get("date", ""))
+			var month: int = int(date_text.split("-")[1])
+			assert_int(month).override_failure_message(
+				"Year %d: single-game series %s found before September (%s)" % [year, str(series_key), date_text]
+			).is_greater_equal(9)
+
+
 func test_teams_never_get_a_three_day_rest_gap_around_shortened_series() -> void:
 	# 固定週間隔カレンダー(火水木/金土日)上で、2連戦(火水木は木曜休養、金土日は金曜休養)は
 	# 同じ週の相方が短縮されない限り休養1日以内に収まる。単独1試合はどちらの曜日に置いても
@@ -336,6 +357,80 @@ func _date_is_in_golden_week(date_text: String) -> bool:
 	return (month == 4 and day >= 27) or (month == 5 and day <= 7)
 
 
+func test_series_right_after_long_breaks_stay_full_length() -> void:
+	# 開幕戦・交流戦明け・オールスター明けは、長い休養(オフシーズン/交流戦の休養カード/
+	# オールスター休養)の直後に短縮カード(1・2連戦)が来ると不自然なため、必ず3連戦になる
+	# ことを確認する(ユーザー指摘、2026-07-08)。intra_days はセ・パ共通なので、該当日には
+	# 両リーグそれぞれのカードが存在し、どちらも3連戦であることを確認する。
+	var base_opening: String = SeasonCalendar.opening_date_for_year(PSSchedule.TEMPLATE_BASE_YEAR)
+	for year in [2026, 2027, 2100]:
+		var season_number: int = year - 2025
+		var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, year, season_number)
+		var target_opening: String = SeasonCalendar.opening_date_for_year(year)
+		var all_star_end: String = PSSchedule._resolve_target_date(PSSchedule.TEMPLATE_ALL_STAR_END_DATE, base_opening, target_opening)
+		var interleague_end: String = ""
+		for game_value in schedule:
+			var game: Dictionary = game_value as Dictionary
+			if bool(game.get("is_interleague", false)):
+				var date_text: String = str(game.get("date", ""))
+				if interleague_end.is_empty() or date_text > interleague_end:
+					interleague_end = date_text
+
+		var groups: Dictionary = _series_groups(schedule)
+		var intra_series: Array = []
+		for series_key in groups.keys():
+			var series_games: Array = groups[series_key] as Array
+			var sample: Dictionary = series_games[0] as Dictionary
+			if bool(sample.get("is_interleague", false)):
+				continue
+			var start_date: String = ""
+			for game_value in series_games:
+				var d: String = str((game_value as Dictionary).get("date", ""))
+				if start_date.is_empty() or d < start_date:
+					start_date = d
+			intra_series.append({"games": series_games, "start_date": start_date})
+
+		var opening_date: String = _earliest_start_date(intra_series, "")
+		_assert_all_series_on_date_are_full_length(intra_series, opening_date, year, "opening day")
+
+		var post_interleague_date: String = _earliest_start_date(intra_series, interleague_end)
+		_assert_all_series_on_date_are_full_length(intra_series, post_interleague_date, year, "right after interleague")
+
+		var post_all_star_date: String = _earliest_start_date(intra_series, all_star_end)
+		_assert_all_series_on_date_are_full_length(intra_series, post_all_star_date, year, "right after the all-star break")
+
+
+# intra_series のうち start_date > after (after が空なら制約なし) を満たす最も早い start_date を返す。
+func _earliest_start_date(intra_series: Array, after: String) -> String:
+	var earliest: String = ""
+	for entry_value in intra_series:
+		var d: String = str((entry_value as Dictionary).get("start_date", ""))
+		if not after.is_empty() and d <= after:
+			continue
+		if earliest.is_empty() or d < earliest:
+			earliest = d
+	return earliest
+
+
+func _assert_all_series_on_date_are_full_length(intra_series: Array, target_date: String, year: int, label: String) -> void:
+	assert_bool(target_date.is_empty()).override_failure_message(
+		"Year %d: could not find any series for %s" % [year, label]
+	).is_false()
+	var checked: int = 0
+	for entry_value in intra_series:
+		var entry: Dictionary = entry_value as Dictionary
+		if str(entry.get("start_date", "")) != target_date:
+			continue
+		checked += 1
+		var games: Array = entry.get("games", []) as Array
+		assert_int(games.size()).override_failure_message(
+			"Year %d: series %s should be a full 3-game series, got %d" % [year, label, games.size()]
+		).is_equal(3)
+	assert_int(checked).override_failure_message(
+		"Year %d: expected at least one series for %s" % [year, label]
+	).is_greater(0)
+
+
 func test_intraleague_pairs_each_play_exactly_25_games() -> void:
 	# 同一リーグの各カード(2球団の組)は「3連戦の本数×3 + 短縮分」の合計が必ず25試合になる。
 	var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, 2026, 1)
@@ -430,9 +525,15 @@ func test_intraleague_cycle_plans_always_sum_to_25_with_valid_lengths() -> void:
 	var no_same_week_as_next: Array = []
 	for i in range(PSSchedule.INTRALEAGUE_CYCLES * PSSchedule.ROUNDS_PER_CYCLE):
 		no_same_week_as_next.append(false)
+	var all_september: Array = []
+	for round_index in range(PSSchedule.ROUNDS_PER_CYCLE):
+		var flags: Array = []
+		for i in range(PSSchedule.INTRALEAGUE_CYCLES):
+			flags.append(true)
+		all_september.append(flags)
 	for seed in [88001, 271828, 424242, 999983]:
 		var round_orders: Array = PSSchedule._round_orders_for_cycles(PSSchedule.INTRALEAGUE_CYCLES, seed)
-		var plans: Array = PSSchedule._intraleague_cycle_plans(PSSchedule.INTRALEAGUE_CYCLES, round_orders, seed, no_protected_cycles_by_round, no_same_week_as_next)
+		var plans: Array = PSSchedule._intraleague_cycle_plans(PSSchedule.INTRALEAGUE_CYCLES, round_orders, seed, no_protected_cycles_by_round, no_same_week_as_next, all_september)
 		assert_int(plans.size()).is_equal(PSSchedule.ROUNDS_PER_CYCLE)
 		for plan_value in plans:
 			var plan: Dictionary = plan_value as Dictionary
