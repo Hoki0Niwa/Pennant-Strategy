@@ -6,6 +6,7 @@ const CampServiceRef = preload("res://services/season/camp_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const ReportHealth = preload("res://services/reports/report_health.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
+const SaveContext = preload("res://services/storage/save_context.gd")
 
 const VERSION: int = 2
 const DEFAULT_SEASONS: int = 40
@@ -138,7 +139,8 @@ func run(options: Dictionary = {}) -> Dictionary:
 		_restore_players(original_player_rows)
 		RecordStore.load_from_dict(original_records)
 		RecordStore.resume_persistence()
-		RecordStore.save_records()
+		if SaveContext.has_active_save():
+			RecordStore.save_records()
 		Rng.current_seed = original_rng_seed
 		Rng.generator.seed = original_rng_seed
 		Rng.generator.state = original_rng_state
@@ -288,7 +290,8 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		_restore_players(original_player_rows)
 		RecordStore.load_from_dict(original_records)
 		RecordStore.resume_persistence()
-		RecordStore.save_records()
+		if SaveContext.has_active_save():
+			RecordStore.save_records()
 		Rng.current_seed = original_rng_seed
 		Rng.generator.seed = original_rng_seed
 		Rng.generator.state = original_rng_state

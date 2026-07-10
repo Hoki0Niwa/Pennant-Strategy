@@ -40,6 +40,14 @@ const BATTER_HR_TAIL_PIVOT: float = 2.6190
 const BATTER_HR_TAIL_SPAN: float = 1.20
 const BATTER_AVOID_K_TAIL_PIVOT: float = 1.1550
 const BATTER_AVOID_K_TAIL_SPAN: float = 0.80
+const BUNT_BASE_PROBABILITY: float = 0.205
+const BUNT_SKILL_WEIGHT: float = 0.015
+const BUNT_IMPACT_PENALTY: float = 0.008
+const BUNT_BARREL_PENALTY: float = 0.006
+const BUNT_OUT_PENALTY: float = 0.040
+const BUNT_RUNNER_SECOND_ONLY_BONUS: float = 0.080
+const BUNT_RUNNER_THIRD_PENALTY: float = 0.070
+const BUNT_PITCHER_BONUS: float = 0.280
 
 
 static func resolve(
@@ -258,13 +266,17 @@ static func _should_bunt(batter: PSPlayerSeasonRecord, bases: Array, outs: int) 
 	var bunt_z: float = _bunt_skill_z(batter)
 	# バント確率(0..1)。バント技術 z が高いほど上げ、長打力(Impact)・芯(Barrel) z が高いほど下げる。
 	# アウトが増えるほど下げ、走者状況で増減し、投手打者は大きく上げる。
-	var bunt_prob: float = 0.05 + bunt_z * 0.0125 - bat_impact * 0.008 - bat_barrel * 0.006 - float(outs) * 0.055
+	var bunt_prob: float = _rule_float("bunt_base_probability", BUNT_BASE_PROBABILITY) \
+		+ bunt_z * _rule_float("bunt_skill_weight", BUNT_SKILL_WEIGHT) \
+		- bat_impact * _rule_float("bunt_impact_penalty", BUNT_IMPACT_PENALTY) \
+		- bat_barrel * _rule_float("bunt_barrel_penalty", BUNT_BARREL_PENALTY) \
+		- float(outs) * _rule_float("bunt_out_penalty", BUNT_OUT_PENALTY)
 	if _has_runner(bases, 2):
-		bunt_prob -= 0.07
+		bunt_prob -= _rule_float("bunt_runner_third_penalty", BUNT_RUNNER_THIRD_PENALTY)
 	elif _has_runner(bases, 1) and not _has_runner(bases, 0):
-		bunt_prob += 0.04
+		bunt_prob += _rule_float("bunt_runner_second_only_bonus", BUNT_RUNNER_SECOND_ONLY_BONUS)
 	if batter.is_pitcher():
-		bunt_prob += 0.22
+		bunt_prob += _rule_float("bunt_pitcher_bonus", BUNT_PITCHER_BONUS)
 	return Rng.roll_float() < clamp(bunt_prob, 0.001, 1.0)
 
 

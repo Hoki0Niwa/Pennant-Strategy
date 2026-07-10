@@ -6,6 +6,7 @@ const AbilityReference = preload("res://services/simulation/pa/ability_reference
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const ReportHealth = preload("res://services/reports/report_health.gd")
+const SaveContext = preload("res://services/storage/save_context.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const DEFAULT_SEASONS: int = 5
@@ -124,9 +125,10 @@ func run(options: Dictionary = {}) -> Dictionary:
 		))
 
 	RecordStore.load_from_dict(original_records)
-	# suspend を解除し、復元状態を 1 度だけ新テーブルへ flush して同期させる。
+	# suspend を解除し、通常プレイ中の active save がある場合だけ復元状態を flush する。
 	RecordStore.resume_persistence()
-	RecordStore.save_records()
+	if SaveContext.has_active_save():
+		RecordStore.save_records()
 	Rng.current_seed = original_rng_seed
 	Rng.generator.seed = original_rng_seed
 	Rng.generator.state = original_rng_state
@@ -270,9 +272,10 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			break
 
 	RecordStore.load_from_dict(original_records)
-	# suspend を解除し、復元状態を 1 度だけ新テーブルへ flush して同期させる。
+	# suspend を解除し、通常プレイ中の active save がある場合だけ復元状態を flush する。
 	RecordStore.resume_persistence()
-	RecordStore.save_records()
+	if SaveContext.has_active_save():
+		RecordStore.save_records()
 	Rng.current_seed = original_rng_seed
 	Rng.generator.seed = original_rng_seed
 	Rng.generator.state = original_rng_state

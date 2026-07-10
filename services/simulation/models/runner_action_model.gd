@@ -21,6 +21,19 @@ const CATCHER_THROW_ERROR_REFERENCE_Z: float = 2.046  # 捕手肩(steal_control)
 const CATCHER_THROW_ERROR_WEIGHT: float = 0.060       # 肩 z が中立を超える分だけ失策を減らす
 const CATCHER_THROW_ERROR_MIN: float = 0.08
 const CATCHER_THROW_ERROR_MAX: float = 0.70
+const STEAL_INTENT_PROBABILITY_SCALE: float = 1.55
+const BATTERY_MISPLAY_MAX_PITCHES: int = 8
+const WILD_PITCH_PER_PITCH_BASE: float = 0.0105
+const WILD_PITCH_CONTROL_WEIGHT: float = 0.0026
+const WILD_PITCH_STUFF_WEIGHT: float = 0.0009
+const WILD_PITCH_BLOCKING_WEIGHT: float = 0.0009
+const WILD_PITCH_GAME_CALL_WEIGHT: float = 0.0004
+const WILD_PITCH_PER_PITCH_MIN: float = 0.0015
+const WILD_PITCH_PER_PITCH_MAX: float = 0.030
+const PASSED_BALL_PER_PITCH_BASE: float = 0.0010
+const PASSED_BALL_BLOCKING_WEIGHT: float = 0.0025
+const PASSED_BALL_PER_PITCH_MIN: float = 0.00015
+const PASSED_BALL_PER_PITCH_MAX: float = 0.008
 
 
 static func pre_plate_runner_events(
@@ -296,7 +309,7 @@ static func _double_steal_intents(
 		score += 0.24
 	# 中立点(z -0.865)からのスコア差で確率を決める。
 	var probability: float = clamp(0.020 + (score + 0.865) * 0.075, 0.0, 0.260)
-	probability = clamp(probability, 0.0, 0.42)
+	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.42)
 	var roll: float = _deterministic_unit([
 		event_index,
 		runner_first.player_id,
@@ -334,7 +347,7 @@ static func _hit_and_run_intent(
 	# スコア(z): 芯・三振回避・走者走力で加点、長打力で減点（強打者はエンドランしにくい）。
 	var score: float = contact * 0.35 + avoid_k * 0.35 + runner_speed * 0.20 - power * 0.18
 	var probability: float = clamp(0.010 + (score + 0.194) * 0.05, 0.0, 0.150)
-	probability = clamp(probability, 0.0, 0.27)
+	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.27)
 	var roll: float = _deterministic_unit([
 		event_index,
 		runner.player_id,
@@ -362,7 +375,7 @@ static func _should_try_delayed_steal(
 		- catcher_arm * 0.40
 	)
 	var probability: float = clamp(0.006 + (score - 0.197) * 0.0375, 0.0, 0.120)
-	probability = clamp(probability, 0.0, 0.20)
+	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.20)
 	return _deterministic_unit([event_index, runner.player_id, catcher_arm, _hash_string(str(context.get("half", ""))), 4409]) < probability
 
 
@@ -400,7 +413,7 @@ static func _steal_intent(
 		score -= 0.40
 	# 中立点(z -0.217)からのスコア差で確率を決める。
 	var probability: float = clamp(0.060 + (score + 0.217) * 0.125, 0.0, 0.560)
-	probability = clamp(probability, 0.0, 0.72)
+	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.72)
 	var roll: float = _deterministic_unit([
 		event_index,
 		from_base,
@@ -567,23 +580,31 @@ static func _battery_misplay_events(
 	var stuff: float = _ability(pitcher, "Pit_KCreate")
 	var catcher_blocking: float = _catcher_blocking(defense)
 	var catcher_game_call: float = _catcher_game_call(defense)
-	# 制球 z が低い・球威 z が高い投手、捕球 z・配球 z が低い捕手ほど暴投が増える。各中立点は wild_pitch 用にずらしてある。
-	var wild_probability: float = clamp(
-		0.002
-		+ (1.44 - control) * 0.003125
-		+ (stuff - 1.776) * 0.001
-		- (catcher_blocking - 2.473) * 0.001
-		- (catcher_game_call - 2.56) * 0.0005,
-		0.0005,
-		0.018
+	var pitch_summary: Dictionary = outcome.get("pitch_summary", {}) as Dictionary
+	var pitch_count: int = int(clamp(int(pitch_summary.get("pitches", 1)), 1, BATTERY_MISPLAY_MAX_PITCHES))
+	# 暴投/捕逸は本来1球ごとの事象なので、打席1回ではなく球数分の機会へ変換する。
+	var wild_per_pitch: float = clamp(
+		WILD_PITCH_PER_PITCH_BASE
+		+ (1.44 - control) * WILD_PITCH_CONTROL_WEIGHT
+		+ (stuff - 1.776) * WILD_PITCH_STUFF_WEIGHT
+		- (catcher_blocking - 2.473) * WILD_PITCH_BLOCKING_WEIGHT
+		- (catcher_game_call - 2.56) * WILD_PITCH_GAME_CALL_WEIGHT,
+		WILD_PITCH_PER_PITCH_MIN,
+		WILD_PITCH_PER_PITCH_MAX
 	)
-	# 捕球 z が低い捕手ほど捕逸が増える。
-	var passed_probability: float = clamp(0.001 + (2.473 - catcher_blocking) * 0.004, 0.0, 0.012)
+	var passed_per_pitch: float = clamp(
+		PASSED_BALL_PER_PITCH_BASE + (2.473 - catcher_blocking) * PASSED_BALL_BLOCKING_WEIGHT,
+		PASSED_BALL_PER_PITCH_MIN,
+		PASSED_BALL_PER_PITCH_MAX
+	)
+	var wild_probability: float = 1.0 - pow(1.0 - wild_per_pitch, float(pitch_count))
+	var passed_probability: float = 1.0 - pow(1.0 - passed_per_pitch, float(pitch_count))
 	var roll: float = _deterministic_unit([
 		event_index,
 		runner.player_id,
 		0 if pitcher == null else pitcher.player_id,
 		_hash_string(str(outcome.get("category", ""))),
+		pitch_count,
 		6607,
 	])
 	if roll >= wild_probability + passed_probability:
