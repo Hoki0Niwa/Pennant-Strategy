@@ -37,6 +37,28 @@ func test_room_helpers_track_limits() -> void:
 	assert_bool(TeamFinance.has_development_room(players, 1)).is_true()
 
 
+# --- FA日数 -------------------------------------------------------------------
+
+# NPB は1年で最大145日(FA_SERVICE_DAYS_PER_YEAR)しか一軍登録日数を積めない。
+# フルシーズン在籍(≈190日超)でも145日/年キャップで加算されること
+# (2026-07-10 修正: 上限が無いとフル出場選手のFA権取得が現実より1.5〜2年早まっていた)。
+func test_fa_service_days_capped_at_145_per_season() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.calendar_start_date = "2099-03-27"
+	season.current_day = 1
+	var player: PSPlayer = _player({"id": 1, "team_id": 1, "years": 1})
+	season.set_active_roster(1, {"player_ids": [1]})
+	season.current_day = 200
+	season.accrue_active_roster_days(1, season.current_day)
+
+	Offseason._apply_fa_service_days(player, null, season)
+
+	assert_int(int(player.source_data.get("fa_active_days_last_season", 0))).is_equal(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
+	assert_int(int(player.source_data.get("fa_nissuu", 0))).is_equal(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
+
+
 func test_released_market_respects_foreign_held_cap() -> void:
 	var open_team_players: Array = _released_market_foreign_cap_players(3)
 	var open_result: Dictionary = ReleasedMarket.process_released_market(

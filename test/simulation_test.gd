@@ -1162,6 +1162,26 @@ func test_winning_pitcher_passes_to_reliever_when_starter_under_five_innings() -
 	assert_int(int(decisions.get("winning_pitcher_id", 0))).is_equal(21)
 
 
+# QS (規則9.19) は自責点3以下が条件。失点(自責+非自責)で判定すると味方失策等の非自責点で
+# 誤って逃す/満たすため、outing の earned_runs を使うこと (2026-07-10 修正)。
+# 6回(18アウト)・失点4・自責2 のケースは失点基準なら QS を逃すが、自責基準では成立する。
+func test_quality_start_uses_earned_runs_not_total_runs() -> void:
+	var starter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	starter.player_id = 10
+	var outing: Dictionary = _outing(10, 1, PSPitcherUsageModel.ROLE_STARTER, 0, 18, 18, 0, 0, 0, 4)
+	outing["earned_runs"] = 2
+	var setup: Dictionary = {
+		"starter_pitcher": starter,
+		"pitcher": starter,
+		"team_id": 1,
+	}
+	var result: Dictionary = {"pitcher_outings": [outing]}
+
+	PSGameDecisions.finalize_pitcher_stats(setup, result)
+
+	assert_int(starter.pitcher_stats.quality_starts).is_equal(1)
+
+
 func test_draw_game_can_record_holds_without_win_loss_save() -> void:
 	var result: Dictionary = {
 		"draw": true,

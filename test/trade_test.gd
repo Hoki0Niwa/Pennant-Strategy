@@ -127,6 +127,42 @@ func test_evaluate_user_proposal_rejects_invalid_sides() -> void:
 	assert_bool(bool(with_foreign.get("ok", false))).is_false()
 
 
+# 人数不均等な提案 (2対1) で受け側の支配下が70枠を超える場合は不可 (2026-07-10 修正)。
+# 自軍がちょうど70人(givenの1人含む)の状態で1人放出・2人受け取りなら71人になり超過する。
+func test_evaluate_user_proposal_rejects_when_capacity_exceeded() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_team(1), _team(2)]
+	var players: Array = []
+	for i in range(TeamFinance.SHIENKA_LIMIT - 1):
+		players.append(_player({"id": 100 + i, "team_id": 1}))
+	var give: PSPlayer = _player_with_z(11, 1, 3, false, -1.0)
+	var receive_a: PSPlayer = _player_with_z(21, 2, 6, false, 1.0)
+	var receive_b: PSPlayer = _player_with_z(22, 2, 4, false, 1.0)
+	players.append(give)
+	players.append(receive_a)
+	players.append(receive_b)
+	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(TeamFinance.SHIENKA_LIMIT)
+
+	var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21, 22])
+	assert_bool(bool(result.get("ok", false))).is_false()
+
+
+# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象であること
+# (2026-07-10 修正: 従来は相手球団の上限しか見ておらず自軍だけ無制限に成立できた)。
+func test_evaluate_user_proposal_rejects_when_user_team_over_trade_limit() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_team(1), _team(2)]
+	var strong: PSPlayer = _player_with_z(11, 1, 3, false, 2.0)
+	var weak: PSPlayer = _player_with_z(21, 2, 6, false, -1.0)
+	var players: Array = [strong, weak]
+	var state: Dictionary = TradeService.trade_state(season)
+	(state["trades_by_team"] as Dictionary)[str(1)] = TradeService.MAX_TRADES_PER_TEAM
+
+	var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21])
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(result.get("accepted", false))).is_false()
+
+
 func test_accept_and_decline_user_offer() -> void:
 	var season: PSSeason = _season(10)
 	var user_player: PSPlayer = _player_with_z(11, 1, 3, false, 1.0)

@@ -511,10 +511,14 @@ static func finalize_pitcher_stats(setup: Dictionary, _result: Dictionary) -> vo
 	var starter_runs_raw: int = int(setup.get("starter_runs", -1))
 	var starter_outs: int = int(starter_outing.get("outs", -1))
 	var starter_runs: int = int(starter_outing.get("runs", -1))
+	var starter_earned_runs: int = int(starter_outing.get("earned_runs", -1))
 	if starter_outs < 0:
 		starter_outs = int(setup.get("game_outs", 0)) if starter_outs_raw < 0 else starter_outs_raw
 	if starter_runs < 0:
 		starter_runs = int(setup.get("game_runs_allowed", 0)) if starter_runs_raw < 0 else starter_runs_raw
+	# outing情報を持たない簡易setup (テスト等) では自責点が取れないので総失点で代用する。
+	if starter_earned_runs < 0:
+		starter_earned_runs = starter_runs
 	# 完投 = 一度も救援を仰がず試合を終えたこと。アウト数だけで判定すると
 	# 「8回を投げ切って9回頭に降板した先発」(24アウト)が全て完投扱いになり完投率が桁違いに膨らむ。
 	# 24アウト下限は、ビジター先発が8回完了で終わる完投負け(本物の完投)を含めるための保険。
@@ -523,7 +527,9 @@ static func finalize_pitcher_stats(setup: Dictionary, _result: Dictionary) -> vo
 		starter.pitcher_stats.complete_games += 1
 		if starter_runs == 0:
 			starter.pitcher_stats.shutouts += 1
-	if starter_outs >= 18 and starter_runs <= 3:
+	# QS (規則9.19): 6回(18アウト)以上・自責点3以下。失点(自責+非自責)ではなく自責点で判定する
+	# (味方失策等の非自責点が乗った試合で QS の成否が不正確になっていた、2026-07-10 修正)。
+	if starter_outs >= 18 and starter_earned_runs <= 3:
 		starter.pitcher_stats.quality_starts += 1
 
 

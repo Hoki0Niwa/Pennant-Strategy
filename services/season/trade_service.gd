@@ -395,6 +395,11 @@ static func accept_user_offer(season: PSSeason, players: Array, offer_id: int, u
 		offer["status"] = "expired"
 		return {"ok": false, "message": "交換期限を過ぎています。"}
 	var cpu_team_id: int = int(offer.get("cpu_team_id", 0))
+	# 提案生成時点では CPU 側の上限しか見ていない (自軍側は _generate_user_offer が未チェック)。
+	# 生成後に他のトレードで両球団の成立数が変わりうるため、受諾時にも改めて双方を確認する。
+	if trades_count_for_team(season, cpu_team_id) >= MAX_TRADES_PER_TEAM or trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:
+		offer["status"] = "invalid"
+		return {"ok": false, "message": "今季のトレード成立上限に達しているため受諾できません。"}
 	var validation: Dictionary = _validate_trade_sides(
 		players, cpu_team_id, offer.get("cpu_player_ids", []) as Array,
 		user_team_id, offer.get("user_player_ids", []) as Array
@@ -446,8 +451,12 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 	var validation: Dictionary = _validate_trade_sides(players, user_team_id, give_ids, cpu_team_id, receive_ids)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "accepted": false, "message": str(validation.get("message", ""))}
+	# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象とする。
+	# 従来は cpu_team_id 側しか見ておらず、自軍だけこの上限を回避できてしまっていた。
 	if trades_count_for_team(season, cpu_team_id) >= MAX_TRADES_PER_TEAM:
 		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": "相手球団は今季のトレードに消極的です。"}
+	if trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:
+		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": "自球団は今季のトレード成立上限に達しています。"}
 
 	var need: Dictionary = build_team_needs(players, teams)
 	var cpu_need: Dictionary = need.get(cpu_team_id, {}) as Dictionary
@@ -560,6 +569,9 @@ static func _swap_active_roster_members(season: PSSeason, team_id: int, out_ids:
 # ---- 内部ヘルパ -----------------------------------------------------------------
 
 # 両サイドの選手が指定球団に所属し、全員トレード可能かを確認する。
+# 人数不均等な提案 (例: 2対1) で受け側の支配下が70枠を超えないことも合わせて検証する
+# (1:1 固定の CPU間マッチングは常に人数が釣り合うため対象外だが、ユーザー提案は
+# MAX_PLAYERS_PER_SIDE まで非対称にできるため、ここでチェックしないと70枠を超過しうる)。
 static func _validate_trade_sides(players: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array) -> Dictionary:
 	for pair in [[team_a_id, a_ids], [team_b_id, b_ids]]:
 		var team_id: int = int((pair as Array)[0])
@@ -569,7 +581,18 @@ static func _validate_trade_sides(players: Array, team_a_id: int, a_ids: Array, 
 				return {"ok": false, "message": "対象選手が既に移籍または退団しています。"}
 			if not is_tradeable(player):
 				return {"ok": false, "message": "%s はトレード対象にできません (外国人/育成/怪我/新人)。" % player.name}
+	if not _capacity_ok_after_trade(players, team_a_id, a_ids, b_ids):
+		return {"ok": false, "message": "自軍の支配下枠(70人)を超えるためこのトレードは成立できません。"}
+	if not _capacity_ok_after_trade(players, team_b_id, b_ids, a_ids):
+		return {"ok": false, "message": "相手球団の支配下枠(70人)を超えるためこのトレードは成立できません。"}
 	return {"ok": true}
+
+
+# team_id が out_ids を放出し in_ids を受け取った後の支配下人数が70枠に収まるか。
+# トレード対象は is_tradeable (育成除外) 済みなので、入出とも支配下枠を1人ずつ増減させる。
+static func _capacity_ok_after_trade(players: Array, team_id: int, out_ids: Array, in_ids: Array) -> bool:
+	var projected: int = TeamFinance.shienka_count(players, team_id) - out_ids.size() + in_ids.size()
+	return projected <= TeamFinance.SHIENKA_LIMIT
 
 
 static func _owner_team_of(players: Array, ids: Array) -> int:

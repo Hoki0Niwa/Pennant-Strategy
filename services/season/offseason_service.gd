@@ -2002,7 +2002,9 @@ static func _apply_fa_service_days(player: PSPlayer, record: PSPlayerSeasonRecor
 		player.source_data["fa_days_accrued_year"] = season.year
 		player.source_data["fa_active_days_last_season"] = 0
 		return
-	var season_days: int = season.get_active_roster_days(service_team_id, player.id)
+	# NPB は1年あたり最大145日分しか一軍登録日数を積めない。フルシーズン(≈190日)を
+	# そのまま加算すると、フル出場選手のFA権取得が現実より1.5〜2年早まってしまう。
+	var season_days: int = mini(season.get_active_roster_days(service_team_id, player.id), PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
 	player.source_data["fa_nissuu"] = int(player.source_data.get("fa_nissuu", 0)) + season_days
 	player.source_data["fa_days_accrued_year"] = season.year
 	player.source_data["fa_active_days_last_season"] = season_days
