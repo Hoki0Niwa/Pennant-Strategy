@@ -218,17 +218,18 @@ const FIELD_ERROR_POSITION_DIFFICULTY: Dictionary = {
 	2: 0.60,
 	3: 0.26,
 	4: 0.80,
-	5: 1.15,
-	6: 1.10,
+	5: 0.95,
+	6: 1.00,
 }
 # 外野(7-9): 捕れる打球(makeable>=閾値)に限り低率で失策。守備能力には依存させず、
-# spray 分布と担当機会の偏りだけを倍率でならし、3 ポジションの記録上の偏りを抑える。
+# spray 分布によって CF の担当機会が両翼の約 2 倍になるため、1 機会あたりの失策率を下げて
+# シーズン失策数をならす。CF は正面の易しい飛球も多く、担当機会数をそのまま失策リスクにしない。
 const OF_CATCHABLE_THRESHOLD: float = 0.42
 const OF_FIELD_ERROR_RATE: float = 0.0105
 const OF_GROUNDER_MISPLAY_RATE: float = 0.0035  # 外野へ抜けたゴロの後逸率（単打→二塁打相当の外野失策）。
 const OF_ERROR_OPPORTUNITY_MULTIPLIER: Dictionary = {
 	7: 0.78,
-	8: 1.65,
+	8: 0.30,
 	9: 0.90,
 }
 const FIELD_ERROR_HARDNESS_EV_FLOOR: float = 88.0
@@ -248,8 +249,8 @@ const THROW_ERROR_BASE_BY_POSITION: Dictionary = {
 	2: 0.013,
 	3: 0.0055,
 	4: 0.022,
-	5: 0.070,
-	6: 0.024,
+	5: 0.040,
+	6: 0.022,
 }
 const THROW_ERROR_REFERENCE_Z: float = 1.4   # 送球(throw) z の基準。これ未満で送球失策増。
 const THROW_ERROR_WEIGHT: float = 0.039      # 送球 z 欠損あたりの増分（大きいほどチーム間ばらつき拡大）

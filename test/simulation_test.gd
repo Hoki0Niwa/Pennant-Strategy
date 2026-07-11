@@ -2105,3 +2105,22 @@ func test_hit_and_run_weights_favor_contact_over_walk() -> void:
 	assert_float(float(weights.get("bip", 0.0))).is_greater(1.0)
 	assert_float(float(weights.get("bb", 0.0))).is_less(-1.0)
 	assert_float(float(weights.get("k", 0.0))).is_less(-1.0)
+
+
+# CF は両翼の約 2 倍の打球を担当するため、1 機会あたりの失策率でさらに増幅しない。
+# 内野も 3B の正面ゴロ難度が SS を大幅に上回らないことを調整ノブの不変条件とする。
+func test_error_difficulty_compensates_for_position_opportunities() -> void:
+	var left_multiplier: float = float(PSPlayResolver.OF_ERROR_OPPORTUNITY_MULTIPLIER[7])
+	var center_multiplier: float = float(PSPlayResolver.OF_ERROR_OPPORTUNITY_MULTIPLIER[8])
+	var right_multiplier: float = float(PSPlayResolver.OF_ERROR_OPPORTUNITY_MULTIPLIER[9])
+	assert_float(center_multiplier * 2.0).is_less_equal((left_multiplier + right_multiplier) * 0.5)
+
+	var third_nominal: float = float(PSPlayResolver.FIELD_ERROR_POSITION_DIFFICULTY[5]) * (
+		PSPlayResolver.FIELD_ERROR_BASE_GROUNDER
+		+ float(PSPlayResolver.THROW_ERROR_BASE_BY_POSITION[5])
+	)
+	var short_nominal: float = float(PSPlayResolver.FIELD_ERROR_POSITION_DIFFICULTY[6]) * (
+		PSPlayResolver.FIELD_ERROR_BASE_GROUNDER
+		+ float(PSPlayResolver.THROW_ERROR_BASE_BY_POSITION[6])
+	)
+	assert_float(third_nominal).is_less_equal(short_nominal * 1.4)
