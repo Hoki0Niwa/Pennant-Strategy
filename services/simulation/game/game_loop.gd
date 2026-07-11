@@ -187,7 +187,7 @@ static func simulate_half_inning(
 		var pre_bases_before: Array = bases.duplicate()
 		var pre_outs_before: int = outs
 		var pre_runs_before: int = runs
-		var pre_runner_events: Array = PSRunnerActionModel.pre_plate_runner_events(
+		var pre_plan: Dictionary = PSRunnerActionModel.pre_plate_runner_plan(
 			pre_event_index,
 			scheduled_batter,
 			pitcher,
@@ -196,6 +196,8 @@ static func simulate_half_inning(
 			outs,
 			runner_context
 		)
+		var pre_runner_events: Array = pre_plan.get("events", []) as Array
+		var deferred_steal_intents: Array = pre_plan.get("deferred_steal_intents", []) as Array
 		var pre_applied: Dictionary = apply_runner_events(pre_runner_events, bases, outs, pre_bases_before)
 		credit_runner_event_errors(defense, pre_runner_events)
 		tally_runner_events(game_result, pre_runner_events)
@@ -267,8 +269,18 @@ static func simulate_half_inning(
 		var bases_before: Array = bases.duplicate()
 		var outs_before: int = outs
 		var runs_before: int = runs
-		var outcome: Dictionary = resolve_plate_outcome(batter, pitcher, defense, bases, outs)
+		var outcome: Dictionary = resolve_plate_outcome(batter, pitcher, defense, bases, outs, {
+			"runner_intents": deferred_steal_intents,
+		})
 		var event_index: int = next_play_event_index(game_result)
+		outcome = PSRunnerActionModel.apply_runner_in_motion_to_outcome(
+			event_index,
+			outcome,
+			deferred_steal_intents,
+			bases_before,
+			outs_before
+		)
+		outcome["runner_intents"] = deferred_steal_intents.duplicate(true)
 		var pitch_summary: Dictionary = outcome.get("pitch_summary", {}) as Dictionary
 		if pitch_summary.is_empty():
 			pitch_summary = PSPlayEventBuilder.pitch_summary_for_play(event_index, batter, pitcher, outcome)
@@ -302,6 +314,7 @@ static func simulate_half_inning(
 		var post_runner_charges: Array = []
 		if not plate_reached_run_limit or is_batted_ball_outcome(outcome):
 			var post_runner_context: Dictionary = runner_event_context(game_result, inning, half, runs)
+			post_runner_context["deferred_steal_intents"] = deferred_steal_intents
 			runner_events = PSPlayEventBuilder.runner_events_for_play(
 				event_index,
 				batter,
@@ -761,7 +774,11 @@ static func scored_runner_ids_for_plate(
 			append_scored_ids_from_advancements(ids, outcome.get("runner_advancements", []) as Array)
 			if ids.is_empty() and runs > 0 and category == "sacrifice_fly":
 				append_base_runner_id(ids, bases_before, 2)
-		"double_play", "strikeout":
+		"double_play":
+			# 無死からの併殺で生還できるのは三塁走者だけ (base_state_resolver.apply_double_play)。
+			if runs > 0:
+				append_base_runner_id(ids, bases_before, 2)
+		"strikeout":
 			pass
 		_:
 			var bases_taken: int = int(outcome.get("bases", 0))
@@ -1109,6 +1126,8 @@ static func runner_event_context(game_result: Dictionary, inning: int, half: Str
 # 走塁・守備イベントのリーグ頻度検証用に、result 種別ごとの件数を試合結果へ集計する。
 # 適用済みイベント (apply_runner_events を通ったもの) だけを数える。集計は
 # balance_report の running_defense セクション (simulation_reporter) が読む。
+# 盗塁企図は内訳 (対象塁 second/third・戦術 delayed/double・三振ゲッツー) も別キーで数え、
+# NPB実勢 (二盗:三盗比・塁別成功率等) との突き合わせに使う。
 static func tally_runner_events(game_result: Dictionary, runner_events: Array) -> void:
 	if game_result.is_empty() or runner_events.is_empty():
 		return
@@ -1119,8 +1138,24 @@ static func tally_runner_events(game_result: Dictionary, runner_events: Array) -
 		if key.is_empty():
 			continue
 		counts[key] = int(counts.get(key, 0)) + 1
+		if key == "runner_in_motion_batted_ball":
+			var motion_strategy: String = str(event.get("strategy", "straight_steal"))
+			counts["runner_in_motion_%s" % motion_strategy] = int(counts.get("runner_in_motion_%s" % motion_strategy, 0)) + 1
+			if bool(event.get("double_play_avoided_by_runner_motion", false)):
+				counts["runner_in_motion_double_play_avoided"] = int(counts.get("runner_in_motion_double_play_avoided", 0)) + 1
 		if bool(event.get("is_steal_attempt", false)):
 			counts["steal_attempt"] = int(counts.get("steal_attempt", 0)) + 1
+			var target_label: String = "second" if int(event.get("from_base", 0)) == 1 else "third"
+			counts["steal_attempt_%s" % target_label] = int(counts.get("steal_attempt_%s" % target_label, 0)) + 1
+			if bool(event.get("is_stolen_base", false)):
+				counts["stolen_base_%s" % target_label] = int(counts.get("stolen_base_%s" % target_label, 0)) + 1
+			var strategy: String = str(event.get("strategy", ""))
+			if strategy in ["delayed_steal", "double_steal", "hit_and_run"]:
+				counts["steal_attempt_%s" % strategy] = int(counts.get("steal_attempt_%s" % strategy, 0)) + 1
+			if bool(event.get("on_strikeout_pitch", false)):
+				counts["steal_attempt_on_strikeout"] = int(counts.get("steal_attempt_on_strikeout", 0)) + 1
+				if bool(event.get("is_caught_stealing", false)):
+					counts["strikeout_caught_stealing"] = int(counts.get("strikeout_caught_stealing", 0)) + 1
 	game_result["runner_event_counts"] = counts
 
 
@@ -1262,11 +1297,18 @@ static func append_play_event(
 	game_result["play_events"] = play_events
 
 
-static func resolve_plate_outcome(batter: PSPlayerSeasonRecord, pitcher: PSPlayerSeasonRecord, defense: Dictionary, bases: Array, outs: int) -> Dictionary:
+static func resolve_plate_outcome(
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	bases: Array,
+	outs: int,
+	batting_context: Dictionary = {}
+) -> Dictionary:
 	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(defense, pitcher)
 	var pitching_context: Dictionary = PSPitcherUsageModel.plate_context(pitcher, usage)
 	var is_reliever: bool = str(pitching_context.get("pitcher_role", PSPitcherUsageModel.ROLE_SHORT_RELIEF)) != PSPitcherUsageModel.ROLE_STARTER
-	return PSPlateAppearanceCoordinator.resolve(batter, pitcher, defense, bases, outs, is_reliever, pitching_context)
+	return PSPlateAppearanceCoordinator.resolve(batter, pitcher, defense, bases, outs, is_reliever, pitching_context, batting_context)
 
 
 # 打席結果が失策のとき、その打球を扱った守備選手に失策を1つ計上する。

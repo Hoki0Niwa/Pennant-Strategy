@@ -9,18 +9,17 @@ class_name PSRunnerAdvanceResolver
 const RESULT_EXTRA_BASE: String = "extra_base_on_hit"
 const RESULT_RUNNER_OUT: String = "runner_out_advancing"
 const RESULT_ADVANCE_ON_THROW: String = "advance_on_throw"
-const FIELDER_ARM_NEUTRAL_Z: float = 1.072
 const FIELDER_ARM_DOUBLE_WEIGHT_Z: float = 0.020
 const FIELDER_ARM_TRIPLE_WEIGHT_Z: float = 0.02125
 const FIELDER_ARM_EXTRA_ADVANCE_WEIGHT_Z: float = 0.025
 const FIELDER_ARM_OUT_WEIGHT_Z: float = 0.030
-const OUTFIELD_THROW_DECISION_BASE: float = 0.34
+const OUTFIELD_THROW_DECISION_BASE: float = 0.27568
 const OUTFIELD_THROW_DECISION_ARM_WEIGHT_Z: float = 0.060
 const OUTFIELD_THROW_DECISION_SPEED_WEIGHT_Z: float = 0.045
 const OUTFIELD_THROW_DECISION_JUDGMENT_WEIGHT_Z: float = 0.020
 const OUTFIELD_THROW_DECISION_CLOSE_PLAY_WEIGHT: float = 0.22
 const OUTFIELD_THROW_DECISION_SHALLOW_WEIGHT: float = 0.18
-const OUTFIELD_THROW_ERROR_BASE: float = 0.010
+const OUTFIELD_THROW_ERROR_BASE: float = 0.02072
 const OUTFIELD_THROW_ERROR_TARGET_HOME: float = 0.010
 const OUTFIELD_THROW_ERROR_TARGET_THIRD: float = 0.005
 const OUTFIELD_THROW_ERROR_DEPTH_WEIGHT: float = 0.010
@@ -135,7 +134,7 @@ static func _legacy_double_chance(
 	speed: float,
 	fielder_arm: float
 ) -> float:
-	var chance: float = 0.035
+	var chance: float = 0.03499
 	if trajectory == "liner":
 		chance += 0.12
 	elif trajectory == "fly":
@@ -148,9 +147,10 @@ static func _legacy_double_chance(
 		chance += 0.30
 	chance += clamp((distance - 62.0) * 0.0040, -0.04, 0.28)
 	chance += clamp((ev - 90.0) * 0.0030, -0.05, 0.12)
-	# 走力 z が平均(0.78)を上回るほど二塁打を増やす。守備肩も z のまま、強いほど減らす。
-	chance += (speed - 0.78) * 0.0275
-	chance -= (fielder_arm - FIELDER_ARM_NEUTRAL_Z) * FIELDER_ARM_DOUBLE_WEIGHT_Z
+	# 走力 z が高いほど二塁打を増やす。守備肩も z のまま、強いほど減らす
+	# (raw z に重みを掛け畳み込み済みベース定数へ足す。中立点・母平均の概念なし)。
+	chance += speed * 0.0275
+	chance -= fielder_arm * FIELDER_ARM_DOUBLE_WEIGHT_Z
 	return clamp(chance, 0.01, 0.78)
 
 
@@ -162,14 +162,15 @@ static func _triple_chance(
 	speed: float,
 	fielder_arm: float
 ) -> float:
-	var chance: float = 0.004
+	var chance: float = 0.00923
 	if in_gap:
 		chance += 0.026
 	if wall_ball:
 		chance += 0.020
 	chance += clamp((distance - 94.0) * 0.0014, 0.0, 0.07)
-	chance += (speed - 0.78) * 0.0225
-	chance -= (fielder_arm - FIELDER_ARM_NEUTRAL_Z) * FIELDER_ARM_TRIPLE_WEIGHT_Z
+	# raw z に重みを掛け畳み込み済みベース定数へ足す(中立点・母平均の概念なし)。
+	chance += speed * 0.0225
+	chance -= fielder_arm * FIELDER_ARM_TRIPLE_WEIGHT_Z
 	if absf(spray) > 30.0:
 		chance -= 0.018
 	return clamp(chance, 0.0, 0.18)
@@ -408,7 +409,7 @@ static func _outfield_throw_decision_probability(
 	var deep_factor: float = clamp((distance - 96.0) / 40.0, 0.0, 1.0)
 	var close_play_factor: float = clamp((0.34 - extra_probability) / 0.34, -0.35, 1.0)
 	var probability: float = OUTFIELD_THROW_DECISION_BASE
-	probability += (fielder_arm - FIELDER_ARM_NEUTRAL_Z) * OUTFIELD_THROW_DECISION_ARM_WEIGHT_Z
+	probability += fielder_arm * OUTFIELD_THROW_DECISION_ARM_WEIGHT_Z
 	probability -= speed * OUTFIELD_THROW_DECISION_SPEED_WEIGHT_Z
 	probability -= judgment * OUTFIELD_THROW_DECISION_JUDGMENT_WEIGHT_Z
 	probability += close_play_factor * OUTFIELD_THROW_DECISION_CLOSE_PLAY_WEIGHT
@@ -447,7 +448,7 @@ static func _outfield_throw_error_probability(
 		probability += OUTFIELD_THROW_ERROR_TARGET_THIRD
 	if fielder_position == 8:
 		probability += 0.002
-	probability -= (fielder_arm - FIELDER_ARM_NEUTRAL_Z) * OUTFIELD_THROW_ERROR_ARM_WEIGHT_Z
+	probability -= fielder_arm * OUTFIELD_THROW_ERROR_ARM_WEIGHT_Z
 	return clamp(probability, OUTFIELD_THROW_ERROR_MIN, OUTFIELD_THROW_ERROR_MAX)
 
 
@@ -497,18 +498,20 @@ static func _extra_advance_probability(
 	var hang_time: float = float(physics.get("hang_time", 1.8))
 	var spray: float = float(physics.get("spray_angle", 0.0))
 	# 状況別の基準進塁率。MLB/NPB の走塁実測(単打の二塁走者生還≈60% / 単打の一塁→三塁≈28% /
-	# 二塁打の一塁走者生還≈42%)へ寄せる。二塁打は距離・ギャップ補正が乗りやすいので基準は低めに置く。
-	var probability: float = 0.08
+	# 二塁打の一塁走者生還≈42%)へ寄せる較正時のアンカー。二塁打は距離・ギャップ補正が乗りやすいので
+	# 基準は低めに置く。ベース値は raw z 畳み込み済みのため、これらのアンカー数値自体は読み替え不可。
+	var probability: float = 0.0474
 	if batter_bases == 1 and from_base == 2 and to_base >= 4:
-		probability = 0.60
+		probability = 0.5674
 	elif batter_bases == 1 and from_base == 1 and to_base == 3:
-		probability = 0.27
+		probability = 0.2374
 	elif batter_bases >= 2 and from_base == 1 and to_base >= 4:
-		probability = 0.30
-	# 走力 z(中立0.78)・走塁判断 z(中立0.42)が高いほど追加進塁を増やす。守備肩も z のまま、強いほど減らす。
-	probability += (speed - 0.78) * 0.06
-	probability += (baserunning - 0.42) * 0.03
-	probability -= (fielder_arm - FIELDER_ARM_NEUTRAL_Z) * FIELDER_ARM_EXTRA_ADVANCE_WEIGHT_Z
+		probability = 0.2674
+	# 走力 z・走塁判断 z が高いほど追加進塁を増やす。守備肩も z のまま、強いほど減らす
+	# (raw z に重みを掛け畳み込み済みベース定数へ足す。中立点・母平均の概念なし)。
+	probability += speed * 0.06
+	probability += baserunning * 0.03
+	probability -= fielder_arm * FIELDER_ARM_EXTRA_ADVANCE_WEIGHT_Z
 	probability += clamp((distance - 70.0) * 0.0045, -0.10, 0.20)
 	probability += clamp((hang_time - 2.0) * 0.035, -0.04, 0.12)
 	if _in_gap(spray):

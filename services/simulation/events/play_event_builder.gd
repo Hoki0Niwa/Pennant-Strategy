@@ -66,15 +66,18 @@ static func build_play_event(
 			outcome,
 			play_event["batted_ball_event"] as Dictionary
 		)
-	play_event["runner_intents"] = runner_intents_for_play(
-		event_index,
-		batter,
-		pitcher,
-		defense,
-		bases_before,
-		outs_before,
-		outcome
-	)
+	if outcome.has("runner_intents"):
+		play_event["runner_intents"] = (outcome.get("runner_intents", []) as Array).duplicate(true)
+	else:
+		play_event["runner_intents"] = runner_intents_for_play(
+			event_index,
+			batter,
+			pitcher,
+			defense,
+			bases_before,
+			outs_before,
+			outcome
+		)
 	return play_event
 
 

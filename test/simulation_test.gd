@@ -1555,3 +1555,553 @@ func test_pitcher_run_charges_match_actual_scores() -> void:
 	assert_int(total_score).is_greater(0)
 	assert_int(runs_allowed_total).is_equal(total_score)
 	assert_int(earned_runs_total).is_less_equal(runs_allowed_total)
+
+
+# 無死一・三塁の併殺: 一塁走者は封殺、三塁走者は生還する(打点は付かない: 規則9.04)。
+func test_double_play_scores_third_runner_with_no_rbi_when_no_outs() -> void:
+	var batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	batter.player_id = 501
+	var pitcher: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	pitcher.player_id = 601
+	var runner_first: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_first.player_id = 701
+	var runner_third: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_third.player_id = 703
+
+	var bases: Array = [runner_first, null, runner_third]
+	var outcome: Dictionary = {"category": "double_play", "result": "double_play_shortstop", "bases": 0}
+	var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, pitcher, bases, 0, outcome)
+
+	assert_int(int(applied.get("outs", 0))).is_equal(2)
+	assert_int(int(applied.get("runs", 0))).is_equal(1)
+	assert_int(runner_third.batter_stats.runs).is_equal(1)
+	assert_int(batter.batter_stats.runs_batted_in).is_equal(0)
+	assert_int(batter.batter_stats.double_plays).is_equal(1)
+	assert_object(bases[0]).is_null()
+	assert_object(bases[1]).is_null()
+	assert_object(bases[2]).is_null()
+
+
+# 無死一・二塁の併殺: 一塁走者は封殺、二塁走者はプレー間に三塁へ進む(得点はまだ無い)。
+func test_double_play_advances_second_runner_to_third_when_no_outs() -> void:
+	var batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	batter.player_id = 502
+	var pitcher: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	pitcher.player_id = 602
+	var runner_first: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_first.player_id = 711
+	var runner_second: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_second.player_id = 712
+
+	var bases: Array = [runner_first, runner_second, null]
+	var outcome: Dictionary = {"category": "double_play", "result": "double_play_shortstop", "bases": 0}
+	var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, pitcher, bases, 0, outcome)
+
+	assert_int(int(applied.get("outs", 0))).is_equal(2)
+	assert_int(int(applied.get("runs", 0))).is_equal(0)
+	assert_object(bases[2]).is_equal(runner_second)
+	assert_object(bases[0]).is_null()
+	assert_object(bases[1]).is_null()
+
+
+# 1死一・三塁の併殺: 併殺の第3アウトが打者走者の一塁封殺相当のため、どの走者も生還しない。
+func test_double_play_with_one_out_ends_inning_without_run() -> void:
+	var batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	batter.player_id = 503
+	var pitcher: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	pitcher.player_id = 603
+	var runner_first: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_first.player_id = 721
+	var runner_third: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_third.player_id = 723
+
+	var bases: Array = [runner_first, null, runner_third]
+	var outcome: Dictionary = {"category": "double_play", "result": "double_play_shortstop", "bases": 0}
+	var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, pitcher, bases, 1, outcome)
+
+	assert_int(int(applied.get("outs", 0))).is_equal(2)
+	assert_int(int(applied.get("runs", 0))).is_equal(0)
+	assert_int(runner_third.batter_stats.runs).is_equal(0)
+	assert_object(bases[2]).is_equal(runner_third)
+
+
+# 無死満塁で二塁封殺を選ぶフォースアウト: 三塁走者は後方フォースのため生還し(打点あり)、
+# 二塁走者は三塁へ進む。
+func test_fielders_choice_force_at_second_scores_third_on_bases_loaded() -> void:
+	var runner_first: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_first.player_id = 731
+	var runner_second: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_second.player_id = 732
+	var runner_third: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_third.player_id = 733
+
+	var bases: Array = [runner_first, runner_second, runner_third]
+	var plan: Array = PSPlayResolver._fielders_choice_advancements(bases, 1, 2)
+	assert_int(plan.size()).is_equal(3)
+
+	var by_from_base: Dictionary = {}
+	for advancement_value in plan:
+		var advancement: Dictionary = advancement_value as Dictionary
+		by_from_base[int(advancement.get("from_base", 0))] = advancement
+
+	var third_plan: Dictionary = by_from_base[3] as Dictionary
+	assert_int(int(third_plan.get("to_base", 0))).is_equal(4)
+	assert_bool(bool(third_plan.get("is_out", false))).is_false()
+
+	var second_plan: Dictionary = by_from_base[2] as Dictionary
+	assert_int(int(second_plan.get("to_base", 0))).is_equal(3)
+	assert_bool(bool(second_plan.get("is_out", false))).is_false()
+
+	var first_plan: Dictionary = by_from_base[1] as Dictionary
+	assert_bool(bool(first_plan.get("is_out", false))).is_true()
+	assert_int(int(first_plan.get("to_base", 0))).is_equal(2)
+
+	var batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	batter.player_id = 504
+	var pitcher: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	pitcher.player_id = 604
+	var outcome: Dictionary = {
+		"category": "fielders_choice",
+		"result": "ground_fielders_choice_shortstop_to_second",
+		"bases": 1,
+		"force_out_from_base": 1,
+		"force_out_to_base": 2,
+		"runner_advancements": plan,
+	}
+	var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, pitcher, bases, 0, outcome)
+
+	assert_int(int(applied.get("runs", 0))).is_equal(1)
+	assert_int(batter.batter_stats.runs_batted_in).is_equal(1)
+	assert_object(bases[0]).is_equal(batter)
+	assert_object(bases[2]).is_equal(runner_second)
+	assert_object(bases[1]).is_null()
+
+
+# 無死一・三塁(二塁空)で二塁封殺を選ぶフォースアウト: 三塁走者は非フォースのため動かない。
+# 同じ force(1,2) でも塁が満塁なら base_state_resolver のフォールバック計画で三塁走者は生還する。
+func test_fielders_choice_force_at_second_holds_unforced_third_runner() -> void:
+	var runner_first: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_first.player_id = 741
+	var runner_third: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	runner_third.player_id = 743
+
+	var bases: Array = [runner_first, null, runner_third]
+	var plan: Array = PSPlayResolver._fielders_choice_advancements(bases, 1, 2)
+	var third_plan: Dictionary = _advancement_from_base(plan, 3)
+	assert_bool(third_plan.is_empty()).is_false()
+	assert_int(int(third_plan.get("to_base", 0))).is_equal(3)
+	assert_bool(bool(third_plan.get("is_out", false))).is_false()
+
+	var loaded_first: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	loaded_first.player_id = 751
+	var loaded_second: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	loaded_second.player_id = 752
+	var loaded_third: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	loaded_third.player_id = 753
+	var loaded_bases: Array = [loaded_first, loaded_second, loaded_third]
+	var fallback_plan: Array = PSBaseStateResolver._default_fielders_choice_advancements(loaded_bases, 1, 2)
+	var fallback_third_plan: Dictionary = _advancement_from_base(fallback_plan, 3)
+	assert_bool(fallback_third_plan.is_empty()).is_false()
+	assert_int(int(fallback_third_plan.get("to_base", 0))).is_equal(4)
+
+
+func _advancement_from_base(plan: Array, from_base: int) -> Dictionary:
+	for advancement_value in plan:
+		var advancement: Dictionary = advancement_value as Dictionary
+		if int(advancement.get("from_base", 0)) == from_base:
+			return advancement
+	return {}
+
+
+func _catcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = player_id
+	record.name = player_name
+	record.position = 2
+	record.role = "fielder"
+	record.age = 27
+	record.fatigue = 0
+	record.injury_days = 0
+	record.z_abilities_snapshot = {
+		"C_Throw": z,
+		"C_Blocking": z,
+		"C_FieldSecure": z,
+		"C_GameCall": z,
+	}
+	return record
+
+
+# 盗塁企図は投球前フェーズで計画される(pre_plate_runner_plan)。大半は途中決行として即座に
+# events 側で解決され(phase=="before_pitch")、旧仕様の "caught_stealing_throwing_error"
+# (刺殺→失策セーフ変換)は出現しないこと、成功盗塁の一部が捕手送球エラーで進塁先++1
+# (記録は盗塁+E2)になることを確認する。
+func test_pre_plate_steal_events_resolve_without_strikeout() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9001, "Speedster", 3.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9002, "Avg Batter", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9003, "Avg Pitcher", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9004, "Avg Catcher", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var bases: Array = [runner, null, null]
+
+	var steal_events: Array = []
+	for i in range(400):
+		var plan: Dictionary = PSRunnerActionModel.pre_plate_runner_plan(i, batter, pitcher, defense, bases, 0, {})
+		var events: Array = plan.get("events", []) as Array
+		for event_value in events:
+			var event: Dictionary = event_value as Dictionary
+			if bool(event.get("is_steal_attempt", false)):
+				steal_events.append(event)
+
+	assert_int(steal_events.size()).is_greater(0)
+	for event_value in steal_events:
+		var event: Dictionary = event_value as Dictionary
+		var result: String = str(event.get("result", ""))
+		assert_bool(result == "stolen_base" or result == "caught_stealing").is_true()
+		assert_str(str(event.get("phase", ""))).is_equal("before_pitch")
+		if bool(event.get("is_fielding_error", false)):
+			assert_bool(bool(event.get("is_stolen_base", false))).is_true()
+			assert_int(int(event.get("to_base", 0))).is_equal(3)
+			assert_int(int(event.get("error_position", 0))).is_equal(2)
+
+
+# context に deferred_steal_intents が無ければ、三振打席で runner_events_for_play が盗塁イベントを
+# 解決することはない(盗塁は pre_plate_runner_plan で管理され、三振打席では繰延べ企図のみが
+# 解決対象になる)。WP/PB は別枠なので出てもよい。
+func test_strikeout_pa_no_longer_resolves_steals() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9011, "Speedster2", 3.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9012, "Avg Batter2", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9013, "Avg Pitcher2", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9014, "Avg Catcher2", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var bases: Array = [runner, null, null]
+	var outcome: Dictionary = {"category": "strikeout", "result": "strikeout", "bases": 0}
+
+	for i in range(200):
+		var events: Array = PSRunnerActionModel.runner_events_for_play(i, batter, pitcher, defense, bases, bases, 0, 1, outcome, {})
+		for event_value in events:
+			var event: Dictionary = event_value as Dictionary
+			assert_bool(bool(event.get("is_steal_attempt", false))).is_false()
+
+
+# 捕手肩(steal_control)が高いほど盗塁成功率(SB/(SB+CS))が下がること。
+func test_steal_success_rate_responds_to_catcher_arm() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9021, "Speedster3", 3.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9022, "Avg Batter3", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9023, "Avg Pitcher3", 0.0)
+	var strong_catcher: PSPlayerSeasonRecord = _catcher(9024, "Strong Arm", 4.0)
+	var weak_catcher: PSPlayerSeasonRecord = _catcher(9025, "Weak Arm", -2.0)
+	var strong_defense: Dictionary = {"fielders": [{"position": 2, "record": strong_catcher}]}
+	var weak_defense: Dictionary = {"fielders": [{"position": 2, "record": weak_catcher}]}
+	var bases: Array = [runner, null, null]
+
+	var strong_rate: float = _steal_success_rate(batter, pitcher, strong_defense, bases)
+	var weak_rate: float = _steal_success_rate(batter, pitcher, weak_defense, bases)
+	assert_float(strong_rate).is_less(weak_rate)
+
+
+func _steal_success_rate(batter: PSPlayerSeasonRecord, pitcher: PSPlayerSeasonRecord, defense: Dictionary, bases: Array) -> float:
+	var sb: int = 0
+	var cs: int = 0
+	# 決定論的ハッシュ由来の乱数なので、少ないサンプルだと稀に強肩/弱肩の順序が逆転しうる。
+	# 十分な試行数(3000)を回して統計的に安定させる。
+	for i in range(3000):
+		var plan: Dictionary = PSRunnerActionModel.pre_plate_runner_plan(i, batter, pitcher, defense, bases, 0, {})
+		var events: Array = plan.get("events", []) as Array
+		for event_value in events:
+			var event: Dictionary = event_value as Dictionary
+			if not bool(event.get("is_steal_attempt", false)):
+				continue
+			if bool(event.get("is_stolen_base", false)):
+				sb += 1
+			elif bool(event.get("is_caught_stealing", false)):
+				cs += 1
+	var total: int = sb + cs
+	if total == 0:
+		return 0.0
+	return float(sb) / float(total)
+
+
+# pre_plate_runner_plan を event_index=0..range_size-1 で回し、deferred_steal_intents が非空になった
+# index とその deferred 企図を収集する(繰延べ盗塁テスト群で共有するヘルパー)。
+func _collect_deferred_steal_indices(
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	bases: Array,
+	outs: int,
+	range_size: int
+) -> Array:
+	var found: Array = []
+	for i in range(range_size):
+		var plan: Dictionary = PSRunnerActionModel.pre_plate_runner_plan(i, batter, pitcher, defense, bases, outs, {})
+		var deferred: Array = plan.get("deferred_steal_intents", []) as Array
+		if not deferred.is_empty():
+			found.append({"index": i, "deferred": deferred})
+	return found
+
+
+# 最終球扱いで繰延べられた盗塁企図(deferred_steal_intents)は、打席結果が三振(かつ三振で3アウトに
+# ならない)なら三振の後に解決される(三振ゲッツー)。イベントの phase は "after_plate_result"、
+# on_strikeout_pitch==true になり、result は通常の盗塁と同じ stolen_base/caught_stealing を使う。
+func test_deferred_steal_resolves_after_strikeout() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9031, "Speedster4", 3.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9032, "Avg Batter4", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9033, "Avg Pitcher4", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9034, "Avg Catcher4", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var bases: Array = [runner, null, null]
+
+	var found: Array = _collect_deferred_steal_indices(batter, pitcher, defense, bases, 0, 600)
+	assert_int(found.size()).is_greater(0)
+
+	var resolved_count: int = 0
+	for entry_value in found:
+		var entry: Dictionary = entry_value as Dictionary
+		var i: int = int(entry.get("index", 0))
+		var deferred: Array = entry.get("deferred", []) as Array
+		var outcome: Dictionary = {"category": "strikeout", "result": "strikeout", "bases": 0}
+		var context: Dictionary = {"deferred_steal_intents": deferred}
+		var events: Array = PSRunnerActionModel.runner_events_for_play(i, batter, pitcher, defense, bases, bases, 0, 1, outcome, context)
+		for event_value in events:
+			var event: Dictionary = event_value as Dictionary
+			if not bool(event.get("is_steal_attempt", false)):
+				continue
+			resolved_count += 1
+			assert_bool(bool(event.get("on_strikeout_pitch", false))).is_true()
+			assert_str(str(event.get("phase", ""))).is_equal("after_plate_result")
+			var result: String = str(event.get("result", ""))
+			assert_bool(result == "stolen_base" or result == "caught_stealing").is_true()
+	assert_int(resolved_count).is_greater(0)
+
+
+# 繰延べられた盗塁企図は、打球(BIP)ならSB/CSとしては解決しない。
+# runner_in_motion の進塁補正は game_loop が打席 outcome 適用前に別途行う。
+func test_deferred_steal_not_scored_as_steal_on_batted_ball() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9031, "Speedster4", 3.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9032, "Avg Batter4", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9033, "Avg Pitcher4", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9034, "Avg Catcher4", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var bases_before: Array = [runner, null, null]
+	var bases_after: Array = [null, runner, null]
+
+	var found: Array = _collect_deferred_steal_indices(batter, pitcher, defense, bases_before, 0, 600)
+	assert_int(found.size()).is_greater(0)
+
+	for entry_value in found:
+		var entry: Dictionary = entry_value as Dictionary
+		var i: int = int(entry.get("index", 0))
+		var deferred: Array = entry.get("deferred", []) as Array
+		var outcome: Dictionary = {"category": "hit", "result": "single_center", "bases": 1}
+		var context: Dictionary = {"deferred_steal_intents": deferred}
+		var events: Array = PSRunnerActionModel.runner_events_for_play(i, batter, pitcher, defense, bases_before, bases_after, 0, 0, outcome, context)
+		for event_value in events:
+			var event: Dictionary = event_value as Dictionary
+			assert_bool(bool(event.get("is_steal_attempt", false))).is_false()
+
+
+# 盗塁企図のタイミング分割: 途中決行(events側)と最終球繰延べ(deferred_steal_intents)の
+# 両方が実際に発生すること(現行ノブはおおよそ58:42だが、件数の大小までは断定しない)。
+func test_steal_events_split_between_early_and_deferred() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9041, "Speedster5", 3.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9042, "Avg Batter5", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9043, "Avg Pitcher5", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9044, "Avg Catcher5", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var bases: Array = [runner, null, null]
+
+	var early_count: int = 0
+	var deferred_count: int = 0
+	for i in range(600):
+		var plan: Dictionary = PSRunnerActionModel.pre_plate_runner_plan(i, batter, pitcher, defense, bases, 0, {})
+		var events: Array = plan.get("events", []) as Array
+		var deferred: Array = plan.get("deferred_steal_intents", []) as Array
+		for event_value in events:
+			var event: Dictionary = event_value as Dictionary
+			if bool(event.get("is_steal_attempt", false)):
+				early_count += 1
+		deferred_count += deferred.size()
+
+	assert_int(early_count).is_greater(0)
+	assert_int(deferred_count).is_greater(0)
+
+
+# 成功率は企図判断用 intent_score に依存せず、同じ走者・投手・捕手なら
+# 三盗のほうが二盗より高い。
+func test_steal_success_separates_attempt_context_and_favors_third() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9051, "Selective Runner", 1.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9052, "Avg Pitcher5", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9053, "Avg Catcher5", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var bases: Array = [runner, null, null]
+	var low_context: Dictionary = {
+		"runner_id": runner.player_id, "batter_id": 0, "from_base": 1, "to_base": 2,
+		"strategy": "straight_steal", "group_id": "", "intent_score": -2.0,
+		"success_skill_score": 1.0,
+	}
+	var high_context: Dictionary = low_context.duplicate(true)
+	high_context["intent_score"] = 3.0
+	var second_low: Dictionary = PSRunnerActionModel._runner_event_from_intent(10, low_context, pitcher, defense, bases)
+	var second_high: Dictionary = PSRunnerActionModel._runner_event_from_intent(10, high_context, pitcher, defense, bases)
+	assert_float(float(second_low.get("success_probability", 0.0))).is_equal(float(second_high.get("success_probability", -1.0)))
+
+	var third_intent: Dictionary = low_context.duplicate(true)
+	third_intent["from_base"] = 2
+	third_intent["to_base"] = 3
+	var third: Dictionary = PSRunnerActionModel._runner_event_from_intent(10, third_intent, pitcher, defense, [null, runner, null])
+	assert_float(float(third.get("success_probability", 0.0))).is_greater(float(second_low.get("success_probability", 0.0)))
+
+
+# 重盗は単独盗塁と別の低い倍率を使い、企図内訳を実勢帯へ近づける。
+func test_double_steal_attempts_are_rare_relative_to_straight_steals() -> void:
+	var runner_first: PSPlayerSeasonRecord = _fielder(9061, "Runner First", 2.0)
+	var runner_second: PSPlayerSeasonRecord = _fielder(9062, "Runner Second", 2.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9063, "Avg Batter6", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9064, "Avg Pitcher6", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9065, "Avg Catcher6", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var double_plays: int = 0
+	var straight_attempts: int = 0
+	for i in range(5000):
+		if not PSRunnerActionModel._double_steal_intents(i, batter, pitcher, defense, [runner_first, runner_second, null], 0, false).is_empty():
+			double_plays += 1
+		if not PSRunnerActionModel._steal_intent(i, 1, 2, runner_first, batter, pitcher, defense, 0, false, "straight_steal").is_empty():
+			straight_attempts += 1
+	assert_int(double_plays).is_greater(0)
+	assert_int(straight_attempts).is_greater(double_plays * 10)
+
+
+# 平均的な投手でもボーク確率が0にクランプされず、走者がいる機会で実際に発生する。
+func test_balk_probability_is_live_for_average_pitcher() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9071, "Runner", 0.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9072, "Batter", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9073, "Pitcher", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9074, "Catcher", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var balk_plays: int = 0
+	for i in range(10000):
+		var events: Array = PSRunnerActionModel._pickoff_or_balk_events(i, batter, pitcher, defense, [runner, null, null], {})
+		if not events.is_empty() and str((events[0] as Dictionary).get("result", "")) == "balk":
+			balk_plays += 1
+	assert_int(balk_plays).is_greater(0)
+
+
+func _runner_intent(runner: PSPlayerSeasonRecord, strategy: String = "straight_steal") -> Dictionary:
+	return {
+		"event_type": "runner_intent",
+		"intent_type": "hit_and_run" if strategy == "hit_and_run" else "steal",
+		"strategy": strategy,
+		"group_id": "",
+		"runner_id": runner.player_id,
+		"batter_id": 0,
+		"pitcher_id": 0,
+		"catcher_id": 0,
+		"from_base": 1,
+		"to_base": 2,
+		"intent_score": 1.0,
+		"success_skill_score": 1.0,
+	}
+
+
+# エンドランは表示用だけでなく実行計画に入り、打席結果まで必ず繰延べられる。
+func test_hit_and_run_is_deferred_execution_intent() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9081, "Hit Run Runner", 2.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9082, "Contact Batter", 0.0)
+	batter.z_abilities_snapshot["Bat_Barrel"] = 3.0
+	batter.z_abilities_snapshot["Bat_KAvoid"] = 3.0
+	batter.z_abilities_snapshot["Bat_Impact"] = -2.0
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9083, "Pitcher", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9084, "Catcher", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var found: bool = false
+	for i in range(10000):
+		var plan: Dictionary = PSRunnerActionModel.pre_plate_runner_plan(i, batter, pitcher, defense, [runner, null, null], 0, {})
+		for intent_value in plan.get("deferred_steal_intents", []) as Array:
+			if str((intent_value as Dictionary).get("strategy", "")) == "hit_and_run":
+				found = true
+				for event_value in plan.get("events", []) as Array:
+					assert_bool(bool((event_value as Dictionary).get("is_steal_attempt", false))).is_false()
+				break
+		if found:
+			break
+	assert_bool(found).is_true()
+
+
+# エンドランで打者が三振した場合は、同じ投球上の通常のSB/CS企図として解決する。
+func test_hit_and_run_on_strikeout_becomes_steal_attempt() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9091, "Hit Run Runner K", 1.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9092, "Batter K", 0.0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(9093, "Pitcher K", 0.0)
+	var catcher: PSPlayerSeasonRecord = _catcher(9094, "Catcher K", 0.0)
+	var defense: Dictionary = {"fielders": [{"position": 2, "record": catcher}]}
+	var intent: Dictionary = _runner_intent(runner, "hit_and_run")
+	var events: Array = PSRunnerActionModel.runner_events_for_play(
+		15, batter, pitcher, defense, [runner, null, null], [runner, null, null], 0, 1,
+		{"category": "strikeout", "result": "strikeout", "bases": 0},
+		{"deferred_steal_intents": [intent]}
+	)
+	assert_int(events.size()).is_equal(1)
+	assert_bool(bool((events[0] as Dictionary).get("is_steal_attempt", false))).is_true()
+	assert_str(str((events[0] as Dictionary).get("strategy", ""))).is_equal("hit_and_run")
+
+
+# スタート済み走者がいる内野ゴロでは併殺の一部が一塁アウト+走者二塁進塁に変わり、
+# その進塁は公式盗塁には数えない。
+func test_runner_in_motion_can_break_double_play_without_steal_credit() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9101, "Moving Runner", 2.0)
+	var batter: PSPlayerSeasonRecord = _fielder(9102, "Batter Ground", 0.0)
+	var intent: Dictionary = _runner_intent(runner, "hit_and_run")
+	var original: Dictionary = {
+		"category": "double_play", "result": "double_play_shortstop", "bases": 0,
+		"physical_traits": {"trajectory_bucket": "grounder"},
+	}
+	var transformed: Dictionary = {}
+	for i in range(100):
+		var candidate: Dictionary = PSRunnerActionModel.apply_runner_in_motion_to_outcome(i, original, [intent], [runner, null, null], 0)
+		if bool(candidate.get("double_play_avoided_by_runner_motion", false)):
+			transformed = candidate
+			break
+	assert_bool(transformed.is_empty()).is_false()
+	assert_str(str(transformed.get("category", ""))).is_equal("out")
+	var marker: Dictionary = (transformed.get("runner_events", []) as Array)[0] as Dictionary
+	assert_bool(bool(marker.get("is_steal_attempt", true))).is_false()
+	assert_str(str(marker.get("result", ""))).is_equal("runner_in_motion_batted_ball")
+	var bases: Array = [runner, null, null]
+	var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, null, bases, 0, transformed)
+	assert_int(int(applied.get("outs", 0))).is_equal(1)
+	assert_object(bases[1]).is_equal(runner)
+
+
+# 安打ではスタート済み走者の追加進塁が起こり得るが、SBには計上しない。
+func test_runner_in_motion_can_take_extra_base_on_hit() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(9111, "Moving Runner Hit", 2.0)
+	var intent: Dictionary = _runner_intent(runner, "hit_and_run")
+	var original: Dictionary = {
+		"category": "hit", "result": "single_center", "bases": 1,
+		"physical_traits": {"trajectory_bucket": "liner"},
+		"runner_advancements": [{
+			"runner": runner, "runner_id": runner.player_id, "from_base": 1, "to_base": 2,
+			"baseline_to": 2, "is_out": false, "is_extra": false,
+		}],
+		"runner_events": [],
+	}
+	var transformed: Dictionary = {}
+	for i in range(100):
+		var candidate: Dictionary = PSRunnerActionModel.apply_runner_in_motion_to_outcome(i, original, [intent], [runner, null, null], 0)
+		var advancement: Dictionary = (candidate.get("runner_advancements", []) as Array)[0] as Dictionary
+		if int(advancement.get("to_base", 0)) == 3:
+			transformed = candidate
+			break
+	assert_bool(transformed.is_empty()).is_false()
+	var marker: Dictionary = (transformed.get("runner_events", []) as Array)[0] as Dictionary
+	assert_bool(bool(marker.get("is_steal_attempt", true))).is_false()
+	assert_int(int(marker.get("to_base", 0))).is_equal(3)
+
+
+# 集約PAモデルでもエンドランはBIPを増やし、四球待ちを減らす。
+func test_hit_and_run_weights_favor_contact_over_walk() -> void:
+	var weights: Dictionary = {"k": -1.0, "bb": -1.0, "hbp": -4.0, "bip": 1.0}
+	PSPlateAppearanceCoordinator._apply_hit_and_run_weights(weights)
+	assert_float(float(weights.get("bip", 0.0))).is_greater(1.0)
+	assert_float(float(weights.get("bb", 0.0))).is_less(-1.0)
+	assert_float(float(weights.get("k", 0.0))).is_less(-1.0)

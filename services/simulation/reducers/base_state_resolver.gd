@@ -127,7 +127,8 @@ static func advance_fielders_choice(batter: PSPlayerSeasonRecord, bases: Array, 
 
 
 # 野選の既定進塁。アウト対象の走者だけ force_to_base へ向かってアウト、
-# その前方にいるフォース走者は1つ進む。
+# その前方にいるフォース走者は1つ進む。封殺対象より後方でもフォース状態(後ろの塁が全て埋まっている)
+# なら1つ進む(満塁の二塁封殺で三塁走者が生還する等)。
 static func _default_fielders_choice_advancements(bases: Array, force_from_base: int, force_to_base: int) -> Array:
 	var advancements: Array = []
 	for base_index in range(2, -1, -1):
@@ -141,6 +142,8 @@ static func _default_fielders_choice_advancements(bases: Array, force_from_base:
 			to_base = force_to_base
 		elif from_base < force_from_base:
 			to_base = from_base + 1
+		elif _is_forced_runner(bases, base_index):
+			to_base = min(4, from_base + 1)
 		advancements.append({
 			"runner": runner,
 			"runner_id": runner.player_id,
@@ -151,6 +154,15 @@ static func _default_fielders_choice_advancements(bases: Array, force_from_base:
 			"is_extra": to_base > from_base,
 		})
 	return advancements
+
+
+# 塁 base_index (0=一塁走者) の走者がフォース状態か。後ろの塁が全て埋まっていれば、
+# 打者走者の一塁進塁に押されて進塁義務がある。
+static func _is_forced_runner(bases: Array, base_index: int) -> bool:
+	for i in range(base_index):
+		if bases[i] == null:
+			return false
+	return true
 
 
 static func advance_error(batter: PSPlayerSeasonRecord, bases: Array, bases_taken: int = 1) -> int:
@@ -280,13 +292,25 @@ static func advance_runners_one_base(bases: Array) -> int:
 	return runs
 
 
-# 併殺の塁上処理。現状は一塁走者がいる通常併殺を扱い、アウト上限は3から現在アウト数を引いた値。
-static func apply_double_play(bases: Array, current_outs: int) -> int:
+# 併殺の塁上処理。アウト上限は3から現在アウト数を引いた値。
+# 無死からの併殺では非フォースの二塁/三塁走者が1つ進み、三塁走者は生還する(打点なし)。
+# 1死からの併殺は3アウト目が打者走者のためどの走者も生還できない(走者は動かさない)。
+static func apply_double_play(bases: Array, current_outs: int) -> Dictionary:
 	var outs_added: int = 1
+	var runs: int = 0
 	if current_outs <= 1 and bases[0] != null:
 		bases[0] = null
 		outs_added = 2
-	return int(min(3 - current_outs, outs_added))
+		if current_outs == 0:
+			if bases[2] != null:
+				var runner_on_third: PSPlayerSeasonRecord = bases[2] as PSPlayerSeasonRecord
+				bases[2] = null
+				_score_runner(runner_on_third)
+				runs += 1
+			if bases[1] != null and bases[2] == null:
+				bases[2] = bases[1]
+				bases[1] = null
+	return {"outs": int(min(3 - current_outs, outs_added)), "runs": runs}
 
 
 # 盗塁、牽制死、暴投進塁など、打席結果とは別に発生した走者イベントを塁状況へ反映する。

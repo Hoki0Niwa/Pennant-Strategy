@@ -48,6 +48,9 @@ const BUNT_OUT_PENALTY: float = 0.040
 const BUNT_RUNNER_SECOND_ONLY_BONUS: float = 0.080
 const BUNT_RUNNER_THIRD_PENALTY: float = 0.070
 const BUNT_PITCHER_BONUS: float = 0.280
+const HIT_AND_RUN_BIP_LOGIT_BONUS: float = 0.16
+const HIT_AND_RUN_K_LOGIT_PENALTY: float = 0.05
+const HIT_AND_RUN_BB_LOGIT_PENALTY: float = 0.30
 
 
 static func resolve(
@@ -57,18 +60,22 @@ static func resolve(
 	bases: Array,
 	outs: int,
 	is_reliever: bool = false,
-	pitching_context: Dictionary = {}
+	pitching_context: Dictionary = {},
+	batting_context: Dictionary = {}
 ) -> Dictionary:
+	var hit_and_run: bool = _has_hit_and_run_intent(batting_context)
 	# 敬遠とバントは打席シーケンスに入らず早期判定する
 	if _should_intentionally_walk(batter, pitcher, bases, outs):
 		return _terminal_walk_outcome(RESULT_INTENTIONAL_WALK, _intentional_walk_pitch_summary())
-	if _should_bunt(batter, bases, outs):
+	if not hit_and_run and _should_bunt(batter, bases, outs):
 		return _resolve_bunt(batter, bases)
 
 	var precomp: Dictionary = _build_precomp(batter, pitcher, defense, pitching_context, is_reliever)
 
 	# 1) K/BB/HBP/BIP softmax 抽選
 	var weights: Dictionary = PSPaProbabilityCalculator.build_weights(precomp)
+	if hit_and_run:
+		_apply_hit_and_run_weights(weights)
 	var category_key: String = PSPaProbabilityCalculator.pick(weights)
 
 	# 2) 球数 summary 生成 (pitch-by-pitch 廃止)
@@ -83,7 +90,25 @@ static func resolve(
 		PSPaProbabilityCalculator.OUTCOME_HIT_BY_PITCH:
 			return _terminal_hbp_outcome(pitch_summary)
 		_:  # BIP: 既存 ContactQualityModel → PhysicsResolver → PlayResolver を流用
-			return _resolve_bip(batter, pitcher, defense, bases, outs, precomp, pitch_summary)
+			var bip_outcome: Dictionary = _resolve_bip(batter, pitcher, defense, bases, outs, precomp, pitch_summary)
+			if hit_and_run:
+				bip_outcome["batting_strategy"] = "hit_and_run"
+			return bip_outcome
+
+
+static func _has_hit_and_run_intent(context: Dictionary) -> bool:
+	for intent_value in context.get("runner_intents", []) as Array:
+		if str((intent_value as Dictionary).get("strategy", "")) == "hit_and_run":
+			return true
+	return false
+
+
+# エンドランは四球待ちよりスイング/コンタクトを優先する。集約PAモデルでは
+# BIP logit を少し上げ、BB/K logit を下げることでその方針を近似する。
+static func _apply_hit_and_run_weights(weights: Dictionary) -> void:
+	weights[PSPaProbabilityCalculator.OUTCOME_BIP] = float(weights.get(PSPaProbabilityCalculator.OUTCOME_BIP, 0.0)) + HIT_AND_RUN_BIP_LOGIT_BONUS
+	weights[PSPaProbabilityCalculator.OUTCOME_STRIKEOUT] = float(weights.get(PSPaProbabilityCalculator.OUTCOME_STRIKEOUT, 0.0)) - HIT_AND_RUN_K_LOGIT_PENALTY
+	weights[PSPaProbabilityCalculator.OUTCOME_WALK] = float(weights.get(PSPaProbabilityCalculator.OUTCOME_WALK, 0.0)) - HIT_AND_RUN_BB_LOGIT_PENALTY
 
 
 static func _resolve_bip(

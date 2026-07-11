@@ -13,29 +13,49 @@ const CATEGORY_HIT_BY_PITCH: String = "hit_by_pitch"
 const CATEGORY_STRIKEOUT: String = "strikeout"
 const CATCHER_METRIC_CACHE_KEY: String = "_runner_catcher_metric_cache"
 
-# 盗塁阻止の送球が逸れて走者が生きる「捕手の送球失策」。本来 caught_stealing になる企図の一部を
-# 失策に変換する（= reached-on-error 相当。盗塁数を水増しせず捕手にのみ失策を計上）。
+# 成功した単独盗塁の一部で捕手送球が逸れ、走者が1つ余分に進む(記録は盗塁+捕手失策 E2)。
+# 刺殺(caught_stealing)は常に刺殺として記録される(刺殺企図を失策でセーフに変換する処理はない)。
 # error_position=2 を持つイベントは game_loop.credit_runner_event_errors が拾って捕手の errors に計上する。
-const CATCHER_THROW_ERROR_BASE: float = 0.55          # caught_stealing 企図あたりの送球失策率（中立捕手）
-const CATCHER_THROW_ERROR_REFERENCE_Z: float = 2.046  # 捕手肩(steal_control) z の中立点
-const CATCHER_THROW_ERROR_WEIGHT: float = 0.060       # 肩 z が中立を超える分だけ失策を減らす
-const CATCHER_THROW_ERROR_MIN: float = 0.08
-const CATCHER_THROW_ERROR_MAX: float = 0.70
-const STEAL_INTENT_PROBABILITY_SCALE: float = 1.55
+const STEAL_THROW_ERROR_EXTRA_BASE: float = 0.045   # 成功盗塁あたり、捕手送球が逸れて+1進塁(盗塁+E2)になる基礎率
+const STEAL_THROW_ERROR_ARM_WEIGHT: float = 0.008   # 捕手肩(steal_control) raw z 1σ あたりの減少
+const STEAL_THROW_ERROR_MIN: float = 0.005
+const STEAL_THROW_ERROR_MAX: float = 0.10
+# 単独盗塁の企図確率スケール。最終球繰延べのうちBIP/四死球分は記録に残らない。
+# 重盗を実勢比まで減らした分も単独盗塁で補い、リーグ企図数(NPB ~1100/季)を保つ。
+const STEAL_INTENT_PROBABILITY_SCALE: float = 0.68
+# エンドランは単独盗塁と別ノブにする。打球化した分は公式企図に残らないため、
+# runner_in_motion 件数と三振球企図を合わせて頻度を調整する。
+const HIT_AND_RUN_PROBABILITY_SCALE: float = 0.15
+# 重盗は専用スケールで独立調整する。企図イベントの1〜3%(数プレー/球団/季)が目安。
+const DOUBLE_STEAL_PROBABILITY_SCALE: float = 0.035
+const STEAL_SUCCESS_BASE: float = 0.592
+const STEAL_THIRD_SUCCESS_BONUS: float = 0.050
+const BALK_PROBABILITY_BASE: float = 0.00215
+const BALK_PROBABILITY_MAX: float = 0.002
+# 企図が打席の最終球と重なる近似割合。記録に残る三振球企図が総企図の6〜9%になるよう調整する。
+# 最終球企図は打席結果まで繰延べられ、
+# 三振なら三振後にSB/CS解決、打球なら runner_in_motion へ変換、四死球なら企図を解除する。
+const STEAL_FINAL_PITCH_RATIO: float = 0.42
+const RUNNER_IN_MOTION_HIT_EXTRA_BASE: float = 0.62
+const RUNNER_IN_MOTION_STEAL_EXTRA_BASE: float = 0.42
+const RUNNER_IN_MOTION_DP_BREAK_HIT_AND_RUN: float = 0.72
+const RUNNER_IN_MOTION_DP_BREAK_STEAL: float = 0.58
 const BATTERY_MISPLAY_MAX_PITCHES: int = 8
-const WILD_PITCH_PER_PITCH_BASE: float = 0.0105
+const WILD_PITCH_PER_PITCH_BASE: float = 0.0158953
 const WILD_PITCH_CONTROL_WEIGHT: float = 0.0026
 const WILD_PITCH_STUFF_WEIGHT: float = 0.0009
 const WILD_PITCH_BLOCKING_WEIGHT: float = 0.0009
 const WILD_PITCH_GAME_CALL_WEIGHT: float = 0.0004
 const WILD_PITCH_PER_PITCH_MIN: float = 0.0015
 const WILD_PITCH_PER_PITCH_MAX: float = 0.030
-const PASSED_BALL_PER_PITCH_BASE: float = 0.0010
+const PASSED_BALL_PER_PITCH_BASE: float = 0.0071825
 const PASSED_BALL_BLOCKING_WEIGHT: float = 0.0025
 const PASSED_BALL_PER_PITCH_MIN: float = 0.00015
 const PASSED_BALL_PER_PITCH_MAX: float = 0.008
 
 
+# 後方互換の薄いラッパー。events のみを返す(繰延べ企図は捨てられる)。呼び出し側は
+# pre_plate_runner_plan を使うこと(deferred_steal_intents を打席結果まで持ち越すため)。
 static func pre_plate_runner_events(
 	event_index: int,
 	batter: PSPlayerSeasonRecord,
@@ -45,12 +65,35 @@ static func pre_plate_runner_events(
 	outs: int,
 	context: Dictionary = {}
 ) -> Array:
+	var plan: Dictionary = pre_plate_runner_plan(event_index, batter, pitcher, defense, bases, outs, context)
+	return plan.get("events", []) as Array
+
+
+# 投球前フェーズの走者イベント計画。events は即時適用する投球前イベント(牽制/ボーク/途中決行の盗塁)、
+# deferred_steal_intents は最終球扱いで打席結果まで繰延べる盗塁企図。
+static func pre_plate_runner_plan(
+	event_index: int,
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	bases: Array,
+	outs: int,
+	context: Dictionary = {}
+) -> Dictionary:
 	if outs >= 3:
-		return []
+		return {"events": [], "deferred_steal_intents": []}
 	var material: Array = _pickoff_or_balk_events(event_index, batter, pitcher, defense, bases, context)
-	return _sort_lead_runner_first(material)
+	if not material.is_empty():
+		return {"events": _sort_lead_runner_first(material), "deferred_steal_intents": []}
+	var plan: Dictionary = _steal_plan(event_index, batter, pitcher, defense, bases, outs, context)
+	return {
+		"events": _sort_lead_runner_first(plan.get("events", []) as Array),
+		"deferred_steal_intents": plan.get("deferred", []) as Array,
+	}
 
 
+# 表示用(play_event_builder が試合ログ生成に呼ぶ)。hit_and_run を含む企図一覧を返すが、
+# 実際の盗塁企図の解決(成功/失敗の抽選)は pre_plate_runner_events / _pre_plate_steal_events 側で行う。
 static func runner_intents_for_play(
 	event_index: int,
 	batter: PSPlayerSeasonRecord,
@@ -129,7 +172,6 @@ static func runner_events_for_play(
 	outcome: Dictionary,
 	context: Dictionary = {}
 ) -> Array:
-	var category: String = str(outcome.get("category", "out"))
 	var is_batted_ball: bool = _is_batted_ball_outcome(outcome)
 	var events: Array = []
 
@@ -164,18 +206,12 @@ static func runner_events_for_play(
 	if outs_after_plate >= 3:
 		return []
 
-	var intents: Array = runner_intents_for_play(
-		event_index,
-		batter,
-		pitcher,
-		defense,
-		bases_before,
-		outs_before,
-		outcome,
-		context
-	)
+	var category: String = str(outcome.get("category", "out"))
 	if category == CATEGORY_STRIKEOUT:
-		events.append_array(_steal_events_from_intents(event_index, intents, pitcher, defense))
+		var deferred: Array = context.get("deferred_steal_intents", []) as Array
+		if not deferred.is_empty():
+			# 三振では塁状態が変わらないので bases_after_plate をそのまま渡してよい。
+			events.append_array(_deferred_steal_events_after_strikeout(event_index, deferred, pitcher, defense, bases_after_plate))
 
 	if events.is_empty():
 		events.append_array(_battery_misplay_events(
@@ -226,8 +262,9 @@ static func _pickoff_or_balk_events(
 	# 走者の脅威 z（走力と盗塁技術の平均）。投手の牽制 z が脅威を上回るほど牽制死がわずかに増える。
 	var threat: float = (runner_speed + runner_stealing) * 0.5
 	var pickoff_out_probability: float = clamp((hold_runners - threat) * 0.0015 + 0.002025, 0.0, 0.006)
-	# 制球 z・牽制 z が低い投手ほどボークしやすい。
-	var balk_probability: float = clamp((1.44 - control) * 0.000625 - (0.488 + hold_runners) * 0.000375, 0.0, 0.002)
+	# 制球 z・牽制 z が低い投手ほどボークしやすい。raw z に重みを掛け畳み込み済みベース定数へ足す
+	# (中立点・母平均の概念なし)。
+	var balk_probability: float = clamp(BALK_PROBABILITY_BASE - control * 0.000625 - hold_runners * 0.000375, 0.0, BALK_PROBABILITY_MAX)
 	var roll: float = _deterministic_unit([
 		event_index,
 		runner.player_id,
@@ -307,9 +344,9 @@ static func _double_steal_intents(
 	)
 	if outs_before == 2:
 		score += 0.24
-	# 中立点(z -0.865)からのスコア差で確率を決める。
-	var probability: float = clamp(0.020 + (score + 0.865) * 0.075, 0.0, 0.260)
-	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.42)
+	# raw z に重みを掛け、畳み込み済みベース定数へ足して確率を決める(中立点・母平均の概念なし)。
+	var probability: float = clamp(0.084875 + score * 0.075, 0.0, 0.260)
+	probability = clamp(probability * DOUBLE_STEAL_PROBABILITY_SCALE, 0.0, 0.42)
 	var roll: float = _deterministic_unit([
 		event_index,
 		runner_first.player_id,
@@ -346,8 +383,9 @@ static func _hit_and_run_intent(
 	var runner_speed: float = _ability(runner, "Run_Speed")
 	# スコア(z): 芯・三振回避・走者走力で加点、長打力で減点（強打者はエンドランしにくい）。
 	var score: float = contact * 0.35 + avoid_k * 0.35 + runner_speed * 0.20 - power * 0.18
-	var probability: float = clamp(0.010 + (score + 0.194) * 0.05, 0.0, 0.150)
-	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.27)
+	# raw z に重みを掛け、畳み込み済みベース定数へ足して確率を決める(中立点・母平均の概念なし)。
+	var probability: float = clamp(0.0197 + score * 0.05, 0.0, 0.150)
+	probability = clamp(probability * HIT_AND_RUN_PROBABILITY_SCALE, 0.0, 0.27)
 	var roll: float = _deterministic_unit([
 		event_index,
 		runner.player_id,
@@ -374,7 +412,8 @@ static func _should_try_delayed_steal(
 		- _ability(pitcher, "Pit_HoldRunner") * 0.25
 		- catcher_arm * 0.40
 	)
-	var probability: float = clamp(0.006 + (score - 0.197) * 0.0375, 0.0, 0.120)
+	# raw z に重みを掛け、畳み込み済みベース定数へ足して確率を決める(中立点・母平均の概念なし)。
+	var probability: float = clamp(-0.0013875 + score * 0.0375, 0.0, 0.120)
 	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.20)
 	return _deterministic_unit([event_index, runner.player_id, catcher_arm, _hash_string(str(context.get("half", ""))), 4409]) < probability
 
@@ -406,13 +445,14 @@ static func _steal_intent(
 	if outs_before == 2:
 		score += 0.32
 	if from_base == 2:
-		score -= 0.64
+		# 三盗は二盗より決行条件を厳しくする。この抑制は成功判定には混ざらない。
+		score -= 1.00
 	if strategy == "delayed_steal":
 		score -= 0.40
 	if batter_power >= 2.0:
 		score -= 0.40
-	# 中立点(z -0.217)からのスコア差で確率を決める。
-	var probability: float = clamp(0.060 + (score + 0.217) * 0.125, 0.0, 0.560)
+	# raw z に重みを掛け、畳み込み済みベース定数へ足して確率を決める(中立点・母平均の概念なし)。
+	var probability: float = clamp(0.087125 + score * 0.125, 0.0, 0.560)
 	probability = clamp(probability * STEAL_INTENT_PROBABILITY_SCALE, 0.0, 0.72)
 	var roll: float = _deterministic_unit([
 		event_index,
@@ -454,6 +494,8 @@ static func _make_intent(
 		"from_base": from_base,
 		"to_base": to_base,
 		"intent_score": round(score * 100.0) / 100.0,
+		# 成功判定は企図判断の状況補正(アウト数・打者パワー・三盗抑制等)と分離する。
+		"success_skill_score": round((_ability(runner, "Run_Steal") * 0.55 + _ability(runner, "Run_Speed") * 0.45) * 100.0) / 100.0,
 		"attempt_probability": round(probability * 10000.0) / 10000.0,
 		"visibility": VISIBILITY_OBSCURED_BY_BATTED_BALL if is_batted_ball else VISIBILITY_VISIBLE,
 		"recorded_as_attempt": false,
@@ -462,18 +504,320 @@ static func _make_intent(
 	}
 
 
-static func _steal_events_from_intents(
+# 実行対象の走者作戦を収集する。重盗→エンドラン→単独/ディレード盗塁の順で
+# 同じ走者を排他する。エンドランも表示用 intent だけでなくこの実行計画に入る。
+static func _run_intents_for_execution(
 	event_index: int,
-	intents: Array,
+	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
-	defense: Dictionary
+	defense: Dictionary,
+	bases_before: Array,
+	outs_before: int,
+	is_batted_ball: bool,
+	context: Dictionary
 ) -> Array:
+	var intents: Array = []
+	var used_runner_ids: Dictionary = {}
+
+	var double_steal: Array = _double_steal_intents(
+		event_index,
+		batter,
+		pitcher,
+		defense,
+		bases_before,
+		outs_before,
+		is_batted_ball
+	)
+	if not double_steal.is_empty():
+		for intent_value in double_steal:
+			var intent: Dictionary = intent_value as Dictionary
+			used_runner_ids[int(intent.get("runner_id", 0))] = true
+			intents.append(intent)
+
+	var hit_and_run: Dictionary = _hit_and_run_intent(
+		event_index,
+		batter,
+		pitcher,
+		defense,
+		bases_before,
+		outs_before,
+		is_batted_ball
+	)
+	if not hit_and_run.is_empty() and not used_runner_ids.has(int(hit_and_run.get("runner_id", 0))):
+		used_runner_ids[int(hit_and_run.get("runner_id", 0))] = true
+		intents.append(hit_and_run)
+
+	for base_index in range(0, 2):
+		var runner: PSPlayerSeasonRecord = bases_before[base_index] as PSPlayerSeasonRecord
+		if runner == null or used_runner_ids.has(runner.player_id):
+			continue
+		if base_index + 1 < bases_before.size() and bases_before[base_index + 1] != null:
+			continue
+		var strategy: String = "delayed_steal" if base_index == 0 and _should_try_delayed_steal(event_index, runner, pitcher, defense, context) else "straight_steal"
+		var intent: Dictionary = _steal_intent(
+			event_index,
+			base_index + 1,
+			base_index + 2,
+			runner,
+			batter,
+			pitcher,
+			defense,
+			outs_before,
+			is_batted_ball,
+			strategy
+		)
+		if not intent.is_empty():
+			intents.append(intent)
+	return intents
+
+
+# 盗塁類(ダブルスチール・ディレード・ストレート)とエンドランを投球前に計画する。
+# 盗塁は STEAL_FINAL_PITCH_RATIO で途中決行と最終球を分け、重盗はグループ単位で同じ側へ振る。
+# エンドランは必ず打者のスイング球と同時なので deferred へ積む。
+# ダブルスチールで片方が刺されたらもう片方は stolen_base でなく advance_on_double_steal_caught
+# として記録する(_apply_double_steal_caught_conversion で共通処理)。
+static func _steal_plan(
+	event_index: int,
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	bases: Array,
+	outs: int,
+	context: Dictionary
+) -> Dictionary:
+	var intents: Array = _run_intents_for_execution(event_index, batter, pitcher, defense, bases, outs, false, context)
+	if intents.is_empty():
+		return {"events": [], "deferred": []}
 	var events: Array = []
+	var deferred: Array = []
+	var group_deferred: Dictionary = {}
 	for intent_value in intents:
 		var intent: Dictionary = intent_value as Dictionary
-		if bool(intent.get("obscured_by_batted_ball", false)):
+		var group_id: String = str(intent.get("group_id", ""))
+		var is_deferred: bool
+		if str(intent.get("strategy", "")) == "hit_and_run":
+			# エンドランは打者がスイングする投球と同時にスタートするため必ず打席結果まで持ち越す。
+			is_deferred = true
+		elif not group_id.is_empty() and group_deferred.has(group_id):
+			is_deferred = bool(group_deferred[group_id])
+		else:
+			# group の場合はグループ先頭(リード走者、intents 内で最初に登場する塁の走者)の
+			# runner_id で1回だけロールし、グループ全員を同じ側に振り分ける。
+			var timing_roll: float = _deterministic_unit([event_index, int(intent.get("runner_id", 0)), 7717])
+			is_deferred = timing_roll < STEAL_FINAL_PITCH_RATIO
+			if not group_id.is_empty():
+				group_deferred[group_id] = is_deferred
+		if is_deferred:
+			deferred.append(intent)
+		else:
+			events.append(_runner_event_from_intent(event_index, intent, pitcher, defense, bases, "before_pitch"))
+	events = _apply_double_steal_caught_conversion(events)
+	return {"events": events, "deferred": deferred}
+
+
+# 最終球で走者がスタートした打席がインプレーになった場合の補正。
+# これは公式記録上の盗塁企図ではないため SB/CS には計上せず、併殺回避と安打時の追加進塁にだけ反映する。
+static func apply_runner_in_motion_to_outcome(
+	event_index: int,
+	outcome: Dictionary,
+	deferred_intents: Array,
+	bases_before: Array,
+	outs_before: int
+) -> Dictionary:
+	if deferred_intents.is_empty() or not _is_batted_ball_outcome(outcome):
+		return outcome
+	var result: Dictionary = outcome.duplicate(true)
+	var motion_intents: Array = []
+	for intent_value in deferred_intents:
+		var intent: Dictionary = intent_value as Dictionary
+		if str(intent.get("intent_type", "")) in ["steal", "hit_and_run"]:
+			motion_intents.append(intent)
+	if motion_intents.is_empty():
+		return result
+
+	result["runner_in_motion"] = true
+	result["runner_in_motion_intents"] = motion_intents.duplicate(true)
+	var trajectory: String = str((result.get("physical_traits", {}) as Dictionary).get("trajectory_bucket", ""))
+	var category: String = str(result.get("category", ""))
+	var lead_intent: Dictionary = motion_intents[0] as Dictionary
+	var lead_from_base: int = int(lead_intent.get("from_base", 0))
+
+	# 一塁走者がスタート済みの内野ゴロでは、二塁送球より一塁の打者走者を取るプレーが増える。
+	if trajectory == "grounder" and lead_from_base == 1 and outs_before < 2 and category in ["double_play", "fielders_choice"]:
+		var force_at_second: bool = category == "double_play" or int(result.get("force_out_to_base", 0)) == 2
+		if force_at_second:
+			var strategy: String = str(lead_intent.get("strategy", "straight_steal"))
+			var break_probability: float = RUNNER_IN_MOTION_DP_BREAK_HIT_AND_RUN if strategy == "hit_and_run" else RUNNER_IN_MOTION_DP_BREAK_STEAL
+			var runner: PSPlayerSeasonRecord = _runner_for_intent(bases_before, lead_intent)
+			if runner != null:
+				break_probability = clamp(break_probability + _ability(runner, "Run_Speed") * 0.035, 0.25, 0.90)
+			if _deterministic_unit([event_index, int(lead_intent.get("runner_id", 0)), 8811]) < break_probability:
+				result["category"] = "out"
+				result["result"] = "groundout_runner_in_motion"
+				result["bases"] = 0
+				result["runner_advancements"] = [_motion_advancement(lead_intent, bases_before, 2)]
+				result["runner_events"] = []
+				result["double_play_avoided_by_runner_motion"] = true
+				result["runner_motion_break_probability"] = break_probability
+				category = "out"
+
+	if category == "hit":
+		_apply_motion_hit_advancements(event_index, result, motion_intents, bases_before)
+	elif trajectory == "grounder" and category == "out":
+		_ensure_motion_groundout_advancements(result, motion_intents, bases_before)
+
+	var marker_events: Array = result.get("runner_events", []) as Array
+	for intent_value in motion_intents:
+		var intent: Dictionary = intent_value as Dictionary
+		marker_events.append(_runner_in_motion_marker(intent, result))
+	result["runner_events"] = marker_events
+	return result
+
+
+static func _apply_motion_hit_advancements(
+	event_index: int,
+	outcome: Dictionary,
+	motion_intents: Array,
+	bases_before: Array
+) -> void:
+	var advancements: Array = outcome.get("runner_advancements", []) as Array
+	if advancements.is_empty():
+		return
+	# 先の塁の走者から処理し、同じ塁への衝突を避ける。
+	var sorted_intents: Array = motion_intents.duplicate()
+	sorted_intents.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.get("from_base", 0)) > int(b.get("from_base", 0)))
+	for intent_value in sorted_intents:
+		var intent: Dictionary = intent_value as Dictionary
+		var runner_id: int = int(intent.get("runner_id", 0))
+		for advancement_value in advancements:
+			var advancement: Dictionary = advancement_value as Dictionary
+			if int(advancement.get("runner_id", 0)) != runner_id or bool(advancement.get("is_out", false)):
+				continue
+			var current_to: int = int(advancement.get("to_base", 0))
+			var extra_to: int = current_to + 1
+			if current_to >= 4 or _advancement_target_occupied(advancements, extra_to, runner_id):
+				break
+			var runner: PSPlayerSeasonRecord = _runner_for_intent(bases_before, intent)
+			var strategy: String = str(intent.get("strategy", "straight_steal"))
+			var probability: float = RUNNER_IN_MOTION_HIT_EXTRA_BASE if strategy == "hit_and_run" else RUNNER_IN_MOTION_STEAL_EXTRA_BASE
+			if runner != null:
+				probability += _ability(runner, "Run_Speed") * 0.035 + _ability(runner, "Run_Judgment") * 0.020
+			probability = clamp(probability, 0.12, 0.86)
+			advancement["runner_in_motion"] = true
+			advancement["runner_motion_extra_probability"] = probability
+			if _deterministic_unit([event_index, runner_id, current_to, 8821]) < probability:
+				advancement["to_base"] = extra_to
+				advancement["is_extra"] = true
+				advancement["runner_motion_extra_base"] = true
+			break
+	outcome["runner_advancements"] = advancements
+
+
+static func _ensure_motion_groundout_advancements(outcome: Dictionary, motion_intents: Array, bases_before: Array) -> void:
+	var advancements: Array = outcome.get("runner_advancements", []) as Array
+	for intent_value in motion_intents:
+		var intent: Dictionary = intent_value as Dictionary
+		var from_base: int = int(intent.get("from_base", 0))
+		if from_base < 1 or from_base >= 3:
 			continue
-		events.append(_runner_event_from_intent(event_index, intent, pitcher, defense))
+		var runner_id: int = int(intent.get("runner_id", 0))
+		var found: bool = false
+		for advancement_value in advancements:
+			if int((advancement_value as Dictionary).get("runner_id", 0)) == runner_id:
+				found = true
+				break
+		if not found:
+			advancements.append(_motion_advancement(intent, bases_before, from_base + 1))
+	outcome["runner_advancements"] = advancements
+
+
+static func _motion_advancement(intent: Dictionary, bases_before: Array, to_base: int) -> Dictionary:
+	var runner: PSPlayerSeasonRecord = _runner_for_intent(bases_before, intent)
+	return {
+		"runner": runner,
+		"runner_id": int(intent.get("runner_id", 0)),
+		"from_base": int(intent.get("from_base", 0)),
+		"to_base": to_base,
+		"baseline_to": int(intent.get("from_base", 0)),
+		"is_out": false,
+		"is_extra": true,
+		"runner_in_motion": true,
+	}
+
+
+static func _advancement_target_occupied(advancements: Array, target: int, ignored_runner_id: int) -> bool:
+	if target >= 4:
+		return false
+	for advancement_value in advancements:
+		var advancement: Dictionary = advancement_value as Dictionary
+		if int(advancement.get("runner_id", 0)) == ignored_runner_id or bool(advancement.get("is_out", false)):
+			continue
+		if int(advancement.get("to_base", 0)) == target:
+			return true
+	return false
+
+
+static func _runner_for_intent(bases_before: Array, intent: Dictionary) -> PSPlayerSeasonRecord:
+	var from_base: int = int(intent.get("from_base", 0))
+	var runner_id: int = int(intent.get("runner_id", 0))
+	if from_base >= 1 and from_base <= bases_before.size():
+		var direct: PSPlayerSeasonRecord = bases_before[from_base - 1] as PSPlayerSeasonRecord
+		if direct != null and direct.player_id == runner_id:
+			return direct
+	for base_value in bases_before:
+		var runner: PSPlayerSeasonRecord = base_value as PSPlayerSeasonRecord
+		if runner != null and runner.player_id == runner_id:
+			return runner
+	return null
+
+
+static func _runner_in_motion_marker(intent: Dictionary, outcome: Dictionary) -> Dictionary:
+	var to_base: int = int(intent.get("from_base", 0))
+	for advancement_value in outcome.get("runner_advancements", []) as Array:
+		var advancement: Dictionary = advancement_value as Dictionary
+		if int(advancement.get("runner_id", 0)) == int(intent.get("runner_id", 0)):
+			to_base = int(advancement.get("to_base", to_base))
+			break
+	return {
+		"event_type": EVENT_TYPE_RUNNER_EVENT,
+		"phase": "after_batted_ball",
+		"strategy": str(intent.get("strategy", "straight_steal")),
+		"result": "runner_in_motion_batted_ball",
+		"runner_id": int(intent.get("runner_id", 0)),
+		"batter_id": int(intent.get("batter_id", 0)),
+		"from_base": int(intent.get("from_base", 0)),
+		"to_base": to_base,
+		"is_steal_attempt": false,
+		"is_stolen_base": false,
+		"is_caught_stealing": false,
+		"recorded_as_attempt": false,
+		"state_already_applied": true,
+		"outs_added": 0,
+		"runner_in_motion": true,
+		"double_play_avoided_by_runner_motion": bool(outcome.get("double_play_avoided_by_runner_motion", false)),
+	}
+
+
+# 三振打席まで繰延べられた盗塁企図(最終球扱い)を三振確定後に解決する。三振では塁状態が
+# 変わらないので、呼び出し側は塁状態を bases_after_plate のまま渡してよい。ダブルスチールの
+# 片方刺殺変換は _steal_plan の即時解決側と共通のヘルパで処理する(ロジックの複製を避ける)。
+static func _deferred_steal_events_after_strikeout(
+	event_index: int,
+	deferred_intents: Array,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	bases: Array
+) -> Array:
+	var events: Array = []
+	for intent_value in deferred_intents:
+		var intent: Dictionary = intent_value as Dictionary
+		events.append(_runner_event_from_intent(event_index, intent, pitcher, defense, bases, "after_plate_result", {"on_strikeout_pitch": true}))
+	return _apply_double_steal_caught_conversion(events)
+
+
+# ダブルスチールで片方が刺された(caught_stealing)場合、もう片方の stolen_base を
+# advance_on_double_steal_caught に変換する(記録上の盗塁成功扱いをしない)。
+static func _apply_double_steal_caught_conversion(events: Array) -> Array:
 	var any_caught: bool = false
 	for event_value in events:
 		var event: Dictionary = event_value as Dictionary
@@ -493,24 +837,26 @@ static func _runner_event_from_intent(
 	event_index: int,
 	intent: Dictionary,
 	pitcher: PSPlayerSeasonRecord,
-	defense: Dictionary
+	defense: Dictionary,
+	bases: Array,
+	phase: String = "before_pitch",
+	extra_fields: Dictionary = {}
 ) -> Dictionary:
 	var runner_id: int = int(intent.get("runner_id", 0))
 	var from_base: int = int(intent.get("from_base", 0))
 	var to_base: int = int(intent.get("to_base", 0))
-	var stealing_score: float = float(intent.get("intent_score", 0.0))
+	var stealing_skill: float = float(intent.get("success_skill_score", 0.0))
 	var hold_runners: float = _ability(pitcher, "Pit_HoldRunner")
 	var catcher_arm: float = _catcher_steal_control(defense)
 	var strategy: String = str(intent.get("strategy", "straight_steal"))
-	var success_probability: float = 0.72
-	# 企図スコア(z)が高いほど成功、投手牽制 z(中立0.712)・捕手肩 z(中立2.046)が高いほど失敗。
-	success_probability += (stealing_score - 0.583) * 0.1
-	success_probability -= (hold_runners - 0.712) * 0.015
-	success_probability -= (catcher_arm - 2.046) * 0.035
-	if strategy == "delayed_steal":
-		success_probability -= 0.05
-	elif strategy == "double_steal" and from_base == 2:
-		success_probability -= 0.04
+	var success_probability: float = STEAL_SUCCESS_BASE
+	# 走者の能力と守備だけで成功率を決める。企図判断の状況補正を混ぜない。
+	success_probability += stealing_skill * 0.1
+	success_probability -= hold_runners * 0.015
+	success_probability -= catcher_arm * 0.035
+	if from_base == 2:
+		# 三盗は企図時点で強く選別されるため、二盗より成功率が高い実勢に合わせる。
+		success_probability += STEAL_THIRD_SUCCESS_BONUS
 	success_probability = clamp(success_probability, 0.45, 0.88)
 	var roll: float = _deterministic_unit([
 		event_index,
@@ -522,21 +868,41 @@ static func _runner_event_from_intent(
 		5501,
 	])
 	var success: bool = roll < success_probability
-	# 本来 caught_stealing になる送球の一部が逸れ、走者が生きる（捕手の送球失策）。肩 z が低いほど増える。
+	var final_to_base: int = to_base
 	var throwing_error: bool = false
-	if not success:
-		var error_chance: float = clamp(
-			CATCHER_THROW_ERROR_BASE - (catcher_arm - CATCHER_THROW_ERROR_REFERENCE_Z) * CATCHER_THROW_ERROR_WEIGHT,
-			CATCHER_THROW_ERROR_MIN,
-			CATCHER_THROW_ERROR_MAX
-		)
-		throwing_error = _deterministic_unit([event_index, from_base, to_base, runner_id, 9901]) < error_chance
-	var runner_safe: bool = success or throwing_error
-	var result_label: String = "stolen_base" if success else ("caught_stealing_throwing_error" if throwing_error else "caught_stealing")
+	# 成功した単独盗塁の一部で捕手送球が逸れ、走者が1つ余分に進む(記録は盗塁+捕手失策 E2)。
+	# ダブルスチール(group_id あり)は対象外。刺殺(caught_stealing)は常に刺殺として記録される。
+	if success and str(intent.get("group_id", "")).is_empty():
+		var extra_target: int = to_base + 1
+		var target_open: bool = extra_target >= 4 or (extra_target >= 1 and extra_target <= 3 and bases[extra_target - 1] == null)
+		if target_open:
+			var error_chance: float = clamp(
+				STEAL_THROW_ERROR_EXTRA_BASE - catcher_arm * STEAL_THROW_ERROR_ARM_WEIGHT,
+				STEAL_THROW_ERROR_MIN,
+				STEAL_THROW_ERROR_MAX
+			)
+			throwing_error = _deterministic_unit([event_index, from_base, to_base, runner_id, 9901]) < error_chance
+			if throwing_error:
+				final_to_base = extra_target
+	var result_label: String = "stolen_base" if success else "caught_stealing"
 	var runner_stub: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
 	runner_stub.player_id = runner_id
+	var extra: Dictionary = {
+		"batter_id": int(intent.get("batter_id", 0)),
+		"group_id": str(intent.get("group_id", "")),
+		"is_stolen_base": success,
+		"is_caught_stealing": not success,
+		"is_fielding_error": throwing_error,
+		"error_position": 2 if throwing_error else 0,
+		"success_probability": round(success_probability * 10000.0) / 10000.0,
+		"recorded_as_attempt": true,
+	}
+	if throwing_error:
+		extra["fielding_error_type"] = "throwing"
+	for key_value in extra_fields.keys():
+		extra[key_value] = extra_fields[key_value]
 	return _runner_event(
-		"after_plate_result",
+		phase,
 		strategy,
 		result_label,
 		runner_stub,
@@ -544,19 +910,10 @@ static func _runner_event_from_intent(
 		pitcher,
 		defense,
 		from_base,
-		to_base,
+		final_to_base,
 		true,
-		0 if runner_safe else 1,
-		{
-			"batter_id": int(intent.get("batter_id", 0)),
-			"group_id": str(intent.get("group_id", "")),
-			"is_stolen_base": success,
-			"is_caught_stealing": not runner_safe,
-			"is_fielding_error": throwing_error,
-			"error_position": 2 if throwing_error else 0,
-			"success_probability": round(success_probability * 10000.0) / 10000.0,
-			"recorded_as_attempt": true,
-		}
+		0 if success else 1,
+		extra
 	)
 
 
@@ -583,17 +940,18 @@ static func _battery_misplay_events(
 	var pitch_summary: Dictionary = outcome.get("pitch_summary", {}) as Dictionary
 	var pitch_count: int = int(clamp(int(pitch_summary.get("pitches", 1)), 1, BATTERY_MISPLAY_MAX_PITCHES))
 	# 暴投/捕逸は本来1球ごとの事象なので、打席1回ではなく球数分の機会へ変換する。
+	# raw z に重みを掛け畳み込み済みベース定数へ足す(中立点・母平均の概念なし)。
 	var wild_per_pitch: float = clamp(
 		WILD_PITCH_PER_PITCH_BASE
-		+ (1.44 - control) * WILD_PITCH_CONTROL_WEIGHT
-		+ (stuff - 1.776) * WILD_PITCH_STUFF_WEIGHT
-		- (catcher_blocking - 2.473) * WILD_PITCH_BLOCKING_WEIGHT
-		- (catcher_game_call - 2.56) * WILD_PITCH_GAME_CALL_WEIGHT,
+		- control * WILD_PITCH_CONTROL_WEIGHT
+		+ stuff * WILD_PITCH_STUFF_WEIGHT
+		- catcher_blocking * WILD_PITCH_BLOCKING_WEIGHT
+		- catcher_game_call * WILD_PITCH_GAME_CALL_WEIGHT,
 		WILD_PITCH_PER_PITCH_MIN,
 		WILD_PITCH_PER_PITCH_MAX
 	)
 	var passed_per_pitch: float = clamp(
-		PASSED_BALL_PER_PITCH_BASE + (2.473 - catcher_blocking) * PASSED_BALL_BLOCKING_WEIGHT,
+		PASSED_BALL_PER_PITCH_BASE - catcher_blocking * PASSED_BALL_BLOCKING_WEIGHT,
 		PASSED_BALL_PER_PITCH_MIN,
 		PASSED_BALL_PER_PITCH_MAX
 	)
@@ -696,8 +1054,9 @@ static func _batted_ball_extra_base_events(
 			continue
 		var speed: float = _ability(runner, "Run_Speed")
 		var outfield_arm: float = _fielder_throwing_for_outcome(defense, outcome)
-		# 走力 z(中立0.78)が高いほど追加進塁、外野肩 z(中立0.272)が高いほど抑制。
-		var probability: float = clamp(0.02 + (speed - 0.78) * 0.03125 - (outfield_arm - 0.272) * 0.01875, 0.0, 0.28)
+		# 走力 z が高いほど追加進塁、外野肩 z が高いほど抑制(raw z に重みを掛け畳み込み済みベース定数へ足す。
+		# 中立点・母平均の概念なし)。
+		var probability: float = clamp(0.000725 + speed * 0.03125 - outfield_arm * 0.01875, 0.0, 0.28)
 		if outs_before == 2:
 			probability += 0.08
 		if to_base >= 4:

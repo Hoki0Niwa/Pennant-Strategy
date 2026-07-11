@@ -1327,6 +1327,8 @@ static func _fielders_choice_outcome(
 	}
 
 
+# 封殺対象より後方でもフォース状態(後ろの塁が全て埋まっている)なら1つ進む
+# (満塁の二塁封殺で三塁走者が生還する等)。
 static func _fielders_choice_advancements(bases: Array, force_from_base: int, force_to_base: int) -> Array:
 	var advancements: Array = []
 	for base_index in range(2, -1, -1):
@@ -1340,6 +1342,8 @@ static func _fielders_choice_advancements(bases: Array, force_from_base: int, fo
 			to_base = force_to_base
 		elif from_base < force_from_base:
 			to_base = from_base + 1
+		elif PSBaseStateResolver._is_forced_runner(bases, base_index):
+			to_base = min(4, from_base + 1)
 		advancements.append(_runner_advancement(runner, from_base, to_base, to_base > from_base, is_out))
 	return advancements
 

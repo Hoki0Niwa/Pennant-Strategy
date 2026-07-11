@@ -95,7 +95,11 @@ static func apply_plate_outcome(
 			if track_batter and batter != null:
 				batter.batter_stats.at_bats += 1
 				batter.batter_stats.double_plays += 1
-			outs_added = BaseStateResolver.apply_double_play(bases, outs)
+			var double_play_applied: Dictionary = BaseStateResolver.apply_double_play(bases, outs)
+			runs = int(double_play_applied.get("runs", 0))
+			earned_runs = runs
+			outs_added = int(double_play_applied.get("outs", 0))
+			# 併殺間の生還は打点にならない(規則9.04)ため runs_batted_in には加算しない。
 		"fielders_choice":
 			if track_batter and batter != null:
 				batter.batter_stats.at_bats += 1
