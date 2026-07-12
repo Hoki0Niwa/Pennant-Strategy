@@ -285,16 +285,29 @@ func _draw_ps_recent(rect: Rect2, post: PSPostseasonResult) -> void:
 	var date_label: String = SeasonCalendar.label_for_date(str(first_game.get("date", "")))
 	_text_right("%s / 第%d日" % [date_label, post.current_day], rect.end.x - 18, rect.position.y + 30, 12, MUTED, 150)
 	# レギュラーの「前日の試合結果」のミニカード (球団バッジ + スコア) をそのまま流用し、枠サイズだけ変える。
+	var shown: Array = games.slice(0, min(games.size(), 2))
+	var normalized: Array = []
+	for entry_value in shown:
+		normalized.append(_normalize_ps_game((entry_value as Dictionary)["game"] as Dictionary))
+	# 一桁/二桁が混在してもセル間でフォントサイズが揃うよう、home_screen と同じく
+	# 表示する試合全体で共通のフォントサイズを1回だけ求める。
+	var font_size: int = 18
+	for game_value in normalized:
+		var g: Dictionary = game_value as Dictionary
+		if bool(g.get("played", false)):
+			var away_text: String = str(int(g.get("away_score", 0)))
+			var home_text: String = str(int(g.get("home_score", 0)))
+			font_size = min(font_size, _fit_score_font_size(away_text, home_text, YESTERDAY_SCORE_MAX_W))
+
 	var gap: float = 10.0
 	var gx: float = rect.position.x + 14.0
 	var gy: float = rect.position.y + 50.0
-	var cols: int = max(1, min(games.size(), 2))
+	var cols: int = max(1, normalized.size())
 	var cw: float = (rect.size.x - 28.0 - gap * float(cols - 1)) / float(cols)
 	var ch: float = rect.size.y - 62.0
-	for i in range(min(games.size(), 2)):
-		var entry: Dictionary = games[i] as Dictionary
+	for i in range(normalized.size()):
 		var cell: Rect2 = Rect2(gx + i * (cw + gap), gy, cw, ch)
-		_draw_yesterday_game(cell, _normalize_ps_game(entry["game"] as Dictionary), AppState.selected_team_id)
+		_draw_yesterday_game(cell, normalized[i] as Dictionary, AppState.selected_team_id, font_size)
 
 
 # ポストシーズン試合を home._draw_yesterday_game が読める形へ正規化する。

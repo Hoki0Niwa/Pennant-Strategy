@@ -342,8 +342,12 @@ func _draw_result_mark(base_center: Vector2, base_radius: float, symbol: String,
 				int(round(base_radius * 1.9)), fallback, base_radius * 2.0, HORIZONTAL_ALIGNMENT_CENTER)
 
 
-func _chip(base_rect: Rect2, text: String, color: Color) -> void:
-	_round(base_rect, Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.5), 9)
+# filled=true は塗り (背景 0.18 + 枠 0.5)、false は枠のみ (背景なし + 枠を濃く)。
+# 塗り/アウトラインで支配下/育成などの2状態を色を変えずに描き分けるのに使う。
+func _chip(base_rect: Rect2, text: String, color: Color, filled: bool = true) -> void:
+	var bg_alpha: float = 0.18 if filled else 0.0
+	var border_alpha: float = 0.5 if filled else 0.85
+	_round(base_rect, Color(color.r, color.g, color.b, bg_alpha), Color(color.r, color.g, color.b, border_alpha), 9)
 	_text(text, Vector2(base_rect.position.x, base_rect.position.y + base_rect.size.y * 0.72), int(base_rect.size.y * 0.52), color, base_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 
@@ -660,11 +664,13 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 				_text(str(row.get("team", "")), Vector2(cx + 20.0, ty), cell_size, base_color, content_w - 24.0)
 			"pos_badge":
 				# 守備位置/役割を色付きチップで描く。row[key]=表示文字 / row[key+"_color"]=色。
+				# row[key+"_dev"]=true なら育成選手としてアウトライン (枠のみ) で描く。
 				var badge_text: String = str(row.get(key, ""))
 				if not badge_text.is_empty():
 					var bw: float = min(content_w - 8.0, 40.0)
 					_chip(Rect2(cx + (content_w - bw) * 0.5, ry + row_h * 0.5 - 11.0, bw, 22.0),
-						badge_text, row.get("%s_color" % key, MUTED) as Color)
+						badge_text, row.get("%s_color" % key, MUTED) as Color,
+						not bool(row.get("%s_dev" % key, false)))
 			"diff":
 				var dv: int = int(row.get(key, 0))
 				var dcol: Color = GREEN if dv > 0 else (RED if dv < 0 else MUTED)
@@ -859,6 +865,15 @@ func _format_money(man_value: int) -> String:
 	if oku > 0:
 		return "%s億%s万円" % [_comma(oku), _comma(man)]
 	return "%s万円" % _comma(man)
+
+
+# 幅の狭い箇所 (SUMMARYパネル/12球団の予算一覧など) 向けの短縮表記 (例: 32000万円→3.2億)。
+# 符号は呼び出し側で付与する想定 (_format_money と同様、絶対値の文字列を返す)。
+func _format_money_compact(man_value: int) -> String:
+	var abs_value: int = absi(man_value)
+	if abs_value >= 10000:
+		return "%.1f億" % (float(abs_value) / 10000.0)
+	return "%s万" % _comma(abs_value)
 
 
 func _comma(value: int) -> String:

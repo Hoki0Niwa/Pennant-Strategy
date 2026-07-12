@@ -144,7 +144,7 @@ func _draw_identity() -> void:
 	x += _measure(_record.name, 28) + 12.0
 	_text("▼", Vector2(x, ID_Y + 6), 14, MUTED)
 	x += 28.0
-	_chip(Rect2(x, ID_Y - 13, 44, 26), _role_or_position_short(_record), _identity_color(_record))
+	_chip(Rect2(x, ID_Y - 13, 44, 26), _role_or_position_short(_record), _identity_color(_record), not _record.development_player)
 	x += 54.0
 	if _record.jersey_number > 0:
 		var jersey: String = "#%d" % _record.jersey_number

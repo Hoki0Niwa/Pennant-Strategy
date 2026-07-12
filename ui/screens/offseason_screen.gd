@@ -195,6 +195,7 @@ func _append_growth_column(cols: Array, title: String, key: String, value_w: int
 # 選手の成長 結果の列 (選手/年齢/結果 + 能力)。
 func _growth_columns(pitcher: bool) -> Array:
 	var cols: Array = [
+		{"title": "守備", "key": "pos", "w": 46, "fmt": "pos_badge"},
 		{"title": "選手", "key": "name", "w": 128, "fmt": "string"},
 		{"title": "年齢", "key": "age", "w": 76, "fmt": "int", "gap_after": 24},
 		{"title": "結果", "key": "kind", "w": 104, "fmt": "string", "align": "right"},
@@ -262,6 +263,9 @@ const CAMP_BOARD: Rect2 = Rect2(262, 324, 1638, 512)
 const CAMP_MENU: Rect2 = Rect2(262, 850, 654, 210)
 const CAMP_RATE: Rect2 = Rect2(932, 850, 476, 210)
 const CAMP_APT: Rect2 = Rect2(1424, 850, 476, 210)
+# 予算改定サマリー (_draw_budget_recompute_summary、引退結果=step_0のみ) が BODY 上部に占める高さ。
+# 投手/野手タブ (_build_result_people_tabs) をこの分だけ下へ逃がして重なりを防ぐ。
+const BUDGET_SUMMARY_BLOCK_H: float = 66.0
 
 # 行ハイライト/選択強調用の補助色。
 const SEL_RELEASE: Color = Color(0.95, 0.6, 0.55)
@@ -407,16 +411,23 @@ func _set_status(text: String, color: Color) -> void:
 
 
 # 自軍ロスターの枠/ポジション別人数を1回集計 (描画は _draw_summary_panel)。
-# ポジション別は支配下 (非育成) の主ポジションで数える。
+# ポジション別は支配下 (非育成) の主ポジションで数える。投手 (pos=1) は先発/中継 (抑えは中継に含む) で分ける。
 func _compute_roster_summary() -> void:
 	var team_id: int = AppState.selected_team_id
-	var positions: Dictionary = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0}
+	var positions: Dictionary = {2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0}
+	var starters: int = 0
+	var relievers: int = 0
 	for player_row in GameDb.players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id or player.is_retired() or player.development_player:
 			continue
 		var pos: int = player.position
-		if positions.has(pos):
+		if pos == 1:
+			if _resolved_pitcher_role(player.role, {}) == "starter":
+				starters += 1
+			else:
+				relievers += 1
+		elif positions.has(pos):
 			positions[pos] = int(positions[pos]) + 1
 	var team: PSTeam = GameDb.get_team(team_id)
 	var payroll: int = TeamFinance.team_payroll(GameDb.players, team_id)
@@ -425,6 +436,8 @@ func _compute_roster_summary() -> void:
 		"development": TeamFinance.development_count(GameDb.players, team_id),
 		"foreign": _active_foreign_count(team_id),
 		"positions": positions,
+		"starters": starters,
+		"relievers": relievers,
 		"funds": team.funds if team != null else 0,
 		"payroll": payroll,
 		"room": TeamFinance.budget_room(team.funds if team != null else 0, payroll),
@@ -514,9 +527,9 @@ func _build_buttons() -> void:
 
 
 # 選手一覧タブ。投手/野手は別表なので「全選手」は作らない。
-func _build_player_tabs(prefix: String, active_tab: String, pitcher_count: int, fielder_count: int, callback: Callable) -> void:
+func _build_player_tabs(prefix: String, active_tab: String, pitcher_count: int, fielder_count: int, callback: Callable, y_offset: float = 0.0) -> void:
 	var x: float = BODY.position.x + 16.0
-	var y: float = BODY.position.y + 16.0
+	var y: float = BODY.position.y + 16.0 + y_offset
 	var tabs: Array = [
 		{"id": PLAYER_TAB_PITCHER, "label": "投手 %d" % pitcher_count, "w": 92.0},
 		{"id": PLAYER_TAB_FIELDER, "label": "野手 %d" % fielder_count, "w": 92.0},
@@ -561,7 +574,10 @@ func _build_result_people_tabs() -> void:
 		people.append_array(result.get("released", []) as Array)
 		people.append_array(result.get("demoted", []) as Array)
 	var counts: Dictionary = _people_pitcher_fielder_counts(people)
-	_build_player_tabs("result_people", _result_people_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
+	# budgets (予算改定サマリー) は step_0 のみ result に含まれ、その分タブを下へ逃がす
+	# (_draw_budget_recompute_summary と同じ高さを共有、ずれるとタブと文字が重なる)。
+	var y_offset: float = BUDGET_SUMMARY_BLOCK_H if result.has("budgets") else 0.0
+	_build_player_tabs("result_people", _result_people_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab, y_offset)
 
 
 # 結果ステップ固有のタブ。成長=候補タブ / キャンプ=自軍・他球団タブ。
@@ -1030,7 +1046,7 @@ func _draw_summary_panel() -> void:
 		{"label": "支配下", "value": "%d/%d" % [shienka, TeamFinance.SHIENKA_LIMIT], "color": AMBER if shienka >= TeamFinance.SHIENKA_LIMIT else TEXT},
 		{"label": "育成", "value": "%d" % dev, "color": TEXT},
 		{"label": "外国人", "value": "%d/%d" % [foreign, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM], "color": AMBER if foreign >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM else TEXT},
-		{"label": "予算残", "value": ("-" + _format_money(-room)) if room < 0 else _format_money(room), "color": AMBER if room < 0 else TEXT},
+		{"label": "予算残", "value": ("-" + _format_money_compact(-room)) if room < 0 else _format_money_compact(room), "color": AMBER if room < 0 else TEXT},
 	]
 	var rx: float = SUMMARY.position.x + 24.0
 	for item_value in roster:
@@ -1043,12 +1059,19 @@ func _draw_summary_panel() -> void:
 	_line(Vector2(div_x, SUMMARY.position.y + 16.0), Vector2(div_x, SUMMARY.end.y - 16.0), BORDER, 1.0)
 	_text("ポジション別 (支配下)", Vector2(div_x + 20.0, label_y), 12, MUTED)
 	var px0: float = div_x + 20.0
-	var slot: float = (SUMMARY.end.x - 16.0 - px0) / 9.0
-	for i in range(9):
-		var pos: int = i + 1
+	# 投手 (pos=1) は先発/中継 (抑えは中継に含む) で分けて表示するため、野手8ポジション+2で10枠。
+	var slots: Array = [
+		{"char": "先", "count": int(_roster_summary.get("starters", 0)), "color": _pos_color(1)},
+		{"char": "継", "count": int(_roster_summary.get("relievers", 0)), "color": _pos_color(1)},
+	]
+	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
+		slots.append({"char": _position_char(pos), "count": int(positions.get(pos, 0)), "color": _pos_color(pos)})
+	var slot: float = (SUMMARY.end.x - 16.0 - px0) / float(slots.size())
+	for i in range(slots.size()):
+		var entry: Dictionary = slots[i] as Dictionary
 		var cx: float = px0 + float(i) * slot
-		_text(_position_char(pos), Vector2(cx, value_y), 16, _pos_color(pos))
-		_text(str(int(positions.get(pos, 0))), Vector2(cx + 24.0, value_y), 18, TEXT, slot - 26.0)
+		_text(str(entry["char"]), Vector2(cx, value_y), 16, entry["color"] as Color)
+		_text(str(int(entry["count"])), Vector2(cx + 24.0, value_y), 18, TEXT, slot - 26.0)
 
 
 # --- 戦力外通告 ---
@@ -1268,7 +1291,7 @@ func _draw_candidate_identity(rect: Rect2, xs: Dictionary, row: Dictionary, y: f
 func _draw_candidate_pitcher_row(rect: Rect2, row: Dictionary, y: float, cache: Dictionary) -> void:
 	var xs: Dictionary = _draft_table_x(rect, true)
 	var role: String = str(row.get("role", "starter"))
-	_chip(Rect2(float(xs["badge_x"]), y - 16.0, 50.0, 22.0), _role_label(role), _role_color(role))
+	_chip(Rect2(float(xs["badge_x"]), y - 16.0, 50.0, 22.0), _role_label(role), _role_color(role), not bool(row.get("is_development", false)))
 	_draw_candidate_identity(rect, xs, row, y)
 	var record: PSPlayerSeasonRecord = _board_record(cache, int(row.get("candidate_id", 0)), row.get("template", {}) as Dictionary)
 	if record != null:
@@ -1281,7 +1304,7 @@ func _draw_candidate_pitcher_row(rect: Rect2, row: Dictionary, y: float, cache: 
 
 func _draw_candidate_fielder_row(rect: Rect2, row: Dictionary, y: float, cache: Dictionary) -> void:
 	var xs: Dictionary = _draft_table_x(rect, false)
-	_position_badge(Rect2(float(xs["badge_x"]), y - 16.0, 40.0, 22.0), int(row.get("position", 0)))
+	_position_badge(Rect2(float(xs["badge_x"]), y - 16.0, 40.0, 22.0), int(row.get("position", 0)), bool(row.get("is_development", false)))
 	_draw_candidate_identity(rect, xs, row, y)
 	var record: PSPlayerSeasonRecord = _board_record(cache, int(row.get("candidate_id", 0)), row.get("template", {}) as Dictionary)
 	if record != null:
@@ -1454,7 +1477,8 @@ func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, ke
 
 
 # 年次予算再計算の結果 (TeamFinance.recompute_annual_budgets の戻り値) を1行+12球団表で表示し、
-# 残り高さを持つ縮小後の rect を返す (下段の表描画に使う)。
+# 残り高さを持つ縮小後の rect を返す (下段の表描画に使う)。消費高さは BUDGET_SUMMARY_BLOCK_H と
+# 一致させること (_build_result_people_tabs がタブをこの分だけ下げて重なりを避ける)。
 func _draw_budget_recompute_summary(rect: Rect2, budgets: Dictionary) -> Rect2:
 	var rows: Array = budgets.get("team_budgets", []) as Array
 	if rows.is_empty():
@@ -1486,7 +1510,9 @@ func _draw_budget_recompute_summary(rect: Rect2, budgets: Dictionary) -> Rect2:
 		var cx: float = rect.position.x + float(i) * col_w
 		var is_self: bool = int(row.get("team_id", 0)) == user_team_id
 		var color: Color = BLUE if is_self else (AMBER if bool(row.get("over_budget", false)) else MUTED)
-		_text("%s %d位 %s" % [str(row.get("name", "")), int(row.get("rank", 0)), _format_money(int(row.get("funds", 0)))], Vector2(cx, cy), 11, color, col_w - 6.0)
+		var team: PSTeam = GameDb.get_team(int(row.get("team_id", 0)))
+		var short_name: String = team.short_name if team != null else str(row.get("name", ""))
+		_text("%s %d位 %s" % [short_name, int(row.get("rank", 0)), _format_money_compact(int(row.get("funds", 0)))], Vector2(cx, cy), 11, color, col_w - 6.0)
 	y = cy + 20.0
 
 	return Rect2(rect.position.x, y, rect.size.x, rect.end.y - y)
@@ -1525,6 +1551,7 @@ func _draw_rookies_result(rect: Rect2, result: Dictionary) -> void:
 			"age": int(entry.get("age", 0)),
 			"pos": str(badge.get("text", "")),
 			"pos_color": badge.get("color", MUTED) as Color,
+			"pos_dev": bool(entry.get("development_player", entry.get("development", false))),
 			"overall": int(entry.get("overall", 0)),
 		})
 	_heading_table(rect, "新人補強: %d人" % rookies.size(), ROOKIE_COLUMNS, rows, "補強の候補がありませんでした。", "result")
@@ -1918,7 +1945,7 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
 	elif team_mode == "team":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
-	_position_badge(Rect2(float(xs["role_x"]), y - 16.0, 40.0, 22.0), record.position)
+	_position_badge(Rect2(float(xs["role_x"]), y - 16.0, 40.0, 22.0), record.position, record.development_player)
 	_draw_identity_cells(record, player, entry, xs, y)
 
 	var value: int = PlayerValueEvaluator.overall_score(record)
@@ -2503,6 +2530,7 @@ func _pick_row(pick: Dictionary) -> Dictionary:
 		"age": int(pick.get("age", 0)),
 		"pos": str(badge.get("text", "")),
 		"pos_color": badge.get("color", MUTED) as Color,
+		"pos_dev": bool(pick.get("development", false)),
 		"overall": int(pick.get("overall", 0)),
 		"source": _source_label(str(pick.get("source_type", ""))),
 		"note": _pick_note(pick),
@@ -3060,6 +3088,7 @@ func _camp_candidate_row(player: PSPlayer, overall: int, rank: int, _trained: Di
 		"info2": "",
 		"info2_color": MUTED,
 		"is_pitcher": player.is_pitcher(),
+		"is_development": player.development_player,
 		"position": player.position,
 		"role": _resolved_pitcher_role(player.role, {}) if player.is_pitcher() else "fielder",
 		"aptitudes": player.position_aptitudes,
@@ -3353,7 +3382,12 @@ func _growth_rows(entries: Array) -> Array:
 		var entry: Dictionary = entry_row as Dictionary
 		var after: int = int(entry.get("after", 0))
 		var delta: int = int(entry.get("delta", 0))
+		var badge: Dictionary = _pick_pos_badge(entry)
+		var gp: PSPlayer = GameDb.get_player(int(entry.get("player_id", 0)))
 		var row: Dictionary = {
+			"pos": str(badge.get("text", "")),
+			"pos_color": badge.get("color", MUTED) as Color,
+			"pos_dev": gp != null and gp.development_player,
 			"name": str(entry.get("name", "")),
 			"age": int(entry.get("age", 0)),
 			"kind": str(entry.get("growth_label", entry.get("result_label", ""))),
@@ -3645,13 +3679,14 @@ func _release_state(player_id: int) -> String:
 	return ""
 
 
+# 支配下=塗り / 育成=アウトライン (枠のみ) で描き分ける。バッジ列を持つ全テーブルで共通。
 func _role_badge(rect: Rect2, record: PSPlayerSeasonRecord) -> void:
 	var role: String = _resolved_pitcher_role(record.role, {"starts": record.pitcher_stats.starts, "relief_appearances": record.pitcher_stats.relief_appearances})
-	_chip(rect, _role_label(role), _role_color(role))
+	_chip(rect, _role_label(role), _role_color(role), not record.development_player)
 
 
-func _position_badge(rect: Rect2, pos: int) -> void:
-	_chip(rect, _position_char(pos), _pos_color(pos))
+func _position_badge(rect: Rect2, pos: int, development: bool = false) -> void:
+	_chip(rect, _position_char(pos), _pos_color(pos), not development)
 
 
 func _role_color(role: String) -> Color:

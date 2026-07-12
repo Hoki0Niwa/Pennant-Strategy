@@ -757,10 +757,12 @@ func _identity_fields(record: PSPlayerSeasonRecord) -> Dictionary:
 		row["role"] = badge["text"]
 		row["role_color"] = badge["color"]
 		row["role_sort"] = badge["sort"]
+		row["role_dev"] = record.development_player
 	else:
 		row["pos"] = str(POS_SHORT.get(record.position, "?"))
 		row["pos_color"] = _pos_color(record.position)
 		row["pos_sort"] = record.position
+		row["pos_dev"] = record.development_player
 	return row
 
 

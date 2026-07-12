@@ -353,19 +353,40 @@ func _draw_yesterday(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
 		return _is_team_game(a as Dictionary, team_id) and not _is_team_game(b as Dictionary, team_id)
 	)
+	var shown: Array = rows.slice(0, min(rows.size(), 6))
+	# セルごとに桁数でフォントサイズを変えると、一桁と二桁の試合が混在したときに
+	# セル間で文字の大きさが揃わず不揃いに見える。表示する試合全体で最も窮屈な組み合わせに
+	# 合わせて1回だけフォントサイズを求め、全セル共通で使うことで見た目を揃える。
+	var font_size: int = 18
+	for row_value in shown:
+		var g: Dictionary = row_value as Dictionary
+		if bool(g.get("played", false)):
+			var away_text: String = str(int(g.get("away_score", 0)))
+			var home_text: String = str(int(g.get("home_score", 0)))
+			font_size = min(font_size, _fit_score_font_size(away_text, home_text, YESTERDAY_SCORE_MAX_W))
+
 	var gap: float = 8.0
 	var gx: float = rect.position.x + 14.0
 	var gy: float = rect.position.y + 50.0
 	var cw: float = (rect.size.x - 28.0 - gap * 2.0) / 3.0
 	var ch: float = (rect.size.y - 62.0 - gap) / 2.0
-	for i in range(min(rows.size(), 6)):
+	for i in range(shown.size()):
 		var col: int = i % 3
 		var row: int = 0 if i < 3 else 1
 		var cell: Rect2 = Rect2(gx + col * (cw + gap), gy + row * (ch + gap), cw, ch)
-		_draw_yesterday_game(cell, rows[i] as Dictionary, team_id)
+		_draw_yesterday_game(cell, shown[i] as Dictionary, team_id, font_size)
 
 
-func _draw_yesterday_game(cell: Rect2, game: Dictionary, team_id: int) -> void:
+# 「前日の試合結果」1試合セルのバッジ/スコアレイアウト基準 (base 座標)。
+# HALF_GAP = 中心からバッジ内側の縁までの距離。SCORE_MAX_W = バッジ間でスコア全体
+# (アウェイ+ダッシュ+ホーム) が使える幅の予算 (両端に少し余白を残す)。
+const YESTERDAY_BADGE_W: float = 30.0
+const YESTERDAY_BADGE_HALF_GAP: float = 36.0
+const YESTERDAY_SCORE_PAD: float = 3.0
+const YESTERDAY_SCORE_MAX_W: float = YESTERDAY_BADGE_HALF_GAP * 2.0 - 4.0
+
+
+func _draw_yesterday_game(cell: Rect2, game: Dictionary, team_id: int, font_size: int) -> void:
 	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
 	var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
 	if away == null or home == null:
@@ -380,19 +401,42 @@ func _draw_yesterday_game(cell: Rect2, game: Dictionary, team_id: int) -> void:
 
 	_round(cell, PANEL_2, Color(BLUE.r, BLUE.g, BLUE.b, 0.55) if is_self else BORDER_SOFT, 7)
 
-	# [away] スコア [home] を中央寄せで横並び。
-	var badge: float = 30.0
+	# [away] スコア [home] を中央寄せで横並び。バッジ位置は固定し、スコアは
+	# バッジ内側の余白に収まるフォントサイズ (呼び出し元で全セル共通に決定済み) で描く
+	# (二桁得点でバッジに衝突しないように)。
 	var center: float = cell.position.x + cell.size.x * 0.5
-	var by: float = cell.position.y + (cell.size.y - badge) * 0.5
+	var by: float = cell.position.y + (cell.size.y - YESTERDAY_BADGE_W) * 0.5
 	var sy: float = cell.position.y + cell.size.y * 0.5 + 6.0
-	_team_badge(Rect2(center - 58.0, by, badge, badge), away)
-	_team_badge(Rect2(center + 28.0, by, badge, badge), home)
+	_team_badge(Rect2(center - YESTERDAY_BADGE_HALF_GAP - YESTERDAY_BADGE_W, by, YESTERDAY_BADGE_W, YESTERDAY_BADGE_W), away)
+	_team_badge(Rect2(center + YESTERDAY_BADGE_HALF_GAP, by, YESTERDAY_BADGE_W, YESTERDAY_BADGE_W), home)
 	if played:
-		_text_right(str(int(game.get("away_score", 0))), center - 7.0, sy, 18, TEXT if (away_won or draw_game) else FAINT, 22)
-		_text("-", Vector2(center - 4.0, sy), 16, MUTED)
-		_text(str(int(game.get("home_score", 0))), Vector2(center + 8.0, sy), 18, TEXT if (home_won or draw_game) else FAINT)
+		var away_text: String = str(int(game.get("away_score", 0)))
+		var home_text: String = str(int(game.get("home_score", 0)))
+		# 「アウェイ - ホーム」を1つのブロックとして中心に配置する。ダッシュ位置を固定して
+		# 両側を個別に右/左寄せすると、一桁/二桁が混在したときに数字の見た目の重心が
+		# 二桁側へ寄って非対称に見えるため、ブロック全体の幅を測って中心から等距離に置く。
+		var away_w: float = _measure(away_text, font_size)
+		var dash_w: float = _measure("-", font_size)
+		var home_w: float = _measure(home_text, font_size)
+		var total_w: float = away_w + YESTERDAY_SCORE_PAD + dash_w + YESTERDAY_SCORE_PAD + home_w
+		var start_x: float = center - total_w * 0.5
+		_text(away_text, Vector2(start_x, sy), font_size, TEXT if (away_won or draw_game) else FAINT)
+		_text("-", Vector2(start_x + away_w + YESTERDAY_SCORE_PAD, sy), 16, MUTED)
+		_text(home_text, Vector2(start_x + away_w + YESTERDAY_SCORE_PAD + dash_w + YESTERDAY_SCORE_PAD, sy), font_size, TEXT if (home_won or draw_game) else FAINT)
 	else:
-		_text("-", Vector2(center - 4.0, sy), 14, MUTED)
+		_text("-", Vector2(center - 3.0, sy), 14, MUTED)
+
+
+# 「アウェイ-ホーム」ブロック全体がバッジ間の幅予算に収まるフォントサイズを返す (18→最小12)。
+func _fit_score_font_size(away_text: String, home_text: String, max_w: float) -> int:
+	var size: int = 18
+	while size > 12 and _score_block_width(away_text, home_text, size) > max_w:
+		size -= 2
+	return size
+
+
+func _score_block_width(away_text: String, home_text: String, size: int) -> float:
+	return _measure(away_text, size) + YESTERDAY_SCORE_PAD + _measure("-", size) + YESTERDAY_SCORE_PAD + _measure(home_text, size)
 
 
 func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
