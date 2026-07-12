@@ -234,9 +234,23 @@ const POSITION_CHARS: Dictionary = {
 	6: "遊", 7: "左", 8: "中", 9: "右", 10: "指",
 }
 
-const FOREIGN_TIER_LABELS: Dictionary = {
-	"ace": "A (即戦力)", "good": "B (主力級)", "average": "C (平均)", "bust": "D (未知数)",
-}
+const FOREIGN_POSITION_OPTIONS: Array = [
+	{"id": "any", "label": "おまかせ"}, {"id": "starter", "label": "先発"}, {"id": "reliever", "label": "救援"},
+	{"id": "catcher", "label": "捕手"}, {"id": "first", "label": "一塁"}, {"id": "second", "label": "二塁"},
+	{"id": "third", "label": "三塁"}, {"id": "shortstop", "label": "遊撃"}, {"id": "outfield", "label": "外野"}, {"id": "dh", "label": "DH"},
+]
+const FOREIGN_FIELDER_TYPES: Array = [
+	{"id": "balanced", "label": "バランス"}, {"id": "power", "label": "パワー"}, {"id": "contact", "label": "巧打"},
+	{"id": "discipline", "label": "選球眼"}, {"id": "speed_defense", "label": "走守"}, {"id": "defense", "label": "守備"},
+]
+const FOREIGN_PITCHER_TYPES: Array = [
+	{"id": "balanced", "label": "バランス"}, {"id": "strikeout", "label": "奪三振"}, {"id": "control", "label": "制球"},
+	{"id": "groundball", "label": "ゴロ"}, {"id": "stamina", "label": "持久力"},
+]
+const FOREIGN_BUDGET_OPTIONS: Array = [
+	{"id": "bargain", "label": "格安 0.3〜0.6億・4名"}, {"id": "standard", "label": "標準 0.6〜1.2億・3名"},
+	{"id": "core", "label": "主力 1.2〜2億・2名"}, {"id": "star", "label": "大物 2〜4億・1名"},
+]
 
 # --- レイアウト基準 (base 座標) ---
 # 上から: ヘッダ(0..86) → ステップchip/status(y92) → ロスターサマリーパネル(SUMMARY) → 操作ボタン行(ACTION_Y) → 本文(BODY)。
@@ -320,13 +334,14 @@ var _fa_can_auto: bool = false
 
 # 外国人補強 (step7)。一覧はドラフトと同じ候補ボード (投手/野手/各守備位置タブ)。
 var selected_foreign_candidate_id: int = 0
-var _foreign_tab: String = "pitcher"
 var _foreign_candidate_rows: Array = []
 var _foreign_record_cache: Dictionary = {}
 var _foreign_by_id: Dictionary = {}
 var _foreign_status_text: String = ""
 var _foreign_can_submit: bool = false
-var _foreign_can_auto: bool = false
+var _foreign_request_position: String = "any"
+var _foreign_request_archetype: String = "balanced"
+var _foreign_request_budget: String = "standard"
 
 # キャンプ (step8)。選手一覧はドラフトと同じ候補ボード。下段に特別練習メニュー/成功率/獲得適性パネル。
 var selected_camp_player_id: int = 0
@@ -476,12 +491,13 @@ func _build_buttons() -> void:
 			_build_player_tabs("fa_market", _fa_tab, int(fa_counts.get(PLAYER_TAB_PITCHER, 0)), int(fa_counts.get(PLAYER_TAB_FIELDER, 0)), _set_fa_tab)
 		AppState.OFFSEASON_PANEL_FOREIGN:
 			_action_row([
+				{"id": "fg_search", "label": "候補を検索", "cb": _on_foreign_search_pressed, "kind": "primary", "w": 120},
 				{"id": "fg_submit", "label": "獲得する", "cb": _on_foreign_submit_pressed, "kind": "primary", "w": 110, "disabled": not _foreign_can_submit},
 				{"id": "fg_skip", "label": "見送る", "cb": _on_foreign_skip_pressed, "kind": "action", "w": 100, "disabled": not _foreign_can_submit},
-				{"id": "fg_auto", "label": "この判断を自動", "cb": _on_foreign_auto_pressed, "kind": "action", "w": 150, "disabled": not _foreign_can_auto},
-				{"id": "fg_auto_all", "label": "残りを自動進行", "cb": _on_foreign_auto_all_pressed, "kind": "action", "w": 150},
+				{"id": "fg_auto_all", "label": "補強を終了", "cb": _on_foreign_auto_all_pressed, "kind": "action", "w": 130},
+				{"id": "fg_ai_all", "label": "すべてAIに任せる", "cb": _on_foreign_ai_all_pressed, "kind": "action", "w": 170},
 			])
-			_build_candidate_tabs(_foreign_candidate_rows, _foreign_tab, _set_foreign_tab, "foreign")
+			_build_foreign_scout_chips()
 		AppState.OFFSEASON_PANEL_CAMP:
 			_action_row([
 				{"id": "camp_submit", "label": "実行", "cb": _on_camp_submit_pressed, "kind": "primary", "w": 100, "disabled": not _camp_can_submit},
@@ -674,6 +690,33 @@ func _action_row(specs: Array) -> void:
 		if spec.has("disabled"):
 			button.disabled = bool(spec["disabled"])
 		x += w + gap
+
+
+func _build_foreign_scout_chips() -> void:
+	var rows: Array = [
+		{"y": BODY.position.y + 36.0, "options": FOREIGN_POSITION_OPTIONS, "selected": _foreign_request_position, "prefix": "fg_pos", "callback": _select_foreign_position},
+		{"y": BODY.position.y + 78.0, "options": _foreign_type_options(), "selected": _foreign_request_archetype, "prefix": "fg_type", "callback": _select_foreign_archetype},
+		{"y": BODY.position.y + 120.0, "options": FOREIGN_BUDGET_OPTIONS, "selected": _foreign_request_budget, "prefix": "fg_budget", "callback": _select_foreign_budget},
+	]
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		var x: float = BODY.position.x + 116.0
+		for option_value in row.get("options", []) as Array:
+			var option: Dictionary = option_value as Dictionary
+			var id: String = str(option.get("id", ""))
+			var label: String = str(option.get("label", ""))
+			var w: float = 22.0 + _measure(label, 13) + 22.0
+			var callback: Callable = row.get("callback") as Callable
+			_add_button("%s_%s" % [str(row.get("prefix", "fg")), id], label, Rect2(x, float(row.get("y", 0.0)), w, 30.0),
+				func(value: String = id, cb: Callable = callback) -> void: cb.call(value),
+				"chip_active" if id == str(row.get("selected", "")) else "chip")
+			x += w + 8.0
+
+
+func _foreign_type_options() -> Array:
+	if _foreign_request_position == "any":
+		return [FOREIGN_FIELDER_TYPES[0]]
+	return FOREIGN_PITCHER_TYPES if _foreign_request_position == "starter" or _foreign_request_position == "reliever" else FOREIGN_FIELDER_TYPES
 
 
 # キャンプの練習種別 / 対象位置をチップ (OptionButton 置換) で出す。
@@ -1129,13 +1172,13 @@ func _draw_draft_grid_cells(block_x: float, end_x: float, y: float, entries: Arr
 		var entry: Dictionary = entries[i] as Dictionary
 		var cx: float = block_x + float(i) * col_w
 		if is_header:
-			_text(str(entry.get("label", "")), Vector2(cx + 4.0, y), 11, FAINT, col_w - 6.0)
+			_text(str(entry.get("label", "")), Vector2(cx, y), 11, FAINT, col_w, HORIZONTAL_ALIGNMENT_CENTER)
 		else:
 			var value: int = int(entry.get("value", -1))
 			if value < 0:
-				_text_right("-", cx + col_w - 4.0, y, 13, FAINT, col_w - 6.0)
+				_text("-", Vector2(cx, y), 13, FAINT, col_w, HORIZONTAL_ALIGNMENT_CENTER)
 			else:
-				_text_right(str(value), cx + col_w - 4.0, y, 13, _grade_color(value), col_w - 6.0)
+				_text(str(value), Vector2(cx, y), 13, _grade_color(value), col_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func _draft_pitch_header_entries() -> Array:
@@ -1270,14 +1313,23 @@ func _draw_released_market_panel() -> void:
 	)
 
 
-# 外国人補強パネル: ドラフトと同じ候補ボード。上に状況テキスト、その下にタブ行 (ボタン)、さらに下にボード。
+# 外国人補強パネル: 条件指定3行とスカウト候補4人。能力値はスカウト推定値を表示する。
 func _draw_foreign_panel() -> void:
 	var status_y: float = BODY.position.y
 	if not _foreign_status_text.is_empty():
 		_text(_foreign_status_text, Vector2(INNER_L, status_y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
-	var table_top: float = status_y + 68.0
+	_text("守備・役割", Vector2(INNER_L, status_y + 58.0), 13, MUTED, 100)
+	_text("選手タイプ", Vector2(INNER_L, status_y + 100.0), 13, MUTED, 100)
+	_text("予算帯", Vector2(INNER_L, status_y + 142.0), 13, MUTED, 100)
+	var selected: Dictionary = _foreign_by_id.get(selected_foreign_candidate_id, {}) as Dictionary
+	if not selected.is_empty():
+		_text("推定総合 %d〜%d　%s" % [int(selected.get("estimate_min", 0)), int(selected.get("estimate_max", 0)), str(selected.get("scout_comment", ""))],
+			Vector2(INNER_L, status_y + 182.0), 13, MUTED, 1420, HORIZONTAL_ALIGNMENT_LEFT, true)
+		_text(_foreign_ability_range_text(selected), Vector2(INNER_L, status_y + 204.0), 13, MUTED, 1500, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var table_top: float = status_y + 224.0
+	var board_tab: String = _foreign_board_tab()
 	_draw_candidate_board(Rect2(INNER_L, table_top, BODY.size.x, BODY.end.y - table_top),
-		_foreign_candidate_rows, _foreign_tab, selected_foreign_candidate_id, "foreign", _foreign_record_cache, "評価", "年俸")
+		_foreign_candidate_rows, board_tab, selected_foreign_candidate_id, "foreign", _foreign_record_cache, "タイプ", "年俸")
 
 
 # --- キャンプ ---
@@ -2383,6 +2435,8 @@ func _candidate_tab_is_pitcher(tab: String) -> bool:
 func _candidate_row_matches_tab(row: Dictionary, tab: String) -> bool:
 	var is_pitcher: bool = bool(row.get("is_pitcher", false))
 	match tab:
+		"all":
+			return true
 		"pitcher":
 			return is_pitcher
 		"starter":
@@ -2739,8 +2793,9 @@ func _populate_foreign() -> void:
 	for row in state.get("signings", []) as Array:
 		if int((row as Dictionary).get("to_team", 0)) == AppState.selected_team_id:
 			user_signings += 1
-	_foreign_status_text = "外国人補強: 現在%d人 / 今オフ獲得%d人 / 上限4 / 候補%d人" % [
-		current_foreign, user_signings, candidates.size(),
+	var request_ready: bool = not (state.get("user_request", {}) as Dictionary).is_empty()
+	_foreign_status_text = "外国人補強: 現在%d人 / 今オフ獲得%d人 / 上限4 / %s" % [
+		current_foreign, user_signings, "候補%d人" % candidates.size() if request_ready else "条件を選んで候補を検索してください",
 	]
 	# 一覧はドラフトと同じ候補ボード。中央2列は 評価(tier) / 年俸。
 	_foreign_record_cache = {}
@@ -2756,24 +2811,23 @@ func _populate_foreign() -> void:
 	if selected_foreign_candidate_id > 0 and not _foreign_by_id.has(selected_foreign_candidate_id):
 		selected_foreign_candidate_id = 0
 	if selected_foreign_candidate_id <= 0:
-		var visible: Array = _candidate_rows_for_tab(_foreign_candidate_rows, _foreign_tab)
+		var visible: Array = _candidate_rows_for_tab(_foreign_candidate_rows, "all")
 		if not visible.is_empty():
 			selected_foreign_candidate_id = int((visible[0] as Dictionary).get("candidate_id", 0))
 	_foreign_can_submit = selected_foreign_candidate_id > 0
-	_foreign_can_auto = not candidates.is_empty()
 
 
 # 外国人候補1件を候補ボード用モデルに変換。中央2列は 評価(tier短縮) / 年俸(万)。
 func _foreign_candidate_row(c: Dictionary, rank: int) -> Dictionary:
-	var template: Dictionary = c.get("player_data", {}) as Dictionary
+	var template: Dictionary = c.get("display_player_data", c.get("player_data", {})) as Dictionary
 	var position: int = int(c.get("position", 0))
 	return {
 		"candidate_id": int(c.get("candidate_id", 0)),
 		"name": str(c.get("name", "")),
 		"age": int(c.get("age", 0)),
-		"overall": int(c.get("value", 0)),
+		"overall": int(c.get("estimated_value", c.get("value", 0))),
 		"rank": rank,
-		"info1": _foreign_tier_short(str(c.get("tier", ""))),
+		"info1": _foreign_archetype_short(str(c.get("archetype", "balanced"))),
 		"info2": str(int(c.get("salary", 0))),
 		"info2_color": TEXT,
 		"is_pitcher": position == 1,
@@ -2785,35 +2839,73 @@ func _foreign_candidate_row(c: Dictionary, rank: int) -> Dictionary:
 	}
 
 
-func _foreign_tier_short(tier: String) -> String:
-	match tier:
-		"ace":
-			return "A"
-		"good":
-			return "B"
-		"average":
-			return "C"
-		"bust":
-			return "D"
-		_:
-			return tier
+func _foreign_board_tab() -> String:
+	if not _foreign_candidate_rows.is_empty():
+		return "pitcher" if bool((_foreign_candidate_rows[0] as Dictionary).get("is_pitcher", false)) else "fielder"
+	return "pitcher" if _foreign_request_position == "starter" or _foreign_request_position == "reliever" else "fielder"
 
 
-func _set_foreign_tab(tab_id: String) -> void:
-	if _foreign_tab == tab_id:
-		return
-	_foreign_tab = tab_id
-	var visible: Array = _candidate_rows_for_tab(_foreign_candidate_rows, _foreign_tab)
-	var still_visible: bool = false
-	for row_value in visible:
-		if int((row_value as Dictionary).get("candidate_id", 0)) == selected_foreign_candidate_id:
-			still_visible = true
-			break
-	if not still_visible:
-		selected_foreign_candidate_id = int((visible[0] as Dictionary).get("candidate_id", 0)) if not visible.is_empty() else 0
-	_foreign_can_submit = selected_foreign_candidate_id > 0
+func _foreign_ability_range_text(candidate: Dictionary) -> String:
+	var template: Dictionary = candidate.get("display_player_data", candidate.get("player_data", {})) as Dictionary
+	var result: Dictionary = PlayerVisibleRatings.ratings_for_player_data(template)
+	var estimate_downside: int = maxi(0, int(candidate.get("estimate_downside", candidate.get("uncertainty", 4))))
+	var estimate_upside: int = maxi(0, int(candidate.get("estimate_upside", candidate.get("uncertainty", 4))))
+	var parts: Array = []
+	for rating_value in result.get("display_ratings", []) as Array:
+		var rating: Dictionary = rating_value as Dictionary
+		var value: int = int(rating.get("display_value", 0))
+		var suffix: String = str(rating.get("suffix", ""))
+		var downside: int = int(ceil(float(estimate_downside) / 2.0)) if suffix == "km/h" else estimate_downside
+		var upside: int = int(ceil(float(estimate_upside) / 2.0)) if suffix == "km/h" else estimate_upside
+		var low: int = maxi(1, value - downside)
+		var high: int = value + upside if suffix == "km/h" else mini(100, value + upside)
+		parts.append("%s %d〜%d%s" % [str(rating.get("label", "")), low, high, suffix])
+	return "能力推定: %s" % " / ".join(parts)
+
+
+func _foreign_archetype_short(archetype: String) -> String:
+	var labels: Dictionary = {
+		"balanced": "万能", "power": "長打", "contact": "巧打", "discipline": "選球",
+		"speed_defense": "走守", "defense": "守備", "strikeout": "奪三振", "control": "制球",
+		"groundball": "ゴロ", "stamina": "持久",
+	}
+	return str(labels.get(archetype, archetype))
+
+
+func _select_foreign_position(position: String) -> void:
+	_foreign_request_position = position
+	var pitcher_request: bool = position == "starter" or position == "reliever"
+	var allowed: Array = FOREIGN_PITCHER_TYPES if pitcher_request else FOREIGN_FIELDER_TYPES
+	var allowed_ids: Array = []
+	for option_value in allowed:
+		allowed_ids.append(str((option_value as Dictionary).get("id", "")))
+	if not allowed_ids.has(_foreign_request_archetype) or position == "any":
+		_foreign_request_archetype = "balanced"
 	_build_buttons()
 	queue_redraw()
+
+
+func _select_foreign_archetype(archetype: String) -> void:
+	_foreign_request_archetype = archetype
+	_build_buttons()
+	queue_redraw()
+
+
+func _select_foreign_budget(budget: String) -> void:
+	_foreign_request_budget = budget
+	_build_buttons()
+	queue_redraw()
+
+
+func _on_foreign_search_pressed() -> void:
+	var result: Dictionary = AppState.configure_foreign_scout_request(
+		_foreign_request_position, _foreign_request_archetype, _foreign_request_budget
+	)
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "外国人候補の検索に失敗しました。")), RED)
+		return
+	selected_foreign_candidate_id = 0
+	_refresh()
 
 
 func _on_foreign_submit_pressed() -> void:
@@ -2839,19 +2931,19 @@ func _on_foreign_skip_pressed() -> void:
 	_refresh()
 
 
-func _on_foreign_auto_pressed() -> void:
-	var result: Dictionary = AppState.auto_foreign_user_pick()
+func _on_foreign_auto_all_pressed() -> void:
+	var result: Dictionary = AppState.complete_foreign_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人自動判断に失敗しました。")), RED)
+		_set_status(str(result.get("message", "外国人自動進行に失敗しました。")), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()
 
 
-func _on_foreign_auto_all_pressed() -> void:
-	var result: Dictionary = AppState.complete_foreign_automatically()
+func _on_foreign_ai_all_pressed() -> void:
+	var result: Dictionary = AppState.complete_all_foreign_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", "外国人補強のAI進行に失敗しました。")), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()

@@ -37,6 +37,152 @@ func test_room_helpers_track_limits() -> void:
 	assert_bool(TeamFinance.has_development_room(players, 1)).is_true()
 
 
+# --- 条件指定型外国人スカウト ----------------------------------------------
+
+func test_foreign_scout_request_generates_matching_pitcher_candidates() -> void:
+	Rng.set_seed_value(20260712)
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state([], [_team(1)], null, 1)
+	var result: Dictionary = ForeignPlayerService.configure_user_scout_request(state, "starter", "control", "core")
+	assert_bool(bool(result.get("ok", false))).is_true()
+	var candidates: Array = ForeignPlayerService.available_user_candidates(state, [], [_team(1)])
+	assert_int(candidates.size()).is_equal(ForeignPlayerService.scout_candidate_count("core"))
+	for candidate_value in candidates:
+		var candidate: Dictionary = candidate_value as Dictionary
+		assert_int(int(candidate.get("request_team_id", 0))).is_equal(1)
+		assert_str(str(candidate.get("scout_position", ""))).is_equal("starter")
+		assert_str(str(candidate.get("archetype", ""))).is_equal("control")
+		assert_str(str(candidate.get("budget_band", ""))).is_equal("core")
+		assert_int(int(candidate.get("position", 0))).is_equal(1)
+		assert_str(str(candidate.get("role", ""))).is_equal("starter")
+		assert_int(int(candidate.get("salary", 0))).is_between(12000, 20000)
+		assert_bool((candidate.get("display_player_data", {}) as Dictionary).is_empty()).is_false()
+		var ratings: Dictionary = PSPlayerVisibleRatings.ratings_for_player_data(candidate.get("display_player_data", {}) as Dictionary)
+		assert_str(str(ratings.get("kind", ""))).is_equal("pitcher")
+		assert_int((ratings.get("display_ratings", []) as Array).size()).is_equal(4)
+		assert_int(int(candidate.get("estimate_min", 0))).is_less_equal(int(candidate.get("estimated_value", 0)))
+		assert_int(int(candidate.get("estimate_max", 0))).is_equal(int(candidate.get("estimated_value", 0)))
+		assert_int(int(candidate.get("estimate_downside", 0))).is_equal(12)
+		assert_int(int(candidate.get("estimate_upside", -1))).is_equal(0)
+		assert_int(int(candidate.get("uncertainty", 0))).is_greater(0)
+
+
+func test_foreign_higher_budget_returns_fewer_candidates() -> void:
+	assert_int(ForeignPlayerService.scout_candidate_count("bargain")).is_equal(4)
+	assert_int(ForeignPlayerService.scout_candidate_count("standard")).is_equal(3)
+	assert_int(ForeignPlayerService.scout_candidate_count("core")).is_equal(2)
+	assert_int(ForeignPlayerService.scout_candidate_count("star")).is_equal(1)
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state([], [_team(1)], null, 1)
+	ForeignPlayerService.configure_user_scout_request(state, "first", "power", "star")
+	var star: Dictionary = (ForeignPlayerService.available_user_candidates(state, [], [_team(1)])[0] as Dictionary)
+	assert_int(int(star.get("estimate_downside", 0))).is_equal(15)
+	assert_int(int(star.get("estimate_upside", -1))).is_equal(0)
+	assert_int(int(star.get("estimate_max", 0))).is_equal(int(star.get("estimated_value", 0)))
+
+
+func test_foreign_any_request_keeps_one_position_group_per_shortlist() -> void:
+	Rng.set_seed_value(20260716)
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state([], [_team(1)], null, 1)
+	ForeignPlayerService.configure_user_scout_request(state, "any", "balanced", "bargain")
+	var candidates: Array = ForeignPlayerService.available_user_candidates(state, [], [_team(1)])
+	assert_int(candidates.size()).is_equal(4)
+	var first_position: int = int((candidates[0] as Dictionary).get("position", 0))
+	for candidate_value in candidates:
+		assert_int(int((candidate_value as Dictionary).get("position", 0))).is_equal(first_position)
+
+
+func test_foreign_cpu_uses_same_request_shortlist_engine() -> void:
+	Rng.set_seed_value(20260713)
+	var team: PSTeam = _team(1)
+	var players: Array = []
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [team], null, 0)
+	ForeignPlayerService.complete_foreign_market_automatically(state, players, [team], null, 0)
+	assert_bool(bool(state.get("complete", false))).is_true()
+	assert_int((state.get("signings", []) as Array).size()).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
+	assert_int((state.get("requests", []) as Array).size()).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
+	var generated_count: int = 0
+	for request_value in state.get("requests", []) as Array:
+		var request: Dictionary = request_value as Dictionary
+		assert_str(str(request.get("method", ""))).is_equal("cpu")
+		var request_count: int = ForeignPlayerService.scout_candidate_count(str(request.get("budget_band", "standard")))
+		assert_int((request.get("candidate_ids", []) as Array).size()).is_equal(request_count)
+		generated_count += request_count
+	assert_int((state.get("candidates", []) as Array).size()).is_equal(generated_count)
+	assert_int(players.size()).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
+	for player_value in players:
+		assert_bool((player_value as PSPlayer).foreign_player).is_true()
+
+
+func test_foreign_all_ai_includes_user_team_and_closes_manual_shortlist() -> void:
+	Rng.set_seed_value(20260717)
+	var team: PSTeam = _team(1)
+	var players: Array = []
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [team], null, 1)
+	ForeignPlayerService.configure_user_scout_request(state, "starter", "control", "standard")
+	var manual_ids: Array = (state.get("user_candidate_ids", []) as Array).duplicate()
+	var result: Dictionary = ForeignPlayerService.complete_all_foreign_market_automatically(state, players, [team], null)
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(state.get("complete", false))).is_true()
+	assert_int(players.size()).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
+	for player_value in players:
+		var player: PSPlayer = player_value as PSPlayer
+		assert_int(player.team_id).is_equal(1)
+		assert_bool(player.foreign_player).is_true()
+	for candidate_id in manual_ids:
+		var manual_candidate: Dictionary = {}
+		for candidate_value in state.get("candidates", []) as Array:
+			var candidate: Dictionary = candidate_value as Dictionary
+			if int(candidate.get("candidate_id", 0)) == int(candidate_id):
+				manual_candidate = candidate
+				break
+		assert_bool(bool(manual_candidate.get("available", true))).is_false()
+
+
+func test_foreign_user_can_sign_then_issue_another_request() -> void:
+	Rng.set_seed_value(20260714)
+	var team: PSTeam = _team(1)
+	var teams: Array = [team]
+	var players: Array = []
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, teams, null, 1)
+	ForeignPlayerService.configure_user_scout_request(state, "first", "power", "standard")
+	var first_candidates: Array = ForeignPlayerService.available_user_candidates(state, players, teams)
+	var first_id: int = int((first_candidates[0] as Dictionary).get("candidate_id", 0))
+	var signing: Dictionary = ForeignPlayerService.submit_user_foreign_decision(state, players, teams, null, first_id, "sign")
+	assert_bool(bool(signing.get("ok", false))).is_true()
+	assert_int(players.size()).is_equal(1)
+	assert_int((state.get("user_candidate_ids", []) as Array).size()).is_equal(0)
+	assert_bool((state.get("user_request", {}) as Dictionary).is_empty()).is_true()
+	assert_bool(bool(state.get("complete", false))).is_false()
+
+	var second: Dictionary = ForeignPlayerService.configure_user_scout_request(state, "reliever", "strikeout", "bargain")
+	assert_bool(bool(second.get("ok", false))).is_true()
+	var second_candidates: Array = ForeignPlayerService.available_user_candidates(state, players, teams)
+	assert_int(second_candidates.size()).is_equal(ForeignPlayerService.scout_candidate_count("bargain"))
+	for candidate_value in second_candidates:
+		var candidate: Dictionary = candidate_value as Dictionary
+		assert_str(str(candidate.get("scout_position", ""))).is_equal("reliever")
+		assert_str(str(candidate.get("archetype", ""))).is_equal("strikeout")
+
+
+func test_foreign_scout_request_migrates_legacy_candidate_ids_without_collision() -> void:
+	Rng.set_seed_value(20260715)
+	var legacy_candidate: Dictionary = {"candidate_id": 54, "available": true}
+	var state: Dictionary = {
+		"version": 2,
+		"year": 2026,
+		"user_team_id": 1,
+		"complete": false,
+		"candidates": [legacy_candidate],
+		"signings": [],
+	}
+	var result: Dictionary = ForeignPlayerService.configure_user_scout_request(state, "outfield", "defense", "standard")
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_int(int(state.get("version", 0))).is_equal(3)
+	var candidate_ids: Array = state.get("user_candidate_ids", []) as Array
+	assert_int(candidate_ids.size()).is_equal(ForeignPlayerService.scout_candidate_count("standard"))
+	assert_int(int(candidate_ids[0])).is_equal(55)
+	assert_int(int(state.get("next_candidate_id", 0))).is_equal(58)
+
+
 # --- FA日数 -------------------------------------------------------------------
 
 # NPB は1年で最大145日(FA_SERVICE_DAYS_PER_YEAR)しか一軍登録日数を積めない。

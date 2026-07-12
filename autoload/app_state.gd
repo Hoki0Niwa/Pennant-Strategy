@@ -890,6 +890,18 @@ func skip_foreign_candidate(candidate_id: int) -> Dictionary:
 	return _submit_foreign_decision(candidate_id, "skip")
 
 
+func configure_foreign_scout_request(position: String, archetype: String, budget_band: String) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	var result: Dictionary = ForeignPlayerService.configure_user_scout_request(foreign_state, position, archetype, budget_band)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
 func _submit_foreign_decision(candidate_id: int, action: String) -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
 		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
@@ -928,6 +940,23 @@ func complete_foreign_automatically() -> Dictionary:
 	if foreign_state.is_empty():
 		return {"ok": false, "message": "外国人補強が初期化されていません"}
 	var result: Dictionary = ForeignPlayerService.complete_foreign_market_automatically(foreign_state, GameDb.players, GameDb.teams, current_season, selected_team_id)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	_finalize_foreign_if_complete()
+	GameDb.rebuild_player_indices()
+	_save_if_enabled()
+	return {"ok": true, "state": foreign_state}
+
+
+func complete_all_foreign_automatically() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	var result: Dictionary = ForeignPlayerService.complete_all_foreign_market_automatically(
+		foreign_state, GameDb.players, GameDb.teams, current_season
+	)
 	foreign_state = result.get("state", foreign_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
