@@ -753,6 +753,7 @@ static func _apply_demotion_to_development(player: PSPlayer, year: int = 0) -> v
 	PSCareerLog.log_dev_demote(player, year, player.team_id)
 	player.development_player = true
 	player.registered_roster = "育成"
+	player.salary = DEVELOPMENT_CONTRACT_SALARY
 	player.source_data["dev_demote_hold"] = true
 
 
@@ -787,6 +788,7 @@ static func _apply_promotion_to_shienka(player: PSPlayer, year: int = 0) -> void
 	PSCareerLog.log_dev_promote(player, year, player.team_id)
 	player.development_player = false
 	player.registered_roster = "支配下"
+	player.salary = maxi(player.salary, SALARY_MIN)
 
 
 # CPU 自動: 育成選手のうち value が閾値以上の者を、支配下に空きがある範囲で昇格する。
@@ -2023,6 +2025,9 @@ const SALARY_MIN: int = 440              # 支配下最低年俸
 const FOREIGN_SALARY_MIN: int = 3000     # 外国人は高め
 const SALARY_MAX: int = 80000            # 8億
 const SALARY_MARKET_FLOOR: float = 800.0
+# 育成契約は一軍成績に連動させず、育成在籍中は契約額を据え置く。支配下から育成へ
+# 切り替わる場合だけ新しい育成契約としてこの額へ再設定し、支配下昇格後は通常査定へ戻す。
+const DEVELOPMENT_CONTRACT_SALARY: int = 350
 # 在籍年数 (年功): 出場が少ないベテランも年数に応じてある程度の年俸を得る (NPB の年功的な底上げ)。
 # これで中央値が現実 (≈1900万) 寄りに上がる (新人の下限は据え置き)。
 const TENURE_PER_YEAR: float = 220.0
@@ -2095,6 +2100,8 @@ static func _season_market_value(record: PSPlayerSeasonRecord, war: float, is_fo
 
 # 前年俸 (player.salary) を今季市場価値へ裁定移動する。
 static func _compute_new_salary(player: PSPlayer, record: PSPlayerSeasonRecord, war: float) -> int:
+	if player.development_player:
+		return player.salary
 	var target: int = _season_market_value(record, war, player.foreign_player)
 	var old_salary: int = player.salary
 	var new_salary: int

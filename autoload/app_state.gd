@@ -418,9 +418,12 @@ func start_offseason() -> Dictionary:
 	if current_awards == null:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
 	postseason_active = false
-	# Step 0: 引退判定を即時実行して結果を保存する。
+	# Step 0: 引退判定を即時実行して結果を保存する (引退者除外後の payroll で予算を算定するため、
+	# 年次予算再計算はこの直後に行う)。
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, current_season)
 	retirement_result["title"] = "引退判定"
+	var champion_id: int = current_postseason.champion_team_id if current_postseason != null else 0
+	retirement_result["budgets"] = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, current_season, champion_id)
 	offseason_step = OFFSEASON_STEP_RETIREMENT
 	offseason_results = {"step_0": retirement_result}
 	draft_state = {}
@@ -1304,6 +1307,14 @@ func restore_from_save(data: Dictionary) -> bool:
 		var team: PSTeam = GameDb.get_team(int(funds_key))
 		if team != null:
 			team.funds = int(saved_funds[funds_key])
+
+	# 年次予算キャップ導入 (2026-07-12): previous_rank も毎オフ更新されるため funds と同様に復元する
+	# (キー欠落 = 旧セーブ はシード値のまま、最初のオフで再計算される)。
+	var saved_ranks: Dictionary = data.get("team_previous_ranks", {}) as Dictionary
+	for rank_key in saved_ranks.keys():
+		var ranked_team: PSTeam = GameDb.get_team(int(rank_key))
+		if ranked_team != null:
+			ranked_team.previous_rank = int(saved_ranks[rank_key])
 
 	selected_team_id = int(data.get("selected_team_id", 0))
 	offseason_step = int(data.get("offseason_step", 0))

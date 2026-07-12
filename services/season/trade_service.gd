@@ -69,14 +69,17 @@ static func run_periodic_trade_check(season: PSSeason, players: Array, teams: Ar
 	if Rng.roll_float() <= CPU_TRADE_CHANCE_PER_CHECK:
 		var pair: Dictionary = _best_cpu_trade_pair(season, players, teams, user_team_id)
 		if not pair.is_empty():
-			var entry: Dictionary = execute_trade(
-				season, players,
-				int(pair.get("team_a", 0)), [int(pair.get("player_a", 0))],
-				int(pair.get("team_b", 0)), [int(pair.get("player_b", 0))],
-				"cpu"
-			)
-			if not entry.is_empty():
-				(result["executed"] as Array).append(entry)
+			var team_a_id: int = int(pair.get("team_a", 0))
+			var team_b_id: int = int(pair.get("team_b", 0))
+			var a_ids: Array = [int(pair.get("player_a", 0))]
+			var b_ids: Array = [int(pair.get("player_b", 0))]
+			# 1:1 固定なので枠は常に釣り合うが、予算は _best_pair_between が考慮していないため
+			# ここで再検証する (超過側が絡む組み合わせはスキップ)。
+			var validation: Dictionary = _validate_trade_sides(players, teams, team_a_id, a_ids, team_b_id, b_ids)
+			if bool(validation.get("ok", false)):
+				var entry: Dictionary = execute_trade(season, players, team_a_id, a_ids, team_b_id, b_ids, "cpu")
+				if not entry.is_empty():
+					(result["executed"] as Array).append(entry)
 
 	if user_team_id > 0 and Rng.roll_float() <= USER_OFFER_CHANCE_PER_CHECK:
 		if pending_user_offers(season).size() < MAX_PENDING_USER_OFFERS:
@@ -387,7 +390,7 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 	return offer
 
 
-static func accept_user_offer(season: PSSeason, players: Array, offer_id: int, user_team_id: int) -> Dictionary:
+static func accept_user_offer(season: PSSeason, players: Array, teams: Array, offer_id: int, user_team_id: int) -> Dictionary:
 	var offer: Dictionary = _pending_offer_by_id(season, offer_id)
 	if offer.is_empty():
 		return {"ok": false, "message": "その提案は有効ではありません。"}
@@ -401,7 +404,7 @@ static func accept_user_offer(season: PSSeason, players: Array, offer_id: int, u
 		offer["status"] = "invalid"
 		return {"ok": false, "message": "今季のトレード成立上限に達しているため受諾できません。"}
 	var validation: Dictionary = _validate_trade_sides(
-		players, cpu_team_id, offer.get("cpu_player_ids", []) as Array,
+		players, teams, cpu_team_id, offer.get("cpu_player_ids", []) as Array,
 		user_team_id, offer.get("user_player_ids", []) as Array
 	)
 	if not bool(validation.get("ok", false)):
@@ -448,7 +451,7 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 	var cpu_team_id: int = _owner_team_of(players, receive_ids)
 	if cpu_team_id <= 0 or cpu_team_id == user_team_id:
 		return {"ok": false, "accepted": false, "message": "相手選手は同一の他球団に所属している必要があります。"}
-	var validation: Dictionary = _validate_trade_sides(players, user_team_id, give_ids, cpu_team_id, receive_ids)
+	var validation: Dictionary = _validate_trade_sides(players, teams, user_team_id, give_ids, cpu_team_id, receive_ids)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "accepted": false, "message": str(validation.get("message", ""))}
 	# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象とする。
@@ -572,7 +575,8 @@ static func _swap_active_roster_members(season: PSSeason, team_id: int, out_ids:
 # 人数不均等な提案 (例: 2対1) で受け側の支配下が70枠を超えないことも合わせて検証する
 # (1:1 固定の CPU間マッチングは常に人数が釣り合うため対象外だが、ユーザー提案は
 # MAX_PLAYERS_PER_SIDE まで非対称にできるため、ここでチェックしないと70枠を超過しうる)。
-static func _validate_trade_sides(players: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array) -> Dictionary:
+# teams は年俸総額が増える側の予算ゲート (trade_payroll_ok) に使う。
+static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array) -> Dictionary:
 	for pair in [[team_a_id, a_ids], [team_b_id, b_ids]]:
 		var team_id: int = int((pair as Array)[0])
 		for id_value in (pair as Array)[1] as Array:
@@ -585,6 +589,14 @@ static func _validate_trade_sides(players: Array, team_a_id: int, a_ids: Array, 
 		return {"ok": false, "message": "自軍の支配下枠(70人)を超えるためこのトレードは成立できません。"}
 	if not _capacity_ok_after_trade(players, team_b_id, b_ids, a_ids):
 		return {"ok": false, "message": "相手球団の支配下枠(70人)を超えるためこのトレードは成立できません。"}
+	var salary_a_out: int = _salary_total(players, a_ids)
+	var salary_b_out: int = _salary_total(players, b_ids)
+	var team_a: PSTeam = _find_team_by_id(teams, team_a_id)
+	var team_b: PSTeam = _find_team_by_id(teams, team_b_id)
+	if not TeamFinance.trade_payroll_ok(players, team_a, salary_a_out, salary_b_out):
+		return {"ok": false, "message": "自軍の年俸総額が予算を超えるためこのトレードは成立できません。"}
+	if not TeamFinance.trade_payroll_ok(players, team_b, salary_b_out, salary_a_out):
+		return {"ok": false, "message": "相手球団の予算を超えるためこのトレードは成立できません。"}
 	return {"ok": true}
 
 
@@ -593,6 +605,15 @@ static func _validate_trade_sides(players: Array, team_a_id: int, a_ids: Array, 
 static func _capacity_ok_after_trade(players: Array, team_id: int, out_ids: Array, in_ids: Array) -> bool:
 	var projected: int = TeamFinance.shienka_count(players, team_id) - out_ids.size() + in_ids.size()
 	return projected <= TeamFinance.SHIENKA_LIMIT
+
+
+static func _salary_total(players: Array, ids: Array) -> int:
+	var total: int = 0
+	for id_value in ids:
+		var player: PSPlayer = _find_player_by_id(players, int(id_value))
+		if player != null:
+			total += player.salary
+	return total
 
 
 static func _owner_team_of(players: Array, ids: Array) -> int:
@@ -622,6 +643,14 @@ static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:
 		var player: PSPlayer = player_row as PSPlayer
 		if player != null and player.id == player_id:
 			return player
+	return null
+
+
+static func _find_team_by_id(teams: Array, team_id: int) -> PSTeam:
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null and team.id == team_id:
+			return team
 	return null
 
 

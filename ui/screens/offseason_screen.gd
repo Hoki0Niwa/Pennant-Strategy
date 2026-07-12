@@ -403,11 +403,16 @@ func _compute_roster_summary() -> void:
 		var pos: int = player.position
 		if positions.has(pos):
 			positions[pos] = int(positions[pos]) + 1
+	var team: PSTeam = GameDb.get_team(team_id)
+	var payroll: int = TeamFinance.team_payroll(GameDb.players, team_id)
 	_roster_summary = {
 		"shienka": TeamFinance.shienka_count(GameDb.players, team_id),
 		"development": TeamFinance.development_count(GameDb.players, team_id),
 		"foreign": _active_foreign_count(team_id),
 		"positions": positions,
+		"funds": team.funds if team != null else 0,
+		"payroll": payroll,
+		"room": TeamFinance.budget_room(team.funds if team != null else 0, payroll),
 	}
 
 
@@ -975,19 +980,21 @@ func _draw_summary_panel() -> void:
 	var shienka: int = int(_roster_summary.get("shienka", 0))
 	var dev: int = int(_roster_summary.get("development", 0))
 	var foreign: int = int(_roster_summary.get("foreign", 0))
+	var room: int = int(_roster_summary.get("room", 0))
 	var positions: Dictionary = _roster_summary.get("positions", {}) as Dictionary
 
 	var roster: Array = [
 		{"label": "支配下", "value": "%d/%d" % [shienka, TeamFinance.SHIENKA_LIMIT], "color": AMBER if shienka >= TeamFinance.SHIENKA_LIMIT else TEXT},
 		{"label": "育成", "value": "%d" % dev, "color": TEXT},
 		{"label": "外国人", "value": "%d/%d" % [foreign, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM], "color": AMBER if foreign >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM else TEXT},
+		{"label": "予算残", "value": ("-" + _format_money(-room)) if room < 0 else _format_money(room), "color": AMBER if room < 0 else TEXT},
 	]
 	var rx: float = SUMMARY.position.x + 24.0
 	for item_value in roster:
 		var item: Dictionary = item_value as Dictionary
 		_text(str(item["label"]), Vector2(rx, label_y), 12, MUTED)
 		_text(str(item["value"]), Vector2(rx, value_y), 20, item["color"] as Color)
-		rx += 150.0
+		rx += 118.0
 
 	var div_x: float = SUMMARY.position.x + 492.0
 	_line(Vector2(div_x, SUMMARY.position.y + 16.0), Vector2(div_x, SUMMARY.end.y - 16.0), BORDER, 1.0)
@@ -1388,7 +1395,49 @@ func _draw_results(rect: Rect2) -> void:
 
 func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, key: String, empty_text: String) -> void:
 	var people: Array = result.get(key, []) as Array
-	_draw_people_player_table(rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true)
+	var table_rect: Rect2 = rect
+	if result.has("budgets"):
+		table_rect = _draw_budget_recompute_summary(rect, result.get("budgets", {}) as Dictionary)
+	_draw_people_player_table(table_rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true)
+
+
+# 年次予算再計算の結果 (TeamFinance.recompute_annual_budgets の戻り値) を1行+12球団表で表示し、
+# 残り高さを持つ縮小後の rect を返す (下段の表描画に使う)。
+func _draw_budget_recompute_summary(rect: Rect2, budgets: Dictionary) -> Rect2:
+	var rows: Array = budgets.get("team_budgets", []) as Array
+	if rows.is_empty():
+		return rect
+	var user_team_id: int = AppState.selected_team_id
+	var user_row: Dictionary = {}
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		if int(row.get("team_id", 0)) == user_team_id:
+			user_row = row
+			break
+	var y: float = rect.position.y
+	if not user_row.is_empty():
+		var bonus: int = int(user_row.get("rank_bonus", 0)) + int(user_row.get("league_champion_bonus", 0)) + int(user_row.get("japan_champion_bonus", 0))
+		var line: String = "予算改定: ベース%s + 順位(%d位)ボーナス%s → 新予算 %s (年俸総額 %s / 残額 %s)" % [
+			_format_money(int(user_row.get("base", 0))), int(user_row.get("rank", 0)), _format_money(bonus),
+			_format_money(int(user_row.get("funds", 0))), _format_money(int(user_row.get("payroll", 0))),
+			_format_money(int(user_row.get("room", 0))),
+		]
+		_text(line, Vector2(rect.position.x, y + 16.0), 14, AMBER if bool(user_row.get("over_budget", false)) else TEXT, rect.size.x, HORIZONTAL_ALIGNMENT_LEFT, true)
+		y += 28.0
+
+	rows = rows.duplicate()
+	rows.sort_custom(func(a, b) -> bool: return int((a as Dictionary).get("team_id", 0)) < int((b as Dictionary).get("team_id", 0)))
+	var col_w: float = rect.size.x / float(rows.size())
+	var cy: float = y + 18.0
+	for i in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		var cx: float = rect.position.x + float(i) * col_w
+		var is_self: bool = int(row.get("team_id", 0)) == user_team_id
+		var color: Color = BLUE if is_self else (AMBER if bool(row.get("over_budget", false)) else MUTED)
+		_text("%s %d位 %s" % [str(row.get("name", "")), int(row.get("rank", 0)), _format_money(int(row.get("funds", 0)))], Vector2(cx, cy), 11, color, col_w - 6.0)
+	y = cy + 20.0
+
+	return Rect2(rect.position.x, y, rect.size.x, rect.end.y - y)
 
 
 func _draw_release_result(rect: Rect2, result: Dictionary) -> void:
@@ -1554,8 +1603,9 @@ func _draw_growth_result(rect: Rect2, result: Dictionary) -> void:
 func _draw_contract_result(_rect: Rect2, result: Dictionary) -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var team_name: String = team.short_name if team != null else ""
-	var heading: String = "%s 契約更新 (昇給 %d / 減給 %d / 新規FA権 %d)" % [
+	var heading: String = "%s 契約更新 (昇給 %d / 減給 %d / 新規FA権 %d / 予算超過球団 %d)" % [
 		team_name, int(result.get("raises_count", 0)), int(result.get("cuts_count", 0)), int(result.get("new_fa_count", 0)),
+		int(result.get("over_budget_count", 0)),
 	]
 	# タブ行 (投手/野手) は _build_step_result_tabs が BODY 左上に重ねる。
 	_draw_player_record_table(BODY, heading, _contract_player_rows(result), _contract_tab == PLAYER_TAB_PITCHER,

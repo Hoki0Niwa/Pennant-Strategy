@@ -1494,7 +1494,7 @@ static func _outfield_sub_factor(primary_position: int, key: String) -> Array:
 
 
 # 育成ドラフト指名の初期年俸 (支配下の本指名より低い。NPB 育成契約相当)。
-const DEV_DRAFT_SALARY: int = 350
+const DEV_DRAFT_SALARY: int = Offseason.DEVELOPMENT_CONTRACT_SALARY
 
 
 static func _salary_for_round(round_no: int) -> int:

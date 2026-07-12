@@ -165,6 +165,7 @@ func test_evaluate_user_proposal_rejects_when_user_team_over_trade_limit() -> vo
 
 func test_accept_and_decline_user_offer() -> void:
 	var season: PSSeason = _season(10)
+	var teams: Array = [_team(1), _team(2)]
 	var user_player: PSPlayer = _player_with_z(11, 1, 3, false, 1.0)
 	var cpu_player: PSPlayer = _player_with_z(21, 2, 6, false, 1.0)
 	var players: Array = [user_player, cpu_player]
@@ -180,14 +181,14 @@ func test_accept_and_decline_user_offer() -> void:
 	assert_bool(bool(declined.get("ok", false))).is_true()
 	assert_int(TradeService.pending_user_offers(season).size()).is_equal(1)
 
-	var accepted: Dictionary = TradeService.accept_user_offer(season, players, 1, 1)
+	var accepted: Dictionary = TradeService.accept_user_offer(season, players, teams, 1, 1)
 	assert_bool(bool(accepted.get("ok", false))).is_true()
 	assert_int(user_player.team_id).is_equal(2)
 	assert_int(cpu_player.team_id).is_equal(1)
 	assert_int(TradeService.pending_user_offers(season).size()).is_equal(0)
 
 	# 同じ提案は再受諾できない。
-	var replay: Dictionary = TradeService.accept_user_offer(season, players, 1, 1)
+	var replay: Dictionary = TradeService.accept_user_offer(season, players, teams, 1, 1)
 	assert_bool(bool(replay.get("ok", false))).is_false()
 
 

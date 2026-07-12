@@ -2,8 +2,10 @@ extends RefCounted
 class_name TeamFinance
 
 # チーム予算の会計ヘルパー。
-# funds は年間予算キャップ、payroll は所属アクティブ選手の年俸合計、room は funds - payroll。
-# 予算超過は is_over_budget で検出するが、現状は警告に留めて契約更新や補強を直接ブロックしない。
+# funds は年間予算キャップ (recompute_annual_budgets で毎オフ再計算、繰越なし)、
+# payroll は所属アクティブ選手の年俸合計、room は funds - payroll。
+# 予算超過中は can_afford_addition / trade_payroll_ok が補強・年俸増トレードをブロックする
+# (契約更改・ドラフト・育成昇格・キャンプは対象外、常に実行する)。
 
 # 育成選手制度を含むロスター計数の単一ソース。
 #  - 支配下 (development_player == false) のみが SHIENKA_LIMIT(70) 枠を消費する。
@@ -25,6 +27,15 @@ const OPENING_ROSTER_TARGET: int = 68
 # 既存の余剰は昇格 (process_development_promotions) と育成整理 (process_development_releases) で
 # 自然に解消される想定。
 const DEVELOPMENT_ROSTER_LIMIT: int = 10
+
+# --- 年次予算キャップ (2026-07-12 経済オーバーホール) ---
+# 毎オフ開始時 (start_offseason) に funds = BASE + 順位ボーナス (+リーグ優勝 +日本一) で
+# 全球団再計算する。繰越なし (前年の残額は破棄)。単位: 万円。
+# シード球団の実payroll平均は約342,000万なので BASE=360,000 は「開幕時に1-2球団だけ超過する」水準。
+const BUDGET_BASE: int = 360000
+const BUDGET_RANK_BONUS: Dictionary = {1: 24000, 2: 18000, 3: 13000, 4: 9000, 5: 6000, 6: 3000}
+const BUDGET_LEAGUE_CHAMPION_BONUS: int = 10000
+const BUDGET_JAPAN_CHAMPION_BONUS: int = 15000
 
 
 # 支配下選手数 (team_id 一致 ∧ 非引退 ∧ 非マネージャー ∧ 非育成)。70 枠の母数。
@@ -96,4 +107,95 @@ static func is_over_budget(funds: int, payroll: int) -> bool:
 	return payroll > funds
 
 
-# 全球団の {team_id: {funds, payroll, room, over_budget}} サマリ。
+# リーグ内最終順位 {team_id: rank(1始まり)}。win_rate 降順、同率は wins 降順で順位付け
+# (standings_screen._build_league_rows と同一基準)。リーグは team.league ("central"/"pacific") で分ける。
+static func final_ranks(season: PSSeason, teams: Array) -> Dictionary:
+	var by_league: Dictionary = {}
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		if not by_league.has(team.league):
+			by_league[team.league] = []
+		(by_league[team.league] as Array).append(team)
+
+	var ranks: Dictionary = {}
+	for league_key in by_league.keys():
+		var league_teams: Array = by_league[league_key] as Array
+		league_teams.sort_custom(func(a, b) -> bool:
+			var ta: PSTeam = a as PSTeam
+			var tb: PSTeam = b as PSTeam
+			var sa: PSStats = season.standings.get(ta.id, null) as PSStats
+			var sb: PSStats = season.standings.get(tb.id, null) as PSStats
+			var wa: float = sa.win_rate() if sa != null else 0.0
+			var wb: float = sb.win_rate() if sb != null else 0.0
+			if is_equal_approx(wa, wb):
+				var winsa: int = sa.wins if sa != null else 0
+				var winsb: int = sb.wins if sb != null else 0
+				return winsa > winsb
+			return wa > wb
+		)
+		var rank: int = 1
+		for team_row in league_teams:
+			ranks[(team_row as PSTeam).id] = rank
+			rank += 1
+	return ranks
+
+
+# 年次予算再計算 (毎オフ start_offseason で1回呼ぶ)。副作用: 各 team.funds と
+# team.previous_rank を更新する (繰越なし = 旧 funds は完全に上書き)。
+# japan_champion_team_id は PSPostseasonResult.champion_team_id (0 = 日本一ボーナスなし)。
+# 戻り値: {"team_budgets": [{team_id, name, rank, base, rank_bonus, league_champion_bonus,
+#   japan_champion_bonus, funds, payroll, room, over_budget}, ...], "over_budget_count": int,
+#   "japan_champion_team_id": int}
+static func recompute_annual_budgets(players: Array, teams: Array, season: PSSeason, japan_champion_team_id: int = 0) -> Dictionary:
+	var ranks: Dictionary = final_ranks(season, teams)
+	var team_budgets: Array = []
+	var over_budget_count: int = 0
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		var rank: int = int(ranks.get(team.id, 0))
+		var rank_bonus: int = int(BUDGET_RANK_BONUS.get(rank, 0))
+		var league_champion_bonus: int = BUDGET_LEAGUE_CHAMPION_BONUS if rank == 1 else 0
+		var japan_champion_bonus: int = BUDGET_JAPAN_CHAMPION_BONUS if team.id == japan_champion_team_id else 0
+		var funds: int = BUDGET_BASE + rank_bonus + league_champion_bonus + japan_champion_bonus
+		team.funds = funds
+		team.previous_rank = rank
+		var payroll: int = team_payroll(players, team.id)
+		var room: int = budget_room(funds, payroll)
+		var over: bool = is_over_budget(funds, payroll)
+		if over:
+			over_budget_count += 1
+		team_budgets.append({
+			"team_id": team.id, "name": team.name, "rank": rank,
+			"base": BUDGET_BASE, "rank_bonus": rank_bonus,
+			"league_champion_bonus": league_champion_bonus, "japan_champion_bonus": japan_champion_bonus,
+			"funds": funds, "payroll": payroll, "room": room, "over_budget": over,
+		})
+	return {
+		"team_budgets": team_budgets,
+		"over_budget_count": over_budget_count,
+		"japan_champion_team_id": japan_champion_team_id,
+	}
+
+
+# 補強ゲート: 追加コスト (年俸 + FA補償金等) を払っても現行 payroll+cost が funds に収まるか。
+static func can_afford_addition(players: Array, team: PSTeam, added_cost: int) -> bool:
+	if team == null:
+		return false
+	var payroll: int = team_payroll(players, team.id)
+	return payroll + added_cost <= team.funds
+
+
+# トレードゲート: 年俸総額が増えない (out >= in) 交換は予算に関わらず常に許可する。
+# 増える交換は、増加後の payroll が funds に収まる場合のみ許可する。
+static func trade_payroll_ok(players: Array, team: PSTeam, out_salary_total: int, in_salary_total: int) -> bool:
+	if team == null:
+		return false
+	if in_salary_total <= out_salary_total:
+		return true
+	var payroll: int = team_payroll(players, team.id)
+	var new_payroll: int = payroll - out_salary_total + in_salary_total
+	return new_payroll <= team.funds

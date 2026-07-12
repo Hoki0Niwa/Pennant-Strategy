@@ -118,6 +118,7 @@ func test_released_market_apply_signing_sets_development_flags_from_track() -> v
 	assert_int(signed.team_id).is_equal(2)
 	assert_bool(signed.development_player).is_true()
 	assert_str(signed.registered_roster).is_equal("育成")
+	assert_int(signed.salary).is_equal(Offseason.DEVELOPMENT_CONTRACT_SALARY)
 
 
 # --- 戦力外選定 (動的キーパー水準、人数目標なし) ------------------------------
@@ -853,6 +854,39 @@ func test_development_fields_round_trip() -> void:
 	assert_str(restored.registered_roster).is_equal("育成")
 
 
+func test_development_contract_salary_uses_separate_scale() -> void:
+	var rookie: PSPlayer = _player({
+		"id": 71,
+		"team_id": 1,
+		"years": 1,
+		"salary": 350,
+		"development_player": true,
+		"registered_roster": "育成",
+	})
+	assert_int(Offseason._compute_new_salary(rookie, null, 0.0)).is_equal(350)
+
+	# 育成のまま更新する限り、在籍年数や一軍査定による自動増減は行わない。
+	var continuing: PSPlayer = _player({
+		"id": 72,
+		"team_id": 1,
+		"years": 8,
+		"salary": 420,
+		"development_player": true,
+		"registered_roster": "育成",
+	})
+	assert_int(Offseason._compute_new_salary(continuing, null, 5.0)).is_equal(420)
+
+	# 支配下から育成へ切り替える時点では、新しい育成契約額へ再設定する。
+	var demoted: PSPlayer = _player({"id": 73, "team_id": 1, "years": 8, "salary": 10000})
+	Offseason._apply_demotion_to_development(demoted)
+	assert_int(demoted.salary).is_equal(Offseason.DEVELOPMENT_CONTRACT_SALARY)
+
+	# 昇格時に支配下最低年俸を保証し、以降は従来の支配下スケールへ戻る。
+	Offseason._apply_promotion_to_shienka(demoted)
+	assert_int(demoted.salary).is_equal(Offseason.SALARY_MIN)
+	assert_int(Offseason._compute_new_salary(demoted, null, 0.0)).is_greater_equal(Offseason.SALARY_MIN)
+
+
 # 若手の年齢保護境界: age<=23 は戦力外から常に保護される (素材保持型の自動降格は
 # 2026-07-03 に撤廃されたため、24歳以上の健康な選手は保護外=通常の戦力外判定に乗る)。
 func test_young_development_protection_boundary() -> void:
@@ -929,4 +963,7 @@ func _team(team_id: int) -> PSTeam:
 		"name": "Team %d" % team_id,
 		"short_name": "T%d" % team_id,
 		"league": "central",
+		# 予算ゲート導入 (2026-07-12) 後もこのファイルの既存テストは支配下枠/年齢等の判定が
+		# 主眼なので、年俸で誤ブロックしないよう十分大きな既定予算を持たせる。
+		"funds": 400000,
 	})

@@ -464,6 +464,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, season)
 	GameDb.rebuild_player_indices()
 
+	# 年次予算キャップ (2026-07-12): 実フロー (app_state.start_offseason) と同じく引退直後・
+	# 補強フェーズより前に再計算する。長期検証はポストシーズンを実施しないため日本一ボーナスは常に0。
+	var budget_result: Dictionary = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, season, 0)
+
 	# R4/R5/R7 調整: 順番は 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → キャンプ → 成長。
 	# 戦力外: 先に外国人 (別基準: 4枠 + 能力バー) を確定し、その後日本人を外国人込み総数 60 まで詰める
 	# (残す外国人が多いほど日本人を多く切る)。
@@ -528,7 +532,24 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		if int((released_row as Dictionary).get("position", 0)) == 1:
 			released_pitcher_count += 1
 
+	# 年次予算再計算直後 (補強フェーズ開始前) の残額。offseason 中の署名で目減りする前の
+	# 「今オフどれだけ配分できたか」の指標。offseason 完了後の実効拘束は over_budget_count 側を見る。
+	var budget_rooms: Array = []
+	for budget_row in budget_result.get("team_budgets", []) as Array:
+		budget_rooms.append(int((budget_row as Dictionary).get("room", 0)))
+	var budget_room_avg: float = 0.0
+	var budget_room_min: int = 0
+	if not budget_rooms.is_empty():
+		var room_sum: int = 0
+		budget_room_min = int(budget_rooms[0])
+		for room_value in budget_rooms:
+			room_sum += int(room_value)
+			budget_room_min = mini(budget_room_min, int(room_value))
+		budget_room_avg = float(room_sum) / float(budget_rooms.size())
+
 	return {
+		"budget_room_avg": budget_room_avg,
+		"budget_room_min": budget_room_min,
 		"retired_count": int(retirement_result.get("retired_count", 0)),
 		"released_count": int(release_result.get("released_count", 0)),
 		"released_pitcher_count": released_pitcher_count,

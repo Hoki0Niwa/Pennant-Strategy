@@ -34,6 +34,7 @@ static func save_state(app_state) -> bool:
 		# R4 Step1: チーム予算 (funds) を {team_id: funds} で永続化。teams 本体は初期シード
 		# から再ロードされるため funds のみ保存する。
 		"team_funds": _team_funds_map(),
+		"team_previous_ranks": _team_previous_ranks_map(),
 		# records は RecordStore が record_store blob / 正規化テーブルへ独立永続化するため
 		# game_state には含めない。全履歴の二重シリアライズ (autosave ごと) を避ける。
 		"offseason_step": app_state.offseason_step,
@@ -125,4 +126,13 @@ static func _team_funds_map() -> Dictionary:
 		var team: PSTeam = team_row as PSTeam
 		if team != null:
 			out[team.id] = team.funds
+	return out
+
+
+static func _team_previous_ranks_map() -> Dictionary:
+	var out: Dictionary = {}
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null:
+			out[team.id] = team.previous_rank
 	return out

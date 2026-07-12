@@ -12,7 +12,6 @@ const MAX_DECLARE_PER_TEAM: int = 2
 const MAX_SIGNINGS_PER_TEAM: int = 3
 const FA_RESIGN_COOLDOWN_YEARS: int = 3
 const MIN_NEED_TO_SIGN: float = 1.0
-const OVER_BUDGET_SCORE_FACTOR: float = 0.6
 const USER_NEGOTIATION_BONUS: float = 0.08
 const CPU_NEGOTIATION_BONUS: float = 0.0
 const FA_SIGN_CHANCE_MIN: float = 0.06
@@ -101,6 +100,10 @@ static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Ar
 		return {"ok": false, "message": "今オフのFA獲得上限に達しています。", "state": state}
 	if not _can_team_accept_candidate(players, state, user_team_id, entry):
 		return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
+	if not _can_team_afford_candidate(players, teams, user_team_id, entry):
+		var team: PSTeam = _find_team_by_id(teams, user_team_id)
+		var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, user_team_id)) if team != null else 0
+		return {"ok": false, "message": "予算が不足しているためFA獲得できません(残額 %d万円 / 必要額 %d万円)。" % [room, _fa_cost(entry)], "state": state}
 	var need: Dictionary = _build_position_need(players, teams)
 	var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 	var success_chance: float = _contract_success_chance(entry, team_need, "user")
@@ -132,6 +135,8 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 		if bool(entry.get("user_skipped", false)):
 			continue
 		if not _can_team_accept_candidate(players, state, user_team_id, entry):
+			continue
+		if not _can_team_afford_candidate(players, teams, user_team_id, entry):
 			continue
 		var need: Dictionary = _build_position_need(players, teams)
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
@@ -172,6 +177,8 @@ static func complete_fa_market_automatically(state: Dictionary, players: Array, 
 			if _signings_for_team(state, team.id) >= MAX_SIGNINGS_PER_TEAM:
 				continue
 			if not _can_team_accept_candidate(players, state, team.id, entry):
+				continue
+			if not _can_team_afford_candidate(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 			if team_need < MIN_NEED_TO_SIGN:
@@ -279,7 +286,7 @@ static func available_user_candidates(state: Dictionary, players: Array, teams: 
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(pos, 0.0))
 		var copy: Dictionary = entry.duplicate(true)
 		copy["need"] = team_need
-		copy["can_sign"] = _can_team_accept_candidate(players, state, user_team_id, entry)
+		copy["can_sign"] = _can_team_accept_candidate(players, state, user_team_id, entry) and _can_team_afford_candidate(players, teams, user_team_id, entry)
 		copy["success_chance"] = _contract_success_chance(entry, team_need, "user")
 		rows.append(copy)
 	rows.sort_custom(func(a, b) -> bool:
@@ -540,7 +547,7 @@ static func _increment_non_declared_fa_passes(players: Array, year: int, declare
 	return count
 
 
-static func _apply_signing(state: Dictionary, players: Array, _teams: Array, season: PSSeason, entry: Dictionary, to_team_id: int, method: String, success_chance: float = 1.0) -> void:
+static func _apply_signing(state: Dictionary, players: Array, teams: Array, season: PSSeason, entry: Dictionary, to_team_id: int, method: String, success_chance: float = 1.0) -> void:
 	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 	if player == null:
 		return
@@ -557,6 +564,16 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, sea
 	entry["available"] = false
 	entry["signed"] = true
 	entry["to_team"] = to_team_id
+	# 金銭補償 (A80%/B60%) を当オフの予算調整として実際に移動する。獲得球団が負担し元球団が受け取る。
+	var comp: int = int(entry.get("compensation_money", 0))
+	var comp_from_team: int = int(entry.get("from_team", 0))
+	if comp > 0 and comp_from_team != to_team_id:
+		var signing_team: PSTeam = _find_team_by_id(teams, to_team_id)
+		var former_team: PSTeam = _find_team_by_id(teams, comp_from_team)
+		if signing_team != null:
+			signing_team.funds -= comp
+		if former_team != null:
+			former_team.funds += comp
 	var signing: Dictionary = {
 		"player_id": player.id,
 		"name": player.name,
@@ -636,15 +653,21 @@ static func _can_team_accept_candidate(players: Array, state: Dictionary, team_i
 	return _active_count_for_team(players, team_id) + reserved < TeamFinance.SHIENKA_LIMIT
 
 
-static func _signing_score(entry: Dictionary, team_need: float, players: Array, teams: Array, team_id: int) -> float:
+# FA獲得コスト = 提示年俸 + 移籍元へ支払う金銭補償 (A/Bランクのみ、獲得側の負担)。
+static func _fa_cost(entry: Dictionary) -> int:
+	return int(entry.get("offer_salary", entry.get("salary", 0))) + int(entry.get("compensation_money", 0))
+
+
+# 予算ゲート: 補強コストを払っても予算内に収まるか。
+static func _can_team_afford_candidate(players: Array, teams: Array, team_id: int, entry: Dictionary) -> bool:
+	var team: PSTeam = _find_team_by_id(teams, team_id)
+	return TeamFinance.can_afford_addition(players, team, _fa_cost(entry))
+
+
+static func _signing_score(entry: Dictionary, team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
 	var score: float = float(entry.get("value", 0)) * (1.0 + team_need / 20.0)
 	score += float(entry.get("war", 0.0)) * 6.0
 	score += float(int(entry.get("offer_salary", entry.get("salary", 0))) - int(entry.get("salary", 0))) * 0.001
-	var team: PSTeam = _find_team_by_id(teams, team_id)
-	if team != null:
-		var room: int = team.funds - TeamFinance.team_payroll(players, team_id) - int(entry.get("offer_salary", entry.get("salary", 0)))
-		if room < 0:
-			score *= OVER_BUDGET_SCORE_FACTOR
 	return score
 
 

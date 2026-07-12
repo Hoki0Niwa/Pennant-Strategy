@@ -12,7 +12,6 @@ const FOREIGN_FA_YEARS: int = 7
 const NUM_CANDIDATES: int = 54
 const MAX_FOREIGN_HELD_PER_TEAM: int = 4
 const MIN_NEED_TO_SIGN: float = 1.0
-const OVER_BUDGET_SCORE_FACTOR: float = 0.6
 const FOREIGN_SLOT_FILL_BONUS: float = 10.0
 const CANDIDATE_MIN_AGE: int = 24
 const CANDIDATE_MAX_AGE: int = 32
@@ -85,6 +84,10 @@ static func submit_user_foreign_decision(state: Dictionary, players: Array, team
 		return {"ok": false, "message": "不正な外国人補強操作です。", "state": state}
 	if not _can_team_sign_foreign(players, state, user_team_id):
 		return {"ok": false, "message": "支配下枠または外国人枠が不足しています。", "state": state}
+	if not _can_team_afford_foreign(players, teams, user_team_id, candidate):
+		var team: PSTeam = _find_team_by_id(teams, user_team_id)
+		var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, user_team_id)) if team != null else 0
+		return {"ok": false, "message": "予算が不足しているため外国人選手を獲得できません(残額 %d万円 / 年俸 %d万円)。" % [room, int(candidate.get("salary", 0))], "state": state}
 	_apply_signing(state, players, teams, season, candidate, user_team_id, "user")
 	_advance_foreign_state_if_done(state, players, teams, season)
 	return {"ok": true, "state": state}
@@ -103,6 +106,8 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 			continue
 		if not _can_team_sign_foreign(players, state, user_team_id):
 			break
+		if not _can_team_afford_foreign(players, teams, user_team_id, candidate):
+			continue
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(candidate.get("position", 0)), 0.0))
 		var score: float = _signing_score(candidate, team_need, players, teams, user_team_id)
 		if score > best_score:
@@ -129,6 +134,8 @@ static func complete_foreign_market_automatically(state: Dictionary, players: Ar
 			if team.id == user_team_id and bool(candidate.get("user_skipped", false)):
 				continue
 			if not _can_team_sign_foreign(players, state, team.id):
+				continue
+			if not _can_team_afford_foreign(players, teams, team.id, candidate):
 				continue
 			var held: int = _foreign_count_for_team(players, team.id)
 			var open_slots: int = max(0, MAX_FOREIGN_HELD_PER_TEAM - held)
@@ -174,7 +181,7 @@ static func available_user_candidates(state: Dictionary, players: Array, teams: 
 		var copy: Dictionary = candidate.duplicate(true)
 		var pos: int = int(candidate.get("position", 0))
 		copy["need"] = float((need.get(user_team_id, {}) as Dictionary).get(pos, 0.0))
-		copy["can_sign"] = _can_team_sign_foreign(players, state, user_team_id)
+		copy["can_sign"] = _can_team_sign_foreign(players, state, user_team_id) and _can_team_afford_foreign(players, teams, user_team_id, candidate)
 		rows.append(copy)
 	rows.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
@@ -234,16 +241,17 @@ static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: 
 	return foreign_total < MAX_FOREIGN_HELD_PER_TEAM
 
 
-static func _signing_score(candidate: Dictionary, team_need: float, players: Array, teams: Array, team_id: int) -> float:
+# 予算ゲート: 年俸を払っても予算内に収まるか。
+static func _can_team_afford_foreign(players: Array, teams: Array, team_id: int, candidate: Dictionary) -> bool:
+	var team: PSTeam = _find_team_by_id(teams, team_id)
+	return TeamFinance.can_afford_addition(players, team, int(candidate.get("salary", 0)))
+
+
+static func _signing_score(candidate: Dictionary, team_need: float, players: Array, _teams: Array, team_id: int) -> float:
 	var held: int = _foreign_count_for_team(players, team_id)
 	var open_slots: int = max(0, MAX_FOREIGN_HELD_PER_TEAM - held)
 	var score: float = float(candidate.get("value", 0)) * (1.0 + team_need / 20.0)
 	score += float(open_slots) * FOREIGN_SLOT_FILL_BONUS
-	var team: PSTeam = _find_team_by_id(teams, team_id)
-	if team != null:
-		var room: int = team.funds - TeamFinance.team_payroll(players, team_id) - int(candidate.get("salary", 0))
-		if room < 0:
-			score *= OVER_BUDGET_SCORE_FACTOR
 	return score
 
 

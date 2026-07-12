@@ -9,7 +9,6 @@ const MAX_SIGNINGS_PER_TEAM: int = 2
 # 0.5 だと大半の球団がどこかのポジションで僅かでも need を持ち毎年上限の2人まで埋まってしまうため、
 # 「明確な穴」だけが対象になる水準まで上げる (=球団によって0人の年もあれば2人埋める年もある)。
 const MIN_NEED_TO_SIGN: float = 4.0
-const OVER_BUDGET_SCORE_FACTOR: float = 0.7
 
 # 支配下/育成は「誰を獲得するか決めてから振り分ける」のではなく、候補ごとに別判定する。
 # 年齢が上がるほど「今すぐ支配下で通用するか」を疑われ育成寄りになり、能力(value)が高い
@@ -104,6 +103,10 @@ static func submit_user_released_decision(state: Dictionary, players: Array, tea
 		return {"ok": false, "message": "今オフの戦力外獲得上限に達しています。", "state": state}
 	if not _can_team_accept_candidate(players, user_team_id, entry):
 		return {"ok": false, "message": "支配下枠または外国人枠が不足しています。", "state": state}
+	if not _can_team_afford_release(players, teams, user_team_id, entry):
+		var team: PSTeam = _find_team_by_id(teams, user_team_id)
+		var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, user_team_id)) if team != null else 0
+		return {"ok": false, "message": "予算が不足しているため戦力外選手を獲得できません(残額 %d万円 / 年俸 %d万円)。" % [room, int(entry.get("salary", 0))], "state": state}
 	_apply_signing(state, players, season, entry, user_team_id, "user")
 	_advance_released_state_if_done(state, players, teams, season)
 	return {"ok": true, "acquired": true, "state": state}
@@ -150,6 +153,8 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 			if _signings_for_team(state, team.id) >= MAX_SIGNINGS_PER_TEAM:
 				continue
 			if not _can_team_accept_candidate(players, team.id, entry):
+				continue
+			if not _can_team_afford_release(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 			if team_need < MIN_NEED_TO_SIGN:
@@ -220,7 +225,7 @@ static func available_user_candidates(state: Dictionary, players: Array, teams: 
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(pos, 0.0))
 		var copy: Dictionary = entry.duplicate(true)
 		copy["need"] = team_need
-		copy["can_sign"] = _can_team_accept_candidate(players, user_team_id, entry)
+		copy["can_sign"] = _can_team_accept_candidate(players, user_team_id, entry) and _can_team_afford_release(players, teams, user_team_id, entry)
 		rows.append(copy)
 	rows.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
@@ -247,6 +252,7 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 			pa = record.batter_stats.plate_appearances
 	var war: float = _record_war(record, league_ctx)
 	var value: int = OffseasonService.player_value_score(player)
+	var track: String = _determine_track(player.age, value)
 	return {
 		"player_id": player.id,
 		"name": player.name,
@@ -255,7 +261,7 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"role": player.role,
 		"from_team": from_team,
 		"foreign_player": player.foreign_player,
-		"salary": player.salary,
+		"salary": OffseasonService.DEVELOPMENT_CONTRACT_SALARY if track == TRACK_DEVELOPMENT else player.salary,
 		"value": value,
 		"war": snapped(war, 0.01),
 		"games": games,
@@ -264,7 +270,7 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"relief_appearances": relief,
 		"outs_pitched": outs,
 		"available": true,
-		"track": _determine_track(player.age, value),
+		"track": track,
 	}
 
 
@@ -294,6 +300,10 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 	player.source_data["released_from_team"] = int(entry.get("from_team", 0))
 	player.development_player = track == TRACK_DEVELOPMENT
 	player.registered_roster = track
+	player.salary = int(entry.get(
+		"salary",
+		OffseasonService.DEVELOPMENT_CONTRACT_SALARY if player.development_player else player.salary
+	))
 	PSCareerLog.log_released_signed(player, year, int(entry.get("from_team", 0)), to_team_id, player.development_player)
 	if player.development_player:
 		# 獲得した同オフの育成整理 (成長ステップ内) で即放出されないよう1オフ分保持する。
@@ -362,6 +372,12 @@ static func _can_sign_entry(players: Array, entry: Dictionary) -> bool:
 	return _is_released_market_player(_find_player_by_id(players, int(entry.get("player_id", 0))))
 
 
+# 予算ゲート: 年俸を払っても予算内に収まるか。
+static func _can_team_afford_release(players: Array, teams: Array, team_id: int, entry: Dictionary) -> bool:
+	var team: PSTeam = _find_team_by_id(teams, team_id)
+	return TeamFinance.can_afford_addition(players, team, int(entry.get("salary", 0)))
+
+
 static func _is_released_market_player(player: PSPlayer) -> bool:
 	if player == null:
 		return false
@@ -373,14 +389,9 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 	return bool(player.source_data.get("released", false))
 
 
-static func _signing_score(entry: Dictionary, team_need: float, players: Array, teams: Array, team_id: int) -> float:
+static func _signing_score(entry: Dictionary, team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
 	var score: float = float(entry.get("value", 0)) * (1.0 + team_need / 16.0)
 	score += float(entry.get("war", 0.0)) * 5.0
-	var team: PSTeam = _find_team_by_id(teams, team_id)
-	if team != null:
-		var room: int = team.funds - TeamFinance.team_payroll(players, team_id) - int(entry.get("salary", 0))
-		if room < 0:
-			score *= OVER_BUDGET_SCORE_FACTOR
 	return score
 
 

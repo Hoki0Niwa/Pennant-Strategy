@@ -328,7 +328,7 @@ func _accept_selected_offer() -> void:
 		_set_message("受諾する提案を選んでください。", AMBER)
 		queue_redraw()
 		return
-	var result: Dictionary = TradeService.accept_user_offer(season, GameDb.players, _selected_offer_id, AppState.selected_team_id)
+	var result: Dictionary = TradeService.accept_user_offer(season, GameDb.players, GameDb.teams, _selected_offer_id, AppState.selected_team_id)
 	if bool(result.get("ok", false)):
 		GameDb.rebuild_player_indices()
 		_set_message("提案を受諾し、トレードが成立しました!", GREEN)
