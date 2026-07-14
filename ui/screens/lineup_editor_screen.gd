@@ -42,11 +42,13 @@ const C_AVG_R: float = 1268.0
 const C_HR_R: float = 1326.0
 const C_RBI_R: float = 1390.0
 const C_SB_R: float = 1450.0
-const C_OBP_R: float = 1542.0
-const C_OPS_R: float = 1630.0
-const C_WOBA_R: float = 1718.0
-const C_WRC_R: float = 1788.0
-const C_OAA_R: float = 1864.0
+const C_OBP_R: float = 1520.0
+const C_OPS_R: float = 1590.0
+const C_WOBA_R: float = 1660.0
+const C_WRC_R: float = 1730.0
+const C_OAA_R: float = 1800.0
+# 能力ブロック(巧打..選球)と成績ブロック(試合..OAA)の境界に引く縦ヘアラインの x 座標。
+const C_BLOCK_SEP_X: float = 1152.0
 
 # スタメン/打順 列
 const O_NUM_CX: float = 292.0
@@ -386,7 +388,8 @@ func _draw_roster_table() -> void:
 	_text_right("wOBA", C_WOBA_R, hy, 11, FAINT)
 	_text_right("wRC+", C_WRC_R, hy, 11, FAINT)
 	_text_right("OAA", C_OAA_R, hy, 11, FAINT)
-	_line(Vector2(C_BADGE_X, TABLE_PANEL.position.y + 70), Vector2(TABLE_PANEL.end.x - 18, TABLE_PANEL.position.y + 70), BORDER_SOFT, 1.0)
+	var header_rule_y: float = TABLE_PANEL.position.y + 70
+	_line(Vector2(C_BADGE_X, header_rule_y), Vector2(TABLE_PANEL.end.x - 18, header_rule_y), BORDER, 1.5)
 
 	_table_hits = []
 	var y: float = TABLE_PANEL.position.y + 94
@@ -404,12 +407,18 @@ func _draw_roster_table() -> void:
 		if in_lineup:
 			_round(Rect2(C_BADGE_X - 8, y - 16, 3, 20), GREEN, Color.TRANSPARENT, 1, 0)
 		_draw_roster_row(record, y)
+		# 全行の下にヘアライン区切り (基底テーブルの罫線と同じ言語で行を刻む)。
+		_line(Vector2(C_BADGE_X - 8, y + 9), Vector2(TABLE_PANEL.end.x - 18, y + 9), HAIRLINE, 1.0)
 		_table_hits.append({"rect": row_rect, "record": record})
 		y += row_h
 		shown += 1
 
 	if _fielders.is_empty():
 		_text("一軍に登録された野手がいません", Vector2(C_BADGE_X, y + 6), 13, MUTED)
+	elif shown > 0:
+		# 能力ブロック(巧打..選球)と成績ブロック(試合..OAA)の境界を縦ヘアラインで区切る。
+		var rows_bottom: float = y - 18.0
+		_line(Vector2(C_BLOCK_SEP_X, header_rule_y), Vector2(C_BLOCK_SEP_X, rows_bottom), HAIRLINE, 1.0)
 
 
 func _draw_roster_row(record: PSPlayerSeasonRecord, y: float) -> void:
@@ -420,7 +429,7 @@ func _draw_roster_row(record: PSPlayerSeasonRecord, y: float) -> void:
 
 	if record.jersey_number > 0:
 		_text(str(record.jersey_number), Vector2(C_JERSEY_X, y), 12, FAINT)
-	_text(record.name, Vector2(C_NAME_X, y), 14, TEXT, C_AGE_R - 46 - C_NAME_X)
+	_text(record.name, Vector2(C_NAME_X, y), 14, TEXT, C_AGE_R - 46 - C_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_right(str(record.age), C_AGE_R, y, 13, MUTED)
 
 	var pct: int = _fatigue_pct(record)
@@ -469,7 +478,7 @@ func _draw_order_panel() -> void:
 	_text_right("HR", O_HR_R, hy, 11, FAINT)
 	_text_right("打点", O_RBI_R, hy, 11, FAINT)
 	_text_right("OPS", O_OPS_R, hy, 11, FAINT)
-	_line(Vector2(O_NUM_CX - 16, ORDER_PANEL.position.y + 66), Vector2(ORDER_PANEL.end.x - 16, ORDER_PANEL.position.y + 66), BORDER_SOFT, 1.0)
+	_line(Vector2(O_NUM_CX - 16, ORDER_PANEL.position.y + 66), Vector2(ORDER_PANEL.end.x - 16, ORDER_PANEL.position.y + 66), BORDER, 1.5)
 
 	_order_hits = []
 	var row_h: float = 32.0
@@ -482,6 +491,8 @@ func _draw_order_panel() -> void:
 			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), BLUE, 6, 1)
 		_text("%d" % (i + 1), Vector2(O_NUM_CX - 14, baseline), 15, TEXT, 28, HORIZONTAL_ALIGNMENT_CENTER)
 		_draw_order_row(i, baseline)
+		# 行ヘアライン (打順枠が縦に並ぶだけの一覧なので視線誘導の罫線を足す)。
+		_line(Vector2(O_NUM_CX - 16, row_rect.end.y), Vector2(ORDER_PANEL.end.x - 16, row_rect.end.y), HAIRLINE, 1.0)
 		_order_hits.append({"rect": row_rect, "index": i})
 
 	_text("DHは打順のどこでも設定できます", Vector2(ORDER_PANEL.position.x + 18, ORDER_PANEL.end.y - 16), 12, FAINT)
@@ -505,7 +516,7 @@ func _draw_order_row(i: int, baseline: float) -> void:
 		_text("(未設定)", Vector2(O_NAME_X, baseline), 14, FAINT)
 		return
 	var bs: PSBatterStats = record.batter_stats
-	_text(record.name, Vector2(O_NAME_X, baseline), 14, TEXT, O_BATS_CX - 60 - O_NAME_X)
+	_text(record.name, Vector2(O_NAME_X, baseline), 14, TEXT, O_BATS_CX - 60 - O_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text(_bats(record), Vector2(O_BATS_CX - 8, baseline), 13, MUTED, 24, HORIZONTAL_ALIGNMENT_CENTER)
 	_text_right(_rate_short(bs.batting_average()), O_AVG_R, baseline, 13, TEXT)
 	_text_right(str(bs.home_runs), O_HR_R, baseline, 13, TEXT)
@@ -597,19 +608,20 @@ func _draw_bench_grid() -> void:
 			if r < list.size():
 				var pid: int = int(list[r])
 				var record: PSPlayerSeasonRecord = _record_by_id(pid)
-				_round(cell_rect, PANEL_3, BORDER_SOFT, 5, 1)
+				# 枠線は無し (面の濃淡だけで区別)。ドロップ先としての強調のみ意味のある枠として残す。
+				_round(cell_rect, PANEL_3, Color.TRANSPARENT, 5, 0)
 				_text(record.name if record != null else "?", Vector2(cell_rect.position.x + 6, cell_rect.position.y + 17), 12, TEXT, cell_rect.size.x - 10)
 				_bench_chip_hits.append({"rect": cell_rect, "pos": pos, "pid": pid})
 			else:
 				var bg: Color = Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if is_target else Color(0.07, 0.083, 0.10)
-				_round(cell_rect, bg, BLUE if is_target else BORDER_SOFT, 5, 1)
+				_round(cell_rect, bg, BLUE if is_target else Color.TRANSPARENT, 5, 1 if is_target else 0)
 				if r == list.size():
 					_text("控え%d" % (r + 1), Vector2(cell_rect.position.x + 6, cell_rect.position.y + 17), 11, FAINT)
 		var zone: Rect2 = Rect2(cx + 4, cell_top, inner, 27.0 * float(MAX_BENCH) - 3.0)
 		_bench_cell_hits.append({"rect": zone, "pos": pos})
 		# 頻度 (交代間隔) — クリックで循環
 		var freq_rect: Rect2 = Rect2(cx + 4, cell_top + 27.0 * float(MAX_BENCH) + 2.0, inner, 20)
-		_round(freq_rect, PANEL, BORDER_SOFT, 5, 1)
+		_round(freq_rect, PANEL, Color.TRANSPARENT, 5, 0)
 		_text(_interval_label(int(_intervals.get(pos, SUB_INTERVAL_FATIGUE_EMERGENCY))), Vector2(freq_rect.position.x, freq_rect.position.y + 15), 11, MUTED, freq_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
 		_freq_hits.append({"rect": freq_rect, "pos": pos})
 

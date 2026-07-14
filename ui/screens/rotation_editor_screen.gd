@@ -45,6 +45,8 @@ const C_ERA_R: float = 1496.0
 const C_FIP_R: float = 1596.0
 const C_WHIP_R: float = 1700.0
 const C_K9_R: float = 1804.0
+# 能力ブロック(球速..スタ)と成績ブロック(登板..K/9)の境界に引く縦ヘアラインの x 座標。
+const C_BLOCK_SEP_X: float = 1078.0
 
 # 先発ローテ列 (ROTATION_PANEL.x からの相対)。
 const R_NUM_X: float = 16.0
@@ -250,7 +252,8 @@ func _draw_pitcher_table() -> void:
 	_text_right("FIP", C_FIP_R, hy, 11, FAINT)
 	_text_right("WHIP", C_WHIP_R, hy, 11, FAINT)
 	_text_right("K/9", C_K9_R, hy, 11, FAINT)
-	_line(Vector2(C_ROLE_X, TABLE_PANEL.position.y + 70), Vector2(TABLE_PANEL.end.x - 18, TABLE_PANEL.position.y + 70), BORDER_SOFT, 1.0)
+	var header_rule_y: float = TABLE_PANEL.position.y + 70
+	_line(Vector2(C_ROLE_X, header_rule_y), Vector2(TABLE_PANEL.end.x - 18, header_rule_y), BORDER, 1.5)
 
 	var closer_id: int = _closer_id()
 	var rotation_set: Dictionary = _rotation_id_set()
@@ -269,12 +272,17 @@ func _draw_pitcher_table() -> void:
 		if record == _hover_record or record == _drag_record:
 			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 5, 0)
 		_draw_pitcher_row(record, y, rotation_set, closer_id)
+		# 全行の下にヘアライン区切り (基底テーブルの罫線と同じ言語で行を刻む)。
+		_line(Vector2(C_ROLE_X - 8, y + 9), Vector2(TABLE_PANEL.end.x - 18, y + 9), HAIRLINE, 1.0)
 		_row_hits.append({"rect": row_rect, "record": record})
 		y += row_h
 		shown += 1
 
 	if rows.is_empty():
 		_text("一軍に登録された投手がいません", Vector2(C_ROLE_X, y + 6), 13, MUTED)
+	elif shown > 0:
+		# 能力ブロック(球速..スタ)と成績ブロック(登板..K/9)の境界を縦ヘアラインで区切る。
+		_line(Vector2(C_BLOCK_SEP_X, header_rule_y), Vector2(C_BLOCK_SEP_X, y - 18.0), HAIRLINE, 1.0)
 
 
 func _draw_pitcher_row(record: PSPlayerSeasonRecord, y: float, rotation_set: Dictionary, closer_id: int) -> void:
@@ -284,7 +292,7 @@ func _draw_pitcher_row(record: PSPlayerSeasonRecord, y: float, rotation_set: Dic
 
 	if record.jersey_number > 0:
 		_text(str(record.jersey_number), Vector2(C_JERSEY_X, y), 12, FAINT)
-	_text(record.name, Vector2(C_NAME_X, y), 14, TEXT, C_AGE_R - 46 - C_NAME_X)
+	_text(record.name, Vector2(C_NAME_X, y), 14, TEXT, C_AGE_R - 46 - C_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_right(str(record.age), C_AGE_R, y, 13, MUTED)
 
 	var pct: int = _fatigue_pct(record)
@@ -327,7 +335,7 @@ func _draw_rotation_panel() -> void:
 	_text_right("防御率", px + R_ERA_R, hy, 11, FAINT)
 	_text_right("WAR", px + R_WAR_R, hy, 11, FAINT)
 	_text_right("評価", px + R_EVAL_R, hy, 11, FAINT)
-	_line(Vector2(px + R_NUM_X, ROTATION_PANEL.position.y + 66), Vector2(ROTATION_PANEL.end.x - 16, ROTATION_PANEL.position.y + 66), BORDER_SOFT, 1.0)
+	_line(Vector2(px + R_NUM_X, ROTATION_PANEL.position.y + 66), Vector2(ROTATION_PANEL.end.x - 16, ROTATION_PANEL.position.y + 66), BORDER, 1.5)
 
 	for i in range(ROTATION_SIZE):
 		var top: float = ROTATION_PANEL.position.y + 74 + float(i) * 52.0
@@ -336,6 +344,8 @@ func _draw_rotation_panel() -> void:
 		_round(Rect2(px + R_NUM_X, top + 13, 50, 34), Color(PINK.r, PINK.g, PINK.b, 0.18), Color(PINK.r, PINK.g, PINK.b, 0.55), 7)
 		_text("%d" % (i + 1), Vector2(px + R_NUM_X, top + 36), 19, PINK, 50, HORIZONTAL_ALIGNMENT_CENTER)
 		_draw_slot_card(_rotation_slot_rect(i), record, {"type": "rot", "index": i})
+		if i > 0:
+			_line(Vector2(px + R_NUM_X, top), Vector2(ROTATION_PANEL.end.x - 16, top), HAIRLINE, 1.0)
 		if record == null:
 			continue
 		var pct: int = _fatigue_pct(record)
@@ -352,10 +362,11 @@ func _rotation_slot_rect(i: int) -> Rect2:
 
 
 func _draw_slot_card(rect: Rect2, record: PSPlayerSeasonRecord, target: Dictionary) -> void:
+	# 枠線はドロップ先として有効な時だけ (通常時はフラット)。
 	var is_target: bool = _drag_active and _drop_match(target)
-	var border: Color = BLUE if is_target else BORDER_SOFT
+	var border: Color = BLUE if is_target else Color.TRANSPARENT
 	var bg: Color = Color(BLUE.r, BLUE.g, BLUE.b, 0.16) if is_target else PANEL_2
-	_round(rect, bg, border, 7, 2 if is_target else 1)
+	_round(rect, bg, border, 7, 2 if is_target else 0)
 	var ty: float = rect.position.y + rect.size.y * 0.68
 	if record == null:
 		_text("ここにドラッグ", Vector2(rect.position.x + 12, ty), 12, FAINT)
@@ -363,7 +374,7 @@ func _draw_slot_card(rect: Rect2, record: PSPlayerSeasonRecord, target: Dictiona
 	var label: String = record.name
 	if record.jersey_number > 0:
 		label = "%d  %s" % [record.jersey_number, record.name]
-	_text(label, Vector2(rect.position.x + 12, ty), 14, TEXT, rect.size.x - 70)
+	_text(label, Vector2(rect.position.x + 12, ty), 14, TEXT, rect.size.x - 70, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_right("評%d" % PlayerValueEvaluator.overall_score(record), rect.end.x - 12, ty, 12, MUTED, 56)
 
 
@@ -378,7 +389,7 @@ func _draw_relief_panel() -> void:
 		var lane_y: float = _relief_lane_top(i)
 		var lane_h: float = _relief_lane_h()
 		if i > 0:
-			_line(Vector2(px + 16, lane_y), Vector2(RELIEF_PANEL.end.x - 16, lane_y), BORDER_SOFT, 1.0)
+			_line(Vector2(px + 16, lane_y), Vector2(RELIEF_PANEL.end.x - 16, lane_y), HAIRLINE, 1.0)
 		var color: Color = lane["color"] as Color
 		_round(Rect2(px + 16, lane_y + (lane_h - 28) * 0.5 - 12, 124, 28), Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.55), 7)
 		_text(str(lane["label"]), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 7), 13, color, 124, HORIZONTAL_ALIGNMENT_CENTER)
@@ -405,8 +416,9 @@ func _relief_lane_rect(i: int) -> Rect2:
 func _draw_relief_lane(i: int, role: String) -> void:
 	var zone: Rect2 = _relief_lane_rect(i)
 	var is_target: bool = _drag_active and _drop_match({"type": "rel", "role": role})
-	var border: Color = BLUE if is_target else BORDER_SOFT
-	_round(zone, Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if is_target else Color(0.07, 0.083, 0.10), border, 7, 2 if is_target else 1)
+	# 枠線はドロップ先として有効な時だけ (通常時はフラット)。
+	var border: Color = BLUE if is_target else Color.TRANSPARENT
+	_round(zone, Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if is_target else Color(0.07, 0.083, 0.10), border, 7, 2 if is_target else 0)
 
 	var ids: Array = _relief[role] as Array
 	if ids.is_empty():

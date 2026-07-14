@@ -9,7 +9,7 @@ extends "res://ui/components/dashboard_screen.gd"
 #   - 打線 (スタメン打順) / ローテーション・勝ちパターン (先発6 + セット/抑え)。
 #   - 直近の対戦結果 / 今後の対戦予定 (schedule から自軍視点で抽出)。
 #   - チーム内成績ランキング: 野手(打率/本塁打/打点/OPS/WAR) と投手(勝利/防御率/WAR/FIP/登板) を
-#     色分け (野手=GREEN / 投手=BLUE) し各 Top3。防御率は先発限定。
+#     色分け (野手=BLUE / 投手=RED) し各 Top3。防御率は先発限定。
 # 重い集計は _refresh で1度だけ行いキャッシュし、_draw は描画専念。
 # 打順/ローテ/勝ちパターンは保存値 (get_lineup/get_rotation) を優先、無ければ preview を表示。
 
@@ -44,9 +44,6 @@ const RANKING_RECT: Rect2 = Rect2(898, 704, 1002, 344)
 const RECENT_LIMIT: int = 6
 
 const CLOSER_RED: Color = Color(0.92, 0.24, 0.30)
-# 野手/投手ランキングのアクセント色 (明るめ・投手はピンク寄り)。
-const BAT_ACCENT: Color = Color(0.46, 0.73, 1.0)
-const PIT_ACCENT: Color = Color(0.95, 0.62, 0.78)
 
 var _team_id: int = 0
 var _team_ids: Array = []                 # 選択候補 (リーグ→id)
@@ -133,56 +130,52 @@ func _logo_hotspot_rect(team: PSTeam) -> Rect2:
 # --- サマリーバー (今期成績, 2段) ---
 
 func _draw_statbar() -> void:
-	var team: PSTeam = GameDb.get_team(_team_id)
 	var wins: int = _stats.wins if _stats != null else 0
 	var losses: int = _stats.losses if _stats != null else 0
 	var draws: int = _stats.draws if _stats != null else 0
 	var rs: int = int(_team_metric.get("rs", 0))
 	var ra: int = int(_team_metric.get("ra", 0))
 	var has_pitch: bool = int(_team_metric.get("outs", 0)) > 0
-
 	var rank_text: String = "%d位" % _rank if _rank > 0 else "-"
-	# 1段目: 順位・勝敗・勝率・ゲーム差・得点・失点
+
+	# 1段目: 順位・勝敗・勝率・ゲーム差・得点・失点。得点/失点はリーグ内順位を note で添える。
+	var rs_note: Dictionary = _rank_note(int(_metric_ranks.get("rs", 0)))
+	var ra_note: Dictionary = _rank_note(int(_metric_ranks.get("ra", 0)))
 	var row1: Array = [
-		{"icon": "rank", "label": "順位 (%s)" % (team.league_label() if team != null else ""), "value": rank_text, "vsize": 23, "color": BLUE},
-		{"icon": "record", "label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws], "vsize": 18, "color": TEXT},
-		{"icon": "winrate", "label": "勝率", "value": _rate_short(_stats.win_rate() if _stats != null else 0.0), "vsize": 23, "color": GREEN},
-		{"icon": "gb", "label": "ゲーム差", "value": ("-" if _gb <= 0.0 else _float1(_gb)), "vsize": 22, "color": TEXT},
-		{"icon": "results", "label": "得点", "value": str(rs), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("rs", 0))},
-		{"icon": "results", "label": "失点", "value": str(ra), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("ra", 0))},
+		{"label": "順位", "value": rank_text, "color": BLUE},
+		{"label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws]},
+		{"label": "勝率", "value": _rate_short(_stats.win_rate() if _stats != null else 0.0), "color": GREEN},
+		{"label": "ゲーム差", "value": ("-" if _gb <= 0.0 else _float1(_gb))},
+		{"label": "得点", "value": str(rs), "note": str(rs_note["text"]), "note_color": rs_note["color"] as Color},
+		{"label": "失点", "value": str(ra), "note": str(ra_note["text"]), "note_color": ra_note["color"] as Color},
 	]
-	# 2段目: 打率・本塁打・盗塁・失策・防御率・セーブ (いずれもリーグ内順位つき)
+	# 2段目: 打率・本塁打・盗塁・失策・防御率・セーブ (いずれもリーグ内順位を note で添える)。
+	var avg_note: Dictionary = _rank_note(int(_metric_ranks.get("avg", 0)))
+	var hr_note: Dictionary = _rank_note(int(_metric_ranks.get("hr", 0)))
+	var sb_note: Dictionary = _rank_note(int(_metric_ranks.get("sb", 0)))
+	var err_note: Dictionary = _rank_note(int(_metric_ranks.get("err", 0)))
+	var era_note: Dictionary = _rank_note(int(_metric_ranks.get("era", 0))) if has_pitch else {"text": "", "color": MUTED}
+	var sv_note: Dictionary = _rank_note(int(_metric_ranks.get("sv", 0)))
 	var row2: Array = [
-		{"icon": "winrate", "label": "打率", "value": _rate_short(float(_team_metric.get("avg", 0.0))), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("avg", 0))},
-		{"icon": "standings", "label": "本塁打", "value": str(int(_team_metric.get("hr", 0))), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("hr", 0))},
-		{"icon": "swap", "label": "盗塁", "value": str(int(_team_metric.get("sb", 0))), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("sb", 0))},
-		{"icon": "role", "label": "失策", "value": str(int(_team_metric.get("err", 0))), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("err", 0))},
-		{"icon": "pitch", "label": "防御率", "value": ("%0.2f" % float(_team_metric.get("era", 0.0))) if has_pitch else "-", "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("era", 0)) if has_pitch else 0},
-		{"icon": "record", "label": "セーブ", "value": str(int(_team_metric.get("sv", 0))), "vsize": 22, "color": TEXT, "rank": int(_metric_ranks.get("sv", 0))},
+		{"label": "打率", "value": _rate_short(float(_team_metric.get("avg", 0.0))), "note": str(avg_note["text"]), "note_color": avg_note["color"] as Color},
+		{"label": "本塁打", "value": str(int(_team_metric.get("hr", 0))), "note": str(hr_note["text"]), "note_color": hr_note["color"] as Color},
+		{"label": "盗塁", "value": str(int(_team_metric.get("sb", 0))), "note": str(sb_note["text"]), "note_color": sb_note["color"] as Color},
+		{"label": "失策", "value": str(int(_team_metric.get("err", 0))), "note": str(err_note["text"]), "note_color": err_note["color"] as Color},
+		{"label": "防御率", "value": ("%0.2f" % float(_team_metric.get("era", 0.0))) if has_pitch else "-", "note": str(era_note["text"]), "note_color": era_note["color"] as Color},
+		{"label": "セーブ", "value": str(int(_team_metric.get("sv", 0))), "note": str(sv_note["text"]), "note_color": sv_note["color"] as Color},
 	]
-	_draw_stat_row(row1, STAT_Y1)
-	_draw_stat_row(row2, STAT_Y2)
+	_stat_strip(Rect2(INNER_L, STAT_Y1, INNER_R - INNER_L, STAT_H), row1)
+	_stat_strip(Rect2(INNER_L, STAT_Y2, INNER_R - INNER_L, STAT_H), row2)
 
 
-func _draw_stat_row(cards: Array, y: float) -> void:
-	var count: int = cards.size()
-	var gap: float = 10.0
-	var total_w: float = INNER_R - INNER_L
-	var card_w: float = (total_w - gap * float(count - 1)) / float(count)
-	var x: float = INNER_L
-	for card_value in cards:
-		var card: Dictionary = card_value as Dictionary
-		_round(Rect2(x, y, card_w, STAT_H), PANEL, BORDER, 9)
-		_icon(str(card["icon"]), Rect2(x + 16, y + 24, 26, 26), MUTED)
-		_text(str(card["label"]), Vector2(x + 52, y + 30), 12, MUTED, card_w - 60)
-		_text(str(card["value"]), Vector2(x + 52, y + 57), int(card["vsize"]), card["color"] as Color, card_w - 60)
-		var rank: int = int(card.get("rank", 0))
-		if rank > 0:
-			# 1位=金 / 最下位(=リーグ6位)=紫 / それ以外=青。
-			var last: int = _league_size if _league_size > 0 else 6
-			var rc: Color = AMBER if rank == 1 else (VIOLET if rank >= last else BLUE)
-			_chip(Rect2(x + card_w - 78, y + 12, 64, 20), "リーグ%d位" % rank, rc)
-		x += card_w + gap
+# リーグ内順位 → note 文言 + 色。1位=AMBER / 最下位(=リーグ最終順位)=VIOLET / それ以外=BLUE
+# (旧カード列の chip 配色をそのまま踏襲)。
+func _rank_note(rank: int) -> Dictionary:
+	if rank <= 0:
+		return {"text": "", "color": MUTED}
+	var last: int = _league_size if _league_size > 0 else 6
+	var color: Color = AMBER if rank == 1 else (VIOLET if rank >= last else BLUE)
+	return {"text": "リーグ%d位" % rank, "color": color}
 
 
 # --- 打線 (スタメン打順) ---
@@ -198,14 +191,16 @@ func _draw_lineup(rect: Rect2) -> void:
 	var name_right: float = rect.end.x - 230.0
 
 	var hy: float = rect.position.y + 58
-	_text("打順", Vector2(rect.position.x + 18, hy), 11, FAINT)
-	_text("守", Vector2(rect.position.x + 64, hy), 11, FAINT)
-	_text("選手", Vector2(rect.position.x + 98, hy), 11, FAINT)
-	_text_right("打率", c_avg, hy, 11, FAINT, 52)
-	_text_right("本", c_hr, hy, 11, FAINT, 40)
-	_text_right("OPS", c_ops, hy, 11, FAINT, 52)
-	_text_right("WAR", c_war, hy, 11, FAINT, 46)
-	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER_SOFT, 1.0)
+	var sep_x: float = name_right + 10.0
+	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text("打順", Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("守", Vector2(rect.position.x + 64, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("選手", Vector2(rect.position.x + 98, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("打率", c_avg, hy, 11, MUTED, 52, true)
+	_text_right("本", c_hr, hy, 11, MUTED, 40, true)
+	_text_right("OPS", c_ops, hy, 11, MUTED, 52, true)
+	_text_right("WAR", c_war, hy, 11, MUTED, 46, true)
+	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
 
 	if _lineup_rows.is_empty():
 		_text("打順を編成できません", Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
@@ -217,13 +212,11 @@ func _draw_lineup(rect: Rect2) -> void:
 		var row: Dictionary = _lineup_rows[i] as Dictionary
 		var ry: float = top + float(i) * row_h
 		var ty: float = ry + row_h * 0.5 + 5.0
-		if i % 2 == 1:
-			_round(Rect2(rect.position.x + 12, ry, rect.size.x - 24, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 		var pos: int = int(row.get("pos", 0))
 		var is_pitcher: bool = pos == 1
 		_text(str(i + 1), Vector2(rect.position.x + 24, ty), 14, BLUE)
 		_chip(Rect2(rect.position.x + 56, ry + row_h * 0.5 - 11, 30, 22), str(row.get("pos_label", "")), _pos_color(pos))
-		_text(str(row.get("name", "")), Vector2(rect.position.x + 98, ty), 14, TEXT, name_right - (rect.position.x + 98))
+		_text(str(row.get("name", "")), Vector2(rect.position.x + 98, ty), 14, TEXT, name_right - (rect.position.x + 98), HORIZONTAL_ALIGNMENT_LEFT, true)
 		if is_pitcher:
 			_text_right("-", c_avg, ty, 13, FAINT, 52)
 			_text_right("-", c_hr, ty, 13, FAINT, 40)
@@ -234,6 +227,10 @@ func _draw_lineup(rect: Rect2) -> void:
 			_text_right(str(int(row.get("hr", 0))), c_hr, ty, 13, MUTED, 40)
 			_text_right("%0.3f" % float(row.get("ops", 0.0)), c_ops, ty, 13, TEXT, 52)
 			_text_right("%0.1f" % float(row.get("war", 0.0)), c_war, ty, 13, MUTED, 46)
+		# 自前描画テーブルなので行区切りは手でヘアラインを引く。
+		_line(Vector2(rect.position.x + 16, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
+	# 識別ブロック(打順/守/選手)と成績ブロック(打率〜WAR)の境界。
+	_line(Vector2(sep_x, hy - 18), Vector2(sep_x, top + float(_lineup_rows.size()) * row_h), HAIRLINE, 1.0)
 
 
 # --- ローテーション・勝ちパターン ---
@@ -254,12 +251,15 @@ func _draw_rotation(rect: Rect2) -> void:
 	var c_war: float = rect.end.x - 14.0
 
 	var sub_y: float = rect.position.y + 56
-	_text("先発ローテーション", Vector2(rect.position.x + 18, sub_y), 13, MUTED)
-	_text_right("勝敗", c_wl, sub_y, 11, FAINT, 78)
-	_text_right("防御率", c_era, sub_y, 11, FAINT, 60)
-	_text_right("WAR", c_war, sub_y, 11, FAINT, 46)
+	var rot_sep_x: float = c_wl - 10.0
+	_round(Rect2(rect.position.x + 16, sub_y - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text("先発ローテーション", Vector2(rect.position.x + 18, sub_y), 13, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("勝敗", c_wl, sub_y, 11, MUTED, 78, true)
+	_text_right("防御率", c_era, sub_y, 11, MUTED, 60, true)
+	_text_right("WAR", c_war, sub_y, 11, MUTED, 46, true)
+	_line(Vector2(rect.position.x + 16, sub_y + 8), Vector2(rect.end.x - 18, sub_y + 8), BORDER, 1.5)
 
-	var rot_top: float = sub_y + 10.0
+	var rot_top: float = sub_y + 18.0
 	var rot_area: float = wp_label_y - 10.0 - rot_top
 	if _rotation_rows.is_empty():
 		_text("ローテーションを編成できません", Vector2(rect.position.x + 20, rot_top + 24), 13, MUTED)
@@ -271,13 +271,15 @@ func _draw_rotation(rect: Rect2) -> void:
 			var ty: float = ry + rot_h * 0.5 + 5.0
 			_round(Rect2(rect.position.x + 18, ry + rot_h * 0.5 - 11, 26, 22), Color(PINK.r, PINK.g, PINK.b, 0.18), Color(PINK.r, PINK.g, PINK.b, 0.55), 6)
 			_text("%d" % int(row.get("num", i + 1)), Vector2(rect.position.x + 18, ty), 14, PINK, 26, HORIZONTAL_ALIGNMENT_CENTER)
-			_text(str(row.get("name", "")), Vector2(rect.position.x + 54, ty), 14, TEXT, c_wl - 78 - (rect.position.x + 54))
+			_text(str(row.get("name", "")), Vector2(rect.position.x + 54, ty), 14, TEXT, c_wl - 78 - (rect.position.x + 54), HORIZONTAL_ALIGNMENT_LEFT, true)
 			_text_right(str(row.get("wl", "")), c_wl, ty, 13, TEXT, 78)
 			_text_right(str(row.get("era", "-.--")), c_era, ty, 13, TEXT, 60)
 			_text_right(str(row.get("war", "-")), c_war, ty, 13, MUTED, 46)
+			_line(Vector2(rect.position.x + 16, ry + rot_h), Vector2(rect.end.x - 18, ry + rot_h), HAIRLINE, 1.0)
+		_line(Vector2(rot_sep_x, sub_y - 18), Vector2(rot_sep_x, rot_top + float(_rotation_rows.size()) * rot_h), HAIRLINE, 1.0)
 
 	# 勝ちパターン (セットアッパー / クローザー) — 下部固定帯
-	_line(Vector2(rect.position.x + 18, wp_label_y), Vector2(rect.end.x - 18, wp_label_y), BORDER_SOFT, 1.0)
+	_line(Vector2(rect.position.x + 18, wp_label_y), Vector2(rect.end.x - 18, wp_label_y), BORDER, 1.5)
 	_text("勝ちパターン", Vector2(rect.position.x + 18, wp_label_y + 22), 13, MUTED)
 	if _win_pattern.is_empty():
 		_text("リリーフ未設定", Vector2(rect.position.x + 150, wp_label_y + 22), 13, MUTED)
@@ -289,7 +291,7 @@ func _draw_rotation(rect: Rect2) -> void:
 		var cy: float = wy + wp_row_h * 0.5
 		_round(Rect2(rect.position.x + 18, cy - 11, 116, 22), Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.55), 7)
 		_text(str(entry.get("role", "")), Vector2(rect.position.x + 18, cy + 5), 12, color, 116, HORIZONTAL_ALIGNMENT_CENTER)
-		_text(str(entry.get("name", "")), Vector2(rect.position.x + 146, cy + 5), 13, TEXT, c_wl - 78 - (rect.position.x + 146))
+		_text(str(entry.get("name", "")), Vector2(rect.position.x + 146, cy + 5), 13, TEXT, c_wl - 78 - (rect.position.x + 146), HORIZONTAL_ALIGNMENT_LEFT, true)
 		_text_right(str(entry.get("wl", "")), c_wl, cy + 5, 13, MUTED, 78)
 		_text_right(str(entry.get("era", "-.--")), c_era, cy + 5, 13, MUTED, 60)
 		_text_right(str(entry.get("war", "-")), c_war, cy + 5, 13, MUTED, 46)
@@ -303,11 +305,12 @@ func _draw_history(rect: Rect2) -> void:
 
 	var inner_x: float = rect.position.x + 18.0
 	var hy: float = rect.position.y + 58
-	_text("年度", Vector2(inner_x, hy), 11, FAINT)
-	_text_right("順位", rect.position.x + 250, hy, 11, FAINT, 56)
-	_text_right("勝-敗-分", rect.end.x - 96, hy, 11, FAINT, 120)
-	_text_right("勝率", rect.end.x - 18, hy, 11, FAINT, 64)
-	_line(Vector2(inner_x, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER_SOFT, 1.0)
+	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text("年度", Vector2(inner_x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("順位", rect.position.x + 250, hy, 11, MUTED, 56, true)
+	_text_right("勝-敗-分", rect.end.x - 96, hy, 11, MUTED, 120, true)
+	_text_right("勝率", rect.end.x - 18, hy, 11, MUTED, 64, true)
+	_line(Vector2(inner_x, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
 
 	if _recent5.is_empty():
 		_text("完了したシーズンの記録がありません", Vector2(inner_x, rect.position.y + 110), 13, MUTED)
@@ -319,11 +322,9 @@ func _draw_history(rect: Rect2) -> void:
 		var row: Dictionary = _recent5[i] as Dictionary
 		var ry: float = top + float(i) * row_h
 		var ty: float = ry + row_h * 0.5 + 5.0
-		if i % 2 == 1:
-			_round(Rect2(rect.position.x + 12, ry, rect.size.x - 24, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 		var rank: int = int(row.get("rank", 0))
 		var rank_color: Color = AMBER if rank == 1 else TEXT
-		_text("%d年" % int(row.get("year", 0)), Vector2(inner_x, ty), 14, TEXT)
+		_text("%d年" % int(row.get("year", 0)), Vector2(inner_x, ty), 14, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		# CS / 日本シリーズ進出時はその到達段階を chip で表示。
 		var ps_text: String = str(row.get("ps", ""))
 		if not ps_text.is_empty():
@@ -332,6 +333,7 @@ func _draw_history(rect: Rect2) -> void:
 		_text_right("%d位" % rank if rank > 0 else "-", rect.position.x + 250, ty, 14, rank_color, 56)
 		_text_right("%d-%d-%d" % [int(row.get("w", 0)), int(row.get("l", 0)), int(row.get("d", 0))], rect.end.x - 96, ty, 13, MUTED, 120)
 		_text_right(_rate_short(float(row.get("pct", 0.0))), rect.end.x - 18, ty, 13, TEXT, 64)
+		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
 
 
 # --- 直近の対戦結果 / 今後の対戦予定 ---
@@ -370,7 +372,7 @@ func _draw_schedule(rect: Rect2) -> void:
 
 func _draw_result_row(cell: Rect2, game: Dictionary) -> void:
 	var color: Color = _game_color(game)
-	_round(cell, PANEL_2, BORDER_SOFT, 7)
+	_round(cell, PANEL_2, Color.TRANSPARENT, 7, 0)
 	var opp: PSTeam = GameDb.get_team(int(game.get("opponent_id", 0)))
 	var ty: float = cell.position.y + cell.size.y * 0.5 + 5.0
 	_text(str(game.get("date_label", "")), Vector2(cell.position.x + 12, ty), 12, MUTED, 90)
@@ -381,7 +383,7 @@ func _draw_result_row(cell: Rect2, game: Dictionary) -> void:
 
 
 func _draw_upcoming_row(cell: Rect2, game: Dictionary) -> void:
-	_round(cell, PANEL_2, BORDER_SOFT, 7)
+	_round(cell, PANEL_2, Color.TRANSPARENT, 7, 0)
 	var opp: PSTeam = GameDb.get_team(int(game.get("opponent_id", 0)))
 	var ty: float = cell.position.y + cell.size.y * 0.5 + 5.0
 	_text(str(game.get("date_label", "")), Vector2(cell.position.x + 12, ty), 12, MUTED, 90)
@@ -416,7 +418,8 @@ func _draw_rankings(rect: Rect2) -> void:
 
 
 func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
-	_round(rect, PANEL_2, BORDER_SOFT, 8)
+	# 枠は落とし、左アクセントバー (野手=BLUE / 投手=RED) だけで区分する。
+	_round(rect, PANEL_2, Color.TRANSPARENT, 8, 0)
 	var accent: Color = card.get("accent", BLUE) as Color
 	_round(Rect2(rect.position.x, rect.position.y, 3, rect.size.y), accent, Color.TRANSPARENT, 0, 0)
 	_text(str(card.get("title", "")), Vector2(rect.position.x + 14, rect.position.y + 28), 14, accent, rect.size.x - 24)
@@ -438,6 +441,8 @@ func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
 		_text("%d" % (i + 1), Vector2(rect.position.x + 12, ty), 12, medal)
 		_text(str(entry.get("name", "")), Vector2(name_x, ty), 13, TEXT, name_w)
 		_text_right(str(entry.get("value", "")), rect.end.x - 10, ty, 13, accent, value_box)
+		if i < entries.size() - 1:
+			_line(Vector2(rect.position.x + 10.0, top + float(i + 1) * row_h), Vector2(rect.end.x - 8.0, top + float(i + 1) * row_h), HAIRLINE, 1.0)
 
 
 # ============================================================ buttons
@@ -898,37 +903,37 @@ func _build_rankings(records: Array) -> void:
 		else:
 			batters.append(record)
 
-	# 上段=野手 (GREEN) / 下段=投手 (BLUE)。各 Top3。
+	# 上段=野手 (BLUE) / 下段=投手 (RED)。各 Top3。
 	_ranking_cards = [
-		_rank_card("打率", BAT_ACCENT, batters, "rate",
+		_rank_card("打率", BLUE, batters, "rate",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.at_bats >= min_ab,
 			func(r: PSPlayerSeasonRecord) -> float: return r.batter_stats.batting_average()),
-		_rank_card("本塁打", BAT_ACCENT, batters, "int",
+		_rank_card("本塁打", BLUE, batters, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.home_runs > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.batter_stats.home_runs)),
-		_rank_card("打点", BAT_ACCENT, batters, "int",
+		_rank_card("打点", BLUE, batters, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.runs_batted_in > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.batter_stats.runs_batted_in)),
-		_rank_card("OPS", BAT_ACCENT, batters, "ops",
+		_rank_card("OPS", BLUE, batters, "ops",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.at_bats >= min_ab,
 			func(r: PSPlayerSeasonRecord) -> float: return r.batter_stats.ops()),
-		_rank_card("WAR (野手)", BAT_ACCENT, batters, "war",
+		_rank_card("WAR (野手)", BLUE, batters, "war",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.plate_appearances > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return _war_of(r)),
-		_rank_card("勝利", PIT_ACCENT, pitchers, "int",
+		_rank_card("勝利", RED, pitchers, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.wins > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.pitcher_stats.wins)),
 		# 防御率は先発のみ (規定投球回ベースの簡易閾値)。
-		_rank_card("防御率 (先発)", PIT_ACCENT, pitchers, "era",
+		_rank_card("防御率 (先発)", RED, pitchers, "era",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.is_starter_pitcher() and r.pitcher_stats.outs_pitched >= min_outs,
 			func(r: PSPlayerSeasonRecord) -> float: return r.pitcher_stats.era()),
-		_rank_card("登板数", PIT_ACCENT, pitchers, "int",
+		_rank_card("登板数", RED, pitchers, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.games > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.pitcher_stats.games)),
-		_rank_card("FIP", PIT_ACCENT, pitchers, "fip",
+		_rank_card("FIP", RED, pitchers, "fip",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.outs_pitched >= min_outs,
 			func(r: PSPlayerSeasonRecord) -> float: return _fip_of(r)),
-		_rank_card("WAR (投手)", PIT_ACCENT, pitchers, "war",
+		_rank_card("WAR (投手)", RED, pitchers, "war",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.outs_pitched > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return _war_of(r)),
 	]

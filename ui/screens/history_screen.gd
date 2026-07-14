@@ -49,14 +49,14 @@ const POST_GROUPS: Array = [
 
 const HIST_COLUMNS: Array = [
 	{"title": "順",   "key": "rank", "w": 40,  "align": "l", "fmt": "rank"},
-	{"title": "球団", "key": "team", "w": 180, "align": "l", "fmt": "team"},
-	{"title": "試",   "key": "g",    "w": 58,  "align": "r", "fmt": "int"},
+	{"title": "球団", "key": "team", "w": 180, "align": "l", "fmt": "team", "strong": true},
+	{"title": "試",   "key": "g",    "w": 58,  "align": "r", "fmt": "int", "sep_before": true},
 	{"title": "勝",   "key": "w",    "w": 56,  "align": "r", "fmt": "int"},
 	{"title": "敗",   "key": "l",    "w": 56,  "align": "r", "fmt": "int"},
 	{"title": "分",   "key": "d",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "勝率", "key": "pct",  "w": 78,  "align": "r", "fmt": "rate"},
+	{"title": "勝率", "key": "pct",  "w": 78,  "align": "r", "fmt": "rate", "sep_before": true},
 	{"title": "差",   "key": "gb",   "w": 66,  "align": "r", "fmt": "gb"},
-	{"title": "得",   "key": "rs",   "w": 62,  "align": "r", "fmt": "int"},
+	{"title": "得",   "key": "rs",   "w": 62,  "align": "r", "fmt": "int", "sep_before": true},
 	{"title": "失",   "key": "ra",   "w": 62,  "align": "r", "fmt": "int"},
 	{"title": "得失", "key": "diff", "w": 70,  "align": "r", "fmt": "diff"},
 ]
@@ -110,9 +110,9 @@ const TITLE_TABLE_RECT: Rect2 = Rect2(262, 190, 1240, 868)
 
 const ALLTIME_COLUMNS: Array = [
 	{"title": "順",   "key": "rank",   "w": 44,  "align": "l", "fmt": "rank"},
-	{"title": "選手", "key": "player", "w": 220, "align": "l", "fmt": "str"},
+	{"title": "選手", "key": "player", "w": 220, "align": "l", "fmt": "str", "strong": true},
 	{"title": "在籍", "key": "span",   "w": 120, "align": "l", "fmt": "str"},
-	{"title": "記録", "key": "value",  "w": 90,  "align": "r", "fmt": "int"},
+	{"title": "記録", "key": "value",  "w": 90,  "align": "r", "fmt": "int", "sep_before": true},
 ]
 const TITLE_COLUMNS: Array = [
 	{"title": "年度",       "key": "year",    "w": 120, "align": "l", "fmt": "str"},
@@ -242,20 +242,19 @@ func _draw_table(rect: Rect2, title: String, columns: Array, rows: Array) -> voi
 # ============================================================ ポストシーズン
 
 func _draw_postseason(rect: Rect2) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text("ポストシーズン", Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(rect, "ポストシーズン")
 
-	# 日本一バナー
+	# 日本一バナー: 枠は使わずアンバーの地色だけで強調する (勝者の色分けは維持)。
 	var banner: Rect2 = Rect2(rect.position.x + 18, rect.position.y + 52, rect.size.x - 36, 88)
 	if _post_champion_id > 0:
-		_round(banner, Color(AMBER.r, AMBER.g, AMBER.b, 0.14), Color(AMBER.r, AMBER.g, AMBER.b, 0.55), 10)
+		_round(banner, Color(AMBER.r, AMBER.g, AMBER.b, 0.14), Color.TRANSPARENT, 10, 0)
 		var champ: PSTeam = GameDb.get_team(_post_champion_id)
 		_text("★ 日本一 ★", Vector2(banner.position.x + 24, banner.position.y + 34), 16, AMBER, 200, HORIZONTAL_ALIGNMENT_LEFT, true)
 		if champ != null:
 			_team_badge(Rect2(banner.position.x + 24, banner.position.y + 42, 34, 34), champ)
 			_text(champ.name, Vector2(banner.position.x + 68, banner.position.y + 66), 22, TEXT, banner.size.x - 90, HORIZONTAL_ALIGNMENT_LEFT, true)
 	else:
-		_round(banner, PANEL_2, BORDER_SOFT, 10)
+		_round(banner, PANEL_2, Color.TRANSPARENT, 10, 0)
 		_text("日本一未決定", Vector2(banner.position.x, banner.position.y + 50), 16, MUTED, banner.size.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 	if _post_by_stage.is_empty():
@@ -322,7 +321,7 @@ func _draw_stage_group(group: Dictionary, lay: Dictionary, y: float, gh: float) 
 
 # 1シリーズ分のカード。row が null のステージは「未実施」と表示する。
 func _draw_post_card(card: Rect2, row: Variant) -> void:
-	_round(card, PANEL_2, BORDER_SOFT, 8)
+	_round(card, PANEL_2, Color.TRANSPARENT, 8, 0)
 	if row == null:
 		_text("未実施", Vector2(card.position.x, card.position.y + card.size.y * 0.5 + 5.0), 13, FAINT, card.size.x, HORIZONTAL_ALIGNMENT_CENTER)
 		return
@@ -404,8 +403,7 @@ func _draw_game_chip(x: float, center_y: float, w: float, label: String, col: Co
 # ============================================================ 最優秀選手・新人王
 
 func _draw_awards(rect: Rect2) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text("最優秀選手・新人王", Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(rect, "最優秀選手・新人王")
 
 	if _award_cards.is_empty():
 		_text("表彰の記録がありません", Vector2(rect.position.x + 24, rect.position.y + rect.size.y * 0.6), 14, MUTED)
@@ -422,7 +420,8 @@ func _draw_awards(rect: Rect2) -> void:
 		var c: Dictionary = _award_cards[i] as Dictionary
 		var cr: Rect2 = Rect2(inner_x + float(i) * (card_w + gap), card_y, card_w, card_h)
 		var accent: Color = c.get("accent", BLUE) as Color
-		_round(cr, PANEL_2, Color(accent.r, accent.g, accent.b, 0.5), 9)
+		# 枠は落とし、上端のアクセントバーだけで部門色を示す。
+		_round(cr, PANEL_2, Color.TRANSPARENT, 9, 0)
 		_round(Rect2(cr.position.x, cr.position.y, cr.size.x, 4.0), accent, Color.TRANSPARENT, 0, 0)
 		_text(str(c.get("title", "")), Vector2(cr.position.x, cr.position.y + 32.0), 16, accent, cr.size.x, HORIZONTAL_ALIGNMENT_CENTER, true)
 		_text(str(c.get("league", "")), Vector2(cr.position.x, cr.position.y + 54.0), 12, MUTED, cr.size.x, HORIZONTAL_ALIGNMENT_CENTER)
@@ -432,8 +431,7 @@ func _draw_awards(rect: Rect2) -> void:
 # ============================================================ 打撃/投手タイトル
 
 func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text(title, Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(rect, title)
 
 	var inner_x: float = rect.position.x + 16.0
 	var label_w: float = 104.0
@@ -441,12 +439,13 @@ func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
 	var c1_x: float = inner_x + label_w
 	var c2_x: float = c1_x + col_w
 
-	# ヘッダ
+	# ヘッダ帯 (v2 の _draw_data_table と同じ言語)。
 	var hy: float = rect.position.y + 60.0
-	_text("部門", Vector2(inner_x + 2.0, hy), 11, FAINT, label_w)
-	_text("第1リーグ", Vector2(c1_x + 4.0, hy), 11, FAINT, col_w - 6.0)
-	_text("第2リーグ", Vector2(c2_x + 4.0, hy), 11, FAINT, col_w - 6.0)
-	_line(Vector2(inner_x, rect.position.y + 68.0), Vector2(rect.end.x - 16.0, rect.position.y + 68.0), BORDER_SOFT, 1.0)
+	_round(Rect2(inner_x, hy - 18.0, rect.end.x - 16.0 - inner_x, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text("部門", Vector2(inner_x + 2.0, hy), 11, MUTED, label_w, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("第1リーグ", Vector2(c1_x + 4.0, hy), 11, MUTED, col_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("第2リーグ", Vector2(c2_x + 4.0, hy), 11, MUTED, col_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_line(Vector2(inner_x, rect.position.y + 68.0), Vector2(rect.end.x - 16.0, rect.position.y + 68.0), BORDER, 1.5)
 
 	if rows.is_empty():
 		_text("記録がありません", Vector2(inner_x + 4.0, rect.position.y + 100.0), 13, MUTED)
@@ -456,12 +455,12 @@ func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
 	var row_h: float = (rect.end.y - row_top - 10.0) / float(rows.size())
 	for i in range(rows.size()):
 		var r: Dictionary = rows[i] as Dictionary
-		var ty: float = row_top + float(i) * row_h + row_h * 0.5 + 5.0
-		if i % 2 == 1:
-			_round(Rect2(inner_x, row_top + float(i) * row_h, rect.size.x - 32.0, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
+		var ry: float = row_top + float(i) * row_h
+		var ty: float = ry + row_h * 0.5 + 5.0
 		_text(str(r.get("label", "")), Vector2(inner_x + 2.0, ty), 13, MUTED, label_w - 4.0)
 		_text(str(r.get("central", "")), Vector2(c1_x + 4.0, ty), 13, TEXT, col_w - 8.0)
 		_text(str(r.get("pacific", "")), Vector2(c2_x + 4.0, ty), 13, TEXT, col_w - 8.0)
+		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 16.0, ry + row_h), HAIRLINE, 1.0)
 
 
 # ============================================================ buttons

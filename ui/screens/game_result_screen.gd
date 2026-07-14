@@ -260,6 +260,8 @@ func _draw_game_list(_season: PSSeason) -> void:
 			_round(row_rect, Color(1, 1, 1, 0.05), Color.TRANSPARENT, 6, 0)
 		_draw_list_row(row_rect, game)
 		_list_row_hits.append({"rect": row_rect, "index": index})
+		# 自前描画リストなので行区切りは手でヘアラインを引く。
+		_line(Vector2(ix, ry + LIST_ROW_H - 2.0), Vector2(ix + iw, ry + LIST_ROW_H - 2.0), HAIRLINE, 1.0)
 
 	# スクロールインジケータ
 	if games.size() > visible:
@@ -311,14 +313,16 @@ func _draw_line_score(rect: Rect2) -> void:
 	var r1: float = rect.position.y + 110.0
 	var r2: float = rect.position.y + 144.0
 
-	# ヘッダ (イニング番号 + R/H/E)
+	# ヘッダ (イニング番号 + R/H/E)。等幅グリッドの右に R/H/E 集計ブロックを縦区切りで分ける
+	# (本物のスコアボードらしく、グリッドと集計を視覚的に分離する)。
 	for i in range(inning_count):
 		_text(str(i + 1), Vector2(grid_x + float(i) * cell_w, hy), 12, FAINT, cell_w, HORIZONTAL_ALIGNMENT_CENTER)
 	var tx: float = grid_x + grid_w
 	var tcol_w: float = totals_w / 3.0
+	_line(Vector2(tx - 8.0, hy - 20.0), Vector2(tx - 8.0, r2 + 20.0), HAIRLINE, 1.0)
 	for j in range(3):
-		_text(["R", "H", "E"][j], Vector2(tx + float(j) * tcol_w, hy), 12, FAINT, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
-	_line(Vector2(rect.position.x + 16, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER_SOFT, 1.0)
+		_text(["R", "H", "E"][j], Vector2(tx + float(j) * tcol_w, hy), 12, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_line(Vector2(rect.position.x + 16, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER, 1.5)
 
 	_draw_line_row(rect, away_id, false, innings, inning_count, grid_x, cell_w, tx, tcol_w, r1)
 	_draw_line_row(rect, home_id, true, innings, inning_count, grid_x, cell_w, tx, tcol_w, r2)
@@ -327,8 +331,9 @@ func _draw_line_score(rect: Rect2) -> void:
 func _draw_line_row(rect: Rect2, team_id: int, is_home: bool, innings: Array, inning_count: int, grid_x: float, cell_w: float, tx: float, tcol_w: float, y: float) -> void:
 	var team: PSTeam = GameDb.get_team(team_id)
 	if team != null:
-		# バッジに略称が入るため、重複する短縮名テキストは描かない。
 		_team_badge(Rect2(rect.position.x + 16, y - 18, 24, 24), team)
+		# スコアボードらしくバッジの右にチーム名も添える (bold)。
+		_text(team.short_name, Vector2(rect.position.x + 44, y - 2), 12, TEXT, grid_x - (rect.position.x + 44) - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	for i in range(inning_count):
 		var txt: String = ""
 		if i < innings.size():
@@ -408,9 +413,8 @@ func _draw_summary(rect: Rect2) -> void:
 # --- 中段: 打席結果 (ボックススコア) ---
 
 func _draw_box_score(rect: Rect2) -> void:
-	_round(rect, PANEL, BORDER, 10)
 	var label: String = "打席結果（%s）" % ("ホーム" if _box_home else "ビジター")
-	_text(label, Vector2(rect.position.x + 18, rect.position.y + 32), 16, TEXT)
+	_panel(rect, label)
 	# ビジター/ホーム切替チップは _build_buttons で配置。
 
 	var rows: Array = _box_data.get("rows", []) as Array
@@ -433,13 +437,18 @@ func _draw_box_score(rect: Rect2) -> void:
 	var inn_w: float = (iw - fixed_w) / float(col_count)
 
 	var hy: float = rect.position.y + 64.0
+	# ヘッダ帯 (v2 の _draw_data_table と同じ言語: PANEL_2 の帯 + bold ラベル + 下端太めルール)。
+	_round(Rect2(ix, hy - 18.0, iw, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	# 固定列ヘッダ
 	var cx: float = ix
 	for c_value in BOX_FIXED:
 		var c: Dictionary = c_value as Dictionary
-		_text(str(c["label"]), Vector2(cx, hy), 11, FAINT, float(c["w"]), c["align"] as int)
+		_text(str(c["label"]), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
 		cx += float(c["w"])
 	var grid_x: float = cx
+	# 守備/選手/利き腕(識別ブロック) と 打数以降(成績ブロック) の境界。
+	var identity_w: float = float((BOX_FIXED[0] as Dictionary)["w"]) + float((BOX_FIXED[1] as Dictionary)["w"]) + float((BOX_FIXED[2] as Dictionary)["w"])
+	var stat_sep_x: float = ix + identity_w
 
 	# 行高は行数 (選手 + 計) に合わせてフィット
 	var line_count: int = rows.size() + 1
@@ -455,18 +464,22 @@ func _draw_box_score(rect: Rect2) -> void:
 		var span: int = 1
 		while gi + span < col_count and int((columns[gi + span] as Dictionary)["inning"]) == inn:
 			span += 1
-		_text(str(inn), Vector2(grid_x + float(gi) * inn_w, hy), 11, FAINT, inn_w * float(span), HORIZONTAL_ALIGNMENT_CENTER)
+		_text(str(inn), Vector2(grid_x + float(gi) * inn_w, hy), 11, MUTED, inn_w * float(span), HORIZONTAL_ALIGNMENT_CENTER, true)
 		# 列が増えているイニングがあるときだけ、グループ境界に薄い区切り線を引いて見やすくする。
 		if expanded and gi > 0:
-			_line(Vector2(grid_x + float(gi) * inn_w, hy + 4), Vector2(grid_x + float(gi) * inn_w, grid_bottom), BORDER_SOFT, 1.0)
+			_line(Vector2(grid_x + float(gi) * inn_w, hy + 4), Vector2(grid_x + float(gi) * inn_w, grid_bottom), HAIRLINE, 1.0)
 		gi += span
-	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER_SOFT, 1.0)
+	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER, 1.5)
+	# 列グループ境界 (識別ブロック | 成績ブロック | イニング) の縦ヘアライン。
+	_line(Vector2(stat_sep_x, hy - 18.0), Vector2(stat_sep_x, grid_bottom), HAIRLINE, 1.0)
+	_line(Vector2(grid_x, hy - 18.0), Vector2(grid_x, grid_bottom), HAIRLINE, 1.0)
 
 	for ri in range(rows.size()):
 		var row: Dictionary = rows[ri] as Dictionary
 		var ry: float = top + float(ri) * row_h
 		var ty: float = ry + row_h * 0.5 + 4.0
 		_draw_box_row(row, ix, fixed_w, inn_w, col_count, ty, ry, row_h, false)
+		_line(Vector2(ix, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
 
 	# 計 (合計) 行
 	if not totals.is_empty():
@@ -504,7 +517,7 @@ func _draw_box_row(row: Dictionary, ix: float, fixed_w: float, inn_w: float, col
 				txt = str(int(row.get(key, 0)))
 			_:
 				txt = str(row.get(key, ""))
-		_text(txt, Vector2(cx, ty), 12, col, w, c["align"] as int)
+		_text(txt, Vector2(cx, ty), 12, col, w, c["align"] as int, key == "name" and not is_total)
 		cx += w
 	# イニングセル (列ごと)
 	var cells: Array = row.get("cells", []) as Array
@@ -568,12 +581,18 @@ func _draw_pitching(rect: Rect2) -> void:
 	var ix: float = rect.position.x + 18.0
 	var hy: float = rect.position.y + 60.0
 
+	# ヘッダ帯 + bold ラベル (v2 の _draw_data_table と同じ言語)。
+	_round(Rect2(ix, hy - 18.0, rect.end.x - 18.0 - ix, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	var cx: float = ix
+	# 列グループ境界 (投手識別 | 勝敗 | 出場・投球回 | 被安打以下 | 防御率) の x を積みながらヘッダを描く。
+	var sep_xs: Array = []
 	for c_value in PITCH_COLS:
 		var c: Dictionary = c_value as Dictionary
-		_text(str(c["label"]), Vector2(cx, hy), 11, FAINT, float(c["w"]), c["align"] as int)
+		if str(c["key"]) in ["w", "g", "h", "era"] and cx > ix:
+			sep_xs.append(cx)
+		_text(str(c["label"]), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
 		cx += float(c["w"])
-	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 18, hy + 8), BORDER_SOFT, 1.0)
+	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 18, hy + 8), BORDER, 1.5)
 
 	if rows.is_empty():
 		_text("投手成績がありません", Vector2(ix, hy + 40), 13, MUTED)
@@ -581,6 +600,9 @@ func _draw_pitching(rect: Rect2) -> void:
 
 	var top: float = hy + 16.0
 	var row_h: float = clampf((rect.end.y - top - 8.0) / float(rows.size()), 18.0, 28.0)
+	var row_bottom: float = top + float(rows.size()) * row_h
+	for sep_x_value in sep_xs:
+		_line(Vector2(float(sep_x_value), hy - 18.0), Vector2(float(sep_x_value), row_bottom), HAIRLINE, 1.0)
 	var prev_team: int = -999
 	for ri in range(rows.size()):
 		var row: Dictionary = rows[ri] as Dictionary
@@ -620,8 +642,9 @@ func _draw_pitching(rect: Rect2) -> void:
 					txt = str(row.get(key, ""))
 				_:
 					txt = str(int(row.get(key, 0)))
-			_text(txt, Vector2(cx2, ty), 12, col, w, c["align"] as int)
+			_text(txt, Vector2(cx2, ty), 12, col, w, c["align"] as int, key == "name")
 			cx2 += w
+		_line(Vector2(ix, ry + row_h), Vector2(rect.end.x - 18, ry + row_h), HAIRLINE, 1.0)
 
 
 # 白星 (○) / 黒星 (●) は白字。引分 (△) は fallback (試合結果色)。投手の S/H はアンバー/青。

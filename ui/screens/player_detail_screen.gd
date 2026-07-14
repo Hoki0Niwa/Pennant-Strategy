@@ -330,11 +330,12 @@ func _draw_profile(rect: Rect2) -> void:
 		var pair: Dictionary = pairs[i] as Dictionary
 		var ry: float = top + float(i) * row_h
 		var ty: float = ry + row_h * 0.5 + 5.0
-		if i % 2 == 1:
-			_round(Rect2(rect.position.x + 12, ry, rect.size.x - 24, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 		_text(str(pair["label"]), Vector2(label_x, ty), 13, MUTED, value_x - label_x - 8.0)
 		var color: Color = AMBER if str(pair["label"]) == "疲労・怪我" and _record.injury_days > 0 else TEXT
 		_text(str(pair["value"]), Vector2(value_x, ty), 14, color, rect.end.x - 22.0 - value_x)
+		# 帯背景の交互塗りは使わず、ヘアラインだけで行を刻む。
+		if i < pairs.size() - 1:
+			_line(Vector2(rect.position.x + 16.0, ry + row_h), Vector2(rect.end.x - 16.0, ry + row_h), HAIRLINE, 1.0)
 
 
 func _contract_status_text(record: PSPlayerSeasonRecord) -> String:
@@ -397,7 +398,7 @@ func _eval_items(record: PSPlayerSeasonRecord) -> Array:
 
 # 今季タブ: 成績+高度指標をカテゴリ別の段落 + 大きなカードで全部見せる (表ではない)。
 func _draw_season(rect: Rect2) -> void:
-	_round(rect, PANEL, BORDER, 10)
+	_round(rect, PANEL, Color.TRANSPARENT, 10, 0)
 	_ensure_season_cards()
 	_text_right("%d年 (%d年目) の全成績" % [_record.year, _record.years], rect.end.x - 18.0, rect.position.y + 44.0, 14, MUTED, 360)
 	if _season_groups.is_empty():
@@ -431,8 +432,10 @@ func _draw_season(rect: Rect2) -> void:
 	for group_value in _season_groups:
 		var group: Dictionary = group_value as Dictionary
 		if y + header_h >= top and y <= rect.end.y - 16.0:
-			_text(str(group.get("title", "")), Vector2(inner_x, y + 19.0), 15, TEXT, 300.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-			_line(Vector2(inner_x, y + 26.0), Vector2(rect.end.x - 16.0, y + 26.0), BORDER_SOFT, 1.0)
+			# カテゴリ見出しは他画面の _panel と同じ言語 (bold + 青ティック)。
+			_round(Rect2(inner_x, y + 6.0, 3, 14.0), BLUE, Color.TRANSPARENT, 2, 0)
+			_text(str(group.get("title", "")), Vector2(inner_x + 9.0, y + 19.0), 15, TEXT, 300.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+			_line(Vector2(inner_x, y + 26.0), Vector2(rect.end.x - 16.0, y + 26.0), BORDER, 1.5)
 		y += header_h
 		var cards: Array = group.get("cards", []) as Array
 		var grows: int = int(ceil(float(cards.size()) / float(cols)))
@@ -445,10 +448,15 @@ func _draw_season(rect: Rect2) -> void:
 				var cx: float = inner_x + float(c) * (card_w + gap)
 				var cy: float = y + float(r) * (SEASON_CARD_H + gap)
 				if cy + SEASON_CARD_H >= top and cy <= rect.end.y - 16.0:
-					_round(Rect2(cx, cy, card_w, SEASON_CARD_H), PANEL_2, BORDER_SOFT, 8)
-					_text(str(card["label"]), Vector2(cx + 10.0, cy + 20.0), 12, MUTED, card_w - 14.0)
-					_text(str(card["value"]), Vector2(cx, cy + SEASON_CARD_H - 14.0), 24, TEXT, card_w, HORIZONTAL_ALIGNMENT_CENTER)
+					# 枠付きミニカードではなく、枠なしのセル + ヘアライン区切り (ラベル上/値下)。
+					_text(str(card["label"]), Vector2(cx + 2.0, cy + 18.0), 11, MUTED, card_w - 4.0)
+					_text(str(card["value"]), Vector2(cx, cy + SEASON_CARD_H - 10.0), 22, TEXT, card_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+					if c > 0:
+						_line(Vector2(cx - gap * 0.5, cy + 4.0), Vector2(cx - gap * 0.5, cy + SEASON_CARD_H - 4.0), HAIRLINE, 1.0)
 				idx += 1
+			if r < grows - 1:
+				var sep_y: float = y + float(r + 1) * (SEASON_CARD_H + gap) - gap * 0.5
+				_line(Vector2(inner_x, sep_y), Vector2(rect.end.x - 16.0, sep_y), HAIRLINE, 1.0)
 		y += float(grows) * SEASON_CARD_H + float(grows - 1) * gap + section_gap
 	if max_off > 0:
 		_text_right("%d / %d" % [offset, max_off], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
@@ -566,14 +574,14 @@ func _columns_for_tab() -> Array:
 			if pitcher:
 				return [
 					{"title": "年", "key": "year", "w": 64, "align": "l", "fmt": "str"},
-					{"title": "チーム", "key": "team", "w": 70, "align": "l", "fmt": "str"},
-					{"title": "投球回", "key": "ip", "w": 76, "align": "r", "fmt": "f1"},
+					{"title": "チーム", "key": "team", "w": 70, "align": "l", "fmt": "str", "strong": true},
+					{"title": "投球回", "key": "ip", "w": 76, "align": "r", "fmt": "f1", "sep_before": true},
 					{"title": "FIP", "key": "fip", "w": 70, "align": "r", "fmt": "f2"},
 					{"title": "WAR", "key": "war", "w": 70, "align": "r", "fmt": "f1s"},
 					{"title": "K/9", "key": "k9", "w": 60, "align": "r", "fmt": "f2"},
 					{"title": "BB/9", "key": "bb9", "w": 64, "align": "r", "fmt": "f2"},
 					{"title": "HR/9", "key": "hr9", "w": 64, "align": "r", "fmt": "f2"},
-					{"title": "球/打者", "key": "ppbf", "w": 72, "align": "r", "fmt": "f2"},
+					{"title": "球/打者", "key": "ppbf", "w": 72, "align": "r", "fmt": "f2", "sep_before": true},
 					{"title": "球/回", "key": "ppi", "w": 66, "align": "r", "fmt": "f1"},
 					{"title": "対戦打者", "key": "bf", "w": 78, "align": "r", "fmt": "int"},
 					{"title": "投球数", "key": "pit", "w": 74, "align": "r", "fmt": "int"},
@@ -581,8 +589,8 @@ func _columns_for_tab() -> Array:
 				]
 			return [
 				{"title": "年", "key": "year", "w": 54, "align": "l", "fmt": "str"},
-				{"title": "チーム", "key": "team", "w": 56, "align": "l", "fmt": "str"},
-				{"title": "打席", "key": "pa", "w": 50, "align": "r", "fmt": "int"},
+				{"title": "チーム", "key": "team", "w": 56, "align": "l", "fmt": "str", "strong": true},
+				{"title": "打席", "key": "pa", "w": 50, "align": "r", "fmt": "int", "sep_before": true},
 				{"title": "球/打席", "key": "ppa", "w": 64, "align": "r", "fmt": "f2"},
 				{"title": "wOBA", "key": "woba", "w": 62, "align": "r", "fmt": "rate"},
 				{"title": "xwOBA", "key": "xwoba", "w": 66, "align": "r", "fmt": "rate"},
@@ -590,7 +598,7 @@ func _columns_for_tab() -> Array:
 				{"title": "RE24", "key": "re24", "w": 64, "align": "r", "fmt": "f1s"},
 				{"title": "BSR", "key": "bsr", "w": 60, "align": "r", "fmt": "f1s"},
 				{"title": "WAR", "key": "war", "w": 62, "align": "r", "fmt": "f1s"},
-				{"title": "OAA", "key": "oaa", "w": 60, "align": "r", "fmt": "f1s"},
+				{"title": "OAA", "key": "oaa", "w": 60, "align": "r", "fmt": "f1s", "sep_before": true},
 				{"title": "OAA内", "key": "oaa_if", "w": 66, "align": "r", "fmt": "f1s"},
 				{"title": "OAA外", "key": "oaa_of", "w": 66, "align": "r", "fmt": "f1s"},
 				{"title": "RngR", "key": "rngr", "w": 62, "align": "r", "fmt": "f1s"},
@@ -607,25 +615,29 @@ func _columns_for_tab() -> Array:
 				{"title": "年齢", "key": "age", "w": 44, "align": "c", "fmt": "int"},
 			]
 			if pitcher:
-				cols.append({"title": "球速", "key": "velocity", "w": 56, "align": "c", "fmt": "int"})
+				cols.append({"title": "球速", "key": "velocity", "w": 56, "align": "c", "fmt": "int", "sep_before": true})
 				cols.append({"title": "球質", "key": "stuff", "w": 52, "align": "c", "fmt": "int"})
 				cols.append({"title": "制球", "key": "control", "w": 52, "align": "c", "fmt": "int"})
 				cols.append({"title": "持久", "key": "stamina", "w": 60, "align": "c", "fmt": "int"})
+				var pitch_first: bool = true
 				for type_value in _arsenal_types:
-					cols.append({"title": PSPitchTypes.display_name(str(type_value)), "key": "pitch_%s" % str(type_value), "w": 66, "align": "c", "fmt": "int"})
-				cols.append({"title": "総合評価", "key": "overall", "w": 60, "align": "r", "fmt": "int"})
+					cols.append({"title": PSPitchTypes.display_name(str(type_value)), "key": "pitch_%s" % str(type_value), "w": 66, "align": "c", "fmt": "int", "sep_before": pitch_first})
+					pitch_first = false
+				cols.append({"title": "総合評価", "key": "overall", "w": 60, "align": "r", "fmt": "int", "sep_before": true})
 				cols.append({"title": "守備評価", "key": "def_eval", "w": 58, "align": "r", "fmt": "int"})
 				cols.append({"title": "年俸(万円)", "key": "salary", "w": 84, "align": "r", "fmt": "comma"})
 			else:
-				cols.append({"title": "巧打", "key": "contact", "w": 50, "align": "c", "fmt": "int"})
+				cols.append({"title": "巧打", "key": "contact", "w": 50, "align": "c", "fmt": "int", "sep_before": true})
 				cols.append({"title": "長打", "key": "power", "w": 50, "align": "c", "fmt": "int"})
 				cols.append({"title": "走力", "key": "speed", "w": 50, "align": "c", "fmt": "int"})
 				cols.append({"title": "守備", "key": "defense", "w": 50, "align": "c", "fmt": "int"})
 				cols.append({"title": "肩力", "key": "arm", "w": 50, "align": "c", "fmt": "int"})
 				cols.append({"title": "選球", "key": "discipline", "w": 50, "align": "c", "fmt": "int"})
+				var apt_first: bool = true
 				for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
-					cols.append({"title": str(POS_SHORT.get(pos, "?")), "key": "apt_%d" % pos, "w": 38, "align": "c", "fmt": "int"})
-				cols.append({"title": "総合評価", "key": "overall", "w": 58, "align": "r", "fmt": "int"})
+					cols.append({"title": str(POS_SHORT.get(pos, "?")), "key": "apt_%d" % pos, "w": 38, "align": "c", "fmt": "int", "sep_before": apt_first})
+					apt_first = false
+				cols.append({"title": "総合評価", "key": "overall", "w": 58, "align": "r", "fmt": "int", "sep_before": true})
 				cols.append({"title": "打撃評価", "key": "bat_eval", "w": 58, "align": "r", "fmt": "int"})
 				cols.append({"title": "守備評価", "key": "def_eval", "w": 58, "align": "r", "fmt": "int"})
 				cols.append({"title": "年俸(万円)", "key": "salary", "w": 82, "align": "r", "fmt": "comma"})
@@ -634,8 +646,8 @@ func _columns_for_tab() -> Array:
 			if pitcher:
 				return [
 					{"title": "年", "key": "year", "w": 52, "align": "l", "fmt": "str"},
-					{"title": "チーム", "key": "team", "w": 54, "align": "l", "fmt": "str"},
-					{"title": "登板", "key": "g", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "チーム", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
+					{"title": "登板", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true},
 					{"title": "先発", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
 					{"title": "完投", "key": "cg", "w": 46, "align": "r", "fmt": "int"},
 					{"title": "完封", "key": "sho", "w": 46, "align": "r", "fmt": "int"},
@@ -644,10 +656,10 @@ func _columns_for_tab() -> Array:
 					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
 					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
 					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int"},
-					{"title": "投球回", "key": "ip", "w": 60, "align": "r", "fmt": "f1"},
+					{"title": "投球回", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "sep_before": true},
 					{"title": "防御率", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
 					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
-					{"title": "奪三振", "key": "so", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "奪三振", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true},
 					{"title": "与四球", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
 					{"title": "与死球", "key": "hbp", "w": 56, "align": "r", "fmt": "int"},
 					{"title": "被安打", "key": "h", "w": 56, "align": "r", "fmt": "int"},
@@ -657,8 +669,8 @@ func _columns_for_tab() -> Array:
 				]
 			return [
 				{"title": "年", "key": "year", "w": 50, "align": "l", "fmt": "str"},
-				{"title": "チーム", "key": "team", "w": 52, "align": "l", "fmt": "str"},
-				{"title": "試合", "key": "g", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "チーム", "key": "team", "w": 52, "align": "l", "fmt": "str", "strong": true},
+				{"title": "試合", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
 				{"title": "打席", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
 				{"title": "打数", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
 				{"title": "得点", "key": "r", "w": 44, "align": "r", "fmt": "int"},
@@ -668,11 +680,11 @@ func _columns_for_tab() -> Array:
 				{"title": "本", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
 				{"title": "打点", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
 				{"title": "盗塁", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "打率", "key": "avg", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "打率", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true},
 				{"title": "出塁", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
 				{"title": "長打", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
 				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
 				{"title": "死球", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
 				{"title": "三振", "key": "so", "w": 44, "align": "r", "fmt": "int"},
 				{"title": "犠打", "key": "sac", "w": 44, "align": "r", "fmt": "int"},

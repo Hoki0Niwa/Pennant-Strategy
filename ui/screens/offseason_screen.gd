@@ -14,19 +14,6 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 # 列定義 ({title, key, w, fmt, align})。描画は基底 _draw_data_table が w / fmt / align を参照する。
 # ---------------------------------------------------------------------------
 
-const RELEASE_COLUMNS: Array = [
-	{"title": "選", "key": "check", "w": 36, "fmt": "string"},
-	{"title": "守備", "key": "pos", "w": 48, "fmt": "pos_badge"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string"},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "在籍", "key": "years", "w": 48, "fmt": "int"},
-	{"title": "総合", "key": "eval", "w": 56, "fmt": "int"},
-	{"title": "WAR", "key": "war", "w": 56, "fmt": "float1"},
-	{"title": "怪我", "key": "injury", "w": 56, "fmt": "int"},
-	{"title": "備考", "key": "note", "w": 80, "fmt": "string"},
-	{"title": "今季成績", "key": "stat", "w": 360, "fmt": "string"},
-]
-
 # ドラフト候補表のタブ。投手/野手に加え、先発・中継・各守備位置で絞り込む
 # (戦力外選択と同じタブ切り替え)。pos2..pos9 は守備位置 (本職 or 守備適性 > 0)。
 const DRAFT_TABS: Array = [
@@ -47,110 +34,36 @@ const DRAFT_TABS: Array = [
 const PICK_COLUMNS: Array = [
 	{"title": "チーム", "key": "team", "w": 72, "fmt": "team", "align": "left"},
 	{"title": "巡", "key": "round", "w": 48, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 110, "fmt": "string"},
+	{"title": "選手", "key": "name", "w": 110, "fmt": "string", "strong": true},
 	{"title": "守備", "key": "pos", "w": 52, "fmt": "pos_badge"},
 	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "出身", "key": "source", "w": 60, "fmt": "string"},
+	{"title": "出身", "key": "source", "w": 60, "fmt": "string", "sep_before": true},
 	{"title": "総合", "key": "overall", "w": 52, "fmt": "int"},
 	{"title": "競合", "key": "note", "w": 52, "fmt": "string"},
 ]
 
 const LOTTERY_COLUMNS: Array = [
 	{"title": "回", "key": "wave", "w": 40, "fmt": "int"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string"},
+	{"title": "選手", "key": "name", "w": 120, "fmt": "string", "strong": true},
 	{"title": "競合", "key": "teams", "w": 200, "fmt": "string"},
-	{"title": "当選", "key": "team", "w": 84, "fmt": "team", "align": "left"},
-]
-
-const PEOPLE_COLUMNS: Array = [
-	{"title": "チーム", "key": "team", "w": 72, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string"},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "守備", "key": "pos", "w": 84, "fmt": "pos_badge"},
-	{"title": "在籍", "key": "years", "w": 56, "fmt": "int"},
-	{"title": "総合", "key": "overall", "w": 56, "fmt": "int"},
+	{"title": "当選", "key": "team", "w": 84, "fmt": "team", "align": "left", "sep_before": true},
 ]
 
 const ROOKIE_COLUMNS: Array = [
 	{"title": "チーム", "key": "team", "w": 72, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string"},
+	{"title": "選手", "key": "name", "w": 120, "fmt": "string", "strong": true},
 	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
 	{"title": "守備", "key": "pos", "w": 84, "fmt": "pos_badge"},
-	{"title": "総合", "key": "overall", "w": 56, "fmt": "int"},
+	{"title": "総合", "key": "overall", "w": 56, "fmt": "int", "sep_before": true},
 ]
-
-
-const FA_MOVE_COLUMNS: Array = [
-	{"title": "元球団", "key": "from", "w": 90, "fmt": "string"},
-	{"title": "移籍先", "key": "to", "w": 90, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 130, "fmt": "string"},
-	{"title": "ランク", "key": "rank", "w": 50, "fmt": "string"},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "守備", "key": "pos", "w": 52, "fmt": "pos_badge"},
-	{"title": "総合", "key": "overall_cell", "w": 60, "fmt": "growth"},
-	{"title": "球速", "key": "velocity", "w": 92, "fmt": "growth"},
-	{"title": "球質", "key": "stuff", "w": 50, "fmt": "growth"},
-	{"title": "制球", "key": "control", "w": 50, "fmt": "growth"},
-	{"title": "持久", "key": "stamina", "w": 72, "fmt": "growth"},
-	{"title": "巧打", "key": "contact", "w": 46, "fmt": "growth"},
-	{"title": "長打", "key": "power", "w": 46, "fmt": "growth"},
-	{"title": "走力", "key": "speed", "w": 46, "fmt": "growth"},
-	{"title": "守備", "key": "defense", "w": 46, "fmt": "growth"},
-	{"title": "肩力", "key": "arm", "w": 46, "fmt": "growth"},
-	{"title": "選球", "key": "discipline", "w": 46, "fmt": "growth"},
-	{"title": "年俸", "key": "salary", "w": 70, "fmt": "int"},
-	{"title": "補償", "key": "compensation", "w": 70, "fmt": "int"},
-]
-
-const RELEASED_MOVE_COLUMNS: Array = [
-	{"title": "元球団", "key": "from", "w": 90, "fmt": "string"},
-	{"title": "移籍先", "key": "to", "w": 90, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 140, "fmt": "string"},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "守備", "key": "pos", "w": 52, "fmt": "pos_badge"},
-	{"title": "総合", "key": "overall_cell", "w": 60, "fmt": "growth"},
-	{"title": "球速", "key": "velocity", "w": 92, "fmt": "growth"},
-	{"title": "球質", "key": "stuff", "w": 50, "fmt": "growth"},
-	{"title": "制球", "key": "control", "w": 50, "fmt": "growth"},
-	{"title": "持久", "key": "stamina", "w": 72, "fmt": "growth"},
-	{"title": "巧打", "key": "contact", "w": 46, "fmt": "growth"},
-	{"title": "長打", "key": "power", "w": 46, "fmt": "growth"},
-	{"title": "走力", "key": "speed", "w": 46, "fmt": "growth"},
-	{"title": "守備", "key": "defense", "w": 46, "fmt": "growth"},
-	{"title": "肩力", "key": "arm", "w": 46, "fmt": "growth"},
-	{"title": "選球", "key": "discipline", "w": 46, "fmt": "growth"},
-	{"title": "年俸", "key": "salary", "w": 70, "fmt": "int"},
-]
-
-const FOREIGN_COLUMNS: Array = [
-	{"title": "獲得球団", "key": "to", "w": 90, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 150, "fmt": "string"},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "守備", "key": "pos", "w": 52, "fmt": "pos_badge"},
-	{"title": "評価", "key": "tier", "w": 92, "fmt": "string"},
-	{"title": "総合", "key": "overall_cell", "w": 60, "fmt": "growth"},
-	{"title": "球速", "key": "velocity", "w": 92, "fmt": "growth"},
-	{"title": "球質", "key": "stuff", "w": 50, "fmt": "growth"},
-	{"title": "制球", "key": "control", "w": 50, "fmt": "growth"},
-	{"title": "持久", "key": "stamina", "w": 72, "fmt": "growth"},
-	{"title": "巧打", "key": "contact", "w": 46, "fmt": "growth"},
-	{"title": "長打", "key": "power", "w": 46, "fmt": "growth"},
-	{"title": "走力", "key": "speed", "w": 46, "fmt": "growth"},
-	{"title": "守備", "key": "defense", "w": 46, "fmt": "growth"},
-	{"title": "肩力", "key": "arm", "w": 46, "fmt": "growth"},
-	{"title": "選球", "key": "discipline", "w": 46, "fmt": "growth"},
-	{"title": "年俸", "key": "salary", "w": 70, "fmt": "int"},
-]
-
-
 
 const CAMP_PITCH_COLUMNS: Array = [
 	{"title": "チーム", "key": "team", "w": 72, "fmt": "team", "align": "left"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string"},
+	{"title": "選手", "key": "name", "w": 120, "fmt": "string", "strong": true},
 	{"title": "年齢", "key": "age", "w": 60, "fmt": "int"},
-	{"title": "習得球種", "key": "pitch", "w": 110, "fmt": "string"},
+	{"title": "習得球種", "key": "pitch", "w": 110, "fmt": "string", "sep_before": true},
 	{"title": "完成度", "key": "grade", "w": 64, "fmt": "string"},
-	{"title": "総合", "key": "overall_cell", "w": 60, "fmt": "growth"},
+	{"title": "総合", "key": "overall_cell", "w": 60, "fmt": "growth", "sep_before": true},
 	{"title": "球速", "key": "velocity", "w": 92, "fmt": "growth"},
 	{"title": "球質", "key": "stuff", "w": 50, "fmt": "growth"},
 	{"title": "制球", "key": "control", "w": 50, "fmt": "growth"},
@@ -196,11 +109,12 @@ func _append_growth_column(cols: Array, title: String, key: String, value_w: int
 func _growth_columns(pitcher: bool) -> Array:
 	var cols: Array = [
 		{"title": "守備", "key": "pos", "w": 46, "fmt": "pos_badge"},
-		{"title": "選手", "key": "name", "w": 128, "fmt": "string"},
+		{"title": "選手", "key": "name", "w": 128, "fmt": "string", "strong": true},
 		{"title": "年齢", "key": "age", "w": 76, "fmt": "int", "gap_after": 24},
-		{"title": "結果", "key": "kind", "w": 104, "fmt": "string", "align": "right"},
+		{"title": "結果", "key": "kind", "w": 104, "fmt": "string", "align": "right", "sep_before": true},
 	]
 	_append_growth_column(cols, "総合", "overall_cell", 58, 30)
+	(cols.back() as Dictionary)["sep_before"] = true
 	cols.append_array(_ability_columns(pitcher))
 	cols.append_array(_growth_detail_columns(pitcher))
 	return cols
@@ -210,24 +124,25 @@ func _growth_columns(pitcher: bool) -> Array:
 func _camp_result_columns(pitcher: bool) -> Array:
 	var cols: Array = [
 		{"title": "球団", "key": "team", "w": 64, "fmt": "team", "align": "left"},
-		{"title": "選手", "key": "name", "w": 118, "fmt": "string"},
+		{"title": "選手", "key": "name", "w": 118, "fmt": "string", "strong": true},
 		{"title": "年齢", "key": "age", "w": 66, "fmt": "int", "gap_after": 20},
-		{"title": "練習", "key": "training", "w": 104, "fmt": "string"},
+		{"title": "練習", "key": "training", "w": 104, "fmt": "string", "sep_before": true},
 		{"title": "成否", "key": "result", "w": 52, "fmt": "string"},
 		{"title": "変更前", "key": "before_state", "w": 64, "fmt": "pos_badge"},
 		{"title": "変更後", "key": "after_state", "w": 64, "fmt": "pos_badge"},
 	]
 	_append_growth_column(cols, "総合", "overall_cell", 54, 28)
+	(cols.back() as Dictionary)["sep_before"] = true
 	cols.append_array(_ability_columns(pitcher, true))
 	cols.append_array(_growth_detail_columns(pitcher, true))
 	return cols
 
 const DRAFT_RESULT_COLUMNS: Array = [
 	{"title": "巡", "key": "round", "w": 36, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 96, "fmt": "string"},
+	{"title": "選手", "key": "name", "w": 96, "fmt": "string", "strong": true},
 	{"title": "守備", "key": "pos", "w": 46, "fmt": "pos_badge"},
 	{"title": "年", "key": "age", "w": 42, "fmt": "int"},
-	{"title": "総", "key": "overall", "w": 38, "fmt": "int"},
+	{"title": "総", "key": "overall", "w": 38, "fmt": "int", "sep_before": true},
 ]
 
 const POSITION_CHARS: Dictionary = {
@@ -1031,33 +946,30 @@ func _step_name(step: int) -> String:
 			return "オフシーズン"
 
 
-# 全ステップ共通の自軍ロスターサマリー: 支配下 / 育成 / 外国人枠 + ポジション別人数。
+# 全ステップ共通の自軍ロスターサマリー: 支配下 / 育成 / 外国人枠 (_stat_strip) + ポジション別人数 (小型セル列)。
 func _draw_summary_panel() -> void:
-	_round(SUMMARY, PANEL, BORDER, 10)
-	var label_y: float = SUMMARY.position.y + 28.0
-	var value_y: float = SUMMARY.position.y + 58.0
+	# 全幅フラットパネル (枠なし)。_stat_strip も同色 PANEL の角丸を内側に重ねるだけなので継ぎ目は出ない。
+	_round(SUMMARY, PANEL, Color.TRANSPARENT, 8, 0)
 	var shienka: int = int(_roster_summary.get("shienka", 0))
 	var dev: int = int(_roster_summary.get("development", 0))
 	var foreign: int = int(_roster_summary.get("foreign", 0))
 	var room: int = int(_roster_summary.get("room", 0))
 	var positions: Dictionary = _roster_summary.get("positions", {}) as Dictionary
 
-	var roster: Array = [
+	var strip_w: float = 500.0
+	var cells: Array = [
 		{"label": "支配下", "value": "%d/%d" % [shienka, TeamFinance.SHIENKA_LIMIT], "color": AMBER if shienka >= TeamFinance.SHIENKA_LIMIT else TEXT},
-		{"label": "育成", "value": "%d" % dev, "color": TEXT},
+		{"label": "育成", "value": "%d" % dev},
 		{"label": "外国人", "value": "%d/%d" % [foreign, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM], "color": AMBER if foreign >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM else TEXT},
 		{"label": "予算残", "value": ("-" + _format_money_compact(-room)) if room < 0 else _format_money_compact(room), "color": AMBER if room < 0 else TEXT},
 	]
-	var rx: float = SUMMARY.position.x + 24.0
-	for item_value in roster:
-		var item: Dictionary = item_value as Dictionary
-		_text(str(item["label"]), Vector2(rx, label_y), 12, MUTED)
-		_text(str(item["value"]), Vector2(rx, value_y), 20, item["color"] as Color)
-		rx += 118.0
+	_stat_strip(Rect2(SUMMARY.position.x, SUMMARY.position.y, strip_w, SUMMARY.size.y), cells)
 
-	var div_x: float = SUMMARY.position.x + 492.0
-	_line(Vector2(div_x, SUMMARY.position.y + 16.0), Vector2(div_x, SUMMARY.end.y - 16.0), BORDER, 1.0)
-	_text("ポジション別 (支配下)", Vector2(div_x + 20.0, label_y), 12, MUTED)
+	var div_x: float = SUMMARY.position.x + strip_w
+	_line(Vector2(div_x, SUMMARY.position.y + 14.0), Vector2(div_x, SUMMARY.end.y - 14.0), HAIRLINE, 1.0)
+	var label_y: float = SUMMARY.position.y + 28.0
+	var value_y: float = SUMMARY.position.y + 58.0
+	_text("ポジション別 (支配下)", Vector2(div_x + 20.0, label_y), FS_LABEL, MUTED)
 	var px0: float = div_x + 20.0
 	# 投手 (pos=1) は先発/中継 (抑えは中継に含む) で分けて表示するため、野手8ポジション+2で10枠。
 	var slots: Array = [
@@ -1070,7 +982,7 @@ func _draw_summary_panel() -> void:
 	for i in range(slots.size()):
 		var entry: Dictionary = slots[i] as Dictionary
 		var cx: float = px0 + float(i) * slot
-		_text(str(entry["char"]), Vector2(cx, value_y), 16, entry["color"] as Color)
+		_text(str(entry["char"]), Vector2(cx, value_y), 16, entry["color"] as Color, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		_text(str(int(entry["count"])), Vector2(cx + 24.0, value_y), 18, TEXT, slot - 26.0)
 
 
@@ -1111,7 +1023,7 @@ func _draw_draft_panel() -> void:
 # info1/info2 は中央2列の見出し (ドラフト=出身/成長, 外国人=評価/年俸)。値は row["info1"/"info2"]。
 # cache は candidate_id -> PSPlayerSeasonRecord (レーティング遅延算出)。
 func _draw_candidate_board(rect: Rect2, rows: Array, tab: String, selected_id: int, sel_kind: String, cache: Dictionary, info1_header: String, info2_header: String) -> void:
-	_round(rect, PANEL, BORDER, 10)
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
 	var pitcher_table: bool = _candidate_tab_is_pitcher(tab)
 	var visible_rows: Array = _candidate_rows_for_tab(rows, tab)
 	var hy: float = rect.position.y + 30.0
@@ -1136,20 +1048,31 @@ func _draw_candidate_board(rect: Rect2, rows: Array, tab: String, selected_id: i
 		_scroll_zones.append({"rect": rect, "key": scroll_key, "max": max_scroll})
 
 	var y: float = row_top + 21.0
+	var drawn: int = 0
 	for i in range(offset, min(offset + visible, visible_rows.size())):
 		var row: Dictionary = visible_rows[i] as Dictionary
 		var cid: int = int(row.get("candidate_id", 0))
 		var row_rect: Rect2 = Rect2(rect.position.x + 10.0, y - 19.0, rect.size.x - 20.0, row_h)
 		if cid == selected_id:
 			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.45), 6, 1)
-		elif i % 2 == 1:
-			_round(row_rect, Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 		if pitcher_table:
 			_draw_candidate_pitcher_row(rect, row, y, cache)
 		else:
 			_draw_candidate_fielder_row(rect, row, y, cache)
 		_row_hits.append({"rect": row_rect, "kind": sel_kind, "meta": cid})
+		# 縞の代わりに全行の下へヘアライン区切り (基底 _draw_data_table と同じ表現)。
+		_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), HAIRLINE, 1.0)
+		drawn += 1
 		y += row_h
+
+	# 列グループ境界の縦ヘアライン (識別 / 評価 / 能力 / 変化球・守備適性グリッドの各ブロック境界)。
+	var xs: Dictionary = _draft_table_x(rect, pitcher_table)
+	var ability_r: float = float(xs["velo_r"]) if pitcher_table else float(xs["meet_r"])
+	var sep_xs: Array = [float(xs["eval_r"]) - 44.0 - 10.0, ability_r - 56.0 - 10.0, float(xs["block_x"]) - 10.0]
+	var band_top: float = hy - 18.0
+	var rows_bottom: float = row_top + float(drawn) * row_h
+	for sep_x in sep_xs:
+		_line(Vector2(sep_x, band_top), Vector2(sep_x, rows_bottom), HAIRLINE, 1.0)
 
 	if max_scroll > 0:
 		_text_right("%d / %d" % [min(offset + visible, visible_rows.size()), visible_rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
@@ -1246,6 +1169,7 @@ func _draft_apt_value_entries(aptitudes: Dictionary) -> Array:
 
 func _draw_candidate_pitcher_header(rect: Rect2, y: float, info1_header: String, info2_header: String) -> void:
 	var xs: Dictionary = _draft_table_x(rect, true)
+	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	_text("役割", Vector2(float(xs["badge_x"]), y), 11, FAINT, 50.0, HORIZONTAL_ALIGNMENT_CENTER)
 	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
 	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
@@ -1257,11 +1181,12 @@ func _draw_candidate_pitcher_header(rect: Rect2, y: float, info1_header: String,
 	_text_cell("制球", float(xs["ctrl_r"]), y, 11, FAINT)
 	_text_cell("持久", float(xs["stam_r"]), y, 11, FAINT, 54.0)
 	_draw_draft_grid_cells(float(xs["block_x"]), rect.end.x - 14.0, y, _draft_pitch_header_entries(), true)
-	_line(Vector2(rect.position.x + 18.0, y + 8.0), Vector2(rect.end.x - 18.0, y + 8.0), BORDER_SOFT, 1.0)
+	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
 func _draw_candidate_fielder_header(rect: Rect2, y: float, info1_header: String, info2_header: String) -> void:
 	var xs: Dictionary = _draft_table_x(rect, false)
+	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	_text("守備", Vector2(float(xs["badge_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
 	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
 	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
@@ -1275,12 +1200,12 @@ func _draw_candidate_fielder_header(rect: Rect2, y: float, info1_header: String,
 	_text_cell("肩力", float(xs["arm_r"]), y, 11, FAINT)
 	_text_cell("選球", float(xs["eye_r"]), y, 11, FAINT)
 	_draw_draft_grid_cells(float(xs["block_x"]), rect.end.x - 14.0, y, _draft_apt_header_entries(), true)
-	_line(Vector2(rect.position.x + 18.0, y + 8.0), Vector2(rect.end.x - 18.0, y + 8.0), BORDER_SOFT, 1.0)
+	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
 func _draw_candidate_identity(rect: Rect2, xs: Dictionary, row: Dictionary, y: float) -> void:
 	_text_cell("#%d" % int(row.get("rank", 0)), float(xs["rank_r"]), y, 12, FAINT, 40.0)
-	_text(str(row.get("name", "")), Vector2(float(xs["name_x"]), y), 13, TEXT, float(xs["age_r"]) - 46.0 - float(xs["name_x"]))
+	_text(str(row.get("name", "")), Vector2(float(xs["name_x"]), y), 13, TEXT, float(xs["age_r"]) - 46.0 - float(xs["name_x"]), HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_cell(str(int(row.get("age", 0))), float(xs["age_r"]), y, 13, MUTED, 40.0)
 	_text(str(row.get("info1", "")), Vector2(float(xs["src_x"]), y), 12, MUTED, 80.0)
 	var overall: int = int(row.get("overall", 0))
@@ -1371,8 +1296,7 @@ func _draw_camp_panel() -> void:
 
 # 特別練習メニュー (練習種別 / 対象位置のチップ)。チップ本体は _build_camp_chips がボタンで重ね描く。
 func _draw_camp_menu_panel() -> void:
-	_round(CAMP_MENU, PANEL, BORDER, 10)
-	_text("特別練習メニュー", Vector2(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 30), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(CAMP_MENU, "特別練習メニュー")
 	if selected_camp_player_id <= 0 or _camp_types.is_empty():
 		_draw_text_lines(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 58, CAMP_MENU.size.x - 32, _camp_detail_text, 13, MUTED)
 		return
@@ -1383,8 +1307,7 @@ func _draw_camp_menu_panel() -> void:
 
 # 成功率パネル。
 func _draw_camp_rate_panel() -> void:
-	_round(CAMP_RATE, PANEL, BORDER, 10)
-	_text("成功率", Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 30), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(CAMP_RATE, "成功率")
 	if _camp_selected_option.is_empty():
 		_text("選手と特別練習を選択してください。", Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 60), 13, MUTED, CAMP_RATE.size.x - 32)
 		return
@@ -1399,8 +1322,7 @@ func _draw_camp_rate_panel() -> void:
 
 # 成功時獲得適性値パネル (守備適性が対象の練習のみ数値を出す)。
 func _draw_camp_apt_panel() -> void:
-	_round(CAMP_APT, PANEL, BORDER, 10)
-	_text("成功時獲得適性値", Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 30), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(CAMP_APT, "成功時獲得適性値")
 	if _camp_selected_option.is_empty():
 		_text("選手と特別練習を選択してください。", Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 60), 13, MUTED, CAMP_APT.size.x - 32)
 		return
@@ -1750,9 +1672,10 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 
 # 投手/野手を混在させない選手一覧。打順・投手起用法の上段表に寄せた自前描画。
 func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, pitcher_table: bool, sel_kind: String, scroll_key: String, _selection_group: String, selected_id: int, empty_text: String, show_tab_space: bool, career_stats: bool, team_mode: String = "") -> void:
-	_round(rect, PANEL, BORDER, 10)
-	var title_x: float = rect.position.x + (222.0 if show_tab_space else 16.0)
-	_text(title, Vector2(title_x, rect.position.y + 34.0), 15, TEXT, rect.end.x - title_x - 18.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
+	var title_x: float = rect.position.x + (222.0 if show_tab_space else 18.0)
+	_round(Rect2(title_x, rect.position.y + 21.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(title, Vector2(title_x + 9.0, rect.position.y + 34.0), 15, TEXT, rect.end.x - title_x - 9.0 - 18.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	var rows: Array = []
 	for row_value in source_rows:
@@ -1789,6 +1712,7 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 		_scroll_zones.append({"rect": rect, "key": scroll_key, "max": max_scroll})
 
 	var y: float = row_top + 21.0
+	var drawn: int = 0
 	for i in range(offset, min(offset + visible, rows.size())):
 		var row: Dictionary = rows[i] as Dictionary
 		var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
@@ -1801,8 +1725,6 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 			_round(row_rect, Color(SEL_DEMOTE.r, SEL_DEMOTE.g, SEL_DEMOTE.b, 0.14), Color(SEL_DEMOTE.r, SEL_DEMOTE.g, SEL_DEMOTE.b, 0.45), 6, 1)
 		elif selected:
 			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.45), 6, 1)
-		elif i % 2 == 1:
-			_round(row_rect, Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 
 		if pitcher_table:
 			_draw_pitcher_player_row(rect, row, y, effective_team_mode, career_stats)
@@ -1810,7 +1732,17 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 			_draw_fielder_player_row(rect, row, y, effective_team_mode, career_stats)
 		if not sel_kind.is_empty():
 			_row_hits.append({"rect": row_rect, "kind": sel_kind, "meta": record.player_id})
+		# 縞の代わりに全行の下へヘアライン区切り (基底 _draw_data_table と同じ表現)。
+		_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), HAIRLINE, 1.0)
+		drawn += 1
 		y += row_h
+
+	# 列グループ境界の縦ヘアライン (識別 / 評価 / 能力 / 成績の各ブロック境界)。
+	var sep_xs: Array = _player_table_sep_xs(_player_table_x(rect, effective_team_mode), pitcher_table)
+	var band_top: float = hy - 18.0
+	var rows_bottom: float = row_top + float(drawn) * row_h
+	for sep_x in sep_xs:
+		_line(Vector2(float(sep_x), band_top), Vector2(float(sep_x), rows_bottom), HAIRLINE, 1.0)
 
 	if max_scroll > 0:
 		_text_right("%d / %d" % [min(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
@@ -1827,6 +1759,7 @@ func _draw_people_player_table(rect: Rect2, title: String, people: Array, tab_id
 
 func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career_stats: bool) -> void:
 	var xs: Dictionary = _player_table_x(rect, team_mode)
+	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	if team_mode == "move":
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
 		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
@@ -1857,11 +1790,12 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 	_text_cell("WHIP", float(xs["whip_r"]), y, 11, FAINT, 58.0)
 	if team_mode != "contract":
 		_text_cell("K/9", float(xs["k9_r"]), y, 11, FAINT, 54.0)
-	_line(Vector2(rect.position.x + 18.0, y + 8.0), Vector2(rect.end.x - 18.0, y + 8.0), BORDER_SOFT, 1.0)
+	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
 func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool) -> void:
 	var xs: Dictionary = _player_table_x(rect, team_mode)
+	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	if team_mode == "move":
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
 		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
@@ -1897,7 +1831,7 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 		_text_cell("wOBA", float(xs["woba_r"]), y, 11, FAINT, 60.0)
 		_text_cell("wRC+", float(xs["wrc_r"]), y, 11, FAINT, 56.0)
 	_text_cell("OAA", float(xs["oaa_r"]), y, 11, FAINT, 54.0)
-	_line(Vector2(rect.position.x + 18.0, y + 8.0), Vector2(rect.end.x - 18.0, y + 8.0), BORDER_SOFT, 1.0)
+	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
 func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode: String, career_stats: bool) -> void:
@@ -1981,7 +1915,7 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 	if record.jersey_number > 0:
 		_text(str(record.jersey_number), Vector2(float(xs["jersey_x"]), y), 12, FAINT)
 	var name_limit_x: float = (float(xs["salary_r"]) - 88.0) if xs.has("salary_r") else (float(xs["age_r"]) - 46.0)
-	_text(record.name, Vector2(float(xs["name_x"]), y), 13, TEXT, name_limit_x - float(xs["name_x"]))
+	_text(record.name, Vector2(float(xs["name_x"]), y), 13, TEXT, name_limit_x - float(xs["name_x"]), HORIZONTAL_ALIGNMENT_LEFT, true)
 	if xs.has("salary_r"):
 		_text_cell(_comma(int(entry.get("new_salary", record.salary))), float(xs["salary_r"]), y, 13, TEXT, 76.0)
 	if xs.has("salary_delta_r"):
@@ -2091,6 +2025,17 @@ func _player_table_x(rect: Rect2, team_mode: String) -> Dictionary:
 		"wrc_r": right - 106.0,
 		"oaa_r": right - 18.0,
 	}
+
+
+# _player_table_x の列 x から「識別 / 評価 / 能力 / 成績」ブロック境界の縦ヘアライン位置を出す。
+# team_mode ごとに絶対値は変わるが eval_r/velo_r(or meet_r)/g_r は全モード共通キーなので分岐不要。
+func _player_table_sep_xs(xs: Dictionary, pitcher: bool) -> Array:
+	var eval_r: float = float(xs["eval_r"])
+	var ability_r: float = float(xs["velo_r"]) if pitcher else float(xs["meet_r"])
+	var ability_box: float = 58.0 if pitcher else 38.0
+	var g_r: float = float(xs["g_r"])
+	var g_box: float = 44.0 if pitcher else 42.0
+	return [eval_r - 44.0 - 10.0, ability_r - ability_box - 10.0, g_r - g_box - 10.0]
 
 
 # 見出し + テーブル1枚のシンプルな結果レイアウト。

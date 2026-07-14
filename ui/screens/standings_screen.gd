@@ -18,39 +18,41 @@ const TABLE_B: Rect2 = Rect2(262, 394, 1638, 256)
 const CHART_RECT: Rect2 = Rect2(262, 664, 956, 394)
 const INTER_RECT: Rect2 = Rect2(1234, 664, 666, 394)
 
+# 列幅は実データ幅基準で詰める (余白は球団名列へ寄せ、数値列が間延びしないように)。
+# sep_before で「勝敗 / 勝率・差・残 / 得失点 / 打撃 / 投手」のブロック境界に縦ヘアラインを引く。
 const LEAGUE_COLUMNS: Array = [
-	{"title": "順",   "key": "rank", "w": 40,  "align": "l", "fmt": "rank"},
-	{"title": "球団", "key": "team", "w": 200, "align": "l", "fmt": "team"},
-	{"title": "試合", "key": "g",    "w": 66,  "align": "r", "fmt": "int"},
-	{"title": "勝",   "key": "w",    "w": 62,  "align": "r", "fmt": "int"},
-	{"title": "敗",   "key": "l",    "w": 62,  "align": "r", "fmt": "int"},
-	{"title": "分",   "key": "d",    "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "勝率", "key": "pct",  "w": 82,  "align": "r", "fmt": "rate"},
-	{"title": "差",   "key": "gb",   "w": 72,  "align": "r", "fmt": "gb"},
-	{"title": "残",   "key": "rem",  "w": 58,  "align": "r", "fmt": "int"},
-	{"title": "得",   "key": "rs",   "w": 68,  "align": "r", "fmt": "int"},
-	{"title": "失",   "key": "ra",   "w": 68,  "align": "r", "fmt": "int"},
-	{"title": "得失", "key": "diff", "w": 76,  "align": "r", "fmt": "diff"},
-	{"title": "打率", "key": "avg",  "w": 82,  "align": "r", "fmt": "rate"},
-	{"title": "本",   "key": "hr",   "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "盗",   "key": "sb",   "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "防",   "key": "era",  "w": 76,  "align": "r", "fmt": "float2"},
-	{"title": "WHIP", "key": "whip", "w": 84,  "align": "r", "fmt": "float2"},
-	{"title": "K/9",  "key": "k9",   "w": 74,  "align": "r", "fmt": "float2"},
-	{"title": "S",    "key": "sv",   "w": 52,  "align": "r", "fmt": "int"},
-	{"title": "H",    "key": "hld",  "w": 52,  "align": "r", "fmt": "int"},
+	{"title": "順",   "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
+	{"title": "球団", "key": "team", "w": 280, "align": "l", "fmt": "team", "strong": true},
+	{"title": "試合", "key": "g",    "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "勝",   "key": "w",    "w": 50,  "align": "r", "fmt": "int"},
+	{"title": "敗",   "key": "l",    "w": 50,  "align": "r", "fmt": "int"},
+	{"title": "分",   "key": "d",    "w": 46,  "align": "r", "fmt": "int"},
+	{"title": "勝率", "key": "pct",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
+	{"title": "差",   "key": "gb",   "w": 60,  "align": "r", "fmt": "gb"},
+	{"title": "残",   "key": "rem",  "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "得",   "key": "rs",   "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "失",   "key": "ra",   "w": 56,  "align": "r", "fmt": "int"},
+	{"title": "得失", "key": "diff", "w": 64,  "align": "r", "fmt": "diff"},
+	{"title": "打率", "key": "avg",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
+	{"title": "本",   "key": "hr",   "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "盗",   "key": "sb",   "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "防",   "key": "era",  "w": 64,  "align": "r", "fmt": "float2", "sep_before": true},
+	{"title": "WHIP", "key": "whip", "w": 70,  "align": "r", "fmt": "float2"},
+	{"title": "K/9",  "key": "k9",   "w": 62,  "align": "r", "fmt": "float2"},
+	{"title": "S",    "key": "sv",   "w": 44,  "align": "r", "fmt": "int"},
+	{"title": "H",    "key": "hld",  "w": 44,  "align": "r", "fmt": "int"},
 ]
 
 const INTER_COLUMNS: Array = [
-	{"title": "順",   "key": "rank", "w": 40,  "align": "l", "fmt": "rank"},
-	{"title": "球団", "key": "team", "w": 168, "align": "l", "fmt": "team"},
-	{"title": "L",    "key": "lg",   "w": 44,  "align": "l", "fmt": "str"},
-	{"title": "試",   "key": "g",    "w": 54,  "align": "r", "fmt": "int"},
-	{"title": "勝",   "key": "w",    "w": 58,  "align": "r", "fmt": "int"},
-	{"title": "敗",   "key": "l",    "w": 58,  "align": "r", "fmt": "int"},
-	{"title": "分",   "key": "d",    "w": 52,  "align": "r", "fmt": "int"},
-	{"title": "勝率", "key": "pct",  "w": 82,  "align": "r", "fmt": "rate"},
-	{"title": "差",   "key": "gb",   "w": 66,  "align": "r", "fmt": "gb"},
+	{"title": "順",   "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
+	{"title": "球団", "key": "team", "w": 210, "align": "l", "fmt": "team", "strong": true},
+	{"title": "L",    "key": "lg",   "w": 42,  "align": "l", "fmt": "str"},
+	{"title": "試",   "key": "g",    "w": 46,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "勝",   "key": "w",    "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "敗",   "key": "l",    "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "分",   "key": "d",    "w": 44,  "align": "r", "fmt": "int"},
+	{"title": "勝率", "key": "pct",  "w": 66,  "align": "r", "fmt": "rate", "sep_before": true},
+	{"title": "差",   "key": "gb",   "w": 56,  "align": "r", "fmt": "gb"},
 ]
 
 # 集計キャッシュ
@@ -94,8 +96,7 @@ func _draw() -> void:
 	if _interleague_played:
 		_draw_table(INTER_RECT, "交流戦順位表", "", INTER_COLUMNS, _interleague_rows)
 	else:
-		_round(INTER_RECT, PANEL, BORDER, 10)
-		_text("交流戦順位表", Vector2(INTER_RECT.position.x + 18, INTER_RECT.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		_panel(INTER_RECT, "交流戦順位表")
 		_text("交流戦はまだ開幕していません", Vector2(INTER_RECT.position.x + 24, INTER_RECT.position.y + INTER_RECT.size.y * 0.5), 15, MUTED, INTER_RECT.size.x - 48, HORIZONTAL_ALIGNMENT_CENTER)
 
 
@@ -107,8 +108,9 @@ func _draw_table(rect: Rect2, title: String, right_label: String, columns: Array
 # ============================================================ 貯金・借金グラフ
 
 func _draw_balance_chart(rect: Rect2) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text("貯金・借金の推移", Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
+	_round(Rect2(rect.position.x + 18, rect.position.y + 19, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+	_text("貯金・借金の推移", Vector2(rect.position.x + 27, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	var teams: Array = _league_team_order(_chart_league)
 

@@ -32,6 +32,17 @@ const AMBER: Color = Color(0.955, 0.715, 0.255)
 # 守備位置/投手役割の色 (全ダッシュボード画面で共通)。投=PINK / DH=VIOLET。
 const PINK: Color = Color(0.94, 0.46, 0.66)
 const VIOLET: Color = Color(0.64, 0.52, 0.96)
+# 表・帯のヘアライン区切り (BORDER_SOFT の半透過)。行区切り/縦区切りなど、面を割らずに
+# 整列だけを見せたい罫線に使う (実線の枠は BORDER / BORDER_SOFT のまま)。
+const HAIRLINE: Color = Color(0.140, 0.168, 0.205, 0.5)
+
+# --- タイポグラフィスケール (base px) ---
+# 文字サイズの階層はこの4段に寄せる: ラベル(補足/表ヘッダ) / セル(表本文) /
+# セクション見出し(表タイトル) / KPI値(_stat_strip の数値)。opts での明示指定はそのまま優先。
+const FS_LABEL: int = 11
+const FS_CELL: int = 14
+const FS_SECTION: int = 17
+const FS_VALUE: int = 30
 
 # --- レイアウト基準 (base 座標) ---
 const SIDEBAR_W: float = 240.0
@@ -303,8 +314,8 @@ func _text(text: String, base_pos: Vector2, base_size: int, color: Color, base_w
 	draw_string(f, _p(base_pos), text, align, (base_width * _scale_f) if base_width > 0.0 else -1.0, max(8, int(round(float(base_size) * _scale_f))), color)
 
 
-func _text_right(text: String, right_x: float, base_y: float, base_size: int, color: Color, box: float = 80.0) -> void:
-	_text(text, Vector2(right_x - box, base_y), base_size, color, box, HORIZONTAL_ALIGNMENT_RIGHT)
+func _text_right(text: String, right_x: float, base_y: float, base_size: int, color: Color, box: float = 80.0, bold: bool = false) -> void:
+	_text(text, Vector2(right_x - box, base_y), base_size, color, box, HORIZONTAL_ALIGNMENT_RIGHT, bold)
 
 
 func _line(from: Vector2, to: Vector2, color: Color, width: float) -> void:
@@ -342,18 +353,57 @@ func _draw_result_mark(base_center: Vector2, base_radius: float, symbol: String,
 				int(round(base_radius * 1.9)), fallback, base_radius * 2.0, HORIZONTAL_ALIGNMENT_CENTER)
 
 
-# filled=true は塗り (背景 0.18 + 枠 0.5)、false は枠のみ (背景なし + 枠を濃く)。
+# filled=true は塗り (背景 0.14 + 枠 0.5)、false は枠のみ (背景なし + 枠を濃く)。
 # 塗り/アウトラインで支配下/育成などの2状態を色を変えずに描き分けるのに使う。
 func _chip(base_rect: Rect2, text: String, color: Color, filled: bool = true) -> void:
-	var bg_alpha: float = 0.18 if filled else 0.0
+	var bg_alpha: float = 0.14 if filled else 0.0
 	var border_alpha: float = 0.5 if filled else 0.85
-	_round(base_rect, Color(color.r, color.g, color.b, bg_alpha), Color(color.r, color.g, color.b, border_alpha), 9)
+	_round(base_rect, Color(color.r, color.g, color.b, bg_alpha), Color(color.r, color.g, color.b, border_alpha), 5)
 	_text(text, Vector2(base_rect.position.x, base_rect.position.y + base_rect.size.y * 0.72), int(base_rect.size.y * 0.52), color, base_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 
+# フラットパネル (枠線なし)。タイトルは bold + 左に BLUE のアクセントティック
+# (サイドバーのカテゴリ見出しと同じ言語)。title 空文字ならタイトル領域は描かない。
 func _panel(base_rect: Rect2, title: String, color: Color = TEXT) -> void:
-	_round(base_rect, PANEL, BORDER, 10)
-	_text(title, Vector2(base_rect.position.x + 18, base_rect.position.y + 32), 16, color)
+	_round(base_rect, PANEL, Color.TRANSPARENT, 8, 0)
+	if title.is_empty():
+		return
+	_round(Rect2(base_rect.position.x + 18, base_rect.position.y + 19, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(title, Vector2(base_rect.position.x + 27, base_rect.position.y + 32), 16, color, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+
+# KPI帯: アイコン付き個別カード列の置き換え。1枚のフラットな帯に cells を等幅で並べ、
+# セル間は縦ヘアラインで区切る。各 cell:
+#   {label:String, value:String, color?:Color(値の色, 既定TEXT), note?:String(値の右の小さな補足), note_color?:Color}
+# 値は FS_VALUE bold を基準に、セル幅へ収まらない場合のみ段階的に縮小する (欠けよりも縮小を優先)。
+func _stat_strip(base_rect: Rect2, cells: Array) -> void:
+	_round(base_rect, PANEL, Color.TRANSPARENT, 8, 0)
+	if cells.is_empty():
+		return
+	var cell_w: float = base_rect.size.x / float(cells.size())
+	for i in range(cells.size()):
+		var cell: Dictionary = cells[i] as Dictionary
+		var cx: float = base_rect.position.x + cell_w * float(i)
+		if i > 0:
+			_line(Vector2(cx, base_rect.position.y + 14.0), Vector2(cx, base_rect.end.y - 14.0), HAIRLINE, 1.0)
+		var pad: float = 20.0
+		# ラベルと値の縦位置・値サイズは帯の高さから決める (高さ72前後の低い帯でも
+		# ラベルと値が重ならないように)。値は高さの約36%を上限とし FS_VALUE を超えない。
+		var strip_h: float = base_rect.size.y
+		_text(str(cell.get("label", "")), Vector2(cx + pad, base_rect.position.y + 22.0), FS_LABEL, MUTED)
+		var value: String = str(cell.get("value", ""))
+		var note: String = str(cell.get("note", ""))
+		var note_w: float = (_measure(note, FS_LABEL) + 10.0) if not note.is_empty() else 0.0
+		var max_w: float = cell_w - pad * 2.0 - note_w
+		# bold は body より僅かに広い。_measure は body 基準なので 6% の余裕を見て縮める。
+		var vsize: int = mini(FS_VALUE, int(strip_h * 0.36))
+		while vsize > 16 and _measure(value, vsize) * 1.06 > max_w:
+			vsize -= 2
+		var vy: float = base_rect.end.y - max(14.0, strip_h * 0.18)
+		_text(value, Vector2(cx + pad, vy), vsize, cell.get("color", TEXT) as Color, max_w, HORIZONTAL_ALIGNMENT_LEFT, true)
+		if not note.is_empty():
+			_text(note, Vector2(cx + pad + min(max_w, _measure(value, vsize) * 1.06) + 8.0, vy), FS_LABEL,
+				cell.get("note_color", MUTED) as Color)
 
 
 func _measure(text: String, base_size: int) -> float:
@@ -535,23 +585,31 @@ func _draw_baseball_stitches(arc_center: Vector2, arc_radius: float, angles_degr
 
 # 共通テーブル描画 (2026-06-24)。各画面に重複していた _draw_table / _draw_table_row / _fmt_cell を集約。
 # 列 columns: 幅 = w / 整列 = align ("l"|"left"/"c"|"center"/"r"|"right", 無指定は default_align) / 書式 = fmt。
+#   任意キー: sep_before:bool (列の左に縦ヘアライン。列グループの境界表現) /
+#   strong:bool (セルを bold で描く。選手名・球団名列の強調用)。
 # 行 rows は key->値の Dictionary。特殊キー: __meta(選択/当たり判定) / __color(行文字色) /
-# is_self / is_leader / is_total (強調)。
+# is_self (左端の BLUE アクセントバー + 薄い青地) / is_leader / is_total (強調)。
 # opts (すべて任意):
 #   panel:bool(=true) パネル背景を描く / title:String 見出し / right_label:String 右肩ラベル
-#   title_size(=17) title_pad(=18) title_y(=32) title_width(=-1)
-#   header_top(=60 見出し行の rect 上端からの y) header_size(=11) cell_size(=13)
+#   title_size(=FS_SECTION) title_pad(=18) title_y(=32) title_width(=-1)
+#   header_top(=60 見出し行テキストの rect 上端からのベースライン y。ヘッダ帯は
+#     header_top-18 〜 header_top+8 の 26px。ヒット判定を複製する画面はこの幾何に追従させる)
+#   header_size(=12) cell_size(=FS_CELL)
 #   inner_pad(=12) bottom_pad(=8) default_align("left"|"right", =推論) empty_text:String
-#   row_h(=0 → 行数で均等ストレッチ) row_h_max(=0 → ストレッチ上限なし) alt_rows:bool(=false 奇数行の薄い縞)
+#   row_h(=0 → 行数で均等ストレッチ。上限は row_h_max、未指定時 34.0。0 を明示すると上限なし)
+#   alt_rows:bool (互換のため受け取るが縞は描かない。行区切りのヘアラインで代替)
 #   scroll_key:String + scroll:Dictionary + scroll_zones:Array (固定行高 row_h>0 のときホイールスクロール)
 #   sel_kind:String + selected_id:int + hits:Array (__meta 行を選択可能にし hits へ当たり判定を push)
 func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary = {}) -> void:
 	if bool(opts.get("panel", true)):
-		_round(rect, PANEL, BORDER, 10)
+		_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
 	var title: String = str(opts.get("title", ""))
 	if not title.is_empty():
-		_text(title, Vector2(rect.position.x + float(opts.get("title_pad", 18.0)), rect.position.y + float(opts.get("title_y", 32.0))),
-			int(opts.get("title_size", 17)), TEXT, float(opts.get("title_width", -1.0)), HORIZONTAL_ALIGNMENT_LEFT, true)
+		var title_pad: float = float(opts.get("title_pad", 18.0))
+		var title_y: float = float(opts.get("title_y", 32.0))
+		_round(Rect2(rect.position.x + title_pad, rect.position.y + title_y - 13.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+		_text(title, Vector2(rect.position.x + title_pad + 9.0, rect.position.y + title_y),
+			int(opts.get("title_size", FS_SECTION)), TEXT, float(opts.get("title_width", -1.0)), HORIZONTAL_ALIGNMENT_LEFT, true)
 	var right_label: String = str(opts.get("right_label", ""))
 	if not right_label.is_empty():
 		_text_right(right_label, rect.end.x - 18.0, rect.position.y + 30.0, 12, MUTED, 200.0)
@@ -565,25 +623,31 @@ func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary
 		sum_w += _col_width(col_value as Dictionary)
 	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
 
-	var header_size: int = int(opts.get("header_size", 11))
+	# ヘッダ帯: 列領域全幅に PANEL_2 の帯 + bold ラベル、下端に太めのルール線。
+	var header_size: int = int(opts.get("header_size", 12))
 	var hy: float = rect.position.y + float(opts.get("header_top", 60.0))
+	var band_top: float = hy - 18.0
+	_round(Rect2(inner_x, band_top, usable, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	var sep_xs: Array = []   # sep_before 列の左端 x (縦ヘアラインは行描画後にまとめて引く)
 	var cx: float = inner_x
 	for col_value in columns:
 		var col: Dictionary = col_value as Dictionary
 		var w: float = _col_width(col) * factor
+		if bool(col.get("sep_before", false)) and cx > inner_x:
+			sep_xs.append(cx)
 		var content_w: float = _col_content_width(col, w, factor)
 		var header_delta_w: float = _growth_delta_width(col, factor)
 		var header_w: float = max(8.0, content_w - header_delta_w) if header_delta_w > 0.0 else content_w
 		match _col_align(col, default_align):
 			HORIZONTAL_ALIGNMENT_LEFT:
-				_text(str(col.get("title", "")), Vector2(cx + 4.0, hy), header_size, FAINT, header_w - 6.0)
+				_text(str(col.get("title", "")), Vector2(cx + 4.0, hy), header_size, MUTED, header_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 			HORIZONTAL_ALIGNMENT_CENTER:
-				_text(str(col.get("title", "")), Vector2(cx + 2.0, hy), header_size, FAINT, header_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
+				_text(str(col.get("title", "")), Vector2(cx + 2.0, hy), header_size, MUTED, header_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, true)
 			_:
-				_text_right(str(col.get("title", "")), cx + header_w - 4.0, hy, header_size, FAINT, header_w - 6.0)
+				_text_right(str(col.get("title", "")), cx + header_w - 4.0, hy, header_size, MUTED, header_w - 6.0, true)
 		cx += w
 	var line_y: float = hy + 8.0
-	_line(Vector2(inner_x, line_y), Vector2(rect.end.x - inner_pad, line_y), BORDER_SOFT, 1.0)
+	_line(Vector2(inner_x, line_y), Vector2(rect.end.x - inner_pad, line_y), BORDER, 1.5)
 
 	if rows.is_empty():
 		var empty_text: String = str(opts.get("empty_text", ""))
@@ -607,28 +671,40 @@ func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary
 			if max_off > 0:
 				(opts.get("scroll_zones", []) as Array).append({"rect": rect, "key": scroll_key, "max": max_off})
 	else:
+		# 均等ストレッチは上限つき (表ごとに行高が伸びてバラつかないように)。
+		# row_h_max 明示があればそれを優先し、0 の明示は「上限なし」の意味を保つ。
 		row_h = area_h / float(rows.size())
-		var row_h_max: float = float(opts.get("row_h_max", 0.0))
+		var row_h_max: float = float(opts.get("row_h_max", 34.0))
 		if row_h_max > 0.0:
 			row_h = min(row_h_max, row_h)
 
 	var sel_kind: String = str(opts.get("sel_kind", ""))
 	var selected_id: int = int(opts.get("selected_id", 0))
-	var alt_rows: bool = bool(opts.get("alt_rows", false))
-	var cell_size: int = int(opts.get("cell_size", 13))
+	var cell_size: int = int(opts.get("cell_size", FS_CELL))
 	var hits: Array = opts.get("hits", []) as Array
+	var drawn: int = 0
 	for vi in range(visible):
 		var ri: int = offset + vi
 		if ri >= rows.size():
 			break
-		_draw_data_row(rect, inner_x, factor, columns, rows[ri] as Dictionary, row_top + float(vi) * row_h, row_h,
-			default_align, cell_size, sel_kind, selected_id, alt_rows, ri, hits)
+		var ry: float = row_top + float(vi) * row_h
+		_draw_data_row(rect, inner_x, factor, columns, rows[ri] as Dictionary, ry, row_h,
+			default_align, cell_size, sel_kind, selected_id, ri, hits)
+		# 全行の下にヘアライン区切り (縞の代わりに罫線で行を刻む)。
+		_line(Vector2(inner_x, ry + row_h), Vector2(inner_x + usable, ry + row_h), HAIRLINE, 1.0)
+		drawn += 1
+
+	# 列グループ境界の縦ヘアライン (ヘッダ帯上端から最終行の下端まで)。
+	var rows_bottom: float = row_top + float(drawn) * row_h
+	for sep_x_value in sep_xs:
+		_line(Vector2(float(sep_x_value), band_top), Vector2(float(sep_x_value), rows_bottom), HAIRLINE, 1.0)
 
 	if not scroll_key.is_empty() and rows.size() > visible:
 		_text_right("%d / %d" % [min(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
-func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, row: Dictionary, ry: float, row_h: float, default_align: String, cell_size: int, sel_kind: String, selected_id: int, alt_rows: bool, index: int, hits: Array) -> void:
+# index は行番号 (現状は当たり判定/強調に未使用だが、呼び出し互換のため残す)。
+func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, row: Dictionary, ry: float, row_h: float, default_align: String, cell_size: int, sel_kind: String, selected_id: int, _index: int, hits: Array) -> void:
 	var has_meta: bool = row.has("__meta")
 	var meta: int = int(row.get("__meta", 0)) if has_meta else 0
 	var selectable: bool = not sel_kind.is_empty() and has_meta
@@ -638,15 +714,15 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 	if selectable and selected_id != 0 and meta == selected_id:
 		_round(Rect2(rect.position.x + 8.0, ry + 1.0, rect.size.x - 16.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.16), Color(BLUE.r, BLUE.g, BLUE.b, 0.5), 6, 1)
 	elif is_self:
-		_round(Rect2(rect.position.x + 8.0, ry + 1.0, rect.size.x - 16.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.12), Color.TRANSPARENT, 6, 0)
+		# 自軍行: 左端の 3px BLUE アクセントバー + ごく薄い青地。文字色は通常のまま。
+		_round(Rect2(rect.position.x + 4.0, ry, rect.size.x - 8.0, row_h), Color(BLUE.r, BLUE.g, BLUE.b, 0.08), Color.TRANSPARENT, 0, 0)
+		_round(Rect2(rect.position.x + 4.0, ry, 3.0, row_h), BLUE, Color.TRANSPARENT, 0, 0)
 	elif is_total:
 		_round(Rect2(rect.position.x + 10.0, ry + 1.0, rect.size.x - 20.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 6, 0)
-	elif alt_rows and index % 2 == 1:
-		_round(Rect2(rect.position.x + 10.0, ry, rect.size.x - 20.0, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 	var base_color: Color = TEXT
 	if row.has("__color"):
 		base_color = row["__color"] as Color
-	elif is_self or is_total:
+	elif is_total:
 		base_color = BLUE
 	var bold: bool = is_total
 	var ty: float = ry + row_h * 0.5 + 5.0
@@ -656,12 +732,14 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 		var key: String = str(col.get("key", ""))
 		var w: float = _col_width(col) * factor
 		var content_w: float = _col_content_width(col, w, factor)
+		# strong 列 (選手名/球団名など) は行の bold 指定と独立してセル単位で bold にする。
+		var cell_bold: bool = bold or bool(col.get("strong", false))
 		match _col_format(col):
 			"rank":
 				_text(str(row.get("rank", "")), Vector2(cx + 4.0, ty), cell_size, AMBER if is_leader else base_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_leader)
 			"team":
 				_dot(Vector2(cx + 9.0, ry + row_h * 0.5), 5.0, row.get("color", MUTED) as Color)
-				_text(str(row.get("team", "")), Vector2(cx + 20.0, ty), cell_size, base_color, content_w - 24.0)
+				_text(str(row.get("team", "")), Vector2(cx + 20.0, ty), cell_size, base_color, content_w - 24.0, HORIZONTAL_ALIGNMENT_LEFT, cell_bold)
 			"pos_badge":
 				# 守備位置/役割を色付きチップで描く。row[key]=表示文字 / row[key+"_color"]=色。
 				# row[key+"_dev"]=true なら育成選手としてアウトライン (枠のみ) で描く。
@@ -744,11 +822,11 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 				var cell_color: Color = row.get("%s_color" % key, base_color) as Color
 				match _col_align(col, default_align):
 					HORIZONTAL_ALIGNMENT_LEFT:
-						_text(text, Vector2(cx + 4.0, ty), cell_size, cell_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, bold)
+						_text(text, Vector2(cx + 4.0, ty), cell_size, cell_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, cell_bold)
 					HORIZONTAL_ALIGNMENT_CENTER:
-						_text(text, Vector2(cx + 2.0, ty), cell_size, cell_color, content_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, bold)
+						_text(text, Vector2(cx + 2.0, ty), cell_size, cell_color, content_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, cell_bold)
 					_:
-						_text_right(text, cx + content_w - 6.0, ty, cell_size, cell_color, content_w - 8.0)
+						_text_right(text, cx + content_w - 6.0, ty, cell_size, cell_color, content_w - 8.0, cell_bold)
 		cx += w
 	if selectable:
 		hits.append({"rect": Rect2(rect.position.x + 8.0, ry, rect.size.x - 16.0, row_h), "kind": sel_kind, "meta": meta})

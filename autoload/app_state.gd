@@ -61,6 +61,9 @@ var current_awards: PSAwards = null
 var auto_roster_swap_for_user_team: bool = false
 # スキップ操作中に自軍も成績ベースの自動入替を行うか。オプション画面から操作。
 var auto_roster_swap_during_skip: bool = true
+# 週次の自動トレード判断に自軍も参加させるか (有効時は自軍宛て提案を作らず、CPU間
+# マッチングと同じ基準で自軍のトレードもAIが自動成立させる)。オプション画面から操作。
+var auto_trade_for_user_team: bool = false
 # 自動セーブを有効にするか。デフォルトは false (手動セーブのみ)。
 var auto_save_enabled: bool = false
 var league_dh_enabled: Dictionary = {
@@ -1273,6 +1276,9 @@ func _build_auto_swap_ctx(during_skip: bool) -> Dictionary:
 	return {
 		"user_team_id": selected_team_id,
 		"include_user_team": include_user,
+		# トレードは一二軍入替と別トグルで自軍参加を制御できる (どちらか一方が有効でも
+		# 自軍をCPU間マッチングへ含める)。未使用の呼び出し元では include_user_team にフォールバックする。
+		"include_user_trade": include_user or auto_trade_for_user_team,
 	}
 
 
@@ -1357,6 +1363,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	postseason_active = bool(data.get("postseason_active", false))
 	auto_roster_swap_for_user_team = bool(data.get("auto_roster_swap_for_user_team", false))
 	auto_roster_swap_during_skip = bool(data.get("auto_roster_swap_during_skip", true))
+	auto_trade_for_user_team = bool(data.get("auto_trade_for_user_team", false))
 	auto_save_enabled = bool(data.get("auto_save_enabled", false))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
 	league_dh_enabled = {

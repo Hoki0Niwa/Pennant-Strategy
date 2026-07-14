@@ -50,6 +50,7 @@ static func save_state(app_state) -> bool:
 		"current_awards": app_state.current_awards.to_dict() if app_state.current_awards != null else {},
 		"auto_roster_swap_for_user_team": app_state.auto_roster_swap_for_user_team,
 		"auto_roster_swap_during_skip": app_state.auto_roster_swap_during_skip,
+		"auto_trade_for_user_team": app_state.auto_trade_for_user_team,
 		"auto_save_enabled": app_state.auto_save_enabled,
 		"league_dh_enabled": app_state.dh_settings_for_schedule(),
 	}

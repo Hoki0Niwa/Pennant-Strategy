@@ -152,16 +152,16 @@ func _draw_league_column(lx: float, lw: float, label: String, cats: Array) -> vo
 
 
 func _draw_category_panel(rect: Rect2, label: String, rows: Array) -> void:
-	_round(rect, PANEL, BORDER, 9)
-	_text(label, Vector2(rect.position.x + 12, rect.position.y + 25), 15, TEXT, rect.size.x - 24, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_line(Vector2(rect.position.x + 12, rect.position.y + 34), Vector2(rect.end.x - 12, rect.position.y + 34), BORDER_SOFT, 1.0)
+	# パネルは基盤 _panel のフラット化 (枠なし + bold タイトル + 青ティック) に乗る。
+	_panel(rect, label)
+	_line(Vector2(rect.position.x + 12, rect.position.y + 44), Vector2(rect.end.x - 12, rect.position.y + 44), BORDER, 1.5)
 
 	if rows.is_empty():
-		_text("データなし", Vector2(rect.position.x + 12, rect.position.y + 62), 12, FAINT)
+		_text("データなし", Vector2(rect.position.x + 12, rect.position.y + 72), 12, FAINT)
 		return
 
 	var inner_x: float = rect.position.x + 12.0
-	var top: float = rect.position.y + 42.0
+	var top: float = rect.position.y + 52.0
 	var row_h: float = (rect.end.y - top - 8.0) / float(RANKING_TOP_COUNT)
 	var value_box: float = 56.0
 	var value_right: float = rect.end.x - 10.0
@@ -187,7 +187,9 @@ func _draw_category_panel(rect: Rect2, label: String, rows: Array) -> void:
 		_text(str(r["rank"]), Vector2(inner_x, ty), 13, rank_color, 18, HORIZONTAL_ALIGNMENT_LEFT, is_top)
 		_text(str(r["team"]), Vector2(inner_x + 22.0, ty), 12, MUTED, 32)
 		_text(str(r["name"]), Vector2(name_x, ty), 13, name_color, name_w, HORIZONTAL_ALIGNMENT_LEFT, is_top)
-		_text_right(str(r["val"]), value_right, ty, 13, value_color, value_box)
+		_text_right(str(r["val"]), value_right, ty, 13, value_color, value_box, true)
+		# 自前描画リストなので行区切りは手でヘアラインを引く (トップ行の強調背景の下にも重ねて描く)。
+		_line(Vector2(rect.position.x + 6.0, ry + row_h), Vector2(rect.end.x - 6.0, ry + row_h), HAIRLINE, 1.0)
 
 		if pid > 0:
 			_row_hits.append({"rect": row_rect, "pid": pid})

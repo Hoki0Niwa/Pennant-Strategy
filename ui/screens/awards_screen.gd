@@ -126,8 +126,11 @@ func _draw_no_awards() -> void:
 
 
 func _draw_champion_panel(rect: Rect2) -> void:
-	var border: Color = Color(AMBER.r, AMBER.g, AMBER.b, 0.65) if _champion_id > 0 else BORDER
-	_round(rect, PANEL, border, 10, 2 if _champion_id > 0 else 1)
+	# 枠は使わず、日本一決定時はアンバーの地色だけで強調する。
+	if _champion_id > 0:
+		_round(rect, Color(AMBER.r, AMBER.g, AMBER.b, 0.10), Color.TRANSPARENT, 10, 0)
+	else:
+		_round(rect, PANEL, Color.TRANSPARENT, 10, 0)
 	_text("日本一", Vector2(rect.position.x + 24, rect.position.y + 36), 18, AMBER, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text(_season_label, Vector2(rect.end.x - 260, rect.position.y + 34), 13, MUTED, 240, HORIZONTAL_ALIGNMENT_RIGHT)
 
@@ -147,8 +150,7 @@ func _draw_champion_panel(rect: Rect2) -> void:
 
 
 func _draw_award_table(rect: Rect2, title: String, rows: Array, accent: Color, label_header: String) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text(title, Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(rect, title)
 	_round(Rect2(rect.position.x + 18, rect.position.y + 44, 54, 3), accent, Color.TRANSPARENT, 1, 0)
 
 	var inner_x: float = rect.position.x + 18.0
@@ -160,10 +162,11 @@ func _draw_award_table(rect: Rect2, title: String, rows: Array, accent: Color, l
 	var c2_x: float = c1_x + league_w + gap
 
 	var hy: float = rect.position.y + 64.0
-	_text(label_header, Vector2(inner_x + 2.0, hy), 11, FAINT, label_w - 4.0)
-	_text("第1リーグ", Vector2(c1_x + 4.0, hy), 11, FAINT, league_w - 6.0)
-	_text("第2リーグ", Vector2(c2_x + 4.0, hy), 11, FAINT, league_w - 6.0)
-	_line(Vector2(inner_x, rect.position.y + 72.0), Vector2(rect.end.x - 18.0, rect.position.y + 72.0), BORDER_SOFT, 1.0)
+	_round(Rect2(inner_x, hy - 18.0, usable, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text(label_header, Vector2(inner_x + 2.0, hy), 11, MUTED, label_w - 4.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("第1リーグ", Vector2(c1_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("第2リーグ", Vector2(c2_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_line(Vector2(inner_x, rect.position.y + 72.0), Vector2(rect.end.x - 18.0, rect.position.y + 72.0), BORDER, 1.5)
 
 	if rows.is_empty():
 		_text("記録がありません", Vector2(inner_x + 4.0, rect.position.y + 110.0), 13, MUTED)
@@ -174,12 +177,11 @@ func _draw_award_table(rect: Rect2, title: String, rows: Array, accent: Color, l
 	for i in range(rows.size()):
 		var row: Dictionary = rows[i] as Dictionary
 		var ry: float = row_top + float(i) * row_h
-		if i % 2 == 1:
-			_round(Rect2(inner_x, ry, usable, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 5, 0)
 		var ty: float = ry + row_h * 0.5 + 5.0
 		_text(str(row.get("label", "")), Vector2(inner_x + 2.0, ty), 14, MUTED, label_w - 4.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		_draw_player_cell(Rect2(c1_x, ry + 3.0, league_w, row_h - 6.0), row.get("central", {}) as Dictionary)
 		_draw_player_cell(Rect2(c2_x, ry + 3.0, league_w, row_h - 6.0), row.get("pacific", {}) as Dictionary)
+		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 18.0, ry + row_h), HAIRLINE, 1.0)
 
 
 func _draw_player_cell(rect: Rect2, cell: Dictionary) -> void:
@@ -204,7 +206,8 @@ func _draw_player_cell(rect: Rect2, cell: Dictionary) -> void:
 	var value_w: float = 86.0 if not value_text.is_empty() else 0.0
 	var name_x: float = rect.position.x + 68.0
 	var name_w: float = rect.size.x - 72.0 - value_w
-	_text(str(cell.get("name", "")), Vector2(name_x, ty), 14, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, hover)
+	# 選手名は常時 bold (strong)。hover は背景の淡いハイライトで示す。
+	_text(str(cell.get("name", "")), Vector2(name_x, ty), 14, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, true)
 	if not value_text.is_empty():
 		_text_right(value_text, rect.end.x - 4.0, ty, 13, AMBER, value_w)
 
@@ -212,13 +215,12 @@ func _draw_player_cell(rect: Rect2, cell: Dictionary) -> void:
 
 
 func _draw_placeholder_panel(rect: Rect2, title: String, accent: Color, slots: Array) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text(title, Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_panel(rect, title)
 	_round(Rect2(rect.position.x + 18, rect.position.y + 44, 54, 3), accent, Color.TRANSPARENT, 1, 0)
 	_chip(Rect2(rect.end.x - 92, rect.position.y + 18, 66, 24), "準備中", accent)
 
 	var inner: Rect2 = Rect2(rect.position.x + 18, rect.position.y + 70, rect.size.x - 36, rect.size.y - 92)
-	_round(inner, PANEL_2, BORDER_SOFT, 8)
+	_round(inner, PANEL_2, Color.TRANSPARENT, 8, 0)
 
 	var hy: float = inner.position.y + 30.0
 	_text("第1リーグ", Vector2(inner.position.x + 18, hy), 12, FAINT)
@@ -230,12 +232,12 @@ func _draw_placeholder_panel(rect: Rect2, title: String, accent: Color, slots: A
 	var row_h: float = (inner.end.y - row_top - 18.0) / float(slots.size())
 	for i in range(slots.size()):
 		var y: float = row_top + float(i) * row_h
-		if i % 2 == 1:
-			_round(Rect2(inner.position.x + 12, y, inner.size.x - 24, row_h), Color(1, 1, 1, 0.018), Color.TRANSPARENT, 4, 0)
 		_text(str(slots[i]), Vector2(inner.position.x + 20, y + row_h * 0.5 + 5.0), 13, MUTED, 86)
 		_text("-", Vector2(inner.position.x + 128, y + row_h * 0.5 + 5.0), 13, FAINT, 70, HORIZONTAL_ALIGNMENT_CENTER)
 		_text(str(slots[i]), Vector2(inner.position.x + inner.size.x * 0.5 + 20, y + row_h * 0.5 + 5.0), 13, MUTED, 86)
 		_text("-", Vector2(inner.position.x + inner.size.x * 0.5 + 128, y + row_h * 0.5 + 5.0), 13, FAINT, 70, HORIZONTAL_ALIGNMENT_CENTER)
+		if i < slots.size() - 1:
+			_line(Vector2(inner.position.x + 12, y + row_h), Vector2(inner.end.x - 12, y + row_h), HAIRLINE, 1.0)
 
 
 # ============================================================ buttons

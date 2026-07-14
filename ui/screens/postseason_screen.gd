@@ -61,7 +61,8 @@ func _draw() -> void:
 # --- 中央: ポストシーズン対戦票 (ブラケット) ---
 
 func _draw_bracket(post: PSPostseasonResult) -> void:
-	_round(CAL_RECT, PANEL, BORDER, 10)
+	# home のカレンダーパネルと同じくフラット (枠線なし)。
+	_round(CAL_RECT, PANEL, Color.TRANSPARENT, 8, 0)
 	_text("ポストシーズン トーナメント", Vector2(CAL_RECT.position.x + 24, CAL_RECT.position.y + 42), 22, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var stage_label: String = _current_stage_headline(post)
 	_text(stage_label, Vector2(CAL_RECT.end.x - 16 - 360, CAL_RECT.position.y + 40), 14, MUTED, 360, HORIZONTAL_ALIGNMENT_RIGHT)
@@ -117,12 +118,16 @@ func _draw_series_card(rect: Rect2, stage_key: String, post: PSPostseasonResult)
 	var completed: bool = bool(series.get("completed", false))
 	var active: bool = _is_active_stage(post, stage_key) and not completed
 
-	var border: Color = BORDER
+	# 枠線は完了/進行中など意味がある状態の時だけ描く (待機中カードはフラット)。
+	var border: Color = Color.TRANSPARENT
+	var border_w: int = 0
 	if completed:
 		border = Color(GREEN.r, GREEN.g, GREEN.b, 0.55)
+		border_w = 2
 	elif active:
 		border = BLUE
-	_round(rect, PANEL_2, border, 9, 2 if (active or completed) else 1)
+		border_w = 2
+	_round(rect, PANEL_2, border, 9, border_w)
 
 	var label: Dictionary = STAGE_CARD_LABELS.get(stage_key, {}) as Dictionary
 	_text(str(label.get("title", stage_key)), Vector2(rect.position.x + 14, rect.position.y + 26), 15, TEXT, rect.size.x - 92, HORIZONTAL_ALIGNMENT_LEFT, true)

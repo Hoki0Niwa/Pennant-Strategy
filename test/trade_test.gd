@@ -224,6 +224,26 @@ func test_trade_state_survives_save_round_trip() -> void:
 	assert_str(str(entry.get("source", ""))).is_equal("cpu")
 
 
+# auto_trade_for_user_team はスキップ中/自動入替とは独立に自軍をCPU間トレードマッチングへ
+# 含める (include_user_trade)。一二軍自動入替 (include_user_team) が無効でも、
+# トレードだけ自動委任できることを AppState 側の ctx 組み立てで確認する。
+func test_build_auto_swap_ctx_includes_trade_flag_independently() -> void:
+	var old_swap: bool = AppState.auto_roster_swap_for_user_team
+	var old_trade: bool = AppState.auto_trade_for_user_team
+	AppState.auto_roster_swap_for_user_team = false
+	AppState.auto_trade_for_user_team = true
+	var ctx: Dictionary = AppState.call("_build_auto_swap_ctx", false)
+	assert_bool(bool(ctx.get("include_user_team", true))).is_false()
+	assert_bool(bool(ctx.get("include_user_trade", false))).is_true()
+
+	AppState.auto_trade_for_user_team = false
+	var ctx_off: Dictionary = AppState.call("_build_auto_swap_ctx", false)
+	assert_bool(bool(ctx_off.get("include_user_trade", true))).is_false()
+
+	AppState.auto_roster_swap_for_user_team = old_swap
+	AppState.auto_trade_for_user_team = old_trade
+
+
 func test_surplus_keeps_position_leaders() -> void:
 	# 一塁に3人 (値差あり): 上位2人は余剰にならず、3番手だけが出せる駒になる。
 	var players: Array = [

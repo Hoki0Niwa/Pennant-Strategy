@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_ui_screenshots.gd" id="1_run_ui_screenshots"]
+
+[node name="RunUiScreenshots" type="Node"]
+script = ExtResource("1_run_ui_screenshots")

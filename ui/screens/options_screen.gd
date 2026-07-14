@@ -96,7 +96,8 @@ func _layout_rects() -> Dictionary:
 	var right_w: float = INNER_R - right_x
 
 	var save_panel: Rect2 = Rect2(left_x, CONTENT_TOP, left_w, 150.0)
-	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 320.0)
+	# 高さはトグル行数 x 標準行高を基準にした目安 (自動トレード行は説明が長く2行分になる分を加味)。
+	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 400.0)
 
 	var rects: Dictionary = {
 		"save_panel": save_panel,
@@ -137,14 +138,32 @@ func _layout_rects() -> Dictionary:
 	return rects
 
 
-# 設定パネル内の i 番目のトグル行 (base 座標)。
+# 説明文がこの文字数を超える行は2行分の高さを確保する (自動トレード等の長文説明向け)。
+const TOGGLE_ROW_H: float = 50.0
+const TOGGLE_ROW_WIDE_H: float = 68.0
+const TOGGLE_ROW_WIDE_THRESHOLD: int = 30
+const TOGGLE_ROW_GAP: float = 8.0
+
+
+func _toggle_row_height(desc: String) -> float:
+	return TOGGLE_ROW_WIDE_H if desc.length() > TOGGLE_ROW_WIDE_THRESHOLD else TOGGLE_ROW_H
+
+
+# 設定パネル内の i 番目のトグル行 (base 座標)。行高は説明文の長さで可変なので、
+# i 番目の位置は先行する行の高さを積み上げて求める。
 func _toggle_row_rect(panel: Rect2, i: int) -> Rect2:
-	return Rect2(panel.position.x + 18.0, panel.position.y + 76.0 + float(i) * 58.0, panel.size.x - 36.0, 50.0)
+	var rows: Array = _toggle_rows()
+	var y: float = panel.position.y + 76.0
+	for k in range(i):
+		y += _toggle_row_height(str((rows[k] as Dictionary)["desc"])) + TOGGLE_ROW_GAP
+	var h: float = _toggle_row_height(str((rows[i] as Dictionary)["desc"])) if i < rows.size() else TOGGLE_ROW_H
+	return Rect2(panel.position.x + 18.0, y, panel.size.x - 36.0, h)
 
 
 func _toggle_rows() -> Array:
 	return [
 		{"id": "autoswap", "label": "スキップ中の自動一二軍入替", "desc": "成績ベースで自動的に一二軍入替を行う", "on": AppState.auto_roster_swap_during_skip},
+		{"id": "autotrade", "label": "自軍のトレードをAIに任せる", "desc": "有効にすると週次の自動トレード判断に自軍も参加し、AIが自軍のトレードを自動で成立させる。無効時は従来通り(自分で提案/受信提案の受諾のみ)。", "on": AppState.auto_trade_for_user_team},
 		{"id": "autosave", "label": "自動セーブ", "desc": "試合進行・オフシーズン処理時に自動で保存する", "on": AppState.auto_save_enabled},
 		{"id": "dh1", "label": "第1リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("central")},
 		{"id": "dh2", "label": "第2リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("pacific")},
@@ -155,7 +174,7 @@ func _toggle_rows() -> Array:
 
 func _draw_save_panel(panel: Rect2) -> void:
 	_panel(panel, "セーブデータ")
-	_text("保存フォルダ", Vector2(panel.position.x + 18, panel.position.y + 62), 12, FAINT)
+	_text("保存フォルダ", Vector2(panel.position.x + 18, panel.position.y + 62), FS_LABEL, MUTED)
 	_text(_save_path, Vector2(panel.position.x + 18, panel.position.y + 84), 13, MUTED, panel.size.x - 36)
 
 
@@ -166,10 +185,11 @@ func _draw_settings_panel(panel: Rect2) -> void:
 	for i in range(rows.size()):
 		var row: Dictionary = rows[i] as Dictionary
 		var rect: Rect2 = _toggle_row_rect(panel, i)
-		_text(str(row["label"]), Vector2(rect.position.x + 4, rect.position.y + 20), 15, TEXT)
-		_text(str(row["desc"]), Vector2(rect.position.x + 4, rect.position.y + 42), 12, MUTED, rect.size.x - 90)
+		_text(str(row["label"]), Vector2(rect.position.x + 4, rect.position.y + 20), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		# 説明文は長さに応じて _toggle_row_height が2行分の高さを確保しているので、折返し描画にする。
+		_multiline(str(row["desc"]), Vector2(rect.position.x + 4, rect.position.y + 40), FS_LABEL, MUTED, rect.size.x - 90)
 		if i < rows.size() - 1:
-			_line(Vector2(rect.position.x, rect.end.y + 4), Vector2(rect.end.x, rect.end.y + 4), BORDER_SOFT, 1.0)
+			_line(Vector2(rect.position.x, rect.end.y + 4), Vector2(rect.end.x, rect.end.y + 4), HAIRLINE, 1.0)
 
 
 func _draw_devtools_panel(panel: Rect2) -> void:
@@ -402,6 +422,9 @@ func _on_toggle(id: String) -> void:
 			if v and season != null and team_id > 0:
 				season.set_last_auto_swap_day(team_id, season.current_day - TeamAutoAI.SWAP_INTERVAL_DAYS)
 			_save_and_status("自動入替設定を保存しました。")
+		"autotrade":
+			AppState.auto_trade_for_user_team = not AppState.auto_trade_for_user_team
+			_save_and_status("自動トレード設定を保存しました。")
 		"autosave":
 			AppState.auto_save_enabled = not AppState.auto_save_enabled
 			_save_and_status("自動セーブ設定を保存しました。")

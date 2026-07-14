@@ -245,7 +245,7 @@ func _draw() -> void:
 	_draw_drag_ghost()
 
 
-# --- 集計カード ---
+# --- 集計帯 ---
 
 func _draw_stat_cards(s: Dictionary) -> void:
 	var total: int = int(s["total"])
@@ -259,29 +259,18 @@ func _draw_stat_cards(s: Dictionary) -> void:
 	var c_color: Color = RED if catchers < MIN_CATCHERS else GREEN
 	var f_color: Color = RED if foreigners > FOREIGN_MAX else TEXT
 
-	var cards: Array = [
-		{"label": "1軍", "big": "%d/%d" % [total, ROSTER_MAX], "color": total_color, "sub": ""},
-		{"label": "投手", "big": str(pitchers), "color": pit_color,
-			"sub": "先発%d 中継%d" % [int(s["starters"]), int(s["middle"])]},
-		{"label": "野手", "big": str(fielders), "color": TEXT,
-			"sub": "捕%d 内%d 外%d" % [catchers, int(s["infield"]), int(s["outfield"])]},
-		{"label": "捕手", "big": str(catchers), "color": c_color, "sub": "最低%d" % MIN_CATCHERS},
-		{"label": "外国人", "big": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color, "sub": ""},
-		{"label": "支配下", "big": "%d/%d" % [int(s["shienka"]), TeamFinance.SHIENKA_LIMIT], "color": TEXT, "sub": ""},
-		{"label": "育成", "big": str(int(s["development"])), "color": GREEN, "sub": ""},
+	var cells: Array = [
+		{"label": "1軍", "value": "%d/%d" % [total, ROSTER_MAX], "color": total_color},
+		{"label": "投手", "value": str(pitchers), "color": pit_color,
+			"note": "先発%d 中継%d" % [int(s["starters"]), int(s["middle"])]},
+		{"label": "野手", "value": str(fielders),
+			"note": "捕%d 内%d 外%d" % [catchers, int(s["infield"]), int(s["outfield"])]},
+		{"label": "捕手", "value": str(catchers), "color": c_color, "note": "最低%d" % MIN_CATCHERS},
+		{"label": "外国人", "value": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color},
+		{"label": "支配下", "value": "%d/%d" % [int(s["shienka"]), TeamFinance.SHIENKA_LIMIT]},
+		{"label": "育成", "value": str(int(s["development"])), "color": GREEN},
 	]
-	var n: int = cards.size()
-	var gap: float = 14.0
-	var w: float = (INNER_R - INNER_L - gap * float(n - 1)) / float(n)
-	for i in range(n):
-		var card: Dictionary = cards[i] as Dictionary
-		var rect: Rect2 = Rect2(INNER_L + float(i) * (w + gap), CARD_Y, w, CARD_H)
-		_round(rect, PANEL, BORDER, 10)
-		_text(str(card["label"]), Vector2(rect.position.x + 16, rect.position.y + 26), 13, MUTED)
-		_text(str(card["big"]), Vector2(rect.position.x + 16, rect.position.y + 62), 26, card["color"] as Color)
-		var sub: String = str(card["sub"])
-		if not sub.is_empty():
-			_text_right(sub, rect.end.x - 14, rect.position.y + 62, 12, FAINT, rect.size.x - 24)
+	_stat_strip(Rect2(INNER_L, CARD_Y, INNER_R - INNER_L, CARD_H), cells)
 
 
 # --- 3 カラム ---
@@ -330,20 +319,21 @@ func _draw_columns() -> void:
 func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, list_key: String, reserve_bottom: float) -> void:
 	var is_target: bool = _drag_active and not _pending.is_empty() \
 		and _drop_zone_at(_to_base(_drag_pos)) == list_key and _is_valid_drop(str(_pending["list"]), list_key)
-	_round(panel, PANEL, BLUE if is_target else BORDER, 10, 2 if is_target else 1)
+	# 枠線はドロップ先として有効な時だけ (通常時はフラット、意味のある時だけ縁取る)。
+	_round(panel, PANEL, BLUE if is_target else Color.TRANSPARENT, 10, 2 if is_target else 0)
 	_text(title, Vector2(panel.position.x + 18, panel.position.y + 32), 16, TEXT)
 	_text_right(count_text, panel.end.x - 18, panel.position.y + 32, 14, MUTED, 120)
 
 	var x: float = panel.position.x
 	var w: float = panel.size.x
 	var hy: float = panel.position.y + 58
-	_text("区分▾", Vector2(x + C_CHIP_X, hy), 11, FAINT)
-	_text("選手", Vector2(x + C_NAME_X, hy), 11, FAINT)
-	_text_right("年齢", x + w - C_AGE_ROFF, hy, 11, FAINT, 40)
-	_text_right("WAR", x + w - C_WAR_ROFF, hy, 11, FAINT, 40)
-	_text_right("評価", x + w - C_EVAL_ROFF, hy, 11, FAINT, 44)
-	_text("備考", Vector2(x + w - C_NOTE_ROFF, hy), 11, FAINT)
-	_line(Vector2(x + C_CHIP_X, panel.position.y + 68), Vector2(x + w - 16, panel.position.y + 68), BORDER_SOFT, 1.0)
+	_text("区分▾", Vector2(x + C_CHIP_X, hy), FS_LABEL, FAINT)
+	_text("選手", Vector2(x + C_NAME_X, hy), FS_LABEL, FAINT)
+	_text_right("年齢", x + w - C_AGE_ROFF, hy, FS_LABEL, FAINT, 40)
+	_text_right("WAR", x + w - C_WAR_ROFF, hy, FS_LABEL, FAINT, 40)
+	_text_right("評価", x + w - C_EVAL_ROFF, hy, FS_LABEL, FAINT, 44)
+	_text("備考", Vector2(x + w - C_NOTE_ROFF, hy), FS_LABEL, FAINT)
+	_line(Vector2(x + C_CHIP_X, panel.position.y + 68), Vector2(x + w - 16, panel.position.y + 68), HAIRLINE, 1.0)
 
 	var row0: float = panel.position.y + 88
 	var bottom: float = panel.end.y - 12 - reserve_bottom
@@ -363,6 +353,7 @@ func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, 
 		elif id == _hover_id:
 			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.08), Color.TRANSPARENT, 5, 0)
 		_draw_row(row, x, w, y)
+		_line(Vector2(x + 12, row_rect.end.y), Vector2(x + w - 12, row_rect.end.y), HAIRLINE, 1.0)
 		_row_hits.append({"rect": row_rect, "id": id, "list": list_key, "name": str(row["name"])})
 		y += ROW_H
 
@@ -375,7 +366,7 @@ func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, 
 
 func _draw_row(row: Dictionary, x: float, w: float, y: float) -> void:
 	_chip(Rect2(x + C_CHIP_X, y - 16, 44, 22), str(row["role"]), row["role_color"] as Color)
-	_text(str(row["name"]), Vector2(x + C_NAME_X, y), 14, TEXT, w - C_AGE_ROFF - 50 - C_NAME_X)
+	_text(str(row["name"]), Vector2(x + C_NAME_X, y), 14, TEXT, w - C_AGE_ROFF - 50 - C_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_right(str(int(row["age"])), x + w - C_AGE_ROFF, y, 13, MUTED, 40)
 	if bool(row.get("has_war", false)):
 		_text_right(str(row["war_str"]), x + w - C_WAR_ROFF, y, 13, _war_color(float(row["war"])), 40)
@@ -559,7 +550,8 @@ func _pitcher_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Arr
 	]
 
 
-# パネルを埋めるラベル/値カードグリッド。cols 列・行数は件数から算出し、行高は余白なく全高に伸ばす。
+# パネルを埋めるラベル/値グリッド。cols 列・行数は件数から算出し、行高は余白なく全高に伸ばす。
+# 枠付きミニカードではなく枠なしセル+ヘアライン区切り (列間/行間) で刻む。
 func _draw_stat_grid(panel: Rect2, cells: Array, cols: int) -> void:
 	if cells.is_empty():
 		return
@@ -570,15 +562,20 @@ func _draw_stat_grid(panel: Rect2, cells: Array, cols: int) -> void:
 	var rows: int = ceili(float(cells.size()) / float(cols))
 	var cell_w: float = avail_w / float(cols)
 	var row_h: float = avail_h / float(rows)
+	for c in range(1, cols):
+		var lx: float = px + float(c) * cell_w
+		_line(Vector2(lx, top_y), Vector2(lx, top_y + float(rows) * row_h), HAIRLINE, 1.0)
+	for r in range(1, rows):
+		var ly: float = top_y + float(r) * row_h
+		_line(Vector2(px, ly), Vector2(px + avail_w, ly), HAIRLINE, 1.0)
 	for i in range(cells.size()):
 		var cell: Dictionary = cells[i] as Dictionary
 		var col: int = i % cols
 		var row: int = floori(float(i) / float(cols))
 		var cx: float = px + float(col) * cell_w
 		var cy: float = top_y + float(row) * row_h
-		_round(Rect2(cx + 3, cy + 3, cell_w - 6, row_h - 6), PANEL_2, BORDER_SOFT, 7)
 		var color: Color = cell.get("color", TEXT) as Color
-		_text(str(cell["label"]), Vector2(cx + 12, cy + row_h * 0.42), 11, MUTED, cell_w - 22)
+		_text(str(cell["label"]), Vector2(cx + 12, cy + row_h * 0.42), FS_LABEL, MUTED, cell_w - 22)
 		_text_right(str(cell["value"]), cx + cell_w - 12, cy + row_h * 0.80, 17, color, cell_w - 22)
 
 

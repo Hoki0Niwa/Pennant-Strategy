@@ -191,12 +191,13 @@ func _build_header_hits(rect: Rect2, columns: Array, opts: Dictionary) -> void:
 		sum_w += float((col_value as Dictionary).get("w", 72))
 	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
 	var hy: float = rect.position.y + float(opts.get("header_top", 60.0))
-	var top: float = hy - 16.0
+	# ヘッダ帯は header_top-18 〜 +8 の 26px (_draw_data_table v2 の帯幾何と一致させること)。
+	var top: float = hy - 18.0
 	var cx: float = inner_x
 	for col_value in columns:
 		var col: Dictionary = col_value as Dictionary
 		var w: float = float(col.get("w", 72)) * factor
-		_header_hits.append({"rect": Rect2(cx, top, w, 28.0), "key": str(col.get("key", ""))})
+		_header_hits.append({"rect": Rect2(cx, top, w, 26.0), "key": str(col.get("key", ""))})
 		cx += w
 
 
@@ -328,7 +329,7 @@ func _columns_for_current() -> Array:
 func _identity_columns(include_age: bool) -> Array:
 	var cols: Array = [
 		{"title": "球団", "key": "team", "w": 56, "align": "l", "fmt": "team"},
-		{"title": "選手", "key": "name", "w": 118, "align": "l", "fmt": "str"},
+		{"title": "選手", "key": "name", "w": 118, "align": "l", "fmt": "str", "strong": true},
 	]
 	if _current_mode() == "pitcher":
 		cols.append({"title": "役", "key": "role", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "role_sort"})

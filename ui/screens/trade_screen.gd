@@ -1,37 +1,58 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# トレード画面 (シーズン中トレード v1)。
-# - 左: 自軍の支配下選手、右: 相手球団 (◀▶で切替) の支配下選手。行クリックで各1〜2人選択。
-# - 左下: 選択内容の提案パネル (CPU が future_value + 需要で受諾判定)。
-# - 右下: CPU からの受信提案 (受諾/拒否、期限つき)。
-# - 下段: リーグ全体の成立履歴。交換期限 (7/31) 後は提案・受諾とも閉鎖。
+# トレード画面 (シーズン中トレード v1、デザインv2)。
+# - 上部帯: 交換期限の残日数 / 自軍の今季成立数 / 支配下枠 / 予算残。
+# - 中段3カラム: 左=自軍ロスター(ポジション絞り込み+行クリックで「出す」選択)、
+#   中央=トレードブロック(出す/貰うスロット+戦力価値差・年俸差+成立見込み+提案/クリア)、
+#   右=相手ロスター(球団はプルダウンで切替、行クリックで「貰う」選択)。
+# - 下段: 左=相手球団からの受信提案(カード+受諾/拒否)、右=今季の成立トレード。
+# 選手名の右クリックで選手詳細へ遷移。業務ルール (各球団最大 MAX_PLAYERS_PER_SIDE 人・
+# is_tradeable 判定・年間成立上限・予算/支配下枠ゲート) は trade_service.gd 側を変更せずそのまま使う。
 
-const TABLE_MINE: Rect2 = Rect2(262, 124, 800, 440)
-const TABLE_THEIRS: Rect2 = Rect2(1078, 124, 822, 440)
-const PROPOSAL_RECT: Rect2 = Rect2(262, 578, 800, 214)
-const OFFERS_RECT: Rect2 = Rect2(1078, 578, 822, 214)
-const LOG_RECT: Rect2 = Rect2(262, 806, 1638, 252)
+const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
+const WarCalculator = preload("res://services/reports/war_calculator.gd")
+
+# --- レイアウト基準 (base 1920x1080 座標) ---
+const TOP_STRIP: Rect2 = Rect2(262, 100, 1638, 76)
+const FILTER_Y: float = 190.0
+const LEFT_RECT: Rect2 = Rect2(262, 224, 610, 424)
+const CENTER_RECT: Rect2 = Rect2(906, 224, 350, 424)
+const RIGHT_RECT: Rect2 = Rect2(1290, 224, 610, 424)
+const OFFERS_RECT: Rect2 = Rect2(262, 664, 806, 384)
+const LOG_RECT: Rect2 = Rect2(1094, 664, 806, 384)
+
+const SLOT_H: float = 38.0
+const SLOT_GAP: float = 4.0
+const OFFER_CARD_H: float = 150.0
+const OFFER_CARD_GAP: float = 14.0
 
 const POS_LABELS: Dictionary = {1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右"}
 
+# ポジション絞り込み (自軍ロスターのみ。相手球団はプルダウン切替のため対象外)。
+const FILTER_DEFS: Array = [
+	{"pos": 0, "label": "全"},
+	{"pos": 1, "label": "投"},
+	{"pos": 2, "label": "捕"},
+	{"pos": 3, "label": "内野"},
+	{"pos": 4, "label": "外野"},
+]
+
 const PLAYER_COLUMNS: Array = [
-	{"title": "選手", "key": "name",   "w": 168, "align": "l", "fmt": "str"},
-	{"title": "守/役", "key": "pos",   "w": 60,  "align": "l", "fmt": "str"},
-	{"title": "年齢", "key": "age",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "年数", "key": "years",  "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "総合", "key": "value",  "w": 54,  "align": "r", "fmt": "int"},
-	{"title": "将来", "key": "future", "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "年俸", "key": "salary", "w": 110, "align": "r", "fmt": "str"},
-	{"title": "備考", "key": "note",   "w": 96,  "align": "l", "fmt": "str"},
+	{"title": "区分", "key": "role",   "w": 54,  "align": "c", "fmt": "pos_badge"},
+	{"title": "選手", "key": "name",   "w": 178, "align": "l", "fmt": "str", "strong": true},
+	{"title": "年齢", "key": "age",    "w": 48,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "評価", "key": "value",  "w": 56,  "align": "r", "fmt": "int"},
+	{"title": "WAR",  "key": "war",    "w": 56,  "align": "r", "fmt": "str"},
+	{"title": "年俸", "key": "salary", "w": 128, "align": "r", "fmt": "str", "sep_before": true},
 ]
 
 const LOG_COLUMNS: Array = [
-	{"title": "日",     "key": "day",     "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "球団A",  "key": "team_a",  "w": 150, "align": "l", "fmt": "str"},
-	{"title": "放出",   "key": "a_gives", "w": 300, "align": "l", "fmt": "str"},
-	{"title": "球団B",  "key": "team_b",  "w": 150, "align": "l", "fmt": "str"},
-	{"title": "放出",   "key": "b_gives", "w": 300, "align": "l", "fmt": "str"},
-	{"title": "種別",   "key": "source",  "w": 90,  "align": "l", "fmt": "str"},
+	{"title": "日",     "key": "day",     "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "球団A",  "key": "team_a",  "w": 130, "align": "l", "fmt": "str", "strong": true},
+	{"title": "放出",   "key": "a_gives", "w": 220, "align": "l", "fmt": "str"},
+	{"title": "球団B",  "key": "team_b",  "w": 130, "align": "l", "fmt": "str", "sep_before": true, "strong": true},
+	{"title": "放出",   "key": "b_gives", "w": 220, "align": "l", "fmt": "str"},
+	{"title": "種別",   "key": "source",  "w": 80,  "align": "l", "fmt": "str", "sep_before": true},
 ]
 
 var _row_hits: Array = []      # [{rect, kind, meta}]
@@ -41,16 +62,37 @@ var _scroll: Dictionary = {}
 var _view_team_id: int = 0     # 相手球団
 var _give_ids: Array = []      # 自軍から出す選手 id (最大 MAX_PLAYERS_PER_SIDE)
 var _receive_ids: Array = []   # 相手から受け取る選手 id
-var _selected_offer_id: int = 0
 var _message: String = ""
 var _message_color: Color = MUTED
+
+var _filter_pos: int = 0
+var _filter_buttons: Dictionary = {}
+var _team_menu_button: Button = null
+
+# 集計キャッシュ (_refresh_all で1回構築、_draw は描画専念)。
+var _war_ctx: Dictionary = {}
+var _mine_all_rows: Array = []
+var _theirs_rows: Array = []
+# evaluate_user_proposal の結果キャッシュ。選択が変わるたび _refresh_proposal_eval で更新する
+# (毎フレーム呼ぶと重いので _draw では参照するだけ)。
+var _eval: Dictionary = {}
 
 
 func _ready() -> void:
 	_init_chrome()
-	_view_team_id = _next_opponent_id(AppState.selected_team_id, 1)
+	var opp_ids: Array = _opponent_team_ids()
+	_view_team_id = int(opp_ids[0]) if not opp_ids.is_empty() else 0
+	_refresh_all()
 	_build_buttons()
 	queue_redraw()
+
+
+# リサイズ時のボタン再配置に加え、絞り込みチップの状態色を再適用する。
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_layout_buttons()
+		_refresh_filter_buttons()
+		queue_redraw()
 
 
 # ============================================================ draw
@@ -71,25 +113,58 @@ func _draw() -> void:
 	_draw_shell("トレード", team, season)
 
 	var window_open: bool = TradeService.is_trade_window_open(season)
-	var status: String = "交換期限: %d年7月31日まで" % season.year if window_open \
-		else "交換期限 (7月31日) を過ぎたため、今季のトレードはできません"
-	_text(status, Vector2(INNER_L, 112.0), 13, MUTED if window_open else AMBER)
-	_text("行クリック=選択 (各球団1〜%d人)" % TradeService.MAX_PLAYERS_PER_SIDE,
-		Vector2(INNER_L + 560.0, 112.0), 12, FAINT)
+	# 操作ヒントは絞り込みチップ行の右に置く (ヘッダ直下だと帯・ヘッダ境界と重なって欠ける)。
+	_text("行クリック=選択（各球団最大%d人） / 選手名を右クリックで選手詳細" % TradeService.MAX_PLAYERS_PER_SIDE,
+		Vector2(INNER_L + 290.0, FILTER_Y + 19.0), 12, FAINT)
+	if AppState.auto_trade_for_user_team:
+		_chip(Rect2(INNER_R - 200.0, FILTER_Y + 1.0, 200.0, 24.0), "自動トレード: AI委任中", BLUE)
 
-	_draw_player_table(TABLE_MINE, "自軍: %s" % team.name, AppState.selected_team_id, _give_ids, "mine")
+	_draw_stat_strip(TOP_STRIP, season, team, window_open)
+
+	_draw_player_table(LEFT_RECT, "自軍: %s" % team.name, _mine_rows_filtered(), _give_ids, "mine")
+	_draw_center_block(CENTER_RECT, season, window_open)
 	var opponent: PSTeam = GameDb.get_team(_view_team_id)
-	_draw_player_table(TABLE_THEIRS, "相手: %s" % (opponent.name if opponent != null else "-"), _view_team_id, _receive_ids, "theirs")
+	_draw_player_table(RIGHT_RECT, "相手: %s ▾" % (opponent.name if opponent != null else "-"), _theirs_rows, _receive_ids, "theirs")
 
-	_draw_proposal_panel(PROPOSAL_RECT, season, window_open)
 	_draw_offers_panel(OFFERS_RECT, season)
 	_draw_log_table(LOG_RECT, season)
 
+	if not _message.is_empty():
+		_text(_message, Vector2(INNER_L, 1064.0), 13, _message_color, 1200.0)
 
-func _draw_player_table(rect: Rect2, title: String, team_id: int, selected_ids: Array, sel_kind: String) -> void:
-	var rows: Array = _player_rows(team_id)
+
+func _draw_stat_strip(rect: Rect2, season: PSSeason, team: PSTeam, window_open: bool) -> void:
+	var days_left: int = _days_left(season)
+	var trades_count: int = TradeService.trades_count_for_team(season, team.id)
+	var shienka: int = TeamFinance.shienka_count(GameDb.players, team.id)
+	var payroll: int = TeamFinance.team_payroll(GameDb.players, team.id)
+	var room: int = TeamFinance.budget_room(team.funds, payroll)
+	var cells: Array = [
+		{"label": "交換期限", "value": ("残り%d日" % days_left) if window_open else "期限終了",
+			"color": TEXT if window_open else AMBER, "note": "7/31まで" if window_open else ""},
+		{"label": "自軍の今季成立数", "value": "%d/%d" % [trades_count, TradeService.MAX_TRADES_PER_TEAM],
+			"color": RED if trades_count >= TradeService.MAX_TRADES_PER_TEAM else TEXT},
+		{"label": "支配下枠", "value": "%d/%d" % [shienka, TeamFinance.SHIENKA_LIMIT],
+			"color": RED if shienka >= TeamFinance.SHIENKA_LIMIT else (AMBER if shienka >= TeamFinance.SHIENKA_LIMIT - 2 else TEXT)},
+		{"label": "予算残", "value": "%s%s" % ["-" if room < 0 else "", _format_money_compact(absi(room))],
+			"color": GREEN if room >= 0 else RED},
+	]
+	_stat_strip(rect, cells)
+
+
+func _days_left(season: PSSeason) -> int:
+	if str(season.calendar_start_date).is_empty():
+		return max(0, TradeService.TRADE_WINDOW_FALLBACK_LAST_DAY - season.current_day)
+	var current: String = SeasonCalendar.current_date(season)
+	var deadline: String = "%04d-%02d-%02d" % [season.year, TradeService.TRADE_DEADLINE_MONTH, TradeService.TRADE_DEADLINE_DAY]
+	return max(0, SeasonCalendar.days_between(current, deadline))
+
+
+# --- 自軍/相手ロスター テーブル ---
+
+func _draw_player_table(rect: Rect2, title: String, rows: Array, selected_ids: Array, sel_kind: String) -> void:
 	var opts: Dictionary = {
-		"title": title, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
+		"title": title, "header_top": 58.0, "row_h": 30.0,
 		"cell_size": 12, "empty_text": "選手がいません",
 		"scroll_key": sel_kind, "scroll": _scroll, "scroll_zones": _scroll_zones,
 		"sel_kind": sel_kind, "hits": _row_hits,
@@ -104,111 +179,138 @@ func _draw_player_table(rect: Rect2, title: String, team_id: int, selected_ids: 
 			_round(hit["rect"] as Rect2, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.75), 6, 2)
 
 
-func _player_rows(team_id: int) -> Array:
-	var rows: Array = []
-	var entries: Array = []
-	for player_row in GameDb.players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id != team_id or player.is_retired() or player.development_player:
-			continue
-		entries.append(player)
-	entries.sort_custom(func(a, b) -> bool:
-		return OffseasonService.player_value_score(a as PSPlayer) > OffseasonService.player_value_score(b as PSPlayer))
-	for entry in entries:
-		var player: PSPlayer = entry as PSPlayer
-		var tradeable: bool = TradeService.is_tradeable(player)
-		var row: Dictionary = {
-			"__meta": player.id,
-			"name": player.name,
-			"pos": _pos_label(player),
-			"age": player.age,
-			"years": player.years,
-			"value": OffseasonService.player_value_score(player),
-			"future": int(round(TradeService.trade_value(player))),
-			"salary": _format_money(player.salary),
-			"note": _note_for(player, tradeable),
-		}
-		if not tradeable:
-			row["__color"] = FAINT
-		rows.append(row)
-	return rows
+# --- トレードブロック (中央) ---
+
+func _draw_center_block(rect: Rect2, season: PSSeason, window_open: bool) -> void:
+	_panel(rect, "トレードブロック")
+	var px: float = rect.position.x + 18.0
+	var card_w: float = rect.size.x - 36.0
+	var y: float = rect.position.y + 50.0
+
+	_text("出す（自軍 → 相手）", Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	y += 12.0
+	for i in range(TradeService.MAX_PLAYERS_PER_SIDE):
+		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _give_ids[i] if i < _give_ids.size() else 0, "give_slot", season)
+		y += SLOT_H + SLOT_GAP
+
+	y += 8.0
+	_text("貰う（相手 → 自軍）", Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	y += 12.0
+	for i in range(TradeService.MAX_PLAYERS_PER_SIDE):
+		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _receive_ids[i] if i < _receive_ids.size() else 0, "receive_slot", season)
+		y += SLOT_H + SLOT_GAP
+
+	y += 10.0
+	y = _draw_trade_balance(rect, y, card_w)
+	_draw_trade_verdict(rect, y, window_open)
 
 
-func _pos_label(player: PSPlayer) -> String:
-	if player.is_pitcher():
-		return "先発" if player.is_starter_pitcher() else "中継"
-	return str(POS_LABELS.get(player.position, "?"))
+func _draw_trade_slot(rect: Rect2, player_id: int, kind: String, season: PSSeason) -> void:
+	if player_id <= 0:
+		_round(rect, Color.TRANSPARENT, BORDER_SOFT, 6, 1)
+		_text("（空き）", Vector2(rect.position.x + 12.0, rect.position.y + rect.size.y * 0.62), 12, FAINT)
+		return
+	var player: PSPlayer = GameDb.get_player(player_id)
+	if player == null:
+		return
+	_round(rect, PANEL_2, Color.TRANSPARENT, 6, 0)
+	var role: Dictionary = _role_chip(player)
+	_chip(Rect2(rect.position.x + 8.0, rect.position.y + 5.0, 40.0, 18.0), str(role["text"]), role["color"] as Color)
+	_text(player.name, Vector2(rect.position.x + 54.0, rect.position.y + 18.0), 13, TEXT, rect.size.x - 64.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
+	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
+	_text("評価 %d   年俸 %s" % [eval, _format_money_compact(player.salary)], Vector2(rect.position.x + 8.0, rect.end.y - 7.0), 11, MUTED, rect.size.x - 16.0)
+	_row_hits.append({"rect": rect, "kind": kind, "meta": player.id})
 
 
-func _note_for(player: PSPlayer, tradeable: bool) -> String:
-	if tradeable:
-		return ""
-	if player.foreign_player:
-		return "外国人"
-	if player.injury_days > 0:
-		return "怪我 %d日" % player.injury_days
-	if bool(player.source_data.get("free_agent", false)):
-		return "FA宣言中"
-	if bool(player.source_data.get("rookie_year", false)) and player.years <= 1:
-		return "新人"
-	return "対象外"
+# 戦力価値差 (trade_value 合計差, 自軍有利=GREEN/不利=RED) + 左右バー + 年俸差。戻り値は次の描画 y。
+func _draw_trade_balance(rect: Rect2, y: float, w: float) -> float:
+	var give_value: float = _sum_trade_value(_give_ids)
+	var receive_value: float = _sum_trade_value(_receive_ids)
+	var diff: float = receive_value - give_value
+	var diff_color: Color = GREEN if diff > 0.05 else (RED if diff < -0.05 else MUTED)
+	_text("戦力価値差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text_right(("%+.1f" % diff), rect.end.x - 18.0, y, 15, diff_color, 100.0, true)
+	y += 14.0
+	var max_v: float = max(1.0, max(give_value, receive_value))
+	var bar_w: float = (w - 8.0) * 0.5
+	var give_w: float = bar_w * clampf(give_value / max_v, 0.0, 1.0)
+	var recv_w: float = bar_w * clampf(receive_value / max_v, 0.0, 1.0)
+	_round(Rect2(rect.position.x + 18.0, y, bar_w, 7.0), PANEL_3, Color.TRANSPARENT, 4, 0)
+	_round(Rect2(rect.position.x + 18.0 + bar_w - give_w, y, give_w, 7.0), RED, Color.TRANSPARENT, 4, 0)
+	_round(Rect2(rect.position.x + 18.0 + bar_w + 8.0, y, bar_w, 7.0), PANEL_3, Color.TRANSPARENT, 4, 0)
+	_round(Rect2(rect.position.x + 18.0 + bar_w + 8.0, y, recv_w, 7.0), GREEN, Color.TRANSPARENT, 4, 0)
+	y += 20.0
+	var salary_diff: int = _sum_salary(_receive_ids) - _sum_salary(_give_ids)
+	_text("年俸差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text_right("%s%s" % ["+" if salary_diff > 0 else ("-" if salary_diff < 0 else ""), _format_money_compact(absi(salary_diff))],
+		rect.end.x - 18.0, y, 13, TEXT, 120.0)
+	return y + 18.0
 
 
-func _draw_proposal_panel(rect: Rect2, _season: PSSeason, window_open: bool) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text("トレード提案", Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+func _draw_trade_verdict(rect: Rect2, y: float, window_open: bool) -> void:
+	var text: String
+	var color: Color
+	if _give_ids.is_empty() or _receive_ids.is_empty():
+		text = "出す/貰う選手を選んでください"
+		color = MUTED
+	elif not window_open:
+		text = "交換期限を過ぎています"
+		color = AMBER
+	elif not bool(_eval.get("ok", false)):
+		text = str(_eval.get("message", "この組み合わせは提案できません"))
+		color = AMBER
+	elif bool(_eval.get("accepted", false)):
+		text = "受諾見込み"
+		color = GREEN
+	else:
+		text = str(_eval.get("message", "交渉はまとまりません"))
+		color = RED
+	_text("成立見込み", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text(text, Vector2(rect.position.x + 18.0, y + 20.0), 14, color, rect.size.x - 36.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
-	var y: float = rect.position.y + 64.0
-	_text("出す:", Vector2(rect.position.x + 18, y), 13, MUTED)
-	_text(_names_line(_give_ids), Vector2(rect.position.x + 70, y), 13, TEXT, rect.size.x - 90.0)
-	y += 28.0
-	_text("貰う:", Vector2(rect.position.x + 18, y), 13, MUTED)
-	_text(_names_line(_receive_ids), Vector2(rect.position.x + 70, y), 13, TEXT, rect.size.x - 90.0)
 
-	if not window_open:
-		_text("交換期限を過ぎています", Vector2(rect.position.x + 18, rect.end.y - 58.0), 13, AMBER)
-	elif not _message.is_empty():
-		_text(_message, Vector2(rect.position.x + 18, rect.end.y - 58.0), 13, _message_color, rect.size.x - 220.0)
-
+# --- 相手球団からの提案 (下段左) ---
 
 func _draw_offers_panel(rect: Rect2, season: PSSeason) -> void:
-	_round(rect, PANEL, BORDER, 10)
-	_text("相手球団からの提案", Vector2(rect.position.x + 18, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-
+	_panel(rect, "相手球団からの提案")
 	var offers: Array = TradeService.pending_user_offers(season)
 	if offers.is_empty():
-		_text("現在、届いている提案はありません", Vector2(rect.position.x + 18, rect.position.y + 78.0), 13, MUTED)
+		_text("現在、届いている提案はありません", Vector2(rect.position.x + 18.0, rect.position.y + 78.0), 13, MUTED)
 		return
-
-	var y: float = rect.position.y + 58.0
-	for offer_value in offers:
-		var offer: Dictionary = offer_value as Dictionary
-		var offer_id: int = int(offer.get("id", 0))
-		var cpu_team: PSTeam = GameDb.get_team(int(offer.get("cpu_team_id", 0)))
-		var line: String = "%s: %s ⇄ 自軍 %s (期限 day%d)" % [
-			cpu_team.name if cpu_team != null else "?",
-			_offer_names(offer, "cpu_player_ids"),
-			_offer_names(offer, "user_player_ids"),
-			int(offer.get("expires_day", 0)),
-		]
-		var row_rect: Rect2 = Rect2(rect.position.x + 12.0, y - 16.0, rect.size.x - 24.0, 26.0)
-		if offer_id == _selected_offer_id:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.75), 6, 2)
-		_row_hits.append({"rect": row_rect, "kind": "offer", "meta": offer_id})
-		_text(line, Vector2(rect.position.x + 18, y), 13, TEXT, rect.size.x - 200.0)
-		y += 30.0
-		if y > rect.end.y - 60.0:
-			break
-	_text("提案を選んで受諾/拒否", Vector2(rect.position.x + 18, rect.end.y - 16.0), 11, FAINT)
+	for i in range(min(offers.size(), TradeService.MAX_PENDING_USER_OFFERS)):
+		_draw_offer_card(_offer_card_rect(rect, i), offers[i] as Dictionary, season)
 
 
-func _offer_names(offer: Dictionary, key: String) -> String:
-	var names: Array = []
-	for id_value in offer.get(key, []) as Array:
+func _offer_card_rect(rect: Rect2, index: int) -> Rect2:
+	var top: float = rect.position.y + 52.0 + float(index) * (OFFER_CARD_H + OFFER_CARD_GAP)
+	return Rect2(rect.position.x + 16.0, top, rect.size.x - 32.0, OFFER_CARD_H)
+
+
+func _draw_offer_card(rect: Rect2, offer: Dictionary, season: PSSeason) -> void:
+	_round(rect, PANEL_2, Color.TRANSPARENT, 8, 0)
+	var cpu_team: PSTeam = GameDb.get_team(int(offer.get("cpu_team_id", 0)))
+	_text(cpu_team.name if cpu_team != null else "?", Vector2(rect.position.x + 16.0, rect.position.y + 26.0), 15, TEXT, rect.size.x - 220.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("期限 day%d" % int(offer.get("expires_day", 0)), rect.end.x - 16.0, rect.position.y + 22.0, 11, FAINT, 140.0)
+	_line(Vector2(rect.position.x + 16.0, rect.position.y + 34.0), Vector2(rect.end.x - 16.0, rect.position.y + 34.0), HAIRLINE, 1.0)
+	_text("受取: " + _offer_players_text(offer.get("cpu_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 62.0), 13, GREEN, rect.size.x - 32.0)
+	_text("放出: " + _offer_players_text(offer.get("user_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 94.0), 13, RED, rect.size.x - 32.0)
+
+
+func _offer_players_text(ids: Array, season: PSSeason) -> String:
+	var parts: Array = []
+	for id_value in ids:
 		var player: PSPlayer = GameDb.get_player(int(id_value))
-		names.append(player.name if player != null else "?")
-	return "、".join(PackedStringArray(names))
+		if player == null:
+			parts.append("?")
+			continue
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
+		parts.append("%s (評価%d, %s)" % [player.name, eval, _format_money_compact(player.salary)])
+	return "、".join(PackedStringArray(parts))
 
+
+# --- 今季の成立トレード (下段右) ---
 
 func _draw_log_table(rect: Rect2, season: PSSeason) -> void:
 	var rows: Array = []
@@ -227,7 +329,7 @@ func _draw_log_table(rect: Rect2, season: PSSeason) -> void:
 			"source": _source_label(str(entry.get("source", ""))),
 		})
 	_draw_data_table(rect, LOG_COLUMNS, rows, {
-		"title": "今季の成立トレード", "header_top": 58.0, "row_h": 26.0, "alt_rows": true,
+		"title": "今季の成立トレード", "header_top": 58.0, "row_h": 28.0,
 		"cell_size": 12, "empty_text": "今季の成立トレードはまだありません",
 		"scroll_key": "log", "scroll": _scroll, "scroll_zones": _scroll_zones,
 	})
@@ -241,112 +343,196 @@ func _source_label(source: String) -> String:
 		_: return source
 
 
-func _names_line(ids: Array) -> String:
-	if ids.is_empty():
-		return "(未選択)"
-	var names: Array = []
-	for id_value in ids:
-		var player: PSPlayer = GameDb.get_player(int(id_value))
-		names.append("%s (%s)" % [player.name, _pos_label(player)] if player != null else "?")
-	return "、".join(PackedStringArray(names))
-
-
 # ============================================================ buttons
 
 func _build_buttons() -> void:
 	_clear_buttons()
 	var season: PSSeason = AppState.current_season
-	if season == null or GameDb.get_team(AppState.selected_team_id) == null:
+	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
+	if season == null or team == null:
 		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
 	_build_nav_buttons()
 
-	# 相手球団切替 (テーブル右肩)。
-	_add_button("prev_team", "◀", Rect2(TABLE_THEIRS.end.x - 96, TABLE_THEIRS.position.y + 12, 36, 28),
-		func() -> void: _cycle_opponent(-1), "chip")
-	_add_button("next_team", "▶", Rect2(TABLE_THEIRS.end.x - 52, TABLE_THEIRS.position.y + 12, 36, 28),
-		func() -> void: _cycle_opponent(1), "chip")
+	# ポジション絞り込みチップ (自軍ロスターのみ)。
+	_filter_buttons = {}
+	var fx: float = INNER_L
+	for def_value in FILTER_DEFS:
+		var def: Dictionary = def_value as Dictionary
+		var pos: int = int(def["pos"])
+		var btn: Button = _add_button("filter_%d" % pos, str(def["label"]), Rect2(fx, FILTER_Y, 46.0, 26.0),
+			func(p: int = pos) -> void: _set_filter(p),
+			"chip_active" if pos == _filter_pos else "chip")
+		_filter_buttons[pos] = btn
+		fx += 52.0
 
-	_add_button("propose", "この内容で提案する", Rect2(PROPOSAL_RECT.end.x - 232, PROPOSAL_RECT.end.y - 60, 210, 40),
-		func() -> void: _submit_proposal(), "primary")
-	_add_button("clear_sel", "選択をクリア", Rect2(PROPOSAL_RECT.end.x - 380, PROPOSAL_RECT.end.y - 60, 130, 40),
-		func() -> void: _clear_selection(), "chip")
+	# 相手球団の切替 (テーブルタイトル自体がプルダウン)。
+	var opponent: PSTeam = GameDb.get_team(_view_team_id)
+	var theirs_title: String = "相手: %s ▾" % (opponent.name if opponent != null else "-")
+	_team_menu_button = _add_button("team_menu", "", _theirs_title_hotspot(RIGHT_RECT, theirs_title), _on_team_menu_pressed, "nav")
 
-	_add_button("offer_accept", "受諾", Rect2(OFFERS_RECT.end.x - 200, OFFERS_RECT.end.y - 60, 84, 40),
-		func() -> void: _accept_selected_offer(), "primary")
-	_add_button("offer_decline", "拒否", Rect2(OFFERS_RECT.end.x - 104, OFFERS_RECT.end.y - 60, 84, 40),
-		func() -> void: _decline_selected_offer(), "chip")
+	var propose_btn: Button = _add_button("propose", "この内容で提案する",
+		Rect2(CENTER_RECT.position.x + 18.0, CENTER_RECT.end.y - 46.0, 176.0, 36.0), _submit_proposal, "primary")
+	propose_btn.disabled = not _can_submit()
+	_add_button("clear_sel", "クリア",
+		Rect2(CENTER_RECT.position.x + 202.0, CENTER_RECT.end.y - 46.0, 112.0, 36.0), func() -> void: _clear_selection(), "chip")
+
+	_build_offer_buttons(OFFERS_RECT, TradeService.pending_user_offers(season))
 
 	_layout_buttons()
 
 
-func _cycle_opponent(step: int) -> void:
-	_view_team_id = _next_opponent_id(_view_team_id, step)
+func _build_offer_buttons(rect: Rect2, offers: Array) -> void:
+	for i in range(min(offers.size(), TradeService.MAX_PENDING_USER_OFFERS)):
+		var offer: Dictionary = offers[i] as Dictionary
+		var card: Rect2 = _offer_card_rect(rect, i)
+		var offer_id: int = int(offer.get("id", 0))
+		_add_button("offer_accept_%d" % offer_id, "受諾", Rect2(card.end.x - 176.0, card.end.y - 38.0, 76.0, 30.0),
+			func() -> void: _accept_offer(offer_id), "primary")
+		_add_button("offer_decline_%d" % offer_id, "拒否", Rect2(card.end.x - 92.0, card.end.y - 38.0, 76.0, 30.0),
+			func() -> void: _decline_offer(offer_id), "chip")
+
+
+# 「相手: 球団名 ▾」タイトルの見た目 (BLUEティック+テキスト) をおおむね覆う透明ボタン矩形。
+func _theirs_title_hotspot(rect: Rect2, title: String) -> Rect2:
+	var w: float = _measure(title, FS_SECTION) + 30.0
+	return Rect2(rect.position.x + 14.0, rect.position.y + 16.0, w, 28.0)
+
+
+func _on_team_menu_pressed() -> void:
+	var menu: PopupMenu = PopupMenu.new()
+	var ids: Array = _opponent_team_ids()
+	for i in range(ids.size()):
+		var team: PSTeam = GameDb.get_team(int(ids[i]))
+		if team == null:
+			continue
+		if i > 0:
+			var prev: PSTeam = GameDb.get_team(int(ids[i - 1]))
+			if prev != null and prev.league != team.league:
+				menu.add_separator(team.league_label())
+		else:
+			menu.add_separator(team.league_label())
+		menu.add_item("%s (%s)" % [team.name, team.short_name], int(ids[i]))
+	_style_popup(menu)
+	add_child(menu)
+	menu.id_pressed.connect(_on_team_selected)
+	menu.popup_hide.connect(func() -> void:
+		if is_instance_valid(menu):
+			menu.queue_free()
+	)
+	var anchor: Vector2 = _p(Vector2(RIGHT_RECT.position.x + 14.0, RIGHT_RECT.position.y + 44.0))
+	if _team_menu_button != null:
+		anchor = _team_menu_button.global_position + Vector2(0.0, _team_menu_button.size.y)
+	menu.position = Vector2i(anchor.round())
+	menu.reset_size()
+	menu.popup()
+
+
+func _on_team_selected(team_id: int) -> void:
+	if team_id == _view_team_id or team_id == AppState.selected_team_id:
+		return
+	_view_team_id = team_id
 	_receive_ids = []
+	var season: PSSeason = AppState.current_season
+	if season != null:
+		_load_theirs(season)
+	_refresh_proposal_eval()
+	_build_buttons()
 	queue_redraw()
 
 
-func _next_opponent_id(from_id: int, step: int) -> int:
-	var ids: Array = []
-	for team_row in GameDb.teams:
-		var team: PSTeam = team_row as PSTeam
-		if team != null and team.id != AppState.selected_team_id:
-			ids.append(team.id)
-	if ids.is_empty():
-		return 0
-	var index: int = ids.find(from_id)
-	if index < 0:
-		return int(ids[0])
-	return int(ids[posmod(index + step, ids.size())])
+# ダッシュボードのダーク配色に合わせて PopupMenu をテーマ上書きする (team_detail から移植)。
+func _style_popup(menu: PopupMenu) -> void:
+	var panel: StyleBoxFlat = StyleBoxFlat.new()
+	panel.bg_color = PANEL_2
+	panel.border_color = BORDER
+	panel.set_border_width_all(1)
+	panel.set_corner_radius_all(8)
+	panel.content_margin_left = 6
+	panel.content_margin_right = 6
+	panel.content_margin_top = 6
+	panel.content_margin_bottom = 6
+	menu.add_theme_stylebox_override("panel", panel)
+	var hover: StyleBoxFlat = StyleBoxFlat.new()
+	hover.bg_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.18)
+	hover.border_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.55)
+	hover.set_border_width_all(1)
+	hover.set_corner_radius_all(6)
+	menu.add_theme_stylebox_override("hover", hover)
+	menu.add_theme_color_override("font_color", TEXT)
+	menu.add_theme_color_override("font_hover_color", TEXT)
+	menu.add_theme_color_override("font_separator_color", MUTED)
+	menu.add_theme_constant_override("v_separation", 6)
+	if _font != null:
+		menu.add_theme_font_override("font", _font)
+	menu.add_theme_font_size_override("font_size", max(11, int(round(14.0 * _scale_f))))
+
+
+func _set_filter(pos: int) -> void:
+	if pos == _filter_pos:
+		return
+	_filter_pos = pos
+	_refresh_filter_buttons()
+	queue_redraw()
+
+
+func _refresh_filter_buttons() -> void:
+	for key in _filter_buttons.keys():
+		var btn: Button = _filter_buttons[key] as Button
+		if btn != null:
+			_apply_button_style(btn, "chip_active" if int(key) == _filter_pos else "chip")
 
 
 # ============================================================ actions
 
 func _submit_proposal() -> void:
 	var season: PSSeason = AppState.current_season
-	if season == null:
-		return
-	if _give_ids.is_empty() or _receive_ids.is_empty():
-		_set_message("出す選手と貰う選手を選んでください。", AMBER)
+	if season == null or not _can_submit():
 		return
 	var result: Dictionary = TradeService.submit_user_proposal(
 		season, GameDb.players, GameDb.teams, AppState.selected_team_id, _give_ids.duplicate(), _receive_ids.duplicate())
 	if bool(result.get("accepted", false)):
 		GameDb.rebuild_player_indices()
-		_clear_selection()
-		_set_message("トレードが成立しました!", GREEN)
+		_give_ids = []
+		_receive_ids = []
+		_eval = {}
+		_refresh_all()
+		_message_color = GREEN
+		_message = "トレードが成立しました。"
 	else:
-		_set_message(str(result.get("message", "交渉はまとまりませんでした。")), AMBER)
+		_message_color = AMBER
+		_message = str(result.get("message", "交渉はまとまりませんでした。"))
+	_build_buttons()
 	queue_redraw()
 
 
-func _accept_selected_offer() -> void:
+func _accept_offer(offer_id: int) -> void:
 	var season: PSSeason = AppState.current_season
-	if season == null or _selected_offer_id <= 0:
-		_set_message("受諾する提案を選んでください。", AMBER)
-		queue_redraw()
+	if season == null:
 		return
-	var result: Dictionary = TradeService.accept_user_offer(season, GameDb.players, GameDb.teams, _selected_offer_id, AppState.selected_team_id)
+	var result: Dictionary = TradeService.accept_user_offer(season, GameDb.players, GameDb.teams, offer_id, AppState.selected_team_id)
 	if bool(result.get("ok", false)):
 		GameDb.rebuild_player_indices()
-		_set_message("提案を受諾し、トレードが成立しました!", GREEN)
+		_refresh_all()
+		_message_color = GREEN
+		_message = "提案を受諾し、トレードが成立しました。"
 	else:
-		_set_message(str(result.get("message", "受諾できませんでした。")), AMBER)
-	_selected_offer_id = 0
+		_message_color = AMBER
+		_message = str(result.get("message", "受諾できませんでした。"))
+	_build_buttons()
 	queue_redraw()
 
 
-func _decline_selected_offer() -> void:
+func _decline_offer(offer_id: int) -> void:
 	var season: PSSeason = AppState.current_season
-	if season == null or _selected_offer_id <= 0:
-		_set_message("拒否する提案を選んでください。", AMBER)
-		queue_redraw()
+	if season == null:
 		return
-	TradeService.decline_user_offer(season, _selected_offer_id)
-	_selected_offer_id = 0
-	_set_message("提案を拒否しました。", MUTED)
+	TradeService.decline_user_offer(season, offer_id)
+	_message_color = MUTED
+	_message = "提案を拒否しました。"
+	_build_buttons()
 	queue_redraw()
 
 
@@ -354,12 +540,185 @@ func _clear_selection() -> void:
 	_give_ids = []
 	_receive_ids = []
 	_message = ""
+	_eval = {}
+	_build_buttons()
 	queue_redraw()
 
 
-func _set_message(text: String, color: Color) -> void:
-	_message = text
-	_message_color = color
+func _can_submit() -> bool:
+	var season: PSSeason = AppState.current_season
+	if season == null or not TradeService.is_trade_window_open(season):
+		return false
+	if _give_ids.is_empty() or _receive_ids.is_empty():
+		return false
+	return bool(_eval.get("ok", false)) and bool(_eval.get("accepted", false))
+
+
+func _toggle_selection(ids: Array, player_id: int) -> void:
+	if ids.has(player_id):
+		ids.erase(player_id)
+	else:
+		var player: PSPlayer = GameDb.get_player(player_id)
+		if player == null or not TradeService.is_tradeable(player):
+			_message_color = AMBER
+			_message = "%s はトレード対象にできません。" % (player.name if player != null else "その選手")
+			_build_buttons()
+			return
+		if ids.size() >= TradeService.MAX_PLAYERS_PER_SIDE:
+			_message_color = AMBER
+			_message = "選択できるのは各球団%d人までです。" % TradeService.MAX_PLAYERS_PER_SIDE
+			_build_buttons()
+			return
+		ids.append(player_id)
+	_message = ""
+	_refresh_proposal_eval()
+	_build_buttons()
+
+
+func _refresh_proposal_eval() -> void:
+	var season: PSSeason = AppState.current_season
+	if season == null or _give_ids.is_empty() or _receive_ids.is_empty():
+		_eval = {}
+		return
+	_eval = TradeService.evaluate_user_proposal(season, GameDb.players, GameDb.teams, AppState.selected_team_id, _give_ids.duplicate(), _receive_ids.duplicate())
+
+
+# ============================================================ aggregation
+
+func _refresh_all() -> void:
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return
+	_war_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	_load_mine(season)
+	_load_theirs(season)
+	_refresh_proposal_eval()
+
+
+func _load_mine(season: PSSeason) -> void:
+	_mine_all_rows = []
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != AppState.selected_team_id or player.is_retired() or player.development_player:
+			continue
+		_mine_all_rows.append(_player_row(player, season))
+	_mine_all_rows.sort_custom(_by_value_desc)
+
+
+func _load_theirs(season: PSSeason) -> void:
+	_theirs_rows = []
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != _view_team_id or player.is_retired() or player.development_player:
+			continue
+		_theirs_rows.append(_player_row(player, season))
+	_theirs_rows.sort_custom(_by_value_desc)
+
+
+func _by_value_desc(a: Variant, b: Variant) -> bool:
+	return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
+
+
+func _player_row(player: PSPlayer, season: PSSeason) -> Dictionary:
+	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
+	var tradeable: bool = TradeService.is_tradeable(player)
+	var role: Dictionary = _role_chip(player)
+	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
+	var has_war: bool = false
+	var war: float = 0.0
+	if record != null:
+		has_war = (record.is_pitcher() and record.pitcher_stats.outs_pitched > 0) \
+			or (not record.is_pitcher() and record.batter_stats.plate_appearances > 0)
+		if has_war:
+			war = float(WarCalculator.season_war(record, _war_ctx).get("war", 0.0))
+	var row: Dictionary = {
+		"__meta": player.id,
+		"role": role["text"], "role_color": role["color"], "role_dev": not tradeable,
+		"name": player.name,
+		"age": player.age,
+		"value": eval,
+		"war": ("%0.1f" % war) if has_war else "-",
+		"salary": _format_money(player.salary),
+		"is_pitcher": player.is_pitcher(),
+		"position": player.position,
+	}
+	if tradeable:
+		row["value_color"] = _table_rating_color(eval)
+		if has_war:
+			row["war_color"] = _war_color(war)
+	else:
+		row["__color"] = FAINT
+	return row
+
+
+func _role_chip(player: PSPlayer) -> Dictionary:
+	if player.is_pitcher():
+		if player.is_starter_pitcher():
+			return {"text": "先発", "color": PINK}
+		return {"text": "中継", "color": RED}
+	return {"text": str(POS_LABELS.get(player.position, "?")), "color": _pos_color(player.position)}
+
+
+func _war_color(war: float) -> Color:
+	if war >= 2.0:
+		return GREEN
+	if war < 0.0:
+		return RED
+	if war <= 0.0:
+		return FAINT
+	return TEXT
+
+
+func _mine_rows_filtered() -> Array:
+	if _filter_pos == 0:
+		return _mine_all_rows
+	var out: Array = []
+	for row_value in _mine_all_rows:
+		if _filter_pass(row_value as Dictionary):
+			out.append(row_value)
+	return out
+
+
+func _filter_pass(row: Dictionary) -> bool:
+	var is_pitcher: bool = bool(row.get("is_pitcher", false))
+	var position: int = int(row.get("position", 0))
+	match _filter_pos:
+		1: return is_pitcher
+		2: return not is_pitcher and position == 2
+		3: return not is_pitcher and position >= 3 and position <= 6
+		4: return not is_pitcher and position >= 7 and position <= 9
+	return true
+
+
+func _opponent_team_ids() -> Array:
+	var ids: Array = []
+	for league_key in ["central", "pacific"]:
+		var league_ids: Array = []
+		for team_row in GameDb.teams:
+			var team: PSTeam = team_row as PSTeam
+			if team != null and team.league == league_key and team.id != AppState.selected_team_id:
+				league_ids.append(team.id)
+		league_ids.sort()
+		ids.append_array(league_ids)
+	return ids
+
+
+func _sum_trade_value(ids: Array) -> float:
+	var total: float = 0.0
+	for id_value in ids:
+		var player: PSPlayer = GameDb.get_player(int(id_value))
+		if player != null:
+			total += TradeService.trade_value(player)
+	return total
+
+
+func _sum_salary(ids: Array) -> int:
+	var total: int = 0
+	for id_value in ids:
+		var player: PSPlayer = GameDb.get_player(int(id_value))
+		if player != null:
+			total += player.salary
+	return total
 
 
 # ============================================================ input
@@ -381,12 +740,10 @@ func _gui_input(event: InputEvent) -> void:
 			if hit.is_empty():
 				return
 			match str(hit.get("kind", "")):
-				"mine":
+				"mine", "give_slot":
 					_toggle_selection(_give_ids, int(hit.get("meta", 0)))
-				"theirs":
+				"theirs", "receive_slot":
 					_toggle_selection(_receive_ids, int(hit.get("meta", 0)))
-				"offer":
-					_selected_offer_id = int(hit.get("meta", 0))
 			queue_redraw()
 			accept_event()
 		MOUSE_BUTTON_RIGHT:
@@ -394,22 +751,6 @@ func _gui_input(event: InputEvent) -> void:
 			if not hit2.is_empty() and str(hit2.get("kind", "")) in ["mine", "theirs"]:
 				AppState.show_player_detail(int(hit2.get("meta", 0)))
 				accept_event()
-
-
-func _toggle_selection(ids: Array, player_id: int) -> void:
-	if ids.has(player_id):
-		ids.erase(player_id)
-		_message = ""
-		return
-	var player: PSPlayer = GameDb.get_player(player_id)
-	if player == null or not TradeService.is_tradeable(player):
-		_set_message("%s はトレード対象にできません。" % (player.name if player != null else "その選手"), AMBER)
-		return
-	if ids.size() >= TradeService.MAX_PLAYERS_PER_SIDE:
-		_set_message("選択できるのは各球団%d人までです。" % TradeService.MAX_PLAYERS_PER_SIDE, AMBER)
-		return
-	ids.append(player_id)
-	_message = ""
 
 
 func _to_base(pos: Vector2) -> Vector2:

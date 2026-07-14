@@ -80,7 +80,7 @@ func _draw_empty() -> void:
 	_text("新規シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
 
 
-# --- サマリーカード ---
+# --- サマリー KPI 帯 ---
 
 func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
 	var stats: PSStats = season.standings.get(team.id) as PSStats
@@ -92,36 +92,25 @@ func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
 	var draws: int = stats.draws if stats != null else 0
 	var gb_value: float = float(standing.get("gb", 0.0))
 
-	var cards: Array = [
-		{"icon": "rank", "label": "順位", "value": "%s位" % str(standing.get("rank", "-")), "vsize": 24, "color": BLUE},
-		{"icon": "record", "label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws], "vsize": 19, "color": TEXT},
-		{"icon": "winrate", "label": "勝率", "value": _rate_short(stats.win_rate() if stats != null else 0.0), "vsize": 24, "color": GREEN},
-		{"icon": "gb", "label": "ゲーム差", "value": ("-" if gb_value <= 0.0 else _float1(gb_value)), "vsize": 23, "color": TEXT},
-		{"icon": "remaining", "label": "残り試合", "value": "%d試合" % season.team_games_remaining(team.id), "vsize": 21, "color": TEXT},
-		{"icon": "budget", "label": "予算", "value": _format_money(team.funds), "vsize": 18, "color": TEXT},
-		{"icon": "payroll", "label": "年俸総額", "value": _format_money(payroll), "vsize": 18, "color": AMBER if over else TEXT, "warn": over},
+	# 個別カード列ではなく1本の帯 (_stat_strip)。順位/勝率のみ色で強調し、
+	# 予算超過は年俸総額セルの note で警告する (旧カードの AMBER チップ相当)。
+	var cells: Array = [
+		{"label": "順位", "value": "%s位" % str(standing.get("rank", "-")), "color": BLUE},
+		{"label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws]},
+		{"label": "勝率", "value": _rate_short(stats.win_rate() if stats != null else 0.0), "color": GREEN},
+		{"label": "ゲーム差", "value": ("-" if gb_value <= 0.0 else _float1(gb_value))},
+		{"label": "残り試合", "value": "%d試合" % season.team_games_remaining(team.id)},
+		{"label": "予算", "value": _format_money(team.funds)},
+		{"label": "年俸総額", "value": _format_money(payroll), "color": AMBER if over else TEXT,
+			"note": "予算超過" if over else "", "note_color": AMBER},
 	]
-
-	var count: int = cards.size()
-	var gap: float = 10.0
-	var total_w: float = INNER_R - INNER_L
-	var card_w: float = (total_w - gap * float(count - 1)) / float(count)
-	var x: float = INNER_L
-	for card_value in cards:
-		var card: Dictionary = card_value as Dictionary
-		_round(Rect2(x, STAT_Y, card_w, STAT_H), PANEL, BORDER, 9)
-		_icon(str(card["icon"]), Rect2(x + 16, STAT_Y + 28, 28, 28), MUTED)
-		_text(str(card["label"]), Vector2(x + 54, STAT_Y + 34), 12, MUTED)
-		_text(str(card["value"]), Vector2(x + 54, STAT_Y + 63), int(card["vsize"]), card["color"] as Color, card_w - 64)
-		if bool(card.get("warn", false)):
-			_chip(Rect2(x + card_w - 84, STAT_Y + 12, 68, 20), "予算超過", AMBER)
-		x += card_w + gap
+	_stat_strip(Rect2(INNER_L, STAT_Y, INNER_R - INNER_L, STAT_H), cells)
 
 
 # --- カレンダー ---
 
 func _draw_calendar(team_id: int, season: PSSeason) -> void:
-	_round(CAL_RECT, PANEL, BORDER, 10)
+	_round(CAL_RECT, PANEL, Color.TRANSPARENT, 8, 0)
 	_text("%d年 %d月" % [_calendar_year, _calendar_month], Vector2(CAL_RECT.position.x + 56, CAL_RECT.position.y + 40), 23, TEXT)
 
 	var inner_x: float = CAL_RECT.position.x + 16
@@ -150,7 +139,8 @@ func _draw_calendar(team_id: int, season: PSSeason) -> void:
 			if n >= 1 and n <= days:
 				_draw_day_cell(cell_rect, _date_string(_calendar_year, _calendar_month, n), n, col, team_id, season)
 			else:
-				_round(cell_rect, Color(0.056, 0.066, 0.080), BORDER_SOFT, 7)
+				# 月外セルは背景よりわずかに暗い面のみ (枠線なし)。
+				_round(cell_rect, Color(0.056, 0.066, 0.080), Color.TRANSPARENT, 7, 0)
 			n += 1
 
 	_draw_legend(Rect2(CAL_RECT.position.x + 16, grid_bottom + 8, inner_w, 26))
@@ -168,12 +158,14 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 			if bool(g.get("dh_enabled", false)):
 				has_dh = true
 
-	var border: Color = BORDER_SOFT
+	# 枠線は使わず bg の明度差だけで面を作る: 通常 < 自軍試合日 < 今日 (今日はわずかに青みも足す)。
+	# 今日/DH は既存のバッジ (本日/DH チップ) が引き続き目印になる。
+	var bg: Color = PANEL_2
 	if is_today:
-		border = BLUE
+		bg = PANEL_3.lerp(BLUE, 0.10)
 	elif has_team_game:
-		border = Color(BLUE.r, BLUE.g, BLUE.b, 0.5)
-	_round(rect, Color(0.118, 0.144, 0.176) if is_today else PANEL_2, border, 7, 2 if is_today else 1)
+		bg = PANEL_2.lerp(PANEL_3, 0.55)
+	_round(rect, bg, Color.TRANSPARENT, 7, 0)
 
 	var num_color: Color = TEXT if is_today else MUTED
 	if not is_today:
@@ -445,15 +437,17 @@ func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_panel(rect, "順位 / チーム指標")
 	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
+	# ミニ順位表もテーブル v2 の体裁 (bold ヘッダ + 太めルール + 行ヘアライン + 自軍のアクセントバー)。
 	var hy: float = rect.position.y + 56
-	_text("順", Vector2(rect.position.x + 18, hy), 11, FAINT)
-	_text("チーム", Vector2(rect.position.x + 50, hy), 11, FAINT)
-	_text_right("勝", rect.position.x + 268, hy, 11, FAINT)
-	_text_right("敗", rect.position.x + 318, hy, 11, FAINT)
-	_text_right("分", rect.position.x + 366, hy, 11, FAINT)
-	_text_right("勝率", rect.position.x + 446, hy, 11, FAINT)
-	_text_right("GB", rect.position.x + 512, hy, 11, FAINT)
-	_text_right("防御率", rect.end.x - 18, hy, 11, FAINT)
+	_text("順", Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("チーム", Vector2(rect.position.x + 50, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("勝", rect.position.x + 268, hy, 11, MUTED, 80.0, true)
+	_text_right("敗", rect.position.x + 318, hy, 11, MUTED, 80.0, true)
+	_text_right("分", rect.position.x + 366, hy, 11, MUTED, 80.0, true)
+	_text_right("勝率", rect.position.x + 446, hy, 11, MUTED, 80.0, true)
+	_text_right("GB", rect.position.x + 512, hy, 11, MUTED, 80.0, true)
+	_text_right("防御率", rect.end.x - 18, hy, 11, MUTED, 80.0, true)
+	_line(Vector2(rect.position.x + 14, hy + 8), Vector2(rect.end.x - 14, hy + 8), BORDER, 1.5)
 
 	var entries: Array = _league_entries(league_key, season)
 	var leader: PSStats = (entries[0] as Dictionary).get("stats") as PSStats if not entries.is_empty() else null
@@ -465,16 +459,18 @@ func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 		var stats: PSStats = entry["stats"] as PSStats
 		var is_self: bool = row_team.id == team_id
 		if is_self:
-			_round(Rect2(rect.position.x + 12, y - 17, rect.size.x - 24, 24), Color(BLUE.r, BLUE.g, BLUE.b, 0.12), Color.TRANSPARENT, 5, 0)
-		var color: Color = BLUE if is_self else TEXT
+			_round(Rect2(rect.position.x + 8, y - 17, rect.size.x - 16, 24), Color(BLUE.r, BLUE.g, BLUE.b, 0.08), Color.TRANSPARENT, 0, 0)
+			_round(Rect2(rect.position.x + 8, y - 17, 3, 24), BLUE, Color.TRANSPARENT, 0, 0)
+		var color: Color = TEXT
 		_text(str(rank), Vector2(rect.position.x + 18, y), 13, color)
-		_text(row_team.short_name, Vector2(rect.position.x + 50, y), 13, color)
+		_text(row_team.short_name, Vector2(rect.position.x + 50, y), 13, color, -1.0, HORIZONTAL_ALIGNMENT_LEFT, is_self)
 		_text_right(str(stats.wins), rect.position.x + 268, y, 13, color)
 		_text_right(str(stats.losses), rect.position.x + 318, y, 13, color)
 		_text_right(str(stats.draws), rect.position.x + 366, y, 13, color)
 		_text_right(_rate_short(stats.win_rate()), rect.position.x + 446, y, 13, color)
 		_text_right("-" if leader == null or rank == 1 else _float1(_game_back(leader, stats)), rect.position.x + 512, y, 13, color)
 		_text_right(_era_str_for(row_team.id), rect.end.x - 18, y, 13, color)
+		_line(Vector2(rect.position.x + 14, y + 7), Vector2(rect.end.x - 14, y + 7), HAIRLINE, 1.0)
 		y += 25
 		rank += 1
 
