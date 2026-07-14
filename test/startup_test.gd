@@ -876,6 +876,29 @@ func test_offseason_screen_builds_each_step() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_offseason_salary_table_layout_and_market_salary_priority() -> void:
+	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
+	var screen: Control = script.new()
+	var rect: Rect2 = Rect2(262.0, 256.0, 1638.0, 804.0)
+
+	assert_bool((screen.call("_player_table_x", rect, "", false) as Dictionary).has("salary_r")).is_false()
+	for team_mode in ["", "team", "move"]:
+		var xs: Dictionary = screen.call("_player_table_x", rect, team_mode, true) as Dictionary
+		assert_bool(xs.has("salary_r")).is_true()
+		assert_float(float(xs["salary_r"])).is_less(float(xs["age_r"]))
+		assert_float(float(xs["stam_r"])).is_less_equal(float(xs["g_r"]) - 44.0)
+		assert_float(float(xs["eye_r"])).is_less_equal(float(xs["g_r"]) - 42.0)
+
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.salary = 1000
+	assert_int(int(screen.call("_player_table_salary", {}, record))).is_equal(1000)
+	assert_int(int(screen.call("_player_table_salary", {"candidate": {"salary": 1200}}, record))).is_equal(1200)
+	assert_int(int(screen.call("_player_table_salary", {"candidate": {"salary": 1200, "offer_salary": 1800}}, record))).is_equal(1800)
+	assert_int(int(screen.call("_player_table_salary", {"salary": 1400, "offer_salary": 2000}, record))).is_equal(2000)
+	assert_int(int(screen.call("_player_table_salary", {"new_salary": 2200, "offer_salary": 2000}, record))).is_equal(2200)
+	screen.free()
+
+
 func test_offseason_view_state_exposes_ui_phase() -> void:
 	var old_active: bool = AppState.offseason_active
 	var old_step: int = AppState.offseason_step

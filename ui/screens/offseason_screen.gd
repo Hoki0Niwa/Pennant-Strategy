@@ -897,7 +897,7 @@ func _draw() -> void:
 		AppState.OFFSEASON_PANEL_FA:
 			# FA一覧は戦力外獲得と同じ選手レコード表 (投手/野手タブ・候補詳細なし)。
 			_draw_player_record_table(BODY, _fa_status_text, _fa_player_rows, _fa_tab == PLAYER_TAB_PITCHER,
-				"fa", "fa_market_%s" % _fa_tab, "fa", selected_fa_candidate_id, "該当するFA候補がいません。", true, false)
+				"fa", "fa_market_%s" % _fa_tab, "fa", selected_fa_candidate_id, "該当するFA候補がいません。", true, false, "", true)
 		AppState.OFFSEASON_PANEL_FOREIGN:
 			_draw_foreign_panel()
 		AppState.OFFSEASON_PANEL_CAMP:
@@ -991,7 +991,7 @@ func _draw_summary_panel() -> void:
 func _draw_release_panel() -> void:
 	var records: Array = _release_visible_records()
 	var pitcher_tab: bool = _release_tab == PLAYER_TAB_PITCHER
-	_draw_player_record_table(BODY, _release_summary_text, records, pitcher_tab, "release", "release_%s" % _release_tab, "release", 0, "該当する選手がいません。", true, false)
+	_draw_player_record_table(BODY, _release_summary_text, records, pitcher_tab, "release", "release_%s" % _release_tab, "release", 0, "該当する選手がいません。", true, false, "", true)
 
 
 # --- ドラフト ---
@@ -1257,7 +1257,9 @@ func _draw_released_market_panel() -> void:
 		selected_released_candidate_id,
 		"該当する自由契約候補がいません。",
 		true,
-		false
+		false,
+		"",
+		true
 	)
 
 
@@ -1395,7 +1397,7 @@ func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, ke
 	var table_rect: Rect2 = rect
 	if result.has("budgets"):
 		table_rect = _draw_budget_recompute_summary(rect, result.get("budgets", {}) as Dictionary)
-	_draw_people_player_table(table_rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true)
+	_draw_people_player_table(table_rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true, true)
 
 
 # 年次予算再計算の結果 (TeamFinance.recompute_annual_budgets の戻り値) を1行+12球団表で表示し、
@@ -1450,15 +1452,15 @@ func _draw_release_result(rect: Rect2, result: Dictionary) -> void:
 		heading = "戦力外通告: %d人 (自軍%d人 / 他球団 %d人 / 外国人 %d人)" % [released.size(), user_n, cpu_n, foreign_n]
 	var demoted: Array = result.get("demoted", []) as Array
 	if demoted.is_empty():
-		_draw_people_player_table(rect, heading, released, _result_people_tab, false, "今オフは戦力外通告がありませんでした。", "result", true)
+		_draw_people_player_table(rect, heading, released, _result_people_tab, false, "今オフは戦力外通告がありませんでした。", "result", true, true)
 		return
 	# 戦力外 + 育成降格 を上下2枚で。
 	var half: float = (rect.size.y - 50.0) / 2.0
-	_draw_people_player_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), heading, released, _result_people_tab, false, "今オフは戦力外通告がありませんでした。", "result", true)
+	_draw_people_player_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), heading, released, _result_people_tab, false, "今オフは戦力外通告がありませんでした。", "result", true, true)
 	var user_d: int = int(result.get("user_demoted_count", 0))
 	var cpu_d: int = int(result.get("cpu_demoted_count", 0))
 	var lower: Rect2 = Rect2(rect.position.x, rect.position.y + half + 56.0, rect.size.x, half - 6.0)
-	_draw_people_player_table(lower, "育成降格: %d人 (自軍%d人 / 他球団 %d人)" % [demoted.size(), user_d, cpu_d], demoted, _result_people_tab, false, "", "result2", false)
+	_draw_people_player_table(lower, "育成降格: %d人 (自軍%d人 / 他球団 %d人)" % [demoted.size(), user_d, cpu_d], demoted, _result_people_tab, false, "", "result2", false, true)
 
 
 func _draw_rookies_result(rect: Rect2, result: Dictionary) -> void:
@@ -1485,7 +1487,7 @@ func _draw_released_result(rect: Rect2, result: Dictionary) -> void:
 	]
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("signings", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "released_result_%s" % _result_people_tab, "", 0,
-		"今オフは戦力外からの獲得がありませんでした。", true, false, "move")
+		"今オフは戦力外からの獲得がありませんでした。", true, false, "move", true)
 
 
 func _draw_fa_result(rect: Rect2, result: Dictionary) -> void:
@@ -1494,7 +1496,7 @@ func _draw_fa_result(rect: Rect2, result: Dictionary) -> void:
 	]
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("signings", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "fa_result_%s" % _result_people_tab, "", 0,
-		"今オフは FA 移籍が成立しませんでした。", true, false, "move")
+		"今オフは FA 移籍が成立しませんでした。", true, false, "move", true)
 
 
 func _draw_foreign_result(rect: Rect2, result: Dictionary) -> void:
@@ -1671,7 +1673,7 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 
 
 # 投手/野手を混在させない選手一覧。打順・投手起用法の上段表に寄せた自前描画。
-func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, pitcher_table: bool, sel_kind: String, scroll_key: String, _selection_group: String, selected_id: int, empty_text: String, show_tab_space: bool, career_stats: bool, team_mode: String = "") -> void:
+func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, pitcher_table: bool, sel_kind: String, scroll_key: String, _selection_group: String, selected_id: int, empty_text: String, show_tab_space: bool, career_stats: bool, team_mode: String = "", show_salary: bool = false) -> void:
 	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
 	var title_x: float = rect.position.x + (222.0 if show_tab_space else 18.0)
 	_round(Rect2(title_x, rect.position.y + 21.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
@@ -1692,9 +1694,9 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 	var table_gap: float = 14.0 if show_tab_space else 0.0
 	var hy: float = rect.position.y + 64.0 + table_gap
 	if pitcher_table:
-		_draw_pitcher_table_header(rect, hy, effective_team_mode, career_stats)
+		_draw_pitcher_table_header(rect, hy, effective_team_mode, career_stats, show_salary)
 	else:
-		_draw_fielder_table_header(rect, hy, effective_team_mode, career_stats)
+		_draw_fielder_table_header(rect, hy, effective_team_mode, career_stats, show_salary)
 
 	if rows.is_empty():
 		if not empty_text.is_empty():
@@ -1727,9 +1729,9 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.45), 6, 1)
 
 		if pitcher_table:
-			_draw_pitcher_player_row(rect, row, y, effective_team_mode, career_stats)
+			_draw_pitcher_player_row(rect, row, y, effective_team_mode, career_stats, show_salary)
 		else:
-			_draw_fielder_player_row(rect, row, y, effective_team_mode, career_stats)
+			_draw_fielder_player_row(rect, row, y, effective_team_mode, career_stats, show_salary)
 		if not sel_kind.is_empty():
 			_row_hits.append({"rect": row_rect, "kind": sel_kind, "meta": record.player_id})
 		# 縞の代わりに全行の下へヘアライン区切り (基底 _draw_data_table と同じ表現)。
@@ -1738,7 +1740,7 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 		y += row_h
 
 	# 列グループ境界の縦ヘアライン (識別 / 評価 / 能力 / 成績の各ブロック境界)。
-	var sep_xs: Array = _player_table_sep_xs(_player_table_x(rect, effective_team_mode), pitcher_table)
+	var sep_xs: Array = _player_table_sep_xs(_player_table_x(rect, effective_team_mode, show_salary), pitcher_table)
 	var band_top: float = hy - 18.0
 	var rows_bottom: float = row_top + float(drawn) * row_h
 	for sep_x in sep_xs:
@@ -1748,17 +1750,17 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 		_text_right("%d / %d" % [min(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
-func _draw_people_player_table(rect: Rect2, title: String, people: Array, tab_id: String, career_stats: bool, empty_text: String, scroll_key: String, show_tab_space: bool) -> void:
+func _draw_people_player_table(rect: Rect2, title: String, people: Array, tab_id: String, career_stats: bool, empty_text: String, scroll_key: String, show_tab_space: bool, show_salary: bool = false) -> void:
 	var rows: Array = _people_player_rows_for_tab(people, tab_id)
 	var pitcher_table: bool = tab_id == PLAYER_TAB_PITCHER
 	var scoped_empty: String = empty_text
 	if scoped_empty.is_empty():
 		scoped_empty = "該当する選手がいません。"
-	_draw_player_record_table(rect, title, rows, pitcher_table, "", "%s_%s" % [scroll_key, tab_id], "", 0, scoped_empty, show_tab_space, career_stats)
+	_draw_player_record_table(rect, title, rows, pitcher_table, "", "%s_%s" % [scroll_key, tab_id], "", 0, scoped_empty, show_tab_space, career_stats, "", show_salary)
 
 
-func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career_stats: bool) -> void:
-	var xs: Dictionary = _player_table_x(rect, team_mode)
+func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career_stats: bool, show_salary: bool) -> void:
+	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	if team_mode == "move":
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
@@ -1767,8 +1769,9 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 		_text("球団", Vector2(float(xs["team_x"]), y), 11, FAINT)
 	_text("役割", Vector2(float(xs["role_x"]), y), 11, FAINT, 52.0, HORIZONTAL_ALIGNMENT_CENTER)
 	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
-	if team_mode == "contract":
+	if xs.has("salary_r"):
 		_text_cell("年俸", float(xs["salary_r"]), y, 11, FAINT, 76.0)
+	if team_mode == "contract":
 		_text_cell("年俸増減", float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
 	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
 	_text_cell("在", float(xs["years_r"]), y, 11, FAINT, 30.0)
@@ -1788,13 +1791,13 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 	_text_cell("防御率", float(xs["era_r"]), y, 11, FAINT, 62.0)
 	_text_cell("FIP", float(xs["fip_r"]), y, 11, FAINT, 54.0)
 	_text_cell("WHIP", float(xs["whip_r"]), y, 11, FAINT, 58.0)
-	if team_mode != "contract":
+	if not xs.has("salary_r"):
 		_text_cell("K/9", float(xs["k9_r"]), y, 11, FAINT, 54.0)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
-func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool) -> void:
-	var xs: Dictionary = _player_table_x(rect, team_mode)
+func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool, show_salary: bool) -> void:
+	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	if team_mode == "move":
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
@@ -1803,8 +1806,9 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 		_text("球団", Vector2(float(xs["team_x"]), y), 11, FAINT)
 	_text("守備", Vector2(float(xs["role_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
 	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
-	if team_mode == "contract":
+	if xs.has("salary_r"):
 		_text_cell("年俸", float(xs["salary_r"]), y, 11, FAINT, 76.0)
+	if team_mode == "contract":
 		_text_cell("年俸増減", float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
 	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
 	_text_cell("在", float(xs["years_r"]), y, 11, FAINT, 30.0)
@@ -1822,10 +1826,10 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 	_text_cell("本", float(xs["hr_r"]), y, 11, FAINT, 34.0)
 	_text_cell("打点", float(xs["rbi_r"]), y, 11, FAINT, 44.0)
 	_text_cell("盗塁", float(xs["sb_r"]), y, 11, FAINT, 44.0)
-	if team_mode != "contract":
+	if not xs.has("salary_r"):
 		_text_cell("出塁率", float(xs["obp_r"]), y, 11, FAINT, 62.0)
 	_text_cell("OPS", float(xs["ops_r"]), y, 11, FAINT, 54.0)
-	if team_mode == "contract":
+	if xs.has("salary_r"):
 		_text_cell("wRC+", float(xs["woba_r"]), y, 11, FAINT, 60.0)
 	else:
 		_text_cell("wOBA", float(xs["woba_r"]), y, 11, FAINT, 60.0)
@@ -1834,11 +1838,11 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
-func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode: String, career_stats: bool) -> void:
+func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode: String, career_stats: bool, show_salary: bool) -> void:
 	var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 	var player: PSPlayer = row.get("player", null) as PSPlayer
 	var entry: Dictionary = row.get("entry", {}) as Dictionary
-	var xs: Dictionary = _player_table_x(rect, team_mode)
+	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary)
 	if team_mode == "move":
 		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
@@ -1865,15 +1869,15 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	_text_cell(_era_str_from_stats(ps), float(xs["era_r"]), y, 13, TEXT, 62.0)
 	_text_cell(_fip_text(record, career_stats), float(xs["fip_r"]), y, 13, MUTED, 54.0)
 	_text_cell(_whip_str(ps), float(xs["whip_r"]), y, 13, MUTED, 58.0)
-	if team_mode != "contract":
+	if not xs.has("salary_r"):
 		_text_cell(_k9_str(ps), float(xs["k9_r"]), y, 13, MUTED, 54.0)
 
 
-func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode: String, career_stats: bool) -> void:
+func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode: String, career_stats: bool, show_salary: bool) -> void:
 	var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 	var player: PSPlayer = row.get("player", null) as PSPlayer
 	var entry: Dictionary = row.get("entry", {}) as Dictionary
-	var xs: Dictionary = _player_table_x(rect, team_mode)
+	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary)
 	if team_mode == "move":
 		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
@@ -1900,10 +1904,10 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	_text_cell(str(bs.home_runs), float(xs["hr_r"]), y, 13, TEXT, 34.0)
 	_text_cell(str(bs.runs_batted_in), float(xs["rbi_r"]), y, 13, MUTED, 44.0)
 	_text_cell(str(bs.stolen_bases), float(xs["sb_r"]), y, 13, MUTED, 44.0)
-	if team_mode != "contract":
+	if not xs.has("salary_r"):
 		_text_cell(_rate_short(bs.on_base_percentage()), float(xs["obp_r"]), y, 13, MUTED, 62.0)
 	_text_cell(_rate_short(bs.ops()), float(xs["ops_r"]), y, 13, TEXT, 54.0)
-	if team_mode == "contract":
+	if xs.has("salary_r"):
 		_text_cell(str(int(round(ad.wrc_plus()))) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
 	else:
 		_text_cell(_rate_short(ad.woba()) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
@@ -1917,7 +1921,7 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 	var name_limit_x: float = (float(xs["salary_r"]) - 88.0) if xs.has("salary_r") else (float(xs["age_r"]) - 46.0)
 	_text(record.name, Vector2(float(xs["name_x"]), y), 13, TEXT, name_limit_x - float(xs["name_x"]), HORIZONTAL_ALIGNMENT_LEFT, true)
 	if xs.has("salary_r"):
-		_text_cell(_comma(int(entry.get("new_salary", record.salary))), float(xs["salary_r"]), y, 13, TEXT, 76.0)
+		_text_cell(_comma(_player_table_salary(entry, record)), float(xs["salary_r"]), y, 13, TEXT, 76.0)
 	if xs.has("salary_delta_r"):
 		var salary_delta: int = int(entry.get("salary_delta", 0))
 		_text_cell(_salary_delta_text(salary_delta), float(xs["salary_delta_r"]), y, 13, _salary_delta_color(salary_delta), 80.0)
@@ -1927,7 +1931,18 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 	_text_cell(str(injury) if injury > 0 else "-", float(xs["inj_r"]), y, 13, RED if injury > 0 else FAINT, 30.0)
 
 
-func _player_table_x(rect: Rect2, team_mode: String) -> Dictionary:
+func _player_table_salary(entry: Dictionary, record: PSPlayerSeasonRecord) -> int:
+	for key in ["new_salary", "offer_salary", "salary"]:
+		if entry.has(key):
+			return int(entry.get(key, record.salary))
+	var candidate: Dictionary = entry.get("candidate", {}) as Dictionary
+	for key in ["offer_salary", "salary"]:
+		if candidate.has(key):
+			return int(candidate.get(key, record.salary))
+	return record.salary
+
+
+func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false) -> Dictionary:
 	if team_mode == "contract":
 		var cleft: float = rect.position.x
 		var cright: float = rect.end.x
@@ -1982,6 +1997,52 @@ func _player_table_x(rect: Rect2, team_mode: String) -> Dictionary:
 		team_shift = 68.0
 	var left: float = rect.position.x
 	var right: float = rect.end.x
+	if show_salary:
+		# 年俸列を持つ一覧は右側の成績を圧縮し、球団列の有無に応じて識別・能力ブロックを送る。
+		# 限られた幅では K/9 (投手) または出塁率・wOBA (野手) を省き、契約更新表と同じ成績配置にする。
+		return {
+			"team_x": left + 18.0,
+			"team_from_x": left + 18.0,
+			"team_to_x": left + 76.0,
+			"role_x": left + 18.0 + team_shift,
+			"jersey_x": left + 78.0 + team_shift,
+			"name_x": left + 104.0 + team_shift,
+			"salary_r": left + 338.0 + team_shift,
+			"age_r": left + 406.0 + team_shift,
+			"years_r": left + 452.0 + team_shift,
+			"inj_r": left + 498.0 + team_shift,
+			"eval_r": left + 562.0 + team_shift,
+			"war_r": left + 626.0 + team_shift,
+			"velo_r": left + 710.0 + team_shift,
+			"stuff_r": left + 792.0 + team_shift,
+			"ctrl_r": left + 850.0 + team_shift,
+			"stam_r": left + 908.0 + team_shift,
+			"meet_r": left + 692.0 + team_shift,
+			"pow_r": left + 738.0 + team_shift,
+			"spd_r": left + 784.0 + team_shift,
+			"def_r": left + 830.0 + team_shift,
+			"arm_r": left + 876.0 + team_shift,
+			"eye_r": left + 922.0 + team_shift,
+			"g_r": right - 552.0,
+			"w_r": right - 500.0,
+			"l_r": right - 456.0,
+			"sv_r": right - 412.0,
+			"hld_r": right - 368.0,
+			"ip_r": right - 284.0,
+			"era_r": right - 196.0,
+			"fip_r": right - 108.0,
+			"whip_r": right - 28.0,
+			"k9_r": right - 28.0,
+			"avg_r": right - 486.0,
+			"hr_r": right - 426.0,
+			"rbi_r": right - 364.0,
+			"sb_r": right - 304.0,
+			"obp_r": right - 304.0,
+			"ops_r": right - 214.0,
+			"woba_r": right - 126.0,
+			"wrc_r": right - 126.0,
+			"oaa_r": right - 28.0,
+		}
 	var rating_shift: float = min(team_shift, 68.0)
 	return {
 		"team_x": left + 18.0,
@@ -2607,6 +2668,7 @@ func _populate_released() -> void:
 					"team_id": int(c.get("from_team", 0)),
 					"position": int(c.get("position", record.position)),
 					"role": str(c.get("role", record.role)),
+					"new_salary": int(c.get("salary", record.salary)),
 					"candidate": c,
 				},
 			})
@@ -2688,6 +2750,7 @@ func _populate_fa() -> void:
 					"team_id": int(c.get("from_team", 0)),
 					"position": int(c.get("position", record.position)),
 					"role": str(c.get("role", record.role)),
+					"new_salary": int(c.get("offer_salary", c.get("salary", record.salary))),
 					"candidate": c,
 				},
 			})

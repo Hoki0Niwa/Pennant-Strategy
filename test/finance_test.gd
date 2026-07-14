@@ -55,6 +55,72 @@ func test_can_afford_addition_boundary() -> void:
 	assert_bool(TeamFinance.can_afford_addition(players, team, 1001)).is_false()
 
 
+func test_ai_offseason_reserve_tracks_later_markets() -> void:
+	var players: Array = [
+		_player({"id": 1, "team_id": 1, "foreign_player": true}),
+		_player({"id": 2, "team_id": 1, "foreign_player": true}),
+	]
+	var full_reserve: int = TeamFinance.ai_offseason_budget_reserve(players, 1, true, true)
+	assert_int(full_reserve).is_equal(
+		TeamFinance.AI_FA_BUDGET_RESERVE
+		+ 2 * TeamFinance.AI_FOREIGN_BUDGET_RESERVE_PER_SLOT
+	)
+	# 今回の獲得で外国人枠を1つ埋める場合は、残り1枠分だけを予約する。
+	var after_foreign_signing: int = TeamFinance.ai_offseason_budget_reserve(players, 1, true, true, 1)
+	assert_int(after_foreign_signing).is_equal(
+		TeamFinance.AI_FA_BUDGET_RESERVE
+		+ TeamFinance.AI_FOREIGN_BUDGET_RESERVE_PER_SLOT
+	)
+
+
+func test_released_cpu_preserves_budget_for_fa() -> void:
+	var team1: PSTeam = _team(1, "central", 25000)
+	var team2: PSTeam = _team(2, "central", 400000)
+	var players: Array = []
+	# 外国人枠は充足済みなので、後続FA用の予約額だけが必要になる。
+	for i in range(TeamFinance.FOREIGN_HELD_TARGET):
+		players.append(_player({"id": 10 + i, "team_id": 1, "position": 1, "salary": 1000, "foreign_player": true}))
+	# team1に一塁手がいないため補強needを作る。元球団team2は再獲得不可。
+	players.append(_player({"id": 20, "team_id": 2, "position": 3, "salary": 1000}))
+	var released: PSPlayer = _player({"id": 50, "team_id": 0, "position": 3, "salary": 10000})
+	released.source_data["released"] = true
+	players.append(released)
+	var entry: Dictionary = {
+		"player_id": 50, "from_team": 2, "available": true,
+		"salary": 10000, "position": 3, "track": "支配下", "value": 70, "war": 2.0,
+	}
+	var state: Dictionary = {"complete": false, "user_team_id": 0, "candidates": [entry], "signings": []}
+	assert_bool(ReleasedMarketService._can_team_afford_release(players, [team1, team2], 1, entry)).is_true()
+	assert_bool(ReleasedMarketService._can_ai_afford_release(players, [team1, team2], 1, entry)).is_false()
+	ReleasedMarketService.complete_released_market_automatically(state, players, [team1, team2], _season(), 0)
+	assert_array(state.get("signings", []) as Array).is_empty()
+	assert_int(released.team_id).is_equal(0)
+
+
+func test_fa_ai_preserves_budget_for_foreign_slots() -> void:
+	var team: PSTeam = _team(1, "central", 28000)
+	var players: Array = [
+		_player({"id": 1, "team_id": 1, "salary": 1000, "foreign_player": true}),
+		_player({"id": 2, "team_id": 1, "salary": 1000, "foreign_player": true}),
+	]
+	var entry: Dictionary = {"offer_salary": 12000, "compensation_money": 3000, "salary": 8000}
+	assert_bool(FaMarketService._can_team_afford_candidate(players, [team], 1, entry)).is_true()
+	assert_bool(FaMarketService._can_ai_afford_candidate(players, [team], 1, entry)).is_false()
+
+
+func test_acquisition_scores_prefer_lower_cost_at_equal_value() -> void:
+	var released_cheap: Dictionary = {"value": 65, "war": 1.0, "salary": 1000}
+	var released_costly: Dictionary = {"value": 65, "war": 1.0, "salary": 21000}
+	assert_float(ReleasedMarketService._signing_score(released_cheap, 5.0, [], [], 1)).is_greater(
+		ReleasedMarketService._signing_score(released_costly, 5.0, [], [], 1)
+	)
+	var fa_cheap: Dictionary = {"value": 72, "war": 2.0, "salary": 8000, "offer_salary": 10000, "compensation_money": 0}
+	var fa_costly: Dictionary = {"value": 72, "war": 2.0, "salary": 8000, "offer_salary": 25000, "compensation_money": 10000}
+	assert_float(FaMarketService._signing_score(fa_cheap, 5.0, [], [], 1)).is_greater(
+		FaMarketService._signing_score(fa_costly, 5.0, [], [], 1)
+	)
+
+
 func test_trade_payroll_ok_decreasing_allowed_increasing_blocked() -> void:
 	var over_team: PSTeam = _team(1, "central", 10000)
 	var over_players: Array = [_player({"id": 1, "team_id": 1, "salary": 10500})]

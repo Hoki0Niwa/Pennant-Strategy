@@ -9,6 +9,13 @@ const MAX_SIGNINGS_PER_TEAM: int = 2
 # 0.5 だと大半の球団がどこかのポジションで僅かでも need を持ち毎年上限の2人まで埋まってしまうため、
 # 「明確な穴」だけが対象になる水準まで上げる (=球団によって0人の年もあれば2人埋める年もある)。
 const MIN_NEED_TO_SIGN: float = 4.0
+# 能力・実績・需要から年俸負担を引いた後も、この水準を満たす候補だけをAIが獲得する。
+const MIN_AI_SIGNING_SCORE: float = 35.0
+
+# 元年俸が1000万円を超える戦力外選手は、1000万円と超過分の20%を再契約年俸にする。
+# 1000万円以下は支配下・育成とも元年俸を維持する。
+const SALARY_KEEP_THRESHOLD: int = 1000
+const SALARY_EXCESS_RATE: float = 0.20
 
 # 支配下/育成は「誰を獲得するか決めてから振り分ける」のではなく、候補ごとに別判定する。
 # 年齢が上がるほど「今すぐ支配下で通用するか」を疑われ育成寄りになり、能力(value)が高い
@@ -81,6 +88,7 @@ static func create_released_market_state(players: Array, _teams: Array, season: 
 static func submit_user_released_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "戦力外獲得市場は既に完了しています。", "state": state}
+	_sync_available_contract_salaries(state, players)
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
@@ -117,21 +125,39 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
 	var candidates: Array = available_user_candidates(state, players, teams)
-	if candidates.is_empty():
+	var best_id: int = 0
+	var best_score: float = -INF
+	for row in candidates:
+		var entry: Dictionary = row as Dictionary
+		if not _can_ai_afford_release(players, teams, user_team_id, entry):
+			continue
+		var team_need: float = float(entry.get("need", 0.0))
+		if team_need < MIN_NEED_TO_SIGN:
+			continue
+		var score: float = _signing_score(entry, team_need, players, teams, user_team_id)
+		if score < MIN_AI_SIGNING_SCORE:
+			continue
+		if score > best_score:
+			best_score = score
+			best_id = int(entry.get("player_id", 0))
+	if best_id <= 0:
 		complete_released_market_automatically(state, players, teams, season, user_team_id)
 		return {"ok": true, "state": state}
-	return submit_user_released_decision(state, players, teams, season, int((candidates[0] as Dictionary).get("player_id", 0)), "sign")
+	return submit_user_released_decision(state, players, teams, season, best_id, "sign")
 
 
 static func complete_released_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
+	_sync_available_contract_salaries(state, players)
 	var need: Dictionary = _build_position_need(players, teams)
 	var candidates: Array = state.get("candidates", []) as Array
 	candidates.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
-		if int(da.get("value", 0)) == int(db.get("value", 0)):
+		var score_a: float = _signing_score(da, 0.0, players, teams, 0)
+		var score_b: float = _signing_score(db, 0.0, players, teams, 0)
+		if is_equal_approx(score_a, score_b):
 			return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
-		return int(da.get("value", 0)) > int(db.get("value", 0))
+		return score_a > score_b
 	)
 	for row in candidates:
 		var entry: Dictionary = row as Dictionary
@@ -154,12 +180,14 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 				continue
 			if not _can_team_accept_candidate(players, team.id, entry):
 				continue
-			if not _can_team_afford_release(players, teams, team.id, entry):
+			if not _can_ai_afford_release(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 			if team_need < MIN_NEED_TO_SIGN:
 				continue
 			var score: float = _signing_score(entry, team_need, players, teams, team.id)
+			if score < MIN_AI_SIGNING_SCORE:
+				continue
 			if score > best_score:
 				best_score = score
 				best_team_id = team.id
@@ -207,6 +235,7 @@ static func finalize_released_market(state: Dictionary) -> Dictionary:
 
 
 static func available_user_candidates(state: Dictionary, players: Array, teams: Array) -> Array:
+	_sync_available_contract_salaries(state, players)
 	var rows: Array = []
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var need: Dictionary = _build_position_need(players, teams)
@@ -261,7 +290,7 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"role": player.role,
 		"from_team": from_team,
 		"foreign_player": player.foreign_player,
-		"salary": OffseasonService.DEVELOPMENT_CONTRACT_SALARY if track == TRACK_DEVELOPMENT else player.salary,
+		"salary": _released_contract_salary(player.salary),
 		"value": value,
 		"war": snapped(war, 0.01),
 		"games": games,
@@ -272,6 +301,24 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"available": true,
 		"track": track,
 	}
+
+
+static func _released_contract_salary(current_salary: int) -> int:
+	if current_salary <= SALARY_KEEP_THRESHOLD:
+		return current_salary
+	return int(round(float(SALARY_KEEP_THRESHOLD) + float(current_salary - SALARY_KEEP_THRESHOLD) * SALARY_EXCESS_RATE))
+
+
+# 候補の契約額は獲得前の元年俸から同期し、市場途中の保存・再開でも現行の算定額を使う。
+static func _sync_available_contract_salaries(state: Dictionary, players: Array) -> void:
+	for row in state.get("candidates", []) as Array:
+		var entry: Dictionary = row as Dictionary
+		if not bool(entry.get("available", true)) or bool(entry.get("signed", false)):
+			continue
+		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
+		if not _is_released_market_player(player):
+			continue
+		entry["salary"] = _released_contract_salary(player.salary)
 
 
 # 年齢が上がるほど育成寄りになる確率を計算し、候補作成時に一度だけ支配下/育成の
@@ -304,6 +351,7 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 		"salary",
 		OffseasonService.DEVELOPMENT_CONTRACT_SALARY if player.development_player else player.salary
 	))
+	player.source_data["released_contract_salary"] = player.salary
 	PSCareerLog.log_released_signed(player, year, int(entry.get("from_team", 0)), to_team_id, player.development_player)
 	if player.development_player:
 		# 獲得した同オフの育成整理 (成長ステップ内) で即放出されないよう1オフ分保持する。
@@ -378,6 +426,14 @@ static func _can_team_afford_release(players: Array, teams: Array, team_id: int,
 	return TeamFinance.can_afford_addition(players, team, int(entry.get("salary", 0)))
 
 
+# 戦力外市場のAIは、今回の年俸に加えて後続のFA・外国人補強費も残す。
+static func _can_ai_afford_release(players: Array, teams: Array, team_id: int, entry: Dictionary) -> bool:
+	var team: PSTeam = _find_team_by_id(teams, team_id)
+	var incoming_foreign: int = 1 if bool(entry.get("foreign_player", false)) else 0
+	var reserve: int = TeamFinance.ai_offseason_budget_reserve(players, team_id, true, true, incoming_foreign)
+	return TeamFinance.can_afford_ai_addition(players, team, int(entry.get("salary", 0)), reserve)
+
+
 static func _is_released_market_player(player: PSPlayer) -> bool:
 	if player == null:
 		return false
@@ -392,6 +448,7 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 static func _signing_score(entry: Dictionary, team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
 	var score: float = float(entry.get("value", 0)) * (1.0 + team_need / 16.0)
 	score += float(entry.get("war", 0.0)) * 5.0
+	score -= TeamFinance.ai_acquisition_cost_penalty(int(entry.get("salary", 0)))
 	return score
 
 
@@ -443,16 +500,7 @@ static func _active_count_for_team(players: Array, team_id: int) -> int:
 
 
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:
-	var count: int = 0
-	for row in players:
-		var player: PSPlayer = row as PSPlayer
-		if player == null or player.team_id != team_id:
-			continue
-		if player.is_retired():
-			continue
-		if player.foreign_player:
-			count += 1
-	return count
+	return TeamFinance.foreign_player_count(players, team_id)
 
 
 static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:

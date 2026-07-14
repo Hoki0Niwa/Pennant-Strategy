@@ -11,7 +11,7 @@ const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_
 const FOREIGN_FA_YEARS: int = 7
 const SCOUT_CANDIDATES_PER_REQUEST: int = 4
 const MAX_CPU_REQUESTS_PER_TEAM: int = 4
-const MAX_FOREIGN_HELD_PER_TEAM: int = 4
+const MAX_FOREIGN_HELD_PER_TEAM: int = TeamFinance.FOREIGN_HELD_TARGET
 const FOREIGN_SLOT_FILL_BONUS: float = 10.0
 const CANDIDATE_MIN_AGE: int = 24
 const CANDIDATE_MAX_AGE: int = 32
@@ -319,6 +319,7 @@ static func _signing_score(candidate: Dictionary, team_need: float, players: Arr
 	# CPUもプレイヤーと同じスカウト情報だけを使い、実能力を透視しない。
 	var score: float = float(candidate.get("estimated_value", candidate.get("value", 0))) * (1.0 + team_need / 20.0)
 	score += float(open_slots) * FOREIGN_SLOT_FILL_BONUS
+	score -= TeamFinance.ai_acquisition_cost_penalty(int(candidate.get("salary", 0)))
 	return score
 
 
@@ -463,14 +464,8 @@ static func _cpu_scout_request(players: Array, team: PSTeam, need: Dictionary) -
 	var position_key: String = _request_key_for_position(players, team.id, desired_position)
 	var archetype: String = _weakest_archetype(players, team.id, position_key)
 	var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, team.id))
-	var budget_band: String = "bargain"
-	# 帯の上限まで払える場合だけ上位帯へ進み、抽選結果だけで全員予算超過になるのを避ける。
-	if room >= 40000:
-		budget_band = "star"
-	elif room >= 20000:
-		budget_band = "core"
-	elif room >= 12000:
-		budget_band = "standard"
+	var open_slots: int = maxi(1, MAX_FOREIGN_HELD_PER_TEAM - _foreign_count_for_team(players, team.id))
+	var budget_band: String = _cpu_budget_band(room, open_slots)
 	return {
 		"team_id": team.id,
 		"position": position_key,
@@ -478,6 +473,17 @@ static func _cpu_scout_request(players: Array, team: PSTeam, need: Dictionary) -
 		"budget_band": budget_band,
 		"method": "cpu",
 	}
+
+
+# 残予算を未充足枠へ均等配分し、各枠の予算で候補帯の上限まで払える最高帯を選ぶ。
+# 先に高額選手1人へ使い切って残り枠を補充できなくなることを防ぐ。
+static func _cpu_budget_band(room: int, open_slots: int) -> String:
+	var per_slot: int = floori(float(maxi(0, room)) / float(maxi(1, open_slots)))
+	for band_name in ["star", "core", "standard", "bargain"]:
+		var band: Dictionary = BUDGET_BANDS[band_name] as Dictionary
+		if per_slot >= int(band.get("salary_max", 0)):
+			return band_name
+	return "bargain"
 
 
 static func _request_key_for_position(players: Array, team_id: int, position: int) -> String:
@@ -698,16 +704,7 @@ static func _active_count_for_team(players: Array, team_id: int) -> int:
 
 
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:
-	var count: int = 0
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id != team_id:
-			continue
-		if player.is_retired():
-			continue
-		if player.foreign_player:
-			count += 1
-	return count
+	return TeamFinance.foreign_player_count(players, team_id)
 
 
 static func _max_player_id(players: Array) -> int:

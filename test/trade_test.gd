@@ -37,6 +37,14 @@ func test_is_tradeable_excludes_foreign_development_injured_rookie() -> void:
 	assert_bool(TradeService.is_tradeable(free_agent)).is_false()
 
 
+func test_trade_value_accounts_for_salary_at_equal_future_value() -> void:
+	var cheap: PSPlayer = _player_with_z(7, 1, 3, false, 1.0)
+	var costly: PSPlayer = _player_with_z(8, 1, 3, false, 1.0)
+	cheap.salary = 1000
+	costly.salary = 31000
+	assert_float(TradeService.trade_value(cheap)).is_greater(TradeService.trade_value(costly))
+
+
 func test_execute_trade_moves_players_rosters_and_fa_days() -> void:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var season: PSSeason = _season(1)

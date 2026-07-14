@@ -286,7 +286,7 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 #   - 外国人枠は即戦力前提なので、野手150PA以下 / 先発10登板以下 / 救援20登板以下の
 #     低稼働シーズンも放出候補にする。
 # CPU は自動。自軍は戦力外エディタの自動選択に候補として出し、確定時は選択された選手だけ切る。
-const FOREIGN_ROSTER_LIMIT: int = 4
+const FOREIGN_ROSTER_LIMIT: int = TeamFinance.FOREIGN_HELD_TARGET
 const FOREIGN_RELEASE_MIN_VALUE: int = 52
 const FOREIGN_RELEASE_FIELDER_MAX_PA: int = 150
 const FOREIGN_RELEASE_STARTER_MAX_STARTS: int = 10
@@ -647,6 +647,8 @@ static func _release_cut_score(player: PSPlayer, record: PSPlayerSeasonRecord) -
 	var development_bonus: float = expected_development_score_bonus(player.age, 6, player.position)
 	if player.age <= RELEASE_DEVELOPMENT_PROTECT_MAX_AGE:
 		score += development_bonus * RELEASE_DEVELOPMENT_SCORE_WEIGHT
+	# 同程度の戦力なら高年俸ほど整理対象に近づけ、限られた予算を主力と補強へ回す。
+	score -= TeamFinance.ai_acquisition_cost_penalty(player.salary)
 	var overall: int = player_value_score(player)
 	if player.age >= RELEASE_MIDCAREER_NOSHOW_MIN_AGE and player.age <= RELEASE_MIDCAREER_NOSHOW_MAX_AGE:
 		if overall <= RELEASE_MIDCAREER_NOSHOW_MAX_OVERALL and _zero_appearances(record):
@@ -1873,7 +1875,7 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 		_apply_fa_service_days(player, record, season)
 		var war: float = _season_war(record, league_ctx)
 		var old_salary: int = player.salary
-		var skip_salary_update: bool = year > 0 and int(player.source_data.get("fa_signed_year", 0)) == year and player.source_data.has("fa_contract_salary")
+		var skip_salary_update: bool = _market_contract_salary_is_locked(player, year)
 		if not skip_salary_update:
 			var new_salary: int = _compute_new_salary(player, record, war)
 			if new_salary != old_salary:
@@ -1971,6 +1973,16 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 		"team_budgets": team_budgets,
 		"over_budget_count": over_budget_count,
 	}
+
+
+# FA移籍・戦力外獲得で今オフに合意した年俸は、直後の契約更新では再査定しない。
+# 翌オフからは通常の成績査定へ戻る。
+static func _market_contract_salary_is_locked(player: PSPlayer, year: int) -> bool:
+	if year <= 0:
+		return false
+	var fa_locked: bool = int(player.source_data.get("fa_signed_year", 0)) == year and player.source_data.has("fa_contract_salary")
+	var released_locked: bool = int(player.source_data.get("released_signed_year", 0)) == year and player.source_data.has("released_contract_salary")
+	return fa_locked or released_locked
 
 
 # 1軍登録日数と FA閾値から contract_status を決める。

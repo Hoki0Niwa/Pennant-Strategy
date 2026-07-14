@@ -5,7 +5,7 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 # シーズン中トレード v1 (R4 Step4)。「余剰と不足の交換」を最小構成で成立させる。
 # - 交換期限 (7/31) までの試合日に、週次で CPU 間トレードと CPU→自軍提案を低頻度判定する。
-# - ユーザーはトレード画面から提案を作成でき、CPU は同じ評価軸 (future_value + 需要) で受諾判定する。
+# - ユーザーはトレード画面から提案を作成でき、CPU は同じ評価軸 (future_value - 年俸負担 + 需要) で受諾判定する。
 # - 対象は支配下の健康な日本人非新人のみ (外国人 / 育成 / 怪我人 / FA宣言中 / 入団初年は対象外)。
 # - 成立時は player.team_id / 当季 record.team_id / 両軍一軍ロスター / FA日数台帳を更新する。
 # 状態は season.trade_state に集約 (成立ログ / 自軍宛て提案 / 週次チェック日 / 球団別成立数)。
@@ -163,7 +163,7 @@ static func is_tradeable(player: PSPlayer) -> bool:
 
 
 static func trade_value(player: PSPlayer) -> float:
-	return OffseasonService.future_value_score(player)
+	return OffseasonService.future_value_score(player) - TeamFinance.ai_acquisition_cost_penalty(player.salary)
 
 
 # 受け手球団にとっての需要フィット (need マップの該当スロット値)。

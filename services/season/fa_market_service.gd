@@ -12,6 +12,8 @@ const MAX_DECLARE_PER_TEAM: int = 2
 const MAX_SIGNINGS_PER_TEAM: int = 3
 const FA_RESIGN_COOLDOWN_YEARS: int = 3
 const MIN_NEED_TO_SIGN: float = 1.0
+# 提示年俸と補償金を差し引いた後も一定の補強価値が残る候補だけをAIが獲得する。
+const MIN_AI_SIGNING_SCORE: float = 45.0
 const USER_NEGOTIATION_BONUS: float = 0.08
 const CPU_NEGOTIATION_BONUS: float = 0.0
 const FA_SIGN_CHANCE_MIN: float = 0.06
@@ -136,11 +138,13 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 			continue
 		if not _can_team_accept_candidate(players, state, user_team_id, entry):
 			continue
-		if not _can_team_afford_candidate(players, teams, user_team_id, entry):
+		if not _can_ai_afford_candidate(players, teams, user_team_id, entry):
 			continue
 		var need: Dictionary = _build_position_need(players, teams)
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 		var score: float = _signing_score(entry, team_need, players, teams, user_team_id)
+		if score < MIN_AI_SIGNING_SCORE:
+			continue
 		if score > best_score:
 			best_score = score
 			best_id = int(entry.get("player_id", 0))
@@ -156,9 +160,11 @@ static func complete_fa_market_automatically(state: Dictionary, players: Array, 
 	declared.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
-		if int(da.get("value", 0)) == int(db.get("value", 0)):
+		var score_a: float = _signing_score(da, 0.0, players, teams, 0)
+		var score_b: float = _signing_score(db, 0.0, players, teams, 0)
+		if is_equal_approx(score_a, score_b):
 			return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
-		return int(da.get("value", 0)) > int(db.get("value", 0))
+		return score_a > score_b
 	)
 	for row in declared:
 		var entry: Dictionary = row as Dictionary
@@ -178,12 +184,14 @@ static func complete_fa_market_automatically(state: Dictionary, players: Array, 
 				continue
 			if not _can_team_accept_candidate(players, state, team.id, entry):
 				continue
-			if not _can_team_afford_candidate(players, teams, team.id, entry):
+			if not _can_ai_afford_candidate(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 			if team_need < MIN_NEED_TO_SIGN:
 				continue
 			var score: float = _signing_score(entry, team_need, players, teams, team.id)
+			if score < MIN_AI_SIGNING_SCORE:
+				continue
 			if score > best_score:
 				best_score = score
 				best_team_id = team.id
@@ -664,10 +672,17 @@ static func _can_team_afford_candidate(players: Array, teams: Array, team_id: in
 	return TeamFinance.can_afford_addition(players, team, _fa_cost(entry))
 
 
+# FA市場のAIは、契約後にも未充足の外国人枠を格安帯で埋められる予算を残す。
+static func _can_ai_afford_candidate(players: Array, teams: Array, team_id: int, entry: Dictionary) -> bool:
+	var team: PSTeam = _find_team_by_id(teams, team_id)
+	var reserve: int = TeamFinance.ai_offseason_budget_reserve(players, team_id, false, true)
+	return TeamFinance.can_afford_ai_addition(players, team, _fa_cost(entry), reserve)
+
+
 static func _signing_score(entry: Dictionary, team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
 	var score: float = float(entry.get("value", 0)) * (1.0 + team_need / 20.0)
 	score += float(entry.get("war", 0.0)) * 6.0
-	score += float(int(entry.get("offer_salary", entry.get("salary", 0))) - int(entry.get("salary", 0))) * 0.001
+	score -= TeamFinance.ai_acquisition_cost_penalty(_fa_cost(entry))
 	return score
 
 

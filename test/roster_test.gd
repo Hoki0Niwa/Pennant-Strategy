@@ -79,6 +79,22 @@ func test_foreign_higher_budget_returns_fewer_candidates() -> void:
 	assert_int(int(star.get("estimate_max", 0))).is_equal(int(star.get("estimated_value", 0)))
 
 
+func test_foreign_cpu_splits_room_across_all_open_slots() -> void:
+	# 4枠を埋めるときは残額を4等分して候補帯を選び、1人目に使い切らない。
+	assert_str(ForeignPlayerService._cpu_budget_band(40000, 4)).is_equal("bargain")
+	assert_str(ForeignPlayerService._cpu_budget_band(48000, 4)).is_equal("standard")
+	assert_str(ForeignPlayerService._cpu_budget_band(80000, 4)).is_equal("core")
+	assert_str(ForeignPlayerService._cpu_budget_band(160000, 4)).is_equal("star")
+
+
+func test_foreign_signing_score_prefers_lower_salary_at_equal_estimate() -> void:
+	var cheap: Dictionary = {"estimated_value": 65, "salary": 6000}
+	var costly: Dictionary = {"estimated_value": 65, "salary": 18000}
+	assert_float(ForeignPlayerService._signing_score(cheap, 5.0, [], [], 1)).is_greater(
+		ForeignPlayerService._signing_score(costly, 5.0, [], [], 1)
+	)
+
+
 func test_foreign_any_request_keeps_one_position_group_per_shortlist() -> void:
 	Rng.set_seed_value(20260716)
 	var state: Dictionary = ForeignPlayerService.create_foreign_market_state([], [_team(1)], null, 1)
@@ -267,6 +283,60 @@ func test_released_market_apply_signing_sets_development_flags_from_track() -> v
 	assert_int(signed.salary).is_equal(Offseason.DEVELOPMENT_CONTRACT_SALARY)
 
 
+func test_released_market_contract_salary_keeps_cheap_players_and_cuts_high_salary() -> void:
+	for salary in [350, 800, 1000]:
+		assert_int(ReleasedMarket._released_contract_salary(salary)).is_equal(salary)
+
+	assert_int(ReleasedMarket._released_contract_salary(2000)).is_equal(1200)
+	assert_int(ReleasedMarket._released_contract_salary(3000)).is_equal(1400)
+	assert_int(ReleasedMarket._released_contract_salary(10000)).is_equal(2800)
+	assert_int(ReleasedMarket._released_contract_salary(30000)).is_equal(6800)
+	assert_int(ReleasedMarket._released_contract_salary(1003)).is_equal(1001)
+
+
+func test_released_market_available_candidates_refresh_new_contract_salary() -> void:
+	var released: PSPlayer = _player({"id": 9303, "team_id": 0, "salary": 10000, "source_data": {"released": true}})
+	var stale_entry: Dictionary = {
+		"player_id": released.id,
+		"from_team": 1,
+		"position": released.position,
+		"foreign_player": false,
+		"track": ReleasedMarket.TRACK_SHIENKA,
+		"salary": released.salary,
+		"available": true,
+	}
+	var state: Dictionary = {"user_team_id": 2, "candidates": [stale_entry], "signings": []}
+	var candidates: Array = ReleasedMarket.available_user_candidates(state, [released], [_team(1), _team(2)])
+
+	assert_int(candidates.size()).is_equal(1)
+	assert_int(int((candidates[0] as Dictionary).get("salary", 0))).is_equal(2800)
+	assert_int(int(stale_entry.get("salary", 0))).is_equal(2800)
+
+
+func test_released_market_signing_salary_is_locked_until_next_offseason() -> void:
+	var signed: PSPlayer = _player({"id": 9302, "team_id": 0, "salary": 10000, "source_data": {"released": true}})
+	var entry: Dictionary = {
+		"player_id": signed.id,
+		"from_team": 1,
+		"track": ReleasedMarket.TRACK_SHIENKA,
+		"salary": ReleasedMarket._released_contract_salary(signed.salary),
+		"value": 60,
+	}
+	ReleasedMarket._apply_signing({"year": 2026, "signings": []}, [signed], null, entry, 2, "cpu")
+
+	assert_int(signed.salary).is_equal(2800)
+	assert_int(int(signed.source_data.get("released_contract_salary", 0))).is_equal(2800)
+	assert_bool(Offseason._market_contract_salary_is_locked(signed, 2026)).is_true()
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var contract_result: Dictionary = Offseason.process_contract_update([signed], [], season)
+	assert_int(signed.salary).is_equal(2800)
+	assert_int(int(contract_result.get("raises_count", -1))).is_equal(0)
+	assert_int(int(contract_result.get("cuts_count", -1))).is_equal(0)
+	assert_bool(Offseason._market_contract_salary_is_locked(signed, 2027)).is_false()
+
+
 # --- 戦力外選定 (動的キーパー水準、人数目標なし) ------------------------------
 
 func test_compute_primary_protected_ids_does_not_blanket_protect_scarce_position() -> void:
@@ -396,6 +466,18 @@ func test_release_penalizes_surplus_position_players() -> void:
 	# 投手は対象外。
 	var pitcher: PSPlayer = _player_with_z(9772, 1, 1, true, 0.0)
 	assert_float(Offseason._position_surplus_release_penalty({1: 40}, pitcher)).is_equal(0.0)
+
+
+func test_release_cut_score_penalizes_high_salary_at_equal_ability() -> void:
+	var cheap: PSPlayer = _player_with_z(9780, 1, 3, false, 0.0)
+	var costly: PSPlayer = _player_with_z(9781, 1, 3, false, 0.0)
+	cheap.age = 29
+	costly.age = 29
+	cheap.salary = 1000
+	costly.salary = 31000
+	assert_float(Offseason._release_cut_score(cheap, null)).is_greater(
+		Offseason._release_cut_score(costly, null)
+	)
 
 
 func test_compute_release_candidates_returns_empty_when_all_protected() -> void:

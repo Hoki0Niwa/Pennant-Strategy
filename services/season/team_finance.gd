@@ -37,6 +37,15 @@ const BUDGET_RANK_BONUS: Dictionary = {1: 24000, 2: 18000, 3: 13000, 4: 9000, 5:
 const BUDGET_LEAGUE_CHAMPION_BONUS: int = 10000
 const BUDGET_JAPAN_CHAMPION_BONUS: int = 15000
 
+# AI の補強評価。年俸 AI_SALARY_COST_PER_SCORE 万円につき評価を1点下げる。
+# 小さくすると安さを重視し、大きくすると能力を優先する。
+const AI_SALARY_COST_PER_SCORE: float = 1000.0
+# 戦力外市場では、後続のFAで主力級1人へ提示できる額を先に残す。
+const AI_FA_BUDGET_RESERVE: int = 12000
+# 外国人不足1枠につき、格安帯の上限額を残す。候補獲得後も残り枠分を再計算する。
+const FOREIGN_HELD_TARGET: int = 4
+const AI_FOREIGN_BUDGET_RESERVE_PER_SLOT: int = 6000
+
 
 # 支配下選手数 (team_id 一致 ∧ 非引退 ∧ 非マネージャー ∧ 非育成)。70 枠の母数。
 static func shienka_count(players: Array, team_id: int) -> int:
@@ -95,6 +104,20 @@ static func team_payroll(players: Array, team_id: int) -> int:
 			continue
 		total += player.salary
 	return total
+
+
+# チームが保有する非引退外国人数。支配下/育成のどちらも保有枠として数える。
+static func foreign_player_count(players: Array, team_id: int) -> int:
+	var count: int = 0
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if player.is_retired():
+			continue
+		if player.foreign_player:
+			count += 1
+	return count
 
 
 # 予算残枠 (負なら超過)。
@@ -187,6 +210,35 @@ static func can_afford_addition(players: Array, team: PSTeam, added_cost: int) -
 		return false
 	var payroll: int = team_payroll(players, team.id)
 	return payroll + added_cost <= team.funds
+
+
+# AI用補強ゲート。獲得費に加えて、後続市場へ残す reserve も予算内に確保する。
+static func can_afford_ai_addition(players: Array, team: PSTeam, added_cost: int, reserve: int) -> bool:
+	if team == null:
+		return false
+	var payroll: int = team_payroll(players, team.id)
+	return payroll + maxi(0, added_cost) + maxi(0, reserve) <= team.funds
+
+
+# オフの残り市場向け予算。additional_foreign は今回の獲得で埋まる外国人枠数。
+static func ai_offseason_budget_reserve(
+	players: Array,
+	team_id: int,
+	reserve_fa: bool,
+	reserve_foreign: bool,
+	additional_foreign: int = 0
+) -> int:
+	var reserve: int = AI_FA_BUDGET_RESERVE if reserve_fa else 0
+	if reserve_foreign:
+		var held_after_addition: int = foreign_player_count(players, team_id) + maxi(0, additional_foreign)
+		var open_slots: int = maxi(0, FOREIGN_HELD_TARGET - held_after_addition)
+		reserve += open_slots * AI_FOREIGN_BUDGET_RESERVE_PER_SLOT
+	return reserve
+
+
+# 能力・需要スコアから差し引く補強コスト。FAは提示年俸と補償金の合計を渡す。
+static func ai_acquisition_cost_penalty(cost: int) -> float:
+	return float(maxi(0, cost)) / AI_SALARY_COST_PER_SCORE
 
 
 # トレードゲート: 年俸総額が増えない (out >= in) 交換は予算に関わらず常に許可する。
