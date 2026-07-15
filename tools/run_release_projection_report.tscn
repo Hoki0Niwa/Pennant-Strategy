@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_release_projection_report.gd" id="1_run_release_projection_report"]
+
+[node name="RunReleaseProjectionReport" type="Node"]
+script = ExtResource("1_run_release_projection_report")

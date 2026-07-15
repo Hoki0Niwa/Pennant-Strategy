@@ -3,6 +3,7 @@ class_name OffseasonService
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
+const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
 # 引退は「年齢による自然減」と「高齢かつ低稼働」を併用する。
 # 出場機会を維持している選手でも40歳以降は毎年確率が上がり、48歳で必ず引退する。
@@ -11,14 +12,8 @@ const RETIREMENT_AGE_THRESHOLD: int = 38
 const FORCED_RETIREMENT_RAMP_START_AGE: int = 40
 const FORCED_RETIREMENT_CERTAIN_AGE: int = 48
 
-# 自動戦力外通告(CPU/自軍ボタン共通)は **編成計画ベース** (2026-07-03 全面刷新):
-# NPB の実運用どおり「来季開幕支配下の目標 (TeamFinance.OPENING_ROSTER_TARGET=68) から逆算」する。
-#   放出数 = 現在籍 + 見込み補強 (ドラフト見込み+外国人不足分+補強予約+育成昇格見込み) − 目標(±jitter)
-# 誰を切るかは cut_score 昇順 (各種保護は従来どおり尊重)。旧方式 (リーグ全体パーセンタイル
-# + ソフト上限 + 年齢ティア表) は、保護の被覆率とロスター収支に振り回されて調整困難だったため全廃。
-# 計画ベースの利点: ドラフト (同じ目標との差分埋め) と収支が連動して現実の人数感に落ち着く /
-# 再実行しても目標到達済みなら追加カット 0 (冪等 = セーブ再開系の事故に強い) /
-# 成績データが欠損していても人数が計画値に収まる (選定の質だけが落ちる)。
+# 自動戦力外通告は、来季の役割スロットから溢れ、かつ将来価値が代替水準を下回る選手だけを対象にする。
+# 開幕支配下目標から逆算する編成計画は人数目標ではなく、候補数の上限としてのみ使う。
 # 見込みドラフト人数 (draft_service の目標と桁を合わせる。厳密一致は不要で、実際の指名数は
 # ドラフト時点の在籍から自動で再計算されるため誤差は自己補正される)。
 const RELEASE_PLAN_DRAFT_ESTIMATE: int = 7
@@ -26,58 +21,28 @@ const RELEASE_PLAN_DRAFT_ESTIMATE: int = 7
 const RELEASE_PLAN_SIGNING_RESERVE: int = 2
 # 育成昇格見込みとして計画に足す上限 (昇格はオフの後段で起こり支配下を増やす)。
 const RELEASE_PLAN_PROMO_CAP: int = 2
-# 開幕目標の球団別ゆらぎ (±)。全球団が同じ人数に収束しないための味付け。
-const RELEASE_PLAN_TARGET_JITTER: int = 1
 # 1球団が1オフに放出できる上限 (計画暴走の安全弁)。
 const RELEASE_PLAN_MAX_PER_TEAM: int = 15
-# 常時カット (無出場ベテラン等) が計画数を超えて切れる上限。健全なデータなら該当は 0〜3 人で
-# 実質無制限だが、成績レコード欠損時 (全員出場ゼロに見える) に大量放出へ暴走しないための安全弁。
-const RELEASE_ALWAYS_CUT_MAX: int = 6
-# 入団1年目のみ rookie 保護 (2026-07-03、旧2年)。age<=23 の若手保護は別に残るので、
-# 実質露出するのは大卒/社会人入団の2年目 (24歳+) だけ。
+# 編成計画に対して許容する上振れ。下限は設けず、該当者が少なければその人数で止める。
+const RECONCILE_UPPER_SLACK: int = 2
+# 入団1年目のみ rookie 保護する。
 const CPU_RELEASE_ROOKIE_PROTECTION_YEARS: int = 1
-const CPU_RELEASE_PHASE1_AGE: int = 30
-# 常時カットの役割別「少試合」上限 (出場0も含む)。
-const CPU_RELEASE_PHASE1_STARTER_MAX: int = 3
-const CPU_RELEASE_PHASE1_RELIEVER_MAX: int = 10
-const CPU_RELEASE_PHASE1_FIELDER_MAX: int = 20
+# 同一CSV・seed=20260714 の比較レポートで、日本人 years<=2 の projected_value 中央値は60.34。
+# 長期較正で新人中央値より約8点低い52に置き、上げるほど戦力外候補が増える。
+const RELEASE_REPLACEMENT_VALUE: float = 52.0
 
-# 戦力外プロテクト: 一定以上稼働した選手は全フェーズで保護対象 (cut 候補から除外)。
-# 野手=出場試合数、先発=先発登板数、中継ぎ=救援登板数 (どちらか満たせば投手は保護)。
-# 2026-07-03: 旧値 (先発8/救援15) は野手80試合に比べ極端に緩く、戦力外が野手に偏る
-# (投手:野手≈1:2) 一因だったため、現実水準 (半ローテ/主力中継ぎ級) へ引き上げ。
-# NPB では20登板前後の中継ぎも普通に戦力外になる。
-const RELEASE_PROTECT_FIELDER_GAMES: int = 80
-const RELEASE_PROTECT_STARTER_STARTS: int = 13
-const RELEASE_PROTECT_RELIEVER_APPEARANCES: int = 30
-# 出場数プロテクトの能力下限。総合がこれ未満なら、いくら出場しても保護しない (居座り防止)。
-const RELEASE_PROTECT_MIN_OVERALL: int = 30
-# 投手は「26歳以上で登板ゼロ」を最優先で戦力外にする (Phase 1 で年齢30未満でもカット)。
-const CPU_RELEASE_PITCHER_NOSHOW_AGE: int = 26
-# 能力プロテクトは「高能力 かつ 怪我で出場できなかった」場合のみ発動 (無条件の総合値フロアは設けない)。
-const RELEASE_PROTECT_INJURY_OVERALL: int = 70
-const RELEASE_PROTECT_INJURY_DAYS: int = 30
-
-# 本職保護: 各守備位置で戦力外から守る上位人数 (overall 順)。野手 2 / 捕手 6。
-const PRIMARY_PROTECT_FIELDER: int = 2
-const PRIMARY_PROTECT_CATCHER: int = 6
-const PRIMARY_PROTECT_MIN_OVERALL: int = 45
-const RELEASE_YOUNG_PROTECT_AGE: int = 23
-# 24-26歳の育成降格候補向けスコア加点(_release_cut_score)の対象年齢上限。
-const RELEASE_DEVELOPMENT_PROTECT_MAX_AGE: int = 26
-const RELEASE_DEVELOPMENT_SCORE_WEIGHT: float = 5.0
-const RELEASE_MIDCAREER_NOSHOW_MIN_AGE: int = 27
-const RELEASE_MIDCAREER_NOSHOW_MAX_AGE: int = 32
-const RELEASE_MIDCAREER_NOSHOW_MAX_OVERALL: int = 55
-const RELEASE_MIDCAREER_NOSHOW_PENALTY: float = 24.0
+# 少出場引退に使う役割別上限。戦力外選定には使わない。
+const RETIREMENT_LOW_STARTER_MAX: int = 3
+const RETIREMENT_LOW_RELIEVER_MAX: int = 10
+const RETIREMENT_LOW_FIELDER_MAX: int = 20
 
 # roadmap #3 育成制度に合わせたロスター判定 (支配下→育成 / 育成→戦力外 / 育成→支配下)。
 # 「今後2〜3年の期待価値」を future_value_score に一本化し、相対値・代替差で段階判定する。
 #
 # 統一スコア future_value_score = 現在能力 (player_value_score)
 #   + 成長期待 (expected_development_score_bonus * FUTURE_GROWTH_WEIGHT) − 故障リスク (injury_value_penalty)。
-# 希少性・編成適合は本職プロテクト (_compute_primary_protected_ids) / draft の need で構造的に担保し、
-# スコアには混ぜない (二重評価回避)。
+# 希少性・編成適合は戦力外の役割スロット / draft の need で構造的に担保し、
+# 育成用スコアには混ぜない。
 const FUTURE_GROWTH_WEIGHT: float = 1.0
 # 故障リスク減点: injury_days 30日ごとに ~1 点、上限 INJURY_PENALTY_CAP。恒久能力低下は既に z へ
 # 反映済みなので二重減点しない (残存離脱日数の機会損失だけを軽く引く)。
@@ -392,35 +357,27 @@ static func _is_low_usage_foreign(player: PSPlayer, record: PSPlayerSeasonRecord
 
 
 # 指定球団について戦力外候補を選んで player_ids[] を返す。
-# 自軍「自動で決める」ボタンと CPU 自動戦力外 (process_cpu_releases) 共通アルゴリズム。
-#
-# 設計 (2026-07-03 編成計画ベースへ全面刷新): NPB の実運用どおり「来季開幕支配下の目標
-# (TeamFinance.OPENING_ROSTER_TARGET) から逆算」して切る人数を決める。
-#   放出数 = 現在籍 + 見込み補強 (_release_plan_count) − 目標(±jitter)
-# 誰を切るかは 2 段:
-#   (A) 常時カット: 出場ゼロ/極少のベテラン (age>=30 AND 少試合、投手は26歳以上登板ゼロ)。
-#       計画数と独立に必ず切るが、成績データ欠損時の暴走防止に RELEASE_ALWAYS_CUT_MAX で上限。
-#   (B) 計画カット: 残り計画数を cut_score 昇順 (未出場優先) で切る。
-# 保護 (両段共通): is_retired / rookie (入団 years<=1) / 若手 age<=23 / 出場実績
-# (_is_protected_from_release) / 本職上位 (_compute_primary_protected_ids) / 外国人 (別基準)。
-# 保護が計画数より多く残る球団は計画未達で止まる (数値目標より安全重視)。その分は
-# ドラフト目標 (同じ開幕目標との差分埋め) が小さくなる形で自己補正される。
+# 自軍「自動で決める」ボタンと CPU 自動戦力外の共通アルゴリズム。
+# 国内選手は「役割スロット外」かつ「projected_value が代替水準未満」の場合だけ候補にする。
+# 編成計画は候補数の上限にのみ使い、人数不足を埋める強制カットは行わない。
 static func compute_release_candidates_for_team(players: Array, team_id: int, season: PSSeason, include_foreign_release_candidates: bool = false) -> Array:
-	# (1) チーム全員 (非引退非マネージャー候補) を集める。rookie protection はここでは適用しない。
 	var roster_records_all: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player.team_id != team_id:
+		if player == null or player.team_id != team_id:
 			continue
 		if player.is_retired():
 			continue
-		# roadmap #3: 育成選手は支配下枠外。戦力外候補には含めない。
 		if player.development_player:
 			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
-		roster_records_all.append({"player": player, "record": record})
+		roster_records_all.append({
+			"player": player,
+			"record": record,
+			"projected_value": ReleaseValueProjector.projected_value(player, record),
+		})
 	if roster_records_all.is_empty():
 		return []
 
@@ -429,139 +386,108 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		for pid_v in compute_foreign_release_candidates_for_team(players, team_id, season):
 			foreign_release_set[int(pid_v)] = true
 
-	# 本職保護: 各守備位置の上位 (野手2 / 捕手6) 名のうち、能力/年齢の実力基準を満たす選手だけを
-	# 戦力外対象から除外する (draft_service の本職補強と対)。頭数が少ないだけでは保護しない
-	# (2026-07-02: 旧実装は在籍数が keep 以下なら無条件保護しており、捕手が事実上聖域化していた)。
-	var protected_primary_ids: Dictionary = _compute_primary_protected_ids(roster_records_all)
-	# 外国人は通常の戦力外では基本的に保護する。ただし自軍自動選択では、外国人専用条件
-	# (4枠超過 / 能力不足 / 低稼働) に該当する選手だけ候補に入れる。
-	for row in roster_records_all:
-		var fp: PSPlayer = (row as Dictionary)["player"] as PSPlayer
-		if fp.foreign_player and not foreign_release_set.has(fp.id):
-			protected_primary_ids[fp.id] = true
-
-	var cut_ids: Array = []
-	var cut_set: Dictionary = {}
-	if include_foreign_release_candidates:
-		for row in roster_records_all:
-			var fp: PSPlayer = (row as Dictionary)["player"] as PSPlayer
-			if not foreign_release_set.has(fp.id):
-				continue
-			cut_ids.append(fp.id)
-			cut_set[fp.id] = true
-
-	# ポジション構成: 本職の在籍数が快適水準を超えるポジションの選手は切られやすくする
-	# (cut_score へ減点)。打撃偏重の総合値だけで切ると守備型 (SS/CF/2B) が先に消えて
-	# コーナー (1B/LF) が蓄積するため、現実の球団運用どおり構成バランスを考慮する。
-	var primary_position_counts: Dictionary = {}
-	for row in roster_records_all:
-		var count_player: PSPlayer = (row as Dictionary)["player"] as PSPlayer
-		if count_player != null and not count_player.is_pitcher():
-			primary_position_counts[count_player.position] = int(primary_position_counts.get(count_player.position, 0)) + 1
-
-	# (2) 保護されていない選手を「常時カット該当」と「通常プール」に振り分ける。
-	var always_cut_pool: Array = []
-	var normal_pool: Array = []
+	var grouped_rows: Dictionary = {}
 	for row in roster_records_all:
 		var data: Dictionary = row as Dictionary
 		var player: PSPlayer = data["player"] as PSPlayer
-		var record: PSPlayerSeasonRecord = data["record"] as PSPlayerSeasonRecord
-		if cut_set.has(player.id):
+		var role_key: String = _release_role_key(player)
+		if not grouped_rows.has(role_key):
+			grouped_rows[role_key] = []
+		(grouped_rows[role_key] as Array).append(data)
+
+	var slot_budgets: Dictionary = _release_slot_budgets(players, team_id)
+	var surplus_ids: Dictionary = {}
+	for role_key_v in grouped_rows.keys():
+		var role_key: String = str(role_key_v)
+		var role_rows: Array = grouped_rows[role_key] as Array
+		role_rows.sort_custom(func(a, b) -> bool:
+			var value_a: float = float((a as Dictionary)["projected_value"])
+			var value_b: float = float((b as Dictionary)["projected_value"])
+			if not is_equal_approx(value_a, value_b):
+				return value_a > value_b
+			return int(((a as Dictionary)["player"] as PSPlayer).id) < int(((b as Dictionary)["player"] as PSPlayer).id)
+		)
+		var budget: int = int(slot_budgets.get(role_key, 1))
+		var claimed_slots: int = 0
+		for role_row in role_rows:
+			var role_data: Dictionary = role_row as Dictionary
+			var role_player: PSPlayer = role_data["player"] as PSPlayer
+			if _can_claim_release_slot(role_player, role_data.get("record", null) as PSPlayerSeasonRecord) \
+					and claimed_slots < budget:
+				claimed_slots += 1
+			else:
+				surplus_ids[role_player.id] = true
+
+	var domestic_candidates: Array = []
+	var selected_rows: Array = []
+	for row in roster_records_all:
+		var data: Dictionary = row as Dictionary
+		var player: PSPlayer = data["player"] as PSPlayer
+		if player.foreign_player:
+			if foreign_release_set.has(player.id):
+				selected_rows.append(data)
 			continue
 		if _has_rookie_release_protection(player):
 			continue
-		if _is_young_development_protected(player):
+		if not surplus_ids.has(player.id):
 			continue
-		if _is_protected_from_release(player, record) or protected_primary_ids.has(player.id):
+		if float(data["projected_value"]) >= RELEASE_REPLACEMENT_VALUE:
 			continue
-		var entry: Dictionary = {
-			"player": player,
-			"zero_app": _zero_appearances(record),
-			"cut_score": _release_cut_score(player, record) - _position_surplus_release_penalty(primary_position_counts, player),
-		}
-		if _is_always_cut_candidate(player, record):
-			always_cut_pool.append(entry)
-		else:
-			normal_pool.append(entry)
+		domestic_candidates.append(data)
 
-	# (3) 常時カット: 無出場/極少出場のベテランは計画数と独立に切る (cut_score 昇順、
-	# 成績欠損時の暴走防止に RELEASE_ALWAYS_CUT_MAX まで)。
-	var score_asc: Callable = func(a, b) -> bool:
-		var ea: Dictionary = a as Dictionary
-		var eb: Dictionary = b as Dictionary
-		if bool(ea["zero_app"]) != bool(eb["zero_app"]):
-			return bool(ea["zero_app"])
-		return float(ea["cut_score"]) < float(eb["cut_score"])
-	always_cut_pool.sort_custom(score_asc)
-	for i in range(min(always_cut_pool.size(), RELEASE_ALWAYS_CUT_MAX)):
-		var pid: int = int(((always_cut_pool[i] as Dictionary)["player"] as PSPlayer).id)
-		cut_ids.append(pid)
-		cut_set[pid] = true
-	# 上限を超えた常時カット該当者は通常プールへ回す (計画数の範囲でなら追加で切れる)。
-	for i in range(RELEASE_ALWAYS_CUT_MAX, always_cut_pool.size()):
-		normal_pool.append(always_cut_pool[i])
-
-	# (4) 計画カット: 開幕目標から逆算した残り人数を cut_score 昇順 (未出場優先) で切る。
+	domestic_candidates.sort_custom(func(a, b) -> bool:
+		var value_a: float = float((a as Dictionary)["projected_value"])
+		var value_b: float = float((b as Dictionary)["projected_value"])
+		if not is_equal_approx(value_a, value_b):
+			return value_a < value_b
+		return int(((a as Dictionary)["player"] as PSPlayer).id) < int(((b as Dictionary)["player"] as PSPlayer).id)
+	)
 	var plan_count: int = _release_plan_count(players, team_id, roster_records_all.size())
-	normal_pool.sort_custom(score_asc)
-	for entry_row in normal_pool:
-		if cut_ids.size() >= plan_count or cut_ids.size() >= RELEASE_PLAN_MAX_PER_TEAM:
-			break
-		var pid: int = int(((entry_row as Dictionary)["player"] as PSPlayer).id)
-		if cut_set.has(pid):
-			continue
-		cut_ids.append(pid)
-		cut_set[pid] = true
+	var max_cuts: int = mini(RELEASE_PLAN_MAX_PER_TEAM, plan_count + RECONCILE_UPPER_SLACK)
+	for i in range(mini(domestic_candidates.size(), max_cuts)):
+		selected_rows.append(domestic_candidates[i])
 
-	if cut_ids.is_empty():
-		return []
-
-	# (7) UI 表示用に cut_score 昇順で並び替えて返す
-	var scored: Array = []
-	for row in roster_records_all:
-		var data: Dictionary = row as Dictionary
-		var player: PSPlayer = data["player"] as PSPlayer
-		if not cut_set.has(player.id):
-			continue
-		var record: PSPlayerSeasonRecord = data["record"] as PSPlayerSeasonRecord
-		scored.append({"player_id": player.id, "score": _release_cut_score(player, record)})
-	scored.sort_custom(func(a, b) -> bool:
-		return float((a as Dictionary)["score"]) < float((b as Dictionary)["score"])
+	selected_rows.sort_custom(func(a, b) -> bool:
+		var value_a: float = float((a as Dictionary)["projected_value"])
+		var value_b: float = float((b as Dictionary)["projected_value"])
+		if not is_equal_approx(value_a, value_b):
+			return value_a < value_b
+		return int(((a as Dictionary)["player"] as PSPlayer).id) < int(((b as Dictionary)["player"] as PSPlayer).id)
 	)
 	var result_ids: Array = []
-	for entry in scored:
-		result_ids.append(int((entry as Dictionary)["player_id"]))
+	for row in selected_rows:
+		result_ids.append(int(((row as Dictionary)["player"] as PSPlayer).id))
 	return result_ids
 
 
-# ポジション別の本職在籍「快適水準」。これを超える分だけ戦力外優先度が上がる。
-# 捕手はブルペン捕手/第3捕手需要で多め、一塁は最少 (コンバート受け皿なので抱えすぎない)。
-const RELEASE_POSITION_COMFORT: Dictionary = {2: 6, 3: 3, 4: 4, 5: 4, 6: 4, 7: 4, 8: 4, 9: 4}
-const RELEASE_POSITION_SURPLUS_PENALTY: float = 6.0
+# 役割別スロット予算。長期診断でゼロ出場30代の残留が捕手/外野へ集中したため、
+# 初期快適水準 (C6/1B3/他4、先発13/救援20) から捕手・外野・救援を計5枠だけ縮める。
+const RELEASE_POSITION_COMFORT: Dictionary = {2: 5, 3: 3, 4: 4, 5: 4, 6: 4, 7: 3, 8: 3, 9: 3}
+const RELEASE_PITCHER_ROLE_COMFORT: Dictionary = {"starter": 13, "reliever": 19}
+# 初期快適水準66の固定基準。較正分を総枠縮小として効かせるため、調整後comfortの合計では割り直さない。
+const RELEASE_COMFORT_TOTAL: float = 66.0
 
 
-static func _position_surplus_release_penalty(primary_position_counts: Dictionary, player: PSPlayer) -> float:
-	if player == null or player.is_pitcher():
-		return 0.0
-	var comfort: int = int(RELEASE_POSITION_COMFORT.get(player.position, 4))
-	var surplus: int = int(primary_position_counts.get(player.position, 0)) - comfort
-	if surplus <= 0:
-		return 0.0
-	return float(surplus) * RELEASE_POSITION_SURPLUS_PENALTY
+static func _release_role_key(player: PSPlayer) -> String:
+	if player != null and player.is_pitcher():
+		return "pitcher:starter" if player.role == "starter" else "pitcher:reliever"
+	return "fielder:%d" % (player.position if player != null else 0)
 
 
-# 常時カット該当か: 出場ゼロ/極少のベテラン (age>=30 AND 少試合)、投手は26歳以上で登板ゼロ。
-static func _is_always_cut_candidate(player: PSPlayer, record: PSPlayerSeasonRecord) -> bool:
-	if _is_pitcher_noshow(player, record):
+# 役割スロットは来季も実際に担える根拠のある選手だけが占有する。30歳以上で当季出場ゼロなら
+# projected_value の高低にかかわらず depth chart 上は surplus とするが、放出には代替水準未満も必要。
+# シーズンの過半を怪我で欠場した場合と成績レコード欠損時は、誤判定を避けてスロット資格を残す。
+static func _can_claim_release_slot(player: PSPlayer, record: PSPlayerSeasonRecord) -> bool:
+	if player == null or player.age < 30 or record == null:
 		return true
-	return player.age >= CPU_RELEASE_PHASE1_AGE and _has_low_appearance_phase1(record)
+	if record.season_injury_days >= ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS:
+		return true
+	var games: int = record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
+	return games > 0
 
 
-# 編成計画: 来季開幕支配下の目標 (TeamFinance.OPENING_ROSTER_TARGET±jitter) から逆算した放出数。
-#   放出数 = 現在籍 + 見込み補強 (ドラフト見込み + 外国人4人確保の不足分 + 補強予約 + 育成昇格見込み) − 目標
-# 見込み補強は概算でよい: 実際のドラフト指名数はドラフト時点の在籍から同じ目標との差分で
-# 再計算されるため、ここの誤差は次工程で自己補正される。
-static func _release_plan_count(players: Array, team_id: int, roster_count: int) -> int:
+# 見込み流入はドラフト、外国人不足、後段補強予約、即戦力の育成昇格で構成する。
+static func _release_expected_inflow(players: Array, team_id: int) -> int:
 	var foreign_count: int = 0
 	var promo_ready: int = 0
 	var ready_threshold: float = first_team_ready_threshold(players, team_id)
@@ -575,56 +501,28 @@ static func _release_plan_count(players: Array, team_id: int, roster_count: int)
 		elif player.foreign_player:
 			foreign_count += 1
 	var foreign_shortfall: int = maxi(0, FOREIGN_ROSTER_LIMIT - foreign_count)
-	var inflow: int = RELEASE_PLAN_DRAFT_ESTIMATE + foreign_shortfall + RELEASE_PLAN_SIGNING_RESERVE \
+	return RELEASE_PLAN_DRAFT_ESTIMATE + foreign_shortfall + RELEASE_PLAN_SIGNING_RESERVE \
 			+ mini(promo_ready, RELEASE_PLAN_PROMO_CAP)
-	var target: int = TeamFinance.OPENING_ROSTER_TARGET \
-			+ Rng.range_int(-RELEASE_PLAN_TARGET_JITTER, RELEASE_PLAN_TARGET_JITTER)
-	return clampi(roster_count + inflow - target, 0, RELEASE_PLAN_MAX_PER_TEAM)
 
 
-# 投手 = pitcher_stats.games == 0、野手 = batter_stats.games == 0、record null も true。
-static func _zero_appearances(record: PSPlayerSeasonRecord) -> bool:
-	if record == null:
-		return true
-	if record.is_pitcher():
-		return record.pitcher_stats.games <= 0
-	return record.batter_stats.games <= 0
+# 開幕目標から見込み流入を引いた放出後ロスターへ、快適水準の比率を比例縮小して割り当てる。
+static func _release_slot_budgets(players: Array, team_id: int) -> Dictionary:
+	var post_target: int = maxi(1, TeamFinance.OPENING_ROSTER_TARGET - _release_expected_inflow(players, team_id))
+	var scale: float = float(post_target) / RELEASE_COMFORT_TOTAL
+	var budgets: Dictionary = {}
+	for position_v in RELEASE_POSITION_COMFORT.keys():
+		var position: int = int(position_v)
+		budgets["fielder:%d" % position] = maxi(1, roundi(float(RELEASE_POSITION_COMFORT[position]) * scale))
+	for role_v in RELEASE_PITCHER_ROLE_COMFORT.keys():
+		var role: String = str(role_v)
+		budgets["pitcher:%s" % role] = maxi(1, roundi(float(RELEASE_PITCHER_ROLE_COMFORT[role]) * scale))
+	return budgets
 
 
-# 戦力外プロテクト判定。true なら全フェーズで cut 候補から除外する。
-#  (1) 出場数プロテクト: 野手 games / 先発 starts / 中継ぎ relief_appearances が基準以上。
-#      投手は starts か relief_appearances のどちらかを満たせば保護 (スイングマンも救済)。
-#      **ただし能力下限 (総合 >= RELEASE_PROTECT_MIN_OVERALL) を満たす場合のみ**。
-#      消去法で出続けるだけの能力一桁の老選手が「出場数で保護され続けて居座る」ループを防ぐ。
-#  (2) 能力プロテクト: 高能力 (表示総合値 >= 閾値) かつ 累積怪我日数が閾値以上のときのみ。
-#      = 本来レギュラー級だが怪我で出場が伸びなかった選手を救済。怪我無しの低出場控えは保護しない。
-static func _is_protected_from_release(player: PSPlayer, record: PSPlayerSeasonRecord) -> bool:
-	if record == null:
-		return false
-	var overall: int = player_value_score(player)
-	# (1) 出場数プロテクト (能力下限を満たす場合のみ)
-	if overall >= RELEASE_PROTECT_MIN_OVERALL:
-		if record.is_pitcher():
-			if record.pitcher_stats.starts >= RELEASE_PROTECT_STARTER_STARTS:
-				return true
-			if record.pitcher_stats.relief_appearances >= RELEASE_PROTECT_RELIEVER_APPEARANCES:
-				return true
-		elif record.batter_stats.games >= RELEASE_PROTECT_FIELDER_GAMES:
-			return true
-	# (2) 怪我ゲート能力プロテクト (高能力かつ累積怪我)
-	if record.season_injury_days >= RELEASE_PROTECT_INJURY_DAYS:
-		if overall >= RELEASE_PROTECT_INJURY_OVERALL:
-			return true
-	return false
-
-
-# 24-26歳を条件付きで保護する分岐は、_should_demote_to_development (DEMOTE_PROSPECT_MAX_AGE=26)
-# の判定と閾値がほぼ同じ形 (年齢+成長期待) で重複しており、両者の境界がわずかにずれていたせいで
-# 「26歳未満で保護されない年齢」が実質1歳分しか残らず降格対象が特定の年齢に偏るバグがあった
-# (2026-07-02)。ここでは純粋age<=23の保護のみ残し、24-26歳の去就は
-# _should_demote_to_development に一本化する。
-static func _is_young_development_protected(player: PSPlayer) -> bool:
-	return player != null and player.age <= RELEASE_YOUNG_PROTECT_AGE
+# 編成計画はガードレール用であり、実際の放出数を強制しない。
+static func _release_plan_count(players: Array, team_id: int, roster_count: int) -> int:
+	var inflow: int = _release_expected_inflow(players, team_id)
+	return clampi(roster_count + inflow - TeamFinance.OPENING_ROSTER_TARGET, 0, RELEASE_PLAN_MAX_PER_TEAM)
 
 
 static func _has_rookie_release_protection(player: PSPlayer) -> bool:
@@ -640,94 +538,6 @@ static func _has_rookie_release_protection(player: PSPlayer) -> bool:
 	if source.has("draft_year") or source.has("draft_year_round") or source.has("draft_overall_pick"):
 		return true
 	return player.draft_round > 0 and not bool(source.get("foreign_scout", false)) and not bool(source.get("fa_signed_year", false))
-
-
-static func _release_cut_score(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
-	var score: float = TeamAutoAI.cut_score(player, record)
-	var development_bonus: float = expected_development_score_bonus(player.age, 6, player.position)
-	if player.age <= RELEASE_DEVELOPMENT_PROTECT_MAX_AGE:
-		score += development_bonus * RELEASE_DEVELOPMENT_SCORE_WEIGHT
-	# 同程度の戦力なら高年俸ほど整理対象に近づけ、限られた予算を主力と補強へ回す。
-	score -= TeamFinance.ai_acquisition_cost_penalty(player.salary)
-	var overall: int = player_value_score(player)
-	if player.age >= RELEASE_MIDCAREER_NOSHOW_MIN_AGE and player.age <= RELEASE_MIDCAREER_NOSHOW_MAX_AGE:
-		if overall <= RELEASE_MIDCAREER_NOSHOW_MAX_OVERALL and _zero_appearances(record):
-			score -= RELEASE_MIDCAREER_NOSHOW_PENALTY
-	return score
-
-
-# 各守備位置の本職 (primary position) 上位 N 名 (overall 順) のうち、実力基準
-# (若手 age<=23 / overall>=45 かつ高齢無出場でない) を満たす選手を戦力外保護する。
-# 野手は各位置 2 名、捕手は 6 名。draft_service の本職補強 (_primary_position_need_bonus) と対。
-# 頭数の無条件保証はしない (位置の空洞化は need-driven ドラフトで補充する前提)。
-static func _compute_primary_protected_ids(roster_records_all: Array) -> Dictionary:
-	var by_position: Dictionary = {}
-	for row in roster_records_all:
-		var data: Dictionary = row as Dictionary
-		var player: PSPlayer = data["player"] as PSPlayer
-		if player == null or player.is_pitcher():
-			continue
-		var pos: int = player.position
-		if not by_position.has(pos):
-			by_position[pos] = []
-		(by_position[pos] as Array).append({
-			"id": player.id,
-			"overall": player_value_score(player),
-			"age": player.age,
-			"record": data.get("record"),
-		})
-	var protected: Dictionary = {}
-	for pos in by_position.keys():
-		var arr: Array = by_position[pos] as Array
-		arr.sort_custom(func(a, b) -> bool:
-			return int((a as Dictionary)["overall"]) > int((b as Dictionary)["overall"])
-		)
-		var keep: int = PRIMARY_PROTECT_CATCHER if int(pos) == 2 else PRIMARY_PROTECT_FIELDER
-		for i in range(min(keep, arr.size())):
-			var entry: Dictionary = arr[i] as Dictionary
-			# 頭数が少ないだけでは保護しない (2026-07-02: 旧実装は在籍数が keep 以下なら無条件で
-			# 全員保護しており、捕手のように保有数が少ないポジションが事実上聖域化していた=
-			# 高齢・無出場でも切られない捕手が居座り、帳尻合わせで他ポジションの若手が余計に
-			# 切られる原因になっていた)。能力/年齢の実力基準を満たす選手だけを保護する。
-			if int(entry.get("age", 99)) <= RELEASE_YOUNG_PROTECT_AGE:
-				protected[int(entry["id"])] = true
-				continue
-			if int(entry.get("overall", 0)) < PRIMARY_PROTECT_MIN_OVERALL:
-				continue
-			# 出場実績のない高齢選手は、本職上位でも潜在能力 (overall) だけでは保護しない
-			# (Phase 1 の常時カット = age>=30 AND 少試合 をこの保護が妨げないようにする)。
-			# 旧実装は record を一切見なかったため「出場ゼロの30代非捕手」が本職上位というだけで
-			# 毎年生き残るバグがあった (2026-07-02)。怪我で出場が伸びなかった高能力選手は
-			# _is_protected_from_release の怪我ゲート側で別途保護される。
-			var rec: PSPlayerSeasonRecord = entry.get("record") as PSPlayerSeasonRecord
-			if int(entry.get("age", 99)) >= CPU_RELEASE_PHASE1_AGE and _has_low_appearance_phase1(rec):
-				continue
-			protected[int(entry["id"])] = true
-	return protected
-
-
-# 投手 26歳以上で今季登板ゼロか。Phase 1 で年齢30未満でも最優先カットするための判定。
-# record null (今季記録なし=登板ゼロ) でも投手かつ26歳以上なら true。
-static func _is_pitcher_noshow(player: PSPlayer, record: PSPlayerSeasonRecord) -> bool:
-	if player.age < CPU_RELEASE_PITCHER_NOSHOW_AGE:
-		return false
-	if record == null:
-		return player.is_pitcher()
-	if not record.is_pitcher():
-		return false
-	return record.pitcher_stats.games <= 0
-
-
-# 常時カットの「少試合」判定。record null も true (出場ゼロ扱い)。
-# 役割別: 先発 starts ≤ 3、リリーフ games ≤ 10、野手 games ≤ 20。
-static func _has_low_appearance_phase1(record: PSPlayerSeasonRecord) -> bool:
-	if record == null:
-		return true
-	if record.is_pitcher():
-		if record.is_starter_pitcher():
-			return record.pitcher_stats.starts <= CPU_RELEASE_PHASE1_STARTER_MAX
-		return record.pitcher_stats.games <= CPU_RELEASE_PHASE1_RELIEVER_MAX
-	return record.batter_stats.games <= CPU_RELEASE_PHASE1_FIELDER_MAX
 
 
 static func _find_player_by_id(players: Array, pid: int) -> PSPlayer:
@@ -1032,7 +842,17 @@ static func _should_retire(player: PSPlayer, record: PSPlayerSeasonRecord) -> bo
 	# (2) 少出場引退: 38歳以上 かつ 役割別少試合。
 	if player.age < RETIREMENT_AGE_THRESHOLD:
 		return false
-	return _has_low_appearance_phase1(record)
+	return _has_low_appearance_for_retirement(record)
+
+
+static func _has_low_appearance_for_retirement(record: PSPlayerSeasonRecord) -> bool:
+	if record == null:
+		return true
+	if record.is_pitcher():
+		if record.is_starter_pitcher():
+			return record.pitcher_stats.starts <= RETIREMENT_LOW_STARTER_MAX
+		return record.pitcher_stats.games <= RETIREMENT_LOW_RELIEVER_MAX
+	return record.batter_stats.games <= RETIREMENT_LOW_FIELDER_MAX
 
 
 # 段階的強制引退の確率。39歳以下=0、40歳から線形に上昇し48歳で1.0(確実)。

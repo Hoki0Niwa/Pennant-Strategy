@@ -3,6 +3,7 @@ class_name TeamAutoAI
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
+const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 
 # 一二軍入替の自動判定 + 戦力外候補スコアリング。
 
@@ -37,7 +38,6 @@ const TARGET_TOTAL: int = 31
 const TARGET_STARTERS: int = 6
 const TARGET_PITCHERS: int = 15
 const MIN_ACTIVE_CATCHERS: int = 2
-const MAX_FOREIGN: int = 4
 const PITCHER_ROLE_STARTER: String = "starter"
 const PITCHER_ROLE_RELIEVER: String = "reliever"
 
@@ -190,8 +190,7 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 	fielders.sort_custom(by_perf)
 
 	var selected: Array = []
-	# Callable は int を値キャプチャするため、参照型 Array に包んで更新可能にする。
-	var foreign_count_ref: Array = [0]
+	var foreign_counts: Dictionary = ForeignActiveRosterRules.empty_counts()
 	var add_player: Callable = func(record: PSPlayerSeasonRecord) -> bool:
 		if record == null or record.injury_days > 0:
 			return false
@@ -200,11 +199,10 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 		for selected_row in selected:
 			if (selected_row as PSPlayerSeasonRecord).player_id == record.player_id:
 				return false
-		if record.foreign_player and int(foreign_count_ref[0]) >= MAX_FOREIGN:
+		if not ForeignActiveRosterRules.can_add_record(foreign_counts, record):
 			return false
 		selected.append(record)
-		if record.foreign_player:
-			foreign_count_ref[0] = int(foreign_count_ref[0]) + 1
+		ForeignActiveRosterRules.add_record(foreign_counts, record)
 		return true
 
 	for record_row in starters:
@@ -497,22 +495,15 @@ static func _repair_try_promote(
 		return false
 	var candidate_set: Dictionary = active_set.duplicate()
 	candidate_set[candidate.player_id] = true
-	if _active_foreign_count(candidate_set, record_by_id) > MAX_FOREIGN:
+	if not ForeignActiveRosterRules.is_within_limits(
+		ForeignActiveRosterRules.counts_from_active_set(candidate_set, record_by_id)
+	):
 		return false
 	if enforce_catcher_min and _active_catcher_count(candidate_set, record_by_id) < required_catchers:
 		return false
 	active_set[candidate.player_id] = true
 	promotions.append(candidate.player_id)
 	return true
-
-
-static func _active_foreign_count(active_set: Dictionary, record_by_id: Dictionary) -> int:
-	var count: int = 0
-	for pid_value in active_set.keys():
-		var record: PSPlayerSeasonRecord = record_by_id.get(int(pid_value), null) as PSPlayerSeasonRecord
-		if record != null and record.foreign_player:
-			count += 1
-	return count
 
 
 static func _active_catcher_count(active_set: Dictionary, record_by_id: Dictionary) -> int:
@@ -894,12 +885,12 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 		_append_snapshots(season, all_records, current_day)
 		return summary
 
-	# (6) 外国人枠チェック (簡易: 入れ替え後の外国人数が4以下になるか)
-	var foreign_lookup: Dictionary = {}
+	# (6) 外国人枠と捕手数のチェック。
+	var record_by_id: Dictionary = {}
 	var catcher_lookup: Dictionary = {}
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		foreign_lookup[record.player_id] = record.foreign_player
+		record_by_id[record.player_id] = record
 		catcher_lookup[record.player_id] = _is_catcher(record)
 
 	# 守備位置別の適性保持者ルックアップ (チーム全体) と、1軍で割り込んではいけない
@@ -922,15 +913,14 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 		var tmp: Dictionary = new_active.duplicate()
 		tmp.erase(down_id)
 		tmp[up_id] = true
-		var foreign_n: int = 0
 		var catcher_n: int = 0
 		for pid_v in tmp.keys():
 			var pid: int = int(pid_v)
-			if bool(foreign_lookup.get(pid, false)):
-				foreign_n += 1
 			if bool(catcher_lookup.get(pid, false)):
 				catcher_n += 1
-		if foreign_n > MAX_FOREIGN:
+		if not ForeignActiveRosterRules.is_within_limits(
+			ForeignActiveRosterRules.counts_from_active_set(tmp, record_by_id)
+		):
 			continue
 		if catcher_n < MIN_ACTIVE_CATCHERS:
 			continue

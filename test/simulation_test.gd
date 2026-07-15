@@ -71,6 +71,9 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	var fielder_mean: float = _mean(fielders)
 	var starter_mean: float = _mean(starters)
 	var reliever_mean: float = _mean(relievers)
+	var all_pitchers: Array = starters.duplicate()
+	all_pitchers.append_array(relievers)
+	var pitcher_mean: float = _mean(all_pitchers)
 
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season
@@ -83,6 +86,8 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	assert_float(absf(starter_mean - fielder_mean)).is_less_equal(5.0)
 	# 中継は先発と同スケール (平均差 <= 5)。
 	assert_float(absf(reliever_mean - starter_mean)).is_less_equal(5.0)
+	# 投手全体と野手の平均評価は同一尺度。1点差でも境界層の編成判断が投手優遇へ偏るため厳しく監視する。
+	assert_float(absf(pitcher_mean - fielder_mean)).is_less_equal(0.75)
 	# 先発の上位帯が野手を大きく上回らない。
 	assert_int(_pctl(starters, 0.90)).is_less_equal(_pctl(fielders, 0.90) + 4)
 	assert_int(_max(starters)).is_less_equal(_max(fielders) + 2)

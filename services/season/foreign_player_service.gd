@@ -7,12 +7,15 @@ class_name ForeignPlayerService
 
 const NamePoolRef = preload("res://services/data/name_pool.gd")
 const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
+const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 
 const FOREIGN_FA_YEARS: int = 7
 const SCOUT_CANDIDATES_PER_REQUEST: int = 4
 const MAX_CPU_REQUESTS_PER_TEAM: int = 4
 const MAX_FOREIGN_HELD_PER_TEAM: int = TeamFinance.FOREIGN_HELD_TARGET
 const FOREIGN_SLOT_FILL_BONUS: float = 10.0
+# 保有外国人の投手・野手差1人ごとに、不足している種別のスカウト需要へ加える。
+const CPU_FOREIGN_TYPE_BALANCE_BONUS: float = 8.0
 const CANDIDATE_MIN_AGE: int = 24
 const CANDIDATE_MAX_AGE: int = 32
 const FOREIGN_MIDDLE_INFIELDER_CENTER_PENALTY: int = 6
@@ -454,13 +457,26 @@ static func _validated_request(position: String, archetype: String, budget_band:
 
 static func _cpu_scout_request(players: Array, team: PSTeam, need: Dictionary) -> Dictionary:
 	var team_need: Dictionary = need.get(team.id, {}) as Dictionary
-	var desired_position: int = 1
-	var highest_need: float = -999999.0
-	for position_value in range(1, 10):
+	var desired_fielder_position: int = 2
+	var highest_fielder_need: float = -999999.0
+	for position_value in range(2, 10):
 		var position_need: float = float(team_need.get(position_value, 0.0))
-		if position_need > highest_need:
-			highest_need = position_need
-			desired_position = position_value
+		if position_need > highest_fielder_need:
+			highest_fielder_need = position_need
+			desired_fielder_position = position_value
+	var foreign_types: Dictionary = _foreign_type_counts_for_team(players, team.id)
+	var foreign_pitchers: int = int(foreign_types.get("pitchers", 0))
+	var foreign_fielders: int = int(foreign_types.get("fielders", 0))
+	var pitcher_need: float = float(team_need.get(1, 0.0)) \
+		+ float(maxi(0, foreign_fielders - foreign_pitchers)) * CPU_FOREIGN_TYPE_BALANCE_BONUS
+	var fielder_need: float = highest_fielder_need \
+		+ float(maxi(0, foreign_pitchers - foreign_fielders)) * CPU_FOREIGN_TYPE_BALANCE_BONUS
+	var desired_position: int = 1 if pitcher_need >= fielder_need else desired_fielder_position
+	# 同一種別の4人目は一軍登録できないため、空いている種別を優先する。
+	if foreign_fielders >= ForeignActiveRosterRules.TYPE_MAX:
+		desired_position = 1
+	elif foreign_pitchers >= ForeignActiveRosterRules.TYPE_MAX:
+		desired_position = desired_fielder_position
 	var position_key: String = _request_key_for_position(players, team.id, desired_position)
 	var archetype: String = _weakest_archetype(players, team.id, position_key)
 	var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, team.id))
@@ -705,6 +721,20 @@ static func _active_count_for_team(players: Array, team_id: int) -> int:
 
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:
 	return TeamFinance.foreign_player_count(players, team_id)
+
+
+static func _foreign_type_counts_for_team(players: Array, team_id: int) -> Dictionary:
+	var pitchers: int = 0
+	var fielders: int = 0
+	for player_value in players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player == null or player.team_id != team_id or player.is_retired() or not player.foreign_player:
+			continue
+		if player.is_pitcher():
+			pitchers += 1
+		else:
+			fielders += 1
+	return {"pitchers": pitchers, "fielders": fielders}
 
 
 static func _max_player_id(players: Array) -> int:

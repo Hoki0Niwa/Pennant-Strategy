@@ -7,6 +7,7 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 const ReportHealth = preload("res://services/reports/report_health.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
+const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
 const VERSION: int = 2
 const DEFAULT_SEASONS: int = 40
@@ -350,7 +351,7 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio")
+	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -433,6 +434,9 @@ func csv_text(report: Dictionary) -> String:
 			int((row.get("trades", {}) as Dictionary).get("count", 0)),
 			int(offseason.get("retired_count", 0)),
 			int(offseason.get("released_count", 0)),
+			int(offseason.get("released_pitcher_count", 0)),
+			int(offseason.get("released_fielder_count", 0)),
+			float(offseason.get("released_average_age", 0.0)),
 			int(offseason.get("demoted_count", 0)),
 			int(offseason.get("promoted_count", 0)),
 			int(offseason.get("dev_released_count", 0)),
@@ -477,7 +481,8 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	GameDb.rebuild_player_indices()
 	# 戦力外フェーズ直後に残った「30歳以上・今季出場ゼロ・入団3年目以降」の支配下選手数。
 	# 本職保護が実績ゼロのベテランを生き残らせる再発バグ (2026-07-02 修正) の監視用で、期待値はほぼ 0。
-	var noshow_thirties_survivors: int = _count_noshow_thirties_survivors(season)
+	var noshow_thirties_survivor_rows: Array = _noshow_thirties_survivor_rows(season)
+	var noshow_thirties_survivors: int = noshow_thirties_survivor_rows.size()
 	var merged_release_result: Dictionary = release_result.duplicate(true)
 	var merged_released: Array = []
 	merged_released.append_array(release_result.get("released", []) as Array)
@@ -528,9 +533,20 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# 戦力外の投手/野手内訳 (position==1 が投手)。現実の NPB はおおむね 1:1〜投手やや多で、
 	# 野手側へ大きく偏っていないかの監視用 (2026-07-03、実測 1:2 の偏り報告を受けて追加)。
 	var released_pitcher_count: int = 0
+	var released_age_sum: int = 0
+	var released_age_min: int = 0
+	var released_age_max: int = 0
 	for released_row in release_result.get("released", []) as Array:
-		if int((released_row as Dictionary).get("position", 0)) == 1:
+		var released_entry: Dictionary = released_row as Dictionary
+		if int(released_entry.get("position", 0)) == 1:
 			released_pitcher_count += 1
+		var released_age: int = int(released_entry.get("age", 0))
+		released_age_sum += released_age
+		if released_age_min <= 0 or released_age < released_age_min:
+			released_age_min = released_age
+		released_age_max = maxi(released_age_max, released_age)
+	var released_age_count: int = int(release_result.get("released_count", 0))
+	var released_average_age: float = _safe_div(float(released_age_sum), float(released_age_count))
 
 	# 年次予算再計算直後 (補強フェーズ開始前) の残額。offseason 中の署名で目減りする前の
 	# 「今オフどれだけ配分できたか」の指標。offseason 完了後の実効拘束は over_budget_count 側を見る。
@@ -554,7 +570,13 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"released_count": int(release_result.get("released_count", 0)),
 		"released_pitcher_count": released_pitcher_count,
 		"released_fielder_count": int(release_result.get("released_count", 0)) - released_pitcher_count,
+		"released_age_count": released_age_count,
+		"released_age_sum": released_age_sum,
+		"released_average_age": _round_float(released_average_age, 2),
+		"released_age_min": released_age_min,
+		"released_age_max": released_age_max,
 		"noshow_thirties_survivors": noshow_thirties_survivors,
+		"noshow_thirties_survivor_rows": noshow_thirties_survivor_rows,
 		"demoted_count": int(release_result.get("demoted_count", 0)),
 		"promoted_count": int(promotion_result.get("promoted_count", 0)),
 		"dev_released_count": int(dev_release_result.get("released_count", 0)),
@@ -578,12 +600,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	}
 
 
-# 戦力外ステップ後に残った「30歳以上・今季出場ゼロ・入団3年目以降 (rookie保護外)」の日本人支配下選手数。
-# 本来 Phase 1 (age>=30 AND 少試合) で常時カットされるはずの層で、本職保護などが実績ゼロの
-# ベテランを生き残らせる再発バグの監視指標。怪我ゲート保護 (高能力かつ怪我30日+、
-# RELEASE_PROTECT_INJURY_*) の該当者は意図的な残留なので数えない。
-func _count_noshow_thirties_survivors(season: PSSeason) -> int:
-	var count: int = 0
+# 戦力外ステップ後に残った「30歳以上・今季出場ゼロ・入団3年目以降」の日本人支配下選手数。
+# シーズンの過半を怪我で欠場して出場割引を全免除された選手は、意図的な残留として数えない。
+func _noshow_thirties_survivor_rows(season: PSSeason) -> Array:
+	var rows: Array = []
 	for player_row in GameDb.players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id <= 0 or player.is_retired():
@@ -597,11 +617,19 @@ func _count_noshow_thirties_survivors(season: PSSeason) -> int:
 			var games: int = record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
 			if games > 0:
 				continue
-			if record.season_injury_days >= OffseasonService.RELEASE_PROTECT_INJURY_DAYS \
-					and OffseasonService.player_value_score(player) >= OffseasonService.RELEASE_PROTECT_INJURY_OVERALL:
+			if record.season_injury_days >= ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS:
 				continue
-		count += 1
-	return count
+		rows.append({
+			"player_id": player.id,
+			"name": player.name,
+			"team_id": player.team_id,
+			"age": player.age,
+			"position": player.position,
+			"role": player.role,
+			"overall": OffseasonService.player_value_score(player),
+			"projected_value": _round_float(ReleaseValueProjector.projected_value(player, record), 2),
+		})
+	return rows
 
 
 func _leaderboards_for_season(season: PSSeason) -> Dictionary:
@@ -1122,6 +1150,15 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"released_per_year": _round_float(_mean_nested(rows, ["offseason", "released_count"]), 2),
 		"released_pitchers_per_year": _round_float(_mean_nested(rows, ["offseason", "released_pitcher_count"]), 2),
 		"released_fielders_per_year": _round_float(_mean_nested(rows, ["offseason", "released_fielder_count"]), 2),
+		"released_fielders_per_pitcher": _round_float(_safe_div(
+			_mean_nested(rows, ["offseason", "released_fielder_count"]),
+			_mean_nested(rows, ["offseason", "released_pitcher_count"])
+		), 3),
+		"released_average_age": _round_float(_weighted_mean_nested(
+			rows,
+			["offseason", "released_age_sum"],
+			["offseason", "released_age_count"]
+		), 2),
 		"noshow_thirties_survivors_per_year": _round_float(_mean_nested(rows, ["offseason", "noshow_thirties_survivors"]), 2),
 		"retired_per_year": _round_float(_mean_nested(rows, ["offseason", "retired_count"]), 2),
 		"rookies_per_year": _round_float(_mean_nested(rows, ["offseason", "rookies_count"]), 2),
@@ -1141,6 +1178,26 @@ func _mean_nested(rows: Array, keys: Array) -> float:
 			continue
 		values.append(float(current))
 	return _mean(values)
+
+
+func _weighted_mean_nested(rows: Array, sum_keys: Array, count_keys: Array) -> float:
+	var total_sum: float = 0.0
+	var total_count: float = 0.0
+	for row_value in rows:
+		total_sum += _nested_float(row_value, sum_keys)
+		total_count += _nested_float(row_value, count_keys)
+	return _safe_div(total_sum, total_count)
+
+
+func _nested_float(root: Variant, keys: Array) -> float:
+	var current: Variant = root
+	for key_value in keys:
+		if not (current is Dictionary):
+			return 0.0
+		current = (current as Dictionary).get(str(key_value), null)
+		if current == null:
+			return 0.0
+	return float(current)
 
 
 func _active_player_id_set(players: Array) -> Dictionary:

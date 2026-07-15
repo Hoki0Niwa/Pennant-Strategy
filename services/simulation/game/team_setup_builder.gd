@@ -6,6 +6,7 @@ const BattingOrderProfile = preload("res://domain/batting_order_profile.gd")
 const BattingOrderService = preload("res://services/simulation/lineup/batting_order_service.gd")
 const DefenseAlignmentProfile = preload("res://domain/defense_alignment_profile.gd")
 const DefenseAlignmentService = preload("res://services/simulation/lineup/defense_alignment_service.gd")
+const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 
 const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
 const MIN_ACTIVE_CATCHERS: int = 2
@@ -126,8 +127,6 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	const TARGET_TOTAL: int = 31
 	const TARGET_STARTERS: int = 6
 	const TARGET_PITCHERS: int = 15
-	const MAX_FOREIGN: int = 4
-
 	var starters: Array = []
 	var relievers: Array = []
 	var fielders: Array = []
@@ -151,7 +150,7 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	fielders.sort_custom(by_overall)
 
 	var selected: Array = []
-	var foreign_count_ref: Array = [0]
+	var foreign_counts: Dictionary = ForeignActiveRosterRules.empty_counts()
 	var add_player: Callable = func(record: PSPlayerSeasonRecord) -> bool:
 		if record == null or record.injury_days > 0:
 			return false
@@ -160,11 +159,10 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 		for selected_row in selected:
 			if (selected_row as PSPlayerSeasonRecord).player_id == record.player_id:
 				return false
-		if record.foreign_player and int(foreign_count_ref[0]) >= MAX_FOREIGN:
+		if not ForeignActiveRosterRules.can_add_record(foreign_counts, record):
 			return false
 		selected.append(record)
-		if record.foreign_player:
-			foreign_count_ref[0] = int(foreign_count_ref[0]) + 1
+		ForeignActiveRosterRules.add_record(foreign_counts, record)
 		return true
 
 	for record_row in starters:
@@ -245,15 +243,14 @@ static func summarize_active_roster_ids(player_ids: Array, records: Array) -> Di
 	var starters: int = 0
 	var fielders: int = 0
 	var catchers: int = 0
-	var foreigners: int = 0
+	var foreign_counts: Dictionary = ForeignActiveRosterRules.empty_counts()
 	for id_value in player_ids:
 		var pid: int = int(id_value)
 		if not by_id.has(pid):
 			continue
 		var record: PSPlayerSeasonRecord = by_id[pid] as PSPlayerSeasonRecord
 		total += 1
-		if record.foreign_player:
-			foreigners += 1
+		ForeignActiveRosterRules.add_record(foreign_counts, record)
 		if record.is_pitcher():
 			pitchers += 1
 			if _is_starter_role(record):
@@ -269,7 +266,9 @@ static func summarize_active_roster_ids(player_ids: Array, records: Array) -> Di
 		"starters": starters,
 		"fielders": fielders,
 		"catchers": catchers,
-		"foreigners": foreigners,
+		"foreigners": int(foreign_counts["foreigners"]),
+		"foreign_pitchers": int(foreign_counts["foreign_pitchers"]),
+		"foreign_fielders": int(foreign_counts["foreign_fielders"]),
 	}
 
 
@@ -424,6 +423,10 @@ static func prepare_team_setup(season: PSSeason, team_id: int, dh_enabled: bool 
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	var active_records: Array = filter_by_active_roster(season, team_id, all_records)
 	var active_needs_repair: bool = active_records.is_empty()
+	if not active_needs_repair:
+		active_needs_repair = not ForeignActiveRosterRules.is_within_limits(
+			ForeignActiveRosterRules.counts_from_records(active_records)
+		)
 	if not active_needs_repair:
 		var required_catchers: int = _required_active_catcher_count(all_records)
 		active_needs_repair = _healthy_catcher_count_in_records(active_records) < required_catchers

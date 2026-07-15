@@ -144,6 +144,10 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 			"team_development_max": _distribution(_nested_values(rows, ["roster_before_season", "team_development_max"]), 0),
 			"team_foreign_max": _distribution(_nested_values(rows, ["roster_before_season", "team_foreign_max"]), 0),
 		},
+		"post_roster": {
+			"team_shienka_min": _distribution(_nested_values(rows, ["roster_after_offseason_next_year", "team_shienka_min"]), 0),
+			"team_shienka_max": _distribution(_nested_values(rows, ["roster_after_offseason_next_year", "team_shienka_max"]), 0),
+		},
 		"leaders": {
 			"ops": _distribution(leader_ops, 3),
 			"era": _distribution(leader_era, 2),
@@ -152,6 +156,7 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 		"flows": {
 			"trades": _distribution(_nested_values(rows, ["trades", "count"]), 1),
 			"fa_declared": _distribution(_nested_values(rows, ["offseason", "fa_declared_count"]), 1),
+			"released": _distribution(_nested_values(rows, ["offseason", "released_count"]), 1),
 		},
 	}
 
@@ -168,6 +173,7 @@ static func long_health(report: Dictionary) -> Dictionary:
 	var last_10: Dictionary = windows.get("last_10_years", {}) as Dictionary
 	var distributions: Dictionary = report.get("distributions", {}) as Dictionary
 	var roster_dist: Dictionary = distributions.get("roster", {}) as Dictionary
+	var post_roster_dist: Dictionary = distributions.get("post_roster", {}) as Dictionary
 	var leader_dist: Dictionary = distributions.get("leaders", {}) as Dictionary
 	var milestones: Dictionary = report.get("milestones", {}) as Dictionary
 
@@ -180,12 +186,19 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "teamless_active_players", int(final_roster.get("teamless_active_players", 0)), 0.0, 0.0, "teamless active players")
 	_add_max_check(checks, "free_agent_orphans", int(final_roster.get("free_agent_orphans", 0)), 0.0, 0.0, "unresolved FA pool players")
 	_add_max_check(checks, "released_orphans", int(final_roster.get("released_orphans", 0)), 0.0, 0.0, "unresolved released players outside retirement")
-	# 戦力外フェーズ後に残る「30歳以上・出場ゼロ・rookie保護外」の支配下選手を年平均で監視する。
-	# 少数の残留は安全上限つき整理の許容範囲だが、二桁規模なら保護条件が強すぎる。
-	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 3.0, 8.0, "zero-appearance 30+ players surviving the release phase")
+	# 戦力外刷新の受入指標。総数は年度別レンジも見て、平均だけ合って末期に減衰する状態を通さない。
+	var flow_dist: Dictionary = distributions.get("flows", {}) as Dictionary
+	var released_dist: Dictionary = flow_dist.get("released", {}) as Dictionary
+	_add_range_check(checks, "released_per_year", float(last_10.get("released_per_year", 0.0)), 90.0, 115.0, 70.0, 135.0, "domestic releases per year")
+	_add_min_check(checks, "released_yearly_min", float(released_dist.get("min", 0.0)), 90.0, 70.0, "domestic releases should not decay below the target band")
+	_add_max_check(checks, "released_yearly_max", float(released_dist.get("max", 0.0)), 115.0, 135.0, "domestic releases should not spike above the target band")
+	_add_range_check(checks, "released_fielders_per_pitcher", float(last_10.get("released_fielders_per_pitcher", 0.0)), 0.8, 1.3, 0.5, 1.8, "released pitcher-to-fielder composition (fielder count per pitcher)")
+	_add_range_check(checks, "released_average_age", float(last_10.get("released_average_age", 0.0)), 26.0, 31.0, 23.0, 35.0, "weighted average age of domestic releases")
+	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 1.0, 4.0, "zero-appearance 30+ players surviving the release phase")
+	_add_min_check(checks, "post_team_shienka_min", _dist_value(post_roster_dist, "team_shienka_min", "min"), 66.0, 64.0, "every team should finish the offseason with at least 66 shienka players")
+	_add_max_check(checks, "post_team_shienka_max", _dist_value(post_roster_dist, "team_shienka_max", "max"), 68.0, 70.0, "every team should finish the offseason with at most 68 shienka players")
 	# 選手流動の沈黙/過熱検知。2026-07-06 の「FA宣言が15年間全ゼロでも health pass」の盲点を受けて追加。
 	# 平均0 (完全停止) は warn 側に倒して可視化する (初期データのFA日数過少による立ち上がり遅れは許容)。
-	var flow_dist: Dictionary = distributions.get("flows", {}) as Dictionary
 	_add_range_check(checks, "trades_per_year", _dist_value(flow_dist, "trades", "mean"), 1.0, 8.0, 0.0, 15.0, "in-season trades per year")
 	_add_range_check(checks, "fa_declared_per_year", _dist_value(flow_dist, "fa_declared", "mean"), 1.0, 10.0, 0.0, 20.0, "FA declarations per year")
 	_add_range_check(checks, "last10_ops", float(last_10.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "last-10-year OPS")

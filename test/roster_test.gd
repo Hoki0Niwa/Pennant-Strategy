@@ -6,6 +6,8 @@ const Offseason = preload("res://services/season/offseason_service.gd")
 const ReleasedMarket = preload("res://services/season/released_market_service.gd")
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
 const TeamAutoAIRef = preload("res://services/season/team_auto_ai.gd")
+const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
+const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
 const ALL_Z_KEYS: Array = [
 	"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Spray", "Bat_Aggression", "Bat_Platoon",
@@ -85,6 +87,31 @@ func test_foreign_cpu_splits_room_across_all_open_slots() -> void:
 	assert_str(ForeignPlayerService._cpu_budget_band(48000, 4)).is_equal("standard")
 	assert_str(ForeignPlayerService._cpu_budget_band(80000, 4)).is_equal("core")
 	assert_str(ForeignPlayerService._cpu_budget_band(160000, 4)).is_equal("star")
+
+
+func test_foreign_cpu_avoids_unusable_fourth_player_of_same_type() -> void:
+	var team: PSTeam = _team(1)
+	var foreign_fielders: Array = []
+	for i in range(ForeignActiveRosterRules.TYPE_MAX):
+		foreign_fielders.append(_player({
+			"id": 300 + i, "team_id": 1, "position": 3, "foreign_player": true,
+		}))
+	var fielder_heavy_need: Dictionary = {1: {
+		1: 0.0, 2: 0.0, 3: 100.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0, 8: 0.0, 9: 0.0,
+	}}
+	var pitcher_request: Dictionary = ForeignPlayerService._cpu_scout_request(foreign_fielders, team, fielder_heavy_need)
+	assert_bool(["starter", "reliever"].has(str(pitcher_request.get("position", "")))).is_true()
+
+	var foreign_pitchers: Array = []
+	for i in range(ForeignActiveRosterRules.TYPE_MAX):
+		foreign_pitchers.append(_player({
+			"id": 400 + i, "team_id": 1, "position": 1, "role": "reliever", "foreign_player": true,
+		}))
+	var pitcher_heavy_need: Dictionary = {1: {
+		1: 100.0, 2: 0.0, 3: 1.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0, 8: 0.0, 9: 0.0,
+	}}
+	var fielder_request: Dictionary = ForeignPlayerService._cpu_scout_request(foreign_pitchers, team, pitcher_heavy_need)
+	assert_bool(["starter", "reliever"].has(str(fielder_request.get("position", "")))).is_false()
 
 
 func test_foreign_signing_score_prefers_lower_salary_at_equal_estimate() -> void:
@@ -337,69 +364,8 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 	assert_bool(Offseason._market_contract_salary_is_locked(signed, 2027)).is_false()
 
 
-# --- 戦力外選定 (動的キーパー水準、人数目標なし) ------------------------------
-
-func test_compute_primary_protected_ids_does_not_blanket_protect_scarce_position() -> void:
-	# 捕手4人构成、うち1人だけ高能力。旧実装は在籍数(4)<=keep(6)で全員無条件保護していたが、
-	# 新実装は能力/年齢の実力基準を満たす選手だけを保護する(2026-07-02、捕手聖域化バグの修正)。
-	var strong: PSPlayer = _player_with_z(9200, 1, 2, false, 1.0)
-	strong.age = 28
-	var weak1: PSPlayer = _player_with_z(9201, 1, 2, false, -2.0)
-	weak1.age = 34
-	var weak2: PSPlayer = _player_with_z(9202, 1, 2, false, -2.0)
-	weak2.age = 33
-	var weak3: PSPlayer = _player_with_z(9203, 1, 2, false, -2.0)
-	weak3.age = 35
-	var roster_records: Array = []
-	for p in [strong, weak1, weak2, weak3]:
-		roster_records.append({"player": p, "record": null})
-	var protected_ids: Dictionary = Offseason._compute_primary_protected_ids(roster_records)
-	assert_bool(protected_ids.has(strong.id)).is_true()
-	assert_bool(protected_ids.has(weak1.id)).is_false()
-	assert_bool(protected_ids.has(weak2.id)).is_false()
-	assert_bool(protected_ids.has(weak3.id)).is_false()
-
-
-func test_primary_protection_excludes_noshow_veteran_keeps_active_veteran() -> void:
-	# 出場ゼロの30代選手は、本職上位かつ overall>=45 でも潜在能力だけでは本職保護されない
-	# (2026-07-02、「出場ゼロの30代非捕手が毎年生き残る」再発バグの修正)。
-	# 同能力・同年齢でも実際に出場している選手は従来どおり保護される。
-	var noshow: PSPlayer = _player_with_z(9210, 1, 6, false, 1.0)
-	noshow.age = 33
-	var noshow_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(noshow, 0, 0)
-	noshow_record.batter_stats.games = 0
-	var active: PSPlayer = _player_with_z(9211, 1, 6, false, 1.0)
-	active.age = 33
-	var active_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(active, 0, 0)
-	active_record.batter_stats.games = 100
-	var roster_records: Array = [
-		{"player": noshow, "record": noshow_record},
-		{"player": active, "record": active_record},
-	]
-	var protected_ids: Dictionary = Offseason._compute_primary_protected_ids(roster_records)
-	assert_bool(protected_ids.has(noshow.id)).is_false()
-	assert_bool(protected_ids.has(active.id)).is_true()
-
-
-func test_compute_release_candidates_cuts_noshow_thirties_fielder() -> void:
-	# 「出場ゼロの30代非捕手」が本職上位 (その位置で唯一) という理由だけで生き残っていた
-	# 再発バグの回帰テスト。Phase 1 (age>=30 AND 少試合) の常時カットを本職保護が妨げないこと
-	# (season=null → record=null = 出場ゼロ扱い)。
-	var players: Array = []
-	var noshow: PSPlayer = _player_with_z(9220, 1, 6, false, 1.0)
-	noshow.age = 33
-	players.append(noshow)
-	for i in range(10):
-		var filler: PSPlayer = _player_with_z(9230 + i, 1, 3, false, 0.0)
-		filler.age = 28
-		players.append(filler)
-	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
-	assert_array(cut_ids).contains(9220)
-
-
-# --- 編成計画ベースの戦力外 (2026-07-03 刷新) ---------------------------------
-# 放出数 = 現在籍 + 見込み補強 − 開幕目標 (TeamFinance.OPENING_ROSTER_TARGET±1)。
-# 以下のテストでは外国人0・育成0なので、見込み補強 = ドラフト見込み7 + 外国人不足4 + 補強予約2 = 13。
+# --- 戦力外選定 (projection × デプスチャート) -------------------------------
+# 外国人0・育成0では見込み流入13人、放出後目標55人として役割予算を比例配分する。
 
 func _plan_team(team_id: int, count: int, base_id: int, z_value: float, age: int = 29) -> Array:
 	var players: Array = []
@@ -411,25 +377,24 @@ func _plan_team(team_id: int, count: int, base_id: int, z_value: float, age: int
 
 
 func test_release_plan_counts_scale_with_roster_size() -> void:
-	# 在籍が多い球団ほど多く切られ、開幕目標に対して余裕のある球団は少ない (計画ベース)。
 	var deep_team: Array = _plan_team(1, 70, 9500, -1.0)
 	var lean_team: Array = _plan_team(2, 60, 9600, -1.0)
 	var all_players: Array = deep_team + lean_team
 	var deep_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 1, null, false)
 	var lean_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 2, null, false)
-	# deep: 70+13-(68±1) = 14〜16 → 上限15。lean: 60+13-(68±1) = 4〜6。
-	assert_int(deep_cut.size()).is_between(14, Offseason.RELEASE_PLAN_MAX_PER_TEAM)
-	assert_int(lean_cut.size()).is_between(4, 6)
+	assert_int(deep_cut.size()).is_equal(Offseason.RELEASE_PLAN_MAX_PER_TEAM)
+	assert_int(lean_cut.size()).is_equal(7)
 	assert_int(deep_cut.size()).is_greater(lean_cut.size())
+	# 上限超過時は projection の低い側だけを残し、戻り値も昇順にする。
+	assert_int(int(deep_cut[0])).is_equal(9500)
+	assert_int(int(deep_cut[-1])).is_equal(9514)
 
 
 func test_release_targets_opening_roster_and_is_idempotent() -> void:
-	# 放出後の残り人数は「開幕目標 − 見込み補強」近辺に落ちる。さらに放出を確定した後で
-	# もう一度計算しても追加カットはほぼ出ない (冪等 = セーブ再開などで二重実行しても壊れない)。
 	var players: Array = _plan_team(1, 70, 9700, -1.0)
 	var first_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
 	var remaining: int = players.size() - first_cut.size()
-	assert_int(remaining).is_between(54, 57)
+	assert_int(remaining).is_equal(55)
 	for pid_value in first_cut:
 		var player: PSPlayer = null
 		for row in players:
@@ -437,53 +402,87 @@ func test_release_targets_opening_roster_and_is_idempotent() -> void:
 				player = row as PSPlayer
 				break
 		Offseason._apply_release_mutation(player)
-	# 目標ゆらぎ (±1) が1回目と2回目で逆向きに出ると最大2人出る (例: 1回目+1で少なく切り、
-	# 2回目-1で目標が下がる)。二重実行しても大量カットにはならないことが本質。
 	var second_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
-	assert_int(second_cut.size()).is_less_equal(2)
+	assert_int(second_cut.size()).is_less_equal(Offseason.RECONCILE_UPPER_SLACK)
 
 
 func test_release_plan_bounded_even_when_stats_missing() -> void:
-	# 成績レコードが欠損 (record=null=全員出場ゼロ扱い) でも、放出数は
-	# 常時カット上限 (RELEASE_ALWAYS_CUT_MAX) + 計画数に収まり、大量放出へ暴走しない
-	# (2026-07-03、成績消失セーブから再開して支配下が激減した事故の再発防止)。
-	var players: Array = _plan_team(1, 66, 9750, 0.0, 32)  # 全員30代・record null = 全員「無出場」に見える
+	var players: Array = _plan_team(1, 66, 9750, 0.0, 32)
 	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
-	# 計画: 66+13-(68±1) = 10〜12。全員が常時カット該当に見えても合計は計画数で止まる。
-	assert_int(cut_ids.size()).is_between(10, 12)
-	assert_int(players.size() - cut_ids.size()).is_greater_equal(54)
+	assert_int(cut_ids.size()).is_equal(13)
+	assert_int(players.size() - cut_ids.size()).is_equal(53)
 
 
-# ポジション構成補正: 本職が飽和した位置 (快適水準超え) の選手は cut_score が下がり
-# 切られやすくなる。希少ポジションの選手には補正なし。
-func test_release_penalizes_surplus_position_players() -> void:
-	var surplus_1b: PSPlayer = _player_with_z(9770, 1, 3, false, 0.0)
-	var scarce_ss: PSPlayer = _player_with_z(9771, 1, 6, false, 0.0)
-	var counts: Dictionary = {3: 6, 6: 2}
-	# 一塁は快適水準3 → 6人在籍で (6-3)*6=18 の減点。遊撃2人は補正なし。
-	assert_float(Offseason._position_surplus_release_penalty(counts, surplus_1b)).is_equal(18.0)
-	assert_float(Offseason._position_surplus_release_penalty(counts, scarce_ss)).is_equal(0.0)
-	# 投手は対象外。
-	var pitcher: PSPlayer = _player_with_z(9772, 1, 1, true, 0.0)
-	assert_float(Offseason._position_surplus_release_penalty({1: 40}, pitcher)).is_equal(0.0)
+func test_release_cuts_surplus_noshow_thirties_fielder() -> void:
+	var players: Array = []
+	var noshow: PSPlayer = _player_with_z(9220, 1, 6, false, 0.0)
+	noshow.age = 33
+	players.append(noshow)
+	for i in range(5):
+		var stronger: PSPlayer = _player_with_z(9230 + i, 1, 6, false, 1.0)
+		stronger.age = 28
+		players.append(stronger)
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	assert_array(cut_ids).contains(noshow.id)
 
 
-func test_release_cut_score_penalizes_high_salary_at_equal_ability() -> void:
-	var cheap: PSPlayer = _player_with_z(9780, 1, 3, false, 0.0)
-	var costly: PSPlayer = _player_with_z(9781, 1, 3, false, 0.0)
-	cheap.age = 29
-	costly.age = 29
-	cheap.salary = 1000
-	costly.salary = 31000
-	assert_float(Offseason._release_cut_score(cheap, null)).is_greater(
-		Offseason._release_cut_score(costly, null)
-	)
+func test_release_keeps_low_value_catcher_within_slot_budget() -> void:
+	var players: Array = []
+	for i in range(4):
+		var catcher: PSPlayer = _player_with_z(9770 + i, 1, 2, false, -3.0)
+		catcher.age = 35
+		players.append(catcher)
+	assert_int(int(Offseason._release_slot_budgets(players, 1)["fielder:2"])).is_equal(4)
+	assert_array(Offseason.compute_release_candidates_for_team(players, 1, null, false)).is_empty()
+
+
+func test_release_slot_rejects_unexcused_noshow_thirties_player() -> void:
+	var player: PSPlayer = _player_with_z(9776, 1, 7, false, -2.0)
+	player.age = 33
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2099, 1)
+	assert_float(ReleaseValueProjector.projected_value(player, record)).is_less(Offseason.RELEASE_REPLACEMENT_VALUE)
+	assert_array(_release_candidates_with_records([player], [record])).contains(player.id)
+
+
+func test_release_keeps_active_regular_that_ranks_inside_slot() -> void:
+	var players: Array = []
+	var records: Array = []
+	var regular: PSPlayer = _player_with_z(9780, 1, 3, false, 0.0)
+	regular.age = 35
+	players.append(regular)
+	var regular_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(regular, 2099, 1)
+	regular_record.batter_stats.games = 100
+	records.append(regular_record)
+	for i in range(5):
+		var reserve: PSPlayer = _player_with_z(9781 + i, 1, 3, false, -3.0)
+		reserve.age = 35
+		players.append(reserve)
+		records.append(PSPlayerSeasonRecord.from_player(reserve, 2099, 1))
+	assert_float(ReleaseValueProjector.projected_value(regular, regular_record)).is_less(Offseason.RELEASE_REPLACEMENT_VALUE)
+	var cut_ids: Array = _release_candidates_with_records(players, records)
+	assert_array(cut_ids).not_contains(regular.id)
+	assert_int(cut_ids.size()).is_greater(0)
+
+
+func test_release_keeps_long_injured_high_ability_surplus_player() -> void:
+	var players: Array = []
+	var records: Array = []
+	var injured: PSPlayer = _player_with_z(9790, 1, 3, false, 1.0)
+	injured.age = 30
+	players.append(injured)
+	var injured_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(injured, 2099, 1)
+	injured_record.season_injury_days = ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS
+	records.append(injured_record)
+	for i in range(5):
+		var stronger: PSPlayer = _player_with_z(9791 + i, 1, 3, false, 2.0)
+		stronger.age = 28
+		players.append(stronger)
+		records.append(PSPlayerSeasonRecord.from_player(stronger, 2099, 1))
+	assert_float(ReleaseValueProjector.projected_value(injured, injured_record)).is_greater_equal(Offseason.RELEASE_REPLACEMENT_VALUE)
+	assert_array(_release_candidates_with_records(players, records)).not_contains(injured.id)
 
 
 func test_compute_release_candidates_returns_empty_when_all_protected() -> void:
-	# 全員 rookie 保護なら、能力が低くてもキーパー水準に関わらず誰も切られない。
-	# 旧 Phase5 は「最終手段」として保護を無視し人数目標まで強制的に削っていたが、今は撤廃済み
-	# (2026-07-02、目標人数を先に決めて切る設計そのものをやめた)。
 	var players: Array = []
 	for i in range(60):
 		var p: PSPlayer = _player_with_z(9700 + i, 1, 3, false, -2.0)
@@ -491,6 +490,9 @@ func test_compute_release_candidates_returns_empty_when_all_protected() -> void:
 		p.years = 1
 		p.source_data["draft_year"] = 2025
 		players.append(p)
+	for i in range(4):
+		players.append(_player_with_z(9800 + i, 1, 3, false, -3.0))
+		(players[-1] as PSPlayer).foreign_player = true
 	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
 	assert_array(cut_ids).is_empty()
 
@@ -690,17 +692,6 @@ func test_should_demote_only_for_long_injury() -> void:
 	assert_bool(Offseason._should_demote_to_development(injured_washed)).is_false()
 
 
-func test_is_protected_from_release_protects_100_game_regular_regardless_of_age() -> void:
-	# 100試合出場・高能力の選手は年齢を問わず出場実績で保護される。
-	# Phase5(最終手段)もこの保護を無視しないため、好成績の選手が相対順位だけで
-	# 戦力外にされることはない(2026-07-02、ユーザー報告「3割20本の選手が戦力外になる」の修正)。
-	var star: PSPlayer = _player_with_z(9950, 1, 3, false, 2.0)
-	star.age = 35
-	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(star, 0, 0)
-	record.batter_stats.games = 100
-	assert_bool(Offseason._is_protected_from_release(star, record)).is_true()
-
-
 func test_development_release_cuts_faded_prospect_keeps_ready_and_rehab() -> void:
 	# 猶予明け・健康・昇格見込みなし (projected_ceiling が即戦力基準未満) → 優先放出
 	var aged_failed: PSPlayer = _player_with_z(103, 1, 3, true, -1.0)
@@ -860,6 +851,99 @@ func test_development_release_holds_the_offseason_a_player_was_demoted() -> void
 
 
 # --- 一軍出場不可 ------------------------------------------------------------
+
+func test_foreign_active_roster_limits_pitchers_and_fielders_to_three() -> void:
+	var pitcher_counts: Dictionary = ForeignActiveRosterRules.empty_counts()
+	var fielder_counts: Dictionary = ForeignActiveRosterRules.empty_counts()
+	for i in range(ForeignActiveRosterRules.TYPE_MAX):
+		var pitcher: PSPlayer = _player({
+			"id": 600 + i,
+			"team_id": 1,
+			"position": 1,
+			"role": "reliever",
+			"foreign_player": true,
+		})
+		ForeignActiveRosterRules.add_record(pitcher_counts, PSPlayerSeasonRecord.from_player(pitcher, 2099, 1))
+		var fielder: PSPlayer = _player({
+			"id": 700 + i,
+			"team_id": 1,
+			"position": 3,
+			"foreign_player": true,
+		})
+		ForeignActiveRosterRules.add_record(fielder_counts, PSPlayerSeasonRecord.from_player(fielder, 2099, 1))
+
+	var fourth_pitcher: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({
+		"id": 699, "team_id": 1, "position": 1, "role": "reliever", "foreign_player": true,
+	}), 2099, 1)
+	var fourth_fielder: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({
+		"id": 799, "team_id": 1, "position": 3, "foreign_player": true,
+	}), 2099, 1)
+
+	assert_bool(ForeignActiveRosterRules.can_add_record(pitcher_counts, fourth_pitcher)).is_false()
+	assert_bool(ForeignActiveRosterRules.can_add_record(fielder_counts, fourth_fielder)).is_false()
+	assert_bool(ForeignActiveRosterRules.is_within_limits(pitcher_counts)).is_true()
+	assert_bool(ForeignActiveRosterRules.is_within_limits(fielder_counts)).is_true()
+
+
+func test_active_roster_summary_reports_foreign_type_counts() -> void:
+	var records: Array = [
+		PSPlayerSeasonRecord.from_player(_player({
+			"id": 801, "team_id": 1, "position": 1, "role": "starter", "foreign_player": true,
+		}), 2099, 1),
+		PSPlayerSeasonRecord.from_player(_player({
+			"id": 802, "team_id": 1, "position": 3, "foreign_player": true,
+		}), 2099, 1),
+		PSPlayerSeasonRecord.from_player(_player({
+			"id": 803, "team_id": 1, "position": 4,
+		}), 2099, 1),
+	]
+	var summary: Dictionary = TeamSetupBuilder.summarize_active_roster_ids([801, 802, 803], records)
+
+	assert_int(int(summary.get("foreigners", 0))).is_equal(2)
+	assert_int(int(summary.get("foreign_pitchers", 0))).is_equal(1)
+	assert_int(int(summary.get("foreign_fielders", 0))).is_equal(1)
+
+
+func test_auto_active_roster_does_not_select_four_foreign_fielders() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	var records: Array = []
+	var player_id: int = 820
+	for i in range(6):
+		var starter: PSPlayer = _player({
+			"id": player_id, "team_id": 1, "position": 1, "role": "starter",
+		})
+		records.append(PSPlayerSeasonRecord.from_player(starter, season.year, season.season_number).to_dict())
+		player_id += 1
+	for i in range(9):
+		var reliever: PSPlayer = _player({
+			"id": player_id, "team_id": 1, "position": 1, "role": "reliever",
+		})
+		records.append(PSPlayerSeasonRecord.from_player(reliever, season.year, season.season_number).to_dict())
+		player_id += 1
+	var positions: Array = [2, 3, 4, 5, 6, 7, 8, 9]
+	for i in range(17):
+		var fielder: PSPlayer = _player_with_z(player_id, 1, int(positions[i % positions.size()]), false, 2.0 if i < 4 else -1.0)
+		fielder.foreign_player = i < 4
+		records.append(PSPlayerSeasonRecord.from_player(fielder, season.year, season.season_number).to_dict())
+		player_id += 1
+
+	RecordStore.load_from_dict({
+		"player_records": records,
+		"team_records": [],
+		"season_archives": [],
+	})
+	var preview: Dictionary = TeamAutoAIRef.preview_perf_based_active_roster(season, 1)
+	var all_records: Array = RecordStore.get_team_player_records(1, season.year, season.season_number)
+	var summary: Dictionary = TeamSetupBuilder.summarize_active_roster_ids(preview.get("player_ids", []) as Array, all_records)
+	RecordStore.load_from_dict(original_records)
+
+	assert_bool(bool(preview.get("ok", false))).is_true()
+	assert_int(int(summary.get("foreign_fielders", 0))).is_equal(ForeignActiveRosterRules.TYPE_MAX)
+	assert_int(int(summary.get("total", 0))).is_equal(TeamAutoAIRef.TARGET_TOTAL)
+
 
 func test_eligible_or_fallback_excludes_development() -> void:
 	var support: PSPlayer = _player({"id": 60, "team_id": 1})
@@ -1115,18 +1199,109 @@ func test_development_contract_salary_uses_separate_scale() -> void:
 	assert_int(Offseason._compute_new_salary(demoted, null, 0.0)).is_greater_equal(Offseason.SALARY_MIN)
 
 
-# 若手の年齢保護境界: age<=23 は戦力外から常に保護される (素材保持型の自動降格は
-# 2026-07-03 に撤廃されたため、24歳以上の健康な選手は保護外=通常の戦力外判定に乗る)。
-func test_young_development_protection_boundary() -> void:
-	var protected_young: PSPlayer = _player_with_z(9523, 1, 3, false, 0.5)
-	protected_young.age = 23
-	assert_bool(Offseason._is_young_development_protected(protected_young)).is_true()
-	var unprotected: PSPlayer = _player_with_z(9524, 1, 3, false, 0.5)
-	unprotected.age = 24
-	assert_bool(Offseason._is_young_development_protected(unprotected)).is_false()
+# --- 戦力外 projection 軸 -----------------------------------------------------
+
+func test_release_projection_prefers_young_at_equal_ability() -> void:
+	# 同能力・同出場 (0) ・同年俸なら growth 項だけが差になり、若い方が明確に高く出る。
+	var young: PSPlayer = _player_with_z(9601, 1, 3, false, 0.5)
+	young.age = 21
+	var old: PSPlayer = _player_with_z(9602, 1, 3, false, 0.5)
+	old.age = 33
+	var young_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(young, 0, 0)
+	var old_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(old, 0, 0)
+	var young_value: float = ReleaseValueProjector.projected_value(young, young_record)
+	var old_value: float = ReleaseValueProjector.projected_value(old, old_record)
+	assert_float(young_value - old_value).is_greater(15.0)
+
+
+func test_release_projection_usage_is_continuous() -> void:
+	# 出場割引の飽和点 (80試合) をまたいでも崖を作らない。
+	var fielder: PSPlayer = _player_with_z(9603, 1, 3, false, 0.3)
+	fielder.age = 26
+	var record_79: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 0, 0)
+	record_79.batter_stats.games = 79
+	var record_80: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 0, 0)
+	record_80.batter_stats.games = 80
+	var value_79: float = ReleaseValueProjector.projected_value(fielder, record_79)
+	var value_80: float = ReleaseValueProjector.projected_value(fielder, record_80)
+	assert_float(absf(value_80 - value_79)).is_less(1.0)
+
+	# ゼロ出場は current の USAGE_ZERO_DISCOUNT 分だけ割り引かれ、フル出場と明確な差が出る。
+	var record_0: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 0, 0)
+	record_0.batter_stats.games = 0
+	var value_0: float = ReleaseValueProjector.projected_value(fielder, record_0)
+	assert_float(value_80 - value_0).is_greater(10.0)
+
+
+func test_release_projection_zero_usage_discount_scales_with_ability() -> void:
+	# 出場割引は加点ではなく current への乗算: 能力が高いのにゼロ出場の選手ほど
+	# 絶対値で大きく疑われる (「高能力を主張しているのに使われていない」ベイズ的証拠)。
+	var strong: PSPlayer = _player_with_z(9606, 1, 3, false, 1.5)
+	strong.age = 28
+	var weak: PSPlayer = _player_with_z(9607, 1, 3, false, -1.5)
+	weak.age = 28
+	var strong_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(strong, 0, 0)
+	strong_record.batter_stats.games = 0
+	var weak_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(weak, 0, 0)
+	weak_record.batter_stats.games = 0
+	var strong_components: Dictionary = ReleaseValueProjector.projected_value_components(strong, strong_record)
+	var weak_components: Dictionary = ReleaseValueProjector.projected_value_components(weak, weak_record)
+	assert_float(float(strong_components["current"])).is_greater(float(weak_components["current"]))
+	assert_float(float(strong_components["usage_evidence"])).is_less(0.0)
+	# 割引デルタ (負値) は高能力側の方が大きい。
+	assert_float(float(strong_components["usage_evidence"])).is_less(float(weak_components["usage_evidence"]))
+
+
+func test_release_projection_excuses_usage_lost_to_long_injury() -> void:
+	var player: PSPlayer = _player_with_z(9608, 1, 3, false, 1.5)
+	player.age = 28
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
+	record.batter_stats.games = 0
+	record.season_injury_days = ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS
+	var components: Dictionary = ReleaseValueProjector.projected_value_components(player, record)
+	assert_float(float(components["usage_evidence"])).is_equal_approx(0.0, 0.001)
+
+
+func test_release_projection_components_sum() -> void:
+	var player: PSPlayer = _player_with_z(9604, 1, 1, false, 0.1)
+	player.age = 29
+	player.role = "starter"
+	player.salary = 8000
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
+	record.pitcher_stats.starts = 10
+	var components: Dictionary = ReleaseValueProjector.projected_value_components(player, record)
+	var expected_total: float = float(components["current"]) + float(components["growth"]) \
+		+ float(components["usage_evidence"]) - float(components["injury_penalty"]) - float(components["salary_penalty"])
+	assert_float(float(components["total"])).is_equal_approx(expected_total, 0.001)
+	assert_float(ReleaseValueProjector.projected_value(player, record)).is_equal_approx(float(components["total"]), 0.001)
+
+
+func test_release_projection_null_record_falls_back_to_player_ability() -> void:
+	var player: PSPlayer = _player_with_z(9605, 1, 3, false, 0.4)
+	player.age = 25
+	var components: Dictionary = ReleaseValueProjector.projected_value_components(player, null)
+	assert_float(float(components["current"])).is_greater(0.0)
 
 
 # --- helpers -----------------------------------------------------------------
+
+func _release_candidates_with_records(players: Array, records: Array) -> Array:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var record_dicts: Array = []
+	for record_row in records:
+		record_dicts.append((record_row as PSPlayerSeasonRecord).to_dict())
+	RecordStore.load_from_dict({
+		"player_records": record_dicts,
+		"team_records": [],
+		"season_archives": [],
+	})
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	var result: Array = Offseason.compute_release_candidates_for_team(players, 1, season, false)
+	RecordStore.load_from_dict(original_records)
+	return result
+
 
 func _player(data: Dictionary) -> PSPlayer:
 	var payload: Dictionary = {

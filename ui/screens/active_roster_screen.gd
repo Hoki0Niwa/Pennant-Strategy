@@ -9,11 +9,13 @@ extends "res://ui/components/dashboard_screen.gd"
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
+const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 const Offseason = preload("res://services/season/offseason_service.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const ROSTER_MAX: int = 31
-const FOREIGN_MAX: int = 4
+const FOREIGN_MAX: int = ForeignActiveRosterRules.TOTAL_MAX
+const FOREIGN_TYPE_MAX: int = ForeignActiveRosterRules.TYPE_MAX
 const TARGET_PITCHERS_MIN: int = 14
 const TARGET_PITCHERS_MAX: int = 15
 const MIN_CATCHERS: int = 2
@@ -253,11 +255,18 @@ func _draw_stat_cards(s: Dictionary) -> void:
 	var fielders: int = int(s["fielders"])
 	var catchers: int = int(s["catchers"])
 	var foreigners: int = int(s["foreigners"])
+	var foreign_pitchers: int = int(s["foreign_pitchers"])
+	var foreign_fielders: int = int(s["foreign_fielders"])
 
 	var total_color: Color = RED if total > ROSTER_MAX else (AMBER if total == ROSTER_MAX else GREEN)
 	var pit_color: Color = AMBER if pitchers < TARGET_PITCHERS_MIN or pitchers > TARGET_PITCHERS_MAX else GREEN
 	var c_color: Color = RED if catchers < MIN_CATCHERS else GREEN
-	var f_color: Color = RED if foreigners > FOREIGN_MAX else TEXT
+	var foreign_counts: Dictionary = {
+		"foreigners": foreigners,
+		"foreign_pitchers": foreign_pitchers,
+		"foreign_fielders": foreign_fielders,
+	}
+	var f_color: Color = RED if not ForeignActiveRosterRules.is_within_limits(foreign_counts) else TEXT
 
 	var cells: Array = [
 		{"label": "1軍", "value": "%d/%d" % [total, ROSTER_MAX], "color": total_color},
@@ -266,7 +275,8 @@ func _draw_stat_cards(s: Dictionary) -> void:
 		{"label": "野手", "value": str(fielders),
 			"note": "捕%d 内%d 外%d" % [catchers, int(s["infield"]), int(s["outfield"])]},
 		{"label": "捕手", "value": str(catchers), "color": c_color, "note": "最低%d" % MIN_CATCHERS},
-		{"label": "外国人", "value": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color},
+		{"label": "外国人", "value": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color,
+			"note": "投%d 野%d（各%d以内）" % [foreign_pitchers, foreign_fielders, FOREIGN_TYPE_MAX]},
 		{"label": "支配下", "value": "%d/%d" % [int(s["shienka"]), TeamFinance.SHIENKA_LIMIT]},
 		{"label": "育成", "value": str(int(s["development"])), "color": GREEN},
 	]
@@ -717,8 +727,9 @@ func _promote(player_id: int) -> void:
 	if int(summary.get("total", 0)) >= ROSTER_MAX:
 		_set_status("1軍は最大%d人です" % ROSTER_MAX, true)
 		return
-	if record.foreign_player and int(summary.get("foreigners", 0)) >= FOREIGN_MAX:
-		_set_status("外国人枠は最大%d人です" % FOREIGN_MAX, true)
+	var foreign_block: String = ForeignActiveRosterRules.add_block_message(summary, record)
+	if not foreign_block.is_empty():
+		_set_status(foreign_block, true)
 		return
 	_active_ids[player_id] = true
 	_set_status("%s を1軍に上げました" % record.name, false)
@@ -802,8 +813,9 @@ func _on_save_pressed() -> void:
 	if total > ROSTER_MAX:
 		_set_status("保存失敗: 1軍は最大%d人です(%d人)" % [ROSTER_MAX, total], true)
 		return
-	if int(summary.get("foreigners", 0)) > FOREIGN_MAX:
-		_set_status("保存失敗: 外国人枠は最大%d人です(%d人)" % [FOREIGN_MAX, int(summary.get("foreigners", 0))], true)
+	var foreign_violation: String = ForeignActiveRosterRules.violation_message(summary)
+	if not foreign_violation.is_empty():
+		_set_status("保存失敗: %s" % foreign_violation, true)
 		return
 	if int(summary.get("catchers", 0)) < MIN_CATCHERS:
 		_set_status("保存失敗: 捕手は1軍に最低%d人必要です (%d人)" % [MIN_CATCHERS, int(summary.get("catchers", 0))], true)
@@ -1013,6 +1025,8 @@ func _compute_stats() -> Dictionary:
 		"infield": infield,
 		"outfield": outfield,
 		"foreigners": int(summary.get("foreigners", 0)),
+		"foreign_pitchers": int(summary.get("foreign_pitchers", 0)),
+		"foreign_fielders": int(summary.get("foreign_fielders", 0)),
 		"shienka": _effective_shienka_count(),
 		"development": _development_players.size(),
 	}
