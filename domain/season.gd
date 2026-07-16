@@ -409,13 +409,16 @@ const PERSISTED_RESULT_KEYS: Array = [
 ]
 
 
-func to_dict() -> Dictionary:
+# include_history=false は SQLite の season_history テーブルへ増分永続化するセーブ経路用。
+# player_stat_history / player_game_history (シーズン後半で数十MB) を blob から外し、
+# 毎セーブの全量再シリアライズを避ける。それ以外の呼び出しは完全な dict を返す既定のまま。
+func to_dict(include_history: bool = true) -> Dictionary:
 	var standings_data: Dictionary = {}
 	for team_id in standings.keys():
 		var stats: PSStats = standings[team_id] as PSStats
 		standings_data[str(team_id)] = stats.to_dict()
 
-	return {
+	var out: Dictionary = {
 		"year": year,
 		"season_number": season_number,
 		"selected_team_id": selected_team_id,
@@ -430,10 +433,12 @@ func to_dict() -> Dictionary:
 		"team_rotations": team_rotations,
 		"team_active_rosters": team_active_rosters,
 		"last_auto_swap_day": last_auto_swap_day,
-		"player_stat_history": player_stat_history,
-		"player_game_history": player_game_history,
 		"trade_state": trade_state,
 	}
+	if include_history:
+		out["player_stat_history"] = player_stat_history
+		out["player_game_history"] = player_game_history
+	return out
 
 
 # schedule をセーブ用に複製し、消化済み試合の重い result を軽量サマリへ差し替える。

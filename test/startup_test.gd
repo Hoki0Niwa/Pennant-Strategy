@@ -1130,6 +1130,84 @@ func test_postseason_day_advance_and_dashboard() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+# ポストシーズンの詳細結果 (box score / play-by-play) 永続化の回帰。
+# auto_save_enabled=false で PS 試合を消化すると PostseasonService.advance_one_day(persist=false) は
+# ログファイルを書かない (docs/agent_memory/project_save_folder_layout.md の「暗黙保存」方針: 通常
+# シーズンの GameLogService.write_pending_game_logs と同様、手動保存時にまとめて flush する想定)。
+# メモリ上の games[].result はこの時点ではまだフル (to_dict の SLIM_RESULT_KEYS 縮小前) なので、
+# GameLogService.write_pending_postseason_game_logs を挟めばログファイルへ退避でき、その後
+# to_dict/from_dict でスリム化されても game_result_screen._ps_game_log と同じフォールバックで
+# 詳細を復元できることを検証する。
+func test_postseason_pending_game_log_persists_through_save_and_reload() -> void:
+	var old_season: PSSeason = AppState.current_season
+	var old_post: PSPostseasonResult = AppState.current_postseason
+	var old_post_active: bool = AppState.postseason_active
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_team_id: int = AppState.selected_team_id
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	AppState.current_postseason = PostseasonService.build_initial_state(AppState.current_season, GameDb.teams)
+	AppState.postseason_active = true
+	PostseasonService.sync_to_next_postseason_day(AppState.current_postseason, AppState.current_season)
+
+	# auto_save_enabled=false のまま1日進める → PostseasonService.advance_one_day(persist=false) が呼ばれる。
+	var day_result: Dictionary = AppState.advance_postseason_day()
+	assert_bool(bool(day_result.get("ok", false))).is_true()
+
+	var games_before: Array = AppState.current_postseason.cs1_central.get("games", []) as Array
+	assert_int(games_before.size()).is_equal(1)
+	var game_before: Dictionary = games_before[0] as Dictionary
+	var result_before: Dictionary = game_before.get("result", {}) as Dictionary
+	assert_bool(result_before.has("play_events")).is_true()  # まだフル result (縮小前)
+
+	# バグ再現: persist=false だったのでログファイルはまだ存在しない。
+	var log_before_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_central", 1)
+	assert_bool(log_before_flush.is_empty()).is_true()
+
+	# 修正: 手動保存が行うべき pending ログ flush を直接呼ぶ。
+	# (本来は SaveService.save_state から呼ぶ配線が必要だが、当該ファイルは本タスクでは編集禁止。
+	# 詳細は対応する調査タスクの最終報告を参照。)
+	PSGameLogService.write_pending_postseason_game_logs(AppState.current_postseason, AppState.current_season)
+	var log_after_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_central", 1)
+	assert_bool(log_after_flush.is_empty()).is_false()
+	assert_array(log_after_flush.get("pa_log", []) as Array).is_not_empty()
+
+	# to_dict/from_dict の往復でも試合結果サマリ (スコア・勝敗) は保持される。
+	var restored: PSPostseasonResult = PSPostseasonResult.from_dict(AppState.current_postseason.to_dict())
+	var restored_games: Array = restored.cs1_central.get("games", []) as Array
+	assert_int(restored_games.size()).is_equal(1)
+	var restored_game: Dictionary = restored_games[0] as Dictionary
+	assert_int(int(restored_game.get("away_score", -1))).is_equal(int(game_before.get("away_score", -2)))
+	assert_int(int(restored_game.get("home_score", -1))).is_equal(int(game_before.get("home_score", -2)))
+	assert_int(int(restored_game.get("winner_id", -1))).is_equal(int(game_before.get("winner_id", -2)))
+	var restored_result: Dictionary = restored_game.get("result", {}) as Dictionary
+	assert_bool(restored_result.has("play_events")).is_false()  # to_dict でスリム化される
+
+	# game_result_screen._ps_game_log と同じフォールバック経路: スリム化後の result には
+	# play_events が無いので、事前に flush されたログファイルから詳細を復元できる。
+	var reloaded_log: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_central", int(restored_game.get("game_num", 0)))
+	assert_bool(reloaded_log.is_empty()).is_false()
+	assert_array(reloaded_log.get("pa_log", []) as Array).is_not_empty()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_postseason = old_post
+	AppState.postseason_active = old_post_active
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func _first_record_not_in_cs1(post: PSPostseasonResult, season: PSSeason) -> PSPlayerSeasonRecord:
 	var playing: Dictionary = {}
 	for key in ["cs1_central", "cs1_pacific"]:

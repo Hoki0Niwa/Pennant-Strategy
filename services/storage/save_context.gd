@@ -169,6 +169,18 @@ static func delete_current_save_data() -> Array:
 	return deleted
 
 
+# 指定 save_id のフォルダを丸ごと削除する (アクティブ以外のセーブも削除できる)。
+# アクティブなセーブを消した場合は ACTIVE_SAVE_PATH もクリアして孤立参照を残さない。
+static func delete_save_id(save_id: String) -> bool:
+	if not _valid_save_id(save_id) or not _save_dir_exists(save_id):
+		return false
+	if not _remove_dir_recursive(save_dir_for_id(save_id)):
+		return false
+	if active_save_id() == save_id:
+		clear_active_save()
+	return true
+
+
 static func clear_active_save() -> void:
 	_active_loaded = true
 	_active_save_id = ""

@@ -6,13 +6,24 @@ const RUNTIME_TEMPLATE_DB_PATH = "res://data/pennant_strategy.sqlite"
 
 # SQLite の user_version に保存する永続化スキーマ世代。
 # required columns と indexes が揃っているかを起動時に確認する。
-const SCHEMA_VERSION: int = 4
+const SCHEMA_VERSION: int = 5
 
 # スキーマ構築 (CREATE TABLE / INDEX / レガシー検出 / PRAGMA table_info) はプロセス内で
 # 一度実行できれば十分。毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
 # 固定オーバーヘッドが積み上がるため、成功後はこのフラグでスキップする。
 static var _schema_ensured: bool = false
 static var _schema_ensured_path: String = ""
+
+# 選手年度レコードの「前回永続化時の内容ハッシュ」キャッシュ (key "pid:year:season" → to_dict().hash())。
+# save のたびに全レコードを upsert する代わりに、内容が変わった行だけを書く。
+# 過去年度のレコードはシーズン中不変なので、これで書き込み行数が現行シーズン分に収まる。
+# キャッシュはプロセス内のみ (空 = 全行書き込みにフォールバック) なので、取りこぼしても
+# 正しさには影響せず、書き込みが増えるだけ。
+static var _record_fingerprints: Dictionary = {}
+static var _fingerprint_db_path: String = ""
+
+# 直近の save_record_store_and_normalized で実際に upsert した選手レコード数 (診断/テスト用)。
+static var last_record_upsert_count: int = 0
 
 
 static func is_available() -> bool:
@@ -154,43 +165,55 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 
 	var player_records: Array = blob_payload.get("player_records", []) as Array
 
-	# (year, season_number) ごとに有効な player_id 集合を作り、
-	# DB 側で集合に居ない行を DELETE してから upsert する。
-	var by_season: Dictionary = {}  # "year:season_number" -> Array[int]
+	# フィンガープリント一致で書き込みをスキップできるのは、キャッシュが現 DB の内容を
+	# 反映していると信頼できる場合のみ。空 (プロセス初回) やセーブフォルダ切替後は全行書く。
+	var cache_valid: bool = _fingerprint_cache_valid()
+	var pending_fingerprints: Dictionary = {}
+	var seen_keys: Dictionary = {}
+
+	if not cache_valid:
+		# (year, season_number) ごとに有効な player_id 集合を作り、
+		# DB 側で集合に居ない行を DELETE してから upsert する (メモリ側の削除を反映)。
+		var by_season: Dictionary = {}  # "year:season_number" -> Array[int]
+		for record_value in player_records:
+			var record: Dictionary = record_value as Dictionary
+			var year: int = int(record.get("year", 0))
+			var season_number: int = int(record.get("season_number", 0))
+			var key: String = "%d:%d" % [year, season_number]
+			if not by_season.has(key):
+				by_season[key] = []
+			by_season[key].append(int(record.get("player_id", 0)))
+
+		for season_key in by_season.keys():
+			var ids: Array = by_season[season_key] as Array
+			if ids.is_empty():
+				continue
+			var parts: PackedStringArray = (season_key as String).split(":")
+			var year: int = int(parts[0])
+			var season_number: int = int(parts[1])
+			var placeholders: String = _build_placeholders(ids.size())
+			var del_bindings: Array = [year, season_number]
+			for pid in ids:
+				del_bindings.append(int(pid))
+			for table_name in ["player_season_records", "batter_stats", "pitcher_stats"]:
+				var del_sql: String = "DELETE FROM %s WHERE year = ? AND season_number = ? AND player_id NOT IN (%s)" % [table_name, placeholders]
+				if not _query_with_bindings(db, del_sql, del_bindings):
+					_execute(db, "ROLLBACK")
+					return false
+
 	for record_value in player_records:
 		var record: Dictionary = record_value as Dictionary
-		var year: int = int(record.get("year", 0))
-		var season_number: int = int(record.get("season_number", 0))
-		var key: String = "%d:%d" % [year, season_number]
-		if not by_season.has(key):
-			by_season[key] = []
-		by_season[key].append(int(record.get("player_id", 0)))
-
-	for season_key in by_season.keys():
-		var ids: Array = by_season[season_key] as Array
-		if ids.is_empty():
-			continue
-		var parts: PackedStringArray = (season_key as String).split(":")
-		var year: int = int(parts[0])
-		var season_number: int = int(parts[1])
-		var placeholders: String = _build_placeholders(ids.size())
-		var del_bindings: Array = [year, season_number]
-		for pid in ids:
-			del_bindings.append(int(pid))
-		for table_name in ["player_season_records", "batter_stats", "pitcher_stats"]:
-			var del_sql: String = "DELETE FROM %s WHERE year = ? AND season_number = ? AND player_id NOT IN (%s)" % [table_name, placeholders]
-			if not _query_with_bindings(db, del_sql, del_bindings):
-				_execute(db, "ROLLBACK")
-				return false
-
-	for record_value in player_records:
-		var record: Dictionary = record_value as Dictionary
-		if not _upsert_player_season_record(db, record):
-			_execute(db, "ROLLBACK")
-			return false
 		var player_id: int = int(record.get("player_id", 0))
 		var year: int = int(record.get("year", 0))
 		var season_number: int = int(record.get("season_number", 0))
+		var record_key: String = "%d:%d:%d" % [player_id, year, season_number]
+		seen_keys[record_key] = true
+		var fingerprint: int = record.hash()
+		if cache_valid and int(_record_fingerprints.get(record_key, 0)) == fingerprint:
+			continue
+		if not _upsert_player_season_record(db, record):
+			_execute(db, "ROLLBACK")
+			return false
 		var batter_stats: Dictionary = record.get("batter_stats", {}) as Dictionary
 		if not _upsert_batter_stats(db, player_id, year, season_number, batter_stats):
 			_execute(db, "ROLLBACK")
@@ -199,13 +222,65 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 		if not _upsert_pitcher_stats(db, player_id, year, season_number, pitcher_stats):
 			_execute(db, "ROLLBACK")
 			return false
+		pending_fingerprints[record_key] = fingerprint
+
+	# キャッシュ有効時の削除反映: メモリから消えたレコード (前回キャッシュに居るが今回不在) を
+	# キー単位で DELETE する (ensure_season_records の非アクティブ選手 erase 等)。
+	if cache_valid:
+		for cached_key_value in _record_fingerprints.keys():
+			var cached_key: String = str(cached_key_value)
+			if seen_keys.has(cached_key):
+				continue
+			var parts: PackedStringArray = cached_key.split(":")
+			var del_bindings: Array = [int(parts[0]), int(parts[1]), int(parts[2])]
+			for table_name in ["player_season_records", "batter_stats", "pitcher_stats"]:
+				var del_sql: String = "DELETE FROM %s WHERE player_id = ? AND year = ? AND season_number = ?" % table_name
+				if not _query_with_bindings(db, del_sql, del_bindings):
+					_execute(db, "ROLLBACK")
+					return false
 
 	if get_user_version(db) < SCHEMA_VERSION:
 		if not set_user_version(db, SCHEMA_VERSION):
 			_execute(db, "ROLLBACK")
 			return false
 
-	return _execute(db, "COMMIT")
+	if not _execute(db, "COMMIT"):
+		return false
+
+	last_record_upsert_count = pending_fingerprints.size()
+	# COMMIT 成功後にのみキャッシュへ反映する (ROLLBACK 時に「書いたつもり」を残さない)。
+	if not cache_valid:
+		_record_fingerprints.clear()
+		_fingerprint_db_path = runtime_db_path()
+		for record_value in player_records:
+			var record: Dictionary = record_value as Dictionary
+			var record_key: String = "%d:%d:%d" % [int(record.get("player_id", 0)), int(record.get("year", 0)), int(record.get("season_number", 0))]
+			_record_fingerprints[record_key] = record.hash()
+	else:
+		for pending_key in pending_fingerprints.keys():
+			_record_fingerprints[pending_key] = pending_fingerprints[pending_key]
+		for cached_key_value in _record_fingerprints.keys():
+			if not seen_keys.has(str(cached_key_value)):
+				_record_fingerprints.erase(cached_key_value)
+	return true
+
+
+static func _fingerprint_cache_valid() -> bool:
+	return not _record_fingerprints.is_empty() and _fingerprint_db_path == runtime_db_path()
+
+
+# 新規ゲーム開始やレコード再ロードでメモリ側が丸ごと入れ替わったとき、
+# 「前回永続化した内容」の前提が崩れるためキャッシュを破棄する。
+static func reset_record_fingerprints() -> void:
+	_record_fingerprints.clear()
+	_fingerprint_db_path = ""
+
+
+# 正規化テーブルから hydrate した直後に RecordStore が呼ぶ。DB とメモリが一致している
+# 時点のハッシュを登録し、セッション初回 save の全行書き込みを不要にする。
+static func seed_record_fingerprints(fingerprints: Dictionary) -> void:
+	_record_fingerprints = fingerprints.duplicate()
+	_fingerprint_db_path = runtime_db_path()
 
 
 # 正規化テーブルから全選手年度記録を復元する。RecordStore.load_records() では blob より優先される。
@@ -232,6 +307,77 @@ static func normalized_tables_empty() -> bool:
 	if rows.is_empty():
 		return true
 	return int((rows[0] as Dictionary).get("count", 0)) == 0
+
+
+# -----------------------------------------------------------------------------
+# シーズン内選手履歴 (season_history): 日単位の増分永続化
+# -----------------------------------------------------------------------------
+
+# days_payload = {day:int → {player_id_str: [entries...]}} を、既永続の最終日以降だけ upsert する。
+# 併せて当該シーズン以外の行・現在日より未来の行 (blob 保存失敗時などの残骸)・
+# retention_cutoff より古い行 (stat スナップショットの trim をミラー) を掃除する。
+# 全体を 1 トランザクションで行い、部分成功を残さない。
+static func save_season_history(year: int, season_number: int, kind: String, days_payload: Dictionary, current_day: int, retention_cutoff: int = 0) -> bool:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return false
+	if not _execute(db, "BEGIN TRANSACTION"):
+		_close(db)
+		return false
+
+	var ok: bool = true
+	ok = ok and _query_with_bindings(db, "DELETE FROM season_history WHERE kind = ? AND (year != ? OR season_number != ?)", [kind, year, season_number])
+	ok = ok and _query_with_bindings(db, "DELETE FROM season_history WHERE kind = ? AND year = ? AND season_number = ? AND day > ?", [kind, year, season_number, current_day])
+	if retention_cutoff > 0:
+		ok = ok and _query_with_bindings(db, "DELETE FROM season_history WHERE kind = ? AND year = ? AND season_number = ? AND day < ?", [kind, year, season_number, retention_cutoff])
+
+	var last_day: int = 0
+	if ok:
+		var rows: Array = _select_with_bindings(db, "SELECT MAX(day) AS max_day FROM season_history WHERE kind = ? AND year = ? AND season_number = ?", [kind, year, season_number])
+		if not rows.is_empty():
+			# 行が無いとき MAX() は NULL を返す (int() 不可) ので null チェックする。
+			var max_day_value: Variant = (rows[0] as Dictionary).get("max_day", 0)
+			if max_day_value != null:
+				last_day = int(max_day_value)
+
+	if ok:
+		# 最終永続日は同日中の再セーブ (1試合ずつ進行など) で内容が増えうるため書き直す。
+		# それより前の日は append-only なのでスキップできる。
+		for day_value in days_payload.keys():
+			var day: int = int(day_value)
+			if day < last_day:
+				continue
+			var day_json: String = JSON.stringify(days_payload[day_value])
+			if not _query_with_bindings(db, "INSERT OR REPLACE INTO season_history (year, season_number, kind, day, payload_json) VALUES (?, ?, ?, ?, ?)", [year, season_number, kind, day, day_json]):
+				ok = false
+				break
+
+	if ok:
+		ok = _execute(db, "COMMIT")
+	else:
+		_execute(db, "ROLLBACK")
+	_close(db)
+	return ok
+
+
+# 当該シーズン・kind の履歴を {player_id_str: [entries...]} (day 昇順) へ再構成する。
+# max_day より未来の行はロード対象外 (blob と履歴テーブルの書き込みタイミング差の防御)。
+static func load_season_history(year: int, season_number: int, kind: String, max_day: int) -> Dictionary:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return {}
+	var rows: Array = _select_with_bindings(db, "SELECT payload_json FROM season_history WHERE kind = ? AND year = ? AND season_number = ? AND day <= ? ORDER BY day ASC", [kind, year, season_number, max_day])
+	_close(db)
+
+	var out: Dictionary = {}
+	for row_value in rows:
+		var day_payload: Dictionary = _parse_json_dict(str((row_value as Dictionary).get("payload_json", "{}")))
+		for player_key in day_payload.keys():
+			var entries: Array = day_payload[player_key] as Array
+			if not out.has(player_key):
+				out[player_key] = []
+			(out[player_key] as Array).append_array(entries)
+	return out
 
 
 # -----------------------------------------------------------------------------
@@ -604,12 +750,11 @@ static func _save_blob(key: String, payload: Dictionary) -> bool:
 	if db == null:
 		return false
 
+	# 値はバインディングで渡す。SQL 文へ文字列連結すると、数十 MB の blob で
+	# エスケープ置換と SQL パースの余計なコストがかかる。
 	var value_json: String = JSON.stringify(payload)
-	var sql: String = "INSERT OR REPLACE INTO runtime_blobs (key, value_json, updated_at) VALUES (%s, %s, datetime('now'))" % [
-		_sql_string(key),
-		_sql_string(value_json),
-	]
-	var ok: bool = _execute(db, sql)
+	var sql: String = "INSERT OR REPLACE INTO runtime_blobs (key, value_json, updated_at) VALUES (?, ?, datetime('now'))"
+	var ok: bool = _query_with_bindings(db, sql, [key, value_json])
 	_close(db)
 	return ok
 
@@ -809,6 +954,17 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 		"CREATE INDEX IF NOT EXISTS idx_ps_k ON pitcher_stats(year, season_number, strikeouts DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_ps_saves ON pitcher_stats(year, season_number, saves DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_ps_holds ON pitcher_stats(year, season_number, holds DESC)",
+		# --- 永続化スキーマ v5: シーズン内の選手履歴 (試合別成績差分 / 日次statsスナップショット) ---
+		# game_state blob から分離し、日単位で増分書き込みする (毎セーブの全量再シリアライズ回避)。
+		# payload_json = {player_id_str: [その日のエントリ...]}。kind は "game" / "stat"。
+		"""CREATE TABLE IF NOT EXISTS season_history (
+			year INTEGER NOT NULL,
+			season_number INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			day INTEGER NOT NULL,
+			payload_json TEXT NOT NULL,
+			PRIMARY KEY (year, season_number, kind, day)
+		)""",
 	]
 	for statement_row in statements:
 		var statement: String = str(statement_row)

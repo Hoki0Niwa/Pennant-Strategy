@@ -103,7 +103,8 @@ func _layout_rects() -> Dictionary:
 	var rects: Dictionary = {
 		"save_panel": save_panel,
 		"save_btn": Rect2(save_panel.position.x + 18.0, save_panel.end.y - 50.0, 150.0, 36.0),
-		"delete_btn": Rect2(save_panel.position.x + 182.0, save_panel.end.y - 50.0, 150.0, 36.0),
+		"select_btn": Rect2(save_panel.position.x + 182.0, save_panel.end.y - 50.0, 170.0, 36.0),
+		"delete_btn": Rect2(save_panel.position.x + 366.0, save_panel.end.y - 50.0, 150.0, 36.0),
 		"settings_panel": settings_panel,
 	}
 
@@ -261,6 +262,7 @@ func _build_buttons() -> void:
 
 	var rects: Dictionary = _layout_rects()
 	_add_button("manual_save", "手動セーブ", rects["save_btn"] as Rect2, _on_manual_save, "primary")
+	_add_button("select_save", "セーブデータ選択", rects["select_btn"] as Rect2, func() -> void: AppState.request_screen("save_select"), "action")
 	_add_button("delete_save", "セーブ削除", rects["delete_btn"] as Rect2, _on_delete_save, "action")
 
 	# トグル: 各行の右端に ON/OFF チップを置き、1クリックで切り替える。

@@ -169,6 +169,27 @@ static func write_pending_game_logs(season: PSSeason) -> void:
 		write_game_log(season, index, result)
 
 
+# postseason 版の write_pending_game_logs。auto_save_enabled=false 中に消化した PS 試合は
+# PostseasonService.advance_one_day(persist=false) がログファイルへ書かないため、メモリ上の
+# 各シリーズ games[].result (まだ SLIM_RESULT_KEYS に縮小されていないフル result) だけが唯一の
+# 詳細データになる。手動保存のタイミングでここを呼び、ログファイルへ退避してから
+# PSPostseasonResult.to_dict() でスリム化しないと、reload 後に box score / play-by-play が
+# 復元不能になる (post_<stage>_<game_num>.json が存在しないため)。
+static func write_pending_postseason_game_logs(postseason: PSPostseasonResult, season: PSSeason) -> void:
+	if not enabled or postseason == null or season == null:
+		return
+	if log_root().is_empty():
+		return
+	for stage_key in PSPostseasonResult.STAGE_KEYS:
+		var series: Dictionary = postseason.stage_dict(str(stage_key))
+		for game_value in (series.get("games", []) as Array):
+			var game: Dictionary = game_value as Dictionary
+			var result: Dictionary = game.get("result", {}) as Dictionary
+			if not _has_detailed_payload(result):
+				continue
+			write_postseason_game_log(season, str(stage_key), int(game.get("game_num", 0)), result)
+
+
 static func _has_detailed_payload(result: Dictionary) -> bool:
 	return result.has("play_events") or result.has("substitutions") or result.has("lineups")
 

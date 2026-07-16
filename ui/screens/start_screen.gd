@@ -61,7 +61,7 @@ func _draw_emblem(box: Rect2) -> void:
 
 
 func _menu_card_height() -> float:
-	var rows: int = 3
+	var rows: int = 4
 	return 36.0 + float(rows) * (BTN_H + BTN_GAP) - BTN_GAP + 36.0
 
 
@@ -73,7 +73,9 @@ func _build_buttons() -> void:
 	var y: float = MENU_TOP + 36.0
 	_add_button("new_game", "新しく始める", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("team_select"), "primary")
 	y += BTN_H + BTN_GAP
-	_add_button("load", "ロード", Rect2(BTN_X, y, BTN_W, BTN_H), _load_game, "action")
+	_add_button("continue", "続きから", Rect2(BTN_X, y, BTN_W, BTN_H), _continue_game, "action")
+	y += BTN_H + BTN_GAP
+	_add_button("load", "セーブデータ選択", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("save_select"), "action")
 	y += BTN_H + BTN_GAP
 	_add_button("options", "オプション", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("options"), "action")
 
@@ -82,7 +84,8 @@ func _build_buttons() -> void:
 
 # ============================================================ actions
 
-func _load_game() -> void:
+# 前回のアクティブセーブ (無ければ最新) をそのまま読み込む従来のロード。
+func _continue_game() -> void:
 	var save_data: Dictionary = SaveService.load_state()
 	if save_data.is_empty():
 		_status_text = "セーブデータがありません"

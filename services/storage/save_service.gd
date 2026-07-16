@@ -4,6 +4,11 @@ class_name SaveService
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
+
+# セーブ一覧 UI 用の軽量メタ情報。セーブ本体 (SQLite blob) を開かずに一覧表示できるよう、
+# save_state のたびにフォルダ直下へ小さな JSON を書き出す。
+const SAVE_META_FILE: String = "save_meta.json"
 
 
 static func save_state(app_state) -> bool:
@@ -17,9 +22,15 @@ static func save_state(app_state) -> bool:
 		return false
 
 	var season_data: Dictionary = {}
+	var history_in_blob: bool = true
 	if app_state.current_season != null:
 		GameLogService.write_pending_game_logs(app_state.current_season)
-		season_data = app_state.current_season.to_dict()
+		# 選手履歴 (試合別差分 / 日次スナップショット) は season_history テーブルへ日単位で
+		# 増分永続化し、成功したときだけ blob から外す (失敗時は従来通り blob に全量を残す)。
+		history_in_blob = not _persist_season_history(app_state.current_season)
+		season_data = app_state.current_season.to_dict(history_in_blob)
+	if app_state.current_postseason != null:
+		GameLogService.write_pending_postseason_game_logs(app_state.current_postseason, app_state.current_season)
 
 	var payload: Dictionary = {
 		"save_id": SaveContext.active_save_id(),
@@ -57,7 +68,13 @@ static func save_state(app_state) -> bool:
 	}
 
 	if SQLiteStoreService.save_game_state(payload):
+		_write_save_meta(app_state)
 		return true
+
+	# JSON fallback は SQLite 全体が使えない状況なので、履歴を分離したままでは
+	# 復元できない。blob から外していた場合は履歴込みの payload に差し替える。
+	if not history_in_blob and app_state.current_season != null:
+		payload["season"] = app_state.current_season.to_dict()
 
 	var save_path: String = SaveContext.game_state_path()
 	var file: FileAccess = FileAccess.open(save_path, FileAccess.WRITE)
@@ -66,6 +83,7 @@ static func save_state(app_state) -> bool:
 		return false
 
 	file.store_string(JSON.stringify(payload, "\t"))
+	_write_save_meta(app_state)
 	return true
 
 
@@ -96,6 +114,51 @@ static func load_state() -> Dictionary:
 	return {}
 
 
+# season.to_dict の履歴2種を SQLite season_history テーブルへ日単位で増分保存する。
+# 成功時 true (= blob から履歴を外してよい)。
+static func _persist_season_history(season: PSSeason) -> bool:
+	if not SQLiteStoreService.is_available():
+		return false
+	var game_days: Dictionary = _group_history_by_day(season.player_game_history)
+	if not SQLiteStoreService.save_season_history(season.year, season.season_number, "game", game_days, season.current_day):
+		return false
+	var stat_days: Dictionary = _group_history_by_day(season.player_stat_history)
+	var retention_cutoff: int = season.current_day - PSSeason.SNAPSHOT_RETENTION_DAYS
+	return SQLiteStoreService.save_season_history(season.year, season.season_number, "stat", stat_days, season.current_day, retention_cutoff)
+
+
+# {player_id_str: [entries]} を {day:int → {player_id_str: [その日のentries]}} へ変換する。
+# 各エントリは "day" キーを持つ (append_player_game_log / append_player_stat_snapshot が付与)。
+static func _group_history_by_day(history: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for player_key in history.keys():
+		var entries: Array = history[player_key] as Array
+		for entry_value in entries:
+			var entry: Dictionary = entry_value as Dictionary
+			var day: int = int(entry.get("day", 0))
+			if not out.has(day):
+				out[day] = {}
+			var day_bucket: Dictionary = out[day] as Dictionary
+			if not day_bucket.has(player_key):
+				day_bucket[player_key] = []
+			(day_bucket[player_key] as Array).append(entry)
+	return out
+
+
+# blob に履歴が入っていない新形式セーブでは、season_history テーブルから履歴を復元して
+# season へ直接代入する (restore_from_save が PSSeason.from_dict の後に呼ぶ)。
+# payload 経由にせず直接代入するのは、from_dict の duplicate(true) による
+# 数十MB構造の深コピーを避けるため (テーブルから再構成した Dictionary は共有元が無い)。
+# 旧形式 (blob に履歴あり) は from_dict が復元済みなので何もしない。
+static func hydrate_season_history(season: PSSeason) -> void:
+	if season == null or not SQLiteStoreService.is_available():
+		return
+	if season.player_game_history.is_empty():
+		season.player_game_history = SQLiteStoreService.load_season_history(season.year, season.season_number, "game", season.current_day)
+	if season.player_stat_history.is_empty():
+		season.player_stat_history = SQLiteStoreService.load_season_history(season.year, season.season_number, "stat", season.current_day)
+
+
 # 肥大化した DB ファイルを必要に応じて切り詰める (freelist が多いときだけ VACUUM)。
 # シーズンの節目 (オフシーズン開始時など) に呼ぶ想定。
 static func compact_storage() -> void:
@@ -112,6 +175,69 @@ static func current_save_display_path() -> String:
 
 static func delete_current_save() -> Array:
 	return SaveContext.delete_current_save_data()
+
+
+# セーブ選択 UI 用: 全 save_* フォルダのメタ情報を新しい順で返す。
+# 各要素: {save_id, is_active, team_name, year, season_number, date, offseason_active, updated_at}
+# (メタ未保存の旧セーブは save_id / is_active のみ確実)。
+static func list_saves() -> Array:
+	var active_id: String = SaveContext.active_save_id()
+	var out: Array = []
+	var ids: Array = SaveContext.save_ids()
+	for i in range(ids.size() - 1, -1, -1):
+		var save_id: String = str(ids[i])
+		var meta: Dictionary = _read_save_meta(save_id)
+		meta["save_id"] = save_id
+		meta["is_active"] = save_id == active_id
+		out.append(meta)
+	return out
+
+
+# 指定セーブをアクティブ化して読み込む。成功時は restore_from_save へ渡せる payload、
+# 失敗時は空 Dictionary (アクティブ選択は変更されている可能性がある点に注意)。
+static func load_save(save_id: String) -> Dictionary:
+	if not SaveContext.activate_save_id(save_id):
+		return {}
+	return load_state()
+
+
+static func delete_save(save_id: String) -> bool:
+	return SaveContext.delete_save_id(save_id)
+
+
+static func _write_save_meta(app_state) -> void:
+	var dir: String = SaveContext.active_save_dir()
+	if dir.is_empty():
+		return
+	var meta: Dictionary = {
+		"updated_at": Time.get_datetime_string_from_system(false, true),
+	}
+	var team: PSTeam = GameDb.get_team(app_state.selected_team_id)
+	if team != null:
+		meta["team_name"] = team.name
+	var season: PSSeason = app_state.current_season
+	if season != null:
+		meta["year"] = season.year
+		meta["season_number"] = season.season_number
+		meta["date"] = SeasonCalendar.current_date(season)
+		meta["offseason_active"] = bool(app_state.offseason_active)
+	var file: FileAccess = FileAccess.open("%s/%s" % [dir, SAVE_META_FILE], FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(meta, "\t"))
+
+
+static func _read_save_meta(save_id: String) -> Dictionary:
+	var path: String = "%s/%s" % [SaveContext.save_dir_for_id(save_id), SAVE_META_FILE]
+	if not FileAccess.file_exists(path):
+		return {}
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if parsed is Dictionary:
+		return parsed as Dictionary
+	return {}
 
 
 static func _players_to_dicts() -> Array:

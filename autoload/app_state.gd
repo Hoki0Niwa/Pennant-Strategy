@@ -1404,6 +1404,8 @@ func restore_from_save(data: Dictionary) -> bool:
 	current_awards = PSAwards.from_dict(awards_data) if not awards_data.is_empty() else null
 	var season_data: Dictionary = data.get("season", {}) as Dictionary
 	current_season = PSSeason.from_dict(season_data) if not season_data.is_empty() else null
+	# 新形式セーブは選手履歴が blob に含まれず season_history テーブル側にある。
+	SaveService.hydrate_season_history(current_season)
 	_apply_dh_settings_to_current_schedule()
 	# records は record_store blob / 正規化テーブルに独立永続化されている
 	# (game_state には含めない)。専用ストアから hydrate する。

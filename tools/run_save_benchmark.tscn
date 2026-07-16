@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/run_save_benchmark.gd" id="1_run_save_benchmark"]
+
+[node name="RunSaveBenchmark" type="Node"]
+script = ExtResource("1_run_save_benchmark")
