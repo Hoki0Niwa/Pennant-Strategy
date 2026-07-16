@@ -64,6 +64,9 @@ var auto_roster_swap_during_skip: bool = true
 # 週次の自動トレード判断に自軍も参加させるか (有効時は自軍宛て提案を作らず、CPU間
 # マッチングと同じ基準で自軍のトレードもAIが自動成立させる)。オプション画面から操作。
 var auto_trade_for_user_team: bool = false
+# ドラフト完全ウェーバー制。ON のとき1巡目の入札・抽選を行わず、本指名の全巡を
+# 前年下位球団から順 (スネークなし) に指名する。次回のドラフト生成から適用。
+var draft_full_waiver: bool = false
 # 自動セーブを有効にするか。デフォルトは false (手動セーブのみ)。
 var auto_save_enabled: bool = false
 var league_dh_enabled: Dictionary = {
@@ -531,7 +534,7 @@ func advance_offseason() -> Dictionary:
 		OFFSEASON_STEP_DRAFT_MAIN:
 			# R4/R5 調整: 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長 の順。
 			# ドラフトを先に行い、残り枠を戦力外獲得・FA・外国人へ回す。
-			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id, false)
+			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id, false, draft_full_waiver)
 			if _is_main_draft_complete():
 				step_result = _store_main_draft_if_complete()
 			else:
@@ -648,6 +651,30 @@ func complete_draft_automatically() -> Dictionary:
 	if draft_state.is_empty():
 		return {"ok": false, "message": "ドラフトが初期化されていません"}
 	var result: Dictionary = DraftService.complete_automatically(draft_state)
+	draft_state = result.get("state", draft_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	_after_draft_action()
+	_save_if_enabled()
+	return {"ok": true, "state": draft_state}
+
+
+# 1巡目入札の対話フロー: stage="first_round_reveal"(公開済み入札→抽選) /
+# "first_round_result"(抽選結果確定→次wave) のどちらかを1ステップだけ進める。
+# UI の「抽選へ」「次へ」ボタンから呼ばれる想定。
+func proceed_draft_first_round() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_DRAFT_MAIN:
+		return {"ok": false, "message": "ドラフトは現在有効ではありません"}
+	if draft_state.is_empty():
+		return {"ok": false, "message": "ドラフトが初期化されていません"}
+	var stage: String = str(draft_state.get("stage", ""))
+	var result: Dictionary
+	if stage == "first_round_reveal":
+		result = DraftService.resolve_first_round_reveal(draft_state)
+	elif stage == "first_round_result":
+		result = DraftService.continue_first_round(draft_state)
+	else:
+		return {"ok": false, "message": "入札公開の段階ではありません"}
 	draft_state = result.get("state", draft_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
@@ -1364,6 +1391,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	auto_roster_swap_for_user_team = bool(data.get("auto_roster_swap_for_user_team", false))
 	auto_roster_swap_during_skip = bool(data.get("auto_roster_swap_during_skip", true))
 	auto_trade_for_user_team = bool(data.get("auto_trade_for_user_team", false))
+	draft_full_waiver = bool(data.get("draft_full_waiver", false))
 	auto_save_enabled = bool(data.get("auto_save_enabled", false))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
 	league_dh_enabled = {

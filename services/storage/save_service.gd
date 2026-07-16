@@ -51,6 +51,7 @@ static func save_state(app_state) -> bool:
 		"auto_roster_swap_for_user_team": app_state.auto_roster_swap_for_user_team,
 		"auto_roster_swap_during_skip": app_state.auto_roster_swap_during_skip,
 		"auto_trade_for_user_team": app_state.auto_trade_for_user_team,
+		"draft_full_waiver": app_state.draft_full_waiver,
 		"auto_save_enabled": app_state.auto_save_enabled,
 		"league_dh_enabled": app_state.dh_settings_for_schedule(),
 	}

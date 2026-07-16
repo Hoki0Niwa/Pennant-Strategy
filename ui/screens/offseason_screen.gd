@@ -145,6 +145,12 @@ const DRAFT_RESULT_COLUMNS: Array = [
 	{"title": "総", "key": "overall", "w": 38, "fmt": "int", "sep_before": true},
 ]
 
+# ドラフト進行中の表示切替チップ (指名画面=候補ボード+指名履歴/抽選、途中経過=結果画面風の全面ビュー)。
+const DRAFT_HISTORY_MODES: Array = [
+	{"id": "timeline", "label": "指名画面"},
+	{"id": "by_team", "label": "途中経過"},
+]
+
 const POSITION_CHARS: Dictionary = {
 	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三",
 	6: "遊", 7: "左", 8: "中", 9: "右", 10: "指",
@@ -231,6 +237,13 @@ var _draft_submit_label: String = "指名する"
 var _draft_show_skip: bool = false
 var _draft_skip_label: String = "本指名終了"
 var _draft_cand_by_id: Dictionary = {}
+# 1巡目入札の対話フロー: ""=通常表示 / "reveal"=入札公開 / "result"=抽選結果。
+var _draft_reveal_stage: String = ""
+# 1巡目パネルの球団別カード (12球団=4列×3行、並び順は _draft_reveal_card_order)。
+var _draft_reveal_cards: Array = []
+var _draft_reveal_go_label: String = "抽選へ"
+# 進行中パネルの表示切替: "timeline"=指名画面 (候補ボード+指名履歴/抽選) / "by_team"=途中経過ビュー。
+var _draft_history_mode: String = "timeline"
 
 # 戦力外獲得市場 (step5)
 var selected_released_candidate_id: int = 0
@@ -392,13 +405,27 @@ func _build_buttons() -> void:
 			])
 			_build_player_tabs("release", _release_tab, _release_pitcher_records.size(), _release_fielder_records.size(), _set_release_tab)
 		AppState.OFFSEASON_PANEL_DRAFT:
-			var specs: Array = [{"id": "draft_submit", "label": _draft_submit_label, "cb": _on_draft_submit_pressed, "kind": "primary", "w": 130}]
-			if _draft_show_skip:
-				specs.append({"id": "draft_skip", "label": _draft_skip_label, "cb": _on_draft_skip_pressed, "kind": "action", "w": 130})
-			specs.append({"id": "draft_auto", "label": "この指名を自動", "cb": _on_draft_auto_pressed, "kind": "action", "w": 150})
-			specs.append({"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150})
-			_action_row(specs)
-			_build_candidate_tabs(_draft_candidate_rows, _draft_tab, _set_draft_tab, "draft")
+			if _draft_reveal_stage == "reveal":
+				_action_row([
+					{"id": "draft_proceed", "label": _draft_reveal_go_label, "cb": _on_draft_proceed_pressed, "kind": "primary", "w": 140},
+					{"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150},
+				])
+			elif _draft_reveal_stage == "result":
+				_action_row([
+					{"id": "draft_proceed", "label": "次へ", "cb": _on_draft_proceed_pressed, "kind": "primary", "w": 140},
+					{"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150},
+				])
+			else:
+				var specs: Array = [{"id": "draft_submit", "label": _draft_submit_label, "cb": _on_draft_submit_pressed, "kind": "primary", "w": 130}]
+				if _draft_show_skip:
+					specs.append({"id": "draft_skip", "label": _draft_skip_label, "cb": _on_draft_skip_pressed, "kind": "action", "w": 130})
+				specs.append({"id": "draft_auto", "label": "この指名を自動", "cb": _on_draft_auto_pressed, "kind": "action", "w": 150})
+				specs.append({"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150})
+				_action_row(specs)
+				# 「途中経過」ビュー中は候補ボードを描かないため、候補タブも出さない。
+				if _draft_history_mode != "by_team":
+					_build_candidate_tabs(_draft_candidate_rows, _draft_tab, _set_draft_tab, "draft")
+				_build_draft_history_mode_chips()
 		AppState.OFFSEASON_PANEL_RELEASED_MARKET:
 			_action_row([
 				{"id": "rm_submit", "label": "獲得する", "cb": _on_released_submit_pressed, "kind": "primary", "w": 110, "disabled": not _released_can_submit},
@@ -849,6 +876,37 @@ func _set_draft_tab(tab_id: String) -> void:
 	queue_redraw()
 
 
+# 表示切替チップ (指名画面/途中経過)。BODY 右上 (状況テキスト行と同じ高さ) に右寄せで置き、
+# 両モードから常に見える。通常指名中 (reveal/result 以外) のみ生成される。
+func _build_draft_history_mode_chips() -> void:
+	var x: float = BODY.end.x - _draft_history_chips_total_width()
+	for option_value in DRAFT_HISTORY_MODES:
+		var option: Dictionary = option_value as Dictionary
+		var id: String = str(option["id"])
+		var w: float = 14.0 + _measure(str(option["label"]), 13) + 14.0
+		var active: bool = id == _draft_history_mode
+		_add_button("draft_hist_%s" % id, str(option["label"]), Rect2(x, BODY.position.y, w, 30.0),
+			func(target: String = id) -> void: _set_draft_history_mode(target),
+			"chip_active" if active else "chip")
+		x += w + 8.0
+
+
+# チップ2個の合計幅。途中経過ビューの右端テキスト (優先リーグ) がチップと重ならないよう共用する。
+func _draft_history_chips_total_width() -> float:
+	var total: float = 0.0
+	for option_value in DRAFT_HISTORY_MODES:
+		total += 14.0 + _measure(str((option_value as Dictionary)["label"]), 13) + 14.0
+	return total + 8.0 * float(DRAFT_HISTORY_MODES.size() - 1)
+
+
+func _set_draft_history_mode(mode: String) -> void:
+	if _draft_history_mode == mode:
+		return
+	_draft_history_mode = mode
+	_build_buttons()
+	queue_redraw()
+
+
 func _select_camp_training(training_type: String) -> void:
 	selected_camp_training_type = training_type
 	selected_camp_target_position = 0
@@ -997,8 +1055,15 @@ func _draw_release_panel() -> void:
 # --- ドラフト ---
 
 func _draw_draft_panel() -> void:
+	if _draft_reveal_stage != "":
+		_draw_draft_reveal_panel()
+		return
+	if _draft_history_mode == "by_team":
+		# 「途中経過」は候補ボードを描かず、結果画面と同じ構成のビューを BODY 全面に描く。
+		_draw_draft_progress_panel()
+		return
 	# 上: 状況テキスト → タブ行 (ボタン) → 候補表 (タブ切替・全幅)。
-	# 下: 指名履歴 (左) / 抽選 (右) の 2 パネル。
+	# 下: 指名履歴 (左) / 抽選 (右) の 2 パネル。表示切替チップ (指名画面/途中経過) は BODY 右上。
 	var status_y: float = BODY.position.y
 	if not _draft_status_text.is_empty():
 		_text(_draft_status_text, Vector2(INNER_L, status_y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
@@ -1016,6 +1081,104 @@ func _draw_draft_panel() -> void:
 	# 指名履歴 (左) / 抽選 (右) を他パネルと同じ表で描く。
 	_draw_table_inner(Rect2(INNER_L, lower_top, half, lower_h), "指名履歴", PICK_COLUMNS, _draft_pick_rows, "draft_picks", "", 0, true)
 	_draw_table_inner(Rect2(INNER_L + half + gap, lower_top, half, lower_h), "抽選", LOTTERY_COLUMNS, _draft_lottery_rows, "draft_lottery", "", 0, true)
+
+
+# 「途中経過」モードのビュー。結果画面 (_draw_draft_result) と同じ構成で BODY 全面に
+# 見出し → 1巡目 抽選 (log があれば) → 球団別グリッドを描く。球団列は順位順 (1位→6位)。
+func _draw_draft_progress_panel() -> void:
+	var state: Dictionary = AppState.draft_state
+	var picks: Array = state.get("picks", []) as Array
+	var phase_label: String = "育成ドラフト" if str(state.get("segment", "main")) == "development" else "本指名"
+	_text("%s 途中経過 指名%d人" % [phase_label, picks.size()], Vector2(BODY.position.x, BODY.position.y + 26), 20, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	# 優先リーグ表示は右上のチップ (指名画面/途中経過) と重ならないよう、チップ幅ぶん左へ寄せる。
+	_text_right("同順位優先リーグ: %s" % _league_label(str(state.get("priority_league", ""))),
+		BODY.end.x - _draft_history_chips_total_width() - 16.0, BODY.position.y + 24, 14, MUTED, 320.0)
+
+	var content_top: float = BODY.position.y + 52.0
+	if not _draft_lottery_rows.is_empty():
+		var lottery_h: float = min(64.0 + float(_draft_lottery_rows.size()) * 28.0, 220.0)
+		_draw_table_inner(Rect2(BODY.position.x, content_top, BODY.size.x, lottery_h), "1巡目 抽選", LOTTERY_COLUMNS, _draft_lottery_rows, "draft_progress_lottery", "", 0, true, 15, 28.0)
+		content_top += lottery_h + 14.0
+
+	_draw_picks_team_grid(Rect2(BODY.position.x, content_top, BODY.size.x, BODY.end.y - content_top), picks, "rank")
+
+
+# 1巡目入札公開 (reveal) / 抽選結果 (result) の静的表示パネル。候補ボードの代わりに
+# 状況テキスト → 球団別カードグリッド (左2/3・4列×N行) + 抽選履歴 (右1/3・過去 wave 分も含む) を並べる。
+# 選択操作は無い (カードクリック無効・アニメーション無し)。
+func _draw_draft_reveal_panel() -> void:
+	var status_y: float = BODY.position.y
+	if not _draft_status_text.is_empty():
+		_text(_draft_status_text, Vector2(INNER_L, status_y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+	var table_top: float = status_y + 40.0
+	var table_h: float = BODY.end.y - table_top
+	var gap: float = 16.0
+	var left_w: float = (BODY.size.x - gap) * (2.0 / 3.0)
+	var right_w: float = BODY.size.x - gap - left_w
+	var left_title: String = "抽選結果" if _draft_reveal_stage == "result" else "入札一覧"
+	_draw_draft_reveal_cards_panel(Rect2(INNER_L, table_top, left_w, table_h), left_title)
+	_draw_table_inner(Rect2(INNER_L + left_w + gap, table_top, right_w, table_h), "抽選", LOTTERY_COLUMNS, _draft_lottery_rows, "draft_lottery", "", 0, true)
+
+
+# _panel と同じフラット枠+タイトルの下に、球団カード (_draft_reveal_cards) を4列×N行のグリッドで描く。
+func _draw_draft_reveal_cards_panel(rect: Rect2, title: String) -> void:
+	_panel(rect, title)
+	var grid_top: float = rect.position.y + 50.0
+	var grid_rect: Rect2 = Rect2(rect.position.x + 16.0, grid_top, rect.size.x - 32.0, rect.end.y - grid_top - 16.0)
+	if _draft_reveal_cards.is_empty():
+		_text("該当する球団がいません。", Vector2(grid_rect.position.x, grid_rect.position.y + 20.0), 14, MUTED)
+		return
+	var cols: int = 4
+	var rows: int = int(ceil(float(_draft_reveal_cards.size()) / float(cols)))
+	var gap: float = 12.0
+	var card_w: float = (grid_rect.size.x - gap * float(cols - 1)) / float(cols)
+	var card_h: float = (grid_rect.size.y - gap * float(max(1, rows - 1))) / float(rows)
+	for i in range(_draft_reveal_cards.size()):
+		var card: Dictionary = _draft_reveal_cards[i] as Dictionary
+		var col: int = i % cols
+		var row: int = int(i / cols)
+		var cx: float = grid_rect.position.x + float(col) * (card_w + gap)
+		var cy: float = grid_rect.position.y + float(row) * (card_h + gap)
+		_draw_draft_reveal_card(Rect2(cx, cy, card_w, card_h), card)
+
+
+# 球団1枚分のカード。ヘッダ=チーム色ドット+短縮名 (右上に状態チップ)、本文=選手名(強調)+
+# 守備バッジ・年齢・出身・総合。muted=true (指名済/指名なし) は文字色を落として沈んだ見た目にする。
+func _draw_draft_reveal_card(rect: Rect2, card: Dictionary) -> void:
+	var muted: bool = bool(card.get("muted", false))
+	_round(rect, PANEL_2 if not muted else PANEL, BORDER_SOFT, 8, 1)
+
+	var pad: float = 14.0
+	var note: String = str(card.get("note", ""))
+	var note_w: float = (18.0 + _measure(note, 12) + 18.0) if not note.is_empty() else 0.0
+	_dot(Vector2(rect.position.x + pad + 5.0, rect.position.y + pad + 6.0), 5.0, card.get("team_color", MUTED) as Color)
+	_text(str(card.get("team", "")), Vector2(rect.position.x + pad + 16.0, rect.position.y + pad + 11.0), 14,
+		TEXT if not muted else MUTED, rect.size.x - pad * 2.0 - 16.0 - note_w - 8.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	if not note.is_empty():
+		_chip(Rect2(rect.end.x - pad - note_w, rect.position.y + pad - 3.0, note_w, 22.0), note, card.get("note_color", MUTED) as Color)
+
+	var name_y: float = rect.position.y + pad + 46.0
+	_text(str(card.get("name", "")), Vector2(rect.position.x + pad, name_y), 18, TEXT if not muted else MUTED, rect.size.x - pad * 2.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+	var detail_y: float = name_y + 26.0
+	var dx: float = rect.position.x + pad
+	var pos_text: String = str(card.get("pos", ""))
+	if not pos_text.is_empty():
+		var badge_w: float = 14.0 + _measure(pos_text, 12) + 14.0
+		_chip(Rect2(dx, detail_y, badge_w, 20.0), pos_text, card.get("pos_color", MUTED) as Color)
+		dx += badge_w + 8.0
+	var detail_text: String = ""
+	if int(card.get("age", 0)) > 0:
+		detail_text = "%d歳" % int(card.get("age", 0))
+	var source: String = str(card.get("source", ""))
+	if not source.is_empty():
+		detail_text += (" ・ " if not detail_text.is_empty() else "") + source
+	if not detail_text.is_empty():
+		_text(detail_text, Vector2(dx, detail_y + 15.0), 13, MUTED if not muted else FAINT, rect.end.x - pad - dx)
+
+	if int(card.get("overall", 0)) > 0:
+		_text("総合 %d" % int(card.get("overall", 0)), Vector2(rect.position.x + pad, detail_y + 42.0), 14, TEXT if not muted else MUTED, rect.size.x - pad * 2.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # 候補ボード (ドラフト/外国人補強で共用)。戦力外選択と同じ行スタイルで、投手系タブは
@@ -1635,6 +1798,15 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 		_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, lottery_h), "1巡目 抽選", LOTTERY_COLUMNS, lottery_rows, "draft_result_lottery", "", 0, true, 15, 28.0)
 		content_top += lottery_h + 14.0
 
+	_draw_picks_team_grid(Rect2(rect.position.x, content_top, rect.size.x, rect.end.y - content_top), picks, "alpha")
+
+
+# 指名選手をセ/パ2段×球団別グリッドで描く (結果画面・進行中の途中経過ビューで共用)。
+# order_mode で球団列の並びを選ぶ:
+#   "alpha" = short_name 昇順 (結果画面)。
+#   "rank"  = 今年度の順位順 1位→6位 (途中経過ビュー。_league_team_ids_draft_order が
+#             下位→上位を返すので reverse する。draft_state が空なら team_id 降順に相当)。
+func _draw_picks_team_grid(area: Rect2, picks: Array, order_mode: String = "alpha") -> void:
 	var picks_by_team: Dictionary = {}
 	for pick_row in picks:
 		var pick: Dictionary = pick_row as Dictionary
@@ -1644,10 +1816,9 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 		(picks_by_team[team_id] as Array).append(pick)
 
 	# チーム別 指名選手パネル (2 リーグ行 × 各球団列)。各球団を枠付きパネル + 大きめ行で描く。
-	var grid_h: float = rect.end.y - content_top
 	var leagues: Array = ["central", "pacific"]
 	var gap: float = 12.0
-	var row_h: float = (grid_h - gap) / 2.0
+	var row_h: float = (area.size.y - gap) / 2.0
 	# 指名数が最多の球団でも全員が収まるよう行高を決める (18〜30px に収める)。
 	var max_picks: int = 1
 	for team_picks_value in picks_by_team.values():
@@ -1655,10 +1826,15 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 	var cell_row_h: float = clampf((row_h - 72.0) / float(max_picks), 18.0, 30.0)
 	for li in range(leagues.size()):
 		var league: String = str(leagues[li])
-		var ids: Array = _league_team_ids(league)
-		var cell_w: float = (rect.size.x - gap * float(max(1, ids.size() - 1))) / float(max(1, ids.size()))
-		var ry: float = content_top + float(li) * (row_h + gap)
-		var cx: float = rect.position.x
+		var ids: Array
+		if order_mode == "rank":
+			ids = _league_team_ids_draft_order(league)
+			ids.reverse()
+		else:
+			ids = _league_team_ids_alpha(league)
+		var cell_w: float = (area.size.x - gap * float(max(1, ids.size() - 1))) / float(max(1, ids.size()))
+		var ry: float = area.position.y + float(li) * (row_h + gap)
+		var cx: float = area.position.x
 		for team_id_value in ids:
 			var team_id: int = int(team_id_value)
 			var team_picks: Array = (picks_by_team.get(team_id, []) as Array).duplicate()
@@ -2395,16 +2571,29 @@ func _populate_draft() -> void:
 	var current_team_id: int = int(state.get("current_team_id", AppState.selected_team_id))
 	var is_dev_segment: bool = str(state.get("segment", "main")) == "development"
 	var phase_label: String = "育成ドラフト" if is_dev_segment else "本指名"
+	var reveal: Dictionary = state.get("first_round_reveal", {}) as Dictionary
+	var reveal_wave: int = int(reveal.get("wave", 1))
 	if stage == "first_round_bid":
 		var bid_label: String = "1巡目 入札" if first_round_wave <= 1 else "1巡目 再入札%d回目" % first_round_wave
 		_draft_status_text = "%s %s: %s" % [phase_label, bid_label, _team_short(AppState.selected_team_id)]
 		_draft_submit_label = "入札する"
+		_draft_reveal_stage = ""
 	elif stage == "user_pick":
 		_draft_status_text = "%s %d巡目 指名: %s" % [phase_label, round_no, _team_short(current_team_id)]
 		_draft_submit_label = "指名する"
+		_draft_reveal_stage = ""
+	elif stage == "first_round_reveal":
+		_draft_status_text = "本指名 1巡目 入札公開" if reveal_wave <= 1 else "本指名 1巡目 再入札%d回目 入札公開" % reveal_wave
+		_draft_submit_label = "指名する"
+		_draft_reveal_stage = "reveal"
+	elif stage == "first_round_result":
+		_draft_status_text = "本指名 1巡目 抽選結果"
+		_draft_submit_label = "指名する"
+		_draft_reveal_stage = "result"
 	else:
 		_draft_status_text = phase_label
 		_draft_submit_label = "指名する"
+		_draft_reveal_stage = ""
 	_draft_show_skip = stage == "user_pick"
 	_draft_skip_label = "育成指名終了" if is_dev_segment else "本指名終了"
 
@@ -2436,6 +2625,45 @@ func _populate_draft() -> void:
 	_draft_pick_rows = []
 	for pick_row in state.get("picks", []) as Array:
 		_draft_pick_rows.append(_pick_row(pick_row as Dictionary))
+
+	_draft_reveal_cards = []
+	_draft_reveal_go_label = "抽選へ"
+	if _draft_reveal_stage != "":
+		var reveal_bids: Dictionary = reveal.get("bids", {}) as Dictionary
+		var reveal_winners: Dictionary = reveal.get("winners", {}) as Dictionary
+		var reveal_loser_ids: Dictionary = {}
+		for team_id_value in reveal.get("loser_team_ids", []) as Array:
+			reveal_loser_ids[int(team_id_value)] = true
+		# 候補ごとの入札球団数 (2以上=競合)。
+		var counts_by_candidate: Dictionary = {}
+		for team_key in reveal_bids.keys():
+			var cid: int = int(reveal_bids[team_key])
+			counts_by_candidate[cid] = int(counts_by_candidate.get(cid, 0)) + 1
+		var any_contested: bool = false
+		for cid_key in counts_by_candidate.keys():
+			if int(counts_by_candidate[cid_key]) >= 2:
+				any_contested = true
+				break
+		_draft_reveal_go_label = "抽選へ" if any_contested else "指名確定へ"
+		# result 段階では当選候補が picked=true になり _draft_cand_by_id (未 picked のみ) から
+		# 引けないため、候補プール全量から id -> candidate の対応をここで作る。
+		var cand_by_id_full: Dictionary = {}
+		for candidate_row in state.get("candidate_pool", []) as Array:
+			var candidate: Dictionary = candidate_row as Dictionary
+			cand_by_id_full[int(candidate.get("candidate_id", 0))] = candidate
+		# 再入札 wave で既に確定済みの球団 (bids に含まれない) を round1 pick から拾うための索引。
+		var round1_picks: Dictionary = _round1_picks_by_team(state)
+		for team_id_value in _draft_reveal_card_order():
+			var team_id: int = int(team_id_value)
+			var team_key: String = str(team_id)
+			if reveal_bids.has(team_key):
+				var candidate_id: int = int(reveal_bids[team_key])
+				var candidate: Dictionary = cand_by_id_full.get(candidate_id, {}) as Dictionary
+				_draft_reveal_cards.append(_draft_reveal_card(team_id, candidate_id, candidate, int(counts_by_candidate.get(candidate_id, 0)), reveal_winners, reveal_loser_ids))
+			elif round1_picks.has(team_id):
+				_draft_reveal_cards.append(_draft_reveal_card_picked(team_id, round1_picks[team_id] as Dictionary))
+			else:
+				_draft_reveal_cards.append(_draft_reveal_card_empty(team_id))
 
 
 # ドラフト候補1件を候補ボード用モデルに変換。中央2列 (出身/成長) は info1/info2 に入れる。
@@ -2593,6 +2821,111 @@ func _lottery_row(log: Dictionary) -> Dictionary:
 	}
 
 
+# 1巡目カードの並び順: 先行リーグ1位→他リーグ1位→先行2位→他2位→…(リーグ内は1位→6位)。
+# セル i (0始まり) は「i偶数=先行リーグ / i奇数=他リーグ」「リーグ内順位=i/2+1番目」に対応する。
+# _league_team_ids_draft_order は teams_order_reverse をリーグでフィルタした「下位→上位」の並びを
+# 返すため reverse して「1位→6位」にする。片リーグが先に尽きたら残りのリーグだけを詰めて続ける
+# (12球団以外の構成でも破綻しない)。
+func _draft_reveal_card_order() -> Array:
+	var priority_league: String = str(AppState.draft_state.get("priority_league", "central"))
+	var other_league: String = "pacific" if priority_league == "central" else "central"
+	var priority_ids: Array = _league_team_ids_draft_order(priority_league)
+	priority_ids.reverse()
+	var other_ids: Array = _league_team_ids_draft_order(other_league)
+	other_ids.reverse()
+	var order: Array = []
+	for i in range(max(priority_ids.size(), other_ids.size())):
+		if i < priority_ids.size():
+			order.append(int(priority_ids[i]))
+		if i < other_ids.size():
+			order.append(int(other_ids[i]))
+	return order
+
+
+# team_id -> 1巡目 (development=false) の確定済み pick。再入札 wave の bids に含まれない
+# (=既に決着済みの) 球団のカードを "指名済" として描くための索引。
+func _round1_picks_by_team(state: Dictionary) -> Dictionary:
+	var map: Dictionary = {}
+	for pick_row in state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		if int(pick.get("round", 0)) == 1 and not bool(pick.get("development", false)):
+			map[int(pick.get("team_id", 0))] = pick
+	return map
+
+
+# 入札公開 (reveal) / 抽選結果 (result) カード1件分 (当該 wave の bids に含まれる球団)。
+# note は reveal 段階=競合数、result 段階=当落 (競合経由の当選/単独確定/外れ) を表す。
+func _draft_reveal_card(team_id: int, candidate_id: int, candidate: Dictionary, contest_count: int, winners: Dictionary, loser_ids: Dictionary) -> Dictionary:
+	var template: Dictionary = candidate.get("player_template", {}) as Dictionary
+	var badge: Dictionary = _pick_pos_badge({"position": int(candidate.get("position", 0)), "role": str(template.get("role", ""))})
+	var note: String = ""
+	var note_color: Color = TEXT
+	if _draft_reveal_stage == "reveal":
+		if contest_count >= 2:
+			note = "競合%d球団" % contest_count
+			note_color = AMBER
+		else:
+			note = "単独"
+			note_color = TEXT
+	elif int(winners.get(str(candidate_id), 0)) == team_id:
+		note = "当選" if contest_count >= 2 else "確定"
+		note_color = GREEN if contest_count >= 2 else TEXT
+	elif loser_ids.has(team_id):
+		note = "外れ"
+		note_color = MUTED
+	return {
+		"team_id": team_id,
+		"team": _team_short(team_id),
+		"team_color": _team_color(team_id),
+		"name": str(candidate.get("name", "")),
+		"pos": str(badge.get("text", "")),
+		"pos_color": badge.get("color", MUTED) as Color,
+		"age": int(candidate.get("age", 0)),
+		"source": _source_label(str(candidate.get("source_type", ""))),
+		"overall": int(candidate.get("overall", 0)),
+		"note": note,
+		"note_color": note_color,
+		"muted": false,
+	}
+
+
+# 既に1巡目の指名が確定済みの球団 (この wave の bids に含まれない)。指名内容を薄い表示で見せる。
+func _draft_reveal_card_picked(team_id: int, pick: Dictionary) -> Dictionary:
+	var badge: Dictionary = _pick_pos_badge(pick)
+	return {
+		"team_id": team_id,
+		"team": _team_short(team_id),
+		"team_color": _team_color(team_id),
+		"name": str(pick.get("name", "")),
+		"pos": str(badge.get("text", "")),
+		"pos_color": badge.get("color", MUTED) as Color,
+		"age": int(pick.get("age", 0)),
+		"source": _source_label(str(pick.get("source_type", ""))),
+		"overall": int(pick.get("overall", 0)),
+		"note": "指名済",
+		"note_color": MUTED,
+		"muted": true,
+	}
+
+
+# round1 の指名も bids も無い球団 (通常は発生しないが、表に穴を空けないための保険)。
+func _draft_reveal_card_empty(team_id: int) -> Dictionary:
+	return {
+		"team_id": team_id,
+		"team": _team_short(team_id),
+		"team_color": _team_color(team_id),
+		"name": "—",
+		"pos": "",
+		"pos_color": MUTED,
+		"age": 0,
+		"source": "",
+		"overall": 0,
+		"note": "指名なし",
+		"note_color": FAINT,
+		"muted": true,
+	}
+
+
 func _on_draft_submit_pressed() -> void:
 	if selected_draft_candidate_id <= 0:
 		_set_status("ドラフト候補を選択してください。", RED)
@@ -2624,6 +2957,16 @@ func _on_draft_auto_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_draft_automatically()
 	if not bool(result.get("ok", false)):
 		_set_status(str(result.get("message", "自動進行に失敗しました。")), RED)
+		return
+	_refresh()
+
+
+# 1巡目入札公開/抽選結果パネルの「抽選へ/指名確定へ」「次へ」ボタン共通ハンドラ。
+# stage に応じて resolve_first_round_reveal / continue_first_round のどちらかを1ステップ進める。
+func _on_draft_proceed_pressed() -> void:
+	var result: Dictionary = AppState.proceed_draft_first_round()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "進行に失敗しました。")), RED)
 		return
 	_refresh()
 
@@ -3864,6 +4207,37 @@ func _league_team_ids(league: String) -> Array:
 		if team != null and team.league == league:
 			ids.append(team.id)
 	ids.sort()
+	return ids
+
+
+# リーグ内球団を short_name 昇順 (アルファベット順) で列挙する。指名結果画面のグリッド列用。
+func _league_team_ids_alpha(league: String) -> Array:
+	var teams: Array = []
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null and team.league == league:
+			teams.append(team)
+	teams.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return (a as PSTeam).short_name < (b as PSTeam).short_name
+	)
+	var ids: Array = []
+	for team_value in teams:
+		ids.append((team_value as PSTeam).id)
+	return ids
+
+
+# リーグ内球団を「指名順」(AppState.draft_state.teams_order_reverse=今年度の下位球団が先頭) で
+# 列挙する。draft_state が空、または teams_order_reverse が空の場合は team_id 昇順にフォールバック。
+func _league_team_ids_draft_order(league: String) -> Array:
+	var order: Array = AppState.draft_state.get("teams_order_reverse", []) as Array
+	if order.is_empty():
+		return _league_team_ids(league)
+	var ids: Array = []
+	for team_id_value in order:
+		var team_id: int = int(team_id_value)
+		var team: PSTeam = GameDb.get_team(team_id)
+		if team != null and team.league == league:
+			ids.append(team_id)
 	return ids
 
 

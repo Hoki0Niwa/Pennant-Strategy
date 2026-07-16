@@ -75,7 +75,7 @@ const GROUP_TARGETS: Dictionary = {
 }
 
 
-static func create_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int, allow_development_segment: bool = true) -> Dictionary:
+static func create_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int, allow_development_segment: bool = true, full_waiver: bool = false) -> Dictionary:
 	var team_profiles: Dictionary = _build_team_profiles(players, teams)
 	var reverse_order: Array = _draft_reverse_order(teams, season)
 	var forward_order: Array = reverse_order.duplicate()
@@ -94,7 +94,11 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		# segment: "main" (本指名=支配下) → "development" (育成ドラフト)。
 		"segment": "main",
 		"allow_development_segment": allow_development_segment,
-		"stage": "first_round_bid",
+		# order_mode: "snake" (通常) は1巡目のみ入札/抽選を行い、2巡目以降は偶数巡reverse/
+		# 奇数巡forwardのスネーク。"waiver" (完全ウェーバー制) は入札/抽選を行わず、本指名の
+		# 全巡を reverse 固定 (下位球団から順) で指名する (_order_for_round で分岐)。
+		"order_mode": "waiver" if full_waiver else "snake",
+		"stage": "later_rounds" if full_waiver else "first_round_bid",
 		"round": 1,
 		"round_position": 0,
 		"current_team_id": user_team_id,
@@ -113,8 +117,11 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		"team_dev_targets": {},
 		"teams_done": {},
 		"first_round_bids": {},
-		"first_round_unresolved": reverse_order.duplicate(),
+		"first_round_unresolved": [] if full_waiver else reverse_order.duplicate(),
 		"first_round_wave": 1,
+		# 1巡目入札の対話フロー用スナップショット (公開/結果段階でのみ中身を持つ)。
+		# {wave, bids(team_id_str->candidate_id), resolved, winners(candidate_id_str->team_id), loser_team_ids}
+		"first_round_reveal": {},
 		"candidate_pool": _generate_candidate_pool(CANDIDATE_POOL_SIZE),
 		"picks": [],
 		"logs": [],
@@ -196,8 +203,7 @@ static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dicti
 		var first_round_bids: Dictionary = state.get("first_round_bids", {}) as Dictionary
 		first_round_bids[str(user_team_id)] = candidate_id
 		state["first_round_bids"] = first_round_bids
-		_resolve_first_round(state)
-		advance_until_user_turn_or_complete(state)
+		_prepare_first_round_reveal(state)
 		return {"ok": true, "state": state}
 
 	if stage == "user_pick":
@@ -215,6 +221,11 @@ static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dicti
 static func auto_pick_for_user(state: Dictionary) -> Dictionary:
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if bool(state.get("complete", false)):
+		return {"ok": true, "state": state}
+	# 入札公開/結果確認の対話段階は、専用の resolve_first_round_reveal / continue_first_round
+	# で進める。ここで指名させると二重指名になるため no-op で返す。
+	var stage_now: String = str(state.get("stage", ""))
+	if stage_now == "first_round_reveal" or stage_now == "first_round_result":
 		return {"ok": true, "state": state}
 	if not _team_can_pick(state, user_team_id):
 		advance_until_user_turn_or_complete(state)
@@ -248,6 +259,10 @@ static func complete_automatically(state: Dictionary) -> Dictionary:
 		var stage: String = str(state.get("stage", ""))
 		if stage == "first_round_bid" or stage == "user_pick":
 			auto_pick_for_user(state)
+		elif stage == "first_round_reveal":
+			resolve_first_round_reveal(state)
+		elif stage == "first_round_result":
+			continue_first_round(state)
 		else:
 			advance_until_user_turn_or_complete(state)
 	return {"ok": bool(state.get("complete", false)), "state": state}
@@ -270,6 +285,12 @@ static func begin_development_draft(state: Dictionary) -> Dictionary:
 
 static func advance_until_user_turn_or_complete(state: Dictionary) -> Dictionary:
 	if bool(state.get("complete", false)):
+		return state
+	# 入札公開/結果確認の対話段階では round はまだ 1 のまま止まっている。ここでガードせずに
+	# 下の通常巡ループへ落ちると、1巡目が未確定なのに次の指名順を回してしまい二重指名になる。
+	# この段階の進行は resolve_first_round_reveal / continue_first_round に委ねる。
+	var stage_guard: String = str(state.get("stage", ""))
+	if stage_guard == "first_round_reveal" or stage_guard == "first_round_result":
 		return state
 
 	var user_team_id: int = int(state.get("user_team_id", 0))
@@ -431,99 +452,141 @@ static func _resolve_first_round(state: Dictionary) -> void:
 		return
 
 	var user_team_id: int = int(state.get("user_team_id", 0))
-	var unresolved: Array = _active_first_round_unresolved(state)
-	var bid_wave: int = int(state.get("first_round_wave", 1))
-
-	while not unresolved.is_empty():
-		var bids_by_candidate: Dictionary = {}
-		var first_round_bids: Dictionary = state.get("first_round_bids", {}) as Dictionary
-		for team_id_value in unresolved:
-			var team_id: int = int(team_id_value)
-			var bid_candidate_id: int = int(first_round_bids.get(str(team_id), 0))
-			if team_id == user_team_id and (bid_candidate_id <= 0 or not _is_candidate_available(state, bid_candidate_id)):
-				_wait_for_first_round_user_bid(state, unresolved, bid_wave)
-				return
-			if team_id != user_team_id and (bid_candidate_id <= 0 or not _is_candidate_available(state, bid_candidate_id)):
-				bid_candidate_id = _choose_cpu_candidate(state, team_id, 1, team_id == int(state.get("user_team_id", 0)))
-			if bid_candidate_id <= 0:
-				continue
-			var key: String = str(bid_candidate_id)
-			if not bids_by_candidate.has(key):
-				bids_by_candidate[key] = []
-			(bids_by_candidate[key] as Array).append(team_id)
-
-		if bids_by_candidate.is_empty():
+	var guard: int = 0
+	while guard < 200:
+		guard += 1
+		var unresolved: Array = _active_first_round_unresolved(state)
+		if unresolved.is_empty():
 			break
-
-		var winners: Array = []
-		var next_unresolved: Array = []
-		for candidate_key in bids_by_candidate.keys():
-			var candidate_id: int = int(candidate_key)
-			var teams_for_candidate: Array = bids_by_candidate[candidate_key] as Array
-			if teams_for_candidate.size() == 1:
-				winners.append({
-					"team_id": int(teams_for_candidate[0]),
-					"candidate_id": candidate_id,
-					"method": "single_bid" if bid_wave == 1 else "rebid_single",
-					"lottery": false,
-				})
-				continue
-
-			var winner_team_id: int = int(teams_for_candidate[Rng.range_int(0, teams_for_candidate.size() - 1)])
-			var losers: Array = []
-			for team_id_value in teams_for_candidate:
-				var team_id: int = int(team_id_value)
-				if team_id == winner_team_id:
-					continue
-				losers.append(team_id)
-				next_unresolved.append(team_id)
-			winners.append({
-				"team_id": winner_team_id,
-				"candidate_id": candidate_id,
-				"method": "lottery",
-				"lottery": true,
-			})
-			var candidate: Dictionary = _candidate_by_id(state, candidate_id)
-			(state.get("logs", []) as Array).append({
-				"type": "lottery",
-				"wave": bid_wave,
-				"candidate_id": candidate_id,
-				"candidate_name": str(candidate.get("name", "")),
-				"teams": teams_for_candidate.duplicate(),
-				"winner_team_id": winner_team_id,
-				"loser_team_ids": losers,
-			})
-
-		winners.sort_custom(func(a, b) -> bool:
-			var wa: Dictionary = a as Dictionary
-			var wb: Dictionary = b as Dictionary
-			return _order_index(state.get("teams_order_reverse", []) as Array, int(wa.get("team_id", 0))) < _order_index(state.get("teams_order_reverse", []) as Array, int(wb.get("team_id", 0)))
-		)
-		for winner_row in winners:
-			var winner: Dictionary = winner_row as Dictionary
-			if _is_candidate_available(state, int(winner.get("candidate_id", 0))):
-				_make_pick(state, int(winner.get("team_id", 0)), int(winner.get("candidate_id", 0)), 1, str(winner.get("method", "bid")), bool(winner.get("lottery", false)))
-
-		unresolved = []
-		for team_id_value in next_unresolved:
-			var team_id: int = int(team_id_value)
-			if _team_can_pick(state, team_id) and not _team_has_round_pick(state, team_id, 1):
-				unresolved.append(team_id)
-		state["first_round_bids"] = {}
-		state["first_round_unresolved"] = unresolved.duplicate()
-		bid_wave += 1
-		state["first_round_wave"] = bid_wave
 		if unresolved.has(user_team_id):
-			_wait_for_first_round_user_bid(state, unresolved, bid_wave)
+			var first_round_bids: Dictionary = state.get("first_round_bids", {}) as Dictionary
+			var bid_candidate_id: int = int(first_round_bids.get(str(user_team_id), 0))
+			if bid_candidate_id <= 0 or not _is_candidate_available(state, bid_candidate_id):
+				_wait_for_first_round_user_bid(state, unresolved, int(state.get("first_round_wave", 1)))
+				return
+		_collect_cpu_first_round_bids(state, unresolved)
+		_resolve_first_round_wave(state)
+		var next_unresolved: Array = _active_first_round_unresolved(state)
+		if next_unresolved.has(user_team_id):
+			_wait_for_first_round_user_bid(state, next_unresolved, int(state.get("first_round_wave", 1)))
 			return
 
+	_finish_first_round(state)
+
+
+# unresolved の各 CPU 球団に、まだ有効な入札 (_is_candidate_available) が無ければ
+# _choose_cpu_candidate で決めて first_round_bids に確定保存する。ユーザー球団の
+# エントリ (既にユーザーが submit_user_candidate で入れた入札) には触れない。
+# 公開 (reveal) 段階で UI に見せる bids はここで確定した値そのものになる。
+static func _collect_cpu_first_round_bids(state: Dictionary, unresolved: Array) -> void:
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var first_round_bids: Dictionary = state.get("first_round_bids", {}) as Dictionary
+	for team_id_value in unresolved:
+		var team_id: int = int(team_id_value)
+		if team_id == user_team_id:
+			continue
+		var bid_candidate_id: int = int(first_round_bids.get(str(team_id), 0))
+		if bid_candidate_id > 0 and _is_candidate_available(state, bid_candidate_id):
+			continue
+		bid_candidate_id = _choose_cpu_candidate(state, team_id, 1, false)
+		if bid_candidate_id > 0:
+			first_round_bids[str(team_id)] = bid_candidate_id
+	state["first_round_bids"] = first_round_bids
+
+
+# first_round_bids (全球団確定済み前提) から候補ごとに入札球団を集計し、単独入札は
+# 即決、競合は抽選 (lottery ログを logs に append) で当選球団を決めて _make_pick する。
+# 戻り値は次 wave に持ち越す未解決球団 (今回の抽選で外れた球団のうち、まだ指名余地がある球団)。
+# 呼び出し後、state の first_round_bids / first_round_unresolved / first_round_wave を更新する。
+static func _resolve_first_round_wave(state: Dictionary) -> Array:
+	var bid_wave: int = int(state.get("first_round_wave", 1))
+	var unresolved: Array = _active_first_round_unresolved(state)
+	var first_round_bids: Dictionary = state.get("first_round_bids", {}) as Dictionary
+
+	var bids_by_candidate: Dictionary = {}
+	for team_id_value in unresolved:
+		var team_id: int = int(team_id_value)
+		var bid_candidate_id: int = int(first_round_bids.get(str(team_id), 0))
+		if bid_candidate_id <= 0:
+			continue
+		var key: String = str(bid_candidate_id)
+		if not bids_by_candidate.has(key):
+			bids_by_candidate[key] = []
+		(bids_by_candidate[key] as Array).append(team_id)
+
+	var winners: Array = []
+	var next_unresolved: Array = []
+	for candidate_key in bids_by_candidate.keys():
+		var candidate_id: int = int(candidate_key)
+		var teams_for_candidate: Array = bids_by_candidate[candidate_key] as Array
+		if teams_for_candidate.size() == 1:
+			winners.append({
+				"team_id": int(teams_for_candidate[0]),
+				"candidate_id": candidate_id,
+				"method": "single_bid" if bid_wave == 1 else "rebid_single",
+				"lottery": false,
+			})
+			continue
+
+		var winner_team_id: int = int(teams_for_candidate[Rng.range_int(0, teams_for_candidate.size() - 1)])
+		var losers: Array = []
+		for team_id_value in teams_for_candidate:
+			var team_id: int = int(team_id_value)
+			if team_id == winner_team_id:
+				continue
+			losers.append(team_id)
+			next_unresolved.append(team_id)
+		winners.append({
+			"team_id": winner_team_id,
+			"candidate_id": candidate_id,
+			"method": "lottery",
+			"lottery": true,
+		})
+		var candidate: Dictionary = _candidate_by_id(state, candidate_id)
+		(state.get("logs", []) as Array).append({
+			"type": "lottery",
+			"wave": bid_wave,
+			"candidate_id": candidate_id,
+			"candidate_name": str(candidate.get("name", "")),
+			"teams": teams_for_candidate.duplicate(),
+			"winner_team_id": winner_team_id,
+			"loser_team_ids": losers,
+		})
+
+	winners.sort_custom(func(a, b) -> bool:
+		var wa: Dictionary = a as Dictionary
+		var wb: Dictionary = b as Dictionary
+		var order: Array = state.get("teams_order_reverse", []) as Array
+		return _order_index(order, int(wa.get("team_id", 0))) < _order_index(order, int(wb.get("team_id", 0)))
+	)
+	for winner_row in winners:
+		var winner: Dictionary = winner_row as Dictionary
+		if _is_candidate_available(state, int(winner.get("candidate_id", 0))):
+			_make_pick(state, int(winner.get("team_id", 0)), int(winner.get("candidate_id", 0)), 1, str(winner.get("method", "bid")), bool(winner.get("lottery", false)))
+
+	var resolved_next_unresolved: Array = []
+	for team_id_value in next_unresolved:
+		var team_id: int = int(team_id_value)
+		if _team_can_pick(state, team_id) and not _team_has_round_pick(state, team_id, 1):
+			resolved_next_unresolved.append(team_id)
+
+	state["first_round_bids"] = {}
+	state["first_round_unresolved"] = resolved_next_unresolved.duplicate()
+	bid_wave += 1
+	state["first_round_wave"] = bid_wave
+	return resolved_next_unresolved
+
+
+# 1巡目の後始末。stage を later_rounds/round=2 に進め、入札関連の一時状態をクリアする。
+# first_round_wave は「何 wave で決着したか」の記録として維持する。
+static func _finish_first_round(state: Dictionary) -> void:
 	state["stage"] = "later_rounds"
 	state["round"] = 2
 	state["round_position"] = 0
 	state["current_team_id"] = 0
 	state["first_round_bids"] = {}
 	state["first_round_unresolved"] = []
-	state["first_round_wave"] = bid_wave
+	state["first_round_reveal"] = {}
 
 
 static func _active_first_round_unresolved(state: Dictionary) -> Array:
@@ -548,6 +611,77 @@ static func _wait_for_first_round_user_bid(state: Dictionary, unresolved: Array,
 	state["first_round_unresolved"] = unresolved.duplicate()
 	state["first_round_wave"] = bid_wave
 	state["first_round_bids"] = {}
+
+
+# ユーザーが入札した直後に呼ぶ。残り (CPU) 球団の入札を確定させ、入札公開 (reveal) 段階へ進める。
+# 全球団の入札が first_round_bids に確定した状態で state["first_round_reveal"] にスナップショットを
+# 残すため、UI は「どの球団がどの候補に入札したか」を抽選前に一覧表示できる。
+# 入札が1件も無い (対象球団が既にいない等) 場合は、公開する内容が無いのでそのまま1巡目を締めて進行する。
+static func _prepare_first_round_reveal(state: Dictionary) -> void:
+	var unresolved: Array = _active_first_round_unresolved(state)
+	_collect_cpu_first_round_bids(state, unresolved)
+	var first_round_bids: Dictionary = state.get("first_round_bids", {}) as Dictionary
+	if first_round_bids.is_empty():
+		_finish_first_round(state)
+		advance_until_user_turn_or_complete(state)
+		return
+	state["first_round_reveal"] = {
+		"wave": int(state.get("first_round_wave", 1)),
+		"bids": first_round_bids.duplicate(),
+		"resolved": false,
+		"winners": {},
+		"loser_team_ids": [],
+	}
+	state["stage"] = "first_round_reveal"
+	state["current_team_id"] = 0
+
+
+# 「抽選へ」。公開済みの入札 (first_round_bids) を1 wave 分だけ解決し、結果確認 (result) 段階へ進める。
+# 単独入札は確定、競合は抽選 (_resolve_first_round_wave が logs に lottery エントリを積む) で決まる。
+static func resolve_first_round_reveal(state: Dictionary) -> Dictionary:
+	if str(state.get("stage", "")) != "first_round_reveal":
+		return {"ok": false, "message": "現在は入札公開の段階ではありません。", "state": state}
+
+	var picks: Array = state.get("picks", []) as Array
+	var picks_before: int = picks.size()
+	var next_unresolved: Array = _resolve_first_round_wave(state)
+
+	var winners: Dictionary = {}
+	for i in range(picks_before, picks.size()):
+		var pick: Dictionary = picks[i] as Dictionary
+		if int(pick.get("round", 0)) != 1:
+			continue
+		winners[str(pick.get("candidate_id", 0))] = int(pick.get("team_id", 0))
+
+	var reveal: Dictionary = state.get("first_round_reveal", {}) as Dictionary
+	reveal["winners"] = winners
+	reveal["loser_team_ids"] = next_unresolved.duplicate()
+	reveal["resolved"] = true
+	state["first_round_reveal"] = reveal
+	state["stage"] = "first_round_result"
+	return {"ok": true, "state": state}
+
+
+# 「次へ」。抽選で外れて再入札が必要な球団があればユーザーの入札待ちへ (ユーザーが含まれる場合) か
+# CPU のみの再入札を公開 (含まれない場合) へ進む。誰も残っていなければ1巡目を締めて次の巡へ進む。
+static func continue_first_round(state: Dictionary) -> Dictionary:
+	if str(state.get("stage", "")) != "first_round_result":
+		return {"ok": false, "message": "現在は結果確認の段階ではありません。", "state": state}
+
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var unresolved: Array = _active_first_round_unresolved(state)
+	if unresolved.is_empty():
+		_finish_first_round(state)
+		advance_until_user_turn_or_complete(state)
+		return {"ok": true, "state": state}
+
+	if unresolved.has(user_team_id):
+		_wait_for_first_round_user_bid(state, unresolved, int(state.get("first_round_wave", 1)))
+		state["first_round_reveal"] = {}
+		return {"ok": true, "state": state}
+
+	_prepare_first_round_reveal(state)
+	return {"ok": true, "state": state}
 
 
 static func _make_pick(state: Dictionary, team_id: int, candidate_id: int, round_no: int, method: String, lottery: bool) -> void:
@@ -618,6 +752,10 @@ static func _consume_current_slot(state: Dictionary) -> void:
 
 
 static func _order_for_round(state: Dictionary, round_no: int) -> Array:
+	# 完全ウェーバー制の本指名は全巡 reverse 固定 (スネークなし)。育成ドラフトは
+	# order_mode によらず現行のスネークを維持する (segment=="main" 限定の分岐)。
+	if str(state.get("order_mode", "snake")) == "waiver" and str(state.get("segment", "main")) == "main":
+		return state.get("teams_order_reverse", []) as Array
 	if round_no % 2 == 0:
 		return state.get("teams_order_reverse", []) as Array
 	return state.get("teams_order_forward", []) as Array

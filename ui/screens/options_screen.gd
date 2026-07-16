@@ -96,8 +96,9 @@ func _layout_rects() -> Dictionary:
 	var right_w: float = INNER_R - right_x
 
 	var save_panel: Rect2 = Rect2(left_x, CONTENT_TOP, left_w, 150.0)
-	# 高さはトグル行数 x 標準行高を基準にした目安 (自動トレード行は説明が長く2行分になる分を加味)。
-	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 400.0)
+	# 高さはトグル行数 x 標準行高を基準にした目安 (自動トレード行・ドラフト完全ウェーバー制行は
+	# 説明が長く2行分になる分を加味)。
+	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 480.0)
 
 	var rects: Dictionary = {
 		"save_panel": save_panel,
@@ -167,6 +168,7 @@ func _toggle_rows() -> Array:
 		{"id": "autosave", "label": "自動セーブ", "desc": "試合進行・オフシーズン処理時に自動で保存する", "on": AppState.auto_save_enabled},
 		{"id": "dh1", "label": "第1リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("central")},
 		{"id": "dh2", "label": "第2リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("pacific")},
+		{"id": "draftwaiver", "label": "ドラフト完全ウェーバー制", "desc": "1巡目の入札・抽選を行わず、全巡とも前年下位球団から順に指名する(次回ドラフトから適用)。", "on": AppState.draft_full_waiver},
 	]
 
 
@@ -434,6 +436,9 @@ func _on_toggle(id: String) -> void:
 		"dh2":
 			AppState.set_dh_enabled_for_league("pacific", not AppState.is_dh_enabled_for_league("pacific"))
 			_save_and_status("DH設定を保存しました。")
+		"draftwaiver":
+			AppState.draft_full_waiver = not AppState.draft_full_waiver
+			_save_and_status("ドラフト完全ウェーバー制設定を保存しました。")
 	# チップの ON/OFF 表示とスタイルを更新するため、ボタンを作り直す。
 	_build_buttons()
 	queue_redraw()

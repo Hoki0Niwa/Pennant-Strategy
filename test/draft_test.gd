@@ -198,6 +198,10 @@ func test_user_skip_ends_development_participation() -> void:
 			break
 		if is_user_turn:
 			DraftService.auto_pick_for_user(state)
+		elif stage == "first_round_reveal":
+			DraftService.resolve_first_round_reveal(state)
+		elif stage == "first_round_result":
+			DraftService.continue_first_round(state)
 		else:
 			DraftService.advance_until_user_turn_or_complete(state)
 
@@ -227,6 +231,10 @@ func test_main_draft_can_complete_before_development_step() -> void:
 			break
 		if stage == "first_round_bid" or stage == "user_pick":
 			DraftService.auto_pick_for_user(state)
+		elif stage == "first_round_reveal":
+			DraftService.resolve_first_round_reveal(state)
+		elif stage == "first_round_result":
+			DraftService.continue_first_round(state)
 		else:
 			DraftService.advance_until_user_turn_or_complete(state)
 
@@ -292,6 +300,154 @@ func test_draft_reserves_slots_for_foreign_roster_shortage() -> void:
 	assert_int(int(targets.get("1", 0))).is_equal(8)
 	assert_int(int(targets.get("2", 0))).is_equal(5)
 	assert_int(int(targets.get("3", 0))).is_equal(4)
+
+
+# 1巡目の「入札→公開(reveal)→結果確認(result)」対話フローを一通り検証する。
+# ユーザーが入札するたびに reveal で1 wave 分だけ抽選が公開され、result で次へ進む。
+# 全球団の1巡目が確定するまでこのループを繰り返しても取りこぼしが無いことを見る。
+func test_first_round_two_stage_flow_for_user() -> void:
+	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var players: Array = []
+	_fill_team(players, 1, 58)
+	_fill_team(players, 2, 58)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1, false)
+	assert_str(str(state.get("stage", ""))).is_equal("first_round_bid")
+
+	var candidate_id: int = int((DraftService.available_candidates(state)[0] as Dictionary).get("candidate_id", 0))
+	DraftService.submit_user_candidate(state, candidate_id)
+	assert_str(str(state.get("stage", ""))).is_equal("first_round_reveal")
+
+	var reveal: Dictionary = state.get("first_round_reveal", {}) as Dictionary
+	var bids: Dictionary = reveal.get("bids", {}) as Dictionary
+	assert_bool(bids.is_empty()).is_false()
+	assert_bool(bids.has(str(1))).is_true()
+	assert_bool(bool(reveal.get("resolved", true))).is_false()
+	assert_int(_round_pick_count(state, 1)).is_equal(0)
+
+	DraftService.resolve_first_round_reveal(state)
+	assert_str(str(state.get("stage", ""))).is_equal("first_round_result")
+	reveal = state.get("first_round_reveal", {}) as Dictionary
+	assert_bool(bool(reveal.get("resolved", false))).is_true()
+	assert_int(_round_pick_count(state, 1)).is_greater_equal(1)
+
+	# 抽選で外れた球団が残っていれば再入札 (bid) → 公開 (reveal) → 結果 (result) を繰り返す。
+	var guard: int = 0
+	while guard < 200:
+		guard += 1
+		var stage: String = str(state.get("stage", ""))
+		if stage == "first_round_bid":
+			DraftService.auto_pick_for_user(state)
+		elif stage == "first_round_reveal":
+			DraftService.resolve_first_round_reveal(state)
+		elif stage == "first_round_result":
+			DraftService.continue_first_round(state)
+		else:
+			break
+	assert_int(guard).is_less(200)
+
+	# 指名可能だった全球団 (両球団とも新規58人在籍で本指名可能) に1巡目の pick がちょうど1件ずつ。
+	for tid in [1, 2]:
+		assert_int(_team_round_pick_count(state, tid, 1)).is_equal(1)
+
+
+# 同一候補への競合入札は抽選 (lottery) で1球団だけ確定し、敗者は次 wave に持ち越される。
+# 乱数依存で flaky にならないよう、勝者が「どちらの球団か」までは断定しない。
+func test_first_round_rebid_wave_lottery() -> void:
+	Rng.set_seed_value(20260710)
+	var teams: Array = [_team(5, "central", 1), _team(6, "pacific", 2)]
+	var players: Array = []
+	_fill_team(players, 5, 58)
+	_fill_team(players, 6, 58)
+
+	# user_team_id=0 (存在しない) だと create_draft_state 内でサイレント一括解決され最後まで
+	# 進んでしまうため、create 後に1巡目入札待ちの状態へ state を手動でリセットしてから
+	# _resolve_first_round_wave を直接検証する。profile の initial_total 等は capacity 判定にのみ
+	# 使われ _resolve_first_round_wave 自体には影響しないため、picks/logs/カウンタのみ戻せば十分。
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0, false)
+	state["complete"] = false
+	state["segment"] = "main"
+	state["stage"] = "first_round_bid"
+	state["round"] = 1
+	state["round_position"] = 0
+	state["picks"] = []
+	state["logs"] = []
+	state["teams_done"] = {}
+	state["team_pick_counts"] = {"5": 0, "6": 0}
+	state["first_round_wave"] = 1
+	state["first_round_reveal"] = {}
+
+	var available: Array = DraftService.available_candidates(state)
+	assert_bool(available.is_empty()).is_false()
+	var shared_candidate_id: int = int((available[0] as Dictionary).get("candidate_id", 0))
+
+	# 2球団が同一候補に入札した状態を手で注入する。
+	state["first_round_unresolved"] = [5, 6]
+	state["first_round_bids"] = {"5": shared_candidate_id, "6": shared_candidate_id}
+
+	var next_unresolved: Array = DraftService._resolve_first_round_wave(state)
+
+	var lottery_logs: Array = []
+	for log_row in state.get("logs", []) as Array:
+		if str((log_row as Dictionary).get("type", "")) == "lottery":
+			lottery_logs.append(log_row)
+	assert_array(lottery_logs).has_size(1)
+
+	var lottery: Dictionary = lottery_logs[0] as Dictionary
+	var lottery_teams: Array = lottery.get("teams", []) as Array
+	assert_int(lottery_teams.size()).is_equal(2)
+	var winner_team_id: int = int(lottery.get("winner_team_id", 0))
+	assert_bool(winner_team_id == 5 or winner_team_id == 6).is_true()
+	var loser_team_ids: Array = lottery.get("loser_team_ids", []) as Array
+	assert_array(loser_team_ids).has_size(1)
+	var loser_team_id: int = int(loser_team_ids[0])
+	assert_bool(loser_team_id != winner_team_id).is_true()
+
+	# 戻り値の次 wave 未解決には敗者のみ含まれ、勝者は含まれない。
+	assert_array(next_unresolved).has_size(1)
+	assert_int(int(next_unresolved[0])).is_equal(loser_team_id)
+	assert_bool(next_unresolved.has(winner_team_id)).is_false()
+
+	# 勝者には1巡目の pick が1件、method/lottery フラグも抽選由来であることを確認。
+	assert_int(_team_round_pick_count(state, winner_team_id, 1)).is_equal(1)
+	var winner_pick: Dictionary = _find_pick(state, winner_team_id, 1)
+	assert_object(winner_pick).is_not_null()
+	assert_bool(bool(winner_pick.get("lottery", false))).is_true()
+	assert_str(str(winner_pick.get("method", ""))).is_equal("lottery")
+	assert_int(_team_round_pick_count(state, loser_team_id, 1)).is_equal(0)
+
+
+# complete_automatically は reveal/result の対話段階でも止まらず完走する。
+func test_complete_automatically_not_stuck_at_reveal() -> void:
+	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var players: Array = []
+	_fill_team(players, 1, 58)
+	_fill_team(players, 2, 58)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1, false)
+	var candidate_id: int = int((DraftService.available_candidates(state)[0] as Dictionary).get("candidate_id", 0))
+	DraftService.submit_user_candidate(state, candidate_id)
+	assert_str(str(state.get("stage", ""))).is_equal("first_round_reveal")
+
+	var result: Dictionary = DraftService.complete_automatically(state)
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(state.get("complete", false))).is_true()
+	for tid in [1, 2]:
+		assert_int(_team_round_pick_count(state, tid, 1)).is_equal(1)
+
+
+# ユーザーが指名に参加しない (user_team_id が存在しない) 場合は create_draft_state 内で
+# 1巡目がサイレントに一括解決され、reveal/result の対話段階を経ずに先へ進む (回帰保護)。
+func test_headless_create_resolves_first_round_silently() -> void:
+	var teams: Array = [_team(5, "central", 1), _team(6, "pacific", 2)]
+	var players: Array = []
+	_fill_team(players, 5, 58)
+	_fill_team(players, 6, 58)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
+	var stage: String = str(state.get("stage", ""))
+	assert_bool(stage == "first_round_bid" or stage == "first_round_reveal" or stage == "first_round_result").is_false()
+	assert_int(_round_pick_count(state, 1)).is_greater(0)
 
 
 func test_draft_target_accounts_for_promotions() -> void:
@@ -400,3 +556,137 @@ func _pick_count(state: Dictionary, team_id: int, development: bool) -> int:
 		if int(pick.get("team_id", 0)) == team_id and bool(pick.get("development", false)) == development:
 			count += 1
 	return count
+
+
+func _round_pick_count(state: Dictionary, round_no: int) -> int:
+	var count: int = 0
+	for pick_row in state.get("picks", []) as Array:
+		if int((pick_row as Dictionary).get("round", 0)) == round_no:
+			count += 1
+	return count
+
+
+func _team_round_pick_count(state: Dictionary, team_id: int, round_no: int) -> int:
+	var count: int = 0
+	for pick_row in state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		if int(pick.get("team_id", 0)) == team_id and int(pick.get("round", 0)) == round_no:
+			count += 1
+	return count
+
+
+func _find_pick(state: Dictionary, team_id: int, round_no: int) -> Dictionary:
+	for pick_row in state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		if int(pick.get("team_id", 0)) == team_id and int(pick.get("round", 0)) == round_no:
+			return pick
+	return {}
+
+
+# 完全ウェーバー制 (full_waiver=true): 1巡目も入札/抽選を行わず、本指名は全巡 reverse 固定。
+# 育成ドラフトは現行のスネーク (奇数巡=forward) を維持することも合わせて確認する。
+func test_full_waiver_order_and_no_lottery() -> void:
+	var teams: Array = [
+		_team(1, "central", 1),
+		_team(2, "central", 2),
+		_team(3, "pacific", 3),
+		_team(4, "pacific", 4),
+	]
+	var players: Array = []
+	_fill_team(players, 1, 55)
+	_fill_team(players, 2, 55)
+	_fill_team(players, 3, 55)
+	_fill_team(players, 4, 55)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0, true, true)
+	DraftService.complete_automatically(state)
+	assert_bool(bool(state.get("complete", false))).is_true()
+
+	for log_row in state.get("logs", []) as Array:
+		assert_str(str((log_row as Dictionary).get("type", ""))).is_not_equal("lottery")
+
+	var picks: Array = state.get("picks", []) as Array
+	for pick_row in picks:
+		var pick: Dictionary = pick_row as Dictionary
+		if bool(pick.get("development", false)):
+			continue
+		assert_bool(bool(pick.get("lottery", false))).is_false()
+		var method: String = str(pick.get("method", ""))
+		assert_bool(method == "single_bid" or method == "rebid_single" or method == "lottery").is_false()
+
+	var reverse_order: Array = state.get("teams_order_reverse", []) as Array
+	var forward_order: Array = state.get("teams_order_forward", []) as Array
+
+	for round_no in [1, 2]:
+		var round_teams: Array = []
+		var round_picks: Array = []
+		for pick_row in picks:
+			var pick: Dictionary = pick_row as Dictionary
+			if bool(pick.get("development", false)):
+				continue
+			if int(pick.get("round", 0)) == round_no:
+				round_picks.append(pick)
+		round_picks.sort_custom(func(a, b) -> bool:
+			return int((a as Dictionary).get("overall_pick", 0)) < int((b as Dictionary).get("overall_pick", 0))
+		)
+		for pick_row in round_picks:
+			round_teams.append(int((pick_row as Dictionary).get("team_id", 0)))
+		var expected_subsequence: Array = []
+		for team_id_value in reverse_order:
+			if round_teams.has(int(team_id_value)):
+				expected_subsequence.append(int(team_id_value))
+		assert_array(round_teams).is_equal(expected_subsequence)
+
+	# 育成ドラフト1巡目は現行のスネーク (奇数巡=forward) を維持する。
+	var dev_round1_teams: Array = []
+	var dev_round1_picks: Array = []
+	for pick_row in picks:
+		var pick: Dictionary = pick_row as Dictionary
+		if bool(pick.get("development", false)) and int(pick.get("round", 0)) == 1:
+			dev_round1_picks.append(pick)
+	dev_round1_picks.sort_custom(func(a, b) -> bool:
+		return int((a as Dictionary).get("overall_pick", 0)) < int((b as Dictionary).get("overall_pick", 0))
+	)
+	for pick_row in dev_round1_picks:
+		dev_round1_teams.append(int((pick_row as Dictionary).get("team_id", 0)))
+	var expected_dev_subsequence: Array = []
+	for team_id_value in forward_order:
+		if dev_round1_teams.has(int(team_id_value)):
+			expected_dev_subsequence.append(int(team_id_value))
+	assert_array(dev_round1_teams).is_equal(expected_dev_subsequence)
+
+
+# 完全ウェーバー制でユーザーが参加する場合、1巡目から入札段階を経ずに user_pick 待ちになり、
+# 通常通り submit_user_candidate で指名できる (method=="user"、抽選なし)。
+func test_full_waiver_user_gets_user_pick_stage_round1() -> void:
+	# season=null のとき _priority_league は year=0 扱いで "pacific" が優先リーグになり、
+	# reverse_order は優先リーグの最下位球団から始まる。自軍 (team_id=1) を優先リーグ
+	# (pacific) の最下位 previous_rank に置いて先頭に来るようにする。
+	var teams: Array = [
+		_team(1, "pacific", 6),
+		_team(2, "pacific", 1),
+		_team(3, "central", 6),
+		_team(4, "central", 1),
+	]
+	var players: Array = []
+	_fill_team(players, 1, 55)
+	_fill_team(players, 2, 55)
+	_fill_team(players, 3, 55)
+	_fill_team(players, 4, 55)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1, true, true)
+	var reverse_order: Array = state.get("teams_order_reverse", []) as Array
+	assert_int(int(reverse_order[0])).is_equal(1)
+
+	assert_str(str(state.get("stage", ""))).is_equal("user_pick")
+	assert_int(int(state.get("round", 0))).is_equal(1)
+	assert_int(int(state.get("current_team_id", 0))).is_equal(1)
+
+	var candidate_id: int = int((DraftService.available_candidates(state)[0] as Dictionary).get("candidate_id", 0))
+	var result: Dictionary = DraftService.submit_user_candidate(state, candidate_id)
+	assert_bool(bool(result.get("ok", false))).is_true()
+
+	var pick: Dictionary = _find_pick(state, 1, 1)
+	assert_object(pick).is_not_null()
+	assert_str(str(pick.get("method", ""))).is_equal("user")
+	assert_bool(bool(pick.get("lottery", false))).is_false()
