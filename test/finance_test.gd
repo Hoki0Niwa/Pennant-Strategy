@@ -82,7 +82,9 @@ func test_released_cpu_preserves_budget_for_fa() -> void:
 		players.append(_player({"id": 10 + i, "team_id": 1, "position": 1, "salary": 1000, "foreign_player": true}))
 	# team1に一塁手がいないため補強needを作る。元球団team2は再獲得不可。
 	players.append(_player({"id": 20, "team_id": 2, "position": 3, "salary": 1000}))
-	var released: PSPlayer = _player({"id": 50, "team_id": 0, "position": 3, "salary": 10000})
+	# 市場処理は候補の契約額を元年俸から減額提示 (_released_contract_salary) で再同期するため、
+	# 減額後がちょうど 10000 (=1000+45000*0.2) になる元年俸を与える。
+	var released: PSPlayer = _player({"id": 50, "team_id": 0, "position": 3, "salary": 46000})
 	released.source_data["released"] = true
 	players.append(released)
 	var entry: Dictionary = {
