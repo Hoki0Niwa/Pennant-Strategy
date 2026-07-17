@@ -13,6 +13,12 @@ const CAL_RECT: Rect2 = Rect2(262, 206, 1020, 854)
 const RIGHT_X: float = 1300.0
 const RIGHT_W: float = 600.0
 
+# カレンダー見出し ("YYYY年 M月") と月送り矢印の位置合わせ用。矢印は固定座標だと
+# 2桁月 (10-12月) で見出しに衝突するため、‹ は固定・› は見出しの実測幅から算出する。
+const CAL_TITLE_X: float = CAL_RECT.position.x + 60.0
+const CAL_TITLE_SIZE: int = 23
+const CAL_NAV_GAP: float = 12.0
+
 const WEEKDAYS: Array = ["月", "火", "水", "木", "金", "土", "日"]
 
 const FILTERS: Array = [
@@ -80,6 +86,10 @@ func _draw_empty() -> void:
 	_text("新規シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
 
 
+func _calendar_title_text() -> String:
+	return "%d年 %d月" % [_calendar_year, _calendar_month]
+
+
 # --- サマリー KPI 帯 ---
 
 func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
@@ -111,7 +121,7 @@ func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
 
 func _draw_calendar(team_id: int, season: PSSeason) -> void:
 	_round(CAL_RECT, PANEL, Color.TRANSPARENT, 8, 0)
-	_text("%d年 %d月" % [_calendar_year, _calendar_month], Vector2(CAL_RECT.position.x + 56, CAL_RECT.position.y + 40), 23, TEXT)
+	_text(_calendar_title_text(), Vector2(CAL_TITLE_X, CAL_RECT.position.y + 34), CAL_TITLE_SIZE, TEXT)
 
 	var inner_x: float = CAL_RECT.position.x + 16
 	var inner_w: float = CAL_RECT.size.x - 32
@@ -552,9 +562,10 @@ func _build_buttons() -> void:
 			"chip_active" if _calendar_filter == fid else "chip")
 		fx += float(fwidths[idx]) + 8.0
 
-	# 月送り
+	# 月送り (› は見出し文字列の実測幅から算出し、2桁月 (10-12月) で見出しと衝突しないようにする)
+	var title_w: float = _measure(_calendar_title_text(), CAL_TITLE_SIZE)
 	_add_button("prev_month", "‹", Rect2(CAL_RECT.position.x + 18, 216, 30, 30), func() -> void: _shift_month(-1), "chip")
-	_add_button("next_month", "›", Rect2(CAL_RECT.position.x + 220, 216, 30, 30), func() -> void: _shift_month(1), "chip")
+	_add_button("next_month", "›", Rect2(CAL_TITLE_X + title_w + CAL_NAV_GAP, 216, 30, 30), func() -> void: _shift_month(1), "chip")
 
 	# この試合を消化 (本日を終了と同じく日単位で消化する)
 	var today_game: Dictionary = _team_game_on_day(team.id, season.current_day)
@@ -665,6 +676,7 @@ func _simulate_remaining_season() -> void:
 
 
 # スキップ後に月をまたいだら、カレンダー表示をスキップ終了時点の月へ追従させる。
+# 見出し文字列が変わると月送り矢印の位置も変わるため _build_buttons() で再配置する。
 func _sync_calendar_to_current() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null:
@@ -672,6 +684,7 @@ func _sync_calendar_to_current() -> void:
 	var d: Dictionary = _parse_date(SeasonCalendar.current_date(season))
 	_calendar_year = int(d.get("year", _calendar_year))
 	_calendar_month = int(d.get("month", _calendar_month))
+	_build_buttons()
 
 
 func _save_game() -> void:
@@ -694,6 +707,7 @@ func _shift_month(delta: int) -> void:
 	while _calendar_month > 12:
 		_calendar_month -= 12
 		_calendar_year += 1
+	_build_buttons()
 	queue_redraw()
 
 
