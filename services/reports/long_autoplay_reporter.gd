@@ -351,7 +351,7 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio")
+	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio,foreign_retained,foreign_poached,foreign_multi_year_signed,extension_offers,extension_accepted,multi_year_active")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -459,6 +459,12 @@ func csv_text(report: Dictionary) -> String:
 			int(post_roster.get("team_foreign_max", 0)),
 			float(post_roster.get("draft_generated_ratio", 0.0)),
 			float(post_roster.get("seed_cohort_ratio", 0.0)),
+			int(offseason.get("foreign_retained_count", 0)),
+			int(offseason.get("foreign_poached_count", 0)),
+			int(offseason.get("foreign_multi_year_signed_count", 0)),
+			int(offseason.get("extension_offers_count", 0)),
+			int(offseason.get("extension_accepted_count", 0)),
+			int(offseason.get("multi_year_active_count", 0)),
 		]
 		lines.append(_csv_values(csv_values))
 	return "\n".join(lines)
@@ -473,10 +479,7 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var budget_result: Dictionary = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, season, 0)
 
 	# R4/R5/R7 調整: 順番は 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → キャンプ → 成長。
-	# 戦力外: 先に外国人 (別基準: 4枠 + 能力バー) を確定し、その後日本人を外国人込み総数 60 まで詰める
-	# (残す外国人が多いほど日本人を多く切る)。
-	var foreign_release_result: Dictionary = OffseasonService.process_foreign_releases(GameDb.players, GameDb.teams, season)
-	GameDb.rebuild_player_indices()
+	# 外国人の去就 (残留/引き抜き/退団) は戦力外ステップではなく外国人契約市場ステップが決める。
 	var release_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, 0, season)
 	GameDb.rebuild_player_indices()
 	# 戦力外フェーズ直後に残った「30歳以上・今季出場ゼロ・入団3年目以降」の支配下選手数。
@@ -484,10 +487,6 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var noshow_thirties_survivor_rows: Array = _noshow_thirties_survivor_rows(season)
 	var noshow_thirties_survivors: int = noshow_thirties_survivor_rows.size()
 	var merged_release_result: Dictionary = release_result.duplicate(true)
-	var merged_released: Array = []
-	merged_released.append_array(release_result.get("released", []) as Array)
-	merged_released.append_array(foreign_release_result.get("released", []) as Array)
-	merged_release_result["released"] = merged_released
 
 	# ドラフト (日本人 66 枠まで 6〜7 人補充)。
 	var draft_state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, season, selected_team_id)
@@ -527,8 +526,18 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	GameDb.rebuild_player_indices()
 
 	# R4 Step1: 契約更新 (年俸再査定 + FA権遷移 + 予算会計)。長期検証で FA権到達が累積するよう
-	# 実フローと同様 advance_players_one_year の直前に実行する。
+	# 実フローと同様 advance_players_one_year の直前に実行する。延長交渉 (Step3) は user_team_id=0
+	# のため全球団がCPU基準で自動解決される (実フローの「AIに任せる」相当)。
 	var contract_result: Dictionary = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, season)
+	# 延長交渉のcap saturation監視 (毎年上限に機械的に張り付いていないか) と、複数年契約中選手の
+	# 全リーグ総数 (制度が定着後どの程度の規模で推移するかの監視)。
+	var multi_year_active_count: int = 0
+	for active_player_row in GameDb.players:
+		var active_player: PSPlayer = active_player_row as PSPlayer
+		if active_player == null or active_player.is_retired():
+			continue
+		if active_player.is_multi_year_locked_offseason(season.year):
+			multi_year_active_count += 1
 
 	# 戦力外の投手/野手内訳 (position==1 が投手)。現実の NPB はおおむね 1:1〜投手やや多で、
 	# 野手側へ大きく偏っていないかの監視用 (2026-07-03、実測 1:2 の偏り報告を受けて追加)。
@@ -594,9 +603,17 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"released_signed_count": int(released_market_result.get("signed_count", 0)),
 		"released_candidates_count": int(released_market_result.get("candidates_count", 0)),
 		"foreign_signed_count": int(foreign_result.get("signed_count", 0)),
-		"foreign_released_count": int(foreign_release_result.get("released_count", 0)),
+		# 外国人契約市場 (残留/引き抜き/退団) の内訳。foreign_released_count は退団数を指す
+		# (旧・外国人戦力外と同じ「保有から抜けた人数」の意味を維持、中身は退団のみに変わった)。
+		"foreign_released_count": int(foreign_result.get("contract_departed_count", 0)),
+		"foreign_retained_count": int(foreign_result.get("contract_retained_count", 0)),
+		"foreign_poached_count": int(foreign_result.get("contract_poached_count", 0)),
+		"foreign_multi_year_signed_count": int(foreign_result.get("contract_multi_year_count", 0)),
 		"camp_actions_count": int(camp_result.get("actions_count", 0)),
 		"camp_pitch_learning_count": int(camp_result.get("normal_pitch_learning_count", 0)),
+		"extension_offers_count": int(contract_result.get("extension_offers_count", 0)),
+		"extension_accepted_count": int(contract_result.get("extension_accepted_count", 0)),
+		"multi_year_active_count": multi_year_active_count,
 	}
 
 

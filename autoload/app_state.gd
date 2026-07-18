@@ -26,7 +26,11 @@ const OFFSEASON_PANEL_DRAFT: String = "draft"
 const OFFSEASON_PANEL_RELEASED_MARKET: String = "released_market"
 const OFFSEASON_PANEL_FA: String = "fa"
 const OFFSEASON_PANEL_FOREIGN: String = "foreign"
+const OFFSEASON_PANEL_FOREIGN_CONTRACT: String = "foreign_contract"
+const OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT: String = "foreign_contract_result"
+const OFFSEASON_PANEL_FOREIGN_RESULT: String = "foreign_result"
 const OFFSEASON_PANEL_CAMP: String = "camp"
+const OFFSEASON_PANEL_CONTRACT_EXTENSION: String = "contract_extension"
 
 var current_screen: String = "start"
 # 画面遷移の戻る/進む用スタック。各要素は画面名と選択中 player_id のスナップショット。
@@ -53,6 +57,7 @@ var released_market_state: Dictionary = {}
 var fa_state: Dictionary = {}
 var foreign_state: Dictionary = {}
 var camp_state: Dictionary = {}
+var contract_update_state: Dictionary = {}
 var offseason_active: bool = false
 var postseason_active: bool = false
 var current_postseason: PSPostseasonResult = null
@@ -218,13 +223,29 @@ func get_offseason_view_state() -> Dictionary:
 				interactive = true
 		OFFSEASON_STEP_FOREIGN_MARKET:
 			if not foreign_state.is_empty() and not bool(foreign_state.get("complete", false)):
-				active_panel = OFFSEASON_PANEL_FOREIGN
-				title = "外国人補強"
+				match str(foreign_state.get("phase", "scout")):
+					"contract":
+						active_panel = OFFSEASON_PANEL_FOREIGN_CONTRACT
+						title = "外国人契約市場"
+					"contract_result":
+						active_panel = OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT
+						title = "外国人契約市場: 結果"
+					"scout_result":
+						active_panel = OFFSEASON_PANEL_FOREIGN_RESULT
+						title = "外国人スカウト: 結果"
+					_:
+						active_panel = OFFSEASON_PANEL_FOREIGN
+						title = "外国人補強"
 				interactive = true
 		OFFSEASON_STEP_CAMP:
 			if not camp_state.is_empty() and not bool(camp_state.get("complete", false)):
 				active_panel = OFFSEASON_PANEL_CAMP
 				title = "キャンプ"
+				interactive = true
+		OFFSEASON_STEP_CONTRACT_UPDATE:
+			if not contract_update_state.is_empty() and not bool(contract_update_state.get("complete", false)):
+				active_panel = OFFSEASON_PANEL_CONTRACT_EXTENSION
+				title = "契約更新(延長交渉)"
 				interactive = true
 
 	if not interactive:
@@ -456,11 +477,14 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	if offseason_step != OFFSEASON_STEP_RELEASE_EDIT:
 		return {"ok": false, "message": "戦力外通告は戦力外エディタ(step 1)でのみ確定できます"}
 
-	# R4 Step3: CPU球団の外国人を別基準 (4枠 + 能力バー + 低稼働) で自動戦力外。
-	# 自軍外国人は戦力外エディタの選択だけを尊重し、確定時に裏で追加解雇しない。
-	var foreign_result: Dictionary = OffseasonService.process_foreign_releases(GameDb.players, GameDb.teams, current_season, selected_team_id)
-	# roadmap #3: 自軍の育成降格 (release ではなく育成化) を release より先に適用し支配下枠を空ける。
 	var offseason_year: int = current_season.year if current_season != null else 0
+	var lock_check: Dictionary = OffseasonService.reject_locked_release_or_demote(GameDb.players, player_ids, demote_ids, offseason_year)
+	if not bool(lock_check.get("ok", true)):
+		return lock_check
+
+	# 外国人の去就 (残留/引き抜き/退団) は戦力外通告ではなく外国人契約市場 (オフステップ7) が
+	# 一括で決める ([[foreign_player_service.gd]])。ここでは日本人選手だけを扱う。
+	# roadmap #3: 自軍の育成降格 (release ではなく育成化) を release より先に適用し支配下枠を空ける。
 	var demote_result: Dictionary = OffseasonService.process_demotion(GameDb.players, selected_team_id, demote_ids, offseason_year)
 	var user_result: Dictionary = OffseasonService.process_release(GameDb.players, selected_team_id, player_ids, offseason_year)
 	var cpu_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, selected_team_id, current_season)
@@ -469,7 +493,6 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	var merged_released: Array = []
 	merged_released.append_array(user_result.get("released", []) as Array)
 	merged_released.append_array(cpu_result.get("released", []) as Array)
-	merged_released.append_array(foreign_result.get("released", []) as Array)
 	merged_released.sort_custom(func(a, b) -> bool:
 		return int((a as Dictionary)["overall"]) > int((b as Dictionary)["overall"])
 	)
@@ -485,7 +508,8 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 		"by_team": cpu_result.get("by_team", {}),
 		"user_released_count": int(user_result.get("released_count", 0)),
 		"cpu_released_count": int(cpu_result.get("released_count", 0)),
-		"foreign_released_count": int(foreign_result.get("released_count", 0)),
+		# 外国人の去就は外国人契約市場ステップで決まるため、この時点では常に0。
+		"foreign_released_count": 0,
 		"demoted": merged_demoted,
 		"demoted_count": merged_demoted.size(),
 		"user_demoted_count": int(demote_result.get("demoted_count", 0)),
@@ -519,6 +543,8 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "外国人補強が進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_CAMP and not _is_camp_complete():
 		return {"ok": false, "message": "キャンプが進行中です。先に完了してください"}
+	if offseason_step == OFFSEASON_STEP_CONTRACT_UPDATE and not _is_contract_update_complete():
+		return {"ok": false, "message": "契約更新の延長交渉が進行中です。先に完了してください"}
 	if offseason_step >= OFFSEASON_TOTAL_STEPS:
 		return {"ok": false, "message": "オフシーズン処理は完了しています。「翌年開始」で次シーズンへ進んでください"}
 
@@ -588,8 +614,11 @@ func advance_offseason() -> Dictionary:
 			step_result["dev_released_count"] = int(dev_rel.get("released_count", 0))
 			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_CONTRACT_UPDATE:
-			step_result = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, current_season)
-			step_result["title"] = "契約更新"
+			contract_update_state = OffseasonService.create_contract_update_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
+			if _is_contract_update_complete():
+				step_result = _finalize_contract_update_if_complete()
+			else:
+				step_result = {"title": "契約更新", "contract_update_in_progress": true}
 		_:
 			return {"ok": false, "message": "不正なステップ番号"}
 
@@ -842,20 +871,20 @@ func _finalize_released_market_if_complete() -> Dictionary:
 	return result
 
 
-func submit_fa_candidate(candidate_id: int) -> Dictionary:
-	return _submit_fa_decision(candidate_id, "sign")
+func submit_fa_candidate(candidate_id: int, offer_years: int = 0) -> Dictionary:
+	return _submit_fa_decision(candidate_id, "sign", offer_years)
 
 
 func skip_fa_candidate(candidate_id: int) -> Dictionary:
 	return _submit_fa_decision(candidate_id, "skip")
 
 
-func _submit_fa_decision(candidate_id: int, action: String) -> Dictionary:
+func _submit_fa_decision(candidate_id: int, action: String, offer_years: int = 0) -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_FA_MARKET:
 		return {"ok": false, "message": "FA市場は現在有効ではありません"}
 	if fa_state.is_empty():
 		return {"ok": false, "message": "FA市場が初期化されていません"}
-	var result: Dictionary = FaMarketService.submit_user_fa_decision(fa_state, GameDb.players, GameDb.teams, current_season, candidate_id, action)
+	var result: Dictionary = FaMarketService.submit_user_fa_decision(fa_state, GameDb.players, GameDb.teams, current_season, candidate_id, action, offer_years)
 	fa_state = result.get("state", fa_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
@@ -932,6 +961,97 @@ func configure_foreign_scout_request(position: String, archetype: String, budget
 	return result
 
 
+# 外国人契約市場 (残留/引き抜き、スカウトの前段フェーズ): 自軍満了者への残留提示、
+# または他球団満了者への引き抜き提示。年数は entry.max_years でクランプされる。
+func submit_foreign_contract_offer(player_id: int, years: int) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	var result: Dictionary = ForeignPlayerService.submit_user_contract_offer(foreign_state, GameDb.players, GameDb.teams, current_season, player_id, years)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
+func withdraw_foreign_contract_offer(player_id: int) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	var result: Dictionary = ForeignPlayerService.withdraw_user_contract_offer(foreign_state, player_id)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
+# 契約市場を確定する: ユーザー球団は明示提示 (submit_foreign_contract_offer) した選手のみを扱い、
+# 未提示の自軍満了者へはCPU残留提示を生成しない (auto_user_team=false)。他球団はCPUが従来どおり
+# 自動で残留/引き抜きを判断する。解決後は結果パネル (OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT) を
+# 経てから scout フェーズへ進む。
+func finalize_foreign_contract_market() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	if str(foreign_state.get("phase", "contract")) != "contract":
+		return {"ok": false, "message": "外国人契約市場は既に確定しています"}
+	var result: Dictionary = ForeignPlayerService.resolve_foreign_contract_market(foreign_state, GameDb.players, GameDb.teams, current_season, selected_team_id, false, true)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	GameDb.rebuild_player_indices()
+	_save_if_enabled()
+	return {"ok": true, "state": foreign_state}
+
+
+# 「すべてAIに任せる」: ユーザー球団も他球団と同じ基準 (_cpu_retain_offer) で自動残留判断させる
+# (auto_user_team=true)。確定ボタンと同様に結果パネル (contract_result) を経てから scout へ進む
+# (show_result=true。2ボタンの違いは自軍を自動判断に含めるか否かだけで、結果表示は共通)。
+func auto_complete_foreign_contract_market() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	if str(foreign_state.get("phase", "contract")) != "contract":
+		return {"ok": false, "message": "外国人契約市場は既に確定しています"}
+	var result: Dictionary = ForeignPlayerService.resolve_foreign_contract_market(foreign_state, GameDb.players, GameDb.teams, current_season, selected_team_id, true, true)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	GameDb.rebuild_player_indices()
+	_save_if_enabled()
+	return {"ok": true, "state": foreign_state}
+
+
+# 契約市場の結果パネルの「次へ」: phase を "contract_result" → "scout" へ進める。
+func advance_foreign_contract_result() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	var result: Dictionary = ForeignPlayerService.advance_foreign_contract_result(foreign_state)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
+# 外国人スカウトの結果パネルの「次へ」: phase "scout_result" を終え、外国人ステップを完了させる。
+func advance_foreign_scout_result() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
+		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
+	if foreign_state.is_empty():
+		return {"ok": false, "message": "外国人補強が初期化されていません"}
+	var result: Dictionary = ForeignPlayerService.advance_foreign_scout_result(foreign_state)
+	foreign_state = result.get("state", foreign_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	if _is_foreign_complete():
+		_finalize_foreign_if_complete()
+	GameDb.rebuild_player_indices()
+	_save_if_enabled()
+	return {"ok": true, "state": foreign_state}
+
+
 func _submit_foreign_decision(candidate_id: int, action: String) -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
 		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
@@ -964,12 +1084,14 @@ func auto_foreign_user_pick() -> Dictionary:
 	return {"ok": true, "state": foreign_state}
 
 
+# 「補強を終了」: 自軍の残り候補は打ち切り、他球団だけCPUが自動補強する。show_result=true なので
+# 即完了はせず phase="scout_result" の結果パネル ("次へ" は advance_foreign_scout_result) を挟む。
 func complete_foreign_automatically() -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
 		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
 	if foreign_state.is_empty():
 		return {"ok": false, "message": "外国人補強が初期化されていません"}
-	var result: Dictionary = ForeignPlayerService.complete_foreign_market_automatically(foreign_state, GameDb.players, GameDb.teams, current_season, selected_team_id)
+	var result: Dictionary = ForeignPlayerService.complete_foreign_market_automatically(foreign_state, GameDb.players, GameDb.teams, current_season, selected_team_id, true)
 	foreign_state = result.get("state", foreign_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
@@ -1098,6 +1220,66 @@ func _finalize_camp_if_complete() -> Dictionary:
 	result["title"] = "キャンプ"
 	offseason_results["step_8"] = result
 	last_status_message = "キャンプ"
+	return result
+
+
+# 契約更新ステップの延長交渉 (自軍の候補に年数を選んで提示、予算/上限年数は entry.max_years でクランプ)。
+func submit_contract_extension_offer(player_id: int, years: int) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_UPDATE:
+		return {"ok": false, "message": "契約更新は現在有効ではありません"}
+	if contract_update_state.is_empty():
+		return {"ok": false, "message": "契約更新が初期化されていません"}
+	var result: Dictionary = OffseasonService.submit_extension_offer(contract_update_state, GameDb.players, GameDb.teams, selected_team_id, player_id, years)
+	contract_update_state = result.get("state", contract_update_state) as Dictionary
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
+func withdraw_contract_extension_offer(player_id: int) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_UPDATE:
+		return {"ok": false, "message": "契約更新は現在有効ではありません"}
+	if contract_update_state.is_empty():
+		return {"ok": false, "message": "契約更新が初期化されていません"}
+	var result: Dictionary = OffseasonService.withdraw_extension_offer(contract_update_state, player_id)
+	contract_update_state = result.get("state", contract_update_state) as Dictionary
+	if bool(result.get("ok", false)):
+		_save_if_enabled()
+	return result
+
+
+# 延長交渉を確定する: 未提示分はCPU基準 (自軍含む) で自動判断し、全候補を解決してから
+# 年俸再査定+予算会計まで一括で終える。専用UIパネルが無くてもこれ一つで進行できる。
+func finalize_contract_extensions() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_UPDATE:
+		return {"ok": false, "message": "契約更新は現在有効ではありません"}
+	if contract_update_state.is_empty():
+		return {"ok": false, "message": "契約更新が初期化されていません"}
+	_finalize_contract_update_if_complete_force()
+	GameDb.rebuild_player_indices()
+	_save_if_enabled()
+	return {"ok": true, "state": contract_update_state}
+
+
+func _is_contract_update_complete() -> bool:
+	return not contract_update_state.is_empty() and bool(contract_update_state.get("complete", false))
+
+
+func _finalize_contract_update_if_complete() -> Dictionary:
+	if not _is_contract_update_complete():
+		return {"title": "契約更新", "contract_update_in_progress": true}
+	return _finalize_contract_update_if_complete_force()
+
+
+# finalize_contract_extensions は phase=="extension" のまま呼ばれる (ユーザーが確定ボタンを押す
+# 経路) ので、_is_contract_update_complete による早期リターンを経ずに直接サービス層を呼ぶ。
+# OffseasonService.finalize_contract_extensions 自体は finalized フラグで二重実行を防ぐ。
+func _finalize_contract_update_if_complete_force() -> Dictionary:
+	var result: Dictionary = OffseasonService.finalize_contract_extensions(contract_update_state, GameDb.players, GameDb.teams, current_season)
+	GameDb.rebuild_player_indices()
+	result["title"] = "契約更新"
+	offseason_results["step_10"] = result
+	last_status_message = "契約更新"
 	return result
 
 

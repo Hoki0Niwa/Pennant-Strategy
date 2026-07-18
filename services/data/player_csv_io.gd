@@ -46,6 +46,9 @@ static func normalize_initial_seed_players(player_dicts: Array, initial_year: in
 
 static func normalize_initial_seed_player(row: Dictionary, initial_year: int) -> Dictionary:
 	var out: Dictionary = row.duplicate(true)
+	# 初期世界の全選手も年俸を有効数字2桁へ揃える (CSV由来の値は較正の都合で丸くないことがある)。
+	# 冪等 (round_salary_2sig は既に2桁の値を変えない) なので再ロードしても値は安定する。
+	out["salary"] = OffseasonService.round_salary_2sig(int(out.get("salary", 0)))
 	var source: Dictionary = (out.get("source_data", {}) as Dictionary).duplicate(true)
 	var fa_years: int = int(out.get("fa_eligible_years", 0))
 	if fa_years <= 0:
@@ -76,6 +79,11 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int) ->
 	if int(source.get("fa_days_accrued_year", 0)) > initial_year:
 		source.erase("fa_days_accrued_year")
 		source.erase("fa_active_days_last_season")
+	# 初期世界は全員無契約 (単年) で開始する。複数年契約の発生源 (FA/外国人/延長交渉) が
+	# 生成した情報がシードに紛れ込んでいても無視する。
+	source.erase("contract_end_year")
+	source.erase("contract_total_years")
+	source.erase("contract_signed_year")
 	out["source_data"] = source
 	return out
 

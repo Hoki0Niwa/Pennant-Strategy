@@ -219,7 +219,10 @@ func test_foreign_scout_request_migrates_legacy_candidate_ids_without_collision(
 	}
 	var result: Dictionary = ForeignPlayerService.configure_user_scout_request(state, "outfield", "defense", "standard")
 	assert_bool(bool(result.get("ok", false))).is_true()
-	assert_int(int(state.get("version", 0))).is_equal(3)
+	# v2 セーブは v3 (候補ID採番) → v4 (契約市場フェーズ) と連続移行し、既存候補が無い旧セーブは
+	# scout フェーズへ直接復帰する。
+	assert_int(int(state.get("version", 0))).is_equal(4)
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
 	var candidate_ids: Array = state.get("user_candidate_ids", []) as Array
 	assert_int(candidate_ids.size()).is_equal(ForeignPlayerService.scout_candidate_count("standard"))
 	assert_int(int(candidate_ids[0])).is_equal(55)
@@ -318,7 +321,7 @@ func test_released_market_contract_salary_keeps_cheap_players_and_cuts_high_sala
 	assert_int(ReleasedMarket._released_contract_salary(3000)).is_equal(1400)
 	assert_int(ReleasedMarket._released_contract_salary(10000)).is_equal(2800)
 	assert_int(ReleasedMarket._released_contract_salary(30000)).is_equal(6800)
-	assert_int(ReleasedMarket._released_contract_salary(1003)).is_equal(1001)
+	assert_int(ReleasedMarket._released_contract_salary(1003)).is_equal(1000)
 
 
 func test_released_market_available_candidates_refresh_new_contract_salary() -> void:
@@ -353,7 +356,7 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 
 	assert_int(signed.salary).is_equal(2800)
 	assert_int(int(signed.source_data.get("released_contract_salary", 0))).is_equal(2800)
-	assert_bool(Offseason._market_contract_salary_is_locked(signed, 2026)).is_true()
+	assert_bool(Offseason._contract_salary_is_locked(signed, 2026)).is_true()
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
@@ -361,7 +364,645 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 	assert_int(signed.salary).is_equal(2800)
 	assert_int(int(contract_result.get("raises_count", -1))).is_equal(0)
 	assert_int(int(contract_result.get("cuts_count", -1))).is_equal(0)
-	assert_bool(Offseason._market_contract_salary_is_locked(signed, 2027)).is_false()
+	assert_bool(Offseason._contract_salary_is_locked(signed, 2027)).is_false()
+
+
+# --- 複数年契約ロック (契約基盤 Step1) ---------------------------------------
+
+func test_contract_update_skips_salary_reassessment_while_multi_year_locked() -> void:
+	var locked: PSPlayer = _player({
+		"id": 9420, "team_id": 1, "salary": 300, "years": 3,
+		"source_data": {"contract_end_year": 2028, "contract_signed_year": 2026, "contract_total_years": 3},
+	})
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+
+	Offseason.process_contract_update([locked], [], season)
+	assert_int(locked.salary).is_equal(300)
+	assert_bool(locked.is_multi_year_locked_offseason(2026)).is_true()
+
+	# 契約最終年 (2028) のオフは契約満了扱いでロックが外れ、再査定が走る。
+	season.year = 2028
+	Offseason.process_contract_update([locked], [], season)
+	assert_bool(locked.is_multi_year_locked_offseason(2028)).is_false()
+	assert_int(locked.salary).is_not_equal(300)
+
+
+func test_is_multi_year_locked_in_season_covers_final_contract_year() -> void:
+	var player: PSPlayer = _player({"id": 9421, "team_id": 1, "source_data": {"contract_end_year": 2028}})
+	assert_bool(player.is_multi_year_locked_in_season(2027)).is_true()
+	# シーズン中は契約最終年もロック対象 (>=)。オフの判定 (>) より1年長い。
+	assert_bool(player.is_multi_year_locked_in_season(2028)).is_true()
+	assert_bool(player.is_multi_year_locked_in_season(2029)).is_false()
+	assert_bool(player.is_multi_year_locked_offseason(2027)).is_true()
+	assert_bool(player.is_multi_year_locked_offseason(2028)).is_false()
+	assert_int(player.contract_years_remaining(2026)).is_equal(2)
+	assert_int(player.contract_years_remaining(2028)).is_equal(0)
+	assert_int(player.contract_years_remaining(2030)).is_equal(0)
+
+
+func test_compute_release_candidates_excludes_multi_year_locked_player() -> void:
+	var players: Array = []
+	var locked: PSPlayer = _player_with_z(9430, 1, 6, false, 0.0)
+	locked.age = 33
+	locked.source_data["contract_end_year"] = 2027
+	players.append(locked)
+	for i in range(5):
+		var stronger: PSPlayer = _player_with_z(9440 + i, 1, 6, false, 1.0)
+		stronger.age = 28
+		players.append(stronger)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, season)
+	assert_array(cut_ids).not_contains(locked.id)
+
+
+func test_reject_locked_release_or_demote_blocks_locked_player_only() -> void:
+	var locked: PSPlayer = _player({"id": 9450, "team_id": 1, "source_data": {"contract_end_year": 2028}})
+	var free_player: PSPlayer = _player({"id": 9451, "team_id": 1})
+	var players: Array = [locked, free_player]
+
+	var blocked_release: Dictionary = Offseason.reject_locked_release_or_demote(players, [locked.id], [], 2026)
+	assert_bool(bool(blocked_release.get("ok", true))).is_false()
+	assert_str(str(blocked_release.get("message", ""))).contains("複数年契約")
+
+	var blocked_demote: Dictionary = Offseason.reject_locked_release_or_demote(players, [], [locked.id], 2026)
+	assert_bool(bool(blocked_demote.get("ok", true))).is_false()
+
+	var allowed: Dictionary = Offseason.reject_locked_release_or_demote(players, [free_player.id], [free_player.id], 2026)
+	assert_bool(bool(allowed.get("ok", false))).is_true()
+
+	# 契約最終年のオフはロック対象外なので拒否されない。
+	var allowed_final_year: Dictionary = Offseason.reject_locked_release_or_demote(players, [locked.id], [], 2028)
+	assert_bool(bool(allowed_final_year.get("ok", false))).is_true()
+
+
+# --- 外国人契約市場 (残留/引き抜き/退団) -------------------------------------
+
+func test_foreign_contract_market_entries_exclude_locked_players() -> void:
+	var locked: PSPlayer = _player_with_z(9460, 1, 3, false, -1.0)
+	locked.foreign_player = true
+	locked.age = 30
+	locked.source_data["contract_end_year"] = 2027
+	var open_player: PSPlayer = _player_with_z(9461, 1, 4, false, -1.0)
+	open_player.foreign_player = true
+	open_player.age = 30
+	var players: Array = [locked, open_player]
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [_team(1)], season, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("contract")
+	var entry_ids: Array = []
+	for row in state.get("contract_entries", []) as Array:
+		entry_ids.append(int((row as Dictionary).get("player_id", 0)))
+	assert_array(entry_ids).not_contains(locked.id)
+	assert_array(entry_ids).contains(open_player.id)
+
+
+func test_foreign_contract_market_skips_contract_phase_when_no_entries() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state([], [_team(1)], season, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
+
+
+func test_foreign_scout_signing_sets_single_year_contract_keys() -> void:
+	Rng.set_seed_value(20260717)
+	var team: PSTeam = _team(1)
+	var players: Array = []
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [team], season, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
+	ForeignPlayerService.configure_user_scout_request(state, "first", "power", "standard")
+	var candidates: Array = ForeignPlayerService.available_user_candidates(state, players, [team])
+	var candidate_id: int = int((candidates[0] as Dictionary).get("candidate_id", 0))
+	var result: Dictionary = ForeignPlayerService.submit_user_foreign_decision(state, players, [team], season, candidate_id, "sign")
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_int(players.size()).is_equal(1)
+	var signed: PSPlayer = players[0] as PSPlayer
+	assert_int(int(signed.source_data.get("contract_end_year", 0))).is_equal(2027)
+	assert_int(int(signed.source_data.get("contract_total_years", 0))).is_equal(1)
+	assert_int(int(signed.source_data.get("contract_signed_year", 0))).is_equal(2026)
+
+
+func test_foreign_contract_cpu_retain_offer_requires_min_value() -> void:
+	var team: PSTeam = _team(1)
+	var players: Array = [
+		_player({"id": 1, "team_id": 1, "salary": 5000}),
+		_player({"id": 2, "team_id": 1, "salary": 5000}),
+	]
+	var weak_entry: Dictionary = {
+		"player_id": 1, "from_team_id": 1,
+		"value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE - 1,
+		"market_salary": 5000, "max_years": 3,
+	}
+	var strong_entry: Dictionary = {
+		"player_id": 2, "from_team_id": 1,
+		"value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+		"market_salary": 5000, "max_years": 3,
+	}
+	assert_bool(ForeignPlayerService._cpu_retain_offer(weak_entry, players, [team]).is_empty()).is_true()
+	assert_bool(ForeignPlayerService._cpu_retain_offer(strong_entry, players, [team]).is_empty()).is_false()
+
+
+func test_foreign_contract_resolution_home_wins_tie_via_loyalty() -> void:
+	var player: PSPlayer = _player({"id": 3001, "team_id": 1, "salary": 5000, "age": 30, "foreign_player": true})
+	var players: Array = [player]
+	var teams: Array = [_team(1), _team(2)]
+	var entry: Dictionary = {"player_id": 3001, "from_team_id": 1, "value": 60, "market_salary": 8000, "max_years": 3}
+	var offers: Array = [
+		{"source": "retain", "team_id": 1, "years": 1, "salary": 8000, "is_home": true},
+		{"source": "poach", "team_id": 2, "years": 1, "salary": 8000, "is_home": false},
+	]
+	var applied: Dictionary = ForeignPlayerService._apply_best_contract_offer(players, teams, entry, offers, 2026)
+	assert_str(str(applied.get("outcome", ""))).is_equal("retained")
+	assert_int(player.team_id).is_equal(1)
+
+
+func test_foreign_contract_resolution_poach_moves_team_and_contract_keys() -> void:
+	var player: PSPlayer = _player({"id": 3002, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var players: Array = [player]
+	var teams: Array = [_team(1), _team(2)]
+	var entry: Dictionary = {"player_id": 3002, "from_team_id": 1, "value": 70, "market_salary": 8000, "max_years": 3}
+	var offers: Array = [
+		{"source": "retain", "team_id": 1, "years": 1, "salary": 8000, "is_home": true},
+		{"source": "poach", "team_id": 2, "years": 2, "salary": 20000, "is_home": false},
+	]
+	var applied: Dictionary = ForeignPlayerService._apply_best_contract_offer(players, teams, entry, offers, 2026)
+	assert_str(str(applied.get("outcome", ""))).is_equal("poached")
+	assert_int(player.team_id).is_equal(2)
+	assert_int(int(player.source_data.get("contract_end_year", 0))).is_equal(2028)
+	assert_int(int(player.source_data.get("contract_total_years", 0))).is_equal(2)
+
+
+func test_foreign_contract_poach_blocked_by_foreign_slot_cap() -> void:
+	var player: PSPlayer = _player({"id": 3003, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var players: Array = [player]
+	for i in range(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM):
+		players.append(_player({"id": 3100 + i, "team_id": 2, "foreign_player": true}))
+	var teams: Array = [_team(1), _team(2)]
+	var entry: Dictionary = {"player_id": 3003, "from_team_id": 1, "value": 70, "market_salary": 8000, "max_years": 3}
+	var offers: Array = [
+		{"source": "poach", "team_id": 2, "years": 1, "salary": 20000, "is_home": false},
+	]
+	var applied: Dictionary = ForeignPlayerService._apply_best_contract_offer(players, teams, entry, offers, 2026)
+	assert_str(str(applied.get("outcome", ""))).is_equal("departed")
+	assert_int(player.team_id).is_equal(0)
+
+
+func test_foreign_contract_poach_blocked_by_shienka_limit() -> void:
+	var player: PSPlayer = _player({"id": 3004, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var players: Array = _support_players(2, TeamFinance.SHIENKA_LIMIT)
+	players.append(player)
+	var teams: Array = [_team(1), _team(2)]
+	var entry: Dictionary = {"player_id": 3004, "from_team_id": 1, "value": 70, "market_salary": 8000, "max_years": 3}
+	var offers: Array = [
+		{"source": "poach", "team_id": 2, "years": 1, "salary": 20000, "is_home": false},
+	]
+	var applied: Dictionary = ForeignPlayerService._apply_best_contract_offer(players, teams, entry, offers, 2026)
+	assert_str(str(applied.get("outcome", ""))).is_equal("departed")
+
+
+func test_foreign_contract_poach_blocked_by_budget() -> void:
+	var player: PSPlayer = _player({"id": 3005, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var players: Array = [player]
+	var poor_team: PSTeam = PSTeam.from_dict({"id": 2, "name": "Team 2", "short_name": "T2", "league": "central", "funds": 1000})
+	var teams: Array = [_team(1), poor_team]
+	var entry: Dictionary = {"player_id": 3005, "from_team_id": 1, "value": 70, "market_salary": 8000, "max_years": 3}
+	var offers: Array = [
+		{"source": "poach", "team_id": 2, "years": 1, "salary": 20000, "is_home": false},
+	]
+	var applied: Dictionary = ForeignPlayerService._apply_best_contract_offer(players, teams, entry, offers, 2026)
+	assert_str(str(applied.get("outcome", ""))).is_equal("departed")
+
+
+func test_foreign_contract_departed_player_excluded_from_released_market() -> void:
+	var player: PSPlayer = _player({"id": 3006, "team_id": 1, "salary": 5000, "age": 34, "foreign_player": true})
+	ForeignPlayerService._apply_contract_departure(player, 1, 2026)
+	assert_bool(player.is_retired()).is_true()
+	assert_bool(ReleasedMarket._is_released_market_player(player)).is_false()
+
+
+func test_foreign_contract_apply_result_sets_multi_year_keys() -> void:
+	var player: PSPlayer = _player({"id": 3007, "team_id": 1, "salary": 5000, "foreign_player": true})
+	ForeignPlayerService._apply_contract_result(player, 1, true, 3, 12000, 2026)
+	assert_int(int(player.source_data.get("contract_end_year", 0))).is_equal(2029)
+	assert_int(int(player.source_data.get("contract_total_years", 0))).is_equal(3)
+	assert_int(int(player.source_data.get("contract_signed_year", 0))).is_equal(2026)
+	assert_int(player.salary).is_equal(12000)
+
+
+# auto_user_team=false (「契約市場を確定して次へ」既定) はユーザー球団の未提示エントリへ
+# CPU残留提示を生成しない (=他球団に引き抜かれない限り退団)。auto_user_team=true
+# (「すべてAIに任せる」) は他球団と同じ基準 (_cpu_retain_offer) で残留提示を生成する。
+func test_build_contract_offers_skips_user_retain_unless_auto_user_team() -> void:
+	var team: PSTeam = _team(1)
+	var players: Array = [_player({"id": 4001, "team_id": 1, "salary": 5000, "foreign_player": true})]
+	var entry: Dictionary = {
+		"player_id": 4001, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+		"market_salary": 8000, "max_years": 3, "user_offer": {},
+	}
+	var offers_default: Array = ForeignPlayerService._build_contract_offers(entry, players, [team], {}, 1, false)
+	assert_int(offers_default.size()).is_equal(0)
+	var offers_auto: Array = ForeignPlayerService._build_contract_offers(entry, players, [team], {}, 1, true)
+	assert_int(offers_auto.size()).is_equal(1)
+	assert_str(str((offers_auto[0] as Dictionary).get("source", ""))).is_equal("retain")
+	# 他球団 (home != user_team_id) は auto_user_team に関係なく従来どおり自動残留提示が出る。
+	var cpu_entry: Dictionary = entry.duplicate(true)
+	cpu_entry["player_id"] = 4001
+	var cpu_offers: Array = ForeignPlayerService._build_contract_offers(cpu_entry, players, [team], {}, 2, false)
+	assert_int(cpu_offers.size()).is_equal(1)
+
+
+# resolve_foreign_contract_market を auto_user_team=false/true で通した end-to-end 確認。
+# false: 未提示の自軍満了者は残留提示が無く退団する。true: CPUと同じ基準で残留する。
+func test_resolve_foreign_contract_market_auto_user_team_flag_changes_outcome() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+
+	var player_a: PSPlayer = _player({"id": 3020, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var state_a: Dictionary = {
+		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
+		"contract_entries": [{
+			"player_id": 3020, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
+		}],
+		"contract_signings": [],
+	}
+	var result_a: Dictionary = ForeignPlayerService.resolve_foreign_contract_market(state_a, [player_a], [_team(1)], season, 1, false, false)
+	assert_bool(bool(result_a.get("ok", false))).is_true()
+	var signings_a: Array = state_a.get("contract_signings", []) as Array
+	assert_int(signings_a.size()).is_equal(1)
+	assert_str(str((signings_a[0] as Dictionary).get("outcome", ""))).is_equal("departed")
+	assert_bool(player_a.is_retired()).is_true()
+
+	var player_b: PSPlayer = _player({"id": 3021, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var state_b: Dictionary = {
+		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
+		"contract_entries": [{
+			"player_id": 3021, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
+		}],
+		"contract_signings": [],
+	}
+	var result_b: Dictionary = ForeignPlayerService.resolve_foreign_contract_market(state_b, [player_b], [_team(1)], season, 1, true, false)
+	assert_bool(bool(result_b.get("ok", false))).is_true()
+	var signings_b: Array = state_b.get("contract_signings", []) as Array
+	assert_int(signings_b.size()).is_equal(1)
+	assert_str(str((signings_b[0] as Dictionary).get("outcome", ""))).is_equal("retained")
+	assert_int(player_b.team_id).is_equal(1)
+
+
+# 契約市場の4段フェーズ ("contract"→"contract_result"→"scout"→"scout_result") を
+# resolve_foreign_contract_market / advance_foreign_contract_result /
+# complete_foreign_market_automatically(show_result) / advance_foreign_scout_result で
+# 順に遷移させ、結果パネル ("次へ") を経てから complete が立つことを確認する。
+func test_foreign_market_four_phase_transition_via_result_panels() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var player: PSPlayer = _player({"id": 3030, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var players: Array = [player]
+	var teams: Array = [_team(1)]
+	var state: Dictionary = {
+		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
+		"contract_entries": [{
+			"player_id": 3030, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
+		}],
+		"contract_signings": [],
+		"next_player_id": 9000, "next_candidate_id": 1, "next_request_id": 1,
+		"candidates": [], "signings": [], "requests": [], "user_request": {}, "user_candidate_ids": [],
+	}
+
+	# 1. contract -> contract_result (show_result 既定 true)。
+	var resolve_result: Dictionary = ForeignPlayerService.resolve_foreign_contract_market(state, players, teams, season, 1, true)
+	assert_bool(bool(resolve_result.get("ok", false))).is_true()
+	assert_str(str(state.get("phase", ""))).is_equal("contract_result")
+	assert_bool(bool(state.get("complete", false))).is_false()
+
+	# 2. contract_result -> scout ("次へ")。
+	var advance_contract: Dictionary = ForeignPlayerService.advance_foreign_contract_result(state)
+	assert_bool(bool(advance_contract.get("ok", false))).is_true()
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
+
+	# 3. scout -> scout_result (「補強を終了」相当、show_result=true)。
+	var complete_result: Dictionary = ForeignPlayerService.complete_foreign_market_automatically(state, players, teams, season, 1, true)
+	assert_bool(bool(complete_result.get("ok", false))).is_true()
+	assert_str(str(state.get("phase", ""))).is_equal("scout_result")
+	assert_bool(bool(state.get("complete", false))).is_false()
+
+	# 4. scout_result -> complete ("次へ")。
+	var advance_scout: Dictionary = ForeignPlayerService.advance_foreign_scout_result(state)
+	assert_bool(bool(advance_scout.get("ok", false))).is_true()
+	assert_bool(bool(state.get("complete", false))).is_true()
+
+
+# 「すべてAIに任せる」相当 (show_result=false) は結果パネルに止まらず直接 scout/complete へ進む。
+func test_foreign_market_show_result_false_skips_result_phases() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var player: PSPlayer = _player({"id": 3031, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
+	var players: Array = [player]
+	var teams: Array = [_team(1)]
+	var state: Dictionary = {
+		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
+		"contract_entries": [{
+			"player_id": 3031, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
+		}],
+		"contract_signings": [],
+		"next_player_id": 9000, "next_candidate_id": 1, "next_request_id": 1,
+		"candidates": [], "signings": [], "requests": [], "user_request": {}, "user_candidate_ids": [],
+	}
+	ForeignPlayerService.resolve_foreign_contract_market(state, players, teams, season, 1, true, false)
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
+	ForeignPlayerService.complete_foreign_market_automatically(state, players, teams, season, 0, false)
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
+	assert_bool(bool(state.get("complete", false))).is_true()
+
+
+# 対象ゼロ (満了外国人なし) なら契約市場フェーズを両方スキップし、最初から scout で始まる
+# (create_foreign_market_state 時点で判定、resolve/contract_result を経由しない)。
+func test_foreign_market_skips_both_contract_phases_when_no_entries() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state([], [_team(1)], season, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("scout")
+	# scout フェーズ以外からの遷移関数は対象が無いので no-op (ok:false) を返す。
+	var advance_contract: Dictionary = ForeignPlayerService.advance_foreign_contract_result(state)
+	assert_bool(bool(advance_contract.get("ok", true))).is_false()
+
+
+# --- 契約更新: 延長交渉 (複数年契約 Step3) ----------------------------------
+
+# create_contract_update_state の Phase A は contract_status を実データ (FA日数) から
+# 再計算して上書きするため、延長交渉の統合テストでは手動で contract_status を立てるのではなく
+# fa_nissuu を必要日数以上にして「FA可能」へ実際に遷移させる。
+func _extension_eligible_player(id: int, team_id: int, z_value: float, age: int = 24) -> PSPlayer:
+	var p: PSPlayer = _player_with_z(id, team_id, 3, false, z_value)
+	p.age = age
+	p.source_data["fa_nissuu"] = p.fa_service_days_required()
+	return p
+
+
+func test_extension_pool_filters_eligible_candidates() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var teams: Array = [_team(1)]
+
+	var eligible: PSPlayer = _player_with_z(9500, 1, 3, false, 2.5)
+	eligible.contract_status = "FA権間近"
+	eligible.age = 27
+
+	var wrong_status: PSPlayer = _player_with_z(9501, 1, 3, false, 2.5)
+	wrong_status.contract_status = "通常"
+
+	var foreign: PSPlayer = _player_with_z(9502, 1, 3, false, 2.5)
+	foreign.contract_status = "FA可能"
+	foreign.foreign_player = true
+
+	var dev: PSPlayer = _player_with_z(9503, 1, 3, true, 2.5)
+	dev.contract_status = "FA可能"
+
+	var locked: PSPlayer = _player_with_z(9504, 1, 3, false, 2.5)
+	locked.contract_status = "FA可能"
+	locked.source_data["contract_end_year"] = 2027
+
+	var refused: PSPlayer = _player_with_z(9505, 1, 3, false, 2.5)
+	refused.contract_status = "FA可能"
+	refused.source_data["extension_refused_year"] = 2026
+
+	var low_value: PSPlayer = _player_with_z(9506, 1, 3, false, -3.0)
+	low_value.contract_status = "FA可能"
+
+	var too_old: PSPlayer = _player_with_z(9507, 1, 3, false, 2.5)
+	too_old.contract_status = "FA可能"
+	too_old.age = 40  # fa_offer_max_years(40) == 1 < 2, 延長交渉の対象外。
+
+	var players: Array = [eligible, wrong_status, foreign, dev, locked, refused, low_value, too_old]
+	var pool: Array = Offseason._build_extension_pool(players, teams, season, 2026)
+	var ids: Array = []
+	for row in pool:
+		ids.append(int((row as Dictionary).get("player_id", 0)))
+	assert_array(ids).contains_exactly([9500])
+
+
+func test_extension_pool_limits_per_team_by_value_descending() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var teams: Array = [_team(1)]
+	var players: Array = []
+	# EXTENSION_POOL_MAX_PER_TEAM(5) を超える6人を value 降順で作り、上限を超えて絞られることを確認する。
+	for i in range(6):
+		var p: PSPlayer = _player_with_z(9520 + i, 1, 3, false, 1.0 + float(i) * 0.3)
+		p.contract_status = "FA可能"
+		players.append(p)
+	var pool: Array = Offseason._build_extension_pool(players, teams, season, 2026)
+	assert_int(pool.size()).is_equal(Offseason.EXTENSION_POOL_MAX_PER_TEAM)
+	# 最も value が低い候補 (9520) は溢れて除外される。
+	var ids: Array = []
+	for row in pool:
+		ids.append(int((row as Dictionary).get("player_id", 0)))
+	assert_array(ids).not_contains([9520])
+
+
+func test_round_salary_2sig_boundaries() -> void:
+	assert_int(Offseason.round_salary_2sig(18602)).is_equal(19000)
+	assert_int(Offseason.round_salary_2sig(9242)).is_equal(9200)
+	assert_int(Offseason.round_salary_2sig(4383)).is_equal(4400)
+	assert_int(Offseason.round_salary_2sig(12347)).is_equal(12000)
+	assert_int(Offseason.round_salary_2sig(440)).is_equal(440)
+	assert_int(Offseason.round_salary_2sig(350)).is_equal(350)
+	assert_int(Offseason.round_salary_2sig(99)).is_equal(99)
+	assert_int(Offseason.round_salary_2sig(100)).is_equal(100)
+	assert_int(Offseason.round_salary_2sig(0)).is_equal(0)
+
+
+# _compute_new_salary は裁定移動+減額制限+clampの最終値を2桁有効数字へ丸める。
+# 昇給方向 (target > old) で丸めが効く代表ケースを確認する。
+func test_compute_new_salary_rounds_to_2_significant_figures() -> void:
+	var player: PSPlayer = _player_with_z(9700, 1, 3, false, 2.0)
+	player.salary = 4383
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2026, 1)
+	var new_salary: int = Offseason._compute_new_salary(player, record, 0.0)
+	assert_int(new_salary).is_equal(Offseason.round_salary_2sig(new_salary))
+
+
+# FA提示年俸 (_offer_salary) は市場価値×ランク倍率(1.05/1.15/1.25)を2桁有効数字へ丸めた値になる。
+# 丸め前の生値 (12347*1.05=12964.35→12964) と異なることも確認し、実際に丸めが効いていることを示す。
+func test_fa_offer_salary_rounds_to_2_significant_figures() -> void:
+	var offer: int = FaMarketService._offer_salary(4000, 12347, "C")
+	assert_int(offer).is_equal(Offseason.round_salary_2sig(offer))
+	assert_int(offer).is_not_equal(12964)
+	assert_int(offer).is_equal(13000)
+
+
+# 外国人契約市場の提示年俸 (_offer_salary) も複数年プレミアム適用後に2桁有効数字へ丸める。
+# base=9242, 3年 (premium 0.05*2=0.10) -> raw 9242*1.10=10166.2→round 10166 -> 2桁丸め 10000。
+func test_foreign_offer_salary_rounds_to_2_significant_figures() -> void:
+	var offer: int = ForeignPlayerService._offer_salary(9242, 3)
+	assert_int(offer).is_equal(Offseason.round_salary_2sig(offer))
+	assert_int(offer).is_not_equal(10166)
+	assert_int(offer).is_equal(10000)
+
+
+func test_extension_offer_salary_applies_multi_year_premium() -> void:
+	assert_int(Offseason._extension_offer_salary(10000, 1)).is_equal(10000)
+	assert_int(Offseason._extension_offer_salary(10000, 3)).is_equal(11000)
+
+
+func test_extension_success_chance_increases_with_years_and_decreases_with_declare_chance() -> void:
+	var short_chance: float = Offseason._extension_success_chance(2, 10000, 10000, 0.0)
+	var long_chance: float = Offseason._extension_success_chance(4, 10000, 10000, 0.0)
+	assert_float(long_chance).is_greater(short_chance)
+	var eager_to_leave_chance: float = Offseason._extension_success_chance(2, 10000, 10000, 0.3)
+	assert_float(eager_to_leave_chance).is_less(short_chance)
+
+
+func test_apply_extension_sets_contract_keys_and_skips_next_salary_reassessment() -> void:
+	var player: PSPlayer = _player({"id": 9530, "team_id": 1, "salary": 5000})
+	Offseason._apply_extension(player, 3, 12000, 2026)
+	assert_int(int(player.source_data.get("contract_end_year", 0))).is_equal(2029)
+	assert_int(int(player.source_data.get("contract_total_years", 0))).is_equal(3)
+	assert_int(int(player.source_data.get("contract_signed_year", 0))).is_equal(2026)
+	assert_int(player.salary).is_equal(12000)
+	assert_bool(Offseason._contract_salary_is_locked(player, 2026)).is_true()
+	assert_bool(Offseason._contract_salary_is_locked(player, 2028)).is_true()
+	assert_bool(Offseason._contract_salary_is_locked(player, 2029)).is_false()
+
+
+func test_contract_update_state_phase_and_auto_done_when_no_candidates() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var players: Array = [_player({"id": 9540, "team_id": 1, "salary": 5000})]
+	var state: Dictionary = Offseason.create_contract_update_state(players, [_team(1)], season, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("done")
+	assert_bool(bool(state.get("complete", false))).is_true()
+
+	var eligible: PSPlayer = _extension_eligible_player(9541, 1, 2.5)
+	var players2: Array = [eligible]
+	var state2: Dictionary = Offseason.create_contract_update_state(players2, [_team(1)], season, 1)
+	assert_str(str(state2.get("phase", ""))).is_equal("extension")
+	assert_bool(bool(state2.get("complete", false))).is_false()
+	var result: Dictionary = Offseason.finalize_contract_extensions(state2, players2, [_team(1)], season)
+	assert_str(str(state2.get("phase", ""))).is_equal("done")
+	assert_bool(bool(state2.get("complete", false))).is_true()
+	assert_dict(result).contains_keys(["extension_signings", "extension_offers_count", "extension_accepted_count"])
+
+
+func test_cpu_extension_offers_capped_per_team_per_year() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var team: PSTeam = _team(1)
+	var players: Array = []
+	for i in range(3):
+		var p: PSPlayer = _extension_eligible_player(9550 + i, 1, 2.0)
+		p.salary = 3000
+		players.append(p)
+	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 0)
+	assert_int((state.get("candidates", []) as Array).size()).is_equal(3)
+	Offseason.finalize_contract_extensions(state, players, [team], season)
+	var offered: int = 0
+	for row in state.get("candidates", []) as Array:
+		if (row as Dictionary).has("success_chance"):
+			offered += 1
+	assert_int(offered).is_equal(Offseason.CPU_EXTENSION_MAX_PER_YEAR)
+
+
+func test_extension_offer_blocked_when_team_over_budget() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var player: PSPlayer = _extension_eligible_player(9560, 1, 2.5, 26)
+	player.salary = 500
+	var players: Array = [player]
+	# funds を現行年俸ちょうどにし、複数年プレミアム込みの増額分を一切払えないようにする。
+	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "central", "funds": 500})
+	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 0)
+	assert_int((state.get("candidates", []) as Array).size()).is_equal(1)
+	Offseason.finalize_contract_extensions(state, players, [team], season)
+	var entry: Dictionary = (state.get("candidates", []) as Array)[0] as Dictionary
+	# 延長は予算不足で提示されないが、通常の年俸再査定 (ロック対象外) は独立に進む。
+	assert_bool(entry.has("success_chance")).is_false()
+	assert_int(int(player.source_data.get("contract_end_year", 0))).is_equal(0)
+
+
+func test_extension_refused_year_blocks_same_year_renegotiation() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var player: PSPlayer = _player_with_z(9570, 1, 3, false, 2.5)
+	player.contract_status = "FA可能"
+	player.source_data["extension_refused_year"] = 2026
+	var players: Array = [player]
+	var pool: Array = Offseason._build_extension_pool(players, [_team(1)], season, 2026)
+	assert_array(pool).is_empty()
+	# 翌オフは再交渉可能 (同オフ限定のブロック)。
+	var pool_next_year: Array = Offseason._build_extension_pool(players, [_team(1)], season, 2027)
+	assert_int(pool_next_year.size()).is_equal(1)
+
+
+func test_submit_extension_offer_clamps_years_and_requires_own_team() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var player: PSPlayer = _extension_eligible_player(9580, 1, 2.5, 26)
+	var players: Array = [player]
+	var team: PSTeam = _team(1)
+	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("extension")
+
+	# 他球団扱い (user_team_id=2) では提示できない。
+	var other_team_result: Dictionary = Offseason.submit_extension_offer(state, players, [team], 2, player.id, 3)
+	assert_bool(bool(other_team_result.get("ok", true))).is_false()
+
+	var max_years: int = FaMarketService.fa_offer_max_years(player.age)
+	var result: Dictionary = Offseason.submit_extension_offer(state, players, [team], 1, player.id, max_years + 5)
+	assert_bool(bool(result.get("ok", false))).is_true()
+	var entry: Dictionary = Offseason._extension_entry_by_player_id(state, player.id)
+	assert_int(int((entry.get("user_offer", {}) as Dictionary).get("years", 0))).is_equal(max_years)
+
+
+func test_fa_declare_excludes_multi_year_locked_player() -> void:
+	var locked: PSPlayer = _player_with_z(9470, 1, 3, false, 3.0)
+	locked.age = 30
+	locked.years = 10
+	locked.salary = 20000
+	locked.source_data["fa_nissuu"] = PSPlayer.FA_SERVICE_DAYS_PER_YEAR * 10
+	locked.source_data["contract_end_year"] = 2027
+	assert_bool(locked.is_fa_eligible()).is_true()
+
+	var declared: Array = FaMarketService._select_declarers([locked], [], null, 2026)
+	assert_array(declared).is_empty()
+	assert_bool(FaMarketService._is_fa_tracking_candidate(locked, 2026)).is_false()
+
+
+func test_fa_pass_count_not_incremented_for_multi_year_locked_player() -> void:
+	var locked: PSPlayer = _player_with_z(9480, 1, 3, false, 0.0)
+	locked.age = 30
+	locked.years = 10
+	locked.source_data["fa_nissuu"] = PSPlayer.FA_SERVICE_DAYS_PER_YEAR * 10
+	locked.source_data["contract_end_year"] = 2027
+	locked.source_data["fa_eligible_year"] = 2025
+	locked.source_data["fa_pass_count"] = 1
+
+	FaMarketService._increment_non_declared_fa_passes([locked], 2026, {})
+	assert_int(int(locked.source_data.get("fa_pass_count", -1))).is_equal(1)
 
 
 # --- 戦力外選定 (projection × デプスチャート) -------------------------------
@@ -380,8 +1021,8 @@ func test_release_plan_counts_scale_with_roster_size() -> void:
 	var deep_team: Array = _plan_team(1, 70, 9500, -1.0)
 	var lean_team: Array = _plan_team(2, 60, 9600, -1.0)
 	var all_players: Array = deep_team + lean_team
-	var deep_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 1, null, false)
-	var lean_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 2, null, false)
+	var deep_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 1, null)
+	var lean_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 2, null)
 	assert_int(deep_cut.size()).is_equal(Offseason.RELEASE_PLAN_MAX_PER_TEAM)
 	assert_int(lean_cut.size()).is_equal(7)
 	assert_int(deep_cut.size()).is_greater(lean_cut.size())
@@ -392,7 +1033,7 @@ func test_release_plan_counts_scale_with_roster_size() -> void:
 
 func test_release_targets_opening_roster_and_is_idempotent() -> void:
 	var players: Array = _plan_team(1, 70, 9700, -1.0)
-	var first_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	var first_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
 	var remaining: int = players.size() - first_cut.size()
 	assert_int(remaining).is_equal(55)
 	for pid_value in first_cut:
@@ -402,13 +1043,13 @@ func test_release_targets_opening_roster_and_is_idempotent() -> void:
 				player = row as PSPlayer
 				break
 		Offseason._apply_release_mutation(player)
-	var second_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	var second_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
 	assert_int(second_cut.size()).is_less_equal(Offseason.RECONCILE_UPPER_SLACK)
 
 
 func test_release_plan_bounded_even_when_stats_missing() -> void:
 	var players: Array = _plan_team(1, 66, 9750, 0.0, 32)
-	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
 	assert_int(cut_ids.size()).is_equal(13)
 	assert_int(players.size() - cut_ids.size()).is_equal(53)
 
@@ -422,7 +1063,7 @@ func test_release_cuts_surplus_noshow_thirties_fielder() -> void:
 		var stronger: PSPlayer = _player_with_z(9230 + i, 1, 6, false, 1.0)
 		stronger.age = 28
 		players.append(stronger)
-	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
 	assert_array(cut_ids).contains(noshow.id)
 
 
@@ -433,7 +1074,7 @@ func test_release_keeps_low_value_catcher_within_slot_budget() -> void:
 		catcher.age = 35
 		players.append(catcher)
 	assert_int(int(Offseason._release_slot_budgets(players, 1)["fielder:2"])).is_equal(4)
-	assert_array(Offseason.compute_release_candidates_for_team(players, 1, null, false)).is_empty()
+	assert_array(Offseason.compute_release_candidates_for_team(players, 1, null)).is_empty()
 
 
 func test_release_slot_rejects_unexcused_noshow_thirties_player() -> void:
@@ -493,7 +1134,7 @@ func test_compute_release_candidates_returns_empty_when_all_protected() -> void:
 	for i in range(4):
 		players.append(_player_with_z(9800 + i, 1, 3, false, -3.0))
 		(players[-1] as PSPlayer).foreign_player = true
-	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null, false)
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
 	assert_array(cut_ids).is_empty()
 
 
@@ -1298,7 +1939,7 @@ func _release_candidates_with_records(players: Array, records: Array) -> Array:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2099
 	season.season_number = 1
-	var result: Array = Offseason.compute_release_candidates_for_team(players, 1, season, false)
+	var result: Array = Offseason.compute_release_candidates_for_team(players, 1, season)
 	RecordStore.load_from_dict(original_records)
 	return result
 

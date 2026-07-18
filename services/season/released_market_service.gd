@@ -306,7 +306,8 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 static func _released_contract_salary(current_salary: int) -> int:
 	if current_salary <= SALARY_KEEP_THRESHOLD:
 		return current_salary
-	return int(round(float(SALARY_KEEP_THRESHOLD) + float(current_salary - SALARY_KEEP_THRESHOLD) * SALARY_EXCESS_RATE))
+	var raw: int = int(round(float(SALARY_KEEP_THRESHOLD) + float(current_salary - SALARY_KEEP_THRESHOLD) * SALARY_EXCESS_RATE))
+	return OffseasonService.round_salary_2sig(raw)
 
 
 # 候補の契約額は獲得前の元年俸から同期し、市場途中の保存・再開でも現行の算定額を使う。

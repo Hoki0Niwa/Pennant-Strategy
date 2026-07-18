@@ -75,7 +75,7 @@ static func run_periodic_trade_check(season: PSSeason, players: Array, teams: Ar
 			var b_ids: Array = [int(pair.get("player_b", 0))]
 			# 1:1 固定なので枠は常に釣り合うが、予算は _best_pair_between が考慮していないため
 			# ここで再検証する (超過側が絡む組み合わせはスキップ)。
-			var validation: Dictionary = _validate_trade_sides(players, teams, team_a_id, a_ids, team_b_id, b_ids)
+			var validation: Dictionary = _validate_trade_sides(players, teams, team_a_id, a_ids, team_b_id, b_ids, season.year)
 			if bool(validation.get("ok", false)):
 				var entry: Dictionary = execute_trade(season, players, team_a_id, a_ids, team_b_id, b_ids, "cpu")
 				if not entry.is_empty():
@@ -147,7 +147,7 @@ static func prune_expired_offers(season: PSSeason, day: int) -> void:
 
 # ---- 対象判定・評価 -----------------------------------------------------------
 
-static func is_tradeable(player: PSPlayer) -> bool:
+static func is_tradeable(player: PSPlayer, season_year: int = 0) -> bool:
 	if player == null or player.team_id <= 0 or player.is_retired():
 		return false
 	if player.foreign_player or player.development_player:
@@ -158,6 +158,9 @@ static func is_tradeable(player: PSPlayer) -> bool:
 		return false
 	# NPB 同様、入団初年 (ドラフト当年) はトレード対象外。
 	if bool(player.source_data.get("rookie_year", false)) and player.years <= 1:
+		return false
+	# 複数年契約は契約最終年のシーズン中もロック対象 (>=)。オフの契約満了扱いより1年長い。
+	if season_year > 0 and player.is_multi_year_locked_in_season(season_year):
 		return false
 	return true
 
@@ -236,7 +239,7 @@ static func build_team_needs(players: Array, teams: Array) -> Dictionary:
 
 
 # 出せる駒 (余剰) の一覧。本職の上位 SURPLUS_KEEP_* 人は残す。
-static func build_surplus_candidates(players: Array, team_id: int) -> Array:
+static func build_surplus_candidates(players: Array, team_id: int, season_year: int = 0) -> Array:
 	var fielders_by_pos: Dictionary = {}
 	var starters: Array = []
 	var relievers: Array = []
@@ -260,15 +263,15 @@ static func build_surplus_candidates(players: Array, team_id: int) -> Array:
 		pos_list.sort_custom(_by_value_desc)
 		var keep: int = SURPLUS_KEEP_CATCHERS if int(pos) == 2 else SURPLUS_KEEP_FIELDERS
 		for i in range(keep, pos_list.size()):
-			if is_tradeable(pos_list[i] as PSPlayer):
+			if is_tradeable(pos_list[i] as PSPlayer, season_year):
 				surplus.append(pos_list[i])
 	starters.sort_custom(_by_value_desc)
 	for i in range(SURPLUS_KEEP_STARTERS, starters.size()):
-		if is_tradeable(starters[i] as PSPlayer):
+		if is_tradeable(starters[i] as PSPlayer, season_year):
 			surplus.append(starters[i])
 	relievers.sort_custom(_by_value_desc)
 	for i in range(SURPLUS_KEEP_RELIEVERS, relievers.size()):
-		if is_tradeable(relievers[i] as PSPlayer):
+		if is_tradeable(relievers[i] as PSPlayer, season_year):
 			surplus.append(relievers[i])
 	return surplus
 
@@ -287,7 +290,7 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 		if trades_count_for_team(season, team.id) >= MAX_TRADES_PER_TEAM:
 			continue
 		team_ids.append(team.id)
-		surplus_by_team[team.id] = build_surplus_candidates(players, team.id)
+		surplus_by_team[team.id] = build_surplus_candidates(players, team.id, season.year)
 
 	var best: Dictionary = {}
 	var best_score: float = 0.0
@@ -343,7 +346,7 @@ static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dicti
 # CPU 球団が自軍の余剰を欲しがり、自軍の需要に合う駒を差し出す 1:1 提案を生成して保存する。
 static func _generate_user_offer(season: PSSeason, players: Array, teams: Array, user_team_id: int, day: int) -> Dictionary:
 	var need: Dictionary = build_team_needs(players, teams)
-	var user_surplus: Array = build_surplus_candidates(players, user_team_id)
+	var user_surplus: Array = build_surplus_candidates(players, user_team_id, season.year)
 	if user_surplus.is_empty():
 		return {}
 	var user_need: Dictionary = need.get(user_team_id, {}) as Dictionary
@@ -358,7 +361,7 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 		if trades_count_for_team(season, team.id) >= MAX_TRADES_PER_TEAM:
 			continue
 		var candidate: Dictionary = _best_pair_between(
-			build_surplus_candidates(players, team.id), user_surplus,
+			build_surplus_candidates(players, team.id, season.year), user_surplus,
 			need.get(team.id, {}) as Dictionary, user_need
 		)
 		if candidate.is_empty():
@@ -405,7 +408,7 @@ static func accept_user_offer(season: PSSeason, players: Array, teams: Array, of
 		return {"ok": false, "message": "今季のトレード成立上限に達しているため受諾できません。"}
 	var validation: Dictionary = _validate_trade_sides(
 		players, teams, cpu_team_id, offer.get("cpu_player_ids", []) as Array,
-		user_team_id, offer.get("user_player_ids", []) as Array
+		user_team_id, offer.get("user_player_ids", []) as Array, season.year
 	)
 	if not bool(validation.get("ok", false)):
 		offer["status"] = "invalid"
@@ -451,7 +454,7 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 	var cpu_team_id: int = _owner_team_of(players, receive_ids)
 	if cpu_team_id <= 0 or cpu_team_id == user_team_id:
 		return {"ok": false, "accepted": false, "message": "相手選手は同一の他球団に所属している必要があります。"}
-	var validation: Dictionary = _validate_trade_sides(players, teams, user_team_id, give_ids, cpu_team_id, receive_ids)
+	var validation: Dictionary = _validate_trade_sides(players, teams, user_team_id, give_ids, cpu_team_id, receive_ids, season.year)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "accepted": false, "message": str(validation.get("message", ""))}
 	# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象とする。
@@ -575,16 +578,17 @@ static func _swap_active_roster_members(season: PSSeason, team_id: int, out_ids:
 # 人数不均等な提案 (例: 2対1) で受け側の支配下が70枠を超えないことも合わせて検証する
 # (1:1 固定の CPU間マッチングは常に人数が釣り合うため対象外だが、ユーザー提案は
 # MAX_PLAYERS_PER_SIDE まで非対称にできるため、ここでチェックしないと70枠を超過しうる)。
-# teams は年俸総額が増える側の予算ゲート (trade_payroll_ok) に使う。
-static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array) -> Dictionary:
+# teams は年俸総額が増える側の予算ゲート (trade_payroll_ok) に使う。season_year は複数年契約
+# ロック判定に使う (0 なら season 不明としてロック判定をスキップ)。
+static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array, season_year: int = 0) -> Dictionary:
 	for pair in [[team_a_id, a_ids], [team_b_id, b_ids]]:
 		var team_id: int = int((pair as Array)[0])
 		for id_value in (pair as Array)[1] as Array:
 			var player: PSPlayer = _find_player_by_id(players, int(id_value))
 			if player == null or player.team_id != team_id:
 				return {"ok": false, "message": "対象選手が既に移籍または退団しています。"}
-			if not is_tradeable(player):
-				return {"ok": false, "message": "%s はトレード対象にできません (外国人/育成/怪我/新人)。" % player.name}
+			if not is_tradeable(player, season_year):
+				return {"ok": false, "message": "%s はトレード対象にできません (外国人/育成/怪我/新人/複数年契約中)。" % player.name}
 	if not _capacity_ok_after_trade(players, team_a_id, a_ids, b_ids):
 		return {"ok": false, "message": "自軍の支配下枠(70人)を超えるためこのトレードは成立できません。"}
 	if not _capacity_ok_after_trade(players, team_b_id, b_ids, a_ids):

@@ -212,6 +212,82 @@ func test_fa_stay_ignores_budget() -> void:
 	assert_bool(TeamFinance.is_over_budget(from_team.funds, TeamFinance.team_payroll(players, 2))).is_true()
 
 
+# --- 複数年契約 (FA複数年オファー, 2026-07-17 Step2a) ------------------------
+
+func test_fa_signing_sets_multi_year_contract_keys() -> void:
+	var signer: PSTeam = _team(1, "central", 100000)
+	var former: PSTeam = _team(2, "central", 100000)
+	var teams: Array = [signer, former]
+	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
+	var players: Array = [declarer]
+	var entry: Dictionary = {
+		"player_id": 99, "from_team": 2, "offer_salary": 20000, "compensation_money": 0, "fa_rank": "A", "offer_years": 3,
+	}
+	var state: Dictionary = {"signings": []}
+	var season: PSSeason = _season()
+	season.year = 2030
+	FaMarketService._apply_signing(state, players, teams, season, entry, 1, "user", 1.0)
+	assert_int(int(declarer.source_data.get("contract_end_year", 0))).is_equal(2033)
+	assert_int(int(declarer.source_data.get("contract_total_years", 0))).is_equal(3)
+	assert_int(int(declarer.source_data.get("contract_signed_year", 0))).is_equal(2030)
+	var signing: Dictionary = (state.get("signings", []) as Array)[0] as Dictionary
+	assert_int(int(signing.get("contract_years", 0))).is_equal(3)
+
+
+func test_fa_stay_also_sets_multi_year_contract_keys() -> void:
+	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
+	var players: Array = [declarer]
+	var entry: Dictionary = {
+		"player_id": 99, "from_team": 2, "available": true, "offer_salary": 50000, "compensation_money": 0, "offer_years": 2,
+	}
+	var state: Dictionary = {"declared": [entry], "signings": [], "failed_negotiations": []}
+	var season: PSSeason = _season()
+	season.year = 2030
+	FaMarketService.finalize_fa_market(state, players, season)
+	assert_int(int(declarer.source_data.get("contract_end_year", 0))).is_equal(2032)
+	assert_int(int(declarer.source_data.get("contract_total_years", 0))).is_equal(2)
+	assert_int(int(declarer.source_data.get("contract_signed_year", 0))).is_equal(2030)
+
+
+func test_fa_offer_max_years_age_boundaries() -> void:
+	assert_int(FaMarketService.fa_offer_max_years(29)).is_equal(4)
+	assert_int(FaMarketService.fa_offer_max_years(30)).is_equal(3)
+	assert_int(FaMarketService.fa_offer_max_years(32)).is_equal(3)
+	assert_int(FaMarketService.fa_offer_max_years(33)).is_equal(2)
+	assert_int(FaMarketService.fa_offer_max_years(35)).is_equal(2)
+	assert_int(FaMarketService.fa_offer_max_years(36)).is_equal(1)
+	assert_int(FaMarketService.fa_offer_max_years(45)).is_equal(1)
+
+
+func test_fa_success_chance_increases_with_offer_years() -> void:
+	# value/war にペナルティを持たせて基準成立率を下げ、年数ボーナス加算後も
+	# FA_SIGN_CHANCE_MAX (0.88) の天井に当たらないようにする。
+	var short_entry: Dictionary = {"value": 70, "war": 1.0, "salary": 8000, "offer_salary": 8000, "offer_years": 1}
+	var long_entry: Dictionary = short_entry.duplicate()
+	long_entry["offer_years"] = 4
+	var short_chance: float = FaMarketService._contract_success_chance(short_entry, 0.0, "cpu")
+	var long_chance: float = FaMarketService._contract_success_chance(long_entry, 0.0, "cpu")
+	assert_float(long_chance).is_greater(short_chance)
+	assert_float(long_chance - short_chance).is_equal_approx(FaMarketService.FA_SIGN_YEARS_BONUS_MAX, 0.0001)
+
+
+func test_fa_user_offer_years_clamped_to_age_limit() -> void:
+	var teams: Array = [_team(1, "central", 999999), _team(2, "central", 100000)]
+	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 5000, "age": 37})
+	var players: Array = [declarer]
+	var entry: Dictionary = {
+		"player_id": 99, "from_team": 2, "available": true,
+		"offer_salary": 8000, "compensation_money": 0,
+		"position": 3, "war": 0.0, "value": 50, "salary": 5000, "age": 37, "offer_years": 1,
+	}
+	var state: Dictionary = {"complete": false, "user_team_id": 1, "declared": [entry], "signings": []}
+	var season: PSSeason = _season()
+	# 提示4年 (37歳の上限=1年) を要求しても、成立可否に関わらず entry は上限クランプ後の値になる。
+	FaMarketService.submit_user_fa_decision(state, players, teams, season, 99, "sign", 4)
+	var updated_entry: Dictionary = (state.get("declared", []) as Array)[0] as Dictionary
+	assert_int(int(updated_entry.get("offer_years", 0))).is_equal(FaMarketService.fa_offer_max_years(37))
+
+
 func test_foreign_user_sign_blocked_when_over_budget() -> void:
 	var teams: Array = [_team(1, "central", 5000)]
 	var players: Array = [_player({"id": 1, "team_id": 1, "salary": 4000})]

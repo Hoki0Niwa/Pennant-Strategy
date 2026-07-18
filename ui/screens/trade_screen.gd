@@ -559,7 +559,9 @@ func _toggle_selection(ids: Array, player_id: int) -> void:
 		ids.erase(player_id)
 	else:
 		var player: PSPlayer = GameDb.get_player(player_id)
-		if player == null or not TradeService.is_tradeable(player):
+		var lock_season: PSSeason = AppState.current_season
+		var lock_year: int = lock_season.year if lock_season != null else 0
+		if player == null or not TradeService.is_tradeable(player, lock_year):
 			_message_color = AMBER
 			_message = "%s はトレード対象にできません。" % (player.name if player != null else "その選手")
 			_build_buttons()
@@ -621,7 +623,7 @@ func _by_value_desc(a: Variant, b: Variant) -> bool:
 
 func _player_row(player: PSPlayer, season: PSSeason) -> Dictionary:
 	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
-	var tradeable: bool = TradeService.is_tradeable(player)
+	var tradeable: bool = TradeService.is_tradeable(player, season.year)
 	var role: Dictionary = _role_chip(player)
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
 	var has_war: bool = false

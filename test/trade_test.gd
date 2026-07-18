@@ -37,6 +37,16 @@ func test_is_tradeable_excludes_foreign_development_injured_rookie() -> void:
 	assert_bool(TradeService.is_tradeable(free_agent)).is_false()
 
 
+func test_is_tradeable_respects_multi_year_contract_lock() -> void:
+	var locked_this_year: PSPlayer = _player({"id": 7, "team_id": 1, "source_data": {"contract_end_year": 2026}})
+	assert_bool(TradeService.is_tradeable(locked_this_year, 2026)).is_false()
+	var expired_contract: PSPlayer = _player({"id": 8, "team_id": 1, "source_data": {"contract_end_year": 2025}})
+	assert_bool(TradeService.is_tradeable(expired_contract, 2026)).is_true()
+	# season_year 省略時 (0) はロック判定をスキップする (呼び出し元互換)。
+	var locked_no_year_arg: PSPlayer = _player({"id": 9, "team_id": 1, "source_data": {"contract_end_year": 2099}})
+	assert_bool(TradeService.is_tradeable(locked_no_year_arg)).is_true()
+
+
 func test_trade_value_accounts_for_salary_at_equal_future_value() -> void:
 	var cheap: PSPlayer = _player_with_z(7, 1, 3, false, 1.0)
 	var costly: PSPlayer = _player_with_z(8, 1, 3, false, 1.0)

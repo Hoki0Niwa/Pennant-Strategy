@@ -38,6 +38,21 @@ const FA_RANK_A_OFFER_MULT: float = 1.25
 const FA_RANK_B_OFFER_MULT: float = 1.15
 const FA_RANK_C_OFFER_MULT: float = 1.05
 
+# 複数年契約: 提示年数の年齢上限 (若いほど長期を提示しやすい)。年齢の低い側から順に判定する。
+const FA_OFFER_MAX_YEARS_BY_AGE: Array = [
+	{"max_age": 29, "years": 4},
+	{"max_age": 32, "years": 3},
+	{"max_age": 35, "years": 2},
+]
+const FA_OFFER_MAX_YEARS_OLDEST: int = 1
+# CPUが既定で提示する年数 (ランク基準、年齢上限でクランプする)。
+const FA_OFFER_YEARS_RANK_A: int = 3
+const FA_OFFER_YEARS_RANK_B: int = 2
+const FA_OFFER_YEARS_RANK_C: int = 1
+# 長期契約は選手側に有利なため成立率を上げる。1年を超える追加1年ごとに加算、上限あり。
+const FA_SIGN_YEARS_BONUS: float = 0.05
+const FA_SIGN_YEARS_BONUS_MAX: float = 0.15
+
 # FA宣言は「レギュラー級」に限定する。控え/余剰の移動は将来の自由契約市場に寄せる。
 const REGULAR_BATTER_PA: int = 300
 const REGULAR_BATTER_GAMES: int = 90
@@ -79,7 +94,7 @@ static func create_fa_market_state(players: Array, teams: Array, season: PSSeaso
 	}
 
 
-static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
+static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String, offer_years: int = 0) -> Dictionary:
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "FA市場は既に完了しています。", "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
@@ -98,6 +113,12 @@ static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Ar
 
 	if action != "sign":
 		return {"ok": false, "message": "不正なFA操作です。", "state": state}
+	# ユーザー指定年数 (0=entry既定値のまま) は年齢上限でクランプして entry を上書きする。
+	# CPU経路 (auto_pick_for_user 含む) は offer_years=0 のまま呼ぶため entry 既定値を使う。
+	if offer_years > 0:
+		var candidate_player: PSPlayer = _find_player_by_id(players, candidate_id)
+		var candidate_age: int = candidate_player.age if candidate_player != null else int(entry.get("age", 0))
+		entry["offer_years"] = clampi(offer_years, 1, fa_offer_max_years(candidate_age))
 	if _signings_for_team(state, user_team_id) >= MAX_SIGNINGS_PER_TEAM:
 		return {"ok": false, "message": "今オフのFA獲得上限に達しています。", "state": state}
 	if not _can_team_accept_candidate(players, state, user_team_id, entry):
@@ -222,12 +243,16 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 		if player == null:
 			continue
+		var offer_years: int = maxi(1, int(entry.get("offer_years", 1)))
 		player.team_id = int(entry.get("from_team", 0))
 		player.salary = int(entry.get("offer_salary", player.salary))
 		player.source_data.erase("free_agent")
 		player.source_data["fa_signed_year"] = year
 		player.source_data["fa_contract_salary"] = player.salary
 		player.source_data["fa_pass_count"] = 0
+		player.source_data["contract_end_year"] = year + offer_years
+		player.source_data["contract_total_years"] = offer_years
+		player.source_data["contract_signed_year"] = year
 		if not player.source_data.has("fa_eligible_year"):
 			player.source_data["fa_eligible_year"] = int(entry.get("fa_eligible_year", year))
 		PSCareerLog.log_fa_stay(player, year, player.team_id, player.salary)
@@ -255,6 +280,7 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 			"war": float(entry.get("war", 0.0)),
 			"fa_rank": str(entry.get("fa_rank", "C")),
 			"offer_salary": int(entry.get("offer_salary", entry.get("salary", 0))),
+			"offer_years": int(entry.get("offer_years", 1)),
 			"compensation_money": int(entry.get("compensation_money", 0)),
 			"fa_eligible_year": int(entry.get("fa_eligible_year", year)),
 			"fa_pass_count": int(entry.get("fa_pass_count", 0)),
@@ -320,6 +346,8 @@ static func _select_declarers(players: Array, _teams: Array, season: PSSeason, y
 			continue
 		if not player.is_fa_eligible() or _on_cooldown(player, year):
 			continue
+		if player.is_multi_year_locked_offseason(year):
+			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
@@ -384,6 +412,7 @@ static func _declaration_entry(
 	var fa_eligible_year: int = _fa_eligible_year(player, year)
 	var fa_pass_count: int = _fa_pass_count(player, year)
 	var fa_nissuu: int = player.fa_service_days()
+	var offer_years: int = _cpu_offer_years(fa_rank, player.age)
 	var base_score: float = float(value) + war * 8.0 + float(games) * 0.03 + float(pa) * 0.01 + float(starts) * 0.5 + float(relief) * 0.12
 	var score: float = base_score * declaration_chance + float(offer_salary - player.salary) * 0.002
 	return {
@@ -398,6 +427,7 @@ static func _declaration_entry(
 		"salary_rank": salary_rank,
 		"market_salary_base": market_salary_base,
 		"offer_salary": offer_salary,
+		"offer_years": offer_years,
 		"compensation_money": compensation_money,
 		"fa_eligible_year": fa_eligible_year,
 		"fa_pass_count": fa_pass_count,
@@ -492,13 +522,33 @@ static func _compensation_money(fa_rank: String, salary: int) -> int:
 			return 0
 
 
+# 年齢から複数年契約の提示可能年数上限を返す (若いほど長期を提示できる)。UI からも使う。
+static func fa_offer_max_years(age: int) -> int:
+	for tier_row in FA_OFFER_MAX_YEARS_BY_AGE:
+		var tier: Dictionary = tier_row as Dictionary
+		if age <= int(tier.get("max_age", 0)):
+			return int(tier.get("years", FA_OFFER_MAX_YEARS_OLDEST))
+	return FA_OFFER_MAX_YEARS_OLDEST
+
+
+# CPU (獲得球団/残留とも) が既定で提示する年数。ランク基準を年齢上限でクランプする。
+static func _cpu_offer_years(fa_rank: String, age: int) -> int:
+	var rank_base: int = FA_OFFER_YEARS_RANK_C
+	if fa_rank == "A":
+		rank_base = FA_OFFER_YEARS_RANK_A
+	elif fa_rank == "B":
+		rank_base = FA_OFFER_YEARS_RANK_B
+	return clampi(rank_base, 1, fa_offer_max_years(age))
+
+
 static func _offer_salary(current_salary: int, market_salary_base: int, fa_rank: String) -> int:
 	var mult: float = FA_RANK_C_OFFER_MULT
 	if fa_rank == "A":
 		mult = FA_RANK_A_OFFER_MULT
 	elif fa_rank == "B":
 		mult = FA_RANK_B_OFFER_MULT
-	return clampi(maxi(current_salary, int(round(float(market_salary_base) * mult))), OffseasonService.SALARY_MIN, OffseasonService.SALARY_MAX)
+	var clamped: int = clampi(maxi(current_salary, int(round(float(market_salary_base) * mult))), OffseasonService.SALARY_MIN, OffseasonService.SALARY_MAX)
+	return clampi(OffseasonService.round_salary_2sig(clamped), OffseasonService.SALARY_MIN, OffseasonService.SALARY_MAX)
 
 
 static func _market_salary_base(player: PSPlayer, record: PSPlayerSeasonRecord, war: float) -> int:
@@ -537,6 +587,8 @@ static func _is_fa_tracking_candidate(player: PSPlayer, year: int) -> bool:
 		return false
 	if bool(player.source_data.get("free_agent", false)):
 		return false
+	if player.is_multi_year_locked_offseason(year):
+		return false
 	return player.is_fa_eligible() and not _on_cooldown(player, year)
 
 
@@ -560,12 +612,16 @@ static func _apply_signing(state: Dictionary, players: Array, teams: Array, seas
 	if player == null:
 		return
 	var year: int = season.year if season != null else int(state.get("year", 0))
+	var offer_years: int = maxi(1, int(entry.get("offer_years", 1)))
 	player.team_id = to_team_id
 	player.salary = int(entry.get("offer_salary", player.salary))
 	player.source_data.erase("free_agent")
 	player.source_data["fa_signed_year"] = year
 	player.source_data["fa_contract_salary"] = player.salary
 	player.source_data["fa_pass_count"] = 0
+	player.source_data["contract_end_year"] = year + offer_years
+	player.source_data["contract_total_years"] = offer_years
+	player.source_data["contract_signed_year"] = year
 	if not player.source_data.has("fa_eligible_year"):
 		player.source_data["fa_eligible_year"] = int(entry.get("fa_eligible_year", year))
 	PSCareerLog.log_fa_move(player, year, int(entry.get("from_team", 0)), to_team_id, player.salary)
@@ -598,6 +654,7 @@ static func _apply_signing(state: Dictionary, players: Array, teams: Array, seas
 		"war": float(entry.get("war", 0.0)),
 		"method": method,
 		"success_chance": success_chance,
+		"contract_years": offer_years,
 	}
 	var signings: Array = state.get("signings", []) as Array
 	signings.append(signing)
@@ -697,6 +754,8 @@ static func _contract_success_chance(entry: Dictionary, team_need: float, method
 	chance += min(10.0, max(0.0, team_need)) * FA_SIGN_NEED_BONUS
 	chance += min(0.10, max(0.0, float(int(entry.get("offer_salary", entry.get("salary", 0))) - int(entry.get("salary", 0))) / 50000.0))
 	chance += USER_NEGOTIATION_BONUS if method == "user" else CPU_NEGOTIATION_BONUS
+	var offer_years: int = maxi(1, int(entry.get("offer_years", 1)))
+	chance += min(FA_SIGN_YEARS_BONUS_MAX, float(offer_years - 1) * FA_SIGN_YEARS_BONUS)
 	return clampf(chance, FA_SIGN_CHANCE_MIN, FA_SIGN_CHANCE_MAX)
 
 

@@ -227,6 +227,25 @@ func is_retired() -> bool:
 	return bool(source_data.get("retired", false))
 
 
+# 複数年契約は source_data.contract_end_year (契約がカバーする最終シーズン年) で表す。
+# 0 は無契約 (単年契約扱い)。締結年・表示用の総年数は contract_signed_year / contract_total_years。
+#
+# シーズン中の操作 (トレード判定): 契約最終年もロック対象に含める (>=)。
+func is_multi_year_locked_in_season(season_year: int) -> bool:
+	return int(source_data.get("contract_end_year", 0)) >= season_year
+
+
+# オフの操作 (年俸査定/FA宣言/戦力外/育成降格の判定): 契約最終年のオフは契約満了扱いで
+# ロック対象から外れる (>)。NPB実態 (複数年契約の最終年オフに FA 宣言できる) に合わせている。
+func is_multi_year_locked_offseason(offseason_year: int) -> bool:
+	return int(source_data.get("contract_end_year", 0)) > offseason_year
+
+
+# 表示用の残り年数 (オフ時点)。契約満了/無契約なら 0。
+func contract_years_remaining(offseason_year: int) -> int:
+	return maxi(0, int(source_data.get("contract_end_year", 0)) - offseason_year)
+
+
 # R4 Step1: 出身から FA閾値 (8=高卒 / 7=その他) を推定する。
 #  - 生成選手は source_data["draft_source"] に出身種別が入る。
 #  - 初期シード選手は列が無いため、デビュー年齢 (age - years + 1) が18以下なら高卒と推定。

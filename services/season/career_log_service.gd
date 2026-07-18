@@ -16,11 +16,15 @@ const TYPE_FA_STAY: String = "fa_stay"
 const TYPE_RELEASED: String = "released"
 const TYPE_RELEASED_SIGNED: String = "released_signed"
 const TYPE_FOREIGN_JOIN: String = "foreign_join"
+const TYPE_FOREIGN_STAY: String = "foreign_stay"
+const TYPE_FOREIGN_MOVE: String = "foreign_move"
+const TYPE_FOREIGN_DEPART: String = "foreign_depart"
 const TYPE_DEV_DEMOTE: String = "dev_demote"
 const TYPE_DEV_PROMOTE: String = "dev_promote"
 const TYPE_RETIRED: String = "retired"
 const TYPE_SALARY: String = "salary"
 const TYPE_INJURY: String = "injury"
+const TYPE_CONTRACT_EXTENSION: String = "contract_extension"
 
 # 怪我はこの日数以上の長期離脱だけ記録する (軽傷まで記録するとログが肥大する)。
 const INJURY_LOG_MIN_DAYS: int = 20
@@ -71,6 +75,21 @@ static func log_foreign_join(player: PSPlayer, year: int, team_id: int, salary: 
 	append(player, {"y": year, "t": TYPE_FOREIGN_JOIN, "o": team_id, "v": salary})
 
 
+# 外国人契約市場での残留 (元球団と再契約)。
+static func log_foreign_stay(player: PSPlayer, year: int, team_id: int, salary: int) -> void:
+	append(player, {"y": year, "t": TYPE_FOREIGN_STAY, "o": team_id, "v": salary})
+
+
+# 外国人契約市場での引き抜き移籍。
+static func log_foreign_move(player: PSPlayer, year: int, from_team: int, to_team: int, salary: int) -> void:
+	append(player, {"y": year, "t": TYPE_FOREIGN_MOVE, "f": from_team, "o": to_team, "v": salary})
+
+
+# 外国人契約市場でどこからも提示が無く退団 (帰国) した。
+static func log_foreign_depart(player: PSPlayer, year: int, team_id: int) -> void:
+	append(player, {"y": year, "t": TYPE_FOREIGN_DEPART, "f": team_id})
+
+
 static func log_dev_demote(player: PSPlayer, year: int, team_id: int) -> void:
 	append(player, {"y": year, "t": TYPE_DEV_DEMOTE, "o": team_id})
 
@@ -92,6 +111,12 @@ static func log_injury(player: PSPlayer, year: int, days: int, label: String) ->
 	if days < INJURY_LOG_MIN_DAYS:
 		return
 	append(player, {"y": year, "t": TYPE_INJURY, "v": days, "s": label})
+
+
+# 契約更新ステップの延長交渉で複数年契約が成立した (team_id は在籍球団のまま、移籍は伴わない)。
+# 契約年数は v に、年俸は s に文字列格納せず別キー "w" (years) を使う。
+static func log_contract_extension(player: PSPlayer, year: int, team_id: int, salary: int, years: int) -> void:
+	append(player, {"y": year, "t": TYPE_CONTRACT_EXTENSION, "o": team_id, "v": salary, "w": years})
 
 
 # 表示用整形。{year, label, detail} を返す。球団名は GameDb から解決する。
@@ -117,6 +142,12 @@ static func describe(entry: Dictionary) -> Dictionary:
 			return {"year": year_text, "label": "移籍 (戦力外獲得)", "detail": "%s → %s (%s)" % [from_name, to_name, track]}
 		TYPE_FOREIGN_JOIN:
 			return {"year": year_text, "label": "入団 (外国人)", "detail": "%s (%s)" % [to_name, _money(value)]}
+		TYPE_FOREIGN_STAY:
+			return {"year": year_text, "label": "外国人残留", "detail": "%s (%s)" % [to_name, _money(value)]}
+		TYPE_FOREIGN_MOVE:
+			return {"year": year_text, "label": "外国人移籍", "detail": "%s → %s (%s)" % [from_name, to_name, _money(value)]}
+		TYPE_FOREIGN_DEPART:
+			return {"year": year_text, "label": "退団 (外国人)", "detail": from_name}
 		TYPE_DEV_DEMOTE:
 			return {"year": year_text, "label": "育成降格", "detail": to_name}
 		TYPE_DEV_PROMOTE:
@@ -127,6 +158,8 @@ static func describe(entry: Dictionary) -> Dictionary:
 			return {"year": year_text, "label": "契約更改", "detail": _money(value)}
 		TYPE_INJURY:
 			return {"year": year_text, "label": "長期離脱", "detail": "%s (%d日)" % [str(entry.get("s", "故障")), value]}
+		TYPE_CONTRACT_EXTENSION:
+			return {"year": year_text, "label": "複数年延長", "detail": "%s %d年 (%s)" % [to_name, int(entry.get("w", 1)), _money(value)]}
 	return {"year": year_text, "label": str(entry.get("t", "")), "detail": ""}
 
 

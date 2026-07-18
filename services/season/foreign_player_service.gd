@@ -8,6 +8,7 @@ class_name ForeignPlayerService
 const NamePoolRef = preload("res://services/data/name_pool.gd")
 const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
 const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
+const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const FOREIGN_FA_YEARS: int = 7
 const SCOUT_CANDIDATES_PER_REQUEST: int = 4
@@ -41,6 +42,31 @@ const BUDGET_BANDS: Dictionary = {
 	"star": {"salary_min": 20000, "salary_max": 40000, "centers": [68, 72, 76], "candidate_count": 1, "estimate_downside": 15, "estimate_upside": 0},
 }
 
+# --- 外国人契約市場 (残留/引き抜き、スカウトの前段) ---
+# 契約が切れた在籍外国人を一括オークション形式で解決する。新規スカウト (上記) は常に単年、
+# 実績を積んだ外国人が複数年契約を得るのはこの市場だけ (NPB実態: 新規来日は単年、残留/移籍時に
+# 複数年が付く)。市場入りの条件・解決手順は create_foreign_market_state / resolve_foreign_contract_market
+# を参照。
+# 元球団の残留最低ライン (旧・外国人戦力外の FOREIGN_RELEASE_MIN_VALUE を引き継ぐ)。
+const FOREIGN_RETAIN_MIN_VALUE: int = 52
+# 元球団の複数年提示: value がこの水準以上なら CPU_FOREIGN_MULTI_YEAR_CHANCE の確率で2年、
+# 3年目提示ラインを超えればさらに同確率で3年 (どちらも max_years でクランプ)。
+const CPU_FOREIGN_MULTI_YEAR_VALUE: int = 70
+const CPU_FOREIGN_MULTI_YEAR_VALUE_3Y: int = 78
+const CPU_FOREIGN_MULTI_YEAR_CHANCE: float = 0.4
+# 他球団の引き抜き: 外国人保有4人未満・支配下70枠と予算に余裕がある球団だけが対象。
+const CPU_FOREIGN_POACH_MIN_VALUE: int = 65
+const CPU_FOREIGN_POACH_CHANCE: float = 0.25
+const CPU_FOREIGN_POACH_MAX_PER_TEAM: int = 1
+# 引き抜き提示は市場年俸に上乗せする (残留より高く払わないと動かない)。
+const FOREIGN_POACH_SALARY_MULT: float = 1.1
+# 元球団は同条件の提示なら選手に有利 (残留を選びやすい)。offer_score にだけ掛かる。
+const FOREIGN_STAY_LOYALTY: float = 1.15
+# 提示年俸そのものへの複数年プレミアム (1年ごと)。
+const FOREIGN_MULTI_YEAR_PREMIUM: float = 0.05
+# 採択スコアの年数ボーナス (1年ごと)。長期保証を選手側が評価する想定。
+const CONTRACT_OFFER_YEARS_SCORE_BONUS: float = 0.10
+
 
 static func process_foreign_market(players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
 	var state: Dictionary = create_foreign_market_state(players, teams, season, user_team_id)
@@ -48,14 +74,18 @@ static func process_foreign_market(players: Array, teams: Array, season: PSSeaso
 	return finalize_foreign_market(state)
 
 
-static func create_foreign_market_state(players: Array, _teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
+static func create_foreign_market_state(players: Array, teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
 	var year: int = season.year if season != null else 0
+	var contract_entries: Array = _build_contract_market_entries(players, teams, season)
 	return {
-		"version": 3,
+		"version": 4,
+		"phase": "contract" if not contract_entries.is_empty() else "scout",
 		"year": year,
 		"user_team_id": user_team_id,
 		"complete": false,
 		"finalized": false,
+		"contract_entries": contract_entries,
+		"contract_signings": [],
 		"next_player_id": _max_player_id(players) + 1,
 		"next_candidate_id": 1,
 		"next_request_id": 1,
@@ -92,10 +122,44 @@ static func _ensure_state_v3(state: Dictionary) -> void:
 	state["user_candidate_ids"] = []
 
 
-static func configure_user_scout_request(state: Dictionary, position: String, archetype: String, budget_band: String) -> Dictionary:
+# v3→v4: 契約市場フェーズを追加。移行時点で進行中だった v3 セーブは、対象選手の再判定をせず
+# scout フェーズへ直接復帰する (中断していた手動スカウトの継続を優先し、遡って契約市場を
+# 割り込ませない)。
+static func _ensure_state_v4(state: Dictionary) -> void:
 	_ensure_state_v3(state)
+	if int(state.get("version", 0)) >= 4:
+		if not state.has("phase"):
+			state["phase"] = "scout"
+		if not state.has("contract_entries"):
+			state["contract_entries"] = []
+		if not state.has("contract_signings"):
+			state["contract_signings"] = []
+		return
+	state["version"] = 4
+	state["phase"] = "scout"
+	state["contract_entries"] = []
+	state["contract_signings"] = []
+
+
+# スカウト操作 (configure_user_scout_request / submit_user_foreign_decision / auto_pick_for_user) の
+# 共通フェーズガード。phase が "scout" 以外 (契約市場が未確定/結果表示中、またはスカウト結果表示中) なら
+# 空でない {ok:false, message, state} を返す。呼び出し元はこれが空なら処理を継続してよい。
+static func _scout_phase_guard(state: Dictionary) -> Dictionary:
+	var phase: String = str(state.get("phase", "scout"))
+	if phase == "contract" or phase == "contract_result":
+		return {"ok": false, "message": "先に外国人契約市場を確定してください。", "state": state}
+	if phase == "scout_result":
+		return {"ok": false, "message": "外国人補強のスカウトは既に終了しています。", "state": state}
+	return {}
+
+
+static func configure_user_scout_request(state: Dictionary, position: String, archetype: String, budget_band: String) -> Dictionary:
+	_ensure_state_v4(state)
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "外国人補強は既に完了しています。", "state": state}
+	var phase_block: Dictionary = _scout_phase_guard(state)
+	if not phase_block.is_empty():
+		return phase_block
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
@@ -120,8 +184,12 @@ static func configure_user_scout_request(state: Dictionary, position: String, ar
 
 
 static func submit_user_foreign_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
+	_ensure_state_v4(state)
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "外国人補強は既に完了しています。", "state": state}
+	var phase_block: Dictionary = _scout_phase_guard(state)
+	if not phase_block.is_empty():
+		return phase_block
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
@@ -153,9 +221,13 @@ static func submit_user_foreign_decision(state: Dictionary, players: Array, team
 
 
 static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	_ensure_state_v4(state)
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+	var phase_block: Dictionary = _scout_phase_guard(state)
+	if not phase_block.is_empty():
+		return phase_block
 	var best_id: int = 0
 	var best_score: float = -999999.0
 	var need: Dictionary = FaMarketService._build_position_need(players, teams)
@@ -177,8 +249,15 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 	return submit_user_foreign_decision(state, players, teams, season, best_id, "sign")
 
 
-static func complete_foreign_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
-	_ensure_state_v3(state)
+# show_result=true (「補強を終了」button) は自軍スカウトを打ち切った後 phase を "scout_result" に
+# 留め、専用の結果パネル ("次へ" 操作) を経てから complete を立てる。show_result=false (CPU自動経路/
+# レポーター/「すべてAIに任せる」) は結果パネルで止まらず即 complete=true にする。
+static func complete_foreign_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0, show_result: bool = false) -> Dictionary:
+	_ensure_state_v4(state)
+	# 契約市場 (残留/引き抜き) が未解決なら、スカウトへ進む前に自動解決する。この経路は常に全自動
+	# (auto_user_team=true) かつ結果パネルなし (show_result=false) で契約市場を通過する。
+	if str(state.get("phase", "scout")) == "contract":
+		resolve_foreign_contract_market(state, players, teams, season, user_team_id, true, false)
 	# ユーザーが「補強を終了」した場合、表示中だった候補を市場に残さない。
 	if user_team_id > 0:
 		_close_request_candidates(state, state.get("user_candidate_ids", []) as Array, true)
@@ -211,12 +290,15 @@ static func complete_foreign_market_automatically(state: Dictionary, players: Ar
 				break
 			_apply_signing(state, players, teams, season, best, team.id, "cpu")
 			_close_request_candidates(state, _candidate_ids(shortlist), false)
-	state["complete"] = true
+	if show_result:
+		state["phase"] = "scout_result"
+	else:
+		state["complete"] = true
 	return {"ok": true, "state": state}
 
 
 static func complete_all_foreign_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	_ensure_state_v3(state)
+	_ensure_state_v4(state)
 	# 手動検索中の候補を閉じてから、自球団を除外せず全チームを同じAIロジックへ流す。
 	_close_request_candidates(state, state.get("user_candidate_ids", []) as Array, true)
 	state["user_request"] = {}
@@ -225,16 +307,38 @@ static func complete_all_foreign_market_automatically(state: Dictionary, players
 
 
 static func finalize_foreign_market(state: Dictionary) -> Dictionary:
+	_ensure_state_v4(state)
 	if bool(state.get("finalized", false)):
 		return state.get("final_result", {}) as Dictionary
 	var signings: Array = (state.get("signings", []) as Array).duplicate(true)
 	signings.sort_custom(func(a, b) -> bool:
 		return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
 	)
+	var contract_signings: Array = (state.get("contract_signings", []) as Array).duplicate(true)
+	var contract_retained: int = 0
+	var contract_poached: int = 0
+	var contract_departed: int = 0
+	var contract_multi_year: int = 0
+	for row in contract_signings:
+		var entry: Dictionary = row as Dictionary
+		match str(entry.get("outcome", "")):
+			"retained":
+				contract_retained += 1
+			"poached":
+				contract_poached += 1
+			"departed":
+				contract_departed += 1
+		if int(entry.get("years", 0)) > 1:
+			contract_multi_year += 1
 	var result: Dictionary = {
 		"candidates_count": (state.get("candidates", []) as Array).size(),
 		"signings": signings,
 		"signed_count": signings.size(),
+		"contract_signings": contract_signings,
+		"contract_retained_count": contract_retained,
+		"contract_poached_count": contract_poached,
+		"contract_departed_count": contract_departed,
+		"contract_multi_year_count": contract_multi_year,
 	}
 	state["finalized"] = true
 	state["complete"] = true
@@ -243,6 +347,7 @@ static func finalize_foreign_market(state: Dictionary) -> Dictionary:
 
 
 static func available_user_candidates(state: Dictionary, players: Array, teams: Array) -> Array:
+	_ensure_state_v4(state)
 	var rows: Array = []
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var need: Dictionary = FaMarketService._build_position_need(players, teams)
@@ -273,8 +378,15 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, _se
 	data["id"] = player_id
 	data["sensyu_num"] = player_id
 	data["team_id"] = team_id
+	var year: int = _season.year if _season != null else int(state.get("year", 0))
+	# 新規スカウト獲得は常に単年契約。実績を積んでからの複数年は外国人契約市場 (残留/引き抜き) のみ。
+	var source: Dictionary = data.get("source_data", {}) as Dictionary
+	source["contract_end_year"] = year + 1
+	source["contract_total_years"] = 1
+	source["contract_signed_year"] = year
+	data["source_data"] = source
 	var player: PSPlayer = PSPlayer.from_dict(data)
-	PSCareerLog.log_foreign_join(player, _season.year if _season != null else int(state.get("year", 0)), team_id, player.salary)
+	PSCareerLog.log_foreign_join(player, year, team_id, player.salary)
 	players.append(player)
 	candidate["available"] = false
 	candidate["signed"] = true
@@ -297,6 +409,316 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, _se
 		"method": method,
 	})
 	state["signings"] = signings
+
+
+# ============================================================ 外国人契約市場 (残留/引き抜き)
+
+# 市場入りの対象: 在籍中 (非引退) の外国人で、複数年契約中でない者
+# (契約キー欠落の旧セーブ/初期シード外国人は contract_end_year=0 なので全員対象になる=意図した移行挙動)。
+static func _build_contract_market_entries(players: Array, teams: Array, season: PSSeason) -> Array:
+	var year: int = season.year if season != null else 0
+	var league_ctx: Dictionary = {}
+	if season != null:
+		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	var entries: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or not player.foreign_player or player.is_retired() or player.team_id <= 0:
+			continue
+		if player.is_multi_year_locked_offseason(year):
+			continue
+		var record: PSPlayerSeasonRecord = null
+		if season != null:
+			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		var war: float = _contract_record_war(record, league_ctx)
+		entries.append({
+			"player_id": player.id,
+			"from_team_id": player.team_id,
+			"name": player.name,
+			"age": player.age,
+			"position": player.position,
+			"role": player.role,
+			"value": OffseasonService.player_value_score(player),
+			"market_salary": OffseasonService.foreign_market_salary(player, record, war),
+			"max_years": FaMarketService.fa_offer_max_years(player.age),
+			"user_offer": {},
+			"resolved": false,
+			"winner_team_id": 0,
+			"winner_years": 0,
+			"winner_salary": 0,
+		})
+	entries.sort_custom(func(a, b) -> bool:
+		return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
+	)
+	return entries
+
+
+static func _contract_record_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:
+	if record == null or league_ctx.is_empty():
+		return 0.0
+	return float(WarCalculator.season_war(record, league_ctx).get("war", 0.0))
+
+
+static func _contract_entry_by_player_id(state: Dictionary, player_id: int) -> Dictionary:
+	for row in state.get("contract_entries", []) as Array:
+		var entry: Dictionary = row as Dictionary
+		if int(entry.get("player_id", 0)) == player_id:
+			return entry
+	return {}
+
+
+# 提示年俸 = ベース年俸 × (1 + FOREIGN_MULTI_YEAR_PREMIUM × (年数-1))。有効数字2桁へ丸める。
+static func _offer_salary(base_salary: int, years: int) -> int:
+	var raw: int = int(round(float(base_salary) * (1.0 + FOREIGN_MULTI_YEAR_PREMIUM * float(maxi(1, years) - 1))))
+	return OffseasonService.round_salary_2sig(raw)
+
+
+# 採択スコア = 年俸 × (1 + 0.10×(年数-1)) × (元球団なら FOREIGN_STAY_LOYALTY)。
+static func _contract_offer_score(salary: int, years: int, is_home: bool) -> float:
+	var score: float = float(salary) * (1.0 + CONTRACT_OFFER_YEARS_SCORE_BONUS * float(maxi(1, years) - 1))
+	if is_home:
+		score *= FOREIGN_STAY_LOYALTY
+	return score
+
+
+# CPU の複数年提示年数: 既定1年、value がしきい値を超えるたびに確率で+1年 (max_years でクランプ)。
+static func _cpu_retain_years(value: int, max_years: int) -> int:
+	var years: int = 1
+	if value >= CPU_FOREIGN_MULTI_YEAR_VALUE and Rng.roll_float() <= CPU_FOREIGN_MULTI_YEAR_CHANCE:
+		years = 2
+		if value >= CPU_FOREIGN_MULTI_YEAR_VALUE_3Y and Rng.roll_float() <= CPU_FOREIGN_MULTI_YEAR_CHANCE:
+			years = 3
+	return clampi(years, 1, maxi(1, max_years))
+
+
+# 元球団の残留提示。value 不足または増額分を払えない場合は提示なし (=退団リスク)。
+static func _cpu_retain_offer(entry: Dictionary, players: Array, teams: Array) -> Dictionary:
+	var value: int = int(entry.get("value", 0))
+	if value < FOREIGN_RETAIN_MIN_VALUE:
+		return {}
+	var team: PSTeam = _find_team_by_id(teams, int(entry.get("from_team_id", 0)))
+	if team == null:
+		return {}
+	var years: int = _cpu_retain_years(value, int(entry.get("max_years", 1)))
+	var salary: int = _offer_salary(int(entry.get("market_salary", 0)), years)
+	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
+	var current_salary: int = player.salary if player != null else salary
+	var delta: int = maxi(0, salary - current_salary)
+	if not TeamFinance.can_afford_addition(players, team, delta):
+		return {}
+	return {"source": "retain", "team_id": team.id, "years": years, "salary": salary, "is_home": true}
+
+
+# 1エントリ分の提示一覧を組む。ユーザー提示 (submit_user_contract_offer で設定済み) があれば
+# その球団分のCPU自動提示 (残留 or 引き抜き) を差し替える。poach_counts は解決ループ全体で
+# 共有し、1球団あたりの引き抜き件数 (CPU_FOREIGN_POACH_MAX_PER_TEAM) を跨エントリで制限する。
+# ユーザー球団 (user_team_id) が home_team かつ user_offer が無い場合、auto_user_team=false なら
+# CPU残留提示を生成しない (=「契約市場を確定して次へ」はユーザーの明示提示のみを扱う)。
+# auto_user_team=true (「すべてAIに任せる」/CPU自動経路) なら他球団と同じ基準で残留提示を生成する。
+static func _build_contract_offers(entry: Dictionary, players: Array, teams: Array, poach_counts: Dictionary, user_team_id: int = 0, auto_user_team: bool = false) -> Array:
+	var offers: Array = []
+	var home_team_id: int = int(entry.get("from_team_id", 0))
+	var user_offer: Dictionary = entry.get("user_offer", {}) as Dictionary
+	var user_offer_team: int = int(user_offer.get("team_id", 0)) if not user_offer.is_empty() else 0
+
+	if not user_offer.is_empty() and user_offer_team == home_team_id:
+		offers.append(user_offer.duplicate())
+	elif home_team_id == user_team_id and not auto_user_team:
+		pass
+	else:
+		var retain: Dictionary = _cpu_retain_offer(entry, players, teams)
+		if not retain.is_empty():
+			offers.append(retain)
+
+	if not user_offer.is_empty() and user_offer_team != home_team_id:
+		offers.append(user_offer.duplicate())
+
+	var value: int = int(entry.get("value", 0))
+	if value >= CPU_FOREIGN_POACH_MIN_VALUE:
+		var max_years: int = int(entry.get("max_years", 1))
+		for team_row in teams:
+			var team: PSTeam = team_row as PSTeam
+			if team == null or team.id == home_team_id or team.id == user_offer_team:
+				continue
+			if int(poach_counts.get(team.id, 0)) >= CPU_FOREIGN_POACH_MAX_PER_TEAM:
+				continue
+			if _foreign_count_for_team(players, team.id) >= MAX_FOREIGN_HELD_PER_TEAM:
+				continue
+			if Rng.roll_float() > CPU_FOREIGN_POACH_CHANCE:
+				continue
+			var years: int = clampi(Rng.range_int(1, mini(3, max_years)), 1, max_years)
+			var salary: int = _offer_salary(int(round(float(entry.get("market_salary", 0)) * FOREIGN_POACH_SALARY_MULT)), years)
+			offers.append({"source": "poach", "team_id": team.id, "years": years, "salary": salary, "is_home": false})
+			poach_counts[team.id] = int(poach_counts.get(team.id, 0)) + 1
+	return offers
+
+
+# 最高スコアの提示から順に枠/予算を確認して採択する (通らなければ次点)。誰も採択できなければ退団。
+static func _apply_best_contract_offer(players: Array, teams: Array, entry: Dictionary, offers: Array, year: int) -> Dictionary:
+	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
+	if player == null:
+		return {}
+	var home_team_id: int = int(entry.get("from_team_id", 0))
+	var ranked: Array = offers.duplicate()
+	ranked.sort_custom(func(a, b) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		return _contract_offer_score(int(da.get("salary", 0)), int(da.get("years", 1)), bool(da.get("is_home", false))) \
+				> _contract_offer_score(int(db.get("salary", 0)), int(db.get("years", 1)), bool(db.get("is_home", false)))
+	)
+	for offer_value in ranked:
+		var offer: Dictionary = offer_value as Dictionary
+		var team_id: int = int(offer.get("team_id", 0))
+		var team: PSTeam = _find_team_by_id(teams, team_id)
+		if team == null:
+			continue
+		var is_home: bool = bool(offer.get("is_home", false))
+		var salary: int = int(offer.get("salary", 0))
+		var years: int = int(offer.get("years", 1))
+		if is_home:
+			var delta: int = maxi(0, salary - player.salary)
+			if not TeamFinance.can_afford_addition(players, team, delta):
+				continue
+		else:
+			if not _can_team_sign_foreign(players, {}, team_id):
+				continue
+			if not TeamFinance.can_afford_addition(players, team, salary):
+				continue
+		var from_team: int = player.team_id
+		_apply_contract_result(player, team_id, is_home, years, salary, year)
+		return {
+			"player_id": player.id, "name": player.name, "age": player.age, "position": player.position,
+			"role": player.role, "from_team": from_team, "to_team": team_id, "salary": salary, "years": years,
+			"value": int(entry.get("value", 0)), "outcome": "retained" if is_home else "poached",
+		}
+	_apply_contract_departure(player, home_team_id, year)
+	return {
+		"player_id": player.id, "name": player.name, "age": player.age, "position": player.position,
+		"role": player.role, "from_team": home_team_id, "to_team": 0, "salary": 0, "years": 0,
+		"value": int(entry.get("value", 0)), "outcome": "departed",
+	}
+
+
+static func _apply_contract_result(player: PSPlayer, team_id: int, is_home: bool, years: int, salary: int, year: int) -> void:
+	var from_team: int = player.team_id
+	player.team_id = team_id
+	player.salary = salary
+	player.source_data["contract_end_year"] = year + years
+	player.source_data["contract_total_years"] = years
+	player.source_data["contract_signed_year"] = year
+	if is_home:
+		PSCareerLog.log_foreign_stay(player, year, team_id, salary)
+	else:
+		PSCareerLog.log_foreign_move(player, year, from_team, team_id, salary)
+
+
+# 退団 (帰国) 扱い: retired のみ立て released は立てない。戦力外獲得市場は released を条件に
+# 候補を拾うため、これにより退団外国人はそちらへ供給されない。
+static func _apply_contract_departure(player: PSPlayer, team_id: int, year: int) -> void:
+	PSCareerLog.log_foreign_depart(player, year, team_id)
+	player.source_data["retired"] = true
+	player.source_data["retired_age"] = player.age
+	player.team_id = 0
+
+
+# 契約市場を一括解決する (エントリを value 降順に1件ずつ、残留/引き抜き/退団を決めていく)。
+# 逐次処理にすることで、枠/予算/引き抜き上限を先に解決したエントリの結果に正しく追従させる。
+# auto_user_team=false (既定、「契約市場を確定して次へ」) はユーザー球団の未提示エントリへ
+# CPU残留提示を生成しない (=明示提示のみ扱う)。auto_user_team=true (「すべてAIに任せる」/
+# CPU自動経路) は他球団と同じ基準でユーザー球団にも自動残留判断を適用する。
+# show_result=true (既定) は解決後 phase を "contract_result" に留め、専用結果パネル ("次へ") を
+# 経てから "scout" へ進む。show_result=false (CPU自動経路/「すべてAIに任せる」) は結果パネルを
+# 経由せず直接 "scout" へ進む。対象が最初から無ければ create_foreign_market_state の時点で
+# 既に "scout" になっており、この関数は何もしない。
+static func resolve_foreign_contract_market(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0, auto_user_team: bool = false, show_result: bool = true) -> Dictionary:
+	_ensure_state_v4(state)
+	if str(state.get("phase", "contract")) != "contract":
+		return {"ok": true, "state": state}
+	var year: int = int(state.get("year", season.year if season != null else 0))
+	var entries: Array = state.get("contract_entries", []) as Array
+	var poach_counts: Dictionary = {}
+	var contract_signings: Array = state.get("contract_signings", []) as Array
+	for entry_value in entries:
+		var entry: Dictionary = entry_value as Dictionary
+		if bool(entry.get("resolved", false)):
+			continue
+		var offers: Array = _build_contract_offers(entry, players, teams, poach_counts, user_team_id, auto_user_team)
+		var applied: Dictionary = _apply_best_contract_offer(players, teams, entry, offers, year)
+		entry["resolved"] = true
+		if not applied.is_empty():
+			entry["winner_team_id"] = int(applied.get("to_team", 0))
+			entry["winner_years"] = int(applied.get("years", 0))
+			entry["winner_salary"] = int(applied.get("salary", 0))
+			contract_signings.append(applied)
+	state["contract_entries"] = entries
+	state["contract_signings"] = contract_signings
+	state["phase"] = "contract_result" if show_result else "scout"
+	return {"ok": true, "state": state}
+
+
+# 契約市場の結果パネル ("次へ") から呼ばれ、phase を "contract_result" → "scout" へ進める。
+static func advance_foreign_contract_result(state: Dictionary) -> Dictionary:
+	_ensure_state_v4(state)
+	if str(state.get("phase", "")) != "contract_result":
+		return {"ok": false, "message": "外国人契約市場の結果は表示されていません。", "state": state}
+	state["phase"] = "scout"
+	return {"ok": true, "state": state}
+
+
+# 外国人スカウトの結果パネル ("次へ") から呼ばれ、phase "scout_result" を経て complete を立てる。
+static func advance_foreign_scout_result(state: Dictionary) -> Dictionary:
+	_ensure_state_v4(state)
+	if str(state.get("phase", "")) != "scout_result":
+		return {"ok": false, "message": "外国人補強の結果は表示されていません。", "state": state}
+	state["complete"] = true
+	return {"ok": true, "state": state}
+
+
+# ユーザーの契約提示 (自軍満了者への残留提示、または他球団満了者への引き抜き提示)。
+# 予算/枠は速報チェックのみで、最終確認は resolve_foreign_contract_market の採択時に再度行う。
+static func submit_user_contract_offer(state: Dictionary, players: Array, teams: Array, _season: PSSeason, player_id: int, years: int) -> Dictionary:
+	_ensure_state_v4(state)
+	if str(state.get("phase", "contract")) != "contract":
+		return {"ok": false, "message": "外国人契約市場は既に終了しています。", "state": state}
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if user_team_id <= 0:
+		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+	var entry: Dictionary = _contract_entry_by_player_id(state, player_id)
+	if entry.is_empty():
+		return {"ok": false, "message": "その選手は外国人契約市場の対象ではありません。", "state": state}
+	if bool(entry.get("resolved", false)):
+		return {"ok": false, "message": "その選手の契約市場は既に解決済みです。", "state": state}
+	var home_team_id: int = int(entry.get("from_team_id", 0))
+	var is_home: bool = home_team_id == user_team_id
+	if not is_home:
+		if _foreign_count_for_team(players, user_team_id) >= MAX_FOREIGN_HELD_PER_TEAM:
+			return {"ok": false, "message": "外国人保有枠が不足しています。", "state": state}
+		if _active_count_for_team(players, user_team_id) >= TeamFinance.SHIENKA_LIMIT:
+			return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
+	var max_years: int = int(entry.get("max_years", 1))
+	var clamped_years: int = clampi(years, 1, maxi(1, max_years))
+	var base_salary: int = int(entry.get("market_salary", 0))
+	if not is_home:
+		base_salary = int(round(float(base_salary) * FOREIGN_POACH_SALARY_MULT))
+	var salary: int = _offer_salary(base_salary, clamped_years)
+	var team: PSTeam = _find_team_by_id(teams, user_team_id)
+	var cost: int = salary
+	if is_home:
+		var player: PSPlayer = _find_player_by_id(players, player_id)
+		cost = maxi(0, salary - (player.salary if player != null else 0))
+	if not TeamFinance.can_afford_addition(players, team, cost):
+		return {"ok": false, "message": "予算が不足しているため提示できません。", "state": state}
+	entry["user_offer"] = {"team_id": user_team_id, "years": clamped_years, "salary": salary, "is_home": is_home}
+	return {"ok": true, "state": state}
+
+
+static func withdraw_user_contract_offer(state: Dictionary, player_id: int) -> Dictionary:
+	_ensure_state_v4(state)
+	var entry: Dictionary = _contract_entry_by_player_id(state, player_id)
+	if entry.is_empty():
+		return {"ok": false, "message": "その選手は外国人契約市場の対象ではありません。", "state": state}
+	entry["user_offer"] = {}
+	return {"ok": true, "state": state}
 
 
 static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: int) -> bool:
@@ -340,7 +762,7 @@ static func _generate_candidate(candidate_id: int, year: int, request: Dictionar
 	_apply_archetype(z_abilities, position, archetype)
 	var arsenal: Array = OffseasonService.generated_arsenal(position, z_abilities)
 	var band: Dictionary = BUDGET_BANDS.get(budget_band, BUDGET_BANDS["standard"]) as Dictionary
-	var salary: int = Rng.range_int(int(band.get("salary_min", 6000)), int(band.get("salary_max", 12000)))
+	var salary: int = OffseasonService.round_salary_2sig(Rng.range_int(int(band.get("salary_min", 6000)), int(band.get("salary_max", 12000))))
 	var data: Dictionary = {
 		"id": 0,
 		"sensyu_num": 0,
@@ -751,4 +1173,12 @@ static func _find_team_by_id(teams: Array, team_id: int) -> PSTeam:
 		var team: PSTeam = row as PSTeam
 		if team != null and team.id == team_id:
 			return team
+	return null
+
+
+static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:
+	for row in players:
+		var player: PSPlayer = row as PSPlayer
+		if player != null and player.id == player_id:
+			return player
 	return null

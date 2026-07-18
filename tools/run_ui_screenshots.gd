@@ -384,6 +384,14 @@ func _capture_offseason_steps(states_dir: String) -> void:
 		var interactive: bool = bool(view.get("is_interactive", false))
 		var panel: String = str(view.get("active_panel", ""))
 		var label: String = str(OFFSEASON_STEP_LABELS.get(step, "step%d" % step))
+		# 外国人ステップは契約市場/契約結果/スカウト/スカウト結果の4フェーズが同じ step 番号なので、
+		# ファイル名が衝突して前段の撮影が上書きされないようラベルを分ける。
+		if interactive and panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
+			label = "foreign_contract"
+		elif interactive and panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
+			label = "foreign_contract_result"
+		elif interactive and panel == AppState.OFFSEASON_PANEL_FOREIGN_RESULT:
+			label = "foreign_scout_result"
 		var suffix: String = "editor" if interactive else "result"
 		_shot(states_dir, "offseason_step%02d_%s_%s" % [step, label, suffix])
 
@@ -397,8 +405,14 @@ func _capture_offseason_steps(states_dir: String) -> void:
 				action_result = AppState.complete_released_market_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_FA:
 				action_result = AppState.complete_fa_automatically()
+			elif panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
+				action_result = AppState.finalize_foreign_contract_market()
+			elif panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
+				action_result = AppState.advance_foreign_contract_result()
 			elif panel == AppState.OFFSEASON_PANEL_FOREIGN:
 				action_result = AppState.complete_foreign_automatically()
+			elif panel == AppState.OFFSEASON_PANEL_FOREIGN_RESULT:
+				action_result = AppState.advance_foreign_scout_result()
 			elif panel == AppState.OFFSEASON_PANEL_CAMP:
 				action_result = AppState.finish_camp()
 			if not bool(action_result.get("ok", false)):

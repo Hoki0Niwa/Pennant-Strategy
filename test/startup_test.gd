@@ -876,6 +876,56 @@ func test_offseason_screen_builds_each_step() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+# 契約更新 延長交渉パネル (OFFSEASON_PANEL_CONTRACT_EXTENSION) が実データで populate/draw できるか。
+# 候補は GameDb.players に登録せず注入した Array だけで作る (GdUnit プロセス内で共有される
+# GameDb.players を汚染しないため)。_ext_entry_row は player==null (GameDb未登録) を許容する。
+func test_offseason_screen_builds_contract_extension_panel() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_active: bool = AppState.offseason_active
+	var old_step: int = AppState.offseason_step
+	var old_state: Dictionary = AppState.contract_update_state.duplicate(true)
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.selected_team_id = team.id
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	season.calendar_start_date = "2026-03-27"
+	AppState.current_season = season
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
+
+	var OffseasonServiceRef = load("res://services/season/offseason_service.gd")
+	# player_value_score が EXTENSION_MIN_VALUE(60) 以上になるよう主要な z 能力を平均より高くする
+	# (z_abilities={} の平均的選手だと閾値を下回りプールが空になり phase が "done" のままになる)。
+	var strong_z: Dictionary = {}
+	for key in ["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "IF_Reach", "IF_Secure", "Run_Speed"]:
+		strong_z[key] = 2.5
+	var candidate: PSPlayer = PSPlayer.from_dict({
+		"id": 999901, "team_id": team.id, "position": 3, "role": "fielder", "age": 26, "years": 8,
+		"salary": 6000, "contract_status": "FA可能", "z_abilities": strong_z, "raw_abilities": {},
+		"source_data": {"fa_nissuu": 9999},
+	})
+	AppState.contract_update_state = OffseasonServiceRef.create_contract_update_state([candidate], [team], season, team.id)
+	assert_str(str(AppState.contract_update_state.get("phase", ""))).is_equal("extension")
+
+	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
+	var screen: Control = script.new()
+	add_child(screen)
+	await get_tree().process_frame
+	assert_str(str(screen._active_panel)).is_equal(AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION)
+	var total_rows: int = (screen._ext_pitcher_rows as Array).size() + (screen._ext_fielder_rows as Array).size()
+	assert_int(total_rows).is_equal(1)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.offseason_active = old_active
+	AppState.offseason_step = old_step
+	AppState.contract_update_state = old_state
+
+
 func test_offseason_salary_table_layout_and_market_salary_priority() -> void:
 	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
 	var screen: Control = script.new()
@@ -903,6 +953,7 @@ func test_offseason_view_state_exposes_ui_phase() -> void:
 	var old_active: bool = AppState.offseason_active
 	var old_step: int = AppState.offseason_step
 	var old_draft_state: Dictionary = AppState.draft_state.duplicate(true)
+	var old_contract_update_state: Dictionary = AppState.contract_update_state.duplicate(true)
 
 	AppState.offseason_active = false
 	var inactive: Dictionary = AppState.get_offseason_view_state()
@@ -923,9 +974,57 @@ func test_offseason_view_state_exposes_ui_phase() -> void:
 	assert_str(str(draft_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_DRAFT)
 	assert_str(str(draft_view.get("status", ""))).is_equal("本指名")
 
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
+	AppState.contract_update_state = {"complete": false, "phase": "extension"}
+	var ext_view: Dictionary = AppState.get_offseason_view_state()
+	assert_str(str(ext_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION)
+	assert_bool(bool(ext_view.get("is_interactive", false))).is_true()
+	AppState.contract_update_state = {"complete": true, "phase": "done"}
+	var ext_done_view: Dictionary = AppState.get_offseason_view_state()
+	assert_bool(bool(ext_done_view.get("is_interactive", true))).is_false()
+
 	AppState.offseason_active = old_active
 	AppState.offseason_step = old_step
 	AppState.draft_state = old_draft_state
+	AppState.contract_update_state = old_contract_update_state
+
+
+# 外国人ステップ (step7) は phase "contract"→"contract_result"→"scout"→"scout_result" の4段が
+# それぞれ専用の active_panel へ写像される (Fix3: 結果パネルを契約市場/スカウトで分離)。
+func test_offseason_view_state_foreign_market_phases_map_to_panels() -> void:
+	var old_active: bool = AppState.offseason_active
+	var old_step: int = AppState.offseason_step
+	var old_foreign_state: Dictionary = AppState.foreign_state.duplicate(true)
+
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_FOREIGN_MARKET
+
+	AppState.foreign_state = {"complete": false, "phase": "contract"}
+	var contract_view: Dictionary = AppState.get_offseason_view_state()
+	assert_str(str(contract_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT)
+	assert_bool(bool(contract_view.get("is_interactive", false))).is_true()
+
+	AppState.foreign_state = {"complete": false, "phase": "contract_result"}
+	var contract_result_view: Dictionary = AppState.get_offseason_view_state()
+	assert_str(str(contract_result_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT)
+	assert_bool(bool(contract_result_view.get("is_interactive", false))).is_true()
+
+	AppState.foreign_state = {"complete": false, "phase": "scout"}
+	var scout_view: Dictionary = AppState.get_offseason_view_state()
+	assert_str(str(scout_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_FOREIGN)
+
+	AppState.foreign_state = {"complete": false, "phase": "scout_result"}
+	var scout_result_view: Dictionary = AppState.get_offseason_view_state()
+	assert_str(str(scout_result_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_FOREIGN_RESULT)
+
+	# complete=true になれば phase を問わずステップ結果画面 (対話パネルなし) へ落ちる。
+	AppState.foreign_state = {"complete": true, "phase": "scout_result"}
+	var done_view: Dictionary = AppState.get_offseason_view_state()
+	assert_bool(bool(done_view.get("is_interactive", true))).is_false()
+
+	AppState.offseason_active = old_active
+	AppState.offseason_step = old_step
+	AppState.foreign_state = old_foreign_state
 
 
 # ポストシーズン: 引き分けで規定試合数に達しイーブンなら、追加試合なしで上位 (top) が勝ち抜ける。
