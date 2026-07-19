@@ -492,24 +492,155 @@ func test_foreign_scout_signing_sets_single_year_contract_keys() -> void:
 	assert_int(int(signed.source_data.get("contract_signed_year", 0))).is_equal(2026)
 
 
-func test_foreign_contract_cpu_retain_offer_requires_min_value() -> void:
+func test_foreign_contract_cpu_retain_offer_uses_shared_release_decision() -> void:
 	var team: PSTeam = _team(1)
 	var players: Array = [
 		_player({"id": 1, "team_id": 1, "salary": 5000}),
 		_player({"id": 2, "team_id": 1, "salary": 5000}),
 	]
-	var weak_entry: Dictionary = {
+	var release_entry: Dictionary = {
 		"player_id": 1, "from_team_id": 1,
-		"value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE - 1,
+		"value": 80, "cpu_release_candidate": true, "cpu_regular_candidate": true,
 		"market_salary": 5000, "max_years": 3,
 	}
-	var strong_entry: Dictionary = {
+	var keep_entry: Dictionary = {
 		"player_id": 2, "from_team_id": 1,
-		"value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+		"value": 40, "cpu_release_candidate": false, "cpu_regular_candidate": true,
 		"market_salary": 5000, "max_years": 3,
 	}
-	assert_bool(ForeignPlayerService._cpu_retain_offer(weak_entry, players, [team]).is_empty()).is_true()
-	assert_bool(ForeignPlayerService._cpu_retain_offer(strong_entry, players, [team]).is_empty()).is_false()
+	var bench_entry: Dictionary = keep_entry.duplicate(true)
+	bench_entry["cpu_regular_candidate"] = false
+	assert_bool(ForeignPlayerService._cpu_retain_offer(release_entry, players, [team]).is_empty()).is_true()
+	assert_bool(ForeignPlayerService._cpu_retain_offer(keep_entry, players, [team]).is_empty()).is_false()
+	assert_bool(ForeignPlayerService._cpu_retain_offer(bench_entry, players, [team]).is_empty()).is_true()
+
+
+func test_foreign_contract_regular_depth_uses_relative_season_performance() -> void:
+	var top: PSPlayer = _player_with_z(3010, 1, 3, false, 0.8)
+	var dh: PSPlayer = _player_with_z(3011, 1, 3, false, 0.8)
+	var bench: PSPlayer = _player_with_z(3012, 1, 3, false, 0.8)
+	for player in [top, dh, bench]:
+		(player as PSPlayer).foreign_player = true
+		(player as PSPlayer).age = 28
+	var players: Array = [top, dh, bench]
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+
+	var records: Array = []
+	var top_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(top, season.year, season.season_number)
+	top_record.batter_stats = PSBatterStats.from_dict({
+		"games": 140, "plate_appearances": 600, "at_bats": 520, "hits": 155,
+		"doubles": 30, "home_runs": 25, "walks": 65, "runs_batted_in": 90,
+	})
+	records.append(top_record)
+	var dh_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(dh, season.year, season.season_number)
+	dh_record.batter_stats = PSBatterStats.from_dict({
+		"games": 120, "plate_appearances": 480, "at_bats": 420, "hits": 110,
+		"doubles": 20, "home_runs": 15, "walks": 45, "runs_batted_in": 60,
+	})
+	records.append(dh_record)
+	var bench_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(bench, season.year, season.season_number)
+	bench_record.batter_stats = PSBatterStats.from_dict({
+		"games": 90, "plate_appearances": 320, "at_bats": 290, "hits": 58,
+		"doubles": 8, "home_runs": 4, "walks": 20, "runs_batted_in": 25,
+	})
+	records.append(bench_record)
+
+	var previous_records: Dictionary = {}
+	for record_value in records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		var key: String = "%d:%d:%d" % [record.player_id, season.year, season.season_number]
+		previous_records[key] = RecordStore.player_records.get(key, null)
+		RecordStore.player_records[key] = record
+
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [_team(1)], season, 0)
+	var regular_by_id: Dictionary = {}
+	for entry_value in state.get("contract_entries", []) as Array:
+		var entry: Dictionary = entry_value as Dictionary
+		regular_by_id[int(entry.get("player_id", 0))] = bool(entry.get("cpu_regular_candidate", false))
+	assert_bool(bool(regular_by_id.get(top.id, false))).is_true()
+	assert_bool(bool(regular_by_id.get(dh.id, false))).is_true()
+	assert_bool(bool(regular_by_id.get(bench.id, true))).is_false()
+	assert_bool(Offseason.would_release_player_for_team(players, 1, bench, season)).is_false()
+
+	for key_value in previous_records.keys():
+		var key: String = str(key_value)
+		var previous: Variant = previous_records[key]
+		if previous == null:
+			RecordStore.player_records.erase(key)
+		else:
+			RecordStore.player_records[key] = previous
+
+
+func test_foreign_contract_cpu_replaces_shared_release_candidate_through_scouting() -> void:
+	Rng.set_seed_value(20260719)
+	var player: PSPlayer = _player_with_z(3025, 1, 3, false, -1.5)
+	player.foreign_player = true
+	player.age = 35
+	player.salary = 5000
+	var players: Array = [player]
+	for i in range(4):
+		var depth_player: PSPlayer = _player_with_z(3030 + i, 1, 3, false, 2.0)
+		depth_player.age = 28
+		players.append(depth_player)
+	var team: PSTeam = _team(1)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, season.year, season.season_number)
+	var record_key: String = "%d:%d:%d" % [player.id, season.year, season.season_number]
+	var previous_record: Variant = RecordStore.player_records.get(record_key, null)
+	RecordStore.player_records[record_key] = record
+
+	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [team], season, 0)
+	var entry: Dictionary = (state.get("contract_entries", []) as Array)[0] as Dictionary
+	assert_bool(Offseason.would_release_player_for_team(players, team.id, player, season)).is_true()
+	assert_bool(bool(entry.get("cpu_release_candidate", false))).is_true()
+	ForeignPlayerService.complete_foreign_market_automatically(state, players, [team], season, 0)
+
+	var contract_results: Array = state.get("contract_signings", []) as Array
+	assert_str(str((contract_results[0] as Dictionary).get("outcome", ""))).is_equal("departed")
+	assert_int((state.get("signings", []) as Array).size()).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
+	assert_int(TeamFinance.foreign_player_count(players, team.id)).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
+
+	if previous_record == null:
+		RecordStore.player_records.erase(record_key)
+	else:
+		RecordStore.player_records[record_key] = previous_record
+
+
+func test_foreign_cpu_scout_uses_shared_release_decision_for_candidates() -> void:
+	var players: Array = []
+	for i in range(4):
+		var depth_player: PSPlayer = _player_with_z(3060 + i, 1, 3, false, 2.0)
+		depth_player.age = 28
+		players.append(depth_player)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+
+	var weak: PSPlayer = _player_with_z(3070, 0, 3, false, -2.0)
+	weak.foreign_player = true
+	weak.age = 35
+	weak.salary = 40000
+	var weak_candidate: Dictionary = {
+		"salary": weak.salary,
+		"display_player_data": weak.to_dict(),
+	}
+	assert_bool(Offseason.would_release_player_for_team(players, 1, weak, season)).is_true()
+	assert_bool(ForeignPlayerService._cpu_scout_candidate_viable(weak_candidate, players, 1, season)).is_false()
+
+	var strong: PSPlayer = _player_with_z(3071, 0, 3, false, 2.0)
+	strong.foreign_player = true
+	strong.age = 28
+	strong.salary = 5000
+	var strong_candidate: Dictionary = {
+		"salary": strong.salary,
+		"display_player_data": strong.to_dict(),
+	}
+	assert_bool(Offseason.would_release_player_for_team(players, 1, strong, season)).is_false()
+	assert_bool(ForeignPlayerService._cpu_scout_candidate_viable(strong_candidate, players, 1, season)).is_true()
 
 
 func test_foreign_contract_resolution_home_wins_tie_via_loyalty() -> void:
@@ -606,7 +737,7 @@ func test_build_contract_offers_skips_user_retain_unless_auto_user_team() -> voi
 	var team: PSTeam = _team(1)
 	var players: Array = [_player({"id": 4001, "team_id": 1, "salary": 5000, "foreign_player": true})]
 	var entry: Dictionary = {
-		"player_id": 4001, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+		"player_id": 4001, "from_team_id": 1, "value": 60,
 		"market_salary": 8000, "max_years": 3, "user_offer": {},
 	}
 	var offers_default: Array = ForeignPlayerService._build_contract_offers(entry, players, [team], {}, 1, false)
@@ -632,7 +763,7 @@ func test_resolve_foreign_contract_market_auto_user_team_flag_changes_outcome() 
 	var state_a: Dictionary = {
 		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
 		"contract_entries": [{
-			"player_id": 3020, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"player_id": 3020, "from_team_id": 1, "value": 60,
 			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
 		}],
 		"contract_signings": [],
@@ -648,7 +779,7 @@ func test_resolve_foreign_contract_market_auto_user_team_flag_changes_outcome() 
 	var state_b: Dictionary = {
 		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
 		"contract_entries": [{
-			"player_id": 3021, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"player_id": 3021, "from_team_id": 1, "value": 60,
 			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
 		}],
 		"contract_signings": [],
@@ -675,7 +806,7 @@ func test_foreign_market_four_phase_transition_via_result_panels() -> void:
 	var state: Dictionary = {
 		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
 		"contract_entries": [{
-			"player_id": 3030, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"player_id": 3030, "from_team_id": 1, "value": 60,
 			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
 		}],
 		"contract_signings": [],
@@ -717,7 +848,7 @@ func test_foreign_market_show_result_false_skips_result_phases() -> void:
 	var state: Dictionary = {
 		"version": 4, "phase": "contract", "year": 2026, "user_team_id": 1, "complete": false,
 		"contract_entries": [{
-			"player_id": 3031, "from_team_id": 1, "value": ForeignPlayerService.FOREIGN_RETAIN_MIN_VALUE,
+			"player_id": 3031, "from_team_id": 1, "value": 60,
 			"market_salary": 8000, "max_years": 3, "user_offer": {}, "resolved": false,
 		}],
 		"contract_signings": [],

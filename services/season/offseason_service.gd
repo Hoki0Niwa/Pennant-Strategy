@@ -258,9 +258,9 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 	}
 
 
-# 外国人の去就 (残留/引き抜き/退団) は ForeignPlayerService の外国人契約市場が一括で決める
-# (foreign_player_service.gd の resolve_foreign_contract_market)。通常戦力外とは切り離した
-# 別経路のため、compute_release_candidates_for_team は外国人選手を対象にしない。
+# 外国人の去就 (残留/引き抜き/退団) は ForeignPlayerService の外国人契約市場が一括で決める。
+# 結果の適用経路は別だが、判断は release_depth_chart_evaluations / would_release_player_for_team を共有する。
+# compute_release_candidates_for_team 自体は国内選手だけを戦力外通告の対象にする。
 # ドラフトの外国人枠予約に使う目標保有数だけ、release計画側の見込み流入計算 (_release_expected_inflow)
 # が独立に参照する。
 const FOREIGN_ROSTER_LIMIT: int = TeamFinance.FOREIGN_HELD_TARGET
@@ -269,8 +269,7 @@ const FOREIGN_ROSTER_LIMIT: int = TeamFinance.FOREIGN_HELD_TARGET
 # 自軍「自動で決める」ボタンと CPU 自動戦力外の共通アルゴリズム。
 # 国内選手は「役割スロット外」かつ「projected_value が代替水準未満」の場合だけ候補にする。
 # 編成計画は候補数の上限にのみ使い、人数不足を埋める強制カットは行わない。
-static func compute_release_candidates_for_team(players: Array, team_id: int, season: PSSeason) -> Array:
-	var offseason_year: int = season.year if season != null else 0
+static func release_depth_chart_evaluations(players: Array, team_id: int, season: PSSeason) -> Dictionary:
 	var roster_records_all: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -289,7 +288,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			"projected_value": ReleaseValueProjector.projected_value(player, record),
 		})
 	if roster_records_all.is_empty():
-		return []
+		return {}
 
 	var grouped_rows: Dictionary = {}
 	for row in roster_records_all:
@@ -323,9 +322,44 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			else:
 				surplus_ids[role_player.id] = true
 
+	var evaluations: Dictionary = {}
+	for row in roster_records_all:
+		var data: Dictionary = row as Dictionary
+		var player: PSPlayer = data["player"] as PSPlayer
+		data["surplus"] = surplus_ids.has(player.id)
+		evaluations[player.id] = data
+	return evaluations
+
+
+# 仮に candidate が team_id に在籍した場合、通常戦力外と同じAND条件で放出対象になるかを返す。
+# 外国人契約市場・新規スカウトもこの入口を使い、獲得判断と翌年の放出判断を同じ尺度に揃える。
+static func would_release_player_for_team(players: Array, team_id: int, candidate: PSPlayer, season: PSSeason) -> bool:
+	if candidate == null or team_id <= 0:
+		return true
+	var evaluation_players: Array = players
+	if candidate.team_id != team_id or candidate.is_retired():
+		evaluation_players = players.duplicate()
+		var hypothetical: PSPlayer = PSPlayer.from_dict(candidate.to_dict())
+		hypothetical.team_id = team_id
+		hypothetical.source_data.erase("retired")
+		evaluation_players.append(hypothetical)
+	var evaluations: Dictionary = release_depth_chart_evaluations(evaluation_players, team_id, season)
+	var evaluation: Dictionary = evaluations.get(candidate.id, {}) as Dictionary
+	if evaluation.is_empty():
+		return true
+	return bool(evaluation.get("surplus", false)) \
+		and float(evaluation.get("projected_value", 0.0)) < RELEASE_REPLACEMENT_VALUE
+
+
+static func compute_release_candidates_for_team(players: Array, team_id: int, season: PSSeason) -> Array:
+	var offseason_year: int = season.year if season != null else 0
+	var evaluations: Dictionary = release_depth_chart_evaluations(players, team_id, season)
+	if evaluations.is_empty():
+		return []
+
 	var domestic_candidates: Array = []
 	var selected_rows: Array = []
-	for row in roster_records_all:
+	for row in evaluations.values():
 		var data: Dictionary = row as Dictionary
 		var player: PSPlayer = data["player"] as PSPlayer
 		if player.foreign_player:
@@ -338,7 +372,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		# process_cpu_releases がこの関数の返す cut_ids からしか降格判定を行わないため)。
 		if player.is_multi_year_locked_offseason(offseason_year):
 			continue
-		if not surplus_ids.has(player.id):
+		if not bool(data.get("surplus", false)):
 			continue
 		if float(data["projected_value"]) >= RELEASE_REPLACEMENT_VALUE:
 			continue
@@ -351,7 +385,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			return value_a < value_b
 		return int(((a as Dictionary)["player"] as PSPlayer).id) < int(((b as Dictionary)["player"] as PSPlayer).id)
 	)
-	var plan_count: int = _release_plan_count(players, team_id, roster_records_all.size())
+	var plan_count: int = _release_plan_count(players, team_id, evaluations.size())
 	var max_cuts: int = mini(RELEASE_PLAN_MAX_PER_TEAM, plan_count + RECONCILE_UPPER_SLACK)
 	for i in range(mini(domestic_candidates.size(), max_cuts)):
 		selected_rows.append(domestic_candidates[i])

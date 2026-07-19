@@ -9,6 +9,8 @@ const NamePoolRef = preload("res://services/data/name_pool.gd")
 const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
 const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
+const ReleaseValueProjectorRef = preload("res://services/season/release_value_projector.gd")
+const TeamAutoAIRef = preload("res://services/season/team_auto_ai.gd")
 
 const FOREIGN_FA_YEARS: int = 7
 const SCOUT_CANDIDATES_PER_REQUEST: int = 4
@@ -47,15 +49,12 @@ const BUDGET_BANDS: Dictionary = {
 # 実績を積んだ外国人が複数年契約を得るのはこの市場だけ (NPB実態: 新規来日は単年、残留/移籍時に
 # 複数年が付く)。市場入りの条件・解決手順は create_foreign_market_state / resolve_foreign_contract_market
 # を参照。
-# 元球団の残留最低ライン (旧・外国人戦力外の FOREIGN_RELEASE_MIN_VALUE を引き継ぐ)。
-const FOREIGN_RETAIN_MIN_VALUE: int = 52
 # 元球団の複数年提示: value がこの水準以上なら CPU_FOREIGN_MULTI_YEAR_CHANCE の確率で2年、
 # 3年目提示ラインを超えればさらに同確率で3年 (どちらも max_years でクランプ)。
 const CPU_FOREIGN_MULTI_YEAR_VALUE: int = 70
 const CPU_FOREIGN_MULTI_YEAR_VALUE_3Y: int = 78
 const CPU_FOREIGN_MULTI_YEAR_CHANCE: float = 0.4
 # 他球団の引き抜き: 外国人保有4人未満・支配下70枠と予算に余裕がある球団だけが対象。
-const CPU_FOREIGN_POACH_MIN_VALUE: int = 65
 const CPU_FOREIGN_POACH_CHANCE: float = 0.25
 const CPU_FOREIGN_POACH_MAX_PER_TEAM: int = 1
 # 引き抜き提示は市場年俸に上乗せする (残留より高く払わないと動かない)。
@@ -237,6 +236,8 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 			continue
 		if not _can_team_sign_foreign(players, state, user_team_id):
 			break
+		if not _cpu_scout_candidate_viable(candidate, players, user_team_id, season):
+			continue
 		if not _can_team_afford_foreign(players, teams, user_team_id, candidate):
 			continue
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(candidate.get("position", 0)), 0.0))
@@ -278,6 +279,8 @@ static func complete_foreign_market_automatically(state: Dictionary, players: Ar
 			var best_score: float = -999999.0
 			for candidate_value in shortlist:
 				var candidate: Dictionary = candidate_value as Dictionary
+				if not _cpu_scout_candidate_viable(candidate, players, team.id, season):
+					continue
 				if not _can_team_afford_foreign(players, teams, team.id, candidate):
 					continue
 				var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(candidate.get("position", 0)), 0.0))
@@ -287,7 +290,10 @@ static func complete_foreign_market_automatically(state: Dictionary, players: Ar
 					best = candidate
 			if best.is_empty():
 				_close_request_candidates(state, _candidate_ids(shortlist), true)
-				break
+				# 1回の候補群に適格者がいなくても、残りの検索回数は別候補へ使う。
+				# ここで打ち切ると、残留を見送って空けた枠を新外国人で補充しない球団が
+				# 生じるため、MAX_CPU_REQUESTS_PER_TEAM の範囲では探索を継続する。
+				continue
 			_apply_signing(state, players, teams, season, best, team.id, "cpu")
 			_close_request_candidates(state, _candidate_ids(shortlist), false)
 	if show_result:
@@ -420,6 +426,7 @@ static func _build_contract_market_entries(players: Array, teams: Array, season:
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	var regular_ids_by_team: Dictionary = {}
 	var entries: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -431,6 +438,10 @@ static func _build_contract_market_entries(players: Array, teams: Array, season:
 		if season != null:
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		var war: float = _contract_record_war(record, league_ctx)
+		if not regular_ids_by_team.has(player.team_id):
+			regular_ids_by_team[player.team_id] = _cpu_regular_role_ids(
+				players, player.team_id, season, league_ctx
+			)
 		entries.append({
 			"player_id": player.id,
 			"from_team_id": player.team_id,
@@ -439,6 +450,11 @@ static func _build_contract_market_entries(players: Array, teams: Array, season:
 			"position": player.position,
 			"role": player.role,
 			"value": OffseasonService.player_value_score(player),
+			"projected_value": ReleaseValueProjectorRef.projected_value(player, record),
+			"cpu_release_candidate": OffseasonService.would_release_player_for_team(
+				players, player.team_id, player, season
+			),
+			"cpu_regular_candidate": (regular_ids_by_team[player.team_id] as Dictionary).has(player.id),
 			"market_salary": OffseasonService.foreign_market_salary(player, record, war),
 			"max_years": FaMarketService.fa_offer_max_years(player.age),
 			"user_offer": {},
@@ -459,12 +475,111 @@ static func _contract_record_war(record: PSPlayerSeasonRecord, league_ctx: Dicti
 	return float(WarCalculator.season_war(record, league_ctx).get("war", 0.0))
 
 
+static func _contract_performance_score(player: PSPlayer, record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:
+	if record == null:
+		return ReleaseValueProjectorRef.projected_value(player, null)
+	return TeamAutoAIRef.perf_score(record, null, null, _contract_record_war(record, league_ctx))
+
+
+static func _sort_contract_performance_rows(rows: Array) -> void:
+	rows.sort_custom(func(a, b) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		if not is_equal_approx(float(da.get("score", 0.0)), float(db.get("score", 0.0))):
+			return float(da.get("score", 0.0)) > float(db.get("score", 0.0))
+		return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
+	)
+
+
+# 当年成績を含む連続スコアで、野手は各位置の1番手+DH、投手は一軍の先発・救援枠を選ぶ。
+# 絶対的な率/出場数足切りを置かず、球団内の役割デプスでレギュラー級かを判定する。
+static func _cpu_regular_role_ids(players: Array, team_id: int, season: PSSeason, league_ctx: Dictionary = {}) -> Dictionary:
+	var ctx: Dictionary = league_ctx
+	if ctx.is_empty() and season != null:
+		ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	var groups: Dictionary = {}
+	for player_value in players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player == null or player.team_id != team_id or player.is_retired() or player.development_player:
+			continue
+		var record: PSPlayerSeasonRecord = null
+		if season != null:
+			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		var role_key: String
+		if player.is_pitcher():
+			role_key = "pitcher:starter" if player.role == "starter" else "pitcher:reliever"
+		else:
+			role_key = "fielder:%d" % player.position
+		if not groups.has(role_key):
+			groups[role_key] = []
+		(groups[role_key] as Array).append({
+			"player_id": player.id,
+			"score": _contract_performance_score(player, record, ctx),
+		})
+
+	var regular_ids: Dictionary = {}
+	var dh_candidates: Array = []
+	for position in range(2, 10):
+		var fielders: Array = groups.get("fielder:%d" % position, []) as Array
+		_sort_contract_performance_rows(fielders)
+		if not fielders.is_empty():
+			regular_ids[int((fielders[0] as Dictionary).get("player_id", 0))] = true
+		for i in range(1, fielders.size()):
+			dh_candidates.append(fielders[i])
+	_sort_contract_performance_rows(dh_candidates)
+	if not dh_candidates.is_empty():
+		regular_ids[int((dh_candidates[0] as Dictionary).get("player_id", 0))] = true
+
+	var starters: Array = groups.get("pitcher:starter", []) as Array
+	_sort_contract_performance_rows(starters)
+	for i in range(mini(starters.size(), TeamAutoAIRef.TARGET_STARTERS)):
+		regular_ids[int((starters[i] as Dictionary).get("player_id", 0))] = true
+	var relievers: Array = groups.get("pitcher:reliever", []) as Array
+	_sort_contract_performance_rows(relievers)
+	var relief_slots: int = maxi(1, TeamAutoAIRef.TARGET_PITCHERS - TeamAutoAIRef.TARGET_STARTERS)
+	for i in range(mini(relievers.size(), relief_slots)):
+		regular_ids[int((relievers[i] as Dictionary).get("player_id", 0))] = true
+	return regular_ids
+
+
+static func _would_be_cpu_regular_for_team(players: Array, team_id: int, candidate: PSPlayer, season: PSSeason) -> bool:
+	if candidate == null or team_id <= 0:
+		return false
+	var evaluation_players: Array = players
+	if candidate.team_id != team_id or candidate.is_retired():
+		evaluation_players = players.duplicate()
+		var hypothetical: PSPlayer = PSPlayer.from_dict(candidate.to_dict())
+		hypothetical.team_id = team_id
+		hypothetical.source_data.erase("retired")
+		evaluation_players.append(hypothetical)
+	return _cpu_regular_role_ids(evaluation_players, team_id, season).has(candidate.id)
+
+
 static func _contract_entry_by_player_id(state: Dictionary, player_id: int) -> Dictionary:
 	for row in state.get("contract_entries", []) as Array:
 		var entry: Dictionary = row as Dictionary
 		if int(entry.get("player_id", 0)) == player_id:
 			return entry
 	return {}
+
+
+# 契約市場を作成済みのセーブにはCPU評価が無い場合があるため、解決直前に共通戦力外・レギュラー評価を補う。
+static func _ensure_cpu_contract_evaluations(entries: Array, players: Array, season: PSSeason) -> void:
+	var regular_ids_by_team: Dictionary = {}
+	for entry_value in entries:
+		var entry: Dictionary = entry_value as Dictionary
+		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
+		var team_id: int = int(entry.get("from_team_id", 0))
+		if not entry.has("cpu_release_candidate"):
+			entry["cpu_release_candidate"] = OffseasonService.would_release_player_for_team(
+				players, team_id, player, season
+			)
+		if not entry.has("cpu_regular_candidate"):
+			if not regular_ids_by_team.has(team_id):
+				regular_ids_by_team[team_id] = _cpu_regular_role_ids(players, team_id, season)
+			entry["cpu_regular_candidate"] = (regular_ids_by_team[team_id] as Dictionary).has(
+				int(entry.get("player_id", 0))
+			)
 
 
 # 提示年俸 = ベース年俸 × (1 + FOREIGN_MULTI_YEAR_PREMIUM × (年数-1))。有効数字2桁へ丸める。
@@ -491,10 +606,10 @@ static func _cpu_retain_years(value: int, max_years: int) -> int:
 	return clampi(years, 1, maxi(1, max_years))
 
 
-# 元球団の残留提示。value 不足または増額分を払えない場合は提示なし (=退団リスク)。
+# 元球団の残留提示。共通戦力外評価の対象、レギュラー枠外、または増額分を払えない場合は提示しない。
 static func _cpu_retain_offer(entry: Dictionary, players: Array, teams: Array) -> Dictionary:
 	var value: int = int(entry.get("value", 0))
-	if value < FOREIGN_RETAIN_MIN_VALUE:
+	if bool(entry.get("cpu_release_candidate", false)) or not bool(entry.get("cpu_regular_candidate", true)):
 		return {}
 	var team: PSTeam = _find_team_by_id(teams, int(entry.get("from_team_id", 0)))
 	if team == null:
@@ -515,7 +630,7 @@ static func _cpu_retain_offer(entry: Dictionary, players: Array, teams: Array) -
 # ユーザー球団 (user_team_id) が home_team かつ user_offer が無い場合、auto_user_team=false なら
 # CPU残留提示を生成しない (=「契約市場を確定して次へ」はユーザーの明示提示のみを扱う)。
 # auto_user_team=true (「すべてAIに任せる」/CPU自動経路) なら他球団と同じ基準で残留提示を生成する。
-static func _build_contract_offers(entry: Dictionary, players: Array, teams: Array, poach_counts: Dictionary, user_team_id: int = 0, auto_user_team: bool = false) -> Array:
+static func _build_contract_offers(entry: Dictionary, players: Array, teams: Array, poach_counts: Dictionary, user_team_id: int = 0, auto_user_team: bool = false, season: PSSeason = null) -> Array:
 	var offers: Array = []
 	var home_team_id: int = int(entry.get("from_team_id", 0))
 	var user_offer: Dictionary = entry.get("user_offer", {}) as Dictionary
@@ -533,8 +648,8 @@ static func _build_contract_offers(entry: Dictionary, players: Array, teams: Arr
 	if not user_offer.is_empty() and user_offer_team != home_team_id:
 		offers.append(user_offer.duplicate())
 
-	var value: int = int(entry.get("value", 0))
-	if value >= CPU_FOREIGN_POACH_MIN_VALUE:
+	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
+	if player != null:
 		var max_years: int = int(entry.get("max_years", 1))
 		for team_row in teams:
 			var team: PSTeam = team_row as PSTeam
@@ -548,6 +663,12 @@ static func _build_contract_offers(entry: Dictionary, players: Array, teams: Arr
 				continue
 			var years: int = clampi(Rng.range_int(1, mini(3, max_years)), 1, max_years)
 			var salary: int = _offer_salary(int(round(float(entry.get("market_salary", 0)) * FOREIGN_POACH_SALARY_MULT)), years)
+			var evaluated_player: PSPlayer = PSPlayer.from_dict(player.to_dict())
+			evaluated_player.salary = salary
+			if OffseasonService.would_release_player_for_team(players, team.id, evaluated_player, season):
+				continue
+			if not _would_be_cpu_regular_for_team(players, team.id, evaluated_player, season):
+				continue
 			offers.append({"source": "poach", "team_id": team.id, "years": years, "salary": salary, "is_home": false})
 			poach_counts[team.id] = int(poach_counts.get(team.id, 0)) + 1
 	return offers
@@ -636,13 +757,14 @@ static func resolve_foreign_contract_market(state: Dictionary, players: Array, t
 		return {"ok": true, "state": state}
 	var year: int = int(state.get("year", season.year if season != null else 0))
 	var entries: Array = state.get("contract_entries", []) as Array
+	_ensure_cpu_contract_evaluations(entries, players, season)
 	var poach_counts: Dictionary = {}
 	var contract_signings: Array = state.get("contract_signings", []) as Array
 	for entry_value in entries:
 		var entry: Dictionary = entry_value as Dictionary
 		if bool(entry.get("resolved", false)):
 			continue
-		var offers: Array = _build_contract_offers(entry, players, teams, poach_counts, user_team_id, auto_user_team)
+		var offers: Array = _build_contract_offers(entry, players, teams, poach_counts, user_team_id, auto_user_team, season)
 		var applied: Dictionary = _apply_best_contract_offer(players, teams, entry, offers, year)
 		entry["resolved"] = true
 		if not applied.is_empty():
@@ -738,13 +860,34 @@ static func _can_team_afford_foreign(players: Array, teams: Array, team_id: int,
 	return TeamFinance.can_afford_addition(players, team, int(candidate.get("salary", 0)))
 
 
+static func _scouted_candidate_projection_player(candidate: Dictionary) -> PSPlayer:
+	var data: Dictionary = candidate.get("display_player_data", {}) as Dictionary
+	if data.is_empty():
+		data = candidate.get("player_data", {}) as Dictionary
+	if data.is_empty():
+		return null
+	var evaluation_data: Dictionary = data.duplicate(true)
+	evaluation_data["salary"] = int(candidate.get("salary", evaluation_data.get("salary", 0)))
+	return PSPlayer.from_dict(evaluation_data)
+
+
+static func _cpu_scout_candidate_viable(candidate: Dictionary, players: Array, team_id: int, season: PSSeason) -> bool:
+	var evaluation_player: PSPlayer = _scouted_candidate_projection_player(candidate)
+	return not OffseasonService.would_release_player_for_team(
+		players, team_id, evaluation_player, season
+	)
+
+
 static func _signing_score(candidate: Dictionary, team_need: float, players: Array, _teams: Array, team_id: int) -> float:
 	var held: int = _foreign_count_for_team(players, team_id)
 	var open_slots: int = max(0, MAX_FOREIGN_HELD_PER_TEAM - held)
 	# CPUもプレイヤーと同じスカウト情報だけを使い、実能力を透視しない。
-	var score: float = float(candidate.get("estimated_value", candidate.get("value", 0))) * (1.0 + team_need / 20.0)
+	var evaluation_player: PSPlayer = _scouted_candidate_projection_player(candidate)
+	var projection: float = ReleaseValueProjectorRef.projected_value(evaluation_player, null) \
+		if evaluation_player != null else float(candidate.get("estimated_value", candidate.get("value", 0))) \
+		- TeamFinance.ai_acquisition_cost_penalty(int(candidate.get("salary", 0)))
+	var score: float = projection * (1.0 + team_need / 20.0)
 	score += float(open_slots) * FOREIGN_SLOT_FILL_BONUS
-	score -= TeamFinance.ai_acquisition_cost_penalty(int(candidate.get("salary", 0)))
 	return score
 
 
