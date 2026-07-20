@@ -251,6 +251,141 @@ func test_fa_service_days_capped_at_145_per_season() -> void:
 	assert_int(int(player.source_data.get("fa_nissuu", 0))).is_equal(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
 
 
+# --- 初期シードCSVの未来年正規化 --------------------------------------------
+# 進化後ワールドからエクスポートされた initial_players.csv は draft_year / traded_year に
+# 開始年より未来の値を含み得る (services/season/geneki_draft_service.gd の現役ドラフト適格判定
+# 「当年ドラフト新人」「当年トレード獲得」の当年比較が initial_year 相当と誤って一致/超過してしまう)。
+
+func test_normalize_initial_seed_player_rebases_future_draft_year() -> void:
+	var row: Dictionary = {
+		"years": 5,
+		"source_data": {"draft_year": 2044},
+	}
+	var out: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	var source: Dictionary = out["source_data"] as Dictionary
+	assert_int(int(source.get("draft_year", 0))).is_equal(2026 - 5)
+
+
+func test_normalize_initial_seed_player_keeps_past_draft_year() -> void:
+	var row: Dictionary = {
+		"years": 5,
+		"source_data": {"draft_year": 2020},
+	}
+	var out: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	var source: Dictionary = out["source_data"] as Dictionary
+	assert_int(int(source.get("draft_year", 0))).is_equal(2020)
+
+
+func test_normalize_initial_seed_player_drops_future_or_current_traded_year() -> void:
+	var row: Dictionary = {
+		"years": 5,
+		"source_data": {"traded_year": 2026, "traded_from_team": 3},
+	}
+	var out: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	var source: Dictionary = out["source_data"] as Dictionary
+	assert_bool(source.has("traded_year")).is_false()
+	assert_bool(source.has("traded_from_team")).is_false()
+
+
+func test_normalize_initial_seed_player_keeps_past_traded_year() -> void:
+	var row: Dictionary = {
+		"years": 5,
+		"source_data": {"traded_year": 2024, "traded_from_team": 3},
+	}
+	var out: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	var source: Dictionary = out["source_data"] as Dictionary
+	assert_int(int(source.get("traded_year", 0))).is_equal(2024)
+	assert_int(int(source.get("traded_from_team", 0))).is_equal(3)
+
+
+# career_log の未来年は世界共通オフセット (最大 y → initial_year - 1) で一括シフトされる。
+# ドラフト入団エントリのシフト後の年は draft_year のリベース値 (initial_year - years) と
+# 一致し、最終オフに記録が無い選手も同じオフセットでずれないこと。
+func test_normalize_initial_seed_players_shifts_career_log_by_world_offset() -> void:
+	var rows: Array = [
+		{
+			"years": 17,
+			"source_data": {"draft_year": 2029, "career_log": [
+				{"y": 2029, "t": "draft", "o": 3, "v": 1},
+				{"y": 2045, "t": "salary", "v": 12000},
+			]},
+		},
+		{
+			"years": 5,
+			"source_data": {"draft_year": 2041, "career_log": [
+				{"y": 2041, "t": "draft", "o": 2, "v": 2},
+				{"y": 2043, "t": "salary", "v": 3000},
+			]},
+		},
+	]
+	var out: Array = PSPlayerCsvIo.normalize_initial_seed_players(rows, 2026)
+	var log_a: Array = ((out[0] as Dictionary)["source_data"] as Dictionary)["career_log"] as Array
+	assert_int(int((log_a[0] as Dictionary).get("y", 0))).is_equal(2026 - 17)
+	assert_int(int((log_a[0] as Dictionary).get("y", 0))).is_equal(int(((out[0] as Dictionary)["source_data"] as Dictionary).get("draft_year", 0)))
+	assert_int(int((log_a[1] as Dictionary).get("y", 0))).is_equal(2025)
+	var log_b: Array = ((out[1] as Dictionary)["source_data"] as Dictionary)["career_log"] as Array
+	assert_int(int((log_b[0] as Dictionary).get("y", 0))).is_equal(2026 - 5)
+	assert_int(int((log_b[0] as Dictionary).get("y", 0))).is_equal(int(((out[1] as Dictionary)["source_data"] as Dictionary).get("draft_year", 0)))
+	assert_int(int((log_b[1] as Dictionary).get("y", 0))).is_equal(2023)
+
+
+# 正規化済み (未来年なし) の career_log はオフセット 0 で再正規化しても変化しない (冪等)。
+func test_normalize_initial_seed_players_career_log_shift_is_idempotent() -> void:
+	var rows: Array = [
+		{
+			"years": 17,
+			"source_data": {"draft_year": 2029, "career_log": [
+				{"y": 2029, "t": "draft", "o": 3, "v": 1},
+				{"y": 2045, "t": "salary", "v": 12000},
+			]},
+		},
+	]
+	var once: Array = PSPlayerCsvIo.normalize_initial_seed_players(rows, 2026)
+	var twice: Array = PSPlayerCsvIo.normalize_initial_seed_players(once, 2026)
+	var log_once: Array = ((once[0] as Dictionary)["source_data"] as Dictionary)["career_log"] as Array
+	var log_twice: Array = ((twice[0] as Dictionary)["source_data"] as Dictionary)["career_log"] as Array
+	assert_array(log_twice).is_equal(log_once)
+
+
+# オフセット不明の単独呼び出し (career_year_offset 省略) では、シフトで救えない未来年
+# エントリだけ落ち、過去年と年不明 (y=0) は残ること。
+func test_normalize_initial_seed_player_drops_unshiftable_future_career_entries() -> void:
+	var row: Dictionary = {
+		"years": 5,
+		"source_data": {"career_log": [
+			{"y": 2020, "t": "draft", "o": 3, "v": 1},
+			{"y": 0, "t": "released", "f": 2},
+			{"y": 2044, "t": "salary", "v": 3000},
+		]},
+	}
+	var out: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	var log: Array = (out["source_data"] as Dictionary)["career_log"] as Array
+	assert_int(log.size()).is_equal(2)
+	assert_str(str((log[0] as Dictionary).get("t", ""))).is_equal("draft")
+	assert_str(str((log[1] as Dictionary).get("t", ""))).is_equal("released")
+
+
+# 実CSVを正規化した直後の全選手で career_log に開始年以降の年が残っていないこと。経歴タブに
+# 未来年が出る回帰の検出用 (全球団対象者ゼロバグと同根のデータ起因)。GameDb.players を見ないのは
+# 共有状態のため他 suite のシーズン進行で開始年以降の正当なエントリが追記されるから (CSVから直接読む)。
+func test_initial_seed_csv_career_log_has_no_future_years() -> void:
+	var start_year: int = SeasonService.DEFAULT_START_YEAR
+	var rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(
+		PSPlayerCsvIo.read_players(GameDb.CSV_PLAYER_PATH), start_year
+	)
+	var dated_entries: int = 0
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		var source: Dictionary = row.get("source_data", {}) as Dictionary
+		for entry_value in source.get(PSCareerLog.KEY, []) as Array:
+			var entry_year: int = int((entry_value as Dictionary).get("y", 0))
+			dated_entries += 1 if entry_year > 0 else 0
+			assert_bool(entry_year < start_year).override_failure_message(
+				"選手 %s の経歴に開始年以降の年 %d が残っています" % [str(row.get("name", "?")), entry_year]
+			).is_true()
+	assert_int(dated_entries).is_greater(0)
+
+
 func test_released_market_respects_foreign_held_cap() -> void:
 	var open_team_players: Array = _released_market_foreign_cap_players(3)
 	var open_result: Dictionary = ReleasedMarket.process_released_market(

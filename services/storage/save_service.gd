@@ -52,6 +52,7 @@ static func save_state(app_state) -> bool:
 		"offseason_results": app_state.offseason_results,
 		"draft_state": app_state.draft_state,
 		"released_market_state": app_state.released_market_state,
+		"geneki_draft_state": app_state.geneki_draft_state,
 		"fa_state": app_state.fa_state,
 		"foreign_state": app_state.foreign_state,
 		"camp_state": app_state.camp_state,

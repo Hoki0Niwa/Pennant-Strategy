@@ -38,13 +38,28 @@ const TEAM_META_ORDER: Array = [
 # ---- Players ----
 
 static func normalize_initial_seed_players(player_dicts: Array, initial_year: int) -> Array:
+	var career_offset: int = career_log_year_offset(player_dicts, initial_year)
 	var rows: Array = []
 	for row_value in player_dicts:
-		rows.append(normalize_initial_seed_player(row_value as Dictionary, initial_year))
+		rows.append(normalize_initial_seed_player(row_value as Dictionary, initial_year, career_offset))
 	return rows
 
 
-static func normalize_initial_seed_player(row: Dictionary, initial_year: int) -> Dictionary:
+# 進化後ワールドの career_log は各エントリの年 (y) がエクスポート時の未来年のまま残る。
+# エクスポートは最終オフ完了後の開幕前状態なので、世界共通の一律シフトで全選手の最大 y が
+# 「開始前年のオフシーズン」(initial_year - 1) に一致するようなオフセットを返す。
+# 選手ごとの推定 (各自の最大 y アンカー) にしないのは、最終オフに記録が無い選手 (年俸据え置き等)
+# だけずれてドラフト入団年が draft_year のリベース値と食い違うため。正規化済みデータでは 0 (冪等)。
+static func career_log_year_offset(player_dicts: Array, initial_year: int) -> int:
+	var max_year: int = 0
+	for row_value in player_dicts:
+		var source: Dictionary = (row_value as Dictionary).get("source_data", {}) as Dictionary
+		for entry_value in source.get(PSCareerLog.KEY, []) as Array:
+			max_year = maxi(max_year, int((entry_value as Dictionary).get("y", 0)))
+	return maxi(0, max_year - (initial_year - 1))
+
+
+static func normalize_initial_seed_player(row: Dictionary, initial_year: int, career_year_offset: int = 0) -> Dictionary:
 	var out: Dictionary = row.duplicate(true)
 	# 初期世界の全選手も年俸を有効数字2桁へ揃える (CSV由来の値は較正の都合で丸くないことがある)。
 	# 冪等 (round_salary_2sig は既に2桁の値を変えない) なので再ロードしても値は安定する。
@@ -84,6 +99,32 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int) ->
 	source.erase("contract_end_year")
 	source.erase("contract_total_years")
 	source.erase("contract_signed_year")
+
+	# draft_year / traded_year は現役ドラフトの適格判定 (当年ドラフト新人・当年トレード獲得の
+	# 除外) に使われる (geneki_draft_service.gd)。進化後ワールドの未来年がそのまま残っていると
+	# 初期世界の開始年でこの判定が誤爆するため、在籍年数から遡った年へリベースする。
+	if source.has("draft_year") and int(source.get("draft_year", 0)) > initial_year:
+		var years_in_league: int = maxi(0, int(out.get("years", 0)))
+		source["draft_year"] = clampi(initial_year - years_in_league, initial_year - 60, initial_year)
+	if source.has("traded_year") and int(source.get("traded_year", 0)) >= initial_year:
+		source.erase("traded_year")
+		source.erase("traded_from_team")
+
+	# career_log の y も未来年のまま残ると経歴タブに未来年が表示される。世界共通オフセット
+	# (career_log_year_offset) で一括シフトする。シフト後も開始年以降に残るエントリ
+	# (オフセット 0 の単独呼び出しに紛れた未来年など) は年を偽装できないので落とす。
+	if source.has(PSCareerLog.KEY):
+		var kept_entries: Array = []
+		for entry_value in source.get(PSCareerLog.KEY, []) as Array:
+			var entry: Dictionary = entry_value as Dictionary
+			var entry_year: int = int(entry.get("y", 0))
+			if entry_year > 0:
+				entry_year -= career_year_offset
+				if entry_year >= initial_year:
+					continue
+				entry["y"] = entry_year
+			kept_entries.append(entry)
+		source[PSCareerLog.KEY] = kept_entries
 	out["source_data"] = source
 	return out
 

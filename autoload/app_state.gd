@@ -6,24 +6,57 @@ signal season_started(season: PSSeason)
 
 const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
-const OFFSEASON_STEP_RETIREMENT: int = 0
-const OFFSEASON_STEP_RELEASE_EDIT: int = 1
-const OFFSEASON_STEP_RELEASE_COMMIT: int = 2
-const OFFSEASON_STEP_DRAFT_MAIN: int = 3
-const OFFSEASON_STEP_DRAFT_DEVELOPMENT: int = 4
-const OFFSEASON_STEP_RELEASED_MARKET: int = 5
-const OFFSEASON_STEP_FA_MARKET: int = 6
-const OFFSEASON_STEP_FOREIGN_MARKET: int = 7
-const OFFSEASON_STEP_CAMP: int = 8
-const OFFSEASON_STEP_GROWTH: int = 9
-const OFFSEASON_STEP_CONTRACT_UPDATE: int = 10
-const OFFSEASON_TOTAL_STEPS: int = OFFSEASON_STEP_CONTRACT_UPDATE
+# オフシーズン進行はステップID (String) で管理する。順序は OFFSEASON_STEP_ORDER が単一ソースで、
+# ステップの挿入・並べ替えはこの配列の編集だけで完結する (番号の振り直しは存在しない)。
+# offseason_results のキーもこのIDをそのまま使う。
+const OFFSEASON_STEP_RETIREMENT: String = "retirement"
+const OFFSEASON_STEP_RELEASE_EDIT: String = "release_edit"
+const OFFSEASON_STEP_RELEASE_COMMIT: String = "release_commit"
+const OFFSEASON_STEP_DRAFT_MAIN: String = "draft_main"
+const OFFSEASON_STEP_DRAFT_DEVELOPMENT: String = "draft_development"
+const OFFSEASON_STEP_RELEASED_MARKET: String = "released_market"
+const OFFSEASON_STEP_GENEKI_DRAFT: String = "geneki_draft"
+const OFFSEASON_STEP_FA_MARKET: String = "fa_market"
+const OFFSEASON_STEP_FOREIGN_MARKET: String = "foreign_market"
+const OFFSEASON_STEP_CAMP: String = "camp"
+const OFFSEASON_STEP_GROWTH: String = "growth"
+const OFFSEASON_STEP_CONTRACT_UPDATE: String = "contract_update"
+const OFFSEASON_STEP_ORDER: Array[String] = [
+	OFFSEASON_STEP_RETIREMENT,
+	OFFSEASON_STEP_RELEASE_EDIT,
+	OFFSEASON_STEP_RELEASE_COMMIT,
+	OFFSEASON_STEP_DRAFT_MAIN,
+	OFFSEASON_STEP_DRAFT_DEVELOPMENT,
+	OFFSEASON_STEP_RELEASED_MARKET,
+	OFFSEASON_STEP_GENEKI_DRAFT,
+	OFFSEASON_STEP_FA_MARKET,
+	OFFSEASON_STEP_FOREIGN_MARKET,
+	OFFSEASON_STEP_CAMP,
+	OFFSEASON_STEP_GROWTH,
+	OFFSEASON_STEP_CONTRACT_UPDATE,
+]
+# 旧セーブ移行用: 数値ステップ時代 (〜2026-07-20) の番号 = この配列の index。
+# offseason_results の旧キー "step_<番号>" も同じ対応でIDへ読み替える。
+const _LEGACY_OFFSEASON_STEP_IDS: Array[String] = [
+	OFFSEASON_STEP_RETIREMENT,
+	OFFSEASON_STEP_RELEASE_EDIT,
+	OFFSEASON_STEP_RELEASE_COMMIT,
+	OFFSEASON_STEP_DRAFT_MAIN,
+	OFFSEASON_STEP_DRAFT_DEVELOPMENT,
+	OFFSEASON_STEP_RELEASED_MARKET,
+	OFFSEASON_STEP_FA_MARKET,
+	OFFSEASON_STEP_FOREIGN_MARKET,
+	OFFSEASON_STEP_CAMP,
+	OFFSEASON_STEP_GROWTH,
+	OFFSEASON_STEP_CONTRACT_UPDATE,
+]
 
 const OFFSEASON_PANEL_NONE: String = "none"
 const OFFSEASON_PANEL_RESULTS: String = "results"
 const OFFSEASON_PANEL_RELEASE: String = "release"
 const OFFSEASON_PANEL_DRAFT: String = "draft"
 const OFFSEASON_PANEL_RELEASED_MARKET: String = "released_market"
+const OFFSEASON_PANEL_GENEKI_DRAFT: String = "geneki_draft"
 const OFFSEASON_PANEL_FA: String = "fa"
 const OFFSEASON_PANEL_FOREIGN: String = "foreign"
 const OFFSEASON_PANEL_FOREIGN_CONTRACT: String = "foreign_contract"
@@ -50,10 +83,11 @@ var selected_team_id: int = 0
 var current_season: PSSeason = null
 var last_status_message: String = ""
 var current_player_id: int = 0
-var offseason_step: int = 0
+var offseason_step: String = OFFSEASON_STEP_RETIREMENT
 var offseason_results: Dictionary = {}
 var draft_state: Dictionary = {}
 var released_market_state: Dictionary = {}
+var geneki_draft_state: Dictionary = {}
 var fa_state: Dictionary = {}
 var foreign_state: Dictionary = {}
 var camp_state: Dictionary = {}
@@ -174,8 +208,18 @@ func dh_settings_for_schedule() -> Dictionary:
 	}
 
 
+# 現在のステップが OFFSEASON_STEP_ORDER の何番目か (-1=不明)。順序比較はこれ経由でのみ行う。
+func offseason_step_index() -> int:
+	return OFFSEASON_STEP_ORDER.find(offseason_step)
+
+
+# 全ステップ消化済み (=最終ステップに到達) かどうか。「翌年開始」可否の判定に使う。
+func offseason_steps_complete() -> bool:
+	return offseason_step == OFFSEASON_STEP_ORDER[OFFSEASON_STEP_ORDER.size() - 1]
+
+
 func get_offseason_view_state() -> Dictionary:
-	var step: int = offseason_step
+	var step: String = offseason_step
 	var active_panel: String = OFFSEASON_PANEL_RESULTS
 	var title: String = ""
 	var interactive: bool = false
@@ -185,8 +229,6 @@ func get_offseason_view_state() -> Dictionary:
 		return {
 			"active": false,
 			"step": step,
-			"total_steps": OFFSEASON_TOTAL_STEPS,
-			"phase": step,
 			"title": "オフシーズン未開始",
 			"status": "オフシーズンが開始されていません",
 			"active_panel": OFFSEASON_PANEL_NONE,
@@ -215,6 +257,11 @@ func get_offseason_view_state() -> Dictionary:
 			if not released_market_state.is_empty() and not bool(released_market_state.get("complete", false)):
 				active_panel = OFFSEASON_PANEL_RELEASED_MARKET
 				title = "戦力外獲得"
+				interactive = true
+		OFFSEASON_STEP_GENEKI_DRAFT:
+			if not geneki_draft_state.is_empty() and not bool(geneki_draft_state.get("complete", false)):
+				active_panel = OFFSEASON_PANEL_GENEKI_DRAFT
+				title = "現役ドラフト"
 				interactive = true
 		OFFSEASON_STEP_FA_MARKET:
 			if not fa_state.is_empty() and not bool(fa_state.get("complete", false)):
@@ -249,21 +296,18 @@ func get_offseason_view_state() -> Dictionary:
 				interactive = true
 
 	if not interactive:
-		var step_key: String = "step_%d" % step
-		result = offseason_results.get(step_key, {}) as Dictionary
+		result = offseason_results.get(step, {}) as Dictionary
 		title = str(result.get("title", "")) if not result.is_empty() else "結果データがありません"
 
 	return {
 		"active": true,
 		"step": step,
-		"total_steps": OFFSEASON_TOTAL_STEPS,
-		"phase": step,
 		"title": title,
 		"status": title,
 		"active_panel": active_panel,
 		"is_interactive": interactive,
-		"can_advance": (not interactive) and step < OFFSEASON_TOTAL_STEPS,
-		"can_finalize": (not interactive) and step >= OFFSEASON_TOTAL_STEPS,
+		"can_advance": (not interactive) and not offseason_steps_complete(),
+		"can_finalize": (not interactive) and offseason_steps_complete(),
 		"result": result,
 	}
 
@@ -287,6 +331,7 @@ func start_new_season() -> bool:
 	last_status_message = ""
 	draft_state = {}
 	released_market_state = {}
+	geneki_draft_state = {}
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
@@ -315,6 +360,7 @@ func start_next_season() -> bool:
 	offseason_results = {}
 	draft_state = {}
 	released_market_state = {}
+	geneki_draft_state = {}
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
@@ -452,9 +498,10 @@ func start_offseason() -> Dictionary:
 	var champion_id: int = current_postseason.champion_team_id if current_postseason != null else 0
 	retirement_result["budgets"] = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, current_season, champion_id)
 	offseason_step = OFFSEASON_STEP_RETIREMENT
-	offseason_results = {"step_0": retirement_result}
+	offseason_results = {OFFSEASON_STEP_RETIREMENT: retirement_result}
 	draft_state = {}
 	released_market_state = {}
+	geneki_draft_state = {}
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
@@ -475,7 +522,7 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	if not offseason_active:
 		return {"ok": false, "message": "オフシーズンが開始されていません"}
 	if offseason_step != OFFSEASON_STEP_RELEASE_EDIT:
-		return {"ok": false, "message": "戦力外通告は戦力外エディタ(step 1)でのみ確定できます"}
+		return {"ok": false, "message": "戦力外通告は戦力外エディタでのみ確定できます"}
 
 	var offseason_year: int = current_season.year if current_season != null else 0
 	var lock_check: Dictionary = OffseasonService.reject_locked_release_or_demote(GameDb.players, player_ids, demote_ids, offseason_year)
@@ -489,7 +536,7 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	var user_result: Dictionary = OffseasonService.process_release(GameDb.players, selected_team_id, player_ids, offseason_year)
 	var cpu_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, selected_team_id, current_season)
 
-	# 自軍と CPU 全球団を合算した結果を step_2 として保存する。
+	# 自軍と CPU 全球団を合算した結果を release_commit ステップ結果として保存する。
 	var merged_released: Array = []
 	merged_released.append_array(user_result.get("released", []) as Array)
 	merged_released.append_array(cpu_result.get("released", []) as Array)
@@ -517,11 +564,11 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 	}
 	step_result["title"] = "戦力外通告"
 	offseason_step = OFFSEASON_STEP_RELEASE_COMMIT
-	offseason_results["step_2"] = step_result
+	offseason_results[OFFSEASON_STEP_RELEASE_COMMIT] = step_result
 	GameDb.rebuild_player_indices()
 	last_status_message = str(step_result.get("title", ""))
 	_save_if_enabled()
-	return {"ok": true, "step": 2, "result": step_result}
+	return {"ok": true, "step": OFFSEASON_STEP_RELEASE_COMMIT, "result": step_result}
 
 
 func advance_offseason() -> Dictionary:
@@ -537,6 +584,8 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "育成指名が進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_RELEASED_MARKET and not _is_released_market_complete():
 		return {"ok": false, "message": "戦力外獲得市場が進行中です。先に完了してください"}
+	if offseason_step == OFFSEASON_STEP_GENEKI_DRAFT and not _is_geneki_draft_complete():
+		return {"ok": false, "message": "現役ドラフトが進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_FA_MARKET and not _is_fa_complete():
 		return {"ok": false, "message": "FA市場が進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_FOREIGN_MARKET and not _is_foreign_complete():
@@ -545,10 +594,13 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "キャンプが進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_CONTRACT_UPDATE and not _is_contract_update_complete():
 		return {"ok": false, "message": "契約更新の延長交渉が進行中です。先に完了してください"}
-	if offseason_step >= OFFSEASON_TOTAL_STEPS:
+	if offseason_steps_complete():
 		return {"ok": false, "message": "オフシーズン処理は完了しています。「翌年開始」で次シーズンへ進んでください"}
+	var current_index: int = offseason_step_index()
+	if current_index < 0:
+		return {"ok": false, "message": "不正なステップID: %s" % offseason_step}
 
-	var next_step: int = offseason_step + 1
+	var next_step: String = OFFSEASON_STEP_ORDER[current_index + 1]
 	var step_result: Dictionary = {}
 	var has_result_to_store: bool = true
 
@@ -576,13 +628,19 @@ func advance_offseason() -> Dictionary:
 				GameDb.players,
 				GameDb.teams,
 				current_season,
-				offseason_results.get("step_2", {}) as Dictionary,
+				offseason_results.get(OFFSEASON_STEP_RELEASE_COMMIT, {}) as Dictionary,
 				selected_team_id
 			)
 			if _is_released_market_complete():
 				step_result = _finalize_released_market_if_complete()
 			else:
 				step_result = {"title": "戦力外獲得", "released_market_in_progress": true}
+		OFFSEASON_STEP_GENEKI_DRAFT:
+			geneki_draft_state = GenekiDraftService.create_geneki_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
+			if _is_geneki_draft_complete():
+				step_result = _finalize_geneki_draft_if_complete()
+			else:
+				step_result = {"title": "現役ドラフト", "geneki_draft_in_progress": true}
 		OFFSEASON_STEP_FA_MARKET:
 			fa_state = FaMarketService.create_fa_market_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
 			if _is_fa_complete():
@@ -620,11 +678,11 @@ func advance_offseason() -> Dictionary:
 			else:
 				step_result = {"title": "契約更新", "contract_update_in_progress": true}
 		_:
-			return {"ok": false, "message": "不正なステップ番号"}
+			return {"ok": false, "message": "不正なステップID: %s" % next_step}
 
 	offseason_step = next_step
 	if has_result_to_store:
-		offseason_results["step_%d" % next_step] = step_result
+		offseason_results[next_step] = step_result
 		last_status_message = str(step_result.get("title", ""))
 	else:
 		last_status_message = "戦力外通告"
@@ -748,7 +806,7 @@ func _store_main_draft_if_complete() -> Dictionary:
 		if not bool(pick.get("development", false)):
 			picks.append(pick)
 	var result: Dictionary = _draft_result_snapshot("本指名", picks)
-	offseason_results["step_3"] = result
+	offseason_results[OFFSEASON_STEP_DRAFT_MAIN] = result
 	last_status_message = "本指名"
 	return result
 
@@ -765,7 +823,7 @@ func _finalize_draft_if_complete() -> Dictionary:
 	result["rookies"] = _filter_development_rookies(final_result.get("rookies", []) as Array)
 	result["rookies_count"] = (result.get("rookies", []) as Array).size()
 	result["title"] = "育成指名"
-	offseason_results["step_4"] = result
+	offseason_results[OFFSEASON_STEP_DRAFT_DEVELOPMENT] = result
 	last_status_message = "育成指名"
 	return result
 
@@ -866,8 +924,78 @@ func _finalize_released_market_if_complete() -> Dictionary:
 	var result: Dictionary = ReleasedMarketService.finalize_released_market(released_market_state)
 	GameDb.rebuild_player_indices()
 	result["title"] = "戦力外獲得"
-	offseason_results["step_5"] = result
+	offseason_results[OFFSEASON_STEP_RELEASED_MARKET] = result
 	last_status_message = "戦力外獲得"
+	return result
+
+
+# ---------------------------------------------------------------- 現役ドラフト
+
+func submit_geneki_list(player_ids: Array) -> Dictionary:
+	return _geneki_action(func() -> Dictionary:
+		return GenekiDraftService.submit_user_list(geneki_draft_state, GameDb.players, GameDb.teams, current_season, player_ids)
+	)
+
+
+func auto_geneki_list() -> Dictionary:
+	return _geneki_action(func() -> Dictionary:
+		return GenekiDraftService.auto_submit_user_list(geneki_draft_state, GameDb.players, GameDb.teams, current_season)
+	)
+
+
+func submit_geneki_pick(player_id: int) -> Dictionary:
+	return _geneki_action(func() -> Dictionary:
+		return GenekiDraftService.submit_user_pick(geneki_draft_state, GameDb.players, GameDb.teams, current_season, player_id)
+	)
+
+
+func pass_geneki_pick() -> Dictionary:
+	return _geneki_action(func() -> Dictionary:
+		return GenekiDraftService.pass_user_pick(geneki_draft_state, GameDb.players, GameDb.teams, current_season)
+	)
+
+
+func set_geneki_round2_mode(mode: String) -> Dictionary:
+	return _geneki_action(func() -> Dictionary:
+		return GenekiDraftService.set_user_round2_mode(geneki_draft_state, GameDb.players, GameDb.teams, current_season, mode)
+	)
+
+
+func complete_geneki_draft_automatically() -> Dictionary:
+	return _geneki_action(func() -> Dictionary:
+		return GenekiDraftService.complete_automatically(geneki_draft_state, GameDb.players, GameDb.teams, current_season)
+	)
+
+
+# 現役ドラフトの各ユーザー操作の共通ラッパー: ステップガード → サービス呼び出し →
+# 完了していれば移籍を確定 → 保存。
+func _geneki_action(action: Callable) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_GENEKI_DRAFT:
+		return {"ok": false, "message": "現役ドラフトは現在有効ではありません"}
+	if geneki_draft_state.is_empty():
+		return {"ok": false, "message": "現役ドラフトが初期化されていません"}
+	var result: Dictionary = action.call()
+	geneki_draft_state = result.get("state", geneki_draft_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	if _is_geneki_draft_complete():
+		_finalize_geneki_draft_if_complete()
+	_save_if_enabled()
+	return {"ok": true, "state": geneki_draft_state}
+
+
+func _is_geneki_draft_complete() -> bool:
+	return not geneki_draft_state.is_empty() and bool(geneki_draft_state.get("complete", false))
+
+
+func _finalize_geneki_draft_if_complete() -> Dictionary:
+	if not _is_geneki_draft_complete():
+		return {"title": "現役ドラフト", "geneki_draft_in_progress": true}
+	var result: Dictionary = GenekiDraftService.finalize_geneki_draft(geneki_draft_state, GameDb.players, GameDb.teams, current_season)
+	GameDb.rebuild_player_indices()
+	result["title"] = "現役ドラフト"
+	offseason_results[OFFSEASON_STEP_GENEKI_DRAFT] = result
+	last_status_message = "現役ドラフト"
 	return result
 
 
@@ -936,7 +1064,7 @@ func _finalize_fa_if_complete() -> Dictionary:
 	var result: Dictionary = FaMarketService.finalize_fa_market(fa_state, GameDb.players, current_season)
 	GameDb.rebuild_player_indices()
 	result["title"] = "FA市場"
-	offseason_results["step_6"] = result
+	offseason_results[OFFSEASON_STEP_FA_MARKET] = result
 	last_status_message = "FA市場"
 	return result
 
@@ -1128,7 +1256,7 @@ func _finalize_foreign_if_complete() -> Dictionary:
 	var result: Dictionary = ForeignPlayerService.finalize_foreign_market(foreign_state)
 	GameDb.rebuild_player_indices()
 	result["title"] = "外国人補強"
-	offseason_results["step_7"] = result
+	offseason_results[OFFSEASON_STEP_FOREIGN_MARKET] = result
 	last_status_message = "外国人補強"
 	return result
 
@@ -1218,7 +1346,7 @@ func _finalize_camp_if_complete() -> Dictionary:
 	var result: Dictionary = _camp_service().finalize_camp(camp_state, GameDb.players, current_season)
 	GameDb.rebuild_player_indices()
 	result["title"] = "キャンプ"
-	offseason_results["step_8"] = result
+	offseason_results[OFFSEASON_STEP_CAMP] = result
 	last_status_message = "キャンプ"
 	return result
 
@@ -1278,15 +1406,40 @@ func _finalize_contract_update_if_complete_force() -> Dictionary:
 	var result: Dictionary = OffseasonService.finalize_contract_extensions(contract_update_state, GameDb.players, GameDb.teams, current_season)
 	GameDb.rebuild_player_indices()
 	result["title"] = "契約更新"
-	offseason_results["step_10"] = result
+	offseason_results[OFFSEASON_STEP_CONTRACT_UPDATE] = result
 	last_status_message = "契約更新"
 	return result
 
 
 func finalize_offseason() -> bool:
-	if offseason_step < OFFSEASON_TOTAL_STEPS:
+	if not offseason_steps_complete():
 		push_warning("Offseason not fully processed before finalize")
 	return start_next_season()
+
+
+# セーブ値のステップを現行IDへ正規化する。旧セーブは int 番号 (= _LEGACY_OFFSEASON_STEP_IDS の
+# index) で保存されているため、String 化と同時にここで読み替える。
+func _normalize_saved_offseason_step(raw_step: Variant) -> String:
+	if raw_step is String and OFFSEASON_STEP_ORDER.has(raw_step):
+		return raw_step
+	if raw_step is int or raw_step is float:
+		var legacy_index: int = clampi(int(raw_step), 0, _LEGACY_OFFSEASON_STEP_IDS.size() - 1)
+		return _LEGACY_OFFSEASON_STEP_IDS[legacy_index]
+	return OFFSEASON_STEP_RETIREMENT
+
+
+# offseason_results の旧キー "step_<番号>" をステップIDキーへ読み替える (新形式キーはそのまま)。
+func _migrate_offseason_result_keys(results: Dictionary) -> Dictionary:
+	var migrated: Dictionary = {}
+	for key in results.keys():
+		var key_text: String = str(key)
+		if key_text.begins_with("step_") and key_text.trim_prefix("step_").is_valid_int():
+			var legacy_index: int = int(key_text.trim_prefix("step_"))
+			if legacy_index >= 0 and legacy_index < _LEGACY_OFFSEASON_STEP_IDS.size():
+				migrated[_LEGACY_OFFSEASON_STEP_IDS[legacy_index]] = results[key]
+				continue
+		migrated[key_text] = results[key]
+	return migrated
 
 
 func simulate_next_game(during_skip: bool = false) -> Dictionary:
@@ -1561,10 +1714,11 @@ func restore_from_save(data: Dictionary) -> bool:
 			ranked_team.previous_rank = int(saved_ranks[rank_key])
 
 	selected_team_id = int(data.get("selected_team_id", 0))
-	offseason_step = int(data.get("offseason_step", 0))
-	offseason_results = (data.get("offseason_results", {}) as Dictionary).duplicate(true)
+	offseason_step = _normalize_saved_offseason_step(data.get("offseason_step", OFFSEASON_STEP_RETIREMENT))
+	offseason_results = _migrate_offseason_result_keys((data.get("offseason_results", {}) as Dictionary).duplicate(true))
 	draft_state = (data.get("draft_state", {}) as Dictionary).duplicate(true)
 	released_market_state = (data.get("released_market_state", {}) as Dictionary).duplicate(true)
+	geneki_draft_state = (data.get("geneki_draft_state", {}) as Dictionary).duplicate(true)
 	fa_state = (data.get("fa_state", {}) as Dictionary).duplicate(true)
 	foreign_state = (data.get("foreign_state", {}) as Dictionary).duplicate(true)
 	camp_state = (data.get("camp_state", {}) as Dictionary).duplicate(true)

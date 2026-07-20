@@ -1,0 +1,804 @@
+extends RefCounted
+class_name GenekiDraftService
+
+# 現役ドラフト (NPB 2022年導入・2024年改定ルール準拠)。オフシーズンの geneki_draft ステップ
+# (戦力外獲得の後・FA市場の前) で実行する。
+#
+# ルールの骨子 (2024年改定):
+# - 各球団は対象選手を2人以上リストアップする。対象は 支配下・非外国人・年俸5000万未満
+#   (1人だけ5000万以上1億未満を含められるが、その場合5000万未満を追加し3人以上)。
+#   FA権保有/行使経験者・複数年契約中・当年ドラフト新人・当年トレード獲得選手は対象外。
+# - 1巡目: 各球団が欲しい選手1人に投票し、自球団リスト選手の得票数が最多の球団から指名開始。
+#   指名された選手の所属球団に指名権が移るチェーン方式。各球団の獲得は必ず1人・放出も必ず1人
+#   (= 既に放出済みの球団の選手は指名できないため、同一球団から1巡目に2人指名されることはない)。
+#   チェーンが閉じたら (指名権が指名済み球団へ移ったら) 未指名球団の得票数上位から再開。
+# - 2巡目: 参加任意。指名して参加 / 放出のみ参加 (2025年改定) / 不参加 を選び、
+#   1巡目の指名順の逆順で指名する。不参加球団の選手は指名対象外。棄権可。
+# - 金銭のやり取りはなく、年俸は据え置きで移籍する。
+#
+# state はセーブ互換のため JSON-safe (Dictionary/Array/int/float/String/bool) のみで構成する。
+# phase: "submit" (ユーザーのリスト編集) → "round1" → "round2_entry" (ユーザーの参加形態選択)
+#        → "round2" → "done" (complete=true)。移籍の実適用は finalize_geneki_draft で行う。
+
+const STATE_VERSION: int = 1
+
+const LIST_MIN: int = 2
+# 年俸境界 (万円)。5000万未満が通常対象、5000万以上1億未満は例外枠1人まで。
+const SALARY_STANDARD_MAX: int = 5000
+const SALARY_EXCEPTION_MAX: int = 10000
+const LIST_MIN_WITH_EXCEPTION: int = 3
+# CPUのリスト人数 (最低限のみ提出。例外枠は eligible 不足時のフォールバックでしか使わない)。
+const CPU_LIST_SIZE: int = 2
+
+# 投票/指名スコア: projected_value + ポジション需要 * NEED_WEIGHT + ノイズ。
+# 需要は FaMarketService._build_position_need (リーグ最良との overall 差、概ね0〜20)。
+const VOTE_NEED_WEIGHT: float = 0.5
+const VOTE_NOISE: float = 2.0
+# 2巡目でCPUが「指名して参加」するスコア下限。代替水準 (ReleaseValueProjector 較正の52) より
+# 明確に上の選手が残っている場合のみ追加獲得に動く (実際の2巡目指名が年0〜3人と少ないことに対応)。
+const ROUND2_PICK_MIN_SCORE: float = 58.0
+
+const ROUND2_MODE_PICK: String = "pick"
+const ROUND2_MODE_OFFER_ONLY: String = "offer_only"
+const ROUND2_MODE_NONE: String = "none"
+
+
+static func create_geneki_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
+	var year: int = season.year if season != null else 0
+	var state: Dictionary = {
+		"version": STATE_VERSION,
+		"year": year,
+		"user_team_id": user_team_id,
+		"phase": "submit",
+		"complete": false,
+		"finalized": false,
+		"waiting_user": false,
+		"user_submitted": false,
+		"current_team_id": 0,
+		# team_id_str -> [entry]。entry は {player_id, from_team_id, salary, exception}。
+		"team_lists": {},
+		# ユーザーのリスト編集用: 適格候補とAI推奨 (player_id 配列)。
+		"user_eligible_ids": [],
+		"user_recommended_ids": [],
+		# 1巡目投票: votes = team_id_str -> player_id / vote_counts = team_id_str -> 得票数。
+		"votes": {},
+		"vote_counts": {},
+		"team_need": {},
+		"round": 1,
+		"picks": [],
+		"pick_order_log": [],
+		# チェーンの次の指名権保持球団 (直前に選手を指名された球団)。0 = チェーン切れ (得票順で再開)。
+		"chain_next": 0,
+		"picked_round1": {},
+		"lost_round1": {},
+		"round2_participation": {},
+		"round2_order": [],
+		"round2_index": 0,
+		"lost_round2": {},
+		"waiver_order": DraftService._draft_reverse_order(teams, season),
+		"seed": year * 7919 + user_team_id * 131,
+		"logs": [],
+	}
+
+	var team_lists: Dictionary = {}
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		var eligible: Array = _eligible_entries_for_team(players, team.id, season)
+		if team.id == user_team_id:
+			var recommended: Array = _cpu_select_list(eligible)
+			var eligible_ids: Array = []
+			for entry_row in eligible:
+				eligible_ids.append(int((entry_row as Dictionary).get("player_id", 0)))
+			state["user_eligible_ids"] = eligible_ids
+			var recommended_ids: Array = []
+			for entry_row in recommended:
+				recommended_ids.append(int((entry_row as Dictionary).get("player_id", 0)))
+			state["user_recommended_ids"] = recommended_ids
+			team_lists[str(team.id)] = []
+		else:
+			team_lists[str(team.id)] = _cpu_select_list(eligible)
+	state["team_lists"] = team_lists
+
+	# ユーザー球団が存在しない (レポート/テストの全CPU進行) 場合は提出も含めて自動で完了させる。
+	if user_team_id <= 0 or not team_lists.has(str(user_team_id)):
+		state["user_submitted"] = true
+		return _advance_until_user_or_complete(state, players, teams, season, true)
+	return _advance_until_user_or_complete(state, players, teams, season, false)
+
+
+# ============================================================ 適格判定・リスト選定
+
+# 現役ドラフトの指名対象になれるか (リスト全体の人数/例外枠ルールは _validate_list 側)。
+static func is_eligible(player: PSPlayer, year: int) -> bool:
+	if player == null or player.team_id <= 0 or player.is_retired():
+		return false
+	if player.development_player or player.foreign_player:
+		return false
+	if player.salary >= SALARY_EXCEPTION_MAX:
+		return false
+	# 複数年契約中は対象外 (契約最終年のオフは満了扱い、FA/戦力外と同じ境界)。
+	if player.is_multi_year_locked_offseason(year):
+		return false
+	# FA権保有者・FA権行使経験者 (fa_signed_year = 宣言してFA契約/残留した履歴) は対象外。
+	if player.is_fa_eligible() or player.source_data.has("fa_signed_year"):
+		return false
+	# 当年ドラフト入団の新人 (オフの本指名/育成指名は現役ドラフトより前のステップ) は対象外。
+	# 判定は当年との「一致」に限る: 初期シードは進化後ワールド由来の未来年 draft_year を
+	# 持ち込むことがあり (rookie_year も生涯 true のまま)、>= 比較だとドラフト出身のほぼ
+	# 全選手が新人扱いになって対象者ゼロになる。念のため在籍0年 (今オフ入団) も新人扱い。
+	if year > 0 and int(player.source_data.get("draft_year", 0)) == year:
+		return false
+	if player.years <= 0 and bool(player.source_data.get("rookie_year", false)):
+		return false
+	# 当年 (今季) トレードで獲得した選手は対象外。
+	if int(player.source_data.get("traded_year", 0)) == year and year > 0:
+		return false
+	return true
+
+
+static func _eligible_entries_for_team(players: Array, team_id: int, season: PSSeason) -> Array:
+	var year: int = season.year if season != null else 0
+	var evaluations: Dictionary = OffseasonService.release_depth_chart_evaluations(players, team_id, season)
+	var entries: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if not is_eligible(player, year):
+			continue
+		var evaluation: Dictionary = evaluations.get(player.id, {}) as Dictionary
+		var projected: float = float(evaluation.get("projected_value", 0.0))
+		if evaluation.is_empty():
+			var record: PSPlayerSeasonRecord = null
+			if season != null:
+				record = RecordStore.get_player_record(player.id, season.year, season.season_number)
+			projected = ReleaseValueProjector.projected_value(player, record)
+		entries.append({
+			"player_id": player.id,
+			"name": player.name,
+			"from_team_id": team_id,
+			"salary": player.salary,
+			"exception": player.salary >= SALARY_STANDARD_MAX,
+			"surplus": bool(evaluation.get("surplus", false)),
+			"value": projected,
+		})
+	return entries
+
+
+# CPUのリスト選定: 「自軍では出場機会がない (surplus) が能力のある選手」を優先して晒す。
+# surplus の projected_value 上位 → 不足分は非 surplus の projected_value 下位 (手放しても
+# 痛くない順) で補う。例外枠 (5000万以上) は5000万未満だけで人数を満たせない場合のみ使う。
+static func _cpu_select_list(eligible: Array) -> Array:
+	var standard: Array = []
+	var exception: Array = []
+	for entry_row in eligible:
+		var entry: Dictionary = entry_row as Dictionary
+		if bool(entry.get("exception", false)):
+			exception.append(entry)
+		else:
+			standard.append(entry)
+
+	var surplus_pool: Array = []
+	var keeper_pool: Array = []
+	for entry_row in standard:
+		var entry: Dictionary = entry_row as Dictionary
+		if bool(entry.get("surplus", false)):
+			surplus_pool.append(entry)
+		else:
+			keeper_pool.append(entry)
+	surplus_pool.sort_custom(func(a, b) -> bool:
+		return float((a as Dictionary).get("value", 0.0)) > float((b as Dictionary).get("value", 0.0))
+	)
+	keeper_pool.sort_custom(func(a, b) -> bool:
+		return float((a as Dictionary).get("value", 0.0)) < float((b as Dictionary).get("value", 0.0))
+	)
+
+	var selected: Array = []
+	for entry_row in surplus_pool:
+		if selected.size() >= CPU_LIST_SIZE:
+			break
+		selected.append((entry_row as Dictionary).duplicate(true))
+	for entry_row in keeper_pool:
+		if selected.size() >= CPU_LIST_SIZE:
+			break
+		selected.append((entry_row as Dictionary).duplicate(true))
+	if selected.size() < CPU_LIST_SIZE and not exception.is_empty():
+		# 5000万未満が足りない球団のみ例外枠を1人使う (リスト3人ルールは相手にした本人が
+		# 5000万未満不足の状況なので満たしようがなく、最低保証を優先する)。
+		exception.sort_custom(func(a, b) -> bool:
+			return float((a as Dictionary).get("value", 0.0)) < float((b as Dictionary).get("value", 0.0))
+		)
+		selected.append((exception[0] as Dictionary).duplicate(true))
+	return selected
+
+
+# ユーザー提出リストの検証。ok=false 時は message を返す。
+# 人数下限は「適格プールで物理的に揃えられる最大数」まで緩和する (縮小ワールド防御。
+# 例外枠1人までのルール自体は緩和しない)。
+static func _validate_list(entries: Array, eligible: Array) -> Dictionary:
+	var exception_count: int = 0
+	for entry_row in entries:
+		if bool((entry_row as Dictionary).get("exception", false)):
+			exception_count += 1
+	if exception_count > 1:
+		return {"ok": false, "message": "年俸5000万円以上の選手は1人までしかリストに入れられません"}
+	var required: int = LIST_MIN
+	if exception_count > 0:
+		required = LIST_MIN_WITH_EXCEPTION
+	var eligible_standard: int = 0
+	var eligible_exception: int = 0
+	for entry_row in eligible:
+		if bool((entry_row as Dictionary).get("exception", false)):
+			eligible_exception += 1
+		else:
+			eligible_standard += 1
+	required = mini(required, eligible_standard + mini(1, eligible_exception))
+	if entries.size() < required:
+		return {"ok": false, "message": "リストは%d人以上必要です (年俸5000万円以上を含む場合は%d人以上)" % [LIST_MIN, LIST_MIN_WITH_EXCEPTION]}
+	return {"ok": true}
+
+
+# ============================================================ ユーザー操作
+
+static func submit_user_list(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_ids: Array) -> Dictionary:
+	if str(state.get("phase", "")) != "submit":
+		return {"ok": false, "message": "リスト提出の段階ではありません", "state": state}
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var eligible: Array = _eligible_entries_for_team(players, user_team_id, season)
+	var entries: Array = []
+	for id_value in player_ids:
+		var player_id: int = int(id_value)
+		var found: Dictionary = {}
+		for entry_row in eligible:
+			if int((entry_row as Dictionary).get("player_id", 0)) == player_id:
+				found = (entry_row as Dictionary).duplicate(true)
+				break
+		if found.is_empty():
+			return {"ok": false, "message": "対象外の選手が含まれています (id=%d)" % player_id, "state": state}
+		entries.append(found)
+	var validation: Dictionary = _validate_list(entries, eligible)
+	if not bool(validation.get("ok", false)):
+		validation["state"] = state
+		return validation
+	(state["team_lists"] as Dictionary)[str(user_team_id)] = entries
+	state["user_submitted"] = true
+	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
+
+
+static func auto_submit_user_list(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	return submit_user_list(state, players, teams, season, state.get("user_recommended_ids", []) as Array)
+
+
+# ユーザーの手番での指名 (1巡目・2巡目共通)。
+static func submit_user_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_id: int) -> Dictionary:
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if not bool(state.get("waiting_user", false)) or int(state.get("current_team_id", 0)) != user_team_id:
+		return {"ok": false, "message": "自軍の指名の手番ではありません", "state": state}
+	var phase: String = str(state.get("phase", ""))
+	var targets: Array = []
+	if phase == "round1":
+		targets = round1_targets(state, user_team_id)
+	elif phase == "round2":
+		targets = round2_targets(state, user_team_id)
+	else:
+		return {"ok": false, "message": "指名の段階ではありません", "state": state}
+	var entry: Dictionary = _find_entry(targets, player_id)
+	if entry.is_empty():
+		return {"ok": false, "message": "その選手は指名できません", "state": state}
+	_apply_pick(state, teams, user_team_id, entry)
+	if phase == "round2":
+		state["round2_index"] = int(state.get("round2_index", 0)) + 1
+	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
+
+
+# 2巡目での棄権 (1巡目の指名は義務なので棄権できない)。
+static func pass_user_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	if not bool(state.get("waiting_user", false)) or int(state.get("current_team_id", 0)) != user_team_id:
+		return {"ok": false, "message": "自軍の指名の手番ではありません", "state": state}
+	if str(state.get("phase", "")) != "round2":
+		return {"ok": false, "message": "1巡目の指名は棄権できません", "state": state}
+	_log(state, teams, "2巡目: %s は指名を見送り" % _team_name(teams, user_team_id))
+	state["round2_index"] = int(state.get("round2_index", 0)) + 1
+	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
+
+
+# 2巡目の参加形態 (pick / offer_only / none) の選択。
+static func set_user_round2_mode(state: Dictionary, players: Array, teams: Array, season: PSSeason, mode: String) -> Dictionary:
+	if str(state.get("phase", "")) != "round2_entry":
+		return {"ok": false, "message": "2巡目の参加選択の段階ではありません", "state": state}
+	if not [ROUND2_MODE_PICK, ROUND2_MODE_OFFER_ONLY, ROUND2_MODE_NONE].has(mode):
+		return {"ok": false, "message": "不正な参加形態です", "state": state}
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	(state["round2_participation"] as Dictionary)[str(user_team_id)] = mode
+	_begin_round2(state, teams)
+	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
+
+
+# ユーザー操作を全てAIに任せて完了まで進める (UIの「AIに任せる」/ ツールの自動消化用)。
+static func complete_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, true)}
+
+
+# ============================================================ 進行
+
+static func _advance_until_user_or_complete(state: Dictionary, players: Array, teams: Array, season: PSSeason, auto_user: bool) -> Dictionary:
+	state["waiting_user"] = false
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var guard: int = 0
+	while not bool(state.get("complete", false)) and guard < 200:
+		guard += 1
+		var phase: String = str(state.get("phase", ""))
+		if phase == "submit":
+			if not bool(state.get("user_submitted", false)):
+				if not auto_user:
+					state["waiting_user"] = true
+					state["current_team_id"] = user_team_id
+					return state
+				var user_entries: Array = _cpu_select_list(_eligible_entries_for_team(players, user_team_id, season))
+				(state["team_lists"] as Dictionary)[str(user_team_id)] = user_entries
+				state["user_submitted"] = true
+			_begin_round1(state, players, teams)
+		elif phase == "round1":
+			var picker: int = _next_round1_picker(state)
+			if picker <= 0:
+				_prepare_round2_entry(state, players, teams, auto_user)
+				continue
+			state["current_team_id"] = picker
+			if picker == user_team_id and not auto_user:
+				state["waiting_user"] = true
+				return state
+			_cpu_pick_round1(state, teams, picker)
+		elif phase == "round2_entry":
+			if not auto_user:
+				state["waiting_user"] = true
+				state["current_team_id"] = user_team_id
+				return state
+			(state["round2_participation"] as Dictionary)[str(user_team_id)] = _cpu_round2_mode(state, players, user_team_id)
+			_begin_round2(state, teams)
+		elif phase == "round2":
+			var order: Array = state.get("round2_order", []) as Array
+			var index: int = int(state.get("round2_index", 0))
+			if index >= order.size():
+				_finish_event(state)
+				continue
+			var picker2: int = int(order[index])
+			state["current_team_id"] = picker2
+			if picker2 == user_team_id and not auto_user:
+				state["waiting_user"] = true
+				return state
+			_cpu_pick_round2(state, players, teams, picker2)
+			state["round2_index"] = int(state.get("round2_index", 0)) + 1
+		else:
+			break
+	return state
+
+
+# 参加球団 = リストに1人以上載せた球団。11球団以下でも同じチェーン方式で回す
+# (テスト/縮小ワールド向けの防御。実NPBは常に12球団)。
+static func _participants(state: Dictionary) -> Array:
+	var result: Array = []
+	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
+	for team_key in team_lists.keys():
+		if not (team_lists[team_key] as Array).is_empty():
+			result.append(int(str(team_key)))
+	return result
+
+
+static func _begin_round1(state: Dictionary, players: Array, teams: Array) -> void:
+	var participants: Array = _participants(state)
+	if participants.size() < 2:
+		_log(state, teams, "参加球団が不足しているため現役ドラフトは実施されませんでした")
+		_finish_event(state)
+		return
+
+	# 投票: 各球団が「最も欲しい他球団リスト選手」に1票。需要はイベント中不変なので snapshot する。
+	var need: Dictionary = FaMarketService._build_position_need(players, teams)
+	var need_snapshot: Dictionary = {}
+	for team_id_value in participants:
+		var team_id: int = int(team_id_value)
+		var pos_need: Dictionary = need.get(team_id, {}) as Dictionary
+		var stringified: Dictionary = {}
+		for pos_key in pos_need.keys():
+			stringified[str(pos_key)] = float(pos_need[pos_key])
+		need_snapshot[str(team_id)] = stringified
+	state["team_need"] = need_snapshot
+
+	var player_lookup: Dictionary = {}
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player != null:
+			player_lookup[player.id] = player
+	state["_player_positions"] = _list_positions(state, player_lookup)
+
+	var votes: Dictionary = {}
+	var vote_counts: Dictionary = {}
+	for team_id_value in participants:
+		vote_counts[str(int(team_id_value))] = 0
+	for team_id_value in participants:
+		var voter_id: int = int(team_id_value)
+		var best_entry: Dictionary = _best_entry_for_team(state, voter_id, _all_listed_entries_except(state, voter_id))
+		if best_entry.is_empty():
+			continue
+		var voted_player: int = int(best_entry.get("player_id", 0))
+		votes[str(voter_id)] = voted_player
+		var owner_key: String = str(int(best_entry.get("from_team_id", 0)))
+		vote_counts[owner_key] = int(vote_counts.get(owner_key, 0)) + 1
+	state["votes"] = votes
+	state["vote_counts"] = vote_counts
+	state["phase"] = "round1"
+	_log(state, teams, "1巡目: 投票の結果、%s が最初の指名権を獲得" % _team_name(teams, _top_vote_team(state, participants)))
+
+
+# リスト選手のポジション (指名スコアの需要参照用)。player が消えた場合は 0 (需要加点なし)。
+static func _list_positions(state: Dictionary, player_lookup: Dictionary) -> Dictionary:
+	var positions: Dictionary = {}
+	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
+	for team_key in team_lists.keys():
+		for entry_row in team_lists[team_key] as Array:
+			var player_id: int = int((entry_row as Dictionary).get("player_id", 0))
+			var player: PSPlayer = player_lookup.get(player_id, null) as PSPlayer
+			positions[str(player_id)] = player.position if player != null else 0
+	return positions
+
+
+static func _all_listed_entries_except(state: Dictionary, team_id: int) -> Array:
+	var result: Array = []
+	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
+	for team_key in team_lists.keys():
+		if int(str(team_key)) == team_id:
+			continue
+		for entry_row in team_lists[team_key] as Array:
+			result.append(entry_row)
+	return result
+
+
+# 指名/投票スコア: 将来価値 + ポジション需要 + 決定論ノイズ (state.seed 起点なのでリロードでも不変)。
+static func _entry_score_for_team(state: Dictionary, team_id: int, entry: Dictionary) -> float:
+	var player_id: int = int(entry.get("player_id", 0))
+	var position: int = int((state.get("_player_positions", {}) as Dictionary).get(str(player_id), 0))
+	var pos_need: Dictionary = (state.get("team_need", {}) as Dictionary).get(str(team_id), {}) as Dictionary
+	var need_bonus: float = float(pos_need.get(str(position), 0.0)) * VOTE_NEED_WEIGHT
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(state.get("seed", 0)) + team_id * 92821 + player_id * 68927
+	return float(entry.get("value", 0.0)) + need_bonus + rng.randf() * VOTE_NOISE
+
+
+static func _best_entry_for_team(state: Dictionary, team_id: int, entries: Array) -> Dictionary:
+	var best: Dictionary = {}
+	var best_score: float = -INF
+	for entry_row in entries:
+		var entry: Dictionary = entry_row as Dictionary
+		var score: float = _entry_score_for_team(state, team_id, entry)
+		if score > best_score:
+			best_score = score
+			best = entry
+	return best
+
+
+static func _top_vote_team(state: Dictionary, candidates: Array) -> int:
+	var vote_counts: Dictionary = state.get("vote_counts", {}) as Dictionary
+	var waiver: Array = state.get("waiver_order", []) as Array
+	var best_team: int = 0
+	var best_votes: int = -1
+	var best_waiver: int = waiver.size() + 1
+	for team_id_value in candidates:
+		var team_id: int = int(team_id_value)
+		var votes: int = int(vote_counts.get(str(team_id), 0))
+		var waiver_pos: int = waiver.find(team_id)
+		if waiver_pos < 0:
+			waiver_pos = waiver.size()
+		# 最多得票優先、同数は前年下位球団 (waiver_order の前方) 優先。
+		if votes > best_votes or (votes == best_votes and waiver_pos < best_waiver):
+			best_votes = votes
+			best_waiver = waiver_pos
+			best_team = team_id
+	return best_team
+
+
+# 1巡目の次の指名球団。0 = 全参加球団が指名済み (1巡目終了)。
+# チェーン方式: 直前に選手を指名された球団が未指名ならその球団、指名済み (=チェーンが閉じた)
+# なら未指名球団の得票数上位から再開する。
+static func _next_round1_picker(state: Dictionary) -> int:
+	var participants: Array = _participants(state)
+	var picked: Dictionary = state.get("picked_round1", {}) as Dictionary
+	var unpicked: Array = []
+	for team_id_value in participants:
+		if not picked.has(str(int(team_id_value))):
+			unpicked.append(int(team_id_value))
+	if unpicked.is_empty():
+		return 0
+	var chained: int = int(state.get("chain_next", 0))
+	if chained > 0 and unpicked.has(chained):
+		return chained
+	return _top_vote_team(state, unpicked)
+
+
+# 1巡目で指名可能な相手リスト選手。自球団以外・放出済みでない球団・未指名の選手のうち、
+# 「指名すると最後の1球団が自球団の選手しか指名できなくなる」手 (孤立詰み) を除外する。
+static func round1_targets(state: Dictionary, picker_id: int) -> Array:
+	var participants: Array = _participants(state)
+	var picked: Dictionary = state.get("picked_round1", {}) as Dictionary
+	var lost: Dictionary = state.get("lost_round1", {}) as Dictionary
+	var picked_player_ids: Dictionary = _picked_player_ids(state)
+	var targets: Array = []
+	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
+	for team_id_value in participants:
+		var owner_id: int = int(team_id_value)
+		if owner_id == picker_id or lost.has(str(owner_id)):
+			continue
+		for entry_row in team_lists[str(owner_id)] as Array:
+			var entry: Dictionary = entry_row as Dictionary
+			if picked_player_ids.has(int(entry.get("player_id", 0))):
+				continue
+			if _pick_strands_last_team(participants, picked, lost, picker_id, owner_id):
+				continue
+			targets.append(entry)
+	return targets
+
+
+# picker が owner の選手を指名した後、未指名球団がちょうど1つ残り、かつ放出可能な球団も
+# その1球団だけになる (= 自球団しか指名できず詰む) 場合 true。
+static func _pick_strands_last_team(participants: Array, picked: Dictionary, lost: Dictionary, picker_id: int, owner_id: int) -> bool:
+	var unpicked_after: Array = []
+	for team_id_value in participants:
+		var team_id: int = int(team_id_value)
+		if team_id != picker_id and not picked.has(str(team_id)):
+			unpicked_after.append(team_id)
+	if unpicked_after.size() != 1:
+		return false
+	var unlost_after: Array = []
+	for team_id_value in participants:
+		var team_id: int = int(team_id_value)
+		if team_id != owner_id and not lost.has(str(team_id)):
+			unlost_after.append(team_id)
+	return unlost_after.size() == 1 and int(unlost_after[0]) == int(unpicked_after[0])
+
+
+static func _picked_player_ids(state: Dictionary) -> Dictionary:
+	var result: Dictionary = {}
+	for pick_row in state.get("picks", []) as Array:
+		result[int((pick_row as Dictionary).get("player_id", 0))] = true
+	return result
+
+
+static func _cpu_pick_round1(state: Dictionary, teams: Array, picker_id: int) -> void:
+	var targets: Array = round1_targets(state, picker_id)
+	if targets.is_empty():
+		# 防御: 孤立ガードにより通常到達しない。リスト全消化などの異常時はチェーンから外す。
+		(state["picked_round1"] as Dictionary)[str(picker_id)] = 0
+		(state["pick_order_log"] as Array).append(picker_id)
+		state["chain_next"] = 0
+		_log(state, teams, "1巡目: %s は指名できる選手がいませんでした" % _team_name(teams, picker_id))
+		return
+	_apply_pick(state, teams, picker_id, _best_entry_for_team(state, picker_id, targets))
+
+
+static func _apply_pick(state: Dictionary, teams: Array, picker_id: int, entry: Dictionary) -> void:
+	var round_no: int = 1 if str(state.get("phase", "")) == "round1" else 2
+	var from_team_id: int = int(entry.get("from_team_id", 0))
+	var pick: Dictionary = {
+		"round": round_no,
+		"order": (state.get("picks", []) as Array).size() + 1,
+		"team_id": picker_id,
+		"from_team_id": from_team_id,
+		"player_id": int(entry.get("player_id", 0)),
+		"salary": int(entry.get("salary", 0)),
+	}
+	(state["picks"] as Array).append(pick)
+	if round_no == 1:
+		(state["picked_round1"] as Dictionary)[str(picker_id)] = int(entry.get("player_id", 0))
+		(state["lost_round1"] as Dictionary)[str(from_team_id)] = int(entry.get("player_id", 0))
+		(state["pick_order_log"] as Array).append(picker_id)
+		state["chain_next"] = from_team_id
+	else:
+		(state["lost_round2"] as Dictionary)[str(from_team_id)] = int(entry.get("player_id", 0))
+	_log(state, teams, "%d巡目: %s が %s の %s を指名" % [round_no, _team_name(teams, picker_id), _team_name(teams, from_team_id), str(entry.get("name", ""))])
+
+
+# ============================================================ 2巡目
+
+static func _prepare_round2_entry(state: Dictionary, players: Array, teams: Array, auto_user: bool) -> void:
+	var participants: Array = _participants(state)
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var participation: Dictionary = state.get("round2_participation", {}) as Dictionary
+	for team_id_value in participants:
+		var team_id: int = int(team_id_value)
+		if team_id == user_team_id and not auto_user:
+			continue
+		participation[str(team_id)] = _cpu_round2_mode(state, players, team_id)
+	state["round2_participation"] = participation
+	if participants.has(user_team_id) and not auto_user:
+		state["phase"] = "round2_entry"
+		return
+	_begin_round2(state, teams)
+
+
+# CPUの2巡目参加形態: 支配下枠に収まり、明確に有用な選手が残っていれば「指名して参加」。
+# それ以外は「放出のみ参加」(リスト提出済みで追加コストが無く、余剰を引き取ってもらえる余地を残す)。
+static func _cpu_round2_mode(state: Dictionary, players: Array, team_id: int) -> String:
+	var best: Dictionary = _best_entry_for_team(state, team_id, round2_candidate_pool_preview(state, team_id))
+	if best.is_empty():
+		return ROUND2_MODE_OFFER_ONLY
+	var best_score: float = _entry_score_for_team(state, team_id, best)
+	if best_score < ROUND2_PICK_MIN_SCORE:
+		return ROUND2_MODE_OFFER_ONLY
+	var count: int = TeamFinance.shienka_count(players, team_id)
+	if count + 1 > TeamFinance.SHIENKA_LIMIT:
+		return ROUND2_MODE_OFFER_ONLY
+	return ROUND2_MODE_PICK
+
+
+# 参加形態の決定前に使う「2巡目に残っていそうな選手」のプレビュー (全球団の残りリスト選手)。
+# 実際の指名時は round2_targets が参加形態を反映して絞り直す。
+static func round2_candidate_pool_preview(state: Dictionary, team_id: int) -> Array:
+	var picked_player_ids: Dictionary = _picked_player_ids(state)
+	var result: Array = []
+	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
+	for team_key in team_lists.keys():
+		if int(str(team_key)) == team_id:
+			continue
+		for entry_row in team_lists[team_key] as Array:
+			if not picked_player_ids.has(int((entry_row as Dictionary).get("player_id", 0))):
+				result.append(entry_row)
+	return result
+
+
+static func _begin_round2(state: Dictionary, teams: Array) -> void:
+	var participation: Dictionary = state.get("round2_participation", {}) as Dictionary
+	# 2巡目の指名順は1巡目の指名順の逆 (指名希望球団のみ)。
+	var order: Array = []
+	var order_log: Array = (state.get("pick_order_log", []) as Array).duplicate()
+	order_log.reverse()
+	for team_id_value in order_log:
+		var team_id: int = int(team_id_value)
+		if str(participation.get(str(team_id), ROUND2_MODE_NONE)) == ROUND2_MODE_PICK:
+			order.append(team_id)
+	state["round2_order"] = order
+	state["round2_index"] = 0
+	state["phase"] = "round2"
+	if order.is_empty():
+		_log(state, teams, "2巡目: 指名を希望する球団がなく終了")
+		_finish_event(state)
+
+
+# 2巡目で指名可能な選手: 参加球団 (pick / offer_only) の残りリスト選手のうち、自球団以外・
+# 2巡目でまだ放出していない球団の選手。各球団の放出は巡ごとに1人まで。
+static func round2_targets(state: Dictionary, picker_id: int) -> Array:
+	var participation: Dictionary = state.get("round2_participation", {}) as Dictionary
+	var lost2: Dictionary = state.get("lost_round2", {}) as Dictionary
+	var picked_player_ids: Dictionary = _picked_player_ids(state)
+	var targets: Array = []
+	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
+	for team_key in team_lists.keys():
+		var owner_id: int = int(str(team_key))
+		if owner_id == picker_id or lost2.has(str(owner_id)):
+			continue
+		var mode: String = str(participation.get(str(owner_id), ROUND2_MODE_NONE))
+		if mode != ROUND2_MODE_PICK and mode != ROUND2_MODE_OFFER_ONLY:
+			continue
+		for entry_row in team_lists[str(owner_id)] as Array:
+			if not picked_player_ids.has(int((entry_row as Dictionary).get("player_id", 0))):
+				targets.append(entry_row)
+	return targets
+
+
+static func _cpu_pick_round2(state: Dictionary, players: Array, teams: Array, picker_id: int) -> void:
+	var targets: Array = round2_targets(state, picker_id)
+	var best: Dictionary = _best_entry_for_team(state, picker_id, targets)
+	if best.is_empty() or _entry_score_for_team(state, picker_id, best) < ROUND2_PICK_MIN_SCORE:
+		_log(state, teams, "2巡目: %s は指名を見送り" % _team_name(teams, picker_id))
+		return
+	# 支配下枠の再確認 (2巡目の獲得は純増。同巡で放出済みなら差し引きゼロ)。
+	var net_gain: int = 1
+	if (state.get("lost_round2", {}) as Dictionary).has(str(picker_id)):
+		net_gain = 0
+	if TeamFinance.shienka_count(players, picker_id) + net_gain > TeamFinance.SHIENKA_LIMIT:
+		_log(state, teams, "2巡目: %s は支配下枠が埋まっているため見送り" % _team_name(teams, picker_id))
+		return
+	_apply_pick(state, teams, picker_id, best)
+
+
+static func _finish_event(state: Dictionary) -> void:
+	state["phase"] = "done"
+	state["complete"] = true
+	state["waiting_user"] = false
+	state["current_team_id"] = 0
+	# 需要参照用の一時テーブルはセーブ肥大を避けるため落とす (finalize 後は不要)。
+	state.erase("_player_positions")
+
+
+# ============================================================ 確定 (移籍の実適用)
+
+static func finalize_geneki_draft(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	if bool(state.get("finalized", false)):
+		return state.get("final_result", {"title": "現役ドラフト", "moves": []}) as Dictionary
+	var year: int = season.year if season != null else int(state.get("year", 0))
+	var moves: Array = []
+	var round1_count: int = 0
+	var round2_count: int = 0
+	for pick_row in state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		var player: PSPlayer = _find_player(players, int(pick.get("player_id", 0)))
+		if player == null:
+			continue
+		var from_team_id: int = int(pick.get("from_team_id", 0))
+		var to_team_id: int = int(pick.get("team_id", 0))
+		if player.team_id != from_team_id:
+			# 状態と選手の所属がずれている場合は移籍させない (二重適用や外部変更への防御)。
+			continue
+		if season != null:
+			season.transfer_active_roster_days(from_team_id, to_team_id, player.id)
+		player.team_id = to_team_id
+		player.source_data["geneki_draft_year"] = year
+		PSCareerLog.log_geneki_draft(player, year, from_team_id, to_team_id)
+		if int(pick.get("round", 1)) == 1:
+			round1_count += 1
+		else:
+			round2_count += 1
+		# from_team/to_team は結果表 (team_mode "move") の慣習に合わせ球団id。
+		moves.append({
+			"player_id": player.id,
+			"name": player.name,
+			"position": player.position,
+			"role": player.role,
+			"age": player.age,
+			"salary": player.salary,
+			"round": int(pick.get("round", 1)),
+			"order": int(pick.get("order", 0)),
+			"from_team": from_team_id,
+			"to_team": to_team_id,
+		})
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	var user_gained: int = 0
+	var user_lost: int = 0
+	for move_row in moves:
+		var move: Dictionary = move_row as Dictionary
+		if int(move.get("to_team", 0)) == user_team_id:
+			user_gained += 1
+		if int(move.get("from_team", 0)) == user_team_id:
+			user_lost += 1
+	var result: Dictionary = {
+		"title": "現役ドラフト",
+		"moves": moves,
+		"moved_count": moves.size(),
+		"round1_count": round1_count,
+		"round2_count": round2_count,
+		"user_gained": user_gained,
+		"user_lost": user_lost,
+		"logs": (state.get("logs", []) as Array).duplicate(true),
+	}
+	state["finalized"] = true
+	state["final_result"] = result
+	return result
+
+
+# ============================================================ 共通ヘルパー
+
+static func _find_entry(entries: Array, player_id: int) -> Dictionary:
+	for entry_row in entries:
+		if int((entry_row as Dictionary).get("player_id", 0)) == player_id:
+			return entry_row as Dictionary
+	return {}
+
+
+static func _find_player(players: Array, player_id: int) -> PSPlayer:
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player != null and player.id == player_id:
+			return player
+	return null
+
+
+static func _team_name(teams: Array, team_id: int) -> String:
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null and team.id == team_id:
+			return team.name
+	return "球団%d" % team_id
+
+
+static func _log(state: Dictionary, _teams: Array, text: String) -> void:
+	(state["logs"] as Array).append(text)

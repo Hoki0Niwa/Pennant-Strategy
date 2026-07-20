@@ -260,6 +260,18 @@ var _released_status_text: String = ""
 var _released_can_submit: bool = false
 var _released_can_auto: bool = false
 
+# 現役ドラフト。提出フェーズは自軍適格選手の複数選択トグル (リスト入り選手を戦力外と同じ
+# 強調色で表示)、指名フェーズは指名可能候補の単一選択。表はいずれも選手レコード表。
+var _geneki_tab: String = PLAYER_TAB_PITCHER
+var _geneki_player_rows: Array = []
+var _geneki_by_id: Dictionary = {}
+var _geneki_status_text: String = ""
+var _geneki_phase: String = ""
+var selected_geneki_list_ids: Dictionary = {}
+var selected_geneki_pick_id: int = 0
+# AI推奨リストを初期選択として流し込んだ year (state 再生成/年替わりで再シード)。
+var _geneki_list_seeded_year: int = 0
+
 # FA 市場 (step6)。一覧は戦力外獲得と同じ選手レコード表 (投手/野手タブ)。
 var selected_fa_candidate_id: int = 0
 var _fa_tab: String = PLAYER_TAB_PITCHER
@@ -362,6 +374,8 @@ func _refresh() -> void:
 				_populate_draft()
 			AppState.OFFSEASON_PANEL_RELEASED_MARKET:
 				_populate_released()
+			AppState.OFFSEASON_PANEL_GENEKI_DRAFT:
+				_populate_geneki()
 			AppState.OFFSEASON_PANEL_FA:
 				_populate_fa()
 			AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
@@ -483,6 +497,30 @@ func _build_buttons() -> void:
 			])
 			var released_counts: Dictionary = _player_row_pitcher_fielder_counts(_released_player_rows)
 			_build_player_tabs("released_market", _released_tab, int(released_counts.get(PLAYER_TAB_PITCHER, 0)), int(released_counts.get(PLAYER_TAB_FIELDER, 0)), _set_released_tab)
+		AppState.OFFSEASON_PANEL_GENEKI_DRAFT:
+			if _geneki_phase == "submit":
+				_action_row([
+					{"id": "gd_submit", "label": "リストを確定", "cb": _on_geneki_submit_list_pressed, "kind": "primary", "w": 150},
+					{"id": "gd_reco", "label": "推奨リストに戻す", "cb": _on_geneki_reset_recommended_pressed, "kind": "action", "w": 170},
+					{"id": "gd_ai", "label": "すべてAIに任せる", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170},
+				])
+			elif _geneki_phase == "round2_entry":
+				_action_row([
+					{"id": "gd_r2_pick", "label": "指名して参加", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_PICK), "kind": "primary", "w": 150},
+					{"id": "gd_r2_offer", "label": "放出のみ参加", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_OFFER_ONLY), "kind": "action", "w": 150},
+					{"id": "gd_r2_none", "label": "参加しない", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_NONE), "kind": "action", "w": 130},
+					{"id": "gd_ai", "label": "すべてAIに任せる", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170},
+				])
+			else:
+				var specs: Array = [
+					{"id": "gd_pick", "label": "指名する", "cb": _on_geneki_pick_pressed, "kind": "primary", "w": 120, "disabled": selected_geneki_pick_id <= 0},
+				]
+				if _geneki_phase == "round2":
+					specs.append({"id": "gd_pass", "label": "見送る", "cb": _on_geneki_pass_pressed, "kind": "action", "w": 100})
+				specs.append({"id": "gd_ai", "label": "すべてAIに任せる", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170})
+				_action_row(specs)
+			var geneki_counts: Dictionary = _player_row_pitcher_fielder_counts(_geneki_player_rows)
+			_build_player_tabs("geneki", _geneki_tab, int(geneki_counts.get(PLAYER_TAB_PITCHER, 0)), int(geneki_counts.get(PLAYER_TAB_FIELDER, 0)), _set_geneki_tab)
 		AppState.OFFSEASON_PANEL_FA:
 			_action_row([
 				{"id": "fa_submit", "label": "交渉する", "cb": _on_fa_submit_pressed, "kind": "primary", "w": 110, "disabled": not _fa_can_submit},
@@ -590,7 +628,7 @@ func _build_candidate_tabs(rows: Array, active_tab: String, callback: Callable, 
 
 
 func _build_result_people_tabs() -> void:
-	var step: int = int(_view.get("step", 0))
+	var step: String = str(_view.get("step", ""))
 	if step != AppState.OFFSEASON_STEP_RETIREMENT and step != AppState.OFFSEASON_STEP_RELEASE_COMMIT:
 		return
 	var result: Dictionary = _view.get("result", {}) as Dictionary
@@ -610,7 +648,7 @@ func _build_result_people_tabs() -> void:
 
 # 結果ステップ固有のタブ。成長=候補タブ / キャンプ=自軍・他球団タブ。
 func _build_step_result_tabs() -> void:
-	var step: int = int(_view.get("step", 0))
+	var step: String = str(_view.get("step", ""))
 	if step == AppState.OFFSEASON_STEP_GROWTH:
 		_build_candidate_tabs(_growth_board_entries(), _growth_tab, _set_growth_tab, "growth")
 	elif step == AppState.OFFSEASON_STEP_CAMP:
@@ -618,6 +656,11 @@ func _build_step_result_tabs() -> void:
 	elif step == AppState.OFFSEASON_STEP_CONTRACT_UPDATE:
 		var counts: Dictionary = _player_row_pitcher_fielder_counts(_contract_player_rows())
 		_build_player_tabs("contract", _contract_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_contract_tab)
+	elif step == AppState.OFFSEASON_STEP_GENEKI_DRAFT:
+		var geneki_result: Dictionary = _view.get("result", {}) as Dictionary
+		var move_rows: Array = _result_signing_player_rows(geneki_result.get("moves", []) as Array)
+		var geneki_counts: Dictionary = _player_row_pitcher_fielder_counts(move_rows)
+		_build_player_tabs("result_moves", _result_people_tab, int(geneki_counts.get(PLAYER_TAB_PITCHER, 0)), int(geneki_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 	elif step == AppState.OFFSEASON_STEP_RELEASED_MARKET or step == AppState.OFFSEASON_STEP_FA_MARKET or step == AppState.OFFSEASON_STEP_FOREIGN_MARKET:
 		var result: Dictionary = _view.get("result", {}) as Dictionary
 		# 外国人ステップのレビューはスカウト獲得のみ表示するため (契約市場結果は専用フェーズで表示済み)、
@@ -873,6 +916,17 @@ func _on_row_clicked(kind: String, meta: int) -> void:
 			_released_can_submit = meta > 0
 			_build_buttons()
 			queue_redraw()
+		"geneki_list":
+			if selected_geneki_list_ids.has(meta):
+				selected_geneki_list_ids.erase(meta)
+			else:
+				selected_geneki_list_ids[meta] = true
+			_geneki_refresh_submit_status()
+			queue_redraw()
+		"geneki_pick":
+			selected_geneki_pick_id = meta
+			_build_buttons()
+			queue_redraw()
 		"fa":
 			selected_fa_candidate_id = meta
 			selected_fa_offer_years = 0
@@ -1035,7 +1089,7 @@ func _draw() -> void:
 	# ヘッダのタイトルは現在のステップ名 (大きく)。何ステップ目かはサブヘッダに控えめに置く。
 	var header_title: String = "オフシーズン"
 	if bool(_view.get("active", false)):
-		header_title = _step_name(int(_view.get("step", 0)))
+		header_title = _step_name(str(_view.get("step", "")))
 	_draw_shell(header_title, team, season)
 
 	if not bool(_view.get("active", false)):
@@ -1052,6 +1106,8 @@ func _draw() -> void:
 			_draw_draft_panel()
 		AppState.OFFSEASON_PANEL_RELEASED_MARKET:
 			_draw_released_market_panel()
+		AppState.OFFSEASON_PANEL_GENEKI_DRAFT:
+			_draw_geneki_panel()
 		AppState.OFFSEASON_PANEL_FA:
 			# FA一覧は戦力外獲得と同じ選手レコード表 (投手/野手タブ・候補詳細なし) + 提示年数列。
 			_draw_player_record_table(BODY, _fa_status_text, _fa_player_rows, _fa_tab == PLAYER_TAB_PITCHER,
@@ -1084,7 +1140,7 @@ func _draw_subheader() -> void:
 
 
 # 各ステップの正準名 (結果データの有無に依存しない)。ヘッダ見出しに使う。
-func _step_name(step: int) -> String:
+func _step_name(step: String) -> String:
 	match step:
 		AppState.OFFSEASON_STEP_RETIREMENT:
 			return "引退"
@@ -1098,6 +1154,8 @@ func _step_name(step: int) -> String:
 			return "育成ドラフト"
 		AppState.OFFSEASON_STEP_RELEASED_MARKET:
 			return "戦力外獲得"
+		AppState.OFFSEASON_STEP_GENEKI_DRAFT:
+			return "現役ドラフト"
 		AppState.OFFSEASON_STEP_FA_MARKET:
 			return "FA市場"
 		AppState.OFFSEASON_STEP_FOREIGN_MARKET:
@@ -1790,7 +1848,7 @@ func _camp_rate_color(pct: float) -> Color:
 # ============================================================ results draw
 
 func _draw_results(rect: Rect2) -> void:
-	var step: int = int(_view.get("step", 0))
+	var step: String = str(_view.get("step", ""))
 	var result: Dictionary = _view.get("result", {}) as Dictionary
 	if result.is_empty():
 		_text(str(_view.get("status", "結果データがありません")), Vector2(rect.position.x, rect.position.y + 24), 16, MUTED)
@@ -1809,6 +1867,8 @@ func _draw_results(rect: Rect2) -> void:
 			_draw_draft_result(rect, result)
 		AppState.OFFSEASON_STEP_RELEASED_MARKET:
 			_draw_released_result(rect, result)
+		AppState.OFFSEASON_STEP_GENEKI_DRAFT:
+			_draw_geneki_result(rect, result)
 		AppState.OFFSEASON_STEP_FA_MARKET:
 			_draw_fa_result(rect, result)
 		AppState.OFFSEASON_STEP_FOREIGN_MARKET:
@@ -1917,6 +1977,16 @@ func _draw_released_result(rect: Rect2, result: Dictionary) -> void:
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("signings", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "released_result_%s" % _result_people_tab, "", 0,
 		"今オフは戦力外からの獲得がありませんでした。", true, false, "move", true)
+
+
+func _draw_geneki_result(rect: Rect2, result: Dictionary) -> void:
+	var heading: String = "現役ドラフト: 移籍 %d人 (1巡目 %d / 2巡目 %d) — 自軍 獲得%d / 放出%d" % [
+		int(result.get("moved_count", 0)), int(result.get("round1_count", 0)), int(result.get("round2_count", 0)),
+		int(result.get("user_gained", 0)), int(result.get("user_lost", 0)),
+	]
+	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("moves", []) as Array),
+		_result_people_tab == PLAYER_TAB_PITCHER, "", "geneki_result_%s" % _result_people_tab, "", 0,
+		"現役ドラフトでの移籍はありませんでした。", true, false, "move", true)
 
 
 func _draw_fa_result(rect: Rect2, result: Dictionary) -> void:
@@ -2202,8 +2272,13 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 		var row: Dictionary = rows[i] as Dictionary
 		var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 		var row_rect: Rect2 = Rect2(rect.position.x + 10.0, y - 19.0, rect.size.x - 20.0, row_h)
-		var state: String = _release_state(record.player_id) if sel_kind == "release" else ""
-		var selected: bool = sel_kind != "release" and selected_id > 0 and record.player_id == selected_id
+		var state: String = ""
+		if sel_kind == "release":
+			state = _release_state(record.player_id)
+		elif sel_kind == "geneki_list" and selected_geneki_list_ids.has(record.player_id):
+			# リスト入り選手は戦力外選択と同じ強調色で示す (放出候補という意味合いが同じ)。
+			state = "release"
+		var selected: bool = sel_kind != "release" and sel_kind != "geneki_list" and selected_id > 0 and record.player_id == selected_id
 		if state == "release":
 			_round(row_rect, Color(SEL_RELEASE.r, SEL_RELEASE.g, SEL_RELEASE.b, 0.14), Color(SEL_RELEASE.r, SEL_RELEASE.g, SEL_RELEASE.b, 0.45), 6, 1)
 		elif state == "demote":
@@ -3452,6 +3527,160 @@ func _on_released_auto_all_pressed() -> void:
 		_set_status(str(result.get("message", "戦力外獲得市場の自動進行に失敗しました。")), RED)
 		return
 	selected_released_candidate_id = 0
+	_refresh()
+
+
+# ============================================================ populate: 現役ドラフト
+
+func _populate_geneki() -> void:
+	var state: Dictionary = AppState.geneki_draft_state
+	_geneki_phase = str(state.get("phase", ""))
+	_geneki_player_rows = []
+	_geneki_by_id = {}
+	match _geneki_phase:
+		"submit":
+			# state 生成直後の初回だけAI推奨を初期選択にする (リロードや再入場では手動選択を保持)。
+			var year: int = int(state.get("year", 0))
+			if _geneki_list_seeded_year != year:
+				selected_geneki_list_ids = {}
+				for pid_value in state.get("user_recommended_ids", []) as Array:
+					selected_geneki_list_ids[int(pid_value)] = true
+				_geneki_list_seeded_year = year
+			for pid_value in state.get("user_eligible_ids", []) as Array:
+				_append_geneki_row(int(pid_value), AppState.selected_team_id, {})
+			_geneki_refresh_submit_status()
+		"round1":
+			for entry_row in GenekiDraftService.round1_targets(state, AppState.selected_team_id):
+				var entry: Dictionary = entry_row as Dictionary
+				_append_geneki_row(int(entry.get("player_id", 0)), int(entry.get("from_team_id", 0)), entry)
+			_geneki_status_text = "現役ドラフト 1巡目: 自軍の指名手番です。他球団のリスト選手から1人を指名してください (指名は義務)。"
+		"round2":
+			for entry_row in GenekiDraftService.round2_targets(state, AppState.selected_team_id):
+				var entry: Dictionary = entry_row as Dictionary
+				_append_geneki_row(int(entry.get("player_id", 0)), int(entry.get("from_team_id", 0)), entry)
+			_geneki_status_text = "現役ドラフト 2巡目: 自軍の指名手番です。指名するか見送ってください。"
+		"round2_entry":
+			for entry_row in GenekiDraftService.round2_candidate_pool_preview(state, AppState.selected_team_id):
+				var entry: Dictionary = entry_row as Dictionary
+				_append_geneki_row(int(entry.get("player_id", 0)), int(entry.get("from_team_id", 0)), entry)
+			_geneki_status_text = "現役ドラフト 2巡目: 参加形態を選んでください。「参加しない」を選ぶと自軍リスト選手は2巡目で指名されません。"
+		_:
+			_geneki_status_text = "現役ドラフトの進行を待っています。"
+	if selected_geneki_pick_id > 0 and not _geneki_by_id.has(selected_geneki_pick_id):
+		selected_geneki_pick_id = 0
+
+
+func _append_geneki_row(pid: int, team_id: int, candidate: Dictionary) -> void:
+	if pid <= 0:
+		return
+	var record: PSPlayerSeasonRecord = _record_for_market_candidate({"player_id": pid})
+	if record == null:
+		return
+	_geneki_by_id[pid] = candidate
+	_geneki_player_rows.append({
+		"record": record,
+		"player": GameDb.get_player(pid),
+		"entry": {
+			"player_id": pid,
+			"team_id": team_id,
+			"position": record.position,
+			"role": record.role,
+			"candidate": candidate,
+		},
+	})
+
+
+func _geneki_refresh_submit_status() -> void:
+	var state: Dictionary = AppState.geneki_draft_state
+	var eligible_count: int = (state.get("user_eligible_ids", []) as Array).size()
+	_geneki_status_text = "現役ドラフト: 対象リスト提出 — 対象%d人 / 選択中%d人 (2人以上。年俸5000万円以上は1人まで、含める場合は3人以上)" % [
+		eligible_count, selected_geneki_list_ids.size(),
+	]
+
+
+func _draw_geneki_panel() -> void:
+	var pitcher_tab: bool = _geneki_tab == PLAYER_TAB_PITCHER
+	match _geneki_phase:
+		"submit":
+			_draw_player_record_table(BODY, _geneki_status_text, _geneki_player_rows, pitcher_tab,
+				"geneki_list", "geneki_list_%s" % _geneki_tab, "", 0,
+				"リストに載せられる対象選手がいません。", true, false, "", true)
+		"round1", "round2":
+			_draw_player_record_table(BODY, _geneki_status_text, _geneki_player_rows, pitcher_tab,
+				"geneki_pick", "geneki_pick_%s" % _geneki_tab, "", selected_geneki_pick_id,
+				"指名できる選手がいません。", true, false, "team", true)
+		"round2_entry":
+			_draw_player_record_table(BODY, _geneki_status_text, _geneki_player_rows, pitcher_tab,
+				"", "geneki_pool_%s" % _geneki_tab, "", 0,
+				"2巡目に残っている選手はいません。", true, false, "team", true)
+		_:
+			_text(_geneki_status_text, Vector2(INNER_L, BODY.position.y + 24.0), 15, MUTED)
+
+
+func _set_geneki_tab(tab_id: String) -> void:
+	if tab_id != PLAYER_TAB_PITCHER and tab_id != PLAYER_TAB_FIELDER:
+		return
+	if _geneki_tab == tab_id:
+		return
+	_geneki_tab = tab_id
+	_build_buttons()
+	queue_redraw()
+
+
+func _on_geneki_submit_list_pressed() -> void:
+	var ids: Array = []
+	for pid in selected_geneki_list_ids.keys():
+		ids.append(int(pid))
+	var result: Dictionary = AppState.submit_geneki_list(ids)
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "リストの提出に失敗しました。")), RED)
+		return
+	_refresh()
+
+
+func _on_geneki_reset_recommended_pressed() -> void:
+	selected_geneki_list_ids = {}
+	for pid_value in AppState.geneki_draft_state.get("user_recommended_ids", []) as Array:
+		selected_geneki_list_ids[int(pid_value)] = true
+	_geneki_refresh_submit_status()
+	queue_redraw()
+
+
+func _on_geneki_pick_pressed() -> void:
+	if selected_geneki_pick_id <= 0:
+		_set_status("指名する選手を選択してください。", RED)
+		return
+	var result: Dictionary = AppState.submit_geneki_pick(selected_geneki_pick_id)
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "指名に失敗しました。")), RED)
+		return
+	selected_geneki_pick_id = 0
+	_refresh()
+
+
+func _on_geneki_pass_pressed() -> void:
+	var result: Dictionary = AppState.pass_geneki_pick()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "見送りに失敗しました。")), RED)
+		return
+	selected_geneki_pick_id = 0
+	_refresh()
+
+
+func _on_geneki_round2_mode_pressed(mode: String) -> void:
+	var result: Dictionary = AppState.set_geneki_round2_mode(mode)
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "2巡目参加の選択に失敗しました。")), RED)
+		return
+	_refresh()
+
+
+func _on_geneki_ai_all_pressed() -> void:
+	var result: Dictionary = AppState.complete_geneki_draft_automatically()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "現役ドラフトの自動進行に失敗しました。")), RED)
+		return
+	selected_geneki_pick_id = 0
 	_refresh()
 
 

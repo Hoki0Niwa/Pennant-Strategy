@@ -803,7 +803,7 @@ func test_offseason_screen_builds_each_step() -> void:
 	var old_season: PSSeason = AppState.current_season
 	var old_screen: String = AppState.current_screen
 	var old_active: bool = AppState.offseason_active
-	var old_step: int = AppState.offseason_step
+	var old_step: String = AppState.offseason_step
 	var old_results: Dictionary = AppState.offseason_results.duplicate(true)
 	var old_save_id: String = SaveContext.active_save_id()
 
@@ -834,11 +834,11 @@ func test_offseason_screen_builds_each_step() -> void:
 	release_screen.queue_free()
 
 	# (2) 結果テーブル群: 引退 / 成長 (2カラム) / ドラフト (12球団グリッド) を inject して描画。
-	AppState.offseason_results["step_%d" % AppState.OFFSEASON_STEP_RETIREMENT] = {
+	AppState.offseason_results[AppState.OFFSEASON_STEP_RETIREMENT] = {
 		"title": "引退",
 		"retired": [{"team_id": team.id, "name": "テスト 引退", "age": 38, "position": 3, "role": "fielder", "years": 15, "overall": 60}],
 	}
-	AppState.offseason_results["step_%d" % AppState.OFFSEASON_STEP_GROWTH] = {
+	AppState.offseason_results[AppState.OFFSEASON_STEP_GROWTH] = {
 		"title": "成長",
 		"growers_count": 1, "decayers_count": 0,
 		"growth_kind_counts": {"awakening": 1},
@@ -847,7 +847,7 @@ func test_offseason_screen_builds_each_step() -> void:
 		"fielders": [{"name": "成長 野手", "age": 23, "growth_label": "覚醒", "after": 72, "delta": 8,
 			"abilities": [{"key": "contact", "after": 68, "delta": 6, "suffix": ""}]}],
 	}
-	AppState.offseason_results["step_%d" % AppState.OFFSEASON_STEP_DRAFT_MAIN] = {
+	AppState.offseason_results[AppState.OFFSEASON_STEP_DRAFT_MAIN] = {
 		"title": "本指名", "priority_league": "central", "logs": [], "rookies": [],
 		"draft_picks": [{"team_id": team.id, "overall_pick": 1, "round": 1, "name": "ルーキー", "age": 18,
 			"position": 1, "overall": 65, "source_type": "high_school", "development": false, "lottery": false}],
@@ -883,7 +883,7 @@ func test_offseason_screen_builds_contract_extension_panel() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
 	var old_active: bool = AppState.offseason_active
-	var old_step: int = AppState.offseason_step
+	var old_step: String = AppState.offseason_step
 	var old_state: Dictionary = AppState.contract_update_state.duplicate(true)
 
 	var team: PSTeam = GameDb.teams[0] as PSTeam
@@ -951,7 +951,7 @@ func test_offseason_salary_table_layout_and_market_salary_priority() -> void:
 
 func test_offseason_view_state_exposes_ui_phase() -> void:
 	var old_active: bool = AppState.offseason_active
-	var old_step: int = AppState.offseason_step
+	var old_step: String = AppState.offseason_step
 	var old_draft_state: Dictionary = AppState.draft_state.duplicate(true)
 	var old_contract_update_state: Dictionary = AppState.contract_update_state.duplicate(true)
 
@@ -993,7 +993,7 @@ func test_offseason_view_state_exposes_ui_phase() -> void:
 # それぞれ専用の active_panel へ写像される (Fix3: 結果パネルを契約市場/スカウトで分離)。
 func test_offseason_view_state_foreign_market_phases_map_to_panels() -> void:
 	var old_active: bool = AppState.offseason_active
-	var old_step: int = AppState.offseason_step
+	var old_step: String = AppState.offseason_step
 	var old_foreign_state: Dictionary = AppState.foreign_state.duplicate(true)
 
 	AppState.offseason_active = true

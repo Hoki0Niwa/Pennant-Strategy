@@ -718,7 +718,7 @@ func _configure_offseason_button(button: Button) -> void:
 		button.disabled = true
 		return
 	if AppState.offseason_active:
-		button.text = "翌年開始" if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS else "オフ続行"
+		button.text = "翌年開始" if AppState.offseason_steps_complete() else "オフ続行"
 		button.disabled = false
 		return
 	if AppState.postseason_active:
@@ -738,7 +738,7 @@ func _on_offseason_pressed() -> void:
 	if season == null:
 		return
 	if AppState.offseason_active:
-		if AppState.offseason_step >= AppState.OFFSEASON_TOTAL_STEPS:
+		if AppState.offseason_steps_complete():
 			if not AppState.finalize_offseason():
 				_status_text = "翌年開始に失敗しました"
 		else:

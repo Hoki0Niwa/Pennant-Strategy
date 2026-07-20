@@ -121,11 +121,11 @@ func test_unsaved_next_season_progress_does_not_persist_records() -> void:
 	AppState.auto_save_enabled = false
 	AppState.offseason_active = true
 	AppState.offseason_step = AppState.OFFSEASON_STEP_RETIREMENT
-	AppState.offseason_results = {"step_0": {"title": "引退判定", "retired": []}}
+	AppState.offseason_results = {AppState.OFFSEASON_STEP_RETIREMENT: {"title": "引退判定", "retired": []}}
 	assert_bool(SaveService.save_state(AppState)).is_true()
 
 	var saved_season_number: int = AppState.current_season.season_number
-	AppState.offseason_step = AppState.OFFSEASON_TOTAL_STEPS
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
 	assert_bool(AppState.finalize_offseason()).is_true()
 	var unsaved_season: PSSeason = AppState.current_season
 	assert_int(unsaved_season.season_number).is_equal(saved_season_number + 1)

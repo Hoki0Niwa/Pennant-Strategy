@@ -49,21 +49,6 @@ const PD_BATTER_FILTER_TRY: Array = ["pos2", "pos3", "pos4", "pos5", "pos6", "po
 const ABILITY_FILTERS: Array = ["b_all", "p_all"]
 const ABILITY_TABS: Array = ["abilities", "stats", "advanced"]
 
-# オフシーズン: offseason_step 番号 -> ファイル名ラベル (AppState.OFFSEASON_STEP_* と対応)。
-const OFFSEASON_STEP_LABELS: Dictionary = {
-	0: "retirement",
-	1: "release_edit",
-	2: "release_commit",
-	3: "draft_main",
-	4: "draft_development",
-	5: "released_market",
-	6: "fa_market",
-	7: "foreign_market",
-	8: "camp",
-	9: "growth",
-	10: "contract_update",
-}
-
 var _main_node: Node = null
 var _state_manifest: Array = []  # [{name, file}] 撮影順の対応表 (最後にまとめて出力)
 
@@ -380,11 +365,12 @@ func _capture_offseason_steps(states_dir: String) -> void:
 		if not bool(view.get("active", false)):
 			print("[state] オフシーズンが非アクティブになったため撮影を打ち切ります")
 			return
-		var step: int = int(view.get("step", 0))
+		var step: String = str(view.get("step", ""))
 		var interactive: bool = bool(view.get("is_interactive", false))
 		var panel: String = str(view.get("active_panel", ""))
-		var label: String = str(OFFSEASON_STEP_LABELS.get(step, "step%d" % step))
-		# 外国人ステップは契約市場/契約結果/スカウト/スカウト結果の4フェーズが同じ step 番号なので、
+		# ステップID自体をファイル名ラベルに使う。番号順は AppState.OFFSEASON_STEP_ORDER の index。
+		var label: String = step
+		# 外国人ステップは契約市場/契約結果/スカウト/スカウト結果の4フェーズが同じ step なので、
 		# ファイル名が衝突して前段の撮影が上書きされないようラベルを分ける。
 		if interactive and panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 			label = "foreign_contract"
@@ -393,7 +379,8 @@ func _capture_offseason_steps(states_dir: String) -> void:
 		elif interactive and panel == AppState.OFFSEASON_PANEL_FOREIGN_RESULT:
 			label = "foreign_scout_result"
 		var suffix: String = "editor" if interactive else "result"
-		_shot(states_dir, "offseason_step%02d_%s_%s" % [step, label, suffix])
+		var step_number: int = AppState.OFFSEASON_STEP_ORDER.find(step)
+		_shot(states_dir, "offseason_step%02d_%s_%s" % [step_number, label, suffix])
 
 		if interactive:
 			var action_result: Dictionary = {"ok": false, "message": "未対応の active_panel"}
@@ -403,6 +390,8 @@ func _capture_offseason_steps(states_dir: String) -> void:
 				action_result = AppState.complete_draft_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_RELEASED_MARKET:
 				action_result = AppState.complete_released_market_automatically()
+			elif panel == AppState.OFFSEASON_PANEL_GENEKI_DRAFT:
+				action_result = AppState.complete_geneki_draft_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_FA:
 				action_result = AppState.complete_fa_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
@@ -416,7 +405,7 @@ func _capture_offseason_steps(states_dir: String) -> void:
 			elif panel == AppState.OFFSEASON_PANEL_CAMP:
 				action_result = AppState.finish_camp()
 			if not bool(action_result.get("ok", false)):
-				print("[state] ステップ%d (%s) の自動消化に失敗したため打ち切ります: %s" % [step, panel, str(action_result.get("message", ""))])
+				print("[state] ステップ%s (%s) の自動消化に失敗したため打ち切ります: %s" % [step, panel, str(action_result.get("message", ""))])
 				return
 			continue
 
