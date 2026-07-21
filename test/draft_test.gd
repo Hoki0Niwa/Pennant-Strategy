@@ -20,6 +20,28 @@ func test_candidate_positions_favor_up_the_middle() -> void:
 	assert_int(int(counts.get(1, 0))).is_between(1900, 2450)  # 投手 ~54%
 
 
+# 投手需要は「エース1枚」でなく上位K枚の WAR 平均 (depth) で測る。エースが同等でも
+# 下位が薄い球団の投手 depth は低くなり、その差がドラフトの投手 need に出る。
+# これが直らないとドラフトAIが投手陣の薄さを検知できない。
+func test_pitcher_depth_war_uses_top_k_mean_not_single_ace() -> void:
+	# players は WAR 降順ソート済み前提 (team_position_war が保証)。
+	var deep_bucket: Dictionary = {"players": [
+		{"war": 4.0}, {"war": 3.5}, {"war": 3.0}, {"war": 2.5}, {"war": 2.0}, {"war": 1.8},
+	]}
+	# エースは同じ 4.0 だが下位が薄い球団。
+	var thin_bucket: Dictionary = {"players": [
+		{"war": 4.0}, {"war": 0.6}, {"war": 0.4}, {"war": 0.2}, {"war": 0.0}, {"war": -0.3},
+	]}
+	var deep_depth: float = DraftService._pitcher_depth_war(deep_bucket)
+	var thin_depth: float = DraftService._pitcher_depth_war(thin_bucket)
+	# 上位K枚 (ここでは6枚) の平均 = 単純平均。
+	assert_float(deep_depth).is_equal_approx((4.0 + 3.5 + 3.0 + 2.5 + 2.0 + 1.8) / 6.0, 0.001)
+	# エースが同等でも depth の薄い球団の方が値が低い (= 投手 need が立つ)。
+	assert_float(thin_depth).is_less(deep_depth)
+	# 空バケツは 0。
+	assert_float(DraftService._pitcher_depth_war({"players": []})).is_equal_approx(0.0, 0.001)
+
+
 func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
 	Rng.set_seed_value(20260615)
 	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]

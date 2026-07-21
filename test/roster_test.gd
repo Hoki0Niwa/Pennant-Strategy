@@ -2190,7 +2190,79 @@ func test_release_projection_null_record_falls_back_to_player_ability() -> void:
 	assert_float(float(components["current"])).is_greater(0.0)
 
 
+# 補強需要は投手をエース1枚でなく上位K枚平均 (depth) で測る。投手が手薄な球団は position 1 に
+# 需要が立ち、エースが同等でも投手 depth の差が need に出る (旧「最良1枚」実装だとゼロだった)。
+# これが直らないと戦力外獲得・現役ドラフトで投手がほとんど移動しない。
+func test_position_need_reflects_pitcher_depth_not_just_ace() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	var players: Array = []
+	# 両球団に同等の野手 (position 2〜9) → 野手 need はほぼ0。
+	for team_id in [1, 2]:
+		for pos in range(2, 10):
+			players.append(_pitcher_or_fielder(9300 + team_id * 100 + pos, team_id, pos, "", 0.0))
+	# team1: 投手12枚すべて強い (depth 厚い)。
+	for i in range(12):
+		players.append(_pitcher_or_fielder(9400 + i, 1, 1, "starter" if i < 6 else "reliever", 1.2))
+	# team2: エース1枚だけ team1 と同等、残り11枚は弱い (depth 薄い)。
+	players.append(_pitcher_or_fielder(9500, 2, 1, "starter", 1.2))
+	for i in range(11):
+		players.append(_pitcher_or_fielder(9501 + i, 2, 1, "starter" if i < 5 else "reliever", -1.5))
+	var need: Dictionary = Offseason.position_need(players, teams)
+	var thin_need: float = float((need.get(2, {}) as Dictionary).get(1, 0.0))
+	var deep_need: float = float((need.get(1, {}) as Dictionary).get(1, 0.0))
+	# 投手が手薄な team2 に明確な投手需要が立つ (旧「最良1枚」実装ではゼロだった)。
+	assert_float(thin_need).is_greater(3.0)
+	# depth が厚い team1 より team2 の方が投手需要が高い。
+	assert_float(thin_need).is_greater(deep_need)
+
+
+# 戦力外獲得のAIは投手を「リーグ相対の positional need」では獲得できない (投手層は深く均一で
+# pos1 need が全球団 <MIN_NEED_TO_SIGN)。投手だけは depth-chart fit (would_release_player_for_team)
+# で判定し、その球団の枠を勝ち取る投手を獲得する。実シードで 放出→戦力外獲得 を回し、AIが
+# 投手を1人以上獲得することを保証する (修正前は投手獲得=0)。
+func test_released_market_ai_signs_pitchers_via_depth_fit() -> void:
+	Rng.set_seed_value(20260721)
+	var players: Array = []
+	for row in GameDb.players:
+		var p: PSPlayer = row as PSPlayer
+		if p != null:
+			players.append(PSPlayer.from_dict(p.to_dict()))
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var release_result: Dictionary = Offseason.process_cpu_releases(players, GameDb.teams, 0, season)
+	var market: Dictionary = ReleasedMarketService.process_released_market(players, GameDb.teams, season, release_result, 0)
+	var signed_pitchers: int = 0
+	for row in market.get("signings", []) as Array:
+		if int((row as Dictionary).get("position", 0)) == 1:
+			signed_pitchers += 1
+	assert_int(signed_pitchers).override_failure_message(
+		"戦力外獲得で投手が1人も獲得されていません (depth-fit ゲートの回帰)"
+	).is_greater(0)
+
+
 # --- helpers -----------------------------------------------------------------
+
+# position=1 は投手 (role 指定・投手 z を付与)、それ以外は野手として z 一律の選手を作る
+# (need の depth 検証用)。ALL_Z_KEYS は野手系のみなので投手値が動くよう Pit_ 系も一律で入れる。
+const PITCHER_Z_KEYS: Array = [
+	"Pit_KCreate", "Pit_Stamina", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_BarrelDeny",
+	"Pit_LoftControl", "Pit_Efficiency", "Pit_EdgeRate", "Pit_FatigueResist", "Pit_HoldRunner",
+]
+
+func _pitcher_or_fielder(id: int, team_id: int, position: int, role: String, z_value: float) -> PSPlayer:
+	var z: Dictionary = {}
+	var keys: Array = PITCHER_Z_KEYS if position == 1 else ALL_Z_KEYS
+	for key in keys:
+		z[key] = z_value
+	return _player({
+		"id": id,
+		"team_id": team_id,
+		"position": position,
+		"role": role if position == 1 else "fielder",
+		"z_abilities": z,
+	})
+
 
 func _release_candidates_with_records(players: Array, records: Array) -> Array:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)

@@ -11,6 +11,8 @@ const MAX_SIGNINGS_PER_TEAM: int = 2
 const MIN_NEED_TO_SIGN: float = 4.0
 # 能力・実績・需要から年俸負担を引いた後も、この水準を満たす候補だけをAIが獲得する。
 const MIN_AI_SIGNING_SCORE: float = 35.0
+# 野手が systematically 高 value な分を相殺する投手 score parity (NPB実績の投打バランス較正用ノブ)。
+const PITCHER_ACQUISITION_PARITY: float = 2.0
 
 # 元年俸が1000万円を超える戦力外選手は、1000万円と超過分の20%を再契約年俸にする。
 # 1000万円以下は支配下・育成とも元年俸を維持する。
@@ -132,7 +134,7 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 		if not _can_ai_afford_release(players, teams, user_team_id, entry):
 			continue
 		var team_need: float = float(entry.get("need", 0.0))
-		if team_need < MIN_NEED_TO_SIGN:
+		if not _team_wants_candidate(players, season, user_team_id, entry, team_need):
 			continue
 		var score: float = _signing_score(entry, team_need, players, teams, user_team_id)
 		if score < MIN_AI_SIGNING_SCORE:
@@ -183,7 +185,7 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 			if not _can_ai_afford_release(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
-			if team_need < MIN_NEED_TO_SIGN:
+			if not _team_wants_candidate(players, season, team.id, entry, team_need):
 				continue
 			var score: float = _signing_score(entry, team_need, players, teams, team.id)
 			if score < MIN_AI_SIGNING_SCORE:
@@ -446,47 +448,57 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 	return bool(player.source_data.get("released", false))
 
 
-static func _signing_score(entry: Dictionary, team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
-	var score: float = float(entry.get("value", 0)) * (1.0 + team_need / 16.0)
+# AIがその候補を獲得対象にするか。投手・野手を対称に「その球団の同一役割の最弱選手を上回る (=戦力
+# アップグレードになる)」で判断する。投手はその球団の最弱投手、野手は同ポジションの最弱選手が基準。
+# 旧実装は野手=リーグ相対 positional need / 投手=depth-fit と非対称で、投手 need が構造的に立たず
+# 戦力外獲得が極端な野手偏重 (実測 投:野 ≈ 23:84) になっていた。役割数の偏り (投手は深く常に埋まる) と
+# 野手が systematically 高 value な分は `_signing_score` の投手 parity で相殺する。
+static func _team_wants_candidate(players: Array, _season: PSSeason, team_id: int, entry: Dictionary, _team_need: float) -> bool:
+	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
+	if player == null:
+		return false
+	return int(entry.get("value", 0)) > _role_weakest_value(players, team_id, player)
+
+
+# その球団の「同一役割」の最弱 value。投手はチーム内最弱投手、野手は同ポジションの最弱野手。
+# 該当者ゼロ (空きポジション) は0を返し常にアップグレード扱いにする。
+static func _role_weakest_value(players: Array, team_id: int, candidate: PSPlayer) -> int:
+	var is_pit: bool = candidate.is_pitcher()
+	var pos: int = candidate.position
+	var weakest: int = 2147483647
+	var found: bool = false
+	for row in players:
+		var p: PSPlayer = row as PSPlayer
+		if p == null or p.team_id != team_id or p.is_retired() or p.development_player:
+			continue
+		if is_pit:
+			if not p.is_pitcher():
+				continue
+		elif p.is_pitcher() or p.position != pos:
+			continue
+		var v: int = OffseasonService.player_value_score(p)
+		if v < weakest:
+			weakest = v
+			found = true
+	return weakest if found else 0
+
+
+# 獲得スコア = 能力 value + WAR + 投手 parity − 年俸負担。旧実装のポジション need 乗算は撤去
+# (need は野手だけ立つため野手の score を過大にし、獲得枠を野手が独占していた)。投手 parity は野手が
+# systematically 高 value (実測 p90 82 vs 78) な分を相殺し、獲得を NPB 実績どおり投打バランスさせる。
+static func _signing_score(entry: Dictionary, _team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
+	var score: float = float(entry.get("value", 0))
 	score += float(entry.get("war", 0.0)) * 5.0
 	score -= TeamFinance.ai_acquisition_cost_penalty(int(entry.get("salary", 0)))
+	if int(entry.get("position", 0)) == 1:
+		score += PITCHER_ACQUISITION_PARITY
 	return score
 
 
+# 投手 depth を反映する需要の単一ソースは OffseasonService.position_need
+# ([[project_offseason_roster_mechanics]])。投手を「エース1枚」でなく上位K枚平均で測る。
 static func _build_position_need(players: Array, teams: Array) -> Dictionary:
-	var best_by_team: Dictionary = {}
-	for team_row in teams:
-		var team: PSTeam = team_row as PSTeam
-		if team != null:
-			best_by_team[team.id] = {}
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id <= 0:
-			continue
-		if player.is_retired():
-			continue
-		if not best_by_team.has(player.team_id):
-			continue
-		var pos_map: Dictionary = best_by_team[player.team_id] as Dictionary
-		var overall: int = OffseasonService.player_value_score(player)
-		if overall > int(pos_map.get(player.position, 0)):
-			pos_map[player.position] = overall
-	var league_avg: Dictionary = {}
-	for pos in range(1, 10):
-		var total: float = 0.0
-		var count: int = 0
-		for team_id in best_by_team.keys():
-			total += float((best_by_team[team_id] as Dictionary).get(pos, 0))
-			count += 1
-		league_avg[pos] = total / float(maxi(1, count))
-	var need: Dictionary = {}
-	for team_id in best_by_team.keys():
-		var pos_need: Dictionary = {}
-		var pos_map: Dictionary = best_by_team[team_id] as Dictionary
-		for pos in range(1, 10):
-			pos_need[pos] = max(0.0, float(league_avg[pos]) - float(pos_map.get(pos, 0)))
-		need[team_id] = pos_need
-	return need
+	return OffseasonService.position_need(players, teams)
 
 
 static func _record_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:

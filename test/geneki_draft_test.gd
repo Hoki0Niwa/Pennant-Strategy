@@ -263,6 +263,62 @@ func test_initial_seed_world_every_team_has_eligible_players() -> void:
 		).is_greater_equal(2)
 
 
+# リスト選定は NPB実績どおり「能力はあるが出場機会に恵まれない中堅」を優先して晒す。
+# 主力 (高出場) と主力級能力は保護、能力の低い選手より blocked talent を上位に置く。
+func test_cpu_list_exposes_blocked_talent_over_regular_and_scrub() -> void:
+	var eligible: Array = [
+		_geneki_entry(1, 60, 0.1, 24),   # 能力有・出場少・若い = blocked talent → 最有力
+		_geneki_entry(2, 62, 0.9, 27),   # 主力 (出場率0.9) → 保護され晒されない
+		_geneki_entry(3, 44, 0.1, 31),   # 能力低 → appeal 低
+		_geneki_entry(4, 58, 0.15, 25),  # 2番手の blocked talent
+	]
+	var selected: Array = GenekiDraftService._cpu_select_list(eligible)
+	var ids: Dictionary = {}
+	for entry_row in selected:
+		ids[int((entry_row as Dictionary).get("player_id", 0))] = true
+	assert_int(selected.size()).is_equal(GenekiDraftService.CPU_LIST_SIZE)
+	assert_bool(ids.has(1)).override_failure_message("blocked talent が晒されていない").is_true()
+	assert_bool(ids.has(4)).override_failure_message("2番手 blocked talent が晒されていない").is_true()
+	assert_bool(ids.has(2)).override_failure_message("主力(高出場)を晒してはいけない").is_false()
+	assert_bool(ids.has(3)).override_failure_message("能力の低い選手より talent を優先すべき").is_false()
+
+
+# 回帰: 指名スコアにポジション需要を足していた頃は投手 need~0 のため自軍(=どの球団も)が毎回
+# 野手を指名していた (実測 30ドラフトで自軍獲得 投手0/野手30)。need を外し、自軍も投手を普通に
+# 指名する (=野手ばかりにならない) ことを保証する。GameDb.players は複製して共有状態を汚さない。
+func test_user_team_picks_are_not_all_fielders() -> void:
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var season: PSSeason = _make_season()
+	var user_pitchers: int = 0
+	var user_total: int = 0
+	for sv in range(10):
+		Rng.set_seed_value(7000 + sv)
+		var players: Array = []
+		for row in GameDb.players:
+			players.append(PSPlayer.from_dict((row as PSPlayer).to_dict()))
+		var state: Dictionary = GenekiDraftService.create_geneki_draft_state(players, GameDb.teams, season, team_id)
+		state = GenekiDraftService.complete_automatically(state, players, GameDb.teams, season).get("state", state)
+		var result: Dictionary = GenekiDraftService.finalize_geneki_draft(state, players, GameDb.teams, season)
+		for row in result.get("moves", []) as Array:
+			var d: Dictionary = row as Dictionary
+			if int(d.get("to_team", 0)) == team_id:
+				user_total += 1
+				if int(d.get("position", 0)) == 1:
+					user_pitchers += 1
+	assert_int(user_pitchers).override_failure_message(
+		"自軍の現役ドラフト獲得が野手偏重 (10ドラフトで投手 %d / 総獲得 %d)" % [user_pitchers, user_total]
+	).is_greater(0)
+
+
+func _geneki_entry(id: int, value: int, ratio: float, age: int) -> Dictionary:
+	return {
+		"player_id": id, "name": "P%d" % id, "from_team_id": 1,
+		"salary": 3000, "exception": false,
+		"age": age, "is_pitcher": true,
+		"playing_time_ratio": ratio, "value": value,
+	}
+
+
 # AppState 配線の E2E: 戦力外獲得ステップ完了状態から advance すると現役ドラフトステップに入り、
 # 対話パネルが開き、AI一任で完了して結果が保存され、次の FA ステップへ進める。
 func test_appstate_advances_into_geneki_step_and_completes() -> void:

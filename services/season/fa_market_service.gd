@@ -771,41 +771,10 @@ static func _regular_usage_score(entry: Dictionary) -> float:
 	return clampf(maxf(batter_usage, pitcher_usage), 0.0, 1.0)
 
 
-# 球団×ポジションの需要 = max(0, リーグ平均ベスト overall - 自軍ベスト overall)。
+# 球団×ポジションの需要。投手 depth を反映する単一ソースは OffseasonService.position_need
+# ([[project_offseason_roster_mechanics]])。投手を「エース1枚」でなく上位K枚平均で測る。
 static func _build_position_need(players: Array, teams: Array) -> Dictionary:
-	var best_by_team: Dictionary = {}
-	for team_row in teams:
-		var team: PSTeam = team_row as PSTeam
-		if team != null:
-			best_by_team[team.id] = {}
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id <= 0:
-			continue
-		if player.is_retired():
-			continue
-		if not best_by_team.has(player.team_id):
-			continue
-		var pos_map: Dictionary = best_by_team[player.team_id] as Dictionary
-		var overall: int = OffseasonService.player_value_score(player)
-		if overall > int(pos_map.get(player.position, 0)):
-			pos_map[player.position] = overall
-	var league_avg: Dictionary = {}
-	for pos in range(1, 10):
-		var total: float = 0.0
-		var count: int = 0
-		for team_id in best_by_team.keys():
-			total += float((best_by_team[team_id] as Dictionary).get(pos, 0))
-			count += 1
-		league_avg[pos] = total / float(maxi(1, count))
-	var need: Dictionary = {}
-	for team_id in best_by_team.keys():
-		var pos_need: Dictionary = {}
-		var pos_map: Dictionary = best_by_team[team_id] as Dictionary
-		for pos in range(1, 10):
-			pos_need[pos] = max(0.0, float(league_avg[pos]) - float(pos_map.get(pos, 0)))
-		need[team_id] = pos_need
-	return need
+	return OffseasonService.position_need(players, teams)
 
 
 static func _on_cooldown(player: PSPlayer, year: int) -> bool:

@@ -10,11 +10,15 @@ const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_
 # 現有戦力が弱いポジションほど候補評価を押し上げる。
 const WAR_NEED_WEIGHT_ROUND1: float = 1.5
 const WAR_NEED_WEIGHT_LATER: float = 3.0
-# 投手 (position=1) はポジション分解せず単一の need として扱う。
-# 既存の _bucket_balance_score / shortage が投手バランスを担当するため、
-# WAR からは「投手陣の弱さ」を 1 つのスカラーとして補助的に加算する。
-const PITCHER_WAR_NEED_WEIGHT_ROUND1: float = 0.5
-const PITCHER_WAR_NEED_WEIGHT_LATER: float = 1.0
+# 投手 (position=1) はポジション分解せず単一の need として扱うが、戦力は「最良投手1枚 (エース)」
+# ではなく上位 PITCHER_DEPTH_WAR_SLOTS 枚の WAR 平均 (=投手陣の depth) で測る
+# ([[project_offseason_roster_mechanics]] の position_need と同じ考え方)。旧実装はエース1枚で測って
+# いたため投手 need≈0 になり、その埋め合わせに重みを 1/3 へ落としていた。depth 化で need が実効を
+# 持つようになったので重みは野手と揃える (グロスの投手/野手比は _bucket_balance_score が別途担保)。
+const PITCHER_WAR_NEED_WEIGHT_ROUND1: float = WAR_NEED_WEIGHT_ROUND1
+const PITCHER_WAR_NEED_WEIGHT_LATER: float = WAR_NEED_WEIGHT_LATER
+# 投手 depth を測る上位枚数 (先発6+中継6 程度)。team_position_war の position=1 バケツの players から取る。
+const PITCHER_DEPTH_WAR_SLOTS: int = 12
 
 # ポジション別適性保持者の確保。各守備位置で最低 POSITION_DEPTH_TARGET 人の適性保持者を
 # 揃えるようドラフトを誘導する。保持者が少ない位置の候補を優先指名するが、その位置に
@@ -132,7 +136,8 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 # 全チームのポジション別 WAR 不足を集計する。
 # 戻り値: {team_id_str: {position: war_deficit}} + "league_average": {position: avg_starter_war}
 # 不足が大きい (war_deficit が高い) ほど、そのチームはそのポジションを補強したい。
-# 投手 (position=1) はリーグ全体の P 合計から1チーム平均を出して差分にする (集計はラフ)。
+# 野手は各ポジションの最良1枚 (starter_war) の league 平均比。投手 (position=1) は全員が1バケツに
+# 集約されるため最良1枚 (エース) では need が立たず、上位K枚の WAR 平均 (depth, _pitcher_depth_war) で測る。
 static func _build_team_position_need(teams: Array, season: PSSeason) -> Dictionary:
 	if season == null:
 		return {}
@@ -152,11 +157,16 @@ static func _build_team_position_need(teams: Array, season: PSSeason) -> Diction
 		var team_starter: Dictionary = {}
 		for pos_key in positions.keys():
 			var bucket: Dictionary = positions[pos_key] as Dictionary
-			var starter_war: float = float(bucket.get("starter_war", 0.0))
-			team_starter[int(pos_key)] = starter_war
+			# 野手は最良1枚 (starter_war) がその枠のレギュラー戦力。投手 (position=1) は全員が
+			# 1 バケツに集約されるため最良1枚 (エース) だとどの球団も同水準で need が立たない。
+			# 投手は上位 K 枚の WAR 平均 (depth) を戦力値にする。
+			var team_value: float = float(bucket.get("starter_war", 0.0))
+			if int(pos_key) == 1:
+				team_value = _pitcher_depth_war(bucket)
+			team_starter[int(pos_key)] = team_value
 			if not league_starter_totals.has(int(pos_key)):
 				league_starter_totals[int(pos_key)] = []
-			(league_starter_totals[int(pos_key)] as Array).append(starter_war)
+			(league_starter_totals[int(pos_key)] as Array).append(team_value)
 		by_team[str(team.id)] = team_starter
 
 	# リーグ平均 starter_war を算出 (ポジションごと)。
@@ -185,6 +195,20 @@ static func _build_team_position_need(teams: Array, season: PSSeason) -> Diction
 
 	need["__league_average"] = league_average
 	return need
+
+
+# team_position_war の position=1 バケツ (全投手集約) から投手 depth WAR を返す。
+# players は WAR 降順ソート済みなので上位 PITCHER_DEPTH_WAR_SLOTS 枚の平均を取る。
+# 投手陣が薄い球団ほど下位が低 WAR (救援・入替) で平均が下がり、投手 need が立つ。
+static func _pitcher_depth_war(bucket: Dictionary) -> float:
+	var players: Array = bucket.get("players", []) as Array
+	if players.is_empty():
+		return 0.0
+	var take: int = mini(PITCHER_DEPTH_WAR_SLOTS, players.size())
+	var total: float = 0.0
+	for i in range(take):
+		total += float((players[i] as Dictionary).get("war", 0.0))
+	return total / float(take)
 
 
 static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dictionary:
@@ -896,8 +920,8 @@ static func _team_candidate_score(state: Dictionary, team_id: int, candidate: Di
 # 直近シーズンの WAR を反映したポジション別補強ボーナス。
 # - 野手 (position 2-9): 当該ポジションの「リーグ平均 starter_war - チーム starter_war」を
 #   不足度として使い、不足が大きいほど候補スコアを押し上げる。
-# - 投手 (position 1): 集計上のノイズを避けるため、チームの全投手 starter_war 不足
-#   (= 1チームの「P」枠全体の WAR 不足) を弱めに反映する。
+# - 投手 (position 1): 上位K枚の WAR 平均 (投手陣 depth) の不足を、野手と同じ重みで反映する
+#   (旧実装はエース1枚で測り need≈0 だったため重みを落としていたが、depth 化で不要になった)。
 static func _position_war_need_bonus(state: Dictionary, team_id: int, candidate: Dictionary, round_no: int) -> float:
 	var need: Dictionary = state.get("team_position_need", {}) as Dictionary
 	if need.is_empty():

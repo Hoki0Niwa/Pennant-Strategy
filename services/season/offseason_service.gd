@@ -31,6 +31,12 @@ const CPU_RELEASE_ROOKIE_PROTECTION_YEARS: int = 1
 # 長期較正で新人中央値より約8点低い52に置き、上げるほど戦力外候補が増える。
 const RELEASE_REPLACEMENT_VALUE: float = 52.0
 
+# 補強需要 (position_need) で投手戦力を測る際に平均する上位投手の枚数。野手は各ポジション
+# 「最良1人」で先発1枠を代表できるが、投手は全員 position=1 に集約されるため「エース1枚」だと
+# どの球団も同水準になり需要がほぼゼロになる。上位 K 枚の平均でロスターの投手 depth を測り、
+# 手薄な球団に投手需要が立つようにする。先発6+中継7 程度を見込む。
+const NEED_PITCHER_DEPTH_SLOTS: int = 12
+
 # 少出場引退に使う役割別上限。戦力外選定には使わない。
 const RETIREMENT_LOW_STARTER_MAX: int = 3
 const RETIREMENT_LOW_RELIEVER_MAX: int = 10
@@ -331,11 +337,11 @@ static func release_depth_chart_evaluations(players: Array, team_id: int, season
 	return evaluations
 
 
-# 仮に candidate が team_id に在籍した場合、通常戦力外と同じAND条件で放出対象になるかを返す。
-# 外国人契約市場・新規スカウトもこの入口を使い、獲得判断と翌年の放出判断を同じ尺度に揃える。
-static func would_release_player_for_team(players: Array, team_id: int, candidate: PSPlayer, season: PSSeason) -> bool:
+# 仮に candidate が team_id に在籍した場合の depth-chart 評価 (surplus/projected_value)。
+# candidate が別球団/引退中なら仮想クローンを足して評価する。見つからなければ {}。
+static func candidate_depth_evaluation_for_team(players: Array, team_id: int, candidate: PSPlayer, season: PSSeason) -> Dictionary:
 	if candidate == null or team_id <= 0:
-		return true
+		return {}
 	var evaluation_players: Array = players
 	if candidate.team_id != team_id or candidate.is_retired():
 		evaluation_players = players.duplicate()
@@ -344,7 +350,13 @@ static func would_release_player_for_team(players: Array, team_id: int, candidat
 		hypothetical.source_data.erase("retired")
 		evaluation_players.append(hypothetical)
 	var evaluations: Dictionary = release_depth_chart_evaluations(evaluation_players, team_id, season)
-	var evaluation: Dictionary = evaluations.get(candidate.id, {}) as Dictionary
+	return evaluations.get(candidate.id, {}) as Dictionary
+
+
+# 仮に candidate が team_id に在籍した場合、通常戦力外と同じAND条件で放出対象になるかを返す。
+# 外国人契約市場・新規スカウトもこの入口を使い、獲得判断と翌年の放出判断を同じ尺度に揃える。
+static func would_release_player_for_team(players: Array, team_id: int, candidate: PSPlayer, season: PSSeason) -> bool:
+	var evaluation: Dictionary = candidate_depth_evaluation_for_team(players, team_id, candidate, season)
 	if evaluation.is_empty():
 		return true
 	return bool(evaluation.get("surplus", false)) \
@@ -821,6 +833,70 @@ static func player_value_score(player: PSPlayer) -> int:
 		return 0
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
 	return PlayerValueEvaluator.overall_score(record)
+
+
+# 球団×ポジションの補強需要 = max(0, リーグ平均戦力 - 自軍戦力)。value 単位 (概ね0〜20)。
+# 野手 (position 2〜9) は各ポジション「最良1人」= その枠のレギュラーを戦力とする。
+# 投手 (position 1) は全員が同一 position に集約されるため、最良1枚 (=エース) で測るとどの球団も
+# 同水準で需要がゼロになる。ロスターの投手 depth を反映させるため上位 NEED_PITCHER_DEPTH_SLOTS 枚の
+# 平均を投手戦力とし、投手が手薄な球団に position 1 の需要が立つようにする。
+# 戦力外獲得・現役ドラフト・FA の各補強AIが共有する単一ソース (以前は FaMarketService と
+# ReleasedMarketService に同一実装が重複していた)。
+static func position_need(players: Array, teams: Array) -> Dictionary:
+	var best_by_team: Dictionary = {}
+	var pitcher_values_by_team: Dictionary = {}
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null:
+			best_by_team[team.id] = {}
+			pitcher_values_by_team[team.id] = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id <= 0:
+			continue
+		if player.is_retired():
+			continue
+		if not best_by_team.has(player.team_id):
+			continue
+		var overall: int = player_value_score(player)
+		if player.is_pitcher():
+			(pitcher_values_by_team[player.team_id] as Array).append(overall)
+		else:
+			var pos_map: Dictionary = best_by_team[player.team_id] as Dictionary
+			if overall > int(pos_map.get(player.position, 0)):
+				pos_map[player.position] = overall
+	# 投手 depth (上位 K 枚平均) を各球団の position 1 戦力として best_by_team に載せる。
+	for team_id in pitcher_values_by_team.keys():
+		(best_by_team[team_id] as Dictionary)[1] = _top_k_mean(pitcher_values_by_team[team_id] as Array, NEED_PITCHER_DEPTH_SLOTS)
+	var league_avg: Dictionary = {}
+	for pos in range(1, 10):
+		var total: float = 0.0
+		var count: int = 0
+		for team_id in best_by_team.keys():
+			total += float((best_by_team[team_id] as Dictionary).get(pos, 0))
+			count += 1
+		league_avg[pos] = total / float(maxi(1, count))
+	var need: Dictionary = {}
+	for team_id in best_by_team.keys():
+		var pos_need: Dictionary = {}
+		var pos_map: Dictionary = best_by_team[team_id] as Dictionary
+		for pos in range(1, 10):
+			pos_need[pos] = max(0.0, float(league_avg[pos]) - float(pos_map.get(pos, 0)))
+		need[team_id] = pos_need
+	return need
+
+
+# 上位 k 枚の value 平均。手薄な球団ほど低くなる (少数しか居なければその平均、空なら0)。
+static func _top_k_mean(values: Array, k: int) -> float:
+	if values.is_empty() or k <= 0:
+		return 0.0
+	var sorted: Array = values.duplicate()
+	sorted.sort_custom(func(a, b) -> bool: return int(a) > int(b))
+	var take: int = mini(k, sorted.size())
+	var total: float = 0.0
+	for i in range(take):
+		total += float(sorted[i])
+	return total / float(take)
 
 
 # 「今後2〜3年の期待価値」を 1 スカラーに統一したスコア。

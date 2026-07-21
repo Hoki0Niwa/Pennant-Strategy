@@ -30,13 +30,41 @@ const LIST_MIN_WITH_EXCEPTION: int = 3
 # CPUのリスト人数 (最低限のみ提出。例外枠は eligible 不足時のフォールバックでしか使わない)。
 const CPU_LIST_SIZE: int = 2
 
-# 投票/指名スコア: projected_value + ポジション需要 * NEED_WEIGHT + ノイズ。
-# 需要は FaMarketService._build_position_need (リーグ最良との overall 差、概ね0〜20)。
-const VOTE_NEED_WEIGHT: float = 0.5
+# --- リスト選定 (放出候補) の基準 ---
+# NPB現役ドラフトで実際に晒され移籍するのは「能力はあるが出場機会に恵まれない中堅」(元上位指名の
+# 伸び悩み投手・飼い殺しの野手など)で、実績は投手偏重(移籍 投:野 = 2022年7:5 / 2023年9:3 / 2024年9:4)。
+# よってリストは surplus(枠余り)ではなく、**素の能力が高く出場が少ない(=blocked)若手中堅**を優先して晒す。
+# 「一軍戦力」(規定近くの出場)と「主力級能力」は保護(晒さない)。指名側は伸びしろ(future_value)で評価する
+# ため、新天地で開花する blocked talent が指名されやすくなる。
+const EXPOSE_REGULAR_PITCHER_APP: int = 20    # 登板がこの水準なら一軍戦力=保護
+const EXPOSE_REGULAR_BATTER_GAMES: int = 80   # 出場がこの水準なら一軍戦力=保護
+const EXPOSE_REGULAR_RATIO: float = 0.75      # 出場率がこれ以上なら「主力」として保護ペナルティ
+const EXPOSE_PROTECT_ABILITY: int = 66        # これ以上の能力は主力として保護 (晒さない)
+const EXPOSE_BLOCKED_WEIGHT: float = 0.6      # 出場が少ないほど appeal を増やす係数
+# 年齢係数: NPB現役ドラフトの対象は「数年やって伸び悩んだ中堅」。23歳以下の素材型は各球団が育成のため
+# 抱えるので晒しにくく(保護)、24〜30歳を全開、31歳以降は伸びしろ減で逓減。若い順に晒す加点は不可
+# (それだと19〜22歳の素材ばかり晒され非現実的な年齢分布になる)。
+const EXPOSE_PRIME_MIN: int = 24
+const EXPOSE_PRIME_MAX: int = 30
+const EXPOSE_PROSPECT_FLOOR: float = 0.35     # 21歳以下の appeal 係数 (素材型を強く保護)
+const EXPOSE_OLD_DECAY: float = 0.06          # 31歳以降 1歳ごとの逓減
+const EXPOSE_OLD_FLOOR: float = 0.3
+const EXPOSE_REGULAR_PENALTY: float = 0.25    # 主力(高出場)を晒し順位で大きく下げる
+const EXPOSE_STAR_PENALTY: float = 0.25       # 主力級能力を晒し順位で大きく下げる
+# 投手偏重の実績に合わせた投手 appeal 補正 (投手の blocked talent を野手よりやや出しやすく)。
+const EXPOSE_PITCHER_BIAS: float = 1.0
+
+# 投票/指名スコア = 能力 value(player_value_score) + 投手 parity + ノイズ。ポジション需要は使わない
+# (投手のリーグ相対 need が構造的~0 で、需要を足すと野手だけ加点され自軍が野手ばかり指名するため)。
+# 投手 parity は (1)野手が systematically 高 value (実測 p90 82 vs 78) な分の相殺 (2)NPB現役ドラフトが
+# リーグ全体で投手偏重 (どの球団も blocked な良質アームを欲しがる) な分の底上げ。球団別の need lean は
+# 採らない — 投手潤沢な球団だけ野手指名になり「自軍が毎年野手」の苦情が再現するため (実測で確認)。
 const VOTE_NOISE: float = 2.0
-# 2巡目でCPUが「指名して参加」するスコア下限。代替水準 (ReleaseValueProjector 較正の52) より
-# 明確に上の選手が残っている場合のみ追加獲得に動く (実際の2巡目指名が年0〜3人と少ないことに対応)。
-const ROUND2_PICK_MIN_SCORE: float = 58.0
+const PICK_PITCHER_PARITY: float = 4.0
+# 2巡目でCPUが「指名して参加」するスコア下限。value を素の能力 (player_value_score) にした scale に合わせ、
+# 晒される blocked talent (能力〜55-65) の上澄みだけが残っている場合のみ動く水準 (実際の2巡目指名が
+# 年0〜3人と少ないことに対応)。1巡目は各球団必ず1人指名 (=12人)、2巡目でこの閾値超えが数人。
+const ROUND2_PICK_MIN_SCORE: float = 70.0
 
 const ROUND2_MODE_PICK: String = "pick"
 const ROUND2_MODE_OFFER_ONLY: String = "offer_only"
@@ -63,7 +91,6 @@ static func create_geneki_draft_state(players: Array, teams: Array, season: PSSe
 		# 1巡目投票: votes = team_id_str -> player_id / vote_counts = team_id_str -> 得票数。
 		"votes": {},
 		"vote_counts": {},
-		"team_need": {},
 		"round": 1,
 		"picks": [],
 		"pick_order_log": [],
@@ -149,68 +176,88 @@ static func _eligible_entries_for_team(players: Array, team_id: int, season: PSS
 		if not is_eligible(player, year):
 			continue
 		var evaluation: Dictionary = evaluations.get(player.id, {}) as Dictionary
-		var projected: float = float(evaluation.get("projected_value", 0.0))
-		if evaluation.is_empty():
-			var record: PSPlayerSeasonRecord = null
-			if season != null:
-				record = RecordStore.get_player_record(player.id, season.year, season.season_number)
-			projected = ReleaseValueProjector.projected_value(player, record)
+		var record: PSPlayerSeasonRecord = evaluation.get("record", null) as PSPlayerSeasonRecord
+		if record == null and season != null:
+			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		entries.append({
 			"player_id": player.id,
 			"name": player.name,
 			"from_team_id": team_id,
 			"salary": player.salary,
 			"exception": player.salary >= SALARY_STANDARD_MAX,
-			"surplus": bool(evaluation.get("surplus", false)),
-			"value": projected,
+			"age": player.age,
+			"is_pitcher": player.is_pitcher(),
+			"playing_time_ratio": _playing_time_ratio(player, record),
+			# appeal・指名評価とも素の能力 (player_value_score) を使う。旧実装の projected_value は
+			# 「当季出場が少ないほど割引」= blocked talent を過小評価するため現役ドラフトには不適
+			# (新天地で開花する前提の制度)。future_value は成長分で過大評価&指名過多になるため不採用。
+			"value": OffseasonService.player_value_score(player),
 		})
 	return entries
 
 
-# CPUのリスト選定: 「自軍では出場機会がない (surplus) が能力のある選手」を優先して晒す。
-# surplus の projected_value 上位 → 不足分は非 surplus の projected_value 下位 (手放しても
-# 痛くない順) で補う。例外枠 (5000万以上) は5000万未満だけで人数を満たせない場合のみ使う。
+# 当季の出場率 (0〜1)。投手は登板数、野手は試合数を規定近い水準で正規化。record 無し=0 (blocked扱い)。
+static func _playing_time_ratio(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
+	if record == null:
+		return 0.0
+	if player.is_pitcher():
+		var appearances: int = record.pitcher_stats.starts + record.pitcher_stats.relief_appearances
+		return clampf(float(appearances) / float(EXPOSE_REGULAR_PITCHER_APP), 0.0, 1.0)
+	return clampf(float(record.batter_stats.games) / float(EXPOSE_REGULAR_BATTER_GAMES), 0.0, 1.0)
+
+
+# 放出候補としての appeal。能力が高く・出場が少なく (blocked)・若いほど高い。主力(高出場)と主力級能力は
+# 大きく減点して保護する。投手は実績の投手偏重に合わせ微増。
+static func _exposure_appeal(entry: Dictionary) -> float:
+	var ability: float = float(entry.get("value", 0))
+	var ratio: float = float(entry.get("playing_time_ratio", 0.0))
+	var blocked: float = 1.0 - ratio
+	var appeal: float = ability * (1.0 + EXPOSE_BLOCKED_WEIGHT * blocked) * _age_factor(int(entry.get("age", 25)))
+	if ratio >= EXPOSE_REGULAR_RATIO:
+		appeal *= EXPOSE_REGULAR_PENALTY
+	if ability >= float(EXPOSE_PROTECT_ABILITY):
+		appeal *= EXPOSE_STAR_PENALTY
+	if bool(entry.get("is_pitcher", false)):
+		appeal *= EXPOSE_PITCHER_BIAS
+	return appeal
+
+
+# 年齢係数: 24〜30歳=1.0、23歳以下は素材保護で逓減 (21歳以下 EXPOSE_PROSPECT_FLOOR)、31歳以降も逓減。
+static func _age_factor(age: int) -> float:
+	if age < EXPOSE_PRIME_MIN:
+		var t: float = clampf(float(age - 21) / float(EXPOSE_PRIME_MIN - 21), 0.0, 1.0)
+		return lerpf(EXPOSE_PROSPECT_FLOOR, 1.0, t)
+	if age <= EXPOSE_PRIME_MAX:
+		return 1.0
+	return maxf(EXPOSE_OLD_FLOOR, 1.0 - float(age - EXPOSE_PRIME_MAX) * EXPOSE_OLD_DECAY)
+
+
+# CPUのリスト選定: 「能力はあるが出場機会に恵まれない中堅」を appeal 順に晒す (NPB実績準拠)。
+# 5000万未満 (standard) を appeal 降順で優先し、不足分だけ例外枠 (5000万以上) を使う。
 static func _cpu_select_list(eligible: Array) -> Array:
 	var standard: Array = []
 	var exception: Array = []
 	for entry_row in eligible:
-		var entry: Dictionary = entry_row as Dictionary
+		var entry: Dictionary = (entry_row as Dictionary).duplicate(true)
+		entry["appeal"] = _exposure_appeal(entry)
 		if bool(entry.get("exception", false)):
 			exception.append(entry)
 		else:
 			standard.append(entry)
-
-	var surplus_pool: Array = []
-	var keeper_pool: Array = []
-	for entry_row in standard:
-		var entry: Dictionary = entry_row as Dictionary
-		if bool(entry.get("surplus", false)):
-			surplus_pool.append(entry)
-		else:
-			keeper_pool.append(entry)
-	surplus_pool.sort_custom(func(a, b) -> bool:
-		return float((a as Dictionary).get("value", 0.0)) > float((b as Dictionary).get("value", 0.0))
+	standard.sort_custom(func(a, b) -> bool:
+		return float((a as Dictionary).get("appeal", 0.0)) > float((b as Dictionary).get("appeal", 0.0))
 	)
-	keeper_pool.sort_custom(func(a, b) -> bool:
-		return float((a as Dictionary).get("value", 0.0)) < float((b as Dictionary).get("value", 0.0))
-	)
-
 	var selected: Array = []
-	for entry_row in surplus_pool:
+	for entry_row in standard:
 		if selected.size() >= CPU_LIST_SIZE:
 			break
-		selected.append((entry_row as Dictionary).duplicate(true))
-	for entry_row in keeper_pool:
-		if selected.size() >= CPU_LIST_SIZE:
-			break
-		selected.append((entry_row as Dictionary).duplicate(true))
+		selected.append(entry_row)
 	if selected.size() < CPU_LIST_SIZE and not exception.is_empty():
-		# 5000万未満が足りない球団のみ例外枠を1人使う (リスト3人ルールは相手にした本人が
-		# 5000万未満不足の状況なので満たしようがなく、最低保証を優先する)。
+		# 5000万未満が足りない球団のみ例外枠を appeal 上位1人で補う (最低保証を優先)。
 		exception.sort_custom(func(a, b) -> bool:
-			return float((a as Dictionary).get("value", 0.0)) < float((b as Dictionary).get("value", 0.0))
+			return float((a as Dictionary).get("appeal", 0.0)) > float((b as Dictionary).get("appeal", 0.0))
 		)
-		selected.append((exception[0] as Dictionary).duplicate(true))
+		selected.append(exception[0])
 	return selected
 
 
@@ -394,25 +441,7 @@ static func _begin_round1(state: Dictionary, players: Array, teams: Array) -> vo
 		_finish_event(state)
 		return
 
-	# 投票: 各球団が「最も欲しい他球団リスト選手」に1票。需要はイベント中不変なので snapshot する。
-	var need: Dictionary = FaMarketService._build_position_need(players, teams)
-	var need_snapshot: Dictionary = {}
-	for team_id_value in participants:
-		var team_id: int = int(team_id_value)
-		var pos_need: Dictionary = need.get(team_id, {}) as Dictionary
-		var stringified: Dictionary = {}
-		for pos_key in pos_need.keys():
-			stringified[str(pos_key)] = float(pos_need[pos_key])
-		need_snapshot[str(team_id)] = stringified
-	state["team_need"] = need_snapshot
-
-	var player_lookup: Dictionary = {}
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player != null:
-			player_lookup[player.id] = player
-	state["_player_positions"] = _list_positions(state, player_lookup)
-
+	# 投票: 各球団が「最も欲しい他球団リスト選手」(スコア最大) に1票。
 	var votes: Dictionary = {}
 	var vote_counts: Dictionary = {}
 	for team_id_value in participants:
@@ -432,18 +461,6 @@ static func _begin_round1(state: Dictionary, players: Array, teams: Array) -> vo
 	_log(state, teams, "1巡目: 投票の結果、%s が最初の指名権を獲得" % _team_name(teams, _top_vote_team(state, participants)))
 
 
-# リスト選手のポジション (指名スコアの需要参照用)。player が消えた場合は 0 (需要加点なし)。
-static func _list_positions(state: Dictionary, player_lookup: Dictionary) -> Dictionary:
-	var positions: Dictionary = {}
-	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
-	for team_key in team_lists.keys():
-		for entry_row in team_lists[team_key] as Array:
-			var player_id: int = int((entry_row as Dictionary).get("player_id", 0))
-			var player: PSPlayer = player_lookup.get(player_id, null) as PSPlayer
-			positions[str(player_id)] = player.position if player != null else 0
-	return positions
-
-
 static func _all_listed_entries_except(state: Dictionary, team_id: int) -> Array:
 	var result: Array = []
 	var team_lists: Dictionary = state.get("team_lists", {}) as Dictionary
@@ -455,15 +472,18 @@ static func _all_listed_entries_except(state: Dictionary, team_id: int) -> Array
 	return result
 
 
-# 指名/投票スコア: 将来価値 + ポジション需要 + 決定論ノイズ (state.seed 起点なのでリロードでも不変)。
+# 指名/投票スコア: 能力 value + 決定論ノイズ (state.seed 起点なのでリロードでも不変)。
+# ポジション需要は使わない: 投手のリーグ相対 need は構造的に~0 で、需要を足すと「投手には加点0・
+# 野手にだけ加点」となり、どの球団も僅差では必ず野手を選ぶ (=自軍が野手ばかり指名する) ため
+# ([[project_offseason_roster_mechanics]])。現役ドラフトの指名は blocked talent の能力/伸びしろ勝負にする。
 static func _entry_score_for_team(state: Dictionary, team_id: int, entry: Dictionary) -> float:
 	var player_id: int = int(entry.get("player_id", 0))
-	var position: int = int((state.get("_player_positions", {}) as Dictionary).get(str(player_id), 0))
-	var pos_need: Dictionary = (state.get("team_need", {}) as Dictionary).get(str(team_id), {}) as Dictionary
-	var need_bonus: float = float(pos_need.get(str(position), 0.0)) * VOTE_NEED_WEIGHT
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(state.get("seed", 0)) + team_id * 92821 + player_id * 68927
-	return float(entry.get("value", 0.0)) + need_bonus + rng.randf() * VOTE_NOISE
+	var score: float = float(entry.get("value", 0.0)) + rng.randf() * VOTE_NOISE
+	if bool(entry.get("is_pitcher", false)):
+		score += PICK_PITCHER_PARITY
+	return score
 
 
 static func _best_entry_for_team(state: Dictionary, team_id: int, entries: Array) -> Dictionary:
@@ -706,8 +726,6 @@ static func _finish_event(state: Dictionary) -> void:
 	state["complete"] = true
 	state["waiting_user"] = false
 	state["current_team_id"] = 0
-	# 需要参照用の一時テーブルはセーブ肥大を避けるため落とす (finalize 後は不要)。
-	state.erase("_player_positions")
 
 
 # ============================================================ 確定 (移籍の実適用)
