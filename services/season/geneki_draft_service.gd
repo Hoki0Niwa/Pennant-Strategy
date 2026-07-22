@@ -39,7 +39,7 @@ const CPU_LIST_SIZE: int = 2
 const EXPOSE_REGULAR_PITCHER_APP: int = 20    # 登板がこの水準なら一軍戦力=保護
 const EXPOSE_REGULAR_BATTER_GAMES: int = 80   # 出場がこの水準なら一軍戦力=保護
 const EXPOSE_REGULAR_RATIO: float = 0.75      # 出場率がこれ以上なら「主力」として保護ペナルティ
-const EXPOSE_PROTECT_ABILITY: int = 66        # これ以上の能力は主力として保護 (晒さない)
+const EXPOSE_PROTECT_PERCENTILE: float = 0.85 # 役割内でこの percentile 以上 (上位15%) は主力として保護
 const EXPOSE_BLOCKED_WEIGHT: float = 0.6      # 出場が少ないほど appeal を増やす係数
 # 年齢係数: NPB現役ドラフトの対象は「数年やって伸び悩んだ中堅」。23歳以下の素材型は各球団が育成のため
 # 抱えるので晒しにくく(保護)、24〜30歳を全開、31歳以降は伸びしろ減で逓減。若い順に晒す加点は不可
@@ -51,16 +51,19 @@ const EXPOSE_OLD_DECAY: float = 0.06          # 31歳以降 1歳ごとの逓減
 const EXPOSE_OLD_FLOOR: float = 0.3
 const EXPOSE_REGULAR_PENALTY: float = 0.25    # 主力(高出場)を晒し順位で大きく下げる
 const EXPOSE_STAR_PENALTY: float = 0.25       # 主力級能力を晒し順位で大きく下げる
-# 投手偏重の実績に合わせた投手 appeal 補正 (投手の blocked talent を野手よりやや出しやすく)。
-const EXPOSE_PITCHER_BIAS: float = 1.0
+# 投手 appeal 補正。役割内 percentile で投打を対称にした上で NPB 実績の投手偏重 (移籍 ~67%) に寄せる。
+# 感度が高い (実測 記録なし露出: 1.00→29%投手 / 1.05→46% / 1.10→71% / 1.20→88%)。1.10 で記録なし71%・
+# 記録あり83% と、記録の有無に依らず投手偏重を保つ (旧 raw-ability 実装は記録なし29%/あり69%と不安定で、
+# ユーザー環境で野手偏重になっていた)。投手が多すぎるなら下げ、野手が多いなら上げる主ノブ。
+const EXPOSE_PITCHER_BIAS: float = 1.1
 
-# 投票/指名スコア = 能力 value(player_value_score) + 投手 parity + ノイズ。ポジション需要は使わない
-# (投手のリーグ相対 need が構造的~0 で、需要を足すと野手だけ加点され自軍が野手ばかり指名するため)。
-# 投手 parity は (1)野手が systematically 高 value (実測 p90 82 vs 78) な分の相殺 (2)NPB現役ドラフトが
-# リーグ全体で投手偏重 (どの球団も blocked な良質アームを欲しがる) な分の底上げ。球団別の need lean は
-# 採らない — 投手潤沢な球団だけ野手指名になり「自軍が毎年野手」の苦情が再現するため (実測で確認)。
+# 投票/指名スコア = 能力 value(player_value_score) + ノイズ。ポジション需要も投手 parity も足さない。
+# 経緯 (2026-07-21): 戦力外獲得の野手偏重を直す (=戦力外獲得で投手が再契約されリスト供給が投手寄りに
+# 戻る) と、素の value+ノイズ指名で自軍獲得は多seed平均で投手~59% (NPB 58〜75% 帯) の投打ミックスになる。
+# ここに投手 parity を足すと全球団が毎年ほぼ投手 (~92%) に振れ、逆に野手が取れなくなる (value 差が小さく
+# 僅かな加点で接戦が全部投手に倒れるため。実測 parity0→投手59% / parity1.5→88%)。ポジション需要も不可
+# (投手 need が構造的~0 で野手だけ加点され自軍が野手ばかりになる)。よって加点なしが最も NPB 的。
 const VOTE_NOISE: float = 2.0
-const PICK_PITCHER_PARITY: float = 4.0
 # 2巡目でCPUが「指名して参加」するスコア下限。value を素の能力 (player_value_score) にした scale に合わせ、
 # 晒される blocked talent (能力〜55-65) の上澄みだけが残っている場合のみ動く水準 (実際の2巡目指名が
 # 年0〜3人と少ないことに対応)。1巡目は各球団必ず1人指名 (=12人)、2巡目でこの閾値超えが数人。
@@ -168,6 +171,22 @@ static func is_eligible(player: PSPlayer, year: int) -> bool:
 static func _eligible_entries_for_team(players: Array, team_id: int, season: PSSeason) -> Array:
 	var year: int = season.year if season != null else 0
 	var evaluations: Dictionary = OffseasonService.release_depth_chart_evaluations(players, team_id, season)
+	# 役割別の value 分布 (リーグ全体)。appeal は raw value でなく「役割内での相対順位 (percentile)」で
+	# 測る。野手は systematically 高 value (実測 avg 69 vs 68、p90 82 vs 78) なので raw だと露出が
+	# 野手に偏る (特に記録が乏しく能力だけで選ぶ状況)。役割内 percentile なら投打が対称になる。
+	var pit_sorted: Array = []
+	var fld_sorted: Array = []
+	for player_row in players:
+		var lp: PSPlayer = player_row as PSPlayer
+		if lp == null or lp.team_id <= 0 or lp.is_retired() or lp.development_player:
+			continue
+		var lv: int = OffseasonService.player_value_score(lp)
+		if lp.is_pitcher():
+			pit_sorted.append(lv)
+		else:
+			fld_sorted.append(lv)
+	pit_sorted.sort()
+	fld_sorted.sort()
 	var entries: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -179,6 +198,8 @@ static func _eligible_entries_for_team(players: Array, team_id: int, season: PSS
 		var record: PSPlayerSeasonRecord = evaluation.get("record", null) as PSPlayerSeasonRecord
 		if record == null and season != null:
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		var v: int = OffseasonService.player_value_score(player)
+		var is_pit: bool = player.is_pitcher()
 		entries.append({
 			"player_id": player.id,
 			"name": player.name,
@@ -186,12 +207,12 @@ static func _eligible_entries_for_team(players: Array, team_id: int, season: PSS
 			"salary": player.salary,
 			"exception": player.salary >= SALARY_STANDARD_MAX,
 			"age": player.age,
-			"is_pitcher": player.is_pitcher(),
+			"is_pitcher": is_pit,
 			"playing_time_ratio": _playing_time_ratio(player, record),
-			# appeal・指名評価とも素の能力 (player_value_score) を使う。旧実装の projected_value は
-			# 「当季出場が少ないほど割引」= blocked talent を過小評価するため現役ドラフトには不適
-			# (新天地で開花する前提の制度)。future_value は成長分で過大評価&指名過多になるため不採用。
-			"value": OffseasonService.player_value_score(player),
+			# 指名評価は raw value (投打を跨いで best available を選ぶため)。露出 appeal は役割内 percentile。
+			# projected_value/future_value は使わない (前者は blocked talent を出場割引で過小評価、後者は成長で過大)。
+			"value": v,
+			"role_pct": _value_percentile(pit_sorted if is_pit else fld_sorted, v),
 		})
 	return entries
 
@@ -206,20 +227,37 @@ static func _playing_time_ratio(player: PSPlayer, record: PSPlayerSeasonRecord) 
 	return clampf(float(record.batter_stats.games) / float(EXPOSE_REGULAR_BATTER_GAMES), 0.0, 1.0)
 
 
-# 放出候補としての appeal。能力が高く・出場が少なく (blocked)・若いほど高い。主力(高出場)と主力級能力は
-# 大きく減点して保護する。投手は実績の投手偏重に合わせ微増。
+# 放出候補としての appeal。役割内での相対的な高能力・出場少 (blocked)・若さ で高くなる。
+# 能力は raw value でなく **役割内 percentile** (`role_pct` 0〜1) を使う → 投手/野手が対称になり、
+# 野手が raw で高い分の露出偏りを排除 (記録が乏しく能力だけで選ぶ状況でも投打が偏らない)。
+# ability_score = 40 + role_pct×60 で 40〜100 の役割中立な能力値に写像。主力(高出場)と役割内トップ層は保護。
 static func _exposure_appeal(entry: Dictionary) -> float:
-	var ability: float = float(entry.get("value", 0))
+	var role_pct: float = float(entry.get("role_pct", 0.5))
+	var ability: float = 40.0 + role_pct * 60.0
 	var ratio: float = float(entry.get("playing_time_ratio", 0.0))
 	var blocked: float = 1.0 - ratio
 	var appeal: float = ability * (1.0 + EXPOSE_BLOCKED_WEIGHT * blocked) * _age_factor(int(entry.get("age", 25)))
 	if ratio >= EXPOSE_REGULAR_RATIO:
 		appeal *= EXPOSE_REGULAR_PENALTY
-	if ability >= float(EXPOSE_PROTECT_ABILITY):
+	if role_pct >= EXPOSE_PROTECT_PERCENTILE:
 		appeal *= EXPOSE_STAR_PENALTY
 	if bool(entry.get("is_pitcher", false)):
 		appeal *= EXPOSE_PITCHER_BIAS
 	return appeal
+
+
+# sorted_vals (昇順) の中で v が下から何割の位置か (0〜1)。役割内 percentile。
+static func _value_percentile(sorted_vals: Array, v: int) -> float:
+	var n: int = sorted_vals.size()
+	if n == 0:
+		return 0.5
+	var below: int = 0
+	for x in sorted_vals:
+		if int(x) < v:
+			below += 1
+		else:
+			break
+	return float(below) / float(n)
 
 
 # 年齢係数: 24〜30歳=1.0、23歳以下は素材保護で逓減 (21歳以下 EXPOSE_PROSPECT_FLOOR)、31歳以降も逓減。
@@ -480,10 +518,7 @@ static func _entry_score_for_team(state: Dictionary, team_id: int, entry: Dictio
 	var player_id: int = int(entry.get("player_id", 0))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(state.get("seed", 0)) + team_id * 92821 + player_id * 68927
-	var score: float = float(entry.get("value", 0.0)) + rng.randf() * VOTE_NOISE
-	if bool(entry.get("is_pitcher", false)):
-		score += PICK_PITCHER_PARITY
-	return score
+	return float(entry.get("value", 0.0)) + rng.randf() * VOTE_NOISE
 
 
 static func _best_entry_for_team(state: Dictionary, team_id: int, entries: Array) -> Dictionary:

@@ -267,10 +267,10 @@ func test_initial_seed_world_every_team_has_eligible_players() -> void:
 # 主力 (高出場) と主力級能力は保護、能力の低い選手より blocked talent を上位に置く。
 func test_cpu_list_exposes_blocked_talent_over_regular_and_scrub() -> void:
 	var eligible: Array = [
-		_geneki_entry(1, 60, 0.1, 24),   # 能力有・出場少・若い = blocked talent → 最有力
-		_geneki_entry(2, 62, 0.9, 27),   # 主力 (出場率0.9) → 保護され晒されない
-		_geneki_entry(3, 44, 0.1, 31),   # 能力低 → appeal 低
-		_geneki_entry(4, 58, 0.15, 25),  # 2番手の blocked talent
+		_geneki_entry(1, 0.70, 0.1, 24),   # 役割内で上位・出場少・若い = blocked talent → 最有力
+		_geneki_entry(2, 0.75, 0.9, 27),   # 主力 (出場率0.9) → 保護され晒されない
+		_geneki_entry(3, 0.15, 0.1, 31),   # 役割内で下位 → appeal 低
+		_geneki_entry(4, 0.65, 0.15, 25),  # 2番手の blocked talent
 	]
 	var selected: Array = GenekiDraftService._cpu_select_list(eligible)
 	var ids: Dictionary = {}
@@ -310,12 +310,12 @@ func test_user_team_picks_are_not_all_fielders() -> void:
 	).is_greater(0)
 
 
-func _geneki_entry(id: int, value: int, ratio: float, age: int) -> Dictionary:
+func _geneki_entry(id: int, role_pct: float, ratio: float, age: int) -> Dictionary:
 	return {
 		"player_id": id, "name": "P%d" % id, "from_team_id": 1,
 		"salary": 3000, "exception": false,
 		"age": age, "is_pitcher": true,
-		"playing_time_ratio": ratio, "value": value,
+		"playing_time_ratio": ratio, "value": int(40.0 + role_pct * 60.0), "role_pct": role_pct,
 	}
 
 
