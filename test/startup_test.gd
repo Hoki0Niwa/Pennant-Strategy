@@ -9,9 +9,32 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 func test_core_scripts_load() -> void:
 	assert_object(load("res://ui/main.gd")).is_not_null()
+	assert_object(load("res://ui/components/game_dialog_style.gd")).is_not_null()
 	assert_object(load("res://ui/screens/home_screen.gd")).is_not_null()
 	assert_object(load("res://ui/screens/offseason_screen.gd")).is_not_null()
 	assert_object(load("res://ui/screens/options_screen.gd")).is_not_null()
+
+
+func test_quit_dialog_uses_shared_game_ui_and_safe_actions() -> void:
+	var main_script: GDScript = load("res://ui/main.gd") as GDScript
+	var main: Control = main_script.new()
+	var dialog: Control = main.call("_ensure_quit_dialog") as Control
+
+	assert_bool(dialog.visible).is_false()
+	assert_str(dialog.name).is_equal("QuitDialogOverlay")
+	var save_button: Button = main.get("_quit_save_button") as Button
+	assert_object(save_button).is_not_null()
+	assert_str(save_button.text).is_equal("保存して終了")
+	assert_bool(save_button.has_theme_stylebox_override("normal")).is_true()
+	var discard_button: Button = main.get("_quit_discard_button") as Button
+	assert_object(discard_button).is_not_null()
+	assert_str(discard_button.text).is_equal("保存せず終了")
+	assert_bool(discard_button.has_theme_stylebox_override("normal")).is_true()
+	main.call("_show_quit_dialog")
+	assert_bool(dialog.visible).is_true()
+	main.call("_hide_quit_dialog")
+	assert_bool(dialog.visible).is_false()
+	main.free()
 
 
 func test_dashboard_long_date_includes_weekday() -> void:
@@ -109,6 +132,177 @@ func test_home_screen_calendar_distinguishes_offseason_from_rest_day() -> void:
 	AppState.current_season = old_season
 	AppState.current_screen = old_screen
 	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func test_remaining_season_skip_uses_live_standings_then_returns_home() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var standings_script: GDScript = load("res://ui/screens/standings_screen.gd") as GDScript
+	var screen: Control = standings_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var observed: Dictionary = {"live": false}
+	var progress_observer: Callable = func(done: int, total: int, _label: String) -> void:
+		if done > 0:
+			observed["live"] = bool(observed.get("live", false)) \
+				or str(screen.get("_status_text")).contains("シーズンスキップ中")
+		if done >= 12 and total > done:
+			AppState.cancel_remaining_season_skip()
+	AppState.season_skip_progress.connect(progress_observer)
+
+	AppState.start_remaining_season_skip(get_tree())
+	var guard: int = 120
+	while AppState.season_skip_active and guard > 0:
+		guard -= 1
+		await get_tree().process_frame
+
+	assert_int(guard).is_greater(0)
+	assert_str(AppState.current_screen).is_equal("home")
+	assert_bool(bool(observed.get("live", false))).is_true()
+	assert_bool(AppState.season_skip_active).is_false()
+	assert_int(AppState.season_skip_done).is_greater_equal(12)
+	assert_int(AppState.season_skip_done).is_less(AppState.season_skip_total)
+	assert_str(str(screen.get("_status_text"))).contains("キャンセル")
+
+	if AppState.season_skip_progress.is_connected(progress_observer):
+		AppState.season_skip_progress.disconnect(progress_observer)
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func test_month_end_skip_uses_live_standings_then_returns_home() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var standings_script: GDScript = load("res://ui/screens/standings_screen.gd") as GDScript
+	var screen: Control = standings_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var observed: Dictionary = {"live": false}
+	var progress_observer: Callable = func(done: int, total: int, _label: String) -> void:
+		if done > 0:
+			observed["live"] = bool(observed.get("live", false)) \
+				or str(screen.get("_status_text")).contains("月末スキップ中")
+		if done >= 6 and total > done:
+			AppState.cancel_remaining_season_skip()
+	AppState.season_skip_progress.connect(progress_observer)
+
+	AppState.start_month_end_skip(get_tree())
+	var guard: int = 120
+	while AppState.season_skip_active and guard > 0:
+		guard -= 1
+		await get_tree().process_frame
+
+	assert_int(guard).is_greater(0)
+	assert_str(AppState.current_screen).is_equal("home")
+	assert_str(AppState.season_skip_kind).is_equal("month")
+	assert_bool(bool(observed.get("live", false))).is_true()
+	assert_bool(AppState.season_skip_active).is_false()
+	assert_int(AppState.season_skip_done).is_greater_equal(6)
+	assert_int(AppState.season_skip_done).is_less(AppState.season_skip_total)
+	assert_str(str(screen.get("_status_text"))).contains("キャンセル")
+
+	if AppState.season_skip_progress.is_connected(progress_observer):
+		AppState.season_skip_progress.disconnect(progress_observer)
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func test_seven_day_skip_runs_inline_without_progress_dialog() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	var start_day: int = AppState.current_season.current_day
+
+	var home_script: GDScript = load("res://ui/screens/home_screen.gd") as GDScript
+	var screen: Control = home_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+	screen.call("_simulate_days", 7)
+	assert_bool(AppState.go_back()).is_false()
+
+	var observed_inline_status: bool = false
+	var observed_progress_dialog: bool = false
+	var guard: int = 600
+	while bool(screen.get("_inline_skip_active")) and guard > 0:
+		guard -= 1
+		observed_inline_status = observed_inline_status \
+			or str(screen.get("_status_text")).contains("7日スキップ中")
+		for child in screen.get_children():
+			if child is ProgressOverlay:
+				observed_progress_dialog = true
+		await get_tree().process_frame
+
+	assert_int(guard).is_greater(0)
+	assert_bool(observed_inline_status).is_true()
+	assert_bool(observed_progress_dialog).is_false()
+	assert_bool(AppState.short_skip_active).is_false()
+	assert_int(AppState.current_season.current_day).is_greater(start_day)
+
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
 	if not test_save_id.is_empty() and test_save_id != old_save_id:
 		SaveContext.delete_current_save_data()
 	if old_save_id.is_empty():

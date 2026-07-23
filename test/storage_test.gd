@@ -5,6 +5,10 @@ const GameLogService = preload("res://services/storage/game_log_service.gd")
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 
 
+func test_auto_save_is_enabled_by_default_for_release_safety() -> void:
+	assert_bool(AppState.DEFAULT_AUTO_SAVE_ENABLED).is_true()
+
+
 func test_new_save_folder_scopes_storage_paths() -> void:
 	var old_save_id: String = SaveContext.active_save_id()
 
@@ -36,9 +40,24 @@ func test_save_state_records_mod_metadata() -> void:
 	var test_save_id: String = ""
 
 	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.auto_save_enabled = true
 	AppState.start_new_season()
 	test_save_id = SaveContext.active_save_id()
 	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
+
+	var main_script: GDScript = load("res://ui/main.gd") as GDScript
+	var main: Control = main_script.new()
+	assert_str(str(main.call("_quit_request_mode"))).is_equal("quit")
+	AppState.auto_trade_for_user_team = not AppState.auto_trade_for_user_team
+	assert_bool(SaveService.is_state_current(AppState)).is_false()
+	assert_str(str(main.call("_quit_request_mode"))).is_equal("autosave")
+	AppState.auto_save_enabled = false
+	assert_str(str(main.call("_quit_request_mode"))).is_equal("confirm")
+	AppState.auto_save_enabled = true
+	AppState.auto_trade_for_user_team = not AppState.auto_trade_for_user_team
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
+	main.free()
 
 	var payload: Dictionary = SaveService.load_state()
 	assert_bool(payload.has("active_mods")).is_true()

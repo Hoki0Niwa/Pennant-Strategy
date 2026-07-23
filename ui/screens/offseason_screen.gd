@@ -3024,6 +3024,7 @@ func _ensure_release_confirm_dialog() -> ConfirmationDialog:
 	_release_confirm_dialog.cancel_button_text = "キャンセル"
 	_release_confirm_dialog.confirmed.connect(_on_release_confirmed)
 	add_child(_release_confirm_dialog)
+	_style_confirmation_dialog(_release_confirm_dialog)
 	return _release_confirm_dialog
 
 
@@ -3987,6 +3988,7 @@ func _ensure_fgc_confirm_dialog() -> ConfirmationDialog:
 	_fgc_confirm_dialog.cancel_button_text = "キャンセル"
 	_fgc_confirm_dialog.confirmed.connect(_on_fgc_finalize_confirmed)
 	add_child(_fgc_confirm_dialog)
+	_style_confirmation_dialog(_fgc_confirm_dialog)
 	return _fgc_confirm_dialog
 
 
@@ -4243,6 +4245,7 @@ func _ensure_ext_confirm_dialog() -> ConfirmationDialog:
 	_ext_confirm_dialog.cancel_button_text = "キャンセル"
 	_ext_confirm_dialog.confirmed.connect(_on_ext_finalize_confirmed)
 	add_child(_ext_confirm_dialog)
+	_style_confirmation_dialog(_ext_confirm_dialog)
 	return _ext_confirm_dialog
 
 

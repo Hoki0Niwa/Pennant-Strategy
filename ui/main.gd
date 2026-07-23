@@ -1,6 +1,7 @@
 extends Control
 
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
+const GameDialogStyle = preload("res://ui/components/game_dialog_style.gd")
 
 const START_SCREEN_PATH: String = "res://ui/screens/start_screen.gd"
 const SCREEN_SCRIPT_PATHS: Dictionary = {
@@ -82,9 +83,17 @@ const FULL_BLEED_SCREENS: Dictionary = {
 var sidebar: VBoxContainer
 var sidebar_buttons: Dictionary = {}
 var content: MarginContainer
+var _quit_dialog: Control
+var _quit_message: Label
+var _quit_save_button: Button
+var _quit_discard_button: Button
+var _quit_save_failed: bool = false
+var _quit_in_progress: bool = false
 
 
 func _ready() -> void:
+	# OS の終了要求を自動受理せず、進行中データの保存確認を必ず経由させる。
+	get_tree().set_auto_accept_quit(false)
 	if not GameDb.data_loaded_ok:
 		await GameDb.data_loaded
 
@@ -93,7 +102,158 @@ func _ready() -> void:
 	_show_screen(AppState.current_screen)
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_request_quit()
+
+
+func _request_quit() -> void:
+	if _quit_in_progress:
+		return
+	match _quit_request_mode():
+		"quit":
+			_perform_quit()
+		"autosave":
+			_on_save_and_quit()
+		"confirm":
+			if _quit_dialog != null and is_instance_valid(_quit_dialog) and _quit_dialog.visible:
+				return
+			_quit_save_failed = false
+			_show_quit_dialog()
+
+
+func _quit_request_mode() -> String:
+	if AppState.current_season == null or SaveService.is_state_current(AppState):
+		return "quit"
+	if AppState.auto_save_enabled:
+		return "autosave"
+	return "confirm"
+
+
+func _show_quit_dialog() -> void:
+	_ensure_quit_dialog()
+	if _quit_save_failed:
+		_quit_message.text = "セーブに失敗しました。\nもう一度保存するか、保存せずに終了してください。"
+	else:
+		_quit_message.text = "現在の進行状況を保存して終了しますか？"
+	_quit_dialog.visible = true
+	if _quit_save_button.is_inside_tree():
+		_quit_save_button.grab_focus()
+
+
+func _ensure_quit_dialog() -> Control:
+	if _quit_dialog != null and is_instance_valid(_quit_dialog):
+		return _quit_dialog
+
+	_quit_dialog = Control.new()
+	_quit_dialog.name = "QuitDialogOverlay"
+	_quit_dialog.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_quit_dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+	_quit_dialog.z_index = 1000
+	add_child(_quit_dialog)
+
+	var dim: ColorRect = ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.62)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_quit_dialog.add_child(dim)
+
+	var center: CenterContainer = CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_quit_dialog.add_child(center)
+
+	var panel: PanelContainer = PanelContainer.new()
+	panel.custom_minimum_size = Vector2(560, 220)
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	GameDialogStyle.style_modal_panel(panel)
+	center.add_child(panel)
+
+	var column: VBoxContainer = VBoxContainer.new()
+	column.add_theme_constant_override("separation", 18)
+	panel.add_child(column)
+
+	var title: Label = Label.new()
+	title.text = "セーブして終了"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	GameDialogStyle.style_modal_title(title)
+	column.add_child(title)
+
+	_quit_message = Label.new()
+	_quit_message.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_quit_message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_quit_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_quit_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	GameDialogStyle.style_modal_body(_quit_message)
+	column.add_child(_quit_message)
+
+	var actions: HBoxContainer = HBoxContainer.new()
+	actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	actions.add_theme_constant_override("separation", 18)
+	column.add_child(actions)
+
+	_quit_save_button = Button.new()
+	_quit_save_button.text = "保存して終了"
+	_quit_save_button.custom_minimum_size = Vector2(126, 40)
+	_quit_save_button.pressed.connect(_on_save_and_quit)
+	GameDialogStyle.style_button(_quit_save_button, "primary")
+	actions.add_child(_quit_save_button)
+
+	var cancel_button: Button = Button.new()
+	cancel_button.text = "キャンセル"
+	cancel_button.custom_minimum_size = Vector2(112, 40)
+	cancel_button.pressed.connect(_hide_quit_dialog)
+	GameDialogStyle.style_button(cancel_button, "action")
+	actions.add_child(cancel_button)
+
+	_quit_discard_button = Button.new()
+	_quit_discard_button.text = "保存せず終了"
+	_quit_discard_button.custom_minimum_size = Vector2(126, 40)
+	_quit_discard_button.pressed.connect(_on_quit_without_save)
+	GameDialogStyle.style_button(_quit_discard_button, "danger")
+	actions.add_child(_quit_discard_button)
+
+	_quit_dialog.visible = false
+	return _quit_dialog
+
+
+func _on_save_and_quit() -> void:
+	if SaveService.save_state(AppState):
+		_perform_quit()
+		return
+	_quit_save_failed = true
+	_show_quit_dialog()
+
+
+func _on_quit_without_save() -> void:
+	_quit_dialog.visible = false
+	_perform_quit()
+
+
+func _hide_quit_dialog() -> void:
+	if _quit_dialog != null:
+		_quit_dialog.visible = false
+	_quit_save_failed = false
+
+
+func _perform_quit() -> void:
+	_quit_in_progress = true
+	get_tree().set_auto_accept_quit(true)
+	get_tree().quit()
+
+
 func _input(event: InputEvent) -> void:
+	if (
+		_quit_dialog != null
+		and _quit_dialog.visible
+		and event is InputEventKey
+		and event.pressed
+		and not event.echo
+		and event.keycode == KEY_ESCAPE
+	):
+		_hide_quit_dialog()
+		get_viewport().set_input_as_handled()
+		return
 	# 画面遷移の「戻る/進む」。マウスのサイドボタンと Alt+←/Alt+→ に対応。
 	# 画面は mouse_filter=STOP の Control で覆われており _unhandled_input には届かないため、
 	# GUI より先に届く _input で処理する (これらの入力は他用途に使っていないので横取りして安全)。

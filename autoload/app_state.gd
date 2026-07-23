@@ -3,6 +3,8 @@ extends Node
 signal screen_change_requested(screen_name: String)
 signal selected_team_changed(team_id: int)
 signal season_started(season: PSSeason)
+signal season_skip_progress(done: int, total: int, label: String)
+signal season_skip_finished(result: Dictionary)
 
 const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
@@ -83,6 +85,18 @@ var selected_team_id: int = 0
 var current_season: PSSeason = null
 var last_status_message: String = ""
 var current_player_id: int = 0
+# 月末・残り全試合のスキップは順位表を表示したまま進める。進捗値は画面再生成時にも
+# 復元できるよう AppState 側へ保持し、完了後は通常の順位表操作へ戻す。
+var season_skip_active: bool = false
+var season_skip_cancel_pending: bool = false
+var season_skip_done: int = 0
+var season_skip_total: int = 0
+var season_skip_label: String = ""
+var season_skip_kind: String = "season"
+var _season_skip_cancel_token: Dictionary = {}
+# 7日スキップはホーム画面内で進捗を表示する。画面ノード上の coroutine を途中で
+# 破棄しないよう、完了までは履歴・画面遷移だけをロックする。
+var short_skip_active: bool = false
 var offseason_step: String = OFFSEASON_STEP_RETIREMENT
 var offseason_results: Dictionary = {}
 var draft_state: Dictionary = {}
@@ -106,8 +120,9 @@ var auto_trade_for_user_team: bool = false
 # ドラフト完全ウェーバー制。ON のとき1巡目の入札・抽選を行わず、本指名の全巡を
 # 前年下位球団から順 (スネークなし) に指名する。次回のドラフト生成から適用。
 var draft_full_waiver: bool = false
-# 自動セーブを有効にするか。デフォルトは false (手動セーブのみ)。
-var auto_save_enabled: bool = false
+# 新規ゲームと設定キーを持たない旧セーブは、進行消失を避けるため自動セーブを有効にする。
+const DEFAULT_AUTO_SAVE_ENABLED: bool = true
+var auto_save_enabled: bool = DEFAULT_AUTO_SAVE_ENABLED
 var league_dh_enabled: Dictionary = {
 	"central": true,
 	"pacific": true,
@@ -163,6 +178,8 @@ func _navigate_history(pop_stack: Array, push_stack: Array) -> bool:
 
 # マウスの戻るボタンなどから呼ぶ。直前に開いていた画面へ戻る。戻れたら true。
 func go_back() -> bool:
+	if season_skip_active or short_skip_active:
+		return false
 	if _navigate_history(_screen_history, _forward_history):
 		return true
 	# 履歴が無い場合のフォールバック: シーズン開始前の画面 (タイトルから来た
@@ -175,10 +192,16 @@ func go_back() -> bool:
 
 # マウスの進むボタンなどから呼ぶ。go_back で戻る前の画面へ進む。進めたら true。
 func go_forward() -> bool:
+	if season_skip_active or short_skip_active:
+		return false
 	return _navigate_history(_forward_history, _screen_history)
 
 
 func request_screen(screen_name: String, record_history: bool = true) -> void:
+	if season_skip_active and screen_name != "standings":
+		return
+	if short_skip_active and screen_name != current_screen:
+		return
 	if record_history:
 		_record_history_snapshot(screen_name)
 	current_screen = screen_name
@@ -1544,7 +1567,8 @@ func simulate_remaining_season_async(
 	tree: SceneTree,
 	progress_cb: Callable,
 	cancel_token: Dictionary,
-	during_skip: bool = false
+	during_skip: bool = false,
+	return_to_home: bool = true
 ) -> Dictionary:
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
@@ -1558,9 +1582,93 @@ func simulate_remaining_season_async(
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
-	if not bool(result.get("cancelled", false)):
+	if return_to_home and not bool(result.get("cancelled", false)):
 		request_screen("home")
 	return result
+
+
+# 処理主体を破棄されるホーム画面ではなく Autoload に置き、順位表へ遷移した後も
+# シミュレーションと進捗通知を継続する。
+func start_remaining_season_skip(tree: SceneTree) -> void:
+	if not _begin_standings_skip("season", current_season.games_remaining() if current_season != null else 0):
+		return
+	var result: Dictionary = await simulate_remaining_season_async(
+		tree,
+		_on_remaining_season_skip_progress,
+		_season_skip_cancel_token,
+		true,
+		false
+	)
+	_finish_standings_skip(result)
+
+
+func start_month_end_skip(tree: SceneTree) -> void:
+	if current_season == null:
+		return
+	var end_date: String = SeasonCalendar.last_day_of_month(SeasonCalendar.current_date(current_season))
+	var end_day: int = SeasonCalendar.season_day_for_date(current_season, end_date)
+	if not _begin_standings_skip("month", _count_unplayed_games_through_day(end_day)):
+		return
+	var result: Dictionary = await simulate_to_month_end_async(
+		tree,
+		_on_remaining_season_skip_progress,
+		_season_skip_cancel_token,
+		true
+	)
+	_finish_standings_skip(result)
+
+
+func _begin_standings_skip(kind: String, total: int) -> bool:
+	if season_skip_active or current_season == null:
+		return false
+	season_skip_active = true
+	season_skip_cancel_pending = false
+	season_skip_done = 0
+	season_skip_total = total
+	season_skip_label = SeasonCalendar.day_status_label(current_season, current_season.current_day)
+	season_skip_kind = kind
+	_season_skip_cancel_token = {"cancelled": false}
+	# 順位表はスキップ中だけの一時画面なので、画面履歴には積まない。
+	request_screen("standings", false)
+	season_skip_progress.emit(season_skip_done, season_skip_total, season_skip_label)
+	return true
+
+
+func _finish_standings_skip(result: Dictionary) -> void:
+	season_skip_active = false
+	season_skip_cancel_pending = false
+	_season_skip_cancel_token = {}
+	last_status_message = str(result.get("message", ""))
+	season_skip_finished.emit(result)
+	request_screen("home", false)
+
+
+func cancel_remaining_season_skip() -> void:
+	if not season_skip_active or season_skip_cancel_pending:
+		return
+	season_skip_cancel_pending = true
+	_season_skip_cancel_token["cancelled"] = true
+	season_skip_progress.emit(season_skip_done, season_skip_total, season_skip_label)
+
+
+func _on_remaining_season_skip_progress(done: int, total: int, _label: String) -> void:
+	season_skip_done = done
+	season_skip_total = total
+	if current_season != null:
+		season_skip_label = SeasonCalendar.day_status_label(current_season, current_season.current_day)
+	season_skip_progress.emit(season_skip_done, season_skip_total, season_skip_label)
+
+
+func _count_unplayed_games_through_day(end_day: int) -> int:
+	if current_season == null:
+		return 0
+	var total: int = 0
+	for game_value in current_season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var day: int = int(game.get("day", 0))
+		if not bool(game.get("played", false)) and day >= current_season.current_day and day <= end_day:
+			total += 1
+	return total
 
 
 func simulate_days_async(
@@ -1688,6 +1796,14 @@ func _season_records_look_wiped(season: PSSeason) -> bool:
 func restore_from_save(data: Dictionary) -> bool:
 	if data.is_empty():
 		return false
+	season_skip_active = false
+	season_skip_cancel_pending = false
+	season_skip_done = 0
+	season_skip_total = 0
+	season_skip_label = ""
+	season_skip_kind = "season"
+	_season_skip_cancel_token = {}
+	short_skip_active = false
 
 	var mod_warnings: Array[String] = ModManager.check_save_compatibility(data.get("active_mods", []) as Array)
 	for warning in mod_warnings:
@@ -1728,7 +1844,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	auto_roster_swap_during_skip = bool(data.get("auto_roster_swap_during_skip", true))
 	auto_trade_for_user_team = bool(data.get("auto_trade_for_user_team", false))
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
-	auto_save_enabled = bool(data.get("auto_save_enabled", false))
+	auto_save_enabled = bool(data.get("auto_save_enabled", DEFAULT_AUTO_SAVE_ENABLED))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
 	league_dh_enabled = {
 		"central": bool(saved_dh_settings.get("central", true)),
@@ -1763,5 +1879,6 @@ func restore_from_save(data: Dictionary) -> bool:
 		next_screen = "home"
 	_screen_history.clear()
 	_forward_history.clear()
+	SaveService.mark_state_loaded(self)
 	request_screen(next_screen, false)
 	return true

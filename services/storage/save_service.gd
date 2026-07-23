@@ -10,6 +10,9 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 # save_state のたびにフォルダ直下へ小さな JSON を書き出す。
 const SAVE_META_FILE: String = "save_meta.json"
 
+static var _saved_state_fingerprint: int = 0
+static var _saved_state_save_id: String = ""
+
 
 static func save_state(app_state) -> bool:
 	if not SaveContext.has_active_save():
@@ -70,6 +73,7 @@ static func save_state(app_state) -> bool:
 
 	if SQLiteStoreService.save_game_state(payload):
 		_write_save_meta(app_state)
+		_remember_saved_state(payload)
 		return true
 
 	# JSON fallback は SQLite 全体が使えない状況なので、履歴を分離したままでは
@@ -85,6 +89,7 @@ static func save_state(app_state) -> bool:
 
 	file.store_string(JSON.stringify(payload, "\t"))
 	_write_save_meta(app_state)
+	_remember_saved_state(payload)
 	return true
 
 
@@ -168,6 +173,26 @@ static func compact_storage() -> void:
 
 static func begin_new_game() -> bool:
 	return SaveContext.begin_new_save()
+
+
+# 現在の進行状態が、同じセーブスロットへ最後に正常保存した内容と一致するかを返す。
+# 画面遷移はゲーム進行ではないため current_screen は比較対象に含めない。
+static func is_state_current(app_state) -> bool:
+	if _saved_state_fingerprint == 0:
+		return false
+	if _saved_state_save_id != SaveContext.active_save_id():
+		return false
+	return _state_fingerprint(_current_state_snapshot(app_state)) == _saved_state_fingerprint
+
+
+# ロード完了後の復元状態を「保存済み」の基準にする。
+static func mark_state_loaded(app_state) -> void:
+	if not SaveContext.has_active_save():
+		_saved_state_fingerprint = 0
+		_saved_state_save_id = ""
+		return
+	_saved_state_fingerprint = _state_fingerprint(_current_state_snapshot(app_state))
+	_saved_state_save_id = SaveContext.active_save_id()
 
 
 static func current_save_display_path() -> String:
@@ -265,3 +290,71 @@ static func _team_previous_ranks_map() -> Dictionary:
 		if team != null:
 			out[team.id] = team.previous_rank
 	return out
+
+
+static func _remember_saved_state(payload: Dictionary) -> void:
+	_saved_state_fingerprint = _state_fingerprint(payload)
+	_saved_state_save_id = SaveContext.active_save_id()
+
+
+static func _current_state_snapshot(app_state) -> Dictionary:
+	return {
+		"selected_team_id": app_state.selected_team_id,
+		"season": app_state.current_season.to_dict(false) if app_state.current_season != null else {},
+		"players": _players_to_dicts(),
+		"team_funds": _team_funds_map(),
+		"team_previous_ranks": _team_previous_ranks_map(),
+		"offseason_step": app_state.offseason_step,
+		"offseason_results": app_state.offseason_results,
+		"draft_state": app_state.draft_state,
+		"released_market_state": app_state.released_market_state,
+		"geneki_draft_state": app_state.geneki_draft_state,
+		"fa_state": app_state.fa_state,
+		"foreign_state": app_state.foreign_state,
+		"camp_state": app_state.camp_state,
+		"offseason_active": app_state.offseason_active,
+		"postseason_active": app_state.postseason_active,
+		"current_postseason": app_state.current_postseason.to_dict() if app_state.current_postseason != null else {},
+		"current_awards": app_state.current_awards.to_dict() if app_state.current_awards != null else {},
+		"auto_roster_swap_for_user_team": app_state.auto_roster_swap_for_user_team,
+		"auto_roster_swap_during_skip": app_state.auto_roster_swap_during_skip,
+		"auto_trade_for_user_team": app_state.auto_trade_for_user_team,
+		"draft_full_waiver": app_state.draft_full_waiver,
+		"auto_save_enabled": app_state.auto_save_enabled,
+		"league_dh_enabled": app_state.dh_settings_for_schedule(),
+	}
+
+
+static func _state_fingerprint(snapshot: Dictionary) -> int:
+	var season_data: Dictionary = (snapshot.get("season", {}) as Dictionary).duplicate(false)
+	# 履歴は通常の SQLite セーブでは別テーブルへ分離される。保存経路による payload 形式の
+	# 違いで誤って「未保存」にならないよう、進行本体と選手状態を比較する。
+	# 成績更新は同時に season の日付・日程結果も変わるため、分離ストアの全レコード再構築は行わない。
+	season_data.erase("player_stat_history")
+	season_data.erase("player_game_history")
+	var comparable: Dictionary = {
+		"selected_team_id": snapshot.get("selected_team_id", 0),
+		"season": season_data,
+		"players": snapshot.get("players", []),
+		"team_funds": snapshot.get("team_funds", {}),
+		"team_previous_ranks": snapshot.get("team_previous_ranks", {}),
+		"offseason_step": snapshot.get("offseason_step", ""),
+		"offseason_results": snapshot.get("offseason_results", {}),
+		"draft_state": snapshot.get("draft_state", {}),
+		"released_market_state": snapshot.get("released_market_state", {}),
+		"geneki_draft_state": snapshot.get("geneki_draft_state", {}),
+		"fa_state": snapshot.get("fa_state", {}),
+		"foreign_state": snapshot.get("foreign_state", {}),
+		"camp_state": snapshot.get("camp_state", {}),
+		"offseason_active": snapshot.get("offseason_active", false),
+		"postseason_active": snapshot.get("postseason_active", false),
+		"current_postseason": snapshot.get("current_postseason", {}),
+		"current_awards": snapshot.get("current_awards", {}),
+		"auto_roster_swap_for_user_team": snapshot.get("auto_roster_swap_for_user_team", false),
+		"auto_roster_swap_during_skip": snapshot.get("auto_roster_swap_during_skip", true),
+		"auto_trade_for_user_team": snapshot.get("auto_trade_for_user_team", false),
+		"draft_full_waiver": snapshot.get("draft_full_waiver", false),
+		"auto_save_enabled": snapshot.get("auto_save_enabled", true),
+		"league_dh_enabled": snapshot.get("league_dh_enabled", {}),
+	}
+	return comparable.hash()

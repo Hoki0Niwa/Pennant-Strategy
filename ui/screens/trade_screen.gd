@@ -443,33 +443,6 @@ func _on_team_selected(team_id: int) -> void:
 	queue_redraw()
 
 
-# ダッシュボードのダーク配色に合わせて PopupMenu をテーマ上書きする (team_detail から移植)。
-func _style_popup(menu: PopupMenu) -> void:
-	var panel: StyleBoxFlat = StyleBoxFlat.new()
-	panel.bg_color = PANEL_2
-	panel.border_color = BORDER
-	panel.set_border_width_all(1)
-	panel.set_corner_radius_all(8)
-	panel.content_margin_left = 6
-	panel.content_margin_right = 6
-	panel.content_margin_top = 6
-	panel.content_margin_bottom = 6
-	menu.add_theme_stylebox_override("panel", panel)
-	var hover: StyleBoxFlat = StyleBoxFlat.new()
-	hover.bg_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.18)
-	hover.border_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.55)
-	hover.set_border_width_all(1)
-	hover.set_corner_radius_all(6)
-	menu.add_theme_stylebox_override("hover", hover)
-	menu.add_theme_color_override("font_color", TEXT)
-	menu.add_theme_color_override("font_hover_color", TEXT)
-	menu.add_theme_color_override("font_separator_color", MUTED)
-	menu.add_theme_constant_override("v_separation", 6)
-	if _font != null:
-		menu.add_theme_font_override("font", _font)
-	menu.add_theme_font_size_override("font_size", max(11, int(round(14.0 * _scale_f))))
-
-
 func _set_filter(pos: int) -> void:
 	if pos == _filter_pos:
 		return

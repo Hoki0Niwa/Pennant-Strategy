@@ -44,6 +44,8 @@ var _calendar_filter: String = "team"
 var _status_text: String = ""
 var _era_by_team: Dictionary = {}
 var _skip_button: Button = null
+var _inline_skip_active: bool = false
+var _inline_skip_days: int = 0
 
 
 func _ready() -> void:
@@ -573,6 +575,11 @@ func _build_buttons() -> void:
 		_add_button("play_today", "この試合を消化", Rect2(RIGHT_X + RIGHT_W - 196, 372, 180, 36), _simulate_current_day, "primary")
 
 	_layout_buttons()
+	if _inline_skip_active:
+		for button_spec_value in _buttons:
+			var button: Button = (button_spec_value as Dictionary).get("button") as Button
+			if button != null:
+				button.disabled = true
 
 
 # ============================================================ actions
@@ -607,72 +614,53 @@ func _on_skip_pressed() -> void:
 	menu.popup()
 
 
-# ダッシュボードのダーク配色に合わせて PopupMenu をテーマ上書きする。
-# 本文は固定座標系を _scale_f で拡縮しているので、フォントもボタンと同じ係数で合わせる。
-func _style_popup(menu: PopupMenu) -> void:
-	var panel: StyleBoxFlat = StyleBoxFlat.new()
-	panel.bg_color = PANEL_2
-	panel.border_color = BORDER
-	panel.set_border_width_all(1)
-	panel.set_corner_radius_all(8)
-	panel.content_margin_left = 6
-	panel.content_margin_right = 6
-	panel.content_margin_top = 6
-	panel.content_margin_bottom = 6
-	menu.add_theme_stylebox_override("panel", panel)
-
-	var hover: StyleBoxFlat = StyleBoxFlat.new()
-	hover.bg_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.18)
-	hover.border_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.55)
-	hover.set_border_width_all(1)
-	hover.set_corner_radius_all(6)
-	menu.add_theme_stylebox_override("hover", hover)
-
-	menu.add_theme_color_override("font_color", TEXT)
-	menu.add_theme_color_override("font_hover_color", TEXT)
-	menu.add_theme_color_override("font_disabled_color", FAINT)
-	menu.add_theme_color_override("font_separator_color", MUTED)
-	menu.add_theme_constant_override("v_separation", 6)
-	menu.add_theme_font_size_override("font_size", max(11, int(round(14.0 * _scale_f))))
-
-
 func _on_skip_menu_selected(id: int) -> void:
 	match id:
 		0:
 			await _simulate_days(7)
 		1:
-			await _simulate_to_month_end()
+			_simulate_to_month_end()
 		2:
-			await _simulate_remaining_season()
+			_simulate_remaining_season()
 
 
 func _simulate_days(days: int) -> void:
 	if days <= 0:
 		return
-	var ov: Dictionary = _show_progress_overlay("%d日分を消化中…" % days)
-	var result: Dictionary = await AppState.simulate_days_async(days, get_tree(), ov["callback"], ov["cancel_token"], true)
-	_hide_progress_overlay(ov)
+	_inline_skip_active = true
+	AppState.short_skip_active = true
+	_inline_skip_days = days
+	_status_text = "%d日スキップを開始しています…" % days
+	_build_buttons()
+	queue_redraw()
+	var result: Dictionary = await AppState.simulate_days_async(
+		days,
+		get_tree(),
+		_on_inline_skip_progress,
+		{"cancelled": false},
+		true
+	)
+	_inline_skip_active = false
+	AppState.short_skip_active = false
 	_status_text = str(result.get("message", ""))
 	_sync_calendar_to_current()
 	queue_redraw()
 
 
 func _simulate_to_month_end() -> void:
-	var ov: Dictionary = _show_progress_overlay("月末まで消化中…")
-	var result: Dictionary = await AppState.simulate_to_month_end_async(get_tree(), ov["callback"], ov["cancel_token"], true)
-	_hide_progress_overlay(ov)
-	_status_text = str(result.get("message", ""))
-	_sync_calendar_to_current()
+	AppState.start_month_end_skip(get_tree())
+
+
+func _on_inline_skip_progress(done: int, total: int, label: String) -> void:
+	var percent: float = float(done) / float(total) * 100.0 if total > 0 else 0.0
+	_status_text = "%d日スキップ中  %d / %d試合 (%0.1f%%)  %s" % [
+		_inline_skip_days, done, total, percent, label,
+	]
 	queue_redraw()
 
 
 func _simulate_remaining_season() -> void:
-	var ov: Dictionary = _show_progress_overlay("残り全試合を消化中…")
-	var result: Dictionary = await AppState.simulate_remaining_season_async(get_tree(), ov["callback"], ov["cancel_token"], true)
-	_hide_progress_overlay(ov)
-	_status_text = str(result.get("message", ""))
-	_sync_calendar_to_current()
-	queue_redraw()
+	AppState.start_remaining_season_skip(get_tree())
 
 
 # スキップ後に月をまたいだら、カレンダー表示をスキップ終了時点の月へ追従させる。

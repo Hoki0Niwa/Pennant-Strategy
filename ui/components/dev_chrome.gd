@@ -5,6 +5,8 @@ extends RefCounted
 # 中身の表・グラフ・入力部はそのまま流用し、背景/ヘッダのトーンだけ統一する。
 # class_name は付けず preload 参照で使う。
 
+const GameDialogStyle = preload("res://ui/components/game_dialog_style.gd")
+
 const BG: Color = Color(0.047, 0.056, 0.068)
 const PANEL: Color = Color(0.086, 0.104, 0.127)
 const PANEL_2: Color = Color(0.112, 0.137, 0.167)
@@ -135,5 +137,5 @@ static func make_theme() -> Theme:
 	t.set_stylebox("hover", "Button", _flat(Color(0.180, 0.220, 0.270), BORDER, 7))
 	t.set_stylebox("pressed", "Button", _flat(PANEL_2, BLUE, 7))
 
+	GameDialogStyle.apply_popup_theme(t)
 	return t
-

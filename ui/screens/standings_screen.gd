@@ -62,12 +62,20 @@ var _interleague_rows: Array = []          # 交流戦 行 Dictionary (順位つ
 var _interleague_played: bool = false
 var _balance_by_team: Dictionary = {}      # {team_id: PackedVector2Array(game_no, balance)}
 var _chart_league: String = "central"
+var _last_skip_refresh_day: int = -1
+var _skip_ui_active: bool = false
+var _skip_ui_cancel_pending: bool = false
 
 
 func _ready() -> void:
 	_init_chrome()
+	AppState.season_skip_progress.connect(_on_season_skip_progress)
+	AppState.season_skip_finished.connect(_on_season_skip_finished)
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	_chart_league = team.league if team != null else "central"
+	_last_skip_refresh_day = AppState.current_season.current_day if AppState.current_season != null else -1
+	_skip_ui_active = AppState.season_skip_active
+	_skip_ui_cancel_pending = AppState.season_skip_cancel_pending
 	_refresh()
 	_build_buttons()
 	queue_redraw()
@@ -195,6 +203,17 @@ func _build_buttons() -> void:
 		_layout_buttons()
 		return
 
+	if AppState.season_skip_active:
+		_add_button(
+			"cancel_season_skip",
+			"停止処理中…" if AppState.season_skip_cancel_pending else "スキップ停止",
+			Rect2(1730, 22, 150, 42),
+			AppState.cancel_remaining_season_skip,
+			"action"
+		).disabled = AppState.season_skip_cancel_pending
+		_layout_buttons()
+		return
+
 	_build_nav_buttons()
 
 	# 貯金グラフのリーグ切替チップ (グラフパネル右上)。
@@ -238,6 +257,48 @@ func _refresh() -> void:
 
 	_build_balance_series(season)
 	_build_interleague_rows(season)
+	if AppState.season_skip_active:
+		_status_text = _season_skip_status()
+
+
+func _on_season_skip_progress(done: int, total: int, _label: String) -> void:
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return
+	var controls_changed: bool = (
+		_skip_ui_active != AppState.season_skip_active
+		or _skip_ui_cancel_pending != AppState.season_skip_cancel_pending
+	)
+	_skip_ui_active = AppState.season_skip_active
+	_skip_ui_cancel_pending = AppState.season_skip_cancel_pending
+	if controls_changed:
+		_build_buttons()
+	# 1試合ごとに進捗文字は更新し、順位・各指標・グラフの重い再集計は日付が進んだ時だけ行う。
+	if season.current_day != _last_skip_refresh_day or (total > 0 and done >= total):
+		_last_skip_refresh_day = season.current_day
+		_refresh()
+	_status_text = _season_skip_status()
+	queue_redraw()
+
+
+func _on_season_skip_finished(result: Dictionary) -> void:
+	_skip_ui_active = AppState.season_skip_active
+	_skip_ui_cancel_pending = AppState.season_skip_cancel_pending
+	_refresh()
+	_status_text = str(result.get("message", "スキップが完了しました。"))
+	_build_buttons()
+	queue_redraw()
+
+
+func _season_skip_status() -> String:
+	var total: int = AppState.season_skip_total
+	var done: int = AppState.season_skip_done
+	var percent: float = float(done) / float(total) * 100.0 if total > 0 else 0.0
+	var skip_name: String = "月末スキップ" if AppState.season_skip_kind == "month" else "シーズンスキップ"
+	var state: String = "%s停止処理中" % skip_name if AppState.season_skip_cancel_pending else "%s中" % skip_name
+	return "%s  %d / %d試合 (%0.1f%%)  %s" % [
+		state, done, total, percent, AppState.season_skip_label,
+	]
 
 
 func _build_league_rows(league_key: String, season: PSSeason) -> Array:

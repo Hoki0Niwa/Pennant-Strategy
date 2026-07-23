@@ -376,11 +376,7 @@ func _place_dropdown(dropdown: OptionButton, base_rect: Rect2) -> void:
 	dropdown.add_theme_stylebox_override("hover", _box(PANEL_3, BORDER, 10))
 	dropdown.add_theme_stylebox_override("pressed", _box(PANEL_3, BLUE, 10))
 	dropdown.add_theme_stylebox_override("focus", _box(PANEL_2, BLUE, 10))
-	var popup: PopupMenu = dropdown.get_popup()
-	popup.add_theme_color_override("font_color", TEXT)
-	popup.add_theme_color_override("font_hover_color", TEXT)
-	popup.add_theme_stylebox_override("panel", _box(PANEL_2, BORDER, 6))
-	popup.add_theme_stylebox_override("hover", _box(Color(BLUE.r, BLUE.g, BLUE.b, 0.18), BLUE, 6))
+	_style_popup(dropdown.get_popup())
 
 
 func _place_edit(edit: LineEdit, base_rect: Rect2) -> void:

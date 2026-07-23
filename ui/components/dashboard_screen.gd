@@ -8,6 +8,7 @@ extends Control
 
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
+const GameDialogStyle = preload("res://ui/components/game_dialog_style.gd")
 
 const BASE: Vector2 = Vector2(1920, 1080)
 const APP_VERSION: String = "v0.1.0"
@@ -283,6 +284,14 @@ func _box(bg: Color, border: Color, pad_left: int) -> StyleBoxFlat:
 	style.content_margin_top = 4
 	style.content_margin_bottom = 4
 	return style
+
+
+func _style_popup(menu: PopupMenu) -> void:
+	GameDialogStyle.style_popup(menu, _font, _scale_f)
+
+
+func _style_confirmation_dialog(dialog: ConfirmationDialog) -> void:
+	GameDialogStyle.style_confirmation(dialog, _font, _scale_f)
 
 
 # ============================================================ draw primitives
