@@ -81,7 +81,7 @@ func _draw_pregame_chrome() -> void:
 	_line(Vector2(SIDEBAR_W, HEADER_H), Vector2(BASE.x, HEADER_H), BORDER_SOFT, 1.0)
 	_text("PennantStrategy", Vector2(20, 40), 22, TEXT)
 	_text("ペナント戦略シミュレーション", Vector2(21, 62), 11, MUTED)
-	_text(APP_VERSION, Vector2(22, BASE.y - 24), 12, FAINT)
+	_text(_app_version_label(), Vector2(22, BASE.y - 24), 12, FAINT)
 	_text("オプション", Vector2(INNER_L, 56), 28, TEXT)
 
 

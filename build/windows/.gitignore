@@ -1,2 +1,6 @@
 *
 !.gitignore
+!README.txt
+!THIRD_PARTY_NOTICES.txt
+!LICENSES/
+!LICENSES/*.txt

@@ -11,7 +11,8 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 const GameDialogStyle = preload("res://ui/components/game_dialog_style.gd")
 
 const BASE: Vector2 = Vector2(1920, 1080)
-const APP_VERSION: String = "v0.1.0"
+const VERSION_SETTING: String = "application/config/version"
+const VERSION_FALLBACK: String = "0.1.0-alpha"
 
 # --- パレット ---
 const BG: Color = Color(0.047, 0.056, 0.068)
@@ -149,7 +150,11 @@ func _draw_sidebar() -> void:
 			_round(Rect2(rect.position.x, rect.position.y + 6, 3, rect.size.y - 12), BLUE, Color.TRANSPARENT, 2, 0)
 		_icon(str(item.get("icon", "")), Rect2(rect.position.x + 14, rect.position.y + 9, 20, 20), TEXT if active else MUTED)
 
-	_text(APP_VERSION, Vector2(22, BASE.y - 24), 12, FAINT)
+	_text(_app_version_label(), Vector2(22, BASE.y - 24), 12, FAINT)
+
+
+func _app_version_label() -> String:
+	return "v%s" % str(ProjectSettings.get_setting(VERSION_SETTING, VERSION_FALLBACK))
 
 
 func _draw_header(title: String, team: PSTeam, season: PSSeason) -> void:

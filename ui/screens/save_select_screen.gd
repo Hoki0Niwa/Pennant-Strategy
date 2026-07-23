@@ -57,7 +57,7 @@ func _draw() -> void:
 		_text("%d / %d ページ (全%d件)" % [_page + 1, _max_page() + 1, _saves.size()],
 			Vector2(0, LIST_TOP + float(PAGE_SIZE) * (ROW_H + ROW_GAP) + 34.0), 14, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
-	_text(APP_VERSION, Vector2(28, BASE.y - 28), 13, FAINT)
+	_text(_app_version_label(), Vector2(28, BASE.y - 28), 13, FAINT)
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(0, BASE.y - 26), 14, RED if _status_is_error else AMBER, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 

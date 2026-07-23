@@ -44,6 +44,14 @@ func test_dashboard_long_date_includes_weekday() -> void:
 	dashboard.free()
 
 
+func test_dashboard_version_comes_from_project_metadata() -> void:
+	assert_str(str(ProjectSettings.get_setting("application/config/version", ""))).is_equal("0.1.0-alpha")
+	var dashboard_script: GDScript = load("res://ui/components/dashboard_screen.gd") as GDScript
+	var dashboard: Control = dashboard_script.new()
+	assert_str(str(dashboard.call("_app_version_label"))).is_equal("v0.1.0-alpha")
+	dashboard.free()
+
+
 func test_autoloads_registered() -> void:
 	# autoload はシーン/プロジェクト起動時のみ登録される(=旧運用で .tscn が必要だった理由)。
 	# GdUnit はプロジェクト文脈で実行するため singleton として参照できる。
