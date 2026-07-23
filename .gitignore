@@ -13,7 +13,8 @@ AGENTS.md
 CLAUDE.md
 
 # Build/export outputs
-/build/
+/build/*
+!/build/windows/
 /exports/
 
 # Project notes and generated reports kept out of public source.
