@@ -69,6 +69,122 @@ func test_save_state_records_mod_metadata() -> void:
 	_restore_app_state(old_state, test_save_id)
 
 
+func test_save_round_trip_preserves_decision_inputs() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	team.auto_lineup = true
+	var setup: Dictionary = PSTeamSetupBuilder.build_team_setup(AppState.current_season, team.id, true)
+	assert_bool(bool(setup.get("ok", false))).is_true()
+	var generated_base_order: Array = AppState.current_season.get_auto_batting_order(team.id, true)
+	assert_int(generated_base_order.size()).is_equal(9)
+	team.auto_lineup = false
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
+	AppState.contract_update_state = {
+		"phase": "extension",
+		"complete": false,
+		"candidates": [{"player_id": 101, "team_id": team.id, "value": 72.5}],
+		"offers": {"101": {"years": 3, "salary": 18000}},
+	}
+
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	var payload: Dictionary = SaveService.load_state()
+	assert_bool(payload.has("team_auto_lineup")).is_true()
+	assert_bool(payload.has("contract_update_state")).is_true()
+
+	team.auto_lineup = true
+	AppState.contract_update_state = {}
+	assert_bool(AppState.restore_from_save(payload)).is_true()
+	team = GameDb.get_team(team.id)
+	assert_bool(team.auto_lineup).is_false()
+	assert_str(JSON.stringify(AppState.contract_update_state)).is_equal(JSON.stringify(payload["contract_update_state"]))
+	assert_str(JSON.stringify(AppState.current_season.get_auto_batting_order(team.id, true))).is_equal(
+		JSON.stringify(generated_base_order)
+	)
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
+
+	team.auto_lineup = true
+	assert_bool(SaveService.is_state_current(AppState)).is_false()
+	team.auto_lineup = false
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
+	AppState.contract_update_state["phase"] = "resolved"
+	assert_bool(SaveService.is_state_current(AppState)).is_false()
+
+	var legacy_payload: Dictionary = payload.duplicate(true)
+	legacy_payload.erase("team_auto_lineup")
+	team.auto_lineup = false
+	assert_bool(AppState.restore_from_save(legacy_payload)).is_true()
+	assert_bool((GameDb.get_team(team.id) as PSTeam).auto_lineup).is_true()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_player_record_identity_refresh_preserves_season_decision_inputs() -> void:
+	var player: PSPlayer = GameDb.players[0] as PSPlayer
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2026, 1)
+	record.batter_stats.hits = 88
+	record.pitcher_stats.strikeouts = 91
+	record.advanced_stats.plate_appearances = 321
+	record.advanced_stats.oaa_by_position = {"8": 4.5}
+	record.season_injury_days = 42
+	record.injury_return_day = 117
+	record.consecutive_appearances = 3
+	record.last_pitched_team_game = 82
+
+	var refreshed: PSPlayerSeasonRecord = RecordStore._refreshed_player_record(record, player)
+
+	assert_int(refreshed.batter_stats.hits).is_equal(88)
+	assert_int(refreshed.pitcher_stats.strikeouts).is_equal(91)
+	assert_int(refreshed.advanced_stats.plate_appearances).is_equal(321)
+	assert_float(float(refreshed.advanced_stats.oaa_by_position.get("8", 0.0))).is_equal(4.5)
+	assert_int(refreshed.season_injury_days).is_equal(42)
+	assert_int(refreshed.injury_return_day).is_equal(117)
+	assert_int(refreshed.consecutive_appearances).is_equal(3)
+	assert_int(refreshed.last_pitched_team_game).is_equal(82)
+
+
+func test_start_offseason_archives_season_without_postseason() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var old_player_rows: Array = []
+	for player_value in GameDb.players:
+		old_player_rows.append((player_value as PSPlayer).to_dict())
+	var test_save_id: String = ""
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	for game_value in AppState.current_season.schedule:
+		(game_value as Dictionary)["played"] = true
+	AppState.current_postseason = null
+	AppState.current_awards = PSAwards.new()
+	AppState.current_awards.year = AppState.current_season.year
+	AppState.current_awards.season_number = AppState.current_season.season_number
+
+	var result: Dictionary = AppState.start_offseason()
+	assert_bool(bool(result.get("ok", false))).is_true()
+	var matching_archive: PSSeasonArchive = null
+	for archive_value in RecordStore.get_season_archives():
+		var archive: PSSeasonArchive = archive_value as PSSeasonArchive
+		if archive.year == AppState.current_season.year and archive.season_number == AppState.current_season.season_number:
+			matching_archive = archive
+			break
+	assert_object(matching_archive).is_not_null()
+	assert_object(matching_archive.postseason).is_null()
+	assert_object(matching_archive.awards).is_not_null()
+	assert_int(matching_archive.standings.size()).is_equal(GameDb.teams.size())
+
+	GameDb.replace_players_from_rows(old_player_rows)
+	_restore_app_state(old_state, test_save_id)
+
+
 func test_unsaved_simulation_does_not_persist_records_or_logs() -> void:
 	var old_state: Dictionary = _capture_app_state()
 	var test_save_id: String = ""
@@ -186,6 +302,7 @@ func test_player_season_stats_round_trip_through_normalized_tables() -> void:
 	assert_object(target).is_not_null()
 	target.batter_stats.games = 123
 	target.batter_stats.hits = 145
+	target.arsenal_snapshot = [{"type": "slider", "mastery": 1.25}]
 	var target_id: int = target.player_id
 
 	assert_bool(SaveService.save_state(AppState)).is_true()
@@ -194,6 +311,9 @@ func test_player_season_stats_round_trip_through_normalized_tables() -> void:
 	assert_object(reloaded).is_not_null()
 	assert_int(reloaded.batter_stats.games).is_equal(123)
 	assert_int(reloaded.batter_stats.hits).is_equal(145)
+	assert_int(reloaded.arsenal_snapshot.size()).is_equal(1)
+	assert_str(str((reloaded.arsenal_snapshot[0] as Dictionary).get("type", ""))).is_equal("slider")
+	assert_float(float((reloaded.arsenal_snapshot[0] as Dictionary).get("mastery", 0.0))).is_equal(1.25)
 
 	_restore_app_state(old_state, test_save_id)
 
@@ -354,11 +474,33 @@ func test_save_selection_list_load_delete() -> void:
 
 
 func _capture_app_state() -> Dictionary:
+	var team_runtime: Dictionary = {}
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		team_runtime[team.id] = {
+			"funds": team.funds,
+			"previous_rank": team.previous_rank,
+			"auto_lineup": team.auto_lineup,
+		}
 	return {
 		"selected_team_id": AppState.selected_team_id,
 		"current_season": AppState.current_season,
 		"current_screen": AppState.current_screen,
 		"auto_save_enabled": AppState.auto_save_enabled,
+		"offseason_step": AppState.offseason_step,
+		"offseason_results": AppState.offseason_results.duplicate(true),
+		"draft_state": AppState.draft_state.duplicate(true),
+		"released_market_state": AppState.released_market_state.duplicate(true),
+		"geneki_draft_state": AppState.geneki_draft_state.duplicate(true),
+		"fa_state": AppState.fa_state.duplicate(true),
+		"foreign_state": AppState.foreign_state.duplicate(true),
+		"camp_state": AppState.camp_state.duplicate(true),
+		"contract_update_state": AppState.contract_update_state.duplicate(true),
+		"offseason_active": AppState.offseason_active,
+		"postseason_active": AppState.postseason_active,
+		"current_postseason": AppState.current_postseason,
+		"current_awards": AppState.current_awards,
+		"team_runtime": team_runtime,
 		"active_save_id": SaveContext.active_save_id(),
 		"records": RecordStore.to_dict().duplicate(true),
 	}
@@ -371,6 +513,27 @@ func _restore_app_state(old_state: Dictionary, test_save_id: String) -> void:
 	AppState.current_season = old_state.get("current_season", null) as PSSeason
 	AppState.current_screen = str(old_state.get("current_screen", "start"))
 	AppState.auto_save_enabled = bool(old_state.get("auto_save_enabled", false))
+	AppState.offseason_step = str(old_state.get("offseason_step", AppState.OFFSEASON_STEP_RETIREMENT))
+	AppState.offseason_results = (old_state.get("offseason_results", {}) as Dictionary).duplicate(true)
+	AppState.draft_state = (old_state.get("draft_state", {}) as Dictionary).duplicate(true)
+	AppState.released_market_state = (old_state.get("released_market_state", {}) as Dictionary).duplicate(true)
+	AppState.geneki_draft_state = (old_state.get("geneki_draft_state", {}) as Dictionary).duplicate(true)
+	AppState.fa_state = (old_state.get("fa_state", {}) as Dictionary).duplicate(true)
+	AppState.foreign_state = (old_state.get("foreign_state", {}) as Dictionary).duplicate(true)
+	AppState.camp_state = (old_state.get("camp_state", {}) as Dictionary).duplicate(true)
+	AppState.contract_update_state = (old_state.get("contract_update_state", {}) as Dictionary).duplicate(true)
+	AppState.offseason_active = bool(old_state.get("offseason_active", false))
+	AppState.postseason_active = bool(old_state.get("postseason_active", false))
+	AppState.current_postseason = old_state.get("current_postseason", null) as PSPostseasonResult
+	AppState.current_awards = old_state.get("current_awards", null) as PSAwards
+	var team_runtime: Dictionary = old_state.get("team_runtime", {}) as Dictionary
+	for team_key in team_runtime.keys():
+		var team: PSTeam = GameDb.get_team(int(team_key))
+		var runtime: Dictionary = team_runtime[team_key] as Dictionary
+		if team != null:
+			team.funds = int(runtime.get("funds", team.funds))
+			team.previous_rank = int(runtime.get("previous_rank", team.previous_rank))
+			team.auto_lineup = bool(runtime.get("auto_lineup", team.auto_lineup))
 	RecordStore.load_from_dict(old_state.get("records", {}) as Dictionary)
 	var old_save_id: String = str(old_state.get("active_save_id", ""))
 	if old_save_id.is_empty():

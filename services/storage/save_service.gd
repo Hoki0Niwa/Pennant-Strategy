@@ -49,6 +49,7 @@ static func save_state(app_state) -> bool:
 		# から再ロードされるため funds のみ保存する。
 		"team_funds": _team_funds_map(),
 		"team_previous_ranks": _team_previous_ranks_map(),
+		"team_auto_lineup": _team_auto_lineup_map(),
 		# records は RecordStore が record_store blob / 正規化テーブルへ独立永続化するため
 		# game_state には含めない。全履歴の二重シリアライズ (autosave ごと) を避ける。
 		"offseason_step": app_state.offseason_step,
@@ -59,6 +60,7 @@ static func save_state(app_state) -> bool:
 		"fa_state": app_state.fa_state,
 		"foreign_state": app_state.foreign_state,
 		"camp_state": app_state.camp_state,
+		"contract_update_state": app_state.contract_update_state,
 		"offseason_active": app_state.offseason_active,
 		"postseason_active": app_state.postseason_active,
 		"current_postseason": app_state.current_postseason.to_dict() if app_state.current_postseason != null else {},
@@ -292,6 +294,15 @@ static func _team_previous_ranks_map() -> Dictionary:
 	return out
 
 
+static func _team_auto_lineup_map() -> Dictionary:
+	var out: Dictionary = {}
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null:
+			out[team.id] = team.auto_lineup
+	return out
+
+
 static func _remember_saved_state(payload: Dictionary) -> void:
 	_saved_state_fingerprint = _state_fingerprint(payload)
 	_saved_state_save_id = SaveContext.active_save_id()
@@ -304,6 +315,7 @@ static func _current_state_snapshot(app_state) -> Dictionary:
 		"players": _players_to_dicts(),
 		"team_funds": _team_funds_map(),
 		"team_previous_ranks": _team_previous_ranks_map(),
+		"team_auto_lineup": _team_auto_lineup_map(),
 		"offseason_step": app_state.offseason_step,
 		"offseason_results": app_state.offseason_results,
 		"draft_state": app_state.draft_state,
@@ -312,6 +324,7 @@ static func _current_state_snapshot(app_state) -> Dictionary:
 		"fa_state": app_state.fa_state,
 		"foreign_state": app_state.foreign_state,
 		"camp_state": app_state.camp_state,
+		"contract_update_state": app_state.contract_update_state,
 		"offseason_active": app_state.offseason_active,
 		"postseason_active": app_state.postseason_active,
 		"current_postseason": app_state.current_postseason.to_dict() if app_state.current_postseason != null else {},
@@ -338,6 +351,7 @@ static func _state_fingerprint(snapshot: Dictionary) -> int:
 		"players": snapshot.get("players", []),
 		"team_funds": snapshot.get("team_funds", {}),
 		"team_previous_ranks": snapshot.get("team_previous_ranks", {}),
+		"team_auto_lineup": snapshot.get("team_auto_lineup", {}),
 		"offseason_step": snapshot.get("offseason_step", ""),
 		"offseason_results": snapshot.get("offseason_results", {}),
 		"draft_state": snapshot.get("draft_state", {}),
@@ -346,6 +360,7 @@ static func _state_fingerprint(snapshot: Dictionary) -> int:
 		"fa_state": snapshot.get("fa_state", {}),
 		"foreign_state": snapshot.get("foreign_state", {}),
 		"camp_state": snapshot.get("camp_state", {}),
+		"contract_update_state": snapshot.get("contract_update_state", {}),
 		"offseason_active": snapshot.get("offseason_active", false),
 		"postseason_active": snapshot.get("postseason_active", false),
 		"current_postseason": snapshot.get("current_postseason", {}),

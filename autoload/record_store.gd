@@ -371,6 +371,8 @@ func _record_identity_changed(record: PSPlayerSeasonRecord, player: PSPlayer) ->
 	# 防御的: record が z_abilities_snapshot を持たない (能力欠落) 場合は player から取り直す
 	if record.z_abilities_snapshot.is_empty() and not player.z_abilities.is_empty():
 		return true
+	if record.arsenal_snapshot.is_empty() and not player.arsenal.is_empty():
+		return true
 	return false
 
 
@@ -378,4 +380,9 @@ func _refreshed_player_record(record: PSPlayerSeasonRecord, player: PSPlayer) ->
 	var refreshed: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, record.year, record.season_number)
 	refreshed.batter_stats = record.batter_stats
 	refreshed.pitcher_stats = record.pitcher_stats
+	refreshed.advanced_stats = record.advanced_stats
+	refreshed.season_injury_days = record.season_injury_days
+	refreshed.injury_return_day = record.injury_return_day
+	refreshed.consecutive_appearances = record.consecutive_appearances
+	refreshed.last_pitched_team_game = record.last_pitched_team_game
 	return refreshed

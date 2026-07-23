@@ -15,6 +15,7 @@ var schedule_bucket_seed: int = 0
 var schedule: Array = []
 var standings: Dictionary = {}
 var team_lineups: Dictionary = {}
+var team_auto_batting_orders: Dictionary = {}
 var team_fielder_usages: Dictionary = {}
 var team_rotations: Dictionary = {}
 var team_active_rosters: Dictionary = {}
@@ -88,6 +89,33 @@ func set_lineup(team_id: int, dh_enabled: bool, lineup: Dictionary) -> void:
 	stored["updated_at_day"] = current_day
 	team_entry[key] = stored
 	team_lineups[str(team_id)] = team_entry
+	_mutex.unlock()
+
+
+func get_auto_batting_order(team_id: int, dh_enabled: bool) -> Array:
+	_mutex.lock()
+	var team_entry: Dictionary = team_auto_batting_orders.get(str(team_id), {}) as Dictionary
+	var key: String = "dh" if dh_enabled else "non_dh"
+	var out: Array[int] = []
+	for player_id_value in team_entry.get(key, []) as Array:
+		var player_id: int = int(player_id_value)
+		if player_id > 0 and not out.has(player_id):
+			out.append(player_id)
+	_mutex.unlock()
+	return out
+
+
+func set_auto_batting_order(team_id: int, dh_enabled: bool, player_ids: Array) -> void:
+	_mutex.lock()
+	var team_entry: Dictionary = team_auto_batting_orders.get(str(team_id), {}) as Dictionary
+	var key: String = "dh" if dh_enabled else "non_dh"
+	var stored: Array[int] = []
+	for player_id_value in player_ids:
+		var player_id: int = int(player_id_value)
+		if player_id > 0 and not stored.has(player_id):
+			stored.append(player_id)
+	team_entry[key] = stored
+	team_auto_batting_orders[str(team_id)] = team_entry
 	_mutex.unlock()
 
 
@@ -429,6 +457,7 @@ func to_dict(include_history: bool = true) -> Dictionary:
 		"schedule": _schedule_for_save(),
 		"standings": standings_data,
 		"team_lineups": team_lineups,
+		"team_auto_batting_orders": team_auto_batting_orders,
 		"team_fielder_usages": team_fielder_usages,
 		"team_rotations": team_rotations,
 		"team_active_rosters": team_active_rosters,
@@ -490,6 +519,7 @@ static func from_dict(data: Dictionary) -> PSSeason:
 		season.standings[int(key)] = PSStats.from_dict(standings_data[key] as Dictionary)
 
 	season.team_lineups = (data.get("team_lineups", {}) as Dictionary).duplicate(true)
+	season.team_auto_batting_orders = (data.get("team_auto_batting_orders", {}) as Dictionary).duplicate(true)
 	season.team_fielder_usages = (data.get("team_fielder_usages", {}) as Dictionary).duplicate(true)
 	season.team_rotations = (data.get("team_rotations", {}) as Dictionary).duplicate(true)
 	season.team_active_rosters = (data.get("team_active_rosters", {}) as Dictionary).duplicate(true)

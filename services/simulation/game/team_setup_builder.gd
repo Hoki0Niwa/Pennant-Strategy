@@ -530,6 +530,11 @@ static func build_setup_from_auto(
 		if not dh_enabled:
 			batting_order.append(rotation_pitcher)
 		var profile: PSBattingOrderProfile = BattingOrderProfile.load_for_team(team_id, dh_enabled)
+		if profile.base_order_player_ids.is_empty():
+			var saved_base_order: Array = season.get_auto_batting_order(team_id, dh_enabled)
+			if not saved_base_order.is_empty():
+				for player_id_value in saved_base_order:
+					profile.base_order_player_ids.append(int(player_id_value))
 		var ctx: Dictionary = {
 			"game_day": season.current_day,
 			"team_id": team_id,
@@ -537,6 +542,8 @@ static func build_setup_from_auto(
 			"opp_pitcher_hand": "",
 		}
 		batting_order = BattingOrderService.build_daily_batting_order(batting_order, ctx, profile)
+		if season.get_auto_batting_order(team_id, dh_enabled).is_empty():
+			season.set_auto_batting_order(team_id, dh_enabled, profile.base_order_player_ids)
 	else:
 		sort_batting_order(batting_order)
 		if not dh_enabled:

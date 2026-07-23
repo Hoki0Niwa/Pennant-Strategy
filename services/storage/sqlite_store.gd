@@ -6,7 +6,7 @@ const RUNTIME_TEMPLATE_DB_PATH = "res://data/pennant_strategy.sqlite"
 
 # SQLite の user_version に保存する永続化スキーマ世代。
 # required columns と indexes が揃っているかを起動時に確認する。
-const SCHEMA_VERSION: int = 5
+const SCHEMA_VERSION: int = 6
 
 # スキーマ構築 (CREATE TABLE / INDEX / レガシー検出 / PRAGMA table_info) はプロセス内で
 # 一度実行できれば十分。毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -107,7 +107,7 @@ const PLAYER_SEASON_COLUMNS: Array = [
 	"consecutive_appearances", "last_pitched_team_game",
 	"position_aptitudes_snapshot_json", "position_experience_snapshot_json",
 	"source_data_json", "z_abilities_snapshot_json", "raw_abilities_snapshot_json",
-	"advanced_stats_json",
+	"arsenal_snapshot_json", "advanced_stats_json",
 ]
 
 const BATTER_STATS_COLUMNS: Array = [
@@ -619,6 +619,8 @@ static func _player_season_value(record: Dictionary, column: String) -> Variant:
 			return JSON.stringify(record.get("z_abilities_snapshot", {}))
 		"raw_abilities_snapshot_json":
 			return JSON.stringify(record.get("raw_abilities_snapshot", {}))
+		"arsenal_snapshot_json":
+			return JSON.stringify(record.get("arsenal_snapshot", []))
 		"advanced_stats_json":
 			return JSON.stringify(record.get("advanced_stats", {}))
 		"name", "role", "throwing_hand", "batting_side", "hometown", "registered_roster", "contract_status", "injury_type":
@@ -690,6 +692,7 @@ static func _normalized_player_season_dict(row: Dictionary) -> Dictionary:
 		"source_data": _parse_json_dict(str(row.get("source_data_json", "{}"))),
 		"z_abilities_snapshot": _parse_json_dict(str(row.get("z_abilities_snapshot_json", "{}"))),
 		"raw_abilities_snapshot": _parse_json_dict(str(row.get("raw_abilities_snapshot_json", "{}"))),
+		"arsenal_snapshot": _parse_json_array(str(row.get("arsenal_snapshot_json", "[]"))),
 		"advanced_stats": _parse_json_dict(str(row.get("advanced_stats_json", "{}"))),
 	}
 
@@ -721,6 +724,13 @@ static func _parse_json_dict(text: String) -> Dictionary:
 	if parsed is Dictionary:
 		return parsed as Dictionary
 	return {}
+
+
+static func _parse_json_array(text: String) -> Array:
+	var parsed: Variant = JSON.parse_string(text)
+	if parsed is Array:
+		return parsed as Array
+	return []
 
 
 static func _build_placeholders(count: int) -> String:
@@ -884,6 +894,7 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			source_data_json TEXT NOT NULL DEFAULT '{}',
 			z_abilities_snapshot_json TEXT NOT NULL DEFAULT '{}',
 			raw_abilities_snapshot_json TEXT NOT NULL DEFAULT '{}',
+			arsenal_snapshot_json TEXT NOT NULL DEFAULT '[]',
 			advanced_stats_json TEXT NOT NULL DEFAULT '{}',
 			PRIMARY KEY (player_id, year, season_number)
 		)""",
@@ -974,6 +985,8 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 		return false
 	if not _ensure_player_season_advanced_stats_column(db):
 		return false
+	if not _ensure_player_season_arsenal_snapshot_column(db):
+		return false
 	if not _ensure_player_season_season_injury_days_column(db):
 		return false
 	if not _ensure_player_season_injury_return_day_column(db):
@@ -1005,6 +1018,15 @@ static func _ensure_player_season_advanced_stats_column(db: Object) -> bool:
 		if str(col.get("name", "")) == "advanced_stats_json":
 			return true
 	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN advanced_stats_json TEXT NOT NULL DEFAULT '{}'")
+
+
+static func _ensure_player_season_arsenal_snapshot_column(db: Object) -> bool:
+	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
+	for col_value in cols:
+		var col: Dictionary = col_value as Dictionary
+		if str(col.get("name", "")) == "arsenal_snapshot_json":
+			return true
+	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN arsenal_snapshot_json TEXT NOT NULL DEFAULT '[]'")
 
 
 static func _ensure_player_season_fa_eligible_years_column(db: Object) -> bool:

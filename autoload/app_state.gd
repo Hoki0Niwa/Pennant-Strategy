@@ -352,12 +352,19 @@ func start_new_season() -> bool:
 	PSBattingOrderProfile.reset_cache()
 	_prewarm_lineup_profiles()
 	last_status_message = ""
+	offseason_step = OFFSEASON_STEP_RETIREMENT
+	offseason_results = {}
 	draft_state = {}
 	released_market_state = {}
 	geneki_draft_state = {}
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
+	contract_update_state = {}
+	offseason_active = false
+	postseason_active = false
+	current_postseason = null
+	current_awards = null
 	_screen_history.clear()
 	_forward_history.clear()
 	request_screen("home")
@@ -387,6 +394,7 @@ func start_next_season() -> bool:
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
+	contract_update_state = {}
 	offseason_active = false
 	postseason_active = false
 	current_postseason = null
@@ -467,18 +475,25 @@ func finalize_postseason_to_awards() -> Dictionary:
 		return {"ok": false, "message": "日本シリーズが未終了です"}
 	if current_awards == null:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
-	# 履歴アーカイブを追加
+	_archive_current_season_if_needed()
+	_save_if_enabled()
+	request_screen("awards")
+	return {"ok": true}
+
+
+func _archive_current_season_if_needed() -> bool:
+	if current_season == null or current_awards == null:
+		return false
+	if _archive_exists(current_season.year, current_season.season_number):
+		return false
 	var archive: PSSeasonArchive = PSSeasonArchive.new()
 	archive.year = current_season.year
 	archive.season_number = current_season.season_number
 	archive.standings = _snapshot_standings(current_season)
 	archive.postseason = current_postseason
 	archive.awards = current_awards
-	if not _archive_exists(archive.year, archive.season_number):
-		RecordStore.add_season_archive(archive, auto_save_enabled)
-	_save_if_enabled()
-	request_screen("awards")
-	return {"ok": true}
+	RecordStore.add_season_archive(archive, auto_save_enabled)
+	return true
 
 
 func _snapshot_standings(season: PSSeason) -> Dictionary:
@@ -513,6 +528,7 @@ func start_offseason() -> Dictionary:
 	# 表彰未計算なら計算する。
 	if current_awards == null:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
+	_archive_current_season_if_needed()
 	postseason_active = false
 	# Step 0: 引退判定を即時実行して結果を保存する (引退者除外後の payroll で予算を算定するため、
 	# 年次予算再計算はこの直後に行う)。
@@ -528,6 +544,7 @@ func start_offseason() -> Dictionary:
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
+	contract_update_state = {}
 	offseason_active = true
 	last_status_message = str(retirement_result.get("title", ""))
 	_save_if_enabled()
@@ -1829,6 +1846,17 @@ func restore_from_save(data: Dictionary) -> bool:
 		if ranked_team != null:
 			ranked_team.previous_rank = int(saved_ranks[rank_key])
 
+	var saved_auto_lineup: Dictionary = data.get("team_auto_lineup", {}) as Dictionary
+	if not data.has("team_auto_lineup"):
+		for team_value in GameDb.teams:
+			var default_lineup_team: PSTeam = team_value as PSTeam
+			if default_lineup_team != null:
+				default_lineup_team.auto_lineup = true
+	for lineup_key in saved_auto_lineup.keys():
+		var lineup_team: PSTeam = GameDb.get_team(int(lineup_key))
+		if lineup_team != null:
+			lineup_team.auto_lineup = bool(saved_auto_lineup[lineup_key])
+
 	selected_team_id = int(data.get("selected_team_id", 0))
 	offseason_step = _normalize_saved_offseason_step(data.get("offseason_step", OFFSEASON_STEP_RETIREMENT))
 	offseason_results = _migrate_offseason_result_keys((data.get("offseason_results", {}) as Dictionary).duplicate(true))
@@ -1838,6 +1866,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	fa_state = (data.get("fa_state", {}) as Dictionary).duplicate(true)
 	foreign_state = (data.get("foreign_state", {}) as Dictionary).duplicate(true)
 	camp_state = (data.get("camp_state", {}) as Dictionary).duplicate(true)
+	contract_update_state = (data.get("contract_update_state", {}) as Dictionary).duplicate(true)
 	offseason_active = bool(data.get("offseason_active", false))
 	postseason_active = bool(data.get("postseason_active", false))
 	auto_roster_swap_for_user_team = bool(data.get("auto_roster_swap_for_user_team", false))
@@ -1859,6 +1888,8 @@ func restore_from_save(data: Dictionary) -> bool:
 	# 新形式セーブは選手履歴が blob に含まれず season_history テーブル側にある。
 	SaveService.hydrate_season_history(current_season)
 	_apply_dh_settings_to_current_schedule()
+	PSDefenseAlignmentProfile.reset_cache()
+	PSBattingOrderProfile.reset_cache()
 	# records は record_store blob / 正規化テーブルに独立永続化されている
 	# (game_state には含めない)。専用ストアから hydrate する。
 	RecordStore.load_records()
