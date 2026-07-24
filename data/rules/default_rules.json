@@ -39,7 +39,13 @@
       "pitcher_output_tail_span": 100.0,
       "pitcher_stuff_tail_span": 100.0,
       "batter_hr_tail_span": 1.2,
-      "batter_avoid_k_tail_span": 0.8
+      "batter_avoid_k_tail_span": 0.8,
+      "batter_contact_tail_pivot": 1.4678,
+      "batter_contact_tail_span": 0.85,
+      "batter_gap_tail_pivot": 1.7849,
+      "batter_gap_tail_span": 1.2,
+      "batter_patience_tail_pivot": 1.3089,
+      "batter_patience_tail_span": 1.5
     },
     "contact_quality": {
       "ev_base": 84.894645,
@@ -134,7 +140,7 @@
     },
     "play_resolver": {
       "hr_wall_clearance": 3.5,
-      "catch_prob_calibration_bias": 0.07,
+      "catch_prob_calibration_bias": 0.09,
       "field_error_base_grounder": 0.017,
       "field_error_base_liner": 0.0022,
       "field_error_base_fly": 0.0013,

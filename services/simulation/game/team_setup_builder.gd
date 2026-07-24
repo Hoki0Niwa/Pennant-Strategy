@@ -847,6 +847,7 @@ static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slot
 	var existing_slots: Dictionary = existing_usage.get("position_slots", {}) as Dictionary
 	var position_slots: Dictionary = existing_slots.duplicate(true)
 	var starter_ids: Dictionary = {}
+	var assigned_sub_ids: Dictionary = {}
 	for slot_row in base_fielding_slots:
 		var assignment: Dictionary = slot_row as Dictionary
 		var record: PSPlayerSeasonRecord = assignment.get("record", null) as PSPlayerSeasonRecord
@@ -865,7 +866,7 @@ static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slot
 			starter_id = record.player_id
 		starter_ids[starter_id] = true
 		var sub_id: int = int(existing_slot.get("sub_id", 0))
-		if starter_ids.has(sub_id):
+		if starter_ids.has(sub_id) or assigned_sub_ids.has(sub_id):
 			sub_id = 0
 		var interval: int = int(existing_slot.get("sub_start_interval", 0))
 		var sub: PSPlayerSeasonRecord = null
@@ -875,8 +876,10 @@ static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slot
 				sub = null
 				sub_id = 0
 		if sub == null:
-			sub = _best_sub_for_position(available_fielders, starter_ids, position)
+			sub = _best_sub_for_position(available_fielders, starter_ids, assigned_sub_ids, position)
 			sub_id = 0 if sub == null else sub.player_id
+		if sub_id > 0:
+			assigned_sub_ids[sub_id] = true
 		if interval == 0 and sub != null:
 			interval = _sub_interval_for(record, sub, position)
 		# ユーザが「控え」で設定した補充優先リストは AI 既定生成でも保持する。
@@ -904,12 +907,18 @@ static func _usage_slot_for_position(position_slots: Dictionary, position: int) 
 	return {}
 
 
-static func _best_sub_for_position(available_fielders: Array, starter_ids: Dictionary, position: int) -> PSPlayerSeasonRecord:
+static func _best_sub_for_position(
+	available_fielders: Array,
+	starter_ids: Dictionary,
+	assigned_sub_ids: Dictionary,
+	position: int
+) -> PSPlayerSeasonRecord:
 	var best: PSPlayerSeasonRecord = null
 	var best_score: int = -2147483647
 	for row in available_fielders:
 		var candidate: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
-		if candidate == null or candidate.injury_days > 0 or starter_ids.has(candidate.player_id):
+		if candidate == null or candidate.injury_days > 0 \
+				or starter_ids.has(candidate.player_id) or assigned_sub_ids.has(candidate.player_id):
 			continue
 		if position_aptitude(candidate, position) <= 0:
 			continue

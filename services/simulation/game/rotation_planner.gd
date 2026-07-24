@@ -7,6 +7,11 @@ const ROTATION_SIZE_MAX: int = 6
 const RELIEF_ROLE_SIZE_MAX: int = 6
 const MIN_STARTER_REST_DAYS: int = 4
 const STARTER_DANGER_FATIGUE: int = 145
+# 自動6人ローテの第6枠では、十分休んだ上位2先発を交互に起用する。
+# 先発平均投球回を変えず、エース級には規定投球回へ届く25～30先発を配分する。
+const AUTO_ACE_SKIP_ROTATION_TURNS: int = 1
+const AUTO_ACE_CANDIDATE_COUNT: int = 2
+const AUTO_ACE_SKIP_MIN_DAY_GAP: int = 6
 
 const RELIEF_ROLE_LONG: String = "long"
 const RELIEF_ROLE_MIDDLE: String = "middle"
@@ -33,7 +38,11 @@ static func resolve_rotation_decision(season: PSSeason, team_id: int, starter_pi
 	var last_starts: Dictionary = saved.get("last_start_day_by_pitcher", {}) as Dictionary
 	var manual_skips: Dictionary = _id_set(saved.get("manual_skip_pitcher_ids", []) as Array)
 
-	var chosen: Dictionary = _first_rotation_candidate(rotation, next_index, current_day, last_starts, manual_skips, true, true, true)
+	var chosen: Dictionary = _auto_ace_skip_candidate(
+		saved, rotation, next_index, current_day, last_starts, team_record
+	)
+	if chosen.is_empty():
+		chosen = _first_rotation_candidate(rotation, next_index, current_day, last_starts, manual_skips, true, true, true)
 	if chosen.is_empty():
 		chosen = _first_rotation_candidate(rotation, next_index, current_day, last_starts, manual_skips, true, false, true)
 	if chosen.is_empty():
@@ -50,6 +59,36 @@ static func resolve_rotation_decision(season: PSSeason, team_id: int, starter_pi
 		"next_rotation_index": next_index,
 		"reason": str(chosen.get("reason", "")),
 	}
+
+
+static func _auto_ace_skip_candidate(
+	saved: Dictionary,
+	rotation: Array,
+	next_index: int,
+	current_day: int,
+	last_starts: Dictionary,
+	team_record: PSTeamSeasonRecord
+) -> Dictionary:
+	if not bool(saved.get("auto_generated", false)):
+		return {}
+	if rotation.size() < ROTATION_SIZE_MAX or next_index != rotation.size() - 1:
+		return {}
+	var games_played: int = 0 if team_record == null else team_record.stats.games
+	var rotation_turn: int = int((games_played + 1) / rotation.size())
+	if rotation_turn <= 0 or rotation_turn % AUTO_ACE_SKIP_ROTATION_TURNS != 0:
+		return {}
+	var limit: int = mini(AUTO_ACE_CANDIDATE_COUNT, rotation.size() - 1)
+	var preferred_index: int = posmod(int(rotation_turn / AUTO_ACE_SKIP_ROTATION_TURNS), limit)
+	for offset in range(limit):
+		var index: int = (preferred_index + offset) % limit
+		var pitcher: PSPlayerSeasonRecord = rotation[index] as PSPlayerSeasonRecord
+		if not _can_start_pitcher(pitcher, current_day, last_starts, true, true):
+			continue
+		var last_day: int = int(last_starts.get(str(pitcher.player_id), 0))
+		if last_day <= 0 or current_day - last_day < AUTO_ACE_SKIP_MIN_DAY_GAP:
+			continue
+		return {"pitcher": pitcher, "index": index, "reason": "ace_skip"}
+	return {}
 
 
 static func record_rotation_start(season: PSSeason, team_id: int, setup: Dictionary, day: int) -> void:

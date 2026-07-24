@@ -39,7 +39,7 @@ const FIELD_NAMES: Dictionary = {
 	9: "right",
 }
 
-const DOUBLE_RATE_SCALE: float = 0.42
+const DOUBLE_RATE_SCALE: float = 0.52
 
 
 static func resolve_hit(

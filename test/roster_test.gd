@@ -1879,6 +1879,15 @@ func test_high_fatigue_record_is_not_auto_demotion_candidate() -> void:
 	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 1.0, 100, 70.0, 70.0, 70.0)).is_true()
 
 
+func test_underperforming_regular_batter_becomes_auto_demotion_candidate() -> void:
+	var player: PSPlayer = _player_with_z(63, 1, 3, false, 0.4)
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2026, 1)
+	record.batter_stats.plate_appearances = 100
+
+	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 54.0, 100, 70.0, 70.0, 70.0)).is_true()
+	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 55.0, 100, 70.0, 70.0, 70.0)).is_false()
+
+
 # FA日数台帳: 入替時に get_active_roster の複製 (古い台帳入り) を渡しても、set_active_roster 内で
 # accrue した区間が巻き戻らないこと。週次入替のたびに直前区間が消え、長期で FA権取得者が
 # 全くいなくなる回帰 (2026-07-06 の15年検証で fa_declared 全ゼロ) の再発防止。

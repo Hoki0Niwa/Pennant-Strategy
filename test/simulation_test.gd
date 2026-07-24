@@ -758,6 +758,9 @@ func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
 	var pitcher_stuff_span: float = ModManager.rule_float("simulation.plate_appearance.pitcher_stuff_tail_span", PSPlateAppearanceCoordinator.PITCHER_STUFF_TAIL_SPAN)
 	var batter_avoid_k_span: float = ModManager.rule_float("simulation.plate_appearance.batter_avoid_k_tail_span", PSPlateAppearanceCoordinator.BATTER_AVOID_K_TAIL_SPAN)
 	var batter_hr_span: float = ModManager.rule_float("simulation.plate_appearance.batter_hr_tail_span", PSPlateAppearanceCoordinator.BATTER_HR_TAIL_SPAN)
+	var batter_contact_span: float = ModManager.rule_float("simulation.plate_appearance.batter_contact_tail_span", PSPlateAppearanceCoordinator.BATTER_CONTACT_TAIL_SPAN)
+	var batter_gap_span: float = ModManager.rule_float("simulation.plate_appearance.batter_gap_tail_span", PSPlateAppearanceCoordinator.BATTER_GAP_TAIL_SPAN)
+	var batter_patience_span: float = ModManager.rule_float("simulation.plate_appearance.batter_patience_tail_span", PSPlateAppearanceCoordinator.BATTER_PATIENCE_TAIL_SPAN)
 
 	assert_float(float(pitcher_z.get("Pit_KCreate", 0.0))).is_less(4.0)
 	assert_float(float(pitcher_z.get("Pit_KCreate", 0.0))).is_less_equal(
@@ -769,6 +772,12 @@ func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
 	assert_float(float(batter_z.get("Bat_KAvoid", 0.0))).is_less(4.0)
 	assert_float(float(batter_z.get("Bat_KAvoid", 0.0))).is_less_equal(
 		PSPlateAppearanceCoordinator.BATTER_AVOID_K_TAIL_PIVOT + batter_avoid_k_span + 0.01)
+	assert_float(float(batter_z.get("Bat_Barrel", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.BATTER_CONTACT_TAIL_PIVOT + batter_contact_span + 0.01)
+	assert_float(float(batter_z.get("Bat_Impact", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.BATTER_GAP_TAIL_PIVOT + batter_gap_span + 0.01)
+	assert_float(float(batter_z.get("Bat_BBCreate", 0.0))).is_less_equal(
+		PSPlateAppearanceCoordinator.BATTER_PATIENCE_TAIL_PIVOT + batter_patience_span + 0.01)
 	assert_float(float(precomp.get("batter_hr_z", 0.0))).is_less(6.0)
 	assert_float(float(precomp.get("batter_hr_z", 0.0))).is_less_equal(
 		PSPlateAppearanceCoordinator.BATTER_HR_TAIL_PIVOT + batter_hr_span + 0.01)
@@ -1326,6 +1335,29 @@ func test_few_starters_do_not_pull_reliever_or_closer_into_rotation() -> void:
 	# starter が 1 人でもいれば補充は発火せず、リリーフ/クローザーはローテに入らない。
 	assert_int(starters.size()).is_equal(2)
 	assert_array(ids).not_contains(470)
+
+
+func test_auto_rotation_periodically_skips_sixth_slot_for_rested_ace() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.current_day = 30
+	var pitchers: Array = []
+	for i in range(6):
+		var starter: PSPlayerSeasonRecord = _pitcher(480 + i, "Starter %d" % i, 1.2 - float(i) * 0.1)
+		starter.role = "starter"
+		pitchers.append(starter)
+	season.set_rotation(1, {
+		"pitcher_ids": [480, 481, 482, 483, 484, 485],
+		"next_rotation_index": 5,
+		"auto_generated": true,
+		"last_start_day_by_pitcher": {"480": 23, "481": 24, "482": 25, "483": 26, "484": 27, "485": 22},
+	})
+	var team_record: PSTeamSeasonRecord = PSTeamSeasonRecord.new()
+	team_record.stats.games = 23
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers, team_record)
+
+	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(480)
+	assert_str(str(decision.get("reason", ""))).is_equal("ace_skip")
 
 
 # 統合: 保存 role 正準 (B) でも実シードの全チームが先発を立て、ブルペンを編成できること。

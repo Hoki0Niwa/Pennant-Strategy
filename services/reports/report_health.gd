@@ -19,6 +19,7 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 	return {
 		"batters": {
 			"qualified_count": batters.size(),
+			"batting_average": _distribution(_float_values(batters, "batting_average"), 3),
 			"ops": _distribution(_float_values(batters, "ops"), 3),
 			"home_runs": _distribution(_float_values(batters, "home_runs"), 0),
 			"war": _distribution(_float_values(batters, "war"), 2),
@@ -28,6 +29,7 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 		"pitchers": {
 			"qualified_count": pitchers.size(),
 			"era": pitcher_era_dist,
+			"innings_pitched": _distribution(_float_values(pitchers, "innings_pitched"), 1),
 			"qualified_pitcher_era_p10": float(pitcher_era_dist.get("p10", 0.0)),
 			"era_under_2_count": int(era_tail.get("era_under_2_count", 0)),
 			"era_under_2_by_team_max": int(era_tail.get("era_under_2_by_team_max", 0)),
@@ -71,6 +73,8 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	var holds_per_year: float = _safe_div(float(pitching.get("holds", 0)), float(seasons))
 	var era_under_2_count: int = int(pitcher_dist.get("era_under_2_count", 0))
 	var era_under_2_by_team_max: int = int(pitcher_dist.get("era_under_2_by_team_max", 0))
+	var qualified_batters: int = int(batter_dist.get("qualified_count", 0))
+	var qualified_pitchers: int = int(pitcher_dist.get("qualified_count", 0))
 	var errors: Array = report.get("errors", []) as Array
 
 	_add_equal_check(checks, "completed_seasons", completed, requested, "all requested seasons completed")
@@ -93,6 +97,18 @@ static func balance_health(report: Dictionary) -> Dictionary:
 		_add_range_check(checks, "wild_pitches_per_team_game", float(running.get("wild_pitches_per_team_game", 0.0)), 0.10, 0.35, 0.02, 0.60, "wild pitches per team game (NPB ~0.20)")
 		_add_range_check(checks, "passed_balls_per_team_game", float(running.get("passed_balls_per_team_game", 0.0)), 0.010, 0.100, 0.0, 0.250, "passed balls per team game (NPB ~0.03-0.05)")
 	_add_min_check(checks, "hard_hit_rate", float(batted_ball.get("hard_hit_rate", 0.0)), 0.20, 0.10, "hard-hit rate should not collapse")
+	_add_range_check(checks, "qualified_batter_count", qualified_batters, 48.0, 70.0, 36.0, 82.0, "qualified batter count (NPB 2015-23: 48-61)")
+	_add_range_check(checks, "qualified_pitcher_count", qualified_pitchers, 14.0, 28.0, 6.0, 38.0, "qualified pitcher count (NPB 2015-23: 14-26)")
+	_add_range_check(checks, "qualified_batter_average_p10", _dist_value(batter_dist, "batting_average", "p10"), 0.225, 0.255, 0.200, 0.275, "qualified batter AVG p10")
+	_add_range_check(checks, "qualified_batter_average_p50", _dist_value(batter_dist, "batting_average", "p50"), 0.255, 0.290, 0.235, 0.310, "qualified batter AVG median")
+	_add_range_check(checks, "qualified_batter_average_p90", _dist_value(batter_dist, "batting_average", "p90"), 0.295, 0.330, 0.275, 0.350, "qualified batter AVG p90")
+	_add_range_check(checks, "qualified_batter_ops_p10", _dist_value(batter_dist, "ops", "p10"), 0.600, 0.710, 0.500, 0.760, "qualified batter OPS p10")
+	_add_range_check(checks, "qualified_batter_ops_p50", _dist_value(batter_dist, "ops", "p50"), 0.700, 0.820, 0.640, 0.880, "qualified batter OPS median")
+	_add_range_check(checks, "qualified_batter_ops_p90", _dist_value(batter_dist, "ops", "p90"), 0.860, 0.980, 0.800, 1.040, "qualified batter OPS p90")
+	_add_range_check(checks, "qualified_pitcher_era_p10", _dist_value(pitcher_dist, "era", "p10"), 1.70, 2.60, 1.20, 3.10, "qualified pitcher ERA p10")
+	_add_range_check(checks, "qualified_pitcher_era_p50", _dist_value(pitcher_dist, "era", "p50"), 2.50, 3.50, 2.10, 3.90, "qualified pitcher ERA median")
+	_add_range_check(checks, "qualified_pitcher_ip_p10", _dist_value(pitcher_dist, "innings_pitched", "p10"), 143.0, 153.0, 143.0, 165.0, "qualified pitcher innings p10")
+	_add_range_check(checks, "qualified_pitcher_ip_p50", _dist_value(pitcher_dist, "innings_pitched", "p50"), 148.0, 172.0, 143.0, 185.0, "qualified pitcher innings median")
 	_add_max_check(checks, "batter_ops_max", _dist_value(batter_dist, "ops", "max"), 1.20, 1.35, "qualified batter OPS max")
 	_add_max_check(checks, "batter_hr_max", _dist_value(batter_dist, "home_runs", "max"), 60.0, 75.0, "single-season HR leader")
 	# MLB fWAR 実測 (2015-24): 年間最高は通常 8.5-9.5、10 超は Judge/Witt 級で10年に4回
@@ -153,6 +169,25 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 			"era": _distribution(leader_era, 2),
 			"strikeouts": _distribution(leader_k, 0),
 		},
+		"players": {
+			"qualified_batters": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "qualified_count"]), 1),
+			"batter_average_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "average", "p10"]), 3),
+			"batter_average_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "average", "p50"]), 3),
+			"batter_average_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "average", "p90"]), 3),
+			"batter_ops_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops", "p10"]), 3),
+			"batter_ops_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops", "p50"]), 3),
+			"batter_ops_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops", "p90"]), 3),
+			"batter_ops_900_count": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops_900_count"]), 1),
+			"batter_ops_950_count": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops_950_count"]), 1),
+			"qualified_pitchers": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "qualified_count"]), 1),
+			"pitcher_era_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "era", "p10"]), 2),
+			"pitcher_era_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "era", "p50"]), 2),
+			"pitcher_era_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "era", "p90"]), 2),
+			"pitcher_ip_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "p10"]), 1),
+			"pitcher_ip_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "p50"]), 1),
+			"pitcher_ip_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "p90"]), 1),
+			"pitcher_ip_max": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "max"]), 1),
+		},
 		"flows": {
 			"trades": _distribution(_nested_values(rows, ["trades", "count"]), 1),
 			"fa_declared": _distribution(_nested_values(rows, ["offseason", "fa_declared_count"]), 1),
@@ -175,6 +210,7 @@ static func long_health(report: Dictionary) -> Dictionary:
 	var roster_dist: Dictionary = distributions.get("roster", {}) as Dictionary
 	var post_roster_dist: Dictionary = distributions.get("post_roster", {}) as Dictionary
 	var leader_dist: Dictionary = distributions.get("leaders", {}) as Dictionary
+	var player_dist: Dictionary = distributions.get("players", {}) as Dictionary
 	var milestones: Dictionary = report.get("milestones", {}) as Dictionary
 
 	_add_equal_check(checks, "completed_seasons", completed, requested, "all requested seasons completed")
@@ -205,6 +241,23 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "last10_era", float(last_10.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "last-10-year ERA")
 	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.0, 30.0, 23.0, 32.0, "last-10-year average age")
 	_add_range_check(checks, "last10_average_overall", float(last_10.get("average_overall", 0.0)), 66.0, 75.0, 62.0, 80.0, "last-10-year average overall")
+	_add_range_check(checks, "qualified_batters_mean", _dist_value(player_dist, "qualified_batters", "mean"), 48.0, 70.0, 36.0, 82.0, "qualified batters per year (NPB 2015-23: 48-61)")
+	_add_range_check(checks, "qualified_batter_average_p10_mean", _dist_value(player_dist, "batter_average_p10", "mean"), 0.225, 0.255, 0.200, 0.275, "yearly qualified-batter AVG p10")
+	_add_range_check(checks, "qualified_batter_average_p50_mean", _dist_value(player_dist, "batter_average_p50", "mean"), 0.255, 0.290, 0.235, 0.310, "yearly qualified-batter AVG median")
+	_add_range_check(checks, "qualified_batter_average_p90_mean", _dist_value(player_dist, "batter_average_p90", "mean"), 0.295, 0.330, 0.275, 0.350, "yearly qualified-batter AVG p90")
+	_add_range_check(checks, "qualified_batter_ops_p10_mean", _dist_value(player_dist, "batter_ops_p10", "mean"), 0.600, 0.710, 0.500, 0.760, "yearly qualified-batter OPS p10")
+	_add_range_check(checks, "qualified_batter_ops_p50_mean", _dist_value(player_dist, "batter_ops_p50", "mean"), 0.700, 0.820, 0.640, 0.880, "yearly qualified-batter OPS median")
+	_add_range_check(checks, "qualified_batter_ops_p90_mean", _dist_value(player_dist, "batter_ops_p90", "mean"), 0.860, 0.980, 0.800, 1.040, "yearly qualified-batter OPS p90")
+	_add_range_check(checks, "qualified_batter_ops_900_mean", _dist_value(player_dist, "batter_ops_900_count", "mean"), 2.0, 12.0, 0.0, 18.0, "qualified batters with OPS .900 or higher")
+	_add_range_check(checks, "qualified_batter_ops_950_mean", _dist_value(player_dist, "batter_ops_950_count", "mean"), 1.0, 8.0, 0.0, 12.0, "qualified batters with OPS .950 or higher")
+	_add_range_check(checks, "qualified_pitchers_mean", _dist_value(player_dist, "qualified_pitchers", "mean"), 14.0, 28.0, 6.0, 38.0, "qualified pitchers per year (NPB 2015-23: 14-26)")
+	_add_range_check(checks, "qualified_pitcher_era_p10_mean", _dist_value(player_dist, "pitcher_era_p10", "mean"), 1.70, 2.60, 1.20, 3.10, "yearly qualified-pitcher ERA p10")
+	_add_range_check(checks, "qualified_pitcher_era_p50_mean", _dist_value(player_dist, "pitcher_era_p50", "mean"), 2.50, 3.50, 2.10, 3.90, "yearly qualified-pitcher ERA median")
+	_add_range_check(checks, "qualified_pitcher_era_p90_mean", _dist_value(player_dist, "pitcher_era_p90", "mean"), 3.20, 4.30, 2.70, 4.80, "yearly qualified-pitcher ERA p90")
+	_add_range_check(checks, "qualified_pitcher_ip_p10_mean", _dist_value(player_dist, "pitcher_ip_p10", "mean"), 143.0, 153.0, 143.0, 165.0, "yearly qualified-pitcher innings p10")
+	_add_range_check(checks, "qualified_pitcher_ip_p50_mean", _dist_value(player_dist, "pitcher_ip_p50", "mean"), 148.0, 172.0, 143.0, 185.0, "yearly qualified-pitcher innings median")
+	_add_range_check(checks, "qualified_pitcher_ip_p90_mean", _dist_value(player_dist, "pitcher_ip_p90", "mean"), 165.0, 195.0, 150.0, 210.0, "yearly qualified-pitcher innings p90")
+	_add_range_check(checks, "qualified_pitcher_ip_max_mean", _dist_value(player_dist, "pitcher_ip_max", "mean"), 175.0, 210.0, 160.0, 225.0, "yearly qualified-pitcher innings maximum")
 	_add_max_check(checks, "leader_ops_max", _dist_value(leader_dist, "ops", "max"), 1.20, 1.35, "yearly OPS leader max")
 	_add_min_check(checks, "leader_era_min", _dist_value(leader_dist, "era", "min"), 0.90, 0.50, "yearly ERA leader floor")
 	_add_max_check(checks, "leader_strikeouts_max", _dist_value(leader_dist, "strikeouts", "max"), 360.0, 430.0, "yearly strikeout leader max")

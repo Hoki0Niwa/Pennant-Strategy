@@ -20,6 +20,7 @@ const QUALIFIER_MONTHLY_PA: int = 40      # 月別評価用 (regular starter ≒
 const QUALIFIER_MONTHLY_OUTS: int = 30    # 月別評価用
 const STAT_WEIGHT_MAX: float = 0.6        # perf_score の alpha 上限 (= 成績60% / 能力40% 下限保証)
 const UNDERPERFORM_RATIO: float = 0.6
+const UNDERPERFORM_RATIO_BATTER: float = 0.78
 const UNDERPERFORM_RATIO_STARTER: float = 0.4    # 先発は登板間隔が長いので閾値を緩める
 const MIN_APPEARANCE_RATIO_BATTER: float = 0.3
 const MIN_APPEARANCE_RATIO_PITCHER: float = 0.9
@@ -999,5 +1000,9 @@ static func _is_demotion_candidate(
 		mean = starter_mean if is_starter else reliever_mean
 	if mean <= 0.0:
 		return false
-	var under_ratio: float = UNDERPERFORM_RATIO_STARTER if is_starter else UNDERPERFORM_RATIO
+	var under_ratio: float = UNDERPERFORM_RATIO
+	if is_starter:
+		under_ratio = UNDERPERFORM_RATIO_STARTER
+	elif not record.is_pitcher():
+		under_ratio = UNDERPERFORM_RATIO_BATTER
 	return perf < mean * under_ratio

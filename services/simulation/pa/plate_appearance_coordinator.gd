@@ -40,6 +40,12 @@ const BATTER_HR_TAIL_PIVOT: float = 2.6190
 const BATTER_HR_TAIL_SPAN: float = 1.20
 const BATTER_AVOID_K_TAIL_PIVOT: float = 1.1550
 const BATTER_AVOID_K_TAIL_SPAN: float = 0.80
+const BATTER_CONTACT_TAIL_PIVOT: float = 1.4678
+const BATTER_CONTACT_TAIL_SPAN: float = 0.85
+const BATTER_GAP_TAIL_PIVOT: float = 1.7849
+const BATTER_GAP_TAIL_SPAN: float = 1.20
+const BATTER_PATIENCE_TAIL_PIVOT: float = 1.3089
+const BATTER_PATIENCE_TAIL_SPAN: float = 1.50
 const BUNT_BASE_PROBABILITY: float = 0.205
 const BUNT_SKILL_WEIGHT: float = 0.015
 const BUNT_IMPACT_PENALTY: float = 0.008
@@ -491,6 +497,21 @@ static func _apply_relief_output_bonus(pitcher_z: Dictionary, role: String, outi
 
 
 static func _apply_pa_tail_limits(batter_z: Dictionary, pitcher_z: Dictionary) -> void:
+	batter_z["Bat_Barrel"] = PSBalanceProfile.compress_z_tail(
+		float(batter_z.get("Bat_Barrel", 0.0)),
+		_rule_float("batter_contact_tail_pivot", BATTER_CONTACT_TAIL_PIVOT),
+		_rule_float("batter_contact_tail_span", BATTER_CONTACT_TAIL_SPAN)
+	)
+	batter_z["Bat_Impact"] = PSBalanceProfile.compress_z_tail(
+		float(batter_z.get("Bat_Impact", 0.0)),
+		_rule_float("batter_gap_tail_pivot", BATTER_GAP_TAIL_PIVOT),
+		_rule_float("batter_gap_tail_span", BATTER_GAP_TAIL_SPAN)
+	)
+	batter_z["Bat_BBCreate"] = PSBalanceProfile.compress_z_tail(
+		float(batter_z.get("Bat_BBCreate", 0.0)),
+		_rule_float("batter_patience_tail_pivot", BATTER_PATIENCE_TAIL_PIVOT),
+		_rule_float("batter_patience_tail_span", BATTER_PATIENCE_TAIL_SPAN)
+	)
 	batter_z["Bat_KAvoid"] = PSBalanceProfile.compress_z_tail(
 		float(batter_z.get("Bat_KAvoid", 0.0)),
 		_rule_float("batter_avoid_k_tail_pivot", BATTER_AVOID_K_TAIL_PIVOT),

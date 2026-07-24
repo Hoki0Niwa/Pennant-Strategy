@@ -67,7 +67,7 @@ const LATERAL_EASY_FRACTION: float = 0.40 # 横ズレがこの割合までは正
 # catch_prob_neutral は out/hit 判定、OAA 基準、失策 makeable の土台なので、守備者能力はここでは混ぜない。
 const CATCH_PROB_MIN: float = 0.04
 const CATCH_PROB_MAX: float = 0.985
-const CATCH_PROB_CALIBRATION_BIAS: float = 0.070
+const CATCH_PROB_CALIBRATION_BIAS: float = 0.090
 const CATCH_EV_SOFT: float = 78.0
 const CATCH_EV_HARD: float = 106.0
 const INFIELD_GROUNDER_DEPTH_EASY: float = 18.0

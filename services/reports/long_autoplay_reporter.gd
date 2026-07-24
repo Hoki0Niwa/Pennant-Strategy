@@ -667,6 +667,7 @@ func _leaderboards_for_season(season: PSSeason) -> Dictionary:
 	return {
 		"qualifier_pa": qualifier_pa,
 		"qualifier_outs": qualifier_outs,
+		"player_distributions": _player_distributions_for_season(records, qualifier_pa, qualifier_outs),
 		"batting": {
 			"average": _top_batters(records, team_by_id, "average", qualifier_pa, true),
 			"ops": _top_batters(records, team_by_id, "ops", qualifier_pa, true),
@@ -682,6 +683,60 @@ func _leaderboards_for_season(season: PSSeason) -> Dictionary:
 			"strikeouts": _top_pitchers(records, team_by_id, "strikeouts", 0, true),
 			"saves": _top_pitchers(records, team_by_id, "saves", 0, true),
 			"home_runs_per_nine": _top_pitchers(records, team_by_id, "home_runs_per_nine", qualifier_outs, false),
+		},
+	}
+
+
+func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifier_outs: int) -> Dictionary:
+	var batting_averages: Array = []
+	var batting_ops: Array = []
+	var pitcher_eras: Array = []
+	var pitcher_innings: Array = []
+	var starter_innings: Array = []
+	var starter_starts: Array = []
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if record.is_pitcher():
+			var pitcher_stats: PSPitcherStats = record.pitcher_stats
+			if pitcher_stats.starts >= 10:
+				starter_innings.append(pitcher_stats.innings_pitched())
+				starter_starts.append(float(pitcher_stats.starts))
+			if pitcher_stats.outs_pitched < qualifier_outs or pitcher_stats.outs_pitched <= 0:
+				continue
+			pitcher_eras.append(pitcher_stats.era())
+			pitcher_innings.append(pitcher_stats.innings_pitched())
+			continue
+		var batter_stats: PSBatterStats = record.batter_stats
+		if batter_stats.plate_appearances < qualifier_pa or batter_stats.at_bats <= 0:
+			continue
+		batting_averages.append(batter_stats.batting_average())
+		batting_ops.append(batter_stats.ops())
+	return {
+		"batters": {
+			"qualified_count": batting_averages.size(),
+			"average": _distribution_summary(batting_averages, 3),
+			"ops": _distribution_summary(batting_ops, 3),
+			"average_300_count": _count_at_least(batting_averages, 0.300),
+			"average_320_count": _count_at_least(batting_averages, 0.320),
+			"ops_850_count": _count_at_least(batting_ops, 0.850),
+			"ops_900_count": _count_at_least(batting_ops, 0.900),
+			"ops_950_count": _count_at_least(batting_ops, 0.950),
+			"ops_1000_count": _count_at_least(batting_ops, 1.000),
+		},
+		"pitchers": {
+			"qualified_count": pitcher_eras.size(),
+			"era": _distribution_summary(pitcher_eras, 2),
+			"innings_pitched": _distribution_summary(pitcher_innings, 1),
+			"starter_innings_pitched": _distribution_summary(starter_innings, 1),
+			"starter_starts": _distribution_summary(starter_starts, 0),
+			"innings_120_count": _count_at_least(starter_innings, 120.0),
+			"innings_130_count": _count_at_least(starter_innings, 130.0),
+			"innings_140_count": _count_at_least(starter_innings, 140.0),
+			"era_200_count": _count_at_most(pitcher_eras, 2.00),
+			"era_250_count": _count_at_most(pitcher_eras, 2.50),
+			"era_300_count": _count_at_most(pitcher_eras, 3.00),
 		},
 	}
 
@@ -1330,6 +1385,38 @@ func _mean(values: Array) -> float:
 	for value in values:
 		total += float(value)
 	return total / float(values.size())
+
+
+func _distribution_summary(values: Array, digits: int) -> Dictionary:
+	if values.is_empty():
+		return {"count": 0}
+	return {
+		"count": values.size(),
+		"min": _round_float(_min_value(values), digits),
+		"p10": _round_float(_percentile(values, 0.10), digits),
+		"p25": _round_float(_percentile(values, 0.25), digits),
+		"p50": _round_float(_percentile(values, 0.50), digits),
+		"p75": _round_float(_percentile(values, 0.75), digits),
+		"p90": _round_float(_percentile(values, 0.90), digits),
+		"max": _round_float(_max_value(values), digits),
+		"mean": _round_float(_mean(values), digits),
+	}
+
+
+func _count_at_least(values: Array, threshold: float) -> int:
+	var count: int = 0
+	for value in values:
+		if float(value) >= threshold:
+			count += 1
+	return count
+
+
+func _count_at_most(values: Array, threshold: float) -> int:
+	var count: int = 0
+	for value in values:
+		if float(value) <= threshold:
+			count += 1
+	return count
 
 
 func _percentile(values: Array, percentile: float) -> float:
