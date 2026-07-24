@@ -690,8 +690,16 @@ func _leaderboards_for_season(season: PSSeason) -> Dictionary:
 func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifier_outs: int) -> Dictionary:
 	var batting_averages: Array = []
 	var batting_ops: Array = []
+	var batter_walks: Array = []
+	var batter_strikeouts: Array = []
+	var batter_walk_rates: Array = []
+	var batter_strikeout_rates: Array = []
 	var pitcher_eras: Array = []
 	var pitcher_innings: Array = []
+	var pitcher_walks: Array = []
+	var pitcher_strikeouts: Array = []
+	var pitcher_walks_per_nine: Array = []
+	var pitcher_strikeouts_per_nine: Array = []
 	var starter_innings: Array = []
 	var starter_starts: Array = []
 	for record_row in records:
@@ -707,17 +715,29 @@ func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifi
 				continue
 			pitcher_eras.append(pitcher_stats.era())
 			pitcher_innings.append(pitcher_stats.innings_pitched())
+			pitcher_walks.append(float(pitcher_stats.walks))
+			pitcher_strikeouts.append(float(pitcher_stats.strikeouts))
+			pitcher_walks_per_nine.append(_safe_div(float(pitcher_stats.walks) * 27.0, float(pitcher_stats.outs_pitched)))
+			pitcher_strikeouts_per_nine.append(pitcher_stats.strikeouts_per_nine())
 			continue
 		var batter_stats: PSBatterStats = record.batter_stats
 		if batter_stats.plate_appearances < qualifier_pa or batter_stats.at_bats <= 0:
 			continue
 		batting_averages.append(batter_stats.batting_average())
 		batting_ops.append(batter_stats.ops())
+		batter_walks.append(float(batter_stats.walks))
+		batter_strikeouts.append(float(batter_stats.strikeouts))
+		batter_walk_rates.append(_safe_div(float(batter_stats.walks), float(batter_stats.plate_appearances)))
+		batter_strikeout_rates.append(_safe_div(float(batter_stats.strikeouts), float(batter_stats.plate_appearances)))
 	return {
 		"batters": {
 			"qualified_count": batting_averages.size(),
 			"average": _distribution_summary(batting_averages, 3),
 			"ops": _distribution_summary(batting_ops, 3),
+			"walks": _distribution_summary(batter_walks, 0),
+			"strikeouts": _distribution_summary(batter_strikeouts, 0),
+			"walk_rate": _distribution_summary(batter_walk_rates, 4),
+			"strikeout_rate": _distribution_summary(batter_strikeout_rates, 4),
 			"average_300_count": _count_at_least(batting_averages, 0.300),
 			"average_320_count": _count_at_least(batting_averages, 0.320),
 			"ops_850_count": _count_at_least(batting_ops, 0.850),
@@ -729,6 +749,10 @@ func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifi
 			"qualified_count": pitcher_eras.size(),
 			"era": _distribution_summary(pitcher_eras, 2),
 			"innings_pitched": _distribution_summary(pitcher_innings, 1),
+			"walks": _distribution_summary(pitcher_walks, 0),
+			"strikeouts": _distribution_summary(pitcher_strikeouts, 0),
+			"walks_per_nine": _distribution_summary(pitcher_walks_per_nine, 2),
+			"strikeouts_per_nine": _distribution_summary(pitcher_strikeouts_per_nine, 2),
 			"starter_innings_pitched": _distribution_summary(starter_innings, 1),
 			"starter_starts": _distribution_summary(starter_starts, 0),
 			"innings_120_count": _count_at_least(starter_innings, 120.0),
@@ -1223,6 +1247,8 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"home_runs_per_game": _round_float(_mean_nested(rows, ["season", "batting", "home_runs_per_game"]), 3),
 		"walks_per_game": _round_float(_mean_nested(rows, ["season", "batting", "walks_per_game"]), 3),
 		"strikeouts_per_game": _round_float(_mean_nested(rows, ["season", "batting", "strikeouts_per_game"]), 3),
+		"walk_rate": _round_float(_ratio_nested(rows, ["season", "batting", "walks"], ["season", "batting", "plate_appearances"]), 4),
+		"strikeout_rate": _round_float(_ratio_nested(rows, ["season", "batting", "strikeouts"], ["season", "batting", "plate_appearances"]), 4),
 		"era": _round_float(_mean_nested(rows, ["season", "pitching", "era"]), 2),
 		"whip": _round_float(_mean_nested(rows, ["season", "pitching", "whip"]), 3),
 		"strikeouts_per_nine": _round_float(_mean_nested(rows, ["season", "pitching", "strikeouts_per_nine"]), 2),
@@ -1259,6 +1285,15 @@ func _mean_nested(rows: Array, keys: Array) -> float:
 			continue
 		values.append(float(current))
 	return _mean(values)
+
+
+func _ratio_nested(rows: Array, numerator_keys: Array, denominator_keys: Array) -> float:
+	var numerator: float = 0.0
+	var denominator: float = 0.0
+	for row_value in rows:
+		numerator += _nested_float(row_value, numerator_keys)
+		denominator += _nested_float(row_value, denominator_keys)
+	return _safe_div(numerator, denominator)
 
 
 func _weighted_mean_nested(rows: Array, sum_keys: Array, count_keys: Array) -> float:

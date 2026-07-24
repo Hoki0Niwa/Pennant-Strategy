@@ -14,7 +14,7 @@
   "simulation": {
     "pa_probability": {
       "k_logit_base": -0.6524042174102638,
-      "bb_logit_base": -1.1475706271489265,
+      "bb_logit_base": -1.0343852840971538,
       "hbp_logit_base": -4.20058985013459,
       "league_bip_base": 0.72,
       "k_create_weight": 0.33,
@@ -24,8 +24,8 @@
       "framing_k_coef": 1.0,
       "gamecall_k_coef": 0.06,
       "tto_k_drop": 0.5,
-      "bb_create_weight": 0.4,
-      "bb_prevent_weight": 0.32,
+      "bb_create_weight": 0.5,
+      "bb_prevent_weight": 0.5,
       "framing_bb_coef": 1.0,
       "gamecall_bb_coef": 0.03,
       "tto_bb_drop": 0.4,

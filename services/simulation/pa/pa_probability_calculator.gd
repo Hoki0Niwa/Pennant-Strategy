@@ -24,7 +24,7 @@ const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY
 # (K_LOGIT_BASE = logit(0.34) - Pit_KCreate母平均*K_CREATE_WEIGHT + Bat_KAvoid母平均*K_AVOID_WEIGHT 等)。
 # BIP だけは能力補正を持たないため、確率のまま(較正で直接いじる基準率)。
 const K_LOGIT_BASE: float = -0.6524042174102638
-const BB_LOGIT_BASE: float = -1.1475706271489265
+const BB_LOGIT_BASE: float = -1.0343852840971538
 const HBP_LOGIT_BASE: float = -4.20058985013459
 const LEAGUE_BIP_BASE: float = 0.72  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
 # K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。
@@ -38,8 +38,8 @@ const FRAMING_K_COEF: float = 1.0         # 捕手フレーミングで得たス
 const GAMECALL_K_COEF: float = 0.06       # 捕手の配球(リード)が三振に効く係数。
 const TTO_K_DROP: float = 0.5             # 巡目ペナルティで奪三振が落ちる量。
 # BB スコア係数: 個々の能力(z)が四球 logit を動かす強さ。
-const BB_CREATE_WEIGHT: float = 0.4  # 打者の選球眼が四球を増やす強さ。
-const BB_PREVENT_WEIGHT: float = 0.32 # 投手の制球が四球を減らす強さ。
+const BB_CREATE_WEIGHT: float = 0.5  # 打者の選球眼が四球を増やす強さ。
+const BB_PREVENT_WEIGHT: float = 0.5 # 投手の制球が四球を減らす強さ。
 const FRAMING_BB_COEF: float = 1.0    # フレーミングで得たストライクが四球を押し下げる係数。
 const GAMECALL_BB_COEF: float = 0.03  # 捕手の配球が四球に効く係数。
 const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増える量。

@@ -22,6 +22,8 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 			"batting_average": _distribution(_float_values(batters, "batting_average"), 3),
 			"ops": _distribution(_float_values(batters, "ops"), 3),
 			"home_runs": _distribution(_float_values(batters, "home_runs"), 0),
+			"walks": _distribution(_float_values(batters, "walks"), 0),
+			"strikeouts": _distribution(_float_values(batters, "strikeouts"), 0),
 			"war": _distribution(_float_values(batters, "war"), 2),
 			"strikeout_rate": _distribution(_float_values(batters, "strikeout_rate"), 3),
 			"walk_rate": _distribution(_float_values(batters, "walk_rate"), 3),
@@ -34,6 +36,8 @@ static func balance_distributions(report: Dictionary) -> Dictionary:
 			"era_under_2_count": int(era_tail.get("era_under_2_count", 0)),
 			"era_under_2_by_team_max": int(era_tail.get("era_under_2_by_team_max", 0)),
 			"era_under_2_team_multi_count": int(era_tail.get("era_under_2_team_multi_count", 0)),
+			"walks": _distribution(_float_values(pitchers, "walks"), 0),
+			"strikeouts": _distribution(_float_values(pitchers, "strikeouts"), 0),
 			"strikeouts_per_nine": _distribution(_float_values(pitchers, "strikeouts_per_nine"), 2),
 			"walks_per_nine": _distribution(_float_values(pitchers, "walks_per_nine"), 2),
 			"home_runs_per_nine": _distribution(_float_values(pitchers, "home_runs_per_nine"), 2),
@@ -82,6 +86,10 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "runs_per_team_game", float(run_env.get("runs_per_team_game", 0.0)), 2.8, 5.2, 2.2, 6.2, "league scoring environment")
 	_add_range_check(checks, "league_ops", float(batting.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "league OPS")
 	_add_range_check(checks, "league_era", float(pitching.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "league ERA")
+	_add_range_check(checks, "league_batter_walk_rate", _safe_div(float(batting.get("walks", 0)), float(batting.get("plate_appearances", 0))), 0.072, 0.095, 0.060, 0.110, "league batter BB% (NPB 2015-23 mean 8.30%)")
+	_add_range_check(checks, "league_batter_strikeout_rate", _safe_div(float(batting.get("strikeouts", 0)), float(batting.get("plate_appearances", 0))), 0.175, 0.210, 0.150, 0.235, "league batter K% (NPB 2015-23 mean 19.31%)")
+	_add_range_check(checks, "league_pitcher_walks_per_nine", float(pitching.get("walks_per_nine", 0.0)), 2.70, 3.60, 2.30, 4.00, "league pitcher BB/9 (NPB 2015-23 mean 3.17)")
+	_add_range_check(checks, "league_pitcher_strikeouts_per_nine", float(pitching.get("strikeouts_per_nine", 0.0)), 6.80, 8.00, 6.20, 8.60, "league pitcher K/9 (NPB 2015-23 mean 7.37)")
 	_add_range_check(checks, "pitches_per_batter_faced", float(pitching.get("pitches_per_batter_faced", 0.0)), 3.45, 4.10, 3.25, 4.35, "pitch count environment")
 	_add_range_check(checks, "stolen_base_attempts_per_game", float(batting.get("stolen_base_attempts_per_game", 0.0)), 0.35, 1.40, 0.15, 2.20, "stolen base attempt volume")
 	# 走塁・守備イベントの頻度 (チーム試合あたり)。基準は NPB 2023 実測:
@@ -105,8 +113,24 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "qualified_batter_ops_p10", _dist_value(batter_dist, "ops", "p10"), 0.600, 0.710, 0.500, 0.760, "qualified batter OPS p10")
 	_add_range_check(checks, "qualified_batter_ops_p50", _dist_value(batter_dist, "ops", "p50"), 0.700, 0.820, 0.640, 0.880, "qualified batter OPS median")
 	_add_range_check(checks, "qualified_batter_ops_p90", _dist_value(batter_dist, "ops", "p90"), 0.860, 0.980, 0.800, 1.040, "qualified batter OPS p90")
+	_add_range_check(checks, "qualified_batter_walks_p50", _dist_value(batter_dist, "walks", "p50"), 38.0, 60.0, 28.0, 75.0, "qualified batter BB median (143-game season)")
+	_add_range_check(checks, "qualified_batter_strikeouts_p50", _dist_value(batter_dist, "strikeouts", "p50"), 70.0, 110.0, 55.0, 130.0, "qualified batter SO median (143-game season)")
+	_add_range_check(checks, "qualified_batter_walk_rate_p10", _dist_value(batter_dist, "walk_rate", "p10"), 0.045, 0.070, 0.025, 0.085, "qualified batter BB% p10")
+	_add_range_check(checks, "qualified_batter_walk_rate_p50", _dist_value(batter_dist, "walk_rate", "p50"), 0.075, 0.105, 0.055, 0.125, "qualified batter BB% median")
+	_add_range_check(checks, "qualified_batter_walk_rate_p90", _dist_value(batter_dist, "walk_rate", "p90"), 0.115, 0.165, 0.090, 0.200, "qualified batter BB% p90")
+	_add_range_check(checks, "qualified_batter_strikeout_rate_p10", _dist_value(batter_dist, "strikeout_rate", "p10"), 0.090, 0.125, 0.070, 0.150, "qualified batter K% p10")
+	_add_range_check(checks, "qualified_batter_strikeout_rate_p50", _dist_value(batter_dist, "strikeout_rate", "p50"), 0.145, 0.180, 0.120, 0.210, "qualified batter K% median")
+	_add_range_check(checks, "qualified_batter_strikeout_rate_p90", _dist_value(batter_dist, "strikeout_rate", "p90"), 0.210, 0.255, 0.180, 0.300, "qualified batter K% p90")
 	_add_range_check(checks, "qualified_pitcher_era_p10", _dist_value(pitcher_dist, "era", "p10"), 1.70, 2.60, 1.20, 3.10, "qualified pitcher ERA p10")
 	_add_range_check(checks, "qualified_pitcher_era_p50", _dist_value(pitcher_dist, "era", "p50"), 2.50, 3.50, 2.10, 3.90, "qualified pitcher ERA median")
+	_add_range_check(checks, "qualified_pitcher_walks_p50", _dist_value(pitcher_dist, "walks", "p50"), 32.0, 58.0, 22.0, 72.0, "qualified pitcher BB median (143-game season)")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_p50", _dist_value(pitcher_dist, "strikeouts", "p50"), 105.0, 155.0, 80.0, 180.0, "qualified pitcher SO median (143-game season)")
+	_add_range_check(checks, "qualified_pitcher_walks_per_nine_p10", _dist_value(pitcher_dist, "walks_per_nine", "p10"), 0.90, 2.20, 0.50, 2.80, "qualified pitcher BB/9 p10")
+	_add_range_check(checks, "qualified_pitcher_walks_per_nine_p50", _dist_value(pitcher_dist, "walks_per_nine", "p50"), 2.00, 2.90, 1.50, 3.50, "qualified pitcher BB/9 median")
+	_add_range_check(checks, "qualified_pitcher_walks_per_nine_p90", _dist_value(pitcher_dist, "walks_per_nine", "p90"), 2.80, 3.80, 2.20, 4.50, "qualified pitcher BB/9 p90")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_per_nine_p10", _dist_value(pitcher_dist, "strikeouts_per_nine", "p10"), 5.10, 6.60, 4.20, 7.20, "qualified pitcher K/9 p10")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_per_nine_p50", _dist_value(pitcher_dist, "strikeouts_per_nine", "p50"), 6.50, 8.00, 5.50, 8.80, "qualified pitcher K/9 median")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_per_nine_p90", _dist_value(pitcher_dist, "strikeouts_per_nine", "p90"), 8.60, 10.70, 7.50, 12.00, "qualified pitcher K/9 p90")
 	_add_range_check(checks, "qualified_pitcher_ip_p10", _dist_value(pitcher_dist, "innings_pitched", "p10"), 143.0, 153.0, 143.0, 165.0, "qualified pitcher innings p10")
 	_add_range_check(checks, "qualified_pitcher_ip_p50", _dist_value(pitcher_dist, "innings_pitched", "p50"), 148.0, 172.0, 143.0, 185.0, "qualified pitcher innings median")
 	_add_max_check(checks, "batter_ops_max", _dist_value(batter_dist, "ops", "max"), 1.20, 1.35, "qualified batter OPS max")
@@ -177,12 +201,28 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 			"batter_ops_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops", "p10"]), 3),
 			"batter_ops_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops", "p50"]), 3),
 			"batter_ops_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops", "p90"]), 3),
+			"batter_walks_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "walks", "p50"]), 1),
+			"batter_strikeouts_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "strikeouts", "p50"]), 1),
+			"batter_walk_rate_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "walk_rate", "p10"]), 4),
+			"batter_walk_rate_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "walk_rate", "p50"]), 4),
+			"batter_walk_rate_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "walk_rate", "p90"]), 4),
+			"batter_strikeout_rate_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "strikeout_rate", "p10"]), 4),
+			"batter_strikeout_rate_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "strikeout_rate", "p50"]), 4),
+			"batter_strikeout_rate_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "strikeout_rate", "p90"]), 4),
 			"batter_ops_900_count": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops_900_count"]), 1),
 			"batter_ops_950_count": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "batters", "ops_950_count"]), 1),
 			"qualified_pitchers": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "qualified_count"]), 1),
 			"pitcher_era_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "era", "p10"]), 2),
 			"pitcher_era_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "era", "p50"]), 2),
 			"pitcher_era_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "era", "p90"]), 2),
+			"pitcher_walks_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "walks", "p50"]), 1),
+			"pitcher_strikeouts_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "strikeouts", "p50"]), 1),
+			"pitcher_walks_per_nine_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "walks_per_nine", "p10"]), 2),
+			"pitcher_walks_per_nine_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "walks_per_nine", "p50"]), 2),
+			"pitcher_walks_per_nine_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "walks_per_nine", "p90"]), 2),
+			"pitcher_strikeouts_per_nine_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "strikeouts_per_nine", "p10"]), 2),
+			"pitcher_strikeouts_per_nine_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "strikeouts_per_nine", "p50"]), 2),
+			"pitcher_strikeouts_per_nine_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "strikeouts_per_nine", "p90"]), 2),
 			"pitcher_ip_p10": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "p10"]), 1),
 			"pitcher_ip_p50": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "p50"]), 1),
 			"pitcher_ip_p90": _distribution(_nested_values(rows, ["leaderboards", "player_distributions", "pitchers", "innings_pitched", "p90"]), 1),
@@ -239,6 +279,10 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "fa_declared_per_year", _dist_value(flow_dist, "fa_declared", "mean"), 1.0, 10.0, 0.0, 20.0, "FA declarations per year")
 	_add_range_check(checks, "last10_ops", float(last_10.get("ops", 0.0)), 0.620, 0.760, 0.560, 0.840, "last-10-year OPS")
 	_add_range_check(checks, "last10_era", float(last_10.get("era", 0.0)), 2.70, 4.60, 2.20, 5.40, "last-10-year ERA")
+	_add_range_check(checks, "last10_batter_walk_rate", float(last_10.get("walk_rate", 0.0)), 0.072, 0.095, 0.060, 0.110, "last-10-year batter BB%")
+	_add_range_check(checks, "last10_batter_strikeout_rate", float(last_10.get("strikeout_rate", 0.0)), 0.175, 0.210, 0.150, 0.235, "last-10-year batter K%")
+	_add_range_check(checks, "last10_pitcher_walks_per_nine", float(last_10.get("walks_per_nine", 0.0)), 2.70, 3.60, 2.30, 4.00, "last-10-year pitcher BB/9")
+	_add_range_check(checks, "last10_pitcher_strikeouts_per_nine", float(last_10.get("strikeouts_per_nine", 0.0)), 6.80, 8.00, 6.20, 8.60, "last-10-year pitcher K/9")
 	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.0, 30.0, 23.0, 32.0, "last-10-year average age")
 	_add_range_check(checks, "last10_average_overall", float(last_10.get("average_overall", 0.0)), 66.0, 75.0, 62.0, 80.0, "last-10-year average overall")
 	_add_range_check(checks, "qualified_batters_mean", _dist_value(player_dist, "qualified_batters", "mean"), 48.0, 70.0, 36.0, 82.0, "qualified batters per year (NPB 2015-23: 48-61)")
@@ -248,12 +292,28 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "qualified_batter_ops_p10_mean", _dist_value(player_dist, "batter_ops_p10", "mean"), 0.600, 0.710, 0.500, 0.760, "yearly qualified-batter OPS p10")
 	_add_range_check(checks, "qualified_batter_ops_p50_mean", _dist_value(player_dist, "batter_ops_p50", "mean"), 0.700, 0.820, 0.640, 0.880, "yearly qualified-batter OPS median")
 	_add_range_check(checks, "qualified_batter_ops_p90_mean", _dist_value(player_dist, "batter_ops_p90", "mean"), 0.860, 0.980, 0.800, 1.040, "yearly qualified-batter OPS p90")
+	_add_range_check(checks, "qualified_batter_walks_p50_mean", _dist_value(player_dist, "batter_walks_p50", "mean"), 38.0, 60.0, 28.0, 75.0, "yearly qualified-batter BB median")
+	_add_range_check(checks, "qualified_batter_strikeouts_p50_mean", _dist_value(player_dist, "batter_strikeouts_p50", "mean"), 70.0, 110.0, 55.0, 130.0, "yearly qualified-batter SO median")
+	_add_range_check(checks, "qualified_batter_walk_rate_p10_mean", _dist_value(player_dist, "batter_walk_rate_p10", "mean"), 0.045, 0.070, 0.025, 0.085, "yearly qualified-batter BB% p10")
+	_add_range_check(checks, "qualified_batter_walk_rate_p50_mean", _dist_value(player_dist, "batter_walk_rate_p50", "mean"), 0.075, 0.105, 0.055, 0.125, "yearly qualified-batter BB% median")
+	_add_range_check(checks, "qualified_batter_walk_rate_p90_mean", _dist_value(player_dist, "batter_walk_rate_p90", "mean"), 0.115, 0.165, 0.090, 0.200, "yearly qualified-batter BB% p90")
+	_add_range_check(checks, "qualified_batter_strikeout_rate_p10_mean", _dist_value(player_dist, "batter_strikeout_rate_p10", "mean"), 0.090, 0.125, 0.070, 0.150, "yearly qualified-batter K% p10")
+	_add_range_check(checks, "qualified_batter_strikeout_rate_p50_mean", _dist_value(player_dist, "batter_strikeout_rate_p50", "mean"), 0.145, 0.180, 0.120, 0.210, "yearly qualified-batter K% median")
+	_add_range_check(checks, "qualified_batter_strikeout_rate_p90_mean", _dist_value(player_dist, "batter_strikeout_rate_p90", "mean"), 0.210, 0.255, 0.180, 0.300, "yearly qualified-batter K% p90")
 	_add_range_check(checks, "qualified_batter_ops_900_mean", _dist_value(player_dist, "batter_ops_900_count", "mean"), 2.0, 12.0, 0.0, 18.0, "qualified batters with OPS .900 or higher")
 	_add_range_check(checks, "qualified_batter_ops_950_mean", _dist_value(player_dist, "batter_ops_950_count", "mean"), 1.0, 8.0, 0.0, 12.0, "qualified batters with OPS .950 or higher")
 	_add_range_check(checks, "qualified_pitchers_mean", _dist_value(player_dist, "qualified_pitchers", "mean"), 14.0, 28.0, 6.0, 38.0, "qualified pitchers per year (NPB 2015-23: 14-26)")
 	_add_range_check(checks, "qualified_pitcher_era_p10_mean", _dist_value(player_dist, "pitcher_era_p10", "mean"), 1.70, 2.60, 1.20, 3.10, "yearly qualified-pitcher ERA p10")
 	_add_range_check(checks, "qualified_pitcher_era_p50_mean", _dist_value(player_dist, "pitcher_era_p50", "mean"), 2.50, 3.50, 2.10, 3.90, "yearly qualified-pitcher ERA median")
 	_add_range_check(checks, "qualified_pitcher_era_p90_mean", _dist_value(player_dist, "pitcher_era_p90", "mean"), 3.20, 4.30, 2.70, 4.80, "yearly qualified-pitcher ERA p90")
+	_add_range_check(checks, "qualified_pitcher_walks_p50_mean", _dist_value(player_dist, "pitcher_walks_p50", "mean"), 32.0, 58.0, 22.0, 72.0, "yearly qualified-pitcher BB median")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_p50_mean", _dist_value(player_dist, "pitcher_strikeouts_p50", "mean"), 105.0, 155.0, 80.0, 180.0, "yearly qualified-pitcher SO median")
+	_add_range_check(checks, "qualified_pitcher_walks_per_nine_p10_mean", _dist_value(player_dist, "pitcher_walks_per_nine_p10", "mean"), 0.90, 2.20, 0.50, 2.80, "yearly qualified-pitcher BB/9 p10")
+	_add_range_check(checks, "qualified_pitcher_walks_per_nine_p50_mean", _dist_value(player_dist, "pitcher_walks_per_nine_p50", "mean"), 2.00, 2.90, 1.50, 3.50, "yearly qualified-pitcher BB/9 median")
+	_add_range_check(checks, "qualified_pitcher_walks_per_nine_p90_mean", _dist_value(player_dist, "pitcher_walks_per_nine_p90", "mean"), 2.80, 3.80, 2.20, 4.50, "yearly qualified-pitcher BB/9 p90")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_per_nine_p10_mean", _dist_value(player_dist, "pitcher_strikeouts_per_nine_p10", "mean"), 5.10, 6.60, 4.20, 7.20, "yearly qualified-pitcher K/9 p10")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_per_nine_p50_mean", _dist_value(player_dist, "pitcher_strikeouts_per_nine_p50", "mean"), 6.50, 8.00, 5.50, 8.80, "yearly qualified-pitcher K/9 median")
+	_add_range_check(checks, "qualified_pitcher_strikeouts_per_nine_p90_mean", _dist_value(player_dist, "pitcher_strikeouts_per_nine_p90", "mean"), 8.60, 10.70, 7.50, 12.00, "yearly qualified-pitcher K/9 p90")
 	_add_range_check(checks, "qualified_pitcher_ip_p10_mean", _dist_value(player_dist, "pitcher_ip_p10", "mean"), 143.0, 153.0, 143.0, 165.0, "yearly qualified-pitcher innings p10")
 	_add_range_check(checks, "qualified_pitcher_ip_p50_mean", _dist_value(player_dist, "pitcher_ip_p50", "mean"), 148.0, 172.0, 143.0, 185.0, "yearly qualified-pitcher innings median")
 	_add_range_check(checks, "qualified_pitcher_ip_p90_mean", _dist_value(player_dist, "pitcher_ip_p90", "mean"), 165.0, 195.0, 150.0, 210.0, "yearly qualified-pitcher innings p90")
