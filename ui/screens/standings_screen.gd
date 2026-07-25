@@ -1,7 +1,8 @@
 extends "res://ui/components/dashboard_screen.gd"
 
 # 順位表画面。現在シーズンのリーグ順位、貯金推移、交流戦順位を同時に表示する。
-# - 上段: 第1/第2リーグの順位表 (チーム成績の総合指標つき、全幅)。
+# - 上段: 第1/第2リーグの順位表 (チーム成績の総合指標つき、全幅)。「差」列は 2 位以下がゲーム差、
+#   首位は優勝マジック / 優勝決定表示を兼ねる (計算は PSPennantRace)。
 # - 下段左: 貯金・借金の推移グラフ (各球団の wins-losses を試合数軸で折れ線描画)。
 # - 下段右: 交流戦順位表 (is_interleague 試合のみ集計、全12球団の混合順位)。
 # 重い集計 (チーム指標 / 貯金時系列 / 交流戦) は _refresh で1度だけ行いキャッシュ、_draw は描画専念。
@@ -58,6 +59,8 @@ const INTER_COLUMNS: Array = [
 # 集計キャッシュ
 var _status_text: String = ""
 var _entries_by_league: Dictionary = {}   # {league_key: Array of row 表示用 Dictionary}
+var _remaining_by_team: Dictionary = {}    # {team_id: 残り試合数}
+var _head_to_head: Dictionary = {}         # {team_id: {opponent_id: 残り直接対決数}}
 var _interleague_rows: Array = []          # 交流戦 行 Dictionary (順位つき)
 var _interleague_played: bool = false
 var _balance_by_team: Dictionary = {}      # {team_id: PackedVector2Array(game_no, balance)}
@@ -238,6 +241,8 @@ func _set_chart_league(league_key: String) -> void:
 func _refresh() -> void:
 	_status_text = ""
 	_entries_by_league = {}
+	_remaining_by_team = {}
+	_head_to_head = {}
 	_interleague_rows = []
 	_interleague_played = false
 	_balance_by_team = {}
@@ -250,6 +255,10 @@ func _refresh() -> void:
 		season.year, season.season_number,
 		SeasonCalendar.day_status_label(season, season.current_day), season.games_remaining(),
 	]
+
+	# 残り試合数と直接対決残数は日程 1 走査でまとめて数え、両リーグの順位表で使い回す。
+	_remaining_by_team = PSPennantRace.remaining_by_team(season)
+	_head_to_head = PSPennantRace.head_to_head_remaining(season)
 
 	for league_row in LEAGUES:
 		var key: String = str((league_row as Dictionary)["key"])
@@ -311,7 +320,7 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 			"team": team,
 			"stats": season.standings[team_id] as PSStats,
 			"metrics": _team_metrics(int(team_id), season),
-			"remaining": season.team_games_remaining(int(team_id)),
+			"remaining": int(_remaining_by_team.get(int(team_id), 0)),
 		})
 
 	entries.sort_custom(func(a, b) -> bool:
@@ -323,6 +332,8 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 	)
 
 	var leader: PSStats = ((entries[0] as Dictionary)["stats"] as PSStats) if not entries.is_empty() else null
+	var magic_info: Dictionary = PSPennantRace.magic_number(_magic_input(entries), _head_to_head)
+	var clinched: bool = bool(magic_info.get("clinched", false))
 	var self_id: int = AppState.selected_team_id
 	var rows: Array = []
 	var rank: int = 1
@@ -332,12 +343,23 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 		var stats: PSStats = entry["stats"] as PSStats
 		var metrics: Dictionary = entry["metrics"] as Dictionary
 		var has_pitch: bool = int(metrics.get("outs_pitched", 0)) > 0
+		# 「差」列は 2 位以下がゲーム差、首位は優勝マジックを兼ねる (優勝決定 = AMBER の「優勝」、
+		# 点灯中 = BLUE の「M<数字>」、点灯前は gb 書式の "-")。
+		var gb_value: Variant = 0.0 if (rank == 1 or leader == null) else _game_back(leader, stats)
+		var gb_color: Color = TEXT
+		if rank == 1:
+			if clinched:
+				gb_value = "優勝"
+				gb_color = AMBER
+			elif bool(magic_info.get("lit", false)):
+				gb_value = "M%d" % int(magic_info.get("magic", 0))
+				gb_color = BLUE
 		rows.append({
 			"rank": rank, "team": team.name, "team_id": team.id, "color": team.color,
 			"is_self": team.id == self_id, "is_leader": rank == 1,
 			"g": stats.games, "w": stats.wins, "l": stats.losses, "d": stats.draws,
 			"pct": stats.win_rate(),
-			"gb": 0.0 if (rank == 1 or leader == null) else _game_back(leader, stats),
+			"gb": gb_value, "gb_color": gb_color,
 			"rem": int(entry["remaining"]),
 			"rs": stats.runs_scored, "ra": stats.runs_allowed, "diff": stats.runs_scored - stats.runs_allowed,
 			"avg": float(metrics.get("batting_average", 0.0)),
@@ -349,6 +371,20 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 		})
 		rank += 1
 	return rows
+
+
+# 優勝マジック計算 (PSPennantRace) が要求する形へ順位順の entries を落とし込む。
+func _magic_input(entries: Array) -> Array:
+	var out: Array = []
+	for entry_value in entries:
+		var entry: Dictionary = entry_value as Dictionary
+		var stats: PSStats = entry["stats"] as PSStats
+		out.append({
+			"team_id": (entry["team"] as PSTeam).id,
+			"wins": stats.wins, "losses": stats.losses,
+			"remaining": int(entry["remaining"]),
+		})
+	return out
 
 
 # 各球団の貯金(=勝-敗)を試合消化順に積み上げた時系列を作る。schedule は day 昇順前提。

@@ -662,3 +662,99 @@ func _assert_consistent_series(series_games: Array) -> void:
 					"Series skips %s but it is not a holiday" % gap_date
 				).is_false()
 		prev_date = date_text
+
+
+# ============================================================ 優勝マジック (PSPennantRace)
+
+# ranked 用のヘルパ。勝率降順で並べた前提の入力を組み立てる。
+func _race_row(team_id: int, wins: int, losses: int, remaining: int) -> Dictionary:
+	return {"team_id": team_id, "wins": wins, "losses": losses, "remaining": remaining}
+
+
+func test_pennant_magic_lights_only_when_rivals_lose_self_clinch() -> void:
+	# 首位 1 が大きく抜け、2 位以下は残り全勝しても勝率で届かない (= 自力優勝消滅) 状態。
+	var ranked: Array = [
+		_race_row(1, 80, 45, 18),
+		_race_row(2, 62, 63, 18),
+		_race_row(3, 60, 65, 18),
+	]
+	var head_to_head: Dictionary = {1: {2: 6, 3: 6}, 2: {1: 6, 3: 6}, 3: {1: 6, 2: 6}}
+	var info: Dictionary = PSPennantRace.magic_number(ranked, head_to_head)
+
+	assert_bool(bool(info.get("lit", false))).is_true()
+	assert_bool(bool(info.get("clinched", false))).is_false()
+	# 2 位の最大 80 勝に対し、首位は残り全敗でも 80 勝 63 敗 = .559 で並ばれない 1 勝が必要。
+	assert_int(int(info.get("magic", 0))).is_equal(1)
+
+
+func test_pennant_magic_stays_dark_while_a_rival_can_self_clinch() -> void:
+	# 混戦。2 位は直接対決を全勝すれば首位を逆転できるのでマジックは点灯しない。
+	var ranked: Array = [
+		_race_row(1, 70, 55, 18),
+		_race_row(2, 68, 57, 18),
+	]
+	var head_to_head: Dictionary = {1: {2: 6}, 2: {1: 6}}
+	var info: Dictionary = PSPennantRace.magic_number(ranked, head_to_head)
+
+	assert_bool(bool(info.get("lit", false))).is_false()
+	assert_bool(bool(info.get("clinched", false))).is_false()
+	assert_bool(PSPennantRace.has_self_clinch_chance(ranked, 1, head_to_head)).is_true()
+
+
+func test_pennant_magic_reaches_zero_and_marks_clinched() -> void:
+	# 2 位が残り全勝しても首位の現時点の勝率に届かない = 優勝決定。
+	var ranked: Array = [
+		_race_row(1, 85, 40, 18),
+		_race_row(2, 60, 65, 18),
+	]
+	var head_to_head: Dictionary = {1: {2: 6}, 2: {1: 6}}
+	var info: Dictionary = PSPennantRace.magic_number(ranked, head_to_head)
+
+	assert_bool(bool(info.get("clinched", false))).is_true()
+	assert_int(int(info.get("magic", 0))).is_equal(0)
+	assert_bool(bool(info.get("lit", false))).is_false()
+
+
+func test_pennant_magic_treats_finished_season_tie_as_clinched() -> void:
+	# 全日程消化。勝率同率でも首位表示の球団を優勝として扱う (延長の目が無いため)。
+	var ranked: Array = [
+		_race_row(1, 70, 70, 0),
+		_race_row(2, 70, 70, 0),
+	]
+	var info: Dictionary = PSPennantRace.magic_number(ranked, {1: {}, 2: {}})
+
+	assert_bool(bool(info.get("clinched", false))).is_true()
+
+
+func test_pennant_magic_counts_draws_out_of_the_win_rate_denominator() -> void:
+	# 引き分けの多い球団は分母が小さく勝率が上がるため、勝利数だけの比較よりマジックは大きくなる。
+	var ranked: Array = [
+		_race_row(1, 72, 60, 11),
+		_race_row(2, 66, 52, 11),   # 引き分け 14 で決着数が少ない
+	]
+	var head_to_head: Dictionary = {1: {2: 4}, 2: {1: 4}}
+	var info: Dictionary = PSPennantRace.magic_number(ranked, head_to_head)
+	var wins_only_magic: int = 66 + 11 - 72 + 1
+
+	assert_int(int(info.get("magic", 0))).is_greater(wins_only_magic)
+
+
+func test_pennant_race_counts_remaining_games_from_schedule() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.setup([1, 2, 3])
+	season.schedule = [
+		{"away_team_id": 1, "home_team_id": 2, "played": true},
+		{"away_team_id": 1, "home_team_id": 2, "played": false},
+		{"away_team_id": 1, "home_team_id": 3, "played": false},
+		{"away_team_id": 2, "home_team_id": 3, "played": false},
+	]
+
+	var remaining: Dictionary = PSPennantRace.remaining_by_team(season)
+	assert_int(int(remaining[1])).is_equal(2)
+	assert_int(int(remaining[2])).is_equal(2)
+	assert_int(int(remaining[3])).is_equal(2)
+
+	var head_to_head: Dictionary = PSPennantRace.head_to_head_remaining(season)
+	assert_int(int((head_to_head[1] as Dictionary).get(2, 0))).is_equal(1)
+	assert_int(int((head_to_head[2] as Dictionary).get(1, 0))).is_equal(1)
+	assert_int(int((head_to_head[3] as Dictionary).get(1, 0))).is_equal(1)
