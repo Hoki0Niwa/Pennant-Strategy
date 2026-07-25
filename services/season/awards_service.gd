@@ -8,6 +8,11 @@ const QUALIFIER_OUTS_PER_GAME: float = 3.0
 const COUNTING_TITLE_MIN_PA: int = 50
 const PITCHER_EXCLUDE_PA: int = 30
 const WIN_RATE_MIN_DECISIONS: int = 8
+# ゴールデングラブの守備資格: 1試合平均このイニング数以上を主守備位置で守った選手のみ候補。
+# 満たす選手がいなければ守備機会のある選手へフォールバックしてスロットを埋める。
+const GOLDEN_GLOVE_MIN_INNINGS_PER_GAME: float = 3.0
+# ベストナイン投手枠の最低登板量 (規定投球回の半分)。規定に届かない好リリーフも WAR で拾う。
+const BEST_NINE_PITCHER_MIN_OUTS_FACTOR: float = 0.5
 
 
 static func calculate(season: PSSeason, teams: Array) -> PSAwards:
@@ -69,6 +74,11 @@ static func calculate(season: PSSeason, teams: Array) -> PSAwards:
 		else:
 			awards.mvp_pacific_player_id = mvp_id
 			awards.rookie_pacific_player_id = rookie_id
+
+		# ベストナイン (打撃ベース、DH はリーグ設定に従う) / ゴールデングラブ (守備ベース)。
+		var dh_enabled: bool = AppState.is_dh_enabled_for_league(league_key)
+		awards.best_nine[league_key] = _pick_best_nine(league_records, war_ctx, qualifier_pa, qualifier_outs, dh_enabled)
+		awards.golden_glove[league_key] = _pick_golden_glove(league_records, war_ctx, qualifier_outs, max_games)
 
 	return awards
 
@@ -257,15 +267,213 @@ static func _mvp_score(record: PSPlayerSeasonRecord, qualifier_pa: int, qualifie
 
 
 # 新人王 (years == 1) も WAR ベースで選出。MVP より緩めの qualifier (PA 100 / outs 30)。
+# 外国人選手は新人王の対象外 (海外プロ経験を持つため NPB でも資格がない扱い)。
 static func _pick_rookie(records: Array, war_ctx: Dictionary) -> int:
 	var best_score: float = -1e9
 	var best_id: int = 0
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record.years != 1:
+		if record.years != 1 or record.foreign_player:
 			continue
 		var score: float = _mvp_score(record, 100, 30, war_ctx)
 		if score > best_score:
 			best_score = score
 			best_id = record.player_id
 	return best_id
+
+
+# ============================================================ ベストナイン / ゴールデングラブ
+
+# ベストナイン: 各守備位置で OPS 最上位の野手を選ぶ (投手枠のみ WAR)。担当位置は主守備位置
+# (advanced_stats.primary_uzr_position) で判定し、外野3枠は左中右を集約して上位3人、
+# DH 枠は守備機会ゼロ (= 専任打者) の中から選ぶ。返り値は PSAwards.BEST_NINE_SLOT_POSITIONS 順の
+# Array[{pid:int, value:String}] (10枠)。守備は問わない打撃タイトル的な選出。
+static func _pick_best_nine(records: Array, war_ctx: Dictionary, qualifier_pa: int, qualifier_outs: int, dh_enabled: bool) -> Array:
+	var batters_by_pos: Dictionary = {}   # position(1..7、外野は7へ集約) → Array[{pid, ops, pa}]
+	var dh_pool: Array = []               # 専任打者 (守備機会ゼロ)
+	var pitchers: Array = []              # {pid, war}
+	var min_pitcher_outs: int = maxi(1, int(round(float(qualifier_outs) * BEST_NINE_PITCHER_MIN_OUTS_FACTOR)))
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if record.is_pitcher():
+			var ps: PSPitcherStats = record.pitcher_stats
+			if ps != null and ps.outs_pitched >= min_pitcher_outs:
+				var war: float = float(WarCalculator.season_war(record, war_ctx).get("war", 0.0))
+				pitchers.append({"pid": record.player_id, "war": war})
+			continue
+		var bs: PSBatterStats = record.batter_stats
+		if bs == null or bs.at_bats <= 0:
+			continue
+		var pos: int = _primary_position(record)
+		var entry: Dictionary = {"pid": record.player_id, "ops": bs.ops(), "pa": bs.plate_appearances}
+		if pos >= 7 and pos <= 9:
+			_append_to(batters_by_pos, 7, entry)
+		elif pos >= 1 and pos <= 6:
+			_append_to(batters_by_pos, pos, entry)
+		else:
+			# 守備機会ゼロ / DH(10) は専任打者として DH 枠候補にする。
+			dh_pool.append(entry)
+
+	var of_cells: Array = _best_nine_batter_cells(batters_by_pos.get(7, []) as Array, qualifier_pa, 3)
+	var result: Array = []
+	var of_index: int = 0
+	for slot_value in PSAwards.BEST_NINE_SLOT_POSITIONS:
+		var slot_pos: int = int(slot_value)
+		match slot_pos:
+			1:
+				result.append(_best_nine_pitcher_cell(pitchers))
+			7:
+				result.append(of_cells[of_index] if of_index < of_cells.size() else _empty_award_cell())
+				of_index += 1
+			10:
+				if dh_enabled:
+					var dh_cells: Array = _best_nine_batter_cells(dh_pool, qualifier_pa, 1)
+					result.append(dh_cells[0] if not dh_cells.is_empty() else _empty_award_cell())
+				else:
+					result.append(_empty_award_cell())
+			_:
+				var cells: Array = _best_nine_batter_cells(batters_by_pos.get(slot_pos, []) as Array, qualifier_pa, 1)
+				result.append(cells[0] if not cells.is_empty() else _empty_award_cell())
+	return result
+
+
+# プール (打者候補) から OPS 上位 count 人を {pid, value} で返す。規定打席到達者を優先し、
+# いなければ 50 打席以上へフォールバックしてスロットを埋める。
+static func _best_nine_batter_cells(pool: Array, qualifier_pa: int, count: int) -> Array:
+	var qualified: Array = pool.filter(func(e: Dictionary) -> bool: return int(e.get("pa", 0)) >= qualifier_pa)
+	if qualified.is_empty():
+		qualified = pool.filter(func(e: Dictionary) -> bool: return int(e.get("pa", 0)) >= COUNTING_TITLE_MIN_PA)
+	qualified.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.get("ops", 0.0)) > float(b.get("ops", 0.0)))
+	var out: Array = []
+	for i in range(mini(count, qualified.size())):
+		var e: Dictionary = qualified[i] as Dictionary
+		out.append({"pid": int(e.get("pid", 0)), "value": _ops_text(float(e.get("ops", 0.0)))})
+	return out
+
+
+static func _best_nine_pitcher_cell(pitchers: Array) -> Dictionary:
+	if pitchers.is_empty():
+		return _empty_award_cell()
+	pitchers.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.get("war", 0.0)) > float(b.get("war", 0.0)))
+	var top: Dictionary = pitchers[0] as Dictionary
+	return {"pid": int(top.get("pid", 0)), "value": "%.1f WAR" % float(top.get("war", 0.0))}
+
+
+# ゴールデングラブ: 各守備位置で守備ラン (ポジション別センタリング UZR) 最上位の選手。
+# 外野3枠は左中右を集約して上位3人。主守備位置での守備イニングが基準未満の選手は原則除外し、
+# 該当者がいなければ守備機会のある選手へフォールバックする。返り値は
+# PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS 順の Array[{pid:int, value:String}] (9枠)。
+static func _pick_golden_glove(records: Array, war_ctx: Dictionary, qualifier_outs: int, max_games: int) -> Array:
+	var min_innings: float = float(max_games) * GOLDEN_GLOVE_MIN_INNINGS_PER_GAME
+	var fielders_by_pos: Dictionary = {}   # pos(2..7、外野は7へ集約) → Array[{pid, value, innings}]
+	var pitchers: Array = []               # {pid, value, outs}
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		var ad: PSAdvancedStats = record.advanced_stats
+		if ad == null:
+			continue
+		if record.is_pitcher():
+			var ps: PSPitcherStats = record.pitcher_stats
+			if ps == null or ps.outs_pitched <= 0:
+				continue
+			var pd: Dictionary = _centered_defense(ad, war_ctx, 1)
+			if int(pd.get("chances", 0)) <= 0:
+				continue
+			pitchers.append({"pid": record.player_id, "value": float(pd.get("value", 0.0)), "outs": ps.outs_pitched})
+			continue
+		var pos: int = ad.primary_uzr_position()
+		if pos < 2 or pos > 9:
+			continue
+		var fd: Dictionary = _centered_defense(ad, war_ctx, pos)
+		if int(fd.get("chances", 0)) <= 0:
+			continue
+		var bucket_pos: int = 7 if pos >= 7 else pos
+		_append_to(fielders_by_pos, bucket_pos, {"pid": record.player_id, "value": float(fd.get("value", 0.0)), "innings": record.defensive_innings_at(pos)})
+
+	var of_cells: Array = _golden_glove_cells(fielders_by_pos.get(7, []) as Array, min_innings, 3)
+	var result: Array = []
+	var of_index: int = 0
+	for slot_value in PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS:
+		var slot_pos: int = int(slot_value)
+		match slot_pos:
+			1:
+				result.append(_golden_glove_pitcher_cell(pitchers, qualifier_outs))
+			7:
+				result.append(of_cells[of_index] if of_index < of_cells.size() else _empty_award_cell())
+				of_index += 1
+			_:
+				var cells: Array = _golden_glove_cells(fielders_by_pos.get(slot_pos, []) as Array, min_innings, 1)
+				result.append(cells[0] if not cells.is_empty() else _empty_award_cell())
+	return result
+
+
+static func _golden_glove_cells(pool: Array, min_innings: float, count: int) -> Array:
+	var qualified: Array = pool.filter(func(e: Dictionary) -> bool: return float(e.get("innings", 0.0)) >= min_innings)
+	if qualified.is_empty():
+		qualified = pool.duplicate()
+	qualified.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.get("value", 0.0)) > float(b.get("value", 0.0)))
+	var out: Array = []
+	for i in range(mini(count, qualified.size())):
+		var e: Dictionary = qualified[i] as Dictionary
+		out.append({"pid": int(e.get("pid", 0)), "value": _defense_text(float(e.get("value", 0.0)))})
+	return out
+
+
+static func _golden_glove_pitcher_cell(pitchers: Array, qualifier_outs: int) -> Dictionary:
+	if pitchers.is_empty():
+		return _empty_award_cell()
+	var qualified: Array = pitchers.filter(func(e: Dictionary) -> bool: return int(e.get("outs", 0)) >= qualifier_outs)
+	if qualified.is_empty():
+		qualified = pitchers
+	qualified.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.get("value", 0.0)) > float(b.get("value", 0.0)))
+	var top: Dictionary = qualified[0] as Dictionary
+	return {"pid": int(top.get("pid", 0)), "value": _defense_text(float(top.get("value", 0.0)))}
+
+
+# 指定守備位置での守備ラン (rngr+errr+dpr) を war_ctx のポジション別センタリングで求める。
+# 戻り値 {value:float, chances:int}。守備機会ゼロなら chances=0。
+static func _centered_defense(ad: PSAdvancedStats, war_ctx: Dictionary, pos: int) -> Dictionary:
+	var key: String = str(pos)
+	var chances: float = float(int(ad.fielding_chances_by_position.get(key, 0)))
+	if chances <= 0.0:
+		return {"value": -1e9, "chances": 0}
+	var center: Dictionary = war_ctx.get("fielding_center", {}) as Dictionary
+	var rngr_pc: float = float((center.get("rngr_per_chance_by_position", {}) as Dictionary).get(key, 0.0))
+	var errr_pc: float = float((center.get("errr_per_chance_by_position", {}) as Dictionary).get(key, 0.0))
+	var dpr_pc: float = float((center.get("dpr_per_chance_by_position", {}) as Dictionary).get(key, 0.0))
+	var rngr: float = float(ad.rngr_by_position.get(key, 0.0)) - rngr_pc * chances
+	var errr: float = float(ad.errr_by_position.get(key, 0.0)) - errr_pc * chances
+	var dpr: float = float(ad.dpr_by_position.get(key, 0.0)) - dpr_pc * chances
+	return {"value": rngr + errr + dpr, "chances": int(chances)}
+
+
+static func _primary_position(record: PSPlayerSeasonRecord) -> int:
+	if record.advanced_stats != null:
+		return record.advanced_stats.primary_uzr_position()
+	return record.position
+
+
+static func _append_to(dict: Dictionary, key: int, entry: Dictionary) -> void:
+	if not dict.has(key):
+		dict[key] = []
+	(dict[key] as Array).append(entry)
+
+
+static func _empty_award_cell() -> Dictionary:
+	return {"pid": 0, "value": ""}
+
+
+# OPS 表示 (".912" / "1.023")。先頭 0 を省いて打率系の並びに寄せる。
+static func _ops_text(value: float) -> String:
+	var s: String = "%.3f" % value
+	if s.begins_with("0."):
+		return s.substr(1)
+	return s
+
+
+static func _defense_text(value: float) -> String:
+	return "%+.1f" % value

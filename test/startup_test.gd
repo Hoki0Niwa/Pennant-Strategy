@@ -853,6 +853,15 @@ func test_awards_screen_builds_with_current_awards() -> void:
 		"central": {"wins": central_pitcher.player_id},
 		"pacific": {"era": pacific_pitcher.player_id},
 	}
+	# ベストナイン (10枠) / ゴールデングラブ (9枠) の表示解決経路も検証する。
+	awards.best_nine = {
+		"central": _make_award_slots(central_pitcher.player_id, central_batter.player_id, PSAwards.BEST_NINE_SLOT_POSITIONS.size()),
+		"pacific": _make_award_slots(pacific_pitcher.player_id, pacific_batter.player_id, PSAwards.BEST_NINE_SLOT_POSITIONS.size()),
+	}
+	awards.golden_glove = {
+		"central": _make_award_slots(central_pitcher.player_id, central_batter.player_id, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size()),
+		"pacific": _make_award_slots(pacific_pitcher.player_id, pacific_batter.player_id, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size()),
+	}
 	AppState.current_awards = awards
 
 	var post: PSPostseasonResult = PSPostseasonResult.new()
@@ -874,6 +883,12 @@ func test_awards_screen_builds_with_current_awards() -> void:
 	assert_int((screen._award_rows as Array).size()).is_equal(2)
 	assert_int((screen._bat_rows as Array).size()).is_equal(PSAwards.BATTING_CATEGORIES.size())
 	assert_int((screen._pit_rows as Array).size()).is_equal(PSAwards.PITCHING_CATEGORIES.size())
+	# ベストナイン/ゴールデングラブが両リーグとも正しいスロット数で解決されている。
+	assert_int(((screen._best_nine as Dictionary).get("central", []) as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
+	assert_int(((screen._best_nine as Dictionary).get("pacific", []) as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
+	assert_int(((screen._golden_glove as Dictionary).get("central", []) as Array).size()).is_equal(PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size())
+	# 解決済みセルは選手名を持つ (pid>0 のスロット)。
+	assert_str(str(((screen._best_nine["central"] as Array)[0] as Dictionary).get("name", ""))).is_not_empty()
 	screen.queue_free()
 
 	AppState.selected_team_id = old_team_id
@@ -990,6 +1005,14 @@ func _make_test_archive() -> PSSeasonArchive:
 	awards.pitching_titles = {"central": {"wins": 3}, "pacific": {"era": 4}}
 	archive.awards = awards
 	return archive
+
+
+# ベストナイン/ゴールデングラブ表示テスト用: 投手枠 (index0) に投手、残りを野手で埋めたスロット列。
+func _make_award_slots(pitcher_id: int, batter_id: int, count: int) -> Array:
+	var slots: Array = []
+	for i in range(count):
+		slots.append({"pid": pitcher_id if i == 0 else batter_id, "value": ".900" if i > 0 else "3.0 WAR"})
+	return slots
 
 
 func _first_record(records: Array, pitcher: bool) -> PSPlayerSeasonRecord:
