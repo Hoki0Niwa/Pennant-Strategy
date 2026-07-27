@@ -44,7 +44,7 @@ func test_pitcher_depth_war_uses_top_k_mean_not_single_ace() -> void:
 
 func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
 	Rng.set_seed_value(20260615)
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -77,7 +77,7 @@ func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
 # 生成投手の先発比率は概ね均衡 (やや中継寄り)。STARTER_DECISION_MARGIN の較正ガード。
 func test_generation_role_ratio_roughly_balanced() -> void:
 	Rng.set_seed_value(20260621)
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2), _team(3, "central", 3), _team(4, "pacific", 4)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2), _team(3, "league1", 3), _team(4, "league2", 4)]
 	var players: Array = []
 	for tid in [1, 2, 3, 4]:
 		_fill_team(players, tid, 58)
@@ -103,10 +103,10 @@ func test_generation_role_ratio_roughly_balanced() -> void:
 func test_main_and_development_segments_split() -> void:
 	# 在籍55 (外国人0) の球団: gap = 目標68−55−予約(2+外国人不足4) = 7。在籍68の球団は hard 空き2まで。
 	var teams: Array = [
-		_team(1, "central", 1),
-		_team(2, "central", 2),
-		_team(3, "pacific", 3),
-		_team(4, "pacific", 4),
+		_team(1, "league1", 1),
+		_team(2, "league1", 2),
+		_team(3, "league2", 3),
+		_team(4, "league2", 4),
 	]
 	var players: Array = []
 	_fill_team(players, 1, 55)
@@ -144,7 +144,7 @@ func test_main_and_development_segments_split() -> void:
 
 
 func test_segments_are_sequential_and_flagged() -> void:
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -204,7 +204,7 @@ func test_development_step_result_filters_out_main_draft_rows() -> void:
 
 
 func test_user_skip_ends_development_participation() -> void:
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -239,7 +239,7 @@ func test_user_skip_ends_development_participation() -> void:
 
 func test_main_draft_can_complete_before_development_step() -> void:
 	Rng.set_seed_value(20260616)
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -284,10 +284,10 @@ func test_draft_target_scales_with_roster_need() -> void:
 	# 編成計画: 指名数 = 開幕目標68 − 在籍 − 補強予約2 (外国人4人充足時)。
 	# 戦力外で在籍が減った球団ほど多く指名し、目標との差分がそのまま指名数になる。
 	var teams: Array = [
-		_team(1, "central", 1),
-		_team(2, "pacific", 2),
-		_team(3, "central", 3),
-		_team(4, "pacific", 4),
+		_team(1, "league1", 1),
+		_team(2, "league2", 2),
+		_team(3, "league1", 3),
+		_team(4, "league2", 4),
 	]
 	var players: Array = []
 	_fill_team(players, 1, 56)  # gap = 68-56-2 = 10
@@ -306,7 +306,7 @@ func test_draft_target_scales_with_roster_need() -> void:
 
 
 func test_draft_reserves_slots_for_foreign_roster_shortage() -> void:
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2), _team(3, "central", 3)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2), _team(3, "league1", 3)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -328,7 +328,7 @@ func test_draft_reserves_slots_for_foreign_roster_shortage() -> void:
 # ユーザーが入札するたびに reveal で1 wave 分だけ抽選が公開され、result で次へ進む。
 # 全球団の1巡目が確定するまでこのループを繰り返しても取りこぼしが無いことを見る。
 func test_first_round_two_stage_flow_for_user() -> void:
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -377,7 +377,7 @@ func test_first_round_two_stage_flow_for_user() -> void:
 # 乱数依存で flaky にならないよう、勝者が「どちらの球団か」までは断定しない。
 func test_first_round_rebid_wave_lottery() -> void:
 	Rng.set_seed_value(20260710)
-	var teams: Array = [_team(5, "central", 1), _team(6, "pacific", 2)]
+	var teams: Array = [_team(5, "league1", 1), _team(6, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 5, 58)
 	_fill_team(players, 6, 58)
@@ -441,7 +441,7 @@ func test_first_round_rebid_wave_lottery() -> void:
 
 # complete_automatically は reveal/result の対話段階でも止まらず完走する。
 func test_complete_automatically_not_stuck_at_reveal() -> void:
-	var teams: Array = [_team(1, "central", 1), _team(2, "pacific", 2)]
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 1, 58)
 	_fill_team(players, 2, 58)
@@ -461,7 +461,7 @@ func test_complete_automatically_not_stuck_at_reveal() -> void:
 # ユーザーが指名に参加しない (user_team_id が存在しない) 場合は create_draft_state 内で
 # 1巡目がサイレントに一括解決され、reveal/result の対話段階を経ずに先へ進む (回帰保護)。
 func test_headless_create_resolves_first_round_silently() -> void:
-	var teams: Array = [_team(5, "central", 1), _team(6, "pacific", 2)]
+	var teams: Array = [_team(5, "league1", 1), _team(6, "league2", 2)]
 	var players: Array = []
 	_fill_team(players, 5, 58)
 	_fill_team(players, 6, 58)
@@ -475,7 +475,7 @@ func test_headless_create_resolves_first_round_silently() -> void:
 func test_draft_target_accounts_for_promotions() -> void:
 	# 昇格見込みの育成が多い球団は目標から最大2人控える。capacity にマスクされないよう
 	# 在籍58 (capacity 10) で比較する (在籍63だと capacity=5 で縮小が見えない)。
-	var teams: Array = [_team(1, "central", 1)]
+	var teams: Array = [_team(1, "league1", 1)]
 	var base_players: Array = []
 	_fill_team(base_players, 1, 58)
 	_mark_foreign(base_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
@@ -609,10 +609,10 @@ func _find_pick(state: Dictionary, team_id: int, round_no: int) -> Dictionary:
 # 育成ドラフトは現行のスネーク (奇数巡=forward) を維持することも合わせて確認する。
 func test_full_waiver_order_and_no_lottery() -> void:
 	var teams: Array = [
-		_team(1, "central", 1),
-		_team(2, "central", 2),
-		_team(3, "pacific", 3),
-		_team(4, "pacific", 4),
+		_team(1, "league1", 1),
+		_team(2, "league1", 2),
+		_team(3, "league2", 3),
+		_team(4, "league2", 4),
 	]
 	var players: Array = []
 	_fill_team(players, 1, 55)
@@ -681,14 +681,14 @@ func test_full_waiver_order_and_no_lottery() -> void:
 # 完全ウェーバー制でユーザーが参加する場合、1巡目から入札段階を経ずに user_pick 待ちになり、
 # 通常通り submit_user_candidate で指名できる (method=="user"、抽選なし)。
 func test_full_waiver_user_gets_user_pick_stage_round1() -> void:
-	# season=null のとき _priority_league は year=0 扱いで "pacific" が優先リーグになり、
+	# season=null のとき _priority_league は year=0 扱いで "league2" が優先リーグになり、
 	# reverse_order は優先リーグの最下位球団から始まる。自軍 (team_id=1) を優先リーグ
-	# (pacific) の最下位 previous_rank に置いて先頭に来るようにする。
+	# (league2) の最下位 previous_rank に置いて先頭に来るようにする。
 	var teams: Array = [
-		_team(1, "pacific", 6),
-		_team(2, "pacific", 1),
-		_team(3, "central", 6),
-		_team(4, "central", 1),
+		_team(1, "league2", 6),
+		_team(2, "league2", 1),
+		_team(3, "league1", 6),
+		_team(4, "league1", 1),
 	]
 	var players: Array = []
 	_fill_team(players, 1, 55)

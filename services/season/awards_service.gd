@@ -21,7 +21,7 @@ static func calculate(season: PSSeason, teams: Array) -> PSAwards:
 	awards.season_number = season.season_number
 
 	var team_by_id: Dictionary = {}
-	var team_ids_by_league: Dictionary = {"central": [], "pacific": []}
+	var team_ids_by_league: Dictionary = {"league1": [], "league2": []}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		if team != null:
@@ -29,7 +29,7 @@ static func calculate(season: PSSeason, teams: Array) -> PSAwards:
 			if team_ids_by_league.has(team.league):
 				(team_ids_by_league[team.league] as Array).append(team.id)
 
-	var by_league: Dictionary = {"central": [], "pacific": []}
+	var by_league: Dictionary = {"league1": [], "league2": []}
 	for record_row in RecordStore.player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record == null:
@@ -68,12 +68,12 @@ static func calculate(season: PSSeason, teams: Array) -> PSAwards:
 		var war_ctx: Dictionary = WarCalculator.build_league_context(season.year, season.season_number)
 		var mvp_id: int = _pick_mvp(league_records, qualifier_pa, qualifier_outs, war_ctx)
 		var rookie_id: int = _pick_rookie(league_records, war_ctx)
-		if league_key == "central":
-			awards.mvp_central_player_id = mvp_id
-			awards.rookie_central_player_id = rookie_id
+		if league_key == "league1":
+			awards.mvp_league1_player_id = mvp_id
+			awards.rookie_league1_player_id = rookie_id
 		else:
-			awards.mvp_pacific_player_id = mvp_id
-			awards.rookie_pacific_player_id = rookie_id
+			awards.mvp_league2_player_id = mvp_id
+			awards.rookie_league2_player_id = rookie_id
 
 		# ベストナイン (打撃ベース、DH はリーグ設定に従う) / ゴールデングラブ (守備ベース)。
 		var dh_enabled: bool = AppState.is_dh_enabled_for_league(league_key)

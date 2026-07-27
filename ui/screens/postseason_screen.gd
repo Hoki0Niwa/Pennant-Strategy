@@ -10,19 +10,19 @@ extends "res://ui/screens/home_screen.gd"
 # 詳細な試合結果はこの画面には出さず、試合結果画面のポストシーズンタブで参照する。
 
 const STAGE_CARD_LABELS: Dictionary = {
-	"cs1_central": {"title": "CS ファースト", "sub": "第1リーグ 2位 vs 3位"},
-	"cs1_pacific": {"title": "CS ファースト", "sub": "第2リーグ 2位 vs 3位"},
-	"cs2_central": {"title": "CS ファイナル", "sub": "第1リーグ 1位 vs CS1勝者"},
-	"cs2_pacific": {"title": "CS ファイナル", "sub": "第2リーグ 1位 vs CS1勝者"},
+	"cs1_league1": {"title": "CS ファースト", "sub": "第1リーグ 2位 vs 3位"},
+	"cs1_league2": {"title": "CS ファースト", "sub": "第2リーグ 2位 vs 3位"},
+	"cs2_league1": {"title": "CS ファイナル", "sub": "第1リーグ 1位 vs CS1勝者"},
+	"cs2_league2": {"title": "CS ファイナル", "sub": "第2リーグ 1位 vs CS1勝者"},
 	"japan_series": {"title": "日本シリーズ", "sub": "両リーグ代表"},
 }
 
 # 右カラム「本日のカード」用のステージ短縮名。
 const STAGE_SHORT: Dictionary = {
-	"cs1_central": "CS1 第1",
-	"cs1_pacific": "CS1 第2",
-	"cs2_central": "CSファイナル 第1",
-	"cs2_pacific": "CSファイナル 第2",
+	"cs1_league1": "CS1 第1",
+	"cs1_league2": "CS1 第2",
+	"cs2_league1": "CSファイナル 第1",
+	"cs2_league2": "CSファイナル 第2",
 	"japan_series": "日本シリーズ",
 }
 
@@ -87,10 +87,10 @@ func _draw_bracket(post: PSPostseasonResult) -> void:
 	# コネクタ (ブラケットの流れ): CS1 → CS2 → 日本シリーズ。
 	_draw_bracket_connectors(col0_x + col_w, col1_x, col2_x, top_y, bottom_y, mid_y, card_h, col_w)
 
-	_draw_series_card(Rect2(col0_x, top_y, col_w, card_h), "cs1_central", post)
-	_draw_series_card(Rect2(col0_x, bottom_y, col_w, card_h), "cs1_pacific", post)
-	_draw_series_card(Rect2(col1_x, top_y, col_w, card_h), "cs2_central", post)
-	_draw_series_card(Rect2(col1_x, bottom_y, col_w, card_h), "cs2_pacific", post)
+	_draw_series_card(Rect2(col0_x, top_y, col_w, card_h), "cs1_league1", post)
+	_draw_series_card(Rect2(col0_x, bottom_y, col_w, card_h), "cs1_league2", post)
+	_draw_series_card(Rect2(col1_x, top_y, col_w, card_h), "cs2_league1", post)
+	_draw_series_card(Rect2(col1_x, bottom_y, col_w, card_h), "cs2_league2", post)
 	_draw_series_card(Rect2(col2_x, mid_y, col_w, card_h), "japan_series", post)
 
 
@@ -494,8 +494,8 @@ func _display_top_id(post: PSPostseasonResult, stage_key: String, series: Dictio
 	if stage_key == "japan_series":
 		var first_home_league: String = str(series.get("first_home_league", PostseasonService.FIRST_LEAGUE))
 		if first_home_league == PostseasonService.FIRST_LEAGUE:
-			return int(post.cs2_central.get("winner_id", 0))
-		return int(post.cs2_pacific.get("winner_id", 0))
+			return int(post.cs2_league1.get("winner_id", 0))
+		return int(post.cs2_league2.get("winner_id", 0))
 	return 0
 
 
@@ -504,15 +504,15 @@ func _display_challenger_id(post: PSPostseasonResult, stage_key: String, series:
 	if c > 0:
 		return c
 	match stage_key:
-		"cs2_central":
-			return int(post.cs1_central.get("winner_id", 0))
-		"cs2_pacific":
-			return int(post.cs1_pacific.get("winner_id", 0))
+		"cs2_league1":
+			return int(post.cs1_league1.get("winner_id", 0))
+		"cs2_league2":
+			return int(post.cs1_league2.get("winner_id", 0))
 		"japan_series":
 			var first_home_league: String = str(series.get("first_home_league", PostseasonService.FIRST_LEAGUE))
 			if first_home_league == PostseasonService.FIRST_LEAGUE:
-				return int(post.cs2_pacific.get("winner_id", 0))
-			return int(post.cs2_central.get("winner_id", 0))
+				return int(post.cs2_league2.get("winner_id", 0))
+			return int(post.cs2_league1.get("winner_id", 0))
 	return 0
 
 

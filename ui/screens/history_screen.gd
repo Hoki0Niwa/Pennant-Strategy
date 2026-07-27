@@ -8,8 +8,8 @@ extends "res://ui/components/dashboard_screen.gd"
 # 重い集計は _refresh / _build_alltime で1度だけ行いキャッシュし、_draw は描画専念。
 
 const STAGE_LABELS: Dictionary = {
-	"cs1_central": "CS1 第1", "cs1_pacific": "CS1 第2",
-	"cs2_central": "CS2 第1", "cs2_pacific": "CS2 第2",
+	"cs1_league1": "CS1 第1", "cs1_league2": "CS1 第2",
+	"cs2_league1": "CS2 第1", "cs2_league2": "CS2 第2",
 	"japan_series": "日本シリーズ",
 }
 const BATTING_TITLE_LABELS: Dictionary = {
@@ -22,8 +22,8 @@ const PITCHING_TITLE_LABELS: Dictionary = {
 }
 
 const LEAGUES: Array = [
-	{"key": "central", "label": "第1リーグ 最終順位"},
-	{"key": "pacific", "label": "第2リーグ 最終順位"},
+	{"key": "league1", "label": "第1リーグ 最終順位"},
+	{"key": "league2", "label": "第2リーグ 最終順位"},
 ]
 
 # --- レイアウト基準 (base 座標) ---
@@ -39,11 +39,11 @@ const AWARD_RECT: Rect2 = Rect2(1092, 440, 808, 196)
 const BAT_RECT: Rect2 = Rect2(1092, 652, 396, 406)
 const PIT_RECT: Rect2 = Rect2(1504, 652, 396, 406)
 
-# ポストシーズンのステージ並び: 同ステージを横並び (左=第1リーグ central / 右=第2リーグ pacific)。
+# ポストシーズンのステージ並び: 同ステージを横並び (左=第1リーグ league1 / 右=第2リーグ league2)。
 # 日本シリーズは両リーグ代表の対戦なので全幅の統合カードで描く。
 const POST_GROUPS: Array = [
-	{"lines": ["CS", "ファースト"], "central": "cs1_central", "pacific": "cs1_pacific", "split": true},
-	{"lines": ["CS", "ファイナル"], "central": "cs2_central", "pacific": "cs2_pacific", "split": true},
+	{"lines": ["CS", "ファースト"], "league1": "cs1_league1", "league2": "cs1_league2", "split": true},
+	{"lines": ["CS", "ファイナル"], "league1": "cs2_league1", "league2": "cs2_league2", "split": true},
 	{"lines": ["日本シリーズ"], "japan": "japan_series", "split": false},
 ]
 
@@ -116,8 +116,8 @@ const ALLTIME_COLUMNS: Array = [
 ]
 const TITLE_COLUMNS: Array = [
 	{"title": "年度",       "key": "year",    "w": 120, "align": "l", "fmt": "str"},
-	{"title": "第1リーグ", "key": "central", "w": 320, "align": "l", "fmt": "str"},
-	{"title": "第2リーグ", "key": "pacific", "w": 320, "align": "l", "fmt": "str"},
+	{"title": "第1リーグ", "key": "league1", "w": 320, "align": "l", "fmt": "str"},
+	{"title": "第2リーグ", "key": "league2", "w": 320, "align": "l", "fmt": "str"},
 ]
 
 # 集計キャッシュ
@@ -129,7 +129,7 @@ var _rows_by_league: Dictionary = {}        # {league_key: Array of 表示用 Di
 var _post_champion_id: int = 0
 var _post_by_stage: Dictionary = {}         # stage_key → シリーズ行 Dictionary (完了分のみ)
 var _award_cards: Array = []                # MVP/新人王 カード Dictionary
-var _bat_rows: Array = []                   # 打撃タイトル行 {label, central, pacific}
+var _bat_rows: Array = []                   # 打撃タイトル行 {label, league1, league2}
 var _pit_rows: Array = []                   # 投手タイトル行
 
 var _view: String = VIEW_YEAR
@@ -180,8 +180,8 @@ func _draw() -> void:
 	_round(Rect2(YEAR_LABEL_X, 96, YEAR_LABEL_W, 34), PANEL_2, BORDER, 8)
 	_text(_year_label, Vector2(YEAR_LABEL_X, 119), 17, TEXT, YEAR_LABEL_W, HORIZONTAL_ALIGNMENT_CENTER, true)
 
-	_draw_table(TABLE_A, str(LEAGUES[0]["label"]), HIST_COLUMNS, _rows_by_league.get("central", []) as Array)
-	_draw_table(TABLE_B, str(LEAGUES[1]["label"]), HIST_COLUMNS, _rows_by_league.get("pacific", []) as Array)
+	_draw_table(TABLE_A, str(LEAGUES[0]["label"]), HIST_COLUMNS, _rows_by_league.get("league1", []) as Array)
+	_draw_table(TABLE_B, str(LEAGUES[1]["label"]), HIST_COLUMNS, _rows_by_league.get("league2", []) as Array)
 	_draw_postseason(POST_RECT)
 	_draw_awards(AWARD_RECT)
 	_draw_titles(BAT_RECT, "打撃タイトル", _bat_rows)
@@ -296,7 +296,7 @@ func _draw_postseason(rect: Rect2) -> void:
 
 
 func _group_has_data(group: Dictionary) -> bool:
-	for key in ["central", "pacific", "japan"]:
+	for key in ["league1", "league2", "japan"]:
 		if group.has(key) and _post_by_stage.has(str(group[key])):
 			return true
 	return false
@@ -313,8 +313,8 @@ func _draw_stage_group(group: Dictionary, lay: Dictionary, y: float, gh: float) 
 	var card_y: float = y + 6.0
 	var card_h: float = gh - 12.0
 	if bool(group.get("split", false)):
-		_draw_post_card(Rect2(float(lay["left_x"]), card_y, float(lay["col_w"]), card_h), _post_by_stage.get(str(group["central"])))
-		_draw_post_card(Rect2(float(lay["right_x"]), card_y, float(lay["col_w"]), card_h), _post_by_stage.get(str(group["pacific"])))
+		_draw_post_card(Rect2(float(lay["left_x"]), card_y, float(lay["col_w"]), card_h), _post_by_stage.get(str(group["league1"])))
+		_draw_post_card(Rect2(float(lay["right_x"]), card_y, float(lay["col_w"]), card_h), _post_by_stage.get(str(group["league2"])))
 	else:
 		_draw_post_card(Rect2(float(lay["cards_x"]), card_y, float(lay["cards_w"]), card_h), _post_by_stage.get(str(group["japan"])))
 
@@ -458,8 +458,8 @@ func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
 		var ry: float = row_top + float(i) * row_h
 		var ty: float = ry + row_h * 0.5 + 5.0
 		_text(str(r.get("label", "")), Vector2(inner_x + 2.0, ty), 13, MUTED, label_w - 4.0)
-		_text(str(r.get("central", "")), Vector2(c1_x + 4.0, ty), 13, TEXT, col_w - 8.0)
-		_text(str(r.get("pacific", "")), Vector2(c2_x + 4.0, ty), 13, TEXT, col_w - 8.0)
+		_text(str(r.get("league1", "")), Vector2(c1_x + 4.0, ty), 13, TEXT, col_w - 8.0)
+		_text(str(r.get("league2", "")), Vector2(c2_x + 4.0, ty), 13, TEXT, col_w - 8.0)
 		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 16.0, ry + row_h), HAIRLINE, 1.0)
 
 
@@ -684,28 +684,28 @@ func _build_title_history_rows() -> void:
 	var archives: Array = RecordStore.get_season_archives()
 	for i in range(archives.size() - 1, -1, -1):
 		var archive: PSSeasonArchive = archives[i] as PSSeasonArchive
-		var central_id: int = 0
-		var pacific_id: int = 0
+		var league1_id: int = 0
+		var league2_id: int = 0
 		if archive.awards != null:
 			var a: PSAwards = archive.awards
 			if _title_key == "mvp":
-				central_id = a.mvp_central_player_id
-				pacific_id = a.mvp_pacific_player_id
+				league1_id = a.mvp_league1_player_id
+				league2_id = a.mvp_league2_player_id
 			elif _title_key == "rookie":
-				central_id = a.rookie_central_player_id
-				pacific_id = a.rookie_pacific_player_id
+				league1_id = a.rookie_league1_player_id
+				league2_id = a.rookie_league2_player_id
 			elif _title_key.begins_with("bat_"):
 				var bat_key: String = _title_key.substr(4)
-				central_id = int((a.batting_titles.get("central", {}) as Dictionary).get(bat_key, 0))
-				pacific_id = int((a.batting_titles.get("pacific", {}) as Dictionary).get(bat_key, 0))
+				league1_id = int((a.batting_titles.get("league1", {}) as Dictionary).get(bat_key, 0))
+				league2_id = int((a.batting_titles.get("league2", {}) as Dictionary).get(bat_key, 0))
 			elif _title_key.begins_with("pit_"):
 				var pit_key: String = _title_key.substr(4)
-				central_id = int((a.pitching_titles.get("central", {}) as Dictionary).get(pit_key, 0))
-				pacific_id = int((a.pitching_titles.get("pacific", {}) as Dictionary).get(pit_key, 0))
+				league1_id = int((a.pitching_titles.get("league1", {}) as Dictionary).get(pit_key, 0))
+				league2_id = int((a.pitching_titles.get("league2", {}) as Dictionary).get(pit_key, 0))
 		_title_rows.append({
 			"year": "%d年" % archive.year,
-			"central": _player_label(central_id),
-			"pacific": _player_label(pacific_id),
+			"league1": _player_label(league1_id),
+			"league2": _player_label(league2_id),
 		})
 
 
@@ -776,24 +776,24 @@ func _build_awards(archive: PSSeasonArchive) -> void:
 		return
 	var a: PSAwards = archive.awards
 	_award_cards = [
-		{"title": "MVP", "league": "第1リーグ", "accent": AMBER, "player": _player_label(a.mvp_central_player_id)},
-		{"title": "MVP", "league": "第2リーグ", "accent": AMBER, "player": _player_label(a.mvp_pacific_player_id)},
-		{"title": "新人王", "league": "第1リーグ", "accent": BLUE, "player": _player_label(a.rookie_central_player_id)},
-		{"title": "新人王", "league": "第2リーグ", "accent": BLUE, "player": _player_label(a.rookie_pacific_player_id)},
+		{"title": "MVP", "league": "第1リーグ", "accent": AMBER, "player": _player_label(a.mvp_league1_player_id)},
+		{"title": "MVP", "league": "第2リーグ", "accent": AMBER, "player": _player_label(a.mvp_league2_player_id)},
+		{"title": "新人王", "league": "第1リーグ", "accent": BLUE, "player": _player_label(a.rookie_league1_player_id)},
+		{"title": "新人王", "league": "第2リーグ", "accent": BLUE, "player": _player_label(a.rookie_league2_player_id)},
 	]
 	_bat_rows = _build_title_rows(a.batting_titles, BATTING_TITLE_LABELS, PSAwards.BATTING_CATEGORIES)
 	_pit_rows = _build_title_rows(a.pitching_titles, PITCHING_TITLE_LABELS, PSAwards.PITCHING_CATEGORIES)
 
 
 func _build_title_rows(titles_by_league: Dictionary, label_map: Dictionary, order: Array) -> Array:
-	var central: Dictionary = titles_by_league.get("central", {}) as Dictionary
-	var pacific: Dictionary = titles_by_league.get("pacific", {}) as Dictionary
+	var league1: Dictionary = titles_by_league.get("league1", {}) as Dictionary
+	var league2: Dictionary = titles_by_league.get("league2", {}) as Dictionary
 	var rows: Array = []
 	for key in order:
 		rows.append({
 			"label": str(label_map.get(key, key)),
-			"central": _player_label(int(central.get(key, 0))),
-			"pacific": _player_label(int(pacific.get(key, 0))),
+			"league1": _player_label(int(league1.get(key, 0))),
+			"league2": _player_label(int(league2.get(key, 0))),
 		})
 	return rows
 

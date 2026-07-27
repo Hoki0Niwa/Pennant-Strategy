@@ -509,7 +509,7 @@ func _on_team_selected(team_id: int) -> void:
 func _build_team_order() -> void:
 	_team_ids = []
 	# 第1リーグ→第2リーグ、リーグ内は id 昇順で巡回。
-	for league_key in ["central", "pacific"]:
+	for league_key in ["league1", "league2"]:
 		var ids: Array = []
 		for team_row in GameDb.teams:
 			var team: PSTeam = team_row as PSTeam

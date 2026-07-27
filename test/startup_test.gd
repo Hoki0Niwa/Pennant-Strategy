@@ -780,7 +780,7 @@ func test_history_screen_builds_with_archive() -> void:
 
 	# 集計結果が表示用に展開されている (全リーグ行 / ポストシーズン / 表彰)。
 	assert_int(screen._rows_by_league.size()).is_equal(2)
-	assert_int((screen._rows_by_league.get("central", []) as Array).size()).is_greater(0)
+	assert_int((screen._rows_by_league.get("league1", []) as Array).size()).is_greater(0)
 	assert_int(screen._post_champion_id).is_equal(archive.postseason.champion_team_id)
 	assert_bool(screen._post_by_stage.has("japan_series")).is_true()
 	assert_int(((screen._post_by_stage["japan_series"] as Dictionary).get("games", []) as Array).size()).is_equal(2)
@@ -811,65 +811,65 @@ func test_awards_screen_builds_with_current_awards() -> void:
 	var old_post_active: bool = AppState.postseason_active
 	var old_save_id: String = SaveContext.active_save_id()
 
-	var central_team: PSTeam = null
-	var pacific_team: PSTeam = null
+	var league1_team: PSTeam = null
+	var league2_team: PSTeam = null
 	for team_value in GameDb.teams:
 		var t: PSTeam = team_value as PSTeam
-		if t.league == "central" and central_team == null:
-			central_team = t
-		elif t.league == "pacific" and pacific_team == null:
-			pacific_team = t
-	assert_object(central_team).is_not_null()
-	assert_object(pacific_team).is_not_null()
+		if t.league == "league1" and league1_team == null:
+			league1_team = t
+		elif t.league == "league2" and league2_team == null:
+			league2_team = t
+	assert_object(league1_team).is_not_null()
+	assert_object(league2_team).is_not_null()
 
-	AppState.select_team(central_team.id)
+	AppState.select_team(league1_team.id)
 	AppState.start_new_season()
 	AppState.current_screen = "awards"
 	var test_save_id: String = SaveContext.active_save_id()
 
-	var central_records: Array = RecordStore.get_team_player_records(central_team.id, AppState.current_season.year, AppState.current_season.season_number)
-	var pacific_records: Array = RecordStore.get_team_player_records(pacific_team.id, AppState.current_season.year, AppState.current_season.season_number)
-	var central_batter: PSPlayerSeasonRecord = _first_record(central_records, false)
-	var central_pitcher: PSPlayerSeasonRecord = _first_record(central_records, true)
-	var pacific_batter: PSPlayerSeasonRecord = _first_record(pacific_records, false)
-	var pacific_pitcher: PSPlayerSeasonRecord = _first_record(pacific_records, true)
-	assert_object(central_batter).is_not_null()
-	assert_object(central_pitcher).is_not_null()
-	assert_object(pacific_batter).is_not_null()
-	assert_object(pacific_pitcher).is_not_null()
+	var league1_records: Array = RecordStore.get_team_player_records(league1_team.id, AppState.current_season.year, AppState.current_season.season_number)
+	var league2_records: Array = RecordStore.get_team_player_records(league2_team.id, AppState.current_season.year, AppState.current_season.season_number)
+	var league1_batter: PSPlayerSeasonRecord = _first_record(league1_records, false)
+	var league1_pitcher: PSPlayerSeasonRecord = _first_record(league1_records, true)
+	var league2_batter: PSPlayerSeasonRecord = _first_record(league2_records, false)
+	var league2_pitcher: PSPlayerSeasonRecord = _first_record(league2_records, true)
+	assert_object(league1_batter).is_not_null()
+	assert_object(league1_pitcher).is_not_null()
+	assert_object(league2_batter).is_not_null()
+	assert_object(league2_pitcher).is_not_null()
 
 	var awards: PSAwards = PSAwards.new()
 	awards.year = AppState.current_season.year
 	awards.season_number = AppState.current_season.season_number
-	awards.mvp_central_player_id = central_batter.player_id
-	awards.rookie_central_player_id = central_pitcher.player_id
-	awards.mvp_pacific_player_id = pacific_batter.player_id
-	awards.rookie_pacific_player_id = pacific_pitcher.player_id
+	awards.mvp_league1_player_id = league1_batter.player_id
+	awards.rookie_league1_player_id = league1_pitcher.player_id
+	awards.mvp_league2_player_id = league2_batter.player_id
+	awards.rookie_league2_player_id = league2_pitcher.player_id
 	awards.batting_titles = {
-		"central": {"average": central_batter.player_id},
-		"pacific": {"home_runs": pacific_batter.player_id},
+		"league1": {"average": league1_batter.player_id},
+		"league2": {"home_runs": league2_batter.player_id},
 	}
 	awards.pitching_titles = {
-		"central": {"wins": central_pitcher.player_id},
-		"pacific": {"era": pacific_pitcher.player_id},
+		"league1": {"wins": league1_pitcher.player_id},
+		"league2": {"era": league2_pitcher.player_id},
 	}
 	# ベストナイン (10枠) / ゴールデングラブ (9枠) の表示解決経路も検証する。
 	awards.best_nine = {
-		"central": _make_award_slots(central_pitcher.player_id, central_batter.player_id, PSAwards.BEST_NINE_SLOT_POSITIONS.size()),
-		"pacific": _make_award_slots(pacific_pitcher.player_id, pacific_batter.player_id, PSAwards.BEST_NINE_SLOT_POSITIONS.size()),
+		"league1": _make_award_slots(league1_pitcher.player_id, league1_batter.player_id, PSAwards.BEST_NINE_SLOT_POSITIONS.size()),
+		"league2": _make_award_slots(league2_pitcher.player_id, league2_batter.player_id, PSAwards.BEST_NINE_SLOT_POSITIONS.size()),
 	}
 	awards.golden_glove = {
-		"central": _make_award_slots(central_pitcher.player_id, central_batter.player_id, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size()),
-		"pacific": _make_award_slots(pacific_pitcher.player_id, pacific_batter.player_id, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size()),
+		"league1": _make_award_slots(league1_pitcher.player_id, league1_batter.player_id, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size()),
+		"league2": _make_award_slots(league2_pitcher.player_id, league2_batter.player_id, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size()),
 	}
 	AppState.current_awards = awards
 
 	var post: PSPostseasonResult = PSPostseasonResult.new()
 	post.japan_series = {
-		"top_id": central_team.id, "challenger_id": pacific_team.id, "winner_id": central_team.id,
+		"top_id": league1_team.id, "challenger_id": league2_team.id, "winner_id": league1_team.id,
 		"top_wins_final": 4, "challenger_wins_final": 2, "completed": true,
 	}
-	post.champion_team_id = central_team.id
+	post.champion_team_id = league1_team.id
 	AppState.current_postseason = post
 
 	var script: GDScript = load("res://ui/screens/awards_screen.gd") as GDScript
@@ -879,16 +879,16 @@ func test_awards_screen_builds_with_current_awards() -> void:
 
 	assert_int(screen.get_child_count()).is_greater(0)
 	assert_bool(screen._has_awards).is_true()
-	assert_int(screen._champion_id).is_equal(central_team.id)
+	assert_int(screen._champion_id).is_equal(league1_team.id)
 	assert_int((screen._award_rows as Array).size()).is_equal(2)
 	assert_int((screen._bat_rows as Array).size()).is_equal(PSAwards.BATTING_CATEGORIES.size())
 	assert_int((screen._pit_rows as Array).size()).is_equal(PSAwards.PITCHING_CATEGORIES.size())
 	# ベストナイン/ゴールデングラブが両リーグとも正しいスロット数で解決されている。
-	assert_int(((screen._best_nine as Dictionary).get("central", []) as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
-	assert_int(((screen._best_nine as Dictionary).get("pacific", []) as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
-	assert_int(((screen._golden_glove as Dictionary).get("central", []) as Array).size()).is_equal(PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size())
+	assert_int(((screen._best_nine as Dictionary).get("league1", []) as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
+	assert_int(((screen._best_nine as Dictionary).get("league2", []) as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
+	assert_int(((screen._golden_glove as Dictionary).get("league1", []) as Array).size()).is_equal(PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size())
 	# 解決済みセルは選手名を持つ (pid>0 のスロット)。
-	assert_str(str(((screen._best_nine["central"] as Array)[0] as Dictionary).get("name", ""))).is_not_empty()
+	assert_str(str(((screen._best_nine["league1"] as Array)[0] as Dictionary).get("name", ""))).is_not_empty()
 	screen.queue_free()
 
 	AppState.selected_team_id = old_team_id
@@ -1000,9 +1000,9 @@ func _make_test_archive() -> PSSeasonArchive:
 	archive.postseason = post
 
 	var awards: PSAwards = PSAwards.new()
-	awards.mvp_central_player_id = 1
-	awards.batting_titles = {"central": {"average": 1}, "pacific": {"home_runs": 2}}
-	awards.pitching_titles = {"central": {"wins": 3}, "pacific": {"era": 4}}
+	awards.mvp_league1_player_id = 1
+	awards.batting_titles = {"league1": {"average": 1}, "league2": {"home_runs": 2}}
+	awards.pitching_titles = {"league1": {"wins": 3}, "league2": {"era": 4}}
 	archive.awards = awards
 	return archive
 
@@ -1076,7 +1076,7 @@ func test_offseason_screen_builds_each_step() -> void:
 			"abilities": [{"key": "contact", "after": 68, "delta": 6, "suffix": ""}]}],
 	}
 	AppState.offseason_results[AppState.OFFSEASON_STEP_DRAFT_MAIN] = {
-		"title": "本指名", "priority_league": "central", "logs": [], "rookies": [],
+		"title": "本指名", "priority_league": "league1", "logs": [], "rookies": [],
 		"draft_picks": [{"team_id": team.id, "overall_pick": 1, "round": 1, "name": "ルーキー", "age": 18,
 			"position": 1, "overall": 65, "source_type": "high_school", "development": false, "lottery": false}],
 	}
@@ -1282,8 +1282,8 @@ func test_postseason_calendar_slots_are_scheduled() -> void:
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	var post: PSPostseasonResult = PostseasonService.build_initial_state(season, GameDb.teams)
 
-	assert_array(post.cs1_central.get("scheduled_dates", []) as Array).is_equal(["2026-10-10", "2026-10-11", "2026-10-12"])
-	assert_array(post.cs2_central.get("scheduled_dates", []) as Array).is_equal(["2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"])
+	assert_array(post.cs1_league1.get("scheduled_dates", []) as Array).is_equal(["2026-10-10", "2026-10-11", "2026-10-12"])
+	assert_array(post.cs2_league1.get("scheduled_dates", []) as Array).is_equal(["2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"])
 	assert_array(post.japan_series.get("scheduled_dates", []) as Array).is_equal(["2026-10-24", "2026-10-25", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-31", "2026-11-01"])
 	assert_str(str(post.japan_series.get("first_home_league", ""))).is_equal(PostseasonService.FIRST_LEAGUE)
 	assert_array(post.japan_series.get("home_sides", []) as Array).is_equal([
@@ -1332,7 +1332,7 @@ func test_start_postseason_sets_current_date_to_cs1_opening_day() -> void:
 	assert_str(SeasonCalendar.current_date(AppState.current_season)).is_equal("2026-10-10")
 	assert_int(AppState.current_season.current_day).is_equal(SeasonCalendar.season_day_for_date(AppState.current_season, "2026-10-10"))
 	assert_int(AppState.current_postseason.current_day).is_equal(0)
-	assert_int((AppState.current_postseason.cs1_central.get("games", []) as Array).size()).is_equal(0)
+	assert_int((AppState.current_postseason.cs1_league1.get("games", []) as Array).size()).is_equal(0)
 
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season
@@ -1384,9 +1384,9 @@ func test_postseason_day_advance_and_dashboard() -> void:
 	assert_str(str(day_result.get("date", ""))).is_equal("2026-10-10")
 	assert_int(AppState.current_season.current_day).is_equal(SeasonCalendar.season_day_for_date(AppState.current_season, "2026-10-11"))
 	assert_int(non_playing_record.fatigue).is_equal(0)
-	assert_int((AppState.current_postseason.cs1_central.get("games", []) as Array).size()).is_equal(1)
-	assert_int((AppState.current_postseason.cs1_pacific.get("games", []) as Array).size()).is_equal(1)
-	var first_game: Dictionary = (AppState.current_postseason.cs1_central.get("games", []) as Array)[0] as Dictionary
+	assert_int((AppState.current_postseason.cs1_league1.get("games", []) as Array).size()).is_equal(1)
+	assert_int((AppState.current_postseason.cs1_league2.get("games", []) as Array).size()).is_equal(1)
+	var first_game: Dictionary = (AppState.current_postseason.cs1_league1.get("games", []) as Array)[0] as Dictionary
 	assert_str(str(first_game.get("date", ""))).is_equal("2026-10-10")
 	assert_int(int(first_game.get("season_day", 0))).is_equal(SeasonCalendar.season_day_for_date(AppState.current_season, "2026-10-10"))
 	var ps_status_script: GDScript = load("res://ui/screens/postseason_screen.gd") as GDScript
@@ -1487,27 +1487,27 @@ func test_postseason_pending_game_log_persists_through_save_and_reload() -> void
 	var day_result: Dictionary = AppState.advance_postseason_day()
 	assert_bool(bool(day_result.get("ok", false))).is_true()
 
-	var games_before: Array = AppState.current_postseason.cs1_central.get("games", []) as Array
+	var games_before: Array = AppState.current_postseason.cs1_league1.get("games", []) as Array
 	assert_int(games_before.size()).is_equal(1)
 	var game_before: Dictionary = games_before[0] as Dictionary
 	var result_before: Dictionary = game_before.get("result", {}) as Dictionary
 	assert_bool(result_before.has("play_events")).is_true()  # まだフル result (縮小前)
 
 	# バグ再現: persist=false だったのでログファイルはまだ存在しない。
-	var log_before_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_central", 1)
+	var log_before_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_league1", 1)
 	assert_bool(log_before_flush.is_empty()).is_true()
 
 	# 修正: 手動保存が行うべき pending ログ flush を直接呼ぶ。
 	# (本来は SaveService.save_state から呼ぶ配線が必要だが、当該ファイルは本タスクでは編集禁止。
 	# 詳細は対応する調査タスクの最終報告を参照。)
 	PSGameLogService.write_pending_postseason_game_logs(AppState.current_postseason, AppState.current_season)
-	var log_after_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_central", 1)
+	var log_after_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_league1", 1)
 	assert_bool(log_after_flush.is_empty()).is_false()
 	assert_array(log_after_flush.get("pa_log", []) as Array).is_not_empty()
 
 	# to_dict/from_dict の往復でも試合結果サマリ (スコア・勝敗) は保持される。
 	var restored: PSPostseasonResult = PSPostseasonResult.from_dict(AppState.current_postseason.to_dict())
-	var restored_games: Array = restored.cs1_central.get("games", []) as Array
+	var restored_games: Array = restored.cs1_league1.get("games", []) as Array
 	assert_int(restored_games.size()).is_equal(1)
 	var restored_game: Dictionary = restored_games[0] as Dictionary
 	assert_int(int(restored_game.get("away_score", -1))).is_equal(int(game_before.get("away_score", -2)))
@@ -1518,7 +1518,7 @@ func test_postseason_pending_game_log_persists_through_save_and_reload() -> void
 
 	# game_result_screen._ps_game_log と同じフォールバック経路: スリム化後の result には
 	# play_events が無いので、事前に flush されたログファイルから詳細を復元できる。
-	var reloaded_log: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_central", int(restored_game.get("game_num", 0)))
+	var reloaded_log: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_league1", int(restored_game.get("game_num", 0)))
 	assert_bool(reloaded_log.is_empty()).is_false()
 	assert_array(reloaded_log.get("pa_log", []) as Array).is_not_empty()
 
@@ -1537,7 +1537,7 @@ func test_postseason_pending_game_log_persists_through_save_and_reload() -> void
 
 func _first_record_not_in_cs1(post: PSPostseasonResult, season: PSSeason) -> PSPlayerSeasonRecord:
 	var playing: Dictionary = {}
-	for key in ["cs1_central", "cs1_pacific"]:
+	for key in ["cs1_league1", "cs1_league2"]:
 		var series: Dictionary = post.stage_dict(str(key))
 		playing[int(series.get("top_id", 0))] = true
 		playing[int(series.get("challenger_id", 0))] = true

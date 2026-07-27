@@ -49,7 +49,7 @@ func _ready() -> void:
 	Rng.set_seed_value(seed_value)
 	RecordStore.clear_records()
 
-	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, selected_team_id, start_year, {"central": true, "pacific": true})
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, selected_team_id, start_year, {"league1": true, "league2": true})
 	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 	var sim_result: Dictionary = GameSimulator.simulate_remaining_season(season, false)
 	var ok: bool = bool(sim_result.get("ok", false))

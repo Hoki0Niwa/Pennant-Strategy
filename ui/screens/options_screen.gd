@@ -167,8 +167,8 @@ func _toggle_rows() -> Array:
 		{"id": "autoswap", "label": "スキップ中の自動一二軍入替", "desc": "成績ベースで自動的に一二軍入替を行う", "on": AppState.auto_roster_swap_during_skip},
 		{"id": "autotrade", "label": "自軍のトレードをAIに任せる", "desc": "有効にすると週次の自動トレード判断に自軍も参加し、AIが自軍のトレードを自動で成立させる。無効時は従来通り(自分で提案/受信提案の受諾のみ)。", "on": AppState.auto_trade_for_user_team},
 		{"id": "autosave", "label": "自動セーブ", "desc": "試合進行・オフシーズン処理時に自動で保存する", "on": AppState.auto_save_enabled},
-		{"id": "dh1", "label": "第1リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("central")},
-		{"id": "dh2", "label": "第2リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("pacific")},
+		{"id": "dh1", "label": "第1リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("league1")},
+		{"id": "dh2", "label": "第2リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("league2")},
 		{"id": "draftwaiver", "label": "ドラフト完全ウェーバー制", "desc": "1巡目の入札・抽選を行わず、全巡とも前年下位球団から順に指名する(次回ドラフトから適用)。", "on": AppState.draft_full_waiver},
 	]
 
@@ -429,10 +429,10 @@ func _on_toggle(id: String) -> void:
 			AppState.auto_save_enabled = not AppState.auto_save_enabled
 			_save_and_status("自動セーブ設定を保存しました。")
 		"dh1":
-			AppState.set_dh_enabled_for_league("central", not AppState.is_dh_enabled_for_league("central"))
+			AppState.set_dh_enabled_for_league("league1", not AppState.is_dh_enabled_for_league("league1"))
 			_save_and_status("DH設定を保存しました。")
 		"dh2":
-			AppState.set_dh_enabled_for_league("pacific", not AppState.is_dh_enabled_for_league("pacific"))
+			AppState.set_dh_enabled_for_league("league2", not AppState.is_dh_enabled_for_league("league2"))
 			_save_and_status("DH設定を保存しました。")
 		"draftwaiver":
 			AppState.draft_full_waiver = not AppState.draft_full_waiver

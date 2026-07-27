@@ -667,7 +667,7 @@ func _filter_pass(row: Dictionary) -> bool:
 
 func _opponent_team_ids() -> Array:
 	var ids: Array = []
-	for league_key in ["central", "pacific"]:
+	for league_key in ["league1", "league2"]:
 		var league_ids: Array = []
 		for team_row in GameDb.teams:
 			var team: PSTeam = team_row as PSTeam

@@ -1,7 +1,7 @@
 extends "res://ui/components/dashboard_screen.gd"
 
 # チーム選択画面。ゲーム開始前フローなのでサイドバーは出さず、全チームカードと開始ボタンだけを描く。
-# 第1リーグ(central)を左カラム、第2リーグ(pacific)を右カラムに 2 列ずつ並べる。
+# 第1リーグ(league1)を左カラム、第2リーグ(league2)を右カラムに 2 列ずつ並べる。
 # カードをクリックで選択し、ヘッダの「このチームで開始」ボタン 1 つで開始する。
 
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
@@ -17,8 +17,8 @@ const COLS: int = 2
 const GAP: float = 18.0
 
 # 各リーグの {team, bat, pitch, shienka, dev} を _ready でキャッシュ (毎フレーム再計算しない)。
-var _central: Array = []
-var _pacific: Array = []
+var _league1: Array = []
+var _league2: Array = []
 var _selected_team_id: int = 0
 
 
@@ -30,8 +30,8 @@ func _ready() -> void:
 
 
 func _build_infos() -> void:
-	_central.clear()
-	_pacific.clear()
+	_league1.clear()
+	_league2.clear()
 	for team_row in GameDb.teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
@@ -43,12 +43,12 @@ func _build_infos() -> void:
 			"shienka": TeamFinance.shienka_count(GameDb.players, team.id),
 			"dev": TeamFinance.development_count(GameDb.players, team.id),
 		}
-		if team.league == "central":
-			_central.append(info)
+		if team.league == "league1":
+			_league1.append(info)
 		else:
-			_pacific.append(info)
+			_league2.append(info)
 	if _selected_team_id <= 0:
-		var first: Array = _central if not _central.is_empty() else _pacific
+		var first: Array = _league1 if not _league1.is_empty() else _league2
 		if not first.is_empty():
 			_selected_team_id = ((first[0] as Dictionary)["team"] as PSTeam).id
 
@@ -65,8 +65,8 @@ func _draw() -> void:
 	var sub: String = "選択中: %s" % selected.name if selected != null else "操作する球団を選んでください"
 	_text(sub, Vector2(MARGIN + 2, 96), 15, MUTED if selected == null else BLUE)
 
-	_draw_league(LEFT_X, _central, _league_label(_central, "第1リーグ"))
-	_draw_league(RIGHT_X, _pacific, _league_label(_pacific, "第2リーグ"))
+	_draw_league(LEFT_X, _league1, _league_label(_league1, "第1リーグ"))
+	_draw_league(RIGHT_X, _league2, _league_label(_league2, "第2リーグ"))
 
 
 func _draw_league(area_x: float, infos: Array, label: String) -> void:
@@ -131,8 +131,8 @@ func _build_buttons() -> void:
 	_add_button("back", "戻る", back_rect, func() -> void: AppState.request_screen("start"), "action")
 
 	# カード全体を透明ボタンで覆い、クリックで選択する。
-	_add_select_buttons(LEFT_X, _central)
-	_add_select_buttons(RIGHT_X, _pacific)
+	_add_select_buttons(LEFT_X, _league1)
+	_add_select_buttons(RIGHT_X, _league2)
 
 	_layout_buttons()
 
@@ -160,7 +160,7 @@ func _start_selected() -> void:
 
 
 func _selected_team() -> PSTeam:
-	for info_value in _central + _pacific:
+	for info_value in _league1 + _league2:
 		var team: PSTeam = (info_value as Dictionary)["team"] as PSTeam
 		if team.id == _selected_team_id:
 			return team

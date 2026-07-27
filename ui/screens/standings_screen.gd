@@ -8,8 +8,8 @@ extends "res://ui/components/dashboard_screen.gd"
 # 重い集計 (チーム指標 / 貯金時系列 / 交流戦) は _refresh で1度だけ行いキャッシュ、_draw は描画専念。
 
 const LEAGUES: Array = [
-	{"key": "central", "label": "第1リーグ"},
-	{"key": "pacific", "label": "第2リーグ"},
+	{"key": "league1", "label": "第1リーグ"},
+	{"key": "league2", "label": "第2リーグ"},
 ]
 
 # --- レイアウト基準 (base 座標) ---
@@ -64,7 +64,7 @@ var _head_to_head: Dictionary = {}         # {team_id: {opponent_id: 残り直�
 var _interleague_rows: Array = []          # 交流戦 行 Dictionary (順位つき)
 var _interleague_played: bool = false
 var _balance_by_team: Dictionary = {}      # {team_id: PackedVector2Array(game_no, balance)}
-var _chart_league: String = "central"
+var _chart_league: String = "league1"
 var _last_skip_refresh_day: int = -1
 var _skip_ui_active: bool = false
 var _skip_ui_cancel_pending: bool = false
@@ -75,7 +75,7 @@ func _ready() -> void:
 	AppState.season_skip_progress.connect(_on_season_skip_progress)
 	AppState.season_skip_finished.connect(_on_season_skip_finished)
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
-	_chart_league = team.league if team != null else "central"
+	_chart_league = team.league if team != null else "league1"
 	_last_skip_refresh_day = AppState.current_season.current_day if AppState.current_season != null else -1
 	_skip_ui_active = AppState.season_skip_active
 	_skip_ui_cancel_pending = AppState.season_skip_cancel_pending
@@ -101,8 +101,8 @@ func _draw() -> void:
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(INNER_L, INFO_Y), 13, MUTED)
 
-	_draw_table(TABLE_A, str(LEAGUES[0]["label"]), "", LEAGUE_COLUMNS, _entries_by_league.get("central", []) as Array)
-	_draw_table(TABLE_B, str(LEAGUES[1]["label"]), "", LEAGUE_COLUMNS, _entries_by_league.get("pacific", []) as Array)
+	_draw_table(TABLE_A, str(LEAGUES[0]["label"]), "", LEAGUE_COLUMNS, _entries_by_league.get("league1", []) as Array)
+	_draw_table(TABLE_B, str(LEAGUES[1]["label"]), "", LEAGUE_COLUMNS, _entries_by_league.get("league2", []) as Array)
 	_draw_balance_chart(CHART_RECT)
 	if _interleague_played:
 		_draw_table(INTER_RECT, "交流戦順位表", "", INTER_COLUMNS, _interleague_rows)
@@ -220,10 +220,10 @@ func _build_buttons() -> void:
 	_build_nav_buttons()
 
 	# 貯金グラフのリーグ切替チップ (グラフパネル右上)。
-	_add_button("chart_central", "第1", Rect2(CHART_RECT.end.x - 142, CHART_RECT.position.y + 14, 64, 28),
-		func() -> void: _set_chart_league("central"), "chip_active" if _chart_league == "central" else "chip")
-	_add_button("chart_pacific", "第2", Rect2(CHART_RECT.end.x - 72, CHART_RECT.position.y + 14, 64, 28),
-		func() -> void: _set_chart_league("pacific"), "chip_active" if _chart_league == "pacific" else "chip")
+	_add_button("chart_league1", "第1", Rect2(CHART_RECT.end.x - 142, CHART_RECT.position.y + 14, 64, 28),
+		func() -> void: _set_chart_league("league1"), "chip_active" if _chart_league == "league1" else "chip")
+	_add_button("chart_league2", "第2", Rect2(CHART_RECT.end.x - 72, CHART_RECT.position.y + 14, 64, 28),
+		func() -> void: _set_chart_league("league2"), "chip_active" if _chart_league == "league2" else "chip")
 
 	_layout_buttons()
 
@@ -476,7 +476,7 @@ func _build_interleague_rows(season: PSSeason) -> void:
 		var gb: float = 0.0 if rank == 1 else float((leader_w - int(entry["w"])) + (int(entry["l"]) - leader_l)) / 2.0
 		_interleague_rows.append({
 			"rank": rank, "team": team.name, "team_id": team.id, "color": team.color,
-			"lg": "第1" if team.league == "central" else "第2",
+			"lg": "第1" if team.league == "league1" else "第2",
 			"is_self": team.id == self_id, "is_leader": rank == 1,
 			"g": int(entry["w"]) + int(entry["l"]) + int(entry["d"]),
 			"w": int(entry["w"]), "l": int(entry["l"]), "d": int(entry["d"]),

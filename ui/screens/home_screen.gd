@@ -353,11 +353,29 @@ func _draw_yesterday(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	if rows.is_empty():
 		_text("試合はありません", Vector2(rect.position.x + 18, rect.position.y + 92), 14, MUTED)
 		return
-	# 自軍の試合を先頭(左上)へ寄せる。
-	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
-		return _is_team_game(a as Dictionary, team_id) and not _is_team_game(b as Dictionary, team_id)
+	# 自軍の試合を先頭(左上)へ、続けて自軍と同じリーグの試合を上段へまとめる。
+	# 6試合を 2行x3列 で描くため、リーグでまとめないと相手リーグの試合が上段と下段に割れて読みづらい。
+	# sort_custom は安定ソートではないので、同順位は元の並び (schedule 順) を保つよう index を併用する。
+	var user_team: PSTeam = GameDb.get_team(team_id)
+	var own_league: String = user_team.league if user_team != null else ""
+	var ordered: Array = []
+	for i in range(rows.size()):
+		var game_row: Dictionary = rows[i] as Dictionary
+		ordered.append({
+			"rank": _yesterday_group_rank(game_row, team_id, own_league),
+			"index": i,
+			"game": game_row,
+		})
+	ordered.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var ra: Dictionary = a as Dictionary
+		var rb: Dictionary = b as Dictionary
+		if int(ra.get("rank", 0)) != int(rb.get("rank", 0)):
+			return int(ra.get("rank", 0)) < int(rb.get("rank", 0))
+		return int(ra.get("index", 0)) < int(rb.get("index", 0))
 	)
-	var shown: Array = rows.slice(0, min(rows.size(), 6))
+	var shown: Array = []
+	for entry_value in ordered.slice(0, min(ordered.size(), 6)):
+		shown.append((entry_value as Dictionary).get("game", {}))
 	# セルごとに桁数でフォントサイズを変えると、一桁と二桁の試合が混在したときに
 	# セル間で文字の大きさが揃わず不揃いに見える。表示する試合全体で最も窮屈な組み合わせに
 	# 合わせて1回だけフォントサイズを求め、全セル共通で使うことで見た目を揃える。
@@ -445,7 +463,7 @@ func _score_block_width(away_text: String, home_text: String, size: int) -> floa
 
 func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	var team: PSTeam = GameDb.get_team(team_id)
-	var league_key: String = team.league if team != null else "central"
+	var league_key: String = team.league if team != null else "league1"
 	_panel(rect, "順位 / チーム指標")
 	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
@@ -852,6 +870,16 @@ func _date_for_game(game: Dictionary, season: PSSeason) -> String:
 
 func _is_team_game(game: Dictionary, team_id: int) -> bool:
 	return int(game.get("away_team_id", 0)) == team_id or int(game.get("home_team_id", 0)) == team_id
+
+
+# 「前日の試合結果」の並び順グループ。0=自軍の試合, 1=自軍と同じリーグ, 2=それ以外。
+# 交流戦の日は全試合が両リーグにまたがるため 1 に寄り、実質 schedule 順のままになる。
+func _yesterday_group_rank(game: Dictionary, team_id: int, own_league: String) -> int:
+	if _is_team_game(game, team_id):
+		return 0
+	if own_league.is_empty():
+		return 1
+	return 1 if _game_in_league(game, own_league) else 2
 
 
 # schedule は day 昇順で保持される (PSSchedule.sort_by_day) ため、先頭/末尾の date が

@@ -41,9 +41,9 @@ var _champion_series_text: String = ""
 var _award_rows: Array = []
 var _bat_rows: Array = []
 var _pit_rows: Array = []
-# {"central": Array[cell], "pacific": Array[cell]}。cell = {pid, name, team_id, value}。
-var _best_nine: Dictionary = {"central": [], "pacific": []}
-var _golden_glove: Dictionary = {"central": [], "pacific": []}
+# {"league1": Array[cell], "league2": Array[cell]}。cell = {pid, name, team_id, value}。
+var _best_nine: Dictionary = {"league1": [], "league2": []}
+var _golden_glove: Dictionary = {"league1": [], "league2": []}
 var _player_hits: Array = []
 var _hover_pid: int = 0
 
@@ -184,8 +184,8 @@ func _draw_award_table(rect: Rect2, title: String, rows: Array, accent: Color, l
 		var ry: float = row_top + float(i) * row_h
 		var ty: float = ry + row_h * 0.5 + 5.0
 		_text(str(row.get("label", "")), Vector2(inner_x + 2.0, ty), 14, MUTED, label_w - 4.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-		_draw_player_cell(Rect2(c1_x, ry + 3.0, league_w, row_h - 6.0), row.get("central", {}) as Dictionary)
-		_draw_player_cell(Rect2(c2_x, ry + 3.0, league_w, row_h - 6.0), row.get("pacific", {}) as Dictionary)
+		_draw_player_cell(Rect2(c1_x, ry + 3.0, league_w, row_h - 6.0), row.get("league1", {}) as Dictionary)
+		_draw_player_cell(Rect2(c2_x, ry + 3.0, league_w, row_h - 6.0), row.get("league2", {}) as Dictionary)
 		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 18.0, ry + row_h), HAIRLINE, 1.0)
 
 
@@ -230,7 +230,7 @@ func _draw_award_grid(rect: Rect2, title: String, accent: Color, slot_labels: Ar
 	_round(inner, PANEL_2, Color.TRANSPARENT, 8, 0)
 
 	var col_w: float = inner.size.x * 0.5
-	var league_keys: Array = ["central", "pacific"]
+	var league_keys: Array = ["league1", "league2"]
 	var league_labels: Array = ["第1リーグ", "第2リーグ"]
 
 	# 列見出し + 中央の縦区切り。
@@ -318,8 +318,8 @@ func _refresh() -> void:
 	_award_rows = []
 	_bat_rows = []
 	_pit_rows = []
-	_best_nine = {"central": [], "pacific": []}
-	_golden_glove = {"central": [], "pacific": []}
+	_best_nine = {"league1": [], "league2": []}
+	_golden_glove = {"league1": [], "league2": []}
 
 	var awards: PSAwards = AppState.current_awards
 	if awards == null:
@@ -333,8 +333,8 @@ func _refresh() -> void:
 		_champion_series_text = _japan_series_record(postseason)
 
 	_award_rows = [
-		{"label": "MVP", "central": _player_cell(awards.mvp_central_player_id), "pacific": _player_cell(awards.mvp_pacific_player_id)},
-		{"label": "新人王", "central": _player_cell(awards.rookie_central_player_id), "pacific": _player_cell(awards.rookie_pacific_player_id)},
+		{"label": "MVP", "league1": _player_cell(awards.mvp_league1_player_id), "league2": _player_cell(awards.mvp_league2_player_id)},
+		{"label": "新人王", "league1": _player_cell(awards.rookie_league1_player_id), "league2": _player_cell(awards.rookie_league2_player_id)},
 	]
 	_bat_rows = _build_title_rows(awards.batting_titles, BATTING_TITLE_LABELS, PSAwards.BATTING_CATEGORIES, false)
 	_pit_rows = _build_title_rows(awards.pitching_titles, PITCHING_TITLE_LABELS, PSAwards.PITCHING_CATEGORIES, true)
@@ -343,24 +343,24 @@ func _refresh() -> void:
 
 
 func _build_title_rows(titles: Dictionary, label_map: Dictionary, keys_order: Array, is_pitcher: bool) -> Array:
-	var central: Dictionary = titles.get("central", {}) as Dictionary
-	var pacific: Dictionary = titles.get("pacific", {}) as Dictionary
+	var league1: Dictionary = titles.get("league1", {}) as Dictionary
+	var league2: Dictionary = titles.get("league2", {}) as Dictionary
 	var rows: Array = []
 	for key in keys_order:
 		rows.append({
 			"label": str(label_map.get(key, key)),
-			"central": _player_cell(int(central.get(key, 0)), str(key), is_pitcher),
-			"pacific": _player_cell(int(pacific.get(key, 0)), str(key), is_pitcher),
+			"league1": _player_cell(int(league1.get(key, 0)), str(key), is_pitcher),
+			"league2": _player_cell(int(league2.get(key, 0)), str(key), is_pitcher),
 		})
 	return rows
 
 
 # awards.best_nine / golden_glove (league → Array[{pid, value}]) を表示用に解決する。
-# 返り値 {"central": Array[cell], "pacific": Array[cell]}、cell = {pid, name, team_id, value}。
+# 返り値 {"league1": Array[cell], "league2": Array[cell]}、cell = {pid, name, team_id, value}。
 func _build_award_columns(data: Dictionary) -> Dictionary:
 	return {
-		"central": _resolve_award_slots(data.get("central", []) as Array),
-		"pacific": _resolve_award_slots(data.get("pacific", []) as Array),
+		"league1": _resolve_award_slots(data.get("league1", []) as Array),
+		"league2": _resolve_award_slots(data.get("league2", []) as Array),
 	}
 
 

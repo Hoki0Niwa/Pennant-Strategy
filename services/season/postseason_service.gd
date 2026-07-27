@@ -13,8 +13,8 @@ const POSTSEASON_SCHEDULE_VERSION: int = 1
 const POSTSEASON_MONTH: int = 10
 const WEEKDAY_WEDNESDAY: int = 3
 const WEEKDAY_SATURDAY: int = 6
-const FIRST_LEAGUE: String = "central"
-const SECOND_LEAGUE: String = "pacific"
+const FIRST_LEAGUE: String = "league1"
+const SECOND_LEAGUE: String = "league2"
 const HOME_SIDE_TOP: String = "top"
 const HOME_SIDE_CHALLENGER: String = "challenger"
 
@@ -25,23 +25,23 @@ static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonR
 	result.season_number = season.season_number
 
 	var by_league: Dictionary = _league_standings(season, teams)
-	var central_ranked: Array = by_league.get("central", []) as Array
-	var pacific_ranked: Array = by_league.get("pacific", []) as Array
+	var league1_ranked: Array = by_league.get("league1", []) as Array
+	var league2_ranked: Array = by_league.get("league2", []) as Array
 
-	if central_ranked.size() >= 3:
-		var c2: PSTeam = central_ranked[1] as PSTeam
-		var c3: PSTeam = central_ranked[2] as PSTeam
-		result.cs1_central = PSPostseasonResult.make_pending_series(c2.id, c3.id, CS1_WIN_TARGET, 0)
-	if pacific_ranked.size() >= 3:
-		var p2: PSTeam = pacific_ranked[1] as PSTeam
-		var p3: PSTeam = pacific_ranked[2] as PSTeam
-		result.cs1_pacific = PSPostseasonResult.make_pending_series(p2.id, p3.id, CS1_WIN_TARGET, 0)
-	if central_ranked.size() >= 1:
-		var c1: PSTeam = central_ranked[0] as PSTeam
-		result.cs2_central = PSPostseasonResult.make_pending_series(c1.id, 0, CS2_WIN_TARGET, CS2_ADVANTAGE)
-	if pacific_ranked.size() >= 1:
-		var p1: PSTeam = pacific_ranked[0] as PSTeam
-		result.cs2_pacific = PSPostseasonResult.make_pending_series(p1.id, 0, CS2_WIN_TARGET, CS2_ADVANTAGE)
+	if league1_ranked.size() >= 3:
+		var c2: PSTeam = league1_ranked[1] as PSTeam
+		var c3: PSTeam = league1_ranked[2] as PSTeam
+		result.cs1_league1 = PSPostseasonResult.make_pending_series(c2.id, c3.id, CS1_WIN_TARGET, 0)
+	if league2_ranked.size() >= 3:
+		var p2: PSTeam = league2_ranked[1] as PSTeam
+		var p3: PSTeam = league2_ranked[2] as PSTeam
+		result.cs1_league2 = PSPostseasonResult.make_pending_series(p2.id, p3.id, CS1_WIN_TARGET, 0)
+	if league1_ranked.size() >= 1:
+		var c1: PSTeam = league1_ranked[0] as PSTeam
+		result.cs2_league1 = PSPostseasonResult.make_pending_series(c1.id, 0, CS2_WIN_TARGET, CS2_ADVANTAGE)
+	if league2_ranked.size() >= 1:
+		var p1: PSTeam = league2_ranked[0] as PSTeam
+		result.cs2_league2 = PSPostseasonResult.make_pending_series(p1.id, 0, CS2_WIN_TARGET, CS2_ADVANTAGE)
 	var japan_series: Dictionary = PSPostseasonResult.make_pending_series(0, 0, JS_WIN_TARGET, 0)
 	# 日本シリーズは規定試合数で打ち切らず、決着するまで延長戦を行う (引き分けでの上位勝ち抜けはしない)。
 	japan_series["extension"] = true
@@ -58,19 +58,19 @@ static func advance_stage(postseason: PSPostseasonResult, stage_key: String, sea
 		return {"ok": false, "message": "既に完了しています"}
 
 	# CS2 / JS は前段の勝者を充填
-	if stage_key == "cs2_central":
-		var w: int = int(postseason.cs1_central.get("winner_id", 0))
+	if stage_key == "cs2_league1":
+		var w: int = int(postseason.cs1_league1.get("winner_id", 0))
 		if w == 0:
-			return {"ok": false, "message": "CS1セ・リーグが未消化です"}
+			return {"ok": false, "message": "CS1 第1リーグが未消化です"}
 		s["challenger_id"] = w
-	elif stage_key == "cs2_pacific":
-		var w2: int = int(postseason.cs1_pacific.get("winner_id", 0))
+	elif stage_key == "cs2_league2":
+		var w2: int = int(postseason.cs1_league2.get("winner_id", 0))
 		if w2 == 0:
-			return {"ok": false, "message": "CS1パ・リーグが未消化です"}
+			return {"ok": false, "message": "CS1 第2リーグが未消化です"}
 		s["challenger_id"] = w2
 	elif stage_key == "japan_series":
-		var c: int = int(postseason.cs2_central.get("winner_id", 0))
-		var p: int = int(postseason.cs2_pacific.get("winner_id", 0))
+		var c: int = int(postseason.cs2_league1.get("winner_id", 0))
+		var p: int = int(postseason.cs2_league2.get("winner_id", 0))
 		if c == 0 or p == 0:
 			return {"ok": false, "message": "CS2が未消化です"}
 		if str(s.get("first_home_league", _japan_series_first_home_league(postseason.season_number))) == FIRST_LEAGUE:
@@ -150,25 +150,25 @@ static func _apply_postseason_schedule(postseason: PSPostseasonResult, season: P
 	var second_home_league: String = SECOND_LEAGUE if first_home_league == FIRST_LEAGUE else FIRST_LEAGUE
 
 	_set_series_schedule(
-		postseason.cs1_central,
+		postseason.cs1_league1,
 		_dates_from_offsets(cs1_start, [0, 1, 2]),
 		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
 		season
 	)
 	_set_series_schedule(
-		postseason.cs1_pacific,
+		postseason.cs1_league2,
 		_dates_from_offsets(cs1_start, [0, 1, 2]),
 		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
 		season
 	)
 	_set_series_schedule(
-		postseason.cs2_central,
+		postseason.cs2_league1,
 		_dates_from_offsets(cs2_start, [0, 1, 2, 3, 4, 5]),
 		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
 		season
 	)
 	_set_series_schedule(
-		postseason.cs2_pacific,
+		postseason.cs2_league2,
 		_dates_from_offsets(cs2_start, [0, 1, 2, 3, 4, 5]),
 		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
 		season
@@ -387,26 +387,26 @@ static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, pe
 # CS2 / 日本シリーズの対戦カードを前段の勝者で充填する。両者が確定したら true。
 static func _ensure_series_ready(postseason: PSPostseasonResult, stage_key: String, s: Dictionary) -> bool:
 	match stage_key:
-		"cs2_central":
+		"cs2_league1":
 			if int(s.get("challenger_id", 0)) == 0:
-				s["challenger_id"] = int(postseason.cs1_central.get("winner_id", 0))
-		"cs2_pacific":
+				s["challenger_id"] = int(postseason.cs1_league1.get("winner_id", 0))
+		"cs2_league2":
 			if int(s.get("challenger_id", 0)) == 0:
-				s["challenger_id"] = int(postseason.cs1_pacific.get("winner_id", 0))
+				s["challenger_id"] = int(postseason.cs1_league2.get("winner_id", 0))
 		"japan_series":
-			var central_winner: int = int(postseason.cs2_central.get("winner_id", 0))
-			var pacific_winner: int = int(postseason.cs2_pacific.get("winner_id", 0))
+			var league1_winner: int = int(postseason.cs2_league1.get("winner_id", 0))
+			var league2_winner: int = int(postseason.cs2_league2.get("winner_id", 0))
 			var first_home_league: String = str(s.get("first_home_league", _japan_series_first_home_league(postseason.season_number)))
 			if first_home_league == FIRST_LEAGUE:
 				if int(s.get("top_id", 0)) == 0:
-					s["top_id"] = central_winner
+					s["top_id"] = league1_winner
 				if int(s.get("challenger_id", 0)) == 0:
-					s["challenger_id"] = pacific_winner
+					s["challenger_id"] = league2_winner
 			else:
 				if int(s.get("top_id", 0)) == 0:
-					s["top_id"] = pacific_winner
+					s["top_id"] = league2_winner
 				if int(s.get("challenger_id", 0)) == 0:
-					s["challenger_id"] = central_winner
+					s["challenger_id"] = league1_winner
 	return int(s.get("top_id", 0)) > 0 and int(s.get("challenger_id", 0)) > 0
 
 
@@ -487,7 +487,7 @@ static func _write_postseason_game_log(season: PSSeason, stage_key: String, game
 
 
 static func _league_standings(season: PSSeason, teams: Array) -> Dictionary:
-	var by_league: Dictionary = {"central": [], "pacific": []}
+	var by_league: Dictionary = {"league1": [], "league2": []}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:

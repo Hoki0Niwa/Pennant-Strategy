@@ -2193,7 +2193,7 @@ func _draw_picks_team_grid(area: Rect2, picks: Array, order_mode: String = "alph
 		(picks_by_team[team_id] as Array).append(pick)
 
 	# チーム別 指名選手パネル (2 リーグ行 × 各球団列)。各球団を枠付きパネル + 大きめ行で描く。
-	var leagues: Array = ["central", "pacific"]
+	var leagues: Array = ["league1", "league2"]
 	var gap: float = 12.0
 	var row_h: float = (area.size.y - gap) / 2.0
 	# 指名数が最多の球団でも全員が収まるよう行高を決める (18〜30px に収める)。
@@ -3294,8 +3294,8 @@ func _lottery_row(log: Dictionary) -> Dictionary:
 # 返すため reverse して「1位→6位」にする。片リーグが先に尽きたら残りのリーグだけを詰めて続ける
 # (12球団以外の構成でも破綻しない)。
 func _draft_reveal_card_order() -> Array:
-	var priority_league: String = str(AppState.draft_state.get("priority_league", "central"))
-	var other_league: String = "pacific" if priority_league == "central" else "central"
+	var priority_league: String = str(AppState.draft_state.get("priority_league", "league1"))
+	var other_league: String = "league2" if priority_league == "league1" else "league1"
 	var priority_ids: Array = _league_team_ids_draft_order(priority_league)
 	priority_ids.reverse()
 	var other_ids: Array = _league_team_ids_draft_order(other_league)
@@ -5353,10 +5353,10 @@ func _role_label(role: String) -> String:
 
 
 func _league_label(league: String) -> String:
-	if league == "central":
-		return "セ"
-	if league == "pacific":
-		return "パ"
+	if league == "league1":
+		return "第1"
+	if league == "league2":
+		return "第2"
 	return league
 
 

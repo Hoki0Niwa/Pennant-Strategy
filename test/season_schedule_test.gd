@@ -157,7 +157,7 @@ func test_interleague_is_followed_by_one_rest_card_then_friday_restart() -> void
 
 
 func test_interleague_home_away_swaps_every_two_years() -> void:
-	# 実球団の対戦カード(central id=1 vs pacific id=7)は2年間同じ側がホーム→次の2年で反転、を
+	# 実球団の対戦カード(league1 id=1 vs league2 id=7)は2年間同じ側がホーム→次の2年で反転、を
 	# バケットのシャッフルに関係なく維持する(交流戦の主催権は球団ID固定+年度2年周期で決まる)。
 	var home_by_year: Dictionary = {}
 	for year in [2026, 2027, 2028, 2029, 2030, 2031]:

@@ -124,8 +124,8 @@ var draft_full_waiver: bool = false
 const DEFAULT_AUTO_SAVE_ENABLED: bool = true
 var auto_save_enabled: bool = DEFAULT_AUTO_SAVE_ENABLED
 var league_dh_enabled: Dictionary = {
-	"central": true,
-	"pacific": true,
+	"league1": true,
+	"league2": true,
 }
 
 
@@ -226,8 +226,8 @@ func set_dh_enabled_for_league(league: String, enabled: bool) -> void:
 
 func dh_settings_for_schedule() -> Dictionary:
 	return {
-		"central": bool(league_dh_enabled.get("central", true)),
-		"pacific": bool(league_dh_enabled.get("pacific", true)),
+		"league1": bool(league_dh_enabled.get("league1", true)),
+		"league2": bool(league_dh_enabled.get("league2", true)),
 	}
 
 
@@ -1770,7 +1770,7 @@ func _build_auto_swap_ctx(during_skip: bool) -> Dictionary:
 
 
 func _normalize_league_key(league: String) -> String:
-	return "pacific" if league == "pacific" else "central"
+	return "league2" if league == "league2" else "league1"
 
 
 func _apply_dh_settings_to_current_schedule() -> void:
@@ -1781,7 +1781,7 @@ func _apply_dh_settings_to_current_schedule() -> void:
 		if bool(game.get("played", false)):
 			continue
 		var home_team: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
-		var league_key: String = "central" if home_team == null else _normalize_league_key(home_team.league)
+		var league_key: String = "league1" if home_team == null else _normalize_league_key(home_team.league)
 		game["dh_enabled"] = is_dh_enabled_for_league(league_key)
 
 
@@ -1875,9 +1875,11 @@ func restore_from_save(data: Dictionary) -> bool:
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
 	auto_save_enabled = bool(data.get("auto_save_enabled", DEFAULT_AUTO_SAVE_ENABLED))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
+	# 旧セーブはリーグキーを "central"/"pacific" で保存している。読み込み時だけ引き継ぎ、
+	# 保存は常に新キー ("league1"/"league2") で行う。
 	league_dh_enabled = {
-		"central": bool(saved_dh_settings.get("central", true)),
-		"pacific": bool(saved_dh_settings.get("pacific", true)),
+		"league1": bool(saved_dh_settings.get("league1", saved_dh_settings.get("central", true))),
+		"league2": bool(saved_dh_settings.get("league2", saved_dh_settings.get("pacific", true))),
 	}
 	var post_data: Dictionary = data.get("current_postseason", {}) as Dictionary
 	current_postseason = PSPostseasonResult.from_dict(post_data) if not post_data.is_empty() else null

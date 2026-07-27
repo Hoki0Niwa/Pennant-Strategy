@@ -38,8 +38,8 @@ func _dh_settings_from_options(options: Dictionary) -> Dictionary:
 	var settings_value: Variant = options.get("dh_by_league", options.get("league_dh_enabled", {}))
 	var settings: Dictionary = settings_value as Dictionary if settings_value is Dictionary else {}
 	return {
-		"central": bool(settings.get("central", true)),
-		"pacific": bool(settings.get("pacific", true)),
+		"league1": bool(settings.get("league1", true)),
+		"league2": bool(settings.get("league2", true)),
 	}
 
 

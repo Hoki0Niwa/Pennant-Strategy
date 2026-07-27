@@ -721,8 +721,8 @@ func _load_initial_state() -> void:
 		queue_redraw()
 		return
 
-	_dh_available = AppState.is_dh_enabled_for_league("central") or AppState.is_dh_enabled_for_league("pacific")
-	_non_dh_available = not AppState.is_dh_enabled_for_league("central") or not AppState.is_dh_enabled_for_league("pacific")
+	_dh_available = AppState.is_dh_enabled_for_league("league1") or AppState.is_dh_enabled_for_league("league2")
+	_non_dh_available = not AppState.is_dh_enabled_for_league("league1") or not AppState.is_dh_enabled_for_league("league2")
 	if not _dh_available:
 		_dh_enabled = false
 	elif not _non_dh_available:

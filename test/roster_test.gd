@@ -839,7 +839,7 @@ func test_foreign_contract_poach_blocked_by_shienka_limit() -> void:
 func test_foreign_contract_poach_blocked_by_budget() -> void:
 	var player: PSPlayer = _player({"id": 3005, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
 	var players: Array = [player]
-	var poor_team: PSTeam = PSTeam.from_dict({"id": 2, "name": "Team 2", "short_name": "T2", "league": "central", "funds": 1000})
+	var poor_team: PSTeam = PSTeam.from_dict({"id": 2, "name": "Team 2", "short_name": "T2", "league": "league1", "funds": 1000})
 	var teams: Array = [_team(1), poor_team]
 	var entry: Dictionary = {"player_id": 3005, "from_team_id": 1, "value": 70, "market_salary": 8000, "max_years": 3}
 	var offers: Array = [
@@ -1198,7 +1198,7 @@ func test_extension_offer_blocked_when_team_over_budget() -> void:
 	player.salary = 500
 	var players: Array = [player]
 	# funds を現行年俸ちょうどにし、複数年プレミアム込みの増額分を一切払えないようにする。
-	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "central", "funds": 500})
+	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "league1", "funds": 500})
 	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 0)
 	assert_int((state.get("candidates", []) as Array).size()).is_equal(1)
 	Offseason.finalize_contract_extensions(state, players, [team], season)
@@ -2353,7 +2353,7 @@ func _team(team_id: int) -> PSTeam:
 		"id": team_id,
 		"name": "Team %d" % team_id,
 		"short_name": "T%d" % team_id,
-		"league": "central",
+		"league": "league1",
 		# 予算ゲート導入 (2026-07-12) 後もこのファイルの既存テストは支配下枠/年齢等の判定が
 		# 主眼なので、年俸で誤ブロックしないよう十分大きな既定予算を持たせる。
 		"funds": 400000,

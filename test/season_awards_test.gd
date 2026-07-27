@@ -12,19 +12,19 @@ func test_awards_serialization_roundtrip() -> void:
 	awards.year = 2030
 	awards.season_number = 5
 	awards.best_nine = {
-		"central": [{"pid": 11, "value": "1.001"}, {"pid": 0, "value": ""}],
-		"pacific": [{"pid": 22, "value": ".950"}],
+		"league1": [{"pid": 11, "value": "1.001"}, {"pid": 0, "value": ""}],
+		"league2": [{"pid": 22, "value": ".950"}],
 	}
 	awards.golden_glove = {
-		"central": [{"pid": 33, "value": "+4.2"}],
-		"pacific": [{"pid": 44, "value": "-1.0"}],
+		"league1": [{"pid": 33, "value": "+4.2"}],
+		"league2": [{"pid": 44, "value": "-1.0"}],
 	}
 	var restored: PSAwards = PSAwards.from_dict(awards.to_dict())
-	assert_int(int((restored.best_nine["central"][0] as Dictionary).get("pid", 0))).is_equal(11)
-	assert_str(str((restored.best_nine["central"][0] as Dictionary).get("value", ""))).is_equal("1.001")
-	assert_str(str((restored.best_nine["pacific"][0] as Dictionary).get("value", ""))).is_equal(".950")
-	assert_str(str((restored.golden_glove["central"][0] as Dictionary).get("value", ""))).is_equal("+4.2")
-	assert_int(int((restored.golden_glove["pacific"][0] as Dictionary).get("pid", 0))).is_equal(44)
+	assert_int(int((restored.best_nine["league1"][0] as Dictionary).get("pid", 0))).is_equal(11)
+	assert_str(str((restored.best_nine["league1"][0] as Dictionary).get("value", ""))).is_equal("1.001")
+	assert_str(str((restored.best_nine["league2"][0] as Dictionary).get("value", ""))).is_equal(".950")
+	assert_str(str((restored.golden_glove["league1"][0] as Dictionary).get("value", ""))).is_equal("+4.2")
+	assert_int(int((restored.golden_glove["league2"][0] as Dictionary).get("pid", 0))).is_equal(44)
 
 
 func test_calculate_populates_best_nine_and_golden_glove() -> void:
@@ -42,32 +42,32 @@ func test_calculate_populates_best_nine_and_golden_glove() -> void:
 	GameSimulator.simulate_days(AppState.current_season, 20, false)
 
 	# DH は第1リーグ有効・第2リーグ無効にして、DH 枠がリーグ設定に従うことを検証する。
-	AppState.league_dh_enabled["central"] = true
-	AppState.league_dh_enabled["pacific"] = false
+	AppState.league_dh_enabled["league1"] = true
+	AppState.league_dh_enabled["league2"] = false
 
 	var awards: PSAwards = AwardsService.calculate(AppState.current_season, GameDb.teams)
 	var year: int = AppState.current_season.year
 	var season_number: int = AppState.current_season.season_number
 
-	for league_key in ["central", "pacific"]:
+	for league_key in ["league1", "league2"]:
 		assert_bool(awards.best_nine.has(league_key)).is_true()
 		assert_bool(awards.golden_glove.has(league_key)).is_true()
 		assert_int((awards.best_nine[league_key] as Array).size()).is_equal(PSAwards.BEST_NINE_SLOT_POSITIONS.size())
 		assert_int((awards.golden_glove[league_key] as Array).size()).is_equal(PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS.size())
 
 	# DH 無効リーグの DH 枠 (最終スロット) は必ず空。
-	var pacific_bn: Array = awards.best_nine["pacific"] as Array
-	assert_int(int((pacific_bn[pacific_bn.size() - 1] as Dictionary).get("pid", 0))).is_equal(0)
+	var league2_bn: Array = awards.best_nine["league2"] as Array
+	assert_int(int((league2_bn[league2_bn.size() - 1] as Dictionary).get("pid", 0))).is_equal(0)
 
 	# 役割整合: 投手枠は投手、捕手枠 (埋まっていれば) は野手。
-	_assert_slot_role(awards.best_nine["central"] as Array, 0, true, year, season_number)
-	_assert_slot_role(awards.golden_glove["central"] as Array, 0, true, year, season_number)
-	_assert_slot_role(awards.best_nine["central"] as Array, 1, false, year, season_number)
-	_assert_slot_role(awards.golden_glove["pacific"] as Array, 1, false, year, season_number)
+	_assert_slot_role(awards.best_nine["league1"] as Array, 0, true, year, season_number)
+	_assert_slot_role(awards.golden_glove["league1"] as Array, 0, true, year, season_number)
+	_assert_slot_role(awards.best_nine["league1"] as Array, 1, false, year, season_number)
+	_assert_slot_role(awards.golden_glove["league2"] as Array, 1, false, year, season_number)
 
 	# 少なくとも一方のリーグでベストナイン守備位置枠がいくつか埋まっている (集計経路の健全性)。
 	var filled: int = 0
-	for cell_value in (awards.best_nine["central"] as Array):
+	for cell_value in (awards.best_nine["league1"] as Array):
 		if int((cell_value as Dictionary).get("pid", 0)) > 0:
 			filled += 1
 	assert_int(filled).is_greater(0)

@@ -5,7 +5,7 @@ extends GdUnitTestSuite
 
 
 func test_final_ranks_orders_by_win_rate_then_wins() -> void:
-	var teams: Array = [_team(1, "central"), _team(2, "central"), _team(3, "pacific"), _team(4, "pacific")]
+	var teams: Array = [_team(1, "league1"), _team(2, "league1"), _team(3, "league2"), _team(4, "league2")]
 	var season: PSSeason = _season()
 	season.standings[1] = _stats(70, 50)   # .583
 	season.standings[2] = _stats(60, 60)   # .500
@@ -19,7 +19,7 @@ func test_final_ranks_orders_by_win_rate_then_wins() -> void:
 
 
 func test_recompute_annual_budgets_formula() -> void:
-	var teams: Array = [_team(1, "central", 999999), _team(2, "central", 999999)]
+	var teams: Array = [_team(1, "league1", 999999), _team(2, "league1", 999999)]
 	var season: PSSeason = _season()
 	season.standings[1] = _stats(80, 40)
 	season.standings[2] = _stats(40, 80)
@@ -36,7 +36,7 @@ func test_recompute_annual_budgets_formula() -> void:
 
 
 func test_recompute_reports_over_budget() -> void:
-	var teams: Array = [_team(1, "central"), _team(2, "central")]
+	var teams: Array = [_team(1, "league1"), _team(2, "league1")]
 	var season: PSSeason = _season()
 	season.standings[1] = _stats(50, 50)
 	season.standings[2] = _stats(40, 60)
@@ -49,7 +49,7 @@ func test_recompute_reports_over_budget() -> void:
 
 
 func test_can_afford_addition_boundary() -> void:
-	var team: PSTeam = _team(1, "central", 10000)
+	var team: PSTeam = _team(1, "league1", 10000)
 	var players: Array = [_player({"id": 1, "team_id": 1, "salary": 9000})]
 	assert_bool(TeamFinance.can_afford_addition(players, team, 1000)).is_true()
 	assert_bool(TeamFinance.can_afford_addition(players, team, 1001)).is_false()
@@ -74,8 +74,8 @@ func test_ai_offseason_reserve_tracks_later_markets() -> void:
 
 
 func test_released_cpu_preserves_budget_for_fa() -> void:
-	var team1: PSTeam = _team(1, "central", 25000)
-	var team2: PSTeam = _team(2, "central", 400000)
+	var team1: PSTeam = _team(1, "league1", 25000)
+	var team2: PSTeam = _team(2, "league1", 400000)
 	var players: Array = []
 	# 外国人枠は充足済みなので、後続FA用の予約額だけが必要になる。
 	for i in range(TeamFinance.FOREIGN_HELD_TARGET):
@@ -100,7 +100,7 @@ func test_released_cpu_preserves_budget_for_fa() -> void:
 
 
 func test_fa_ai_preserves_budget_for_foreign_slots() -> void:
-	var team: PSTeam = _team(1, "central", 28000)
+	var team: PSTeam = _team(1, "league1", 28000)
 	var players: Array = [
 		_player({"id": 1, "team_id": 1, "salary": 1000, "foreign_player": true}),
 		_player({"id": 2, "team_id": 1, "salary": 1000, "foreign_player": true}),
@@ -124,14 +124,14 @@ func test_acquisition_scores_prefer_lower_cost_at_equal_value() -> void:
 
 
 func test_trade_payroll_ok_decreasing_allowed_increasing_blocked() -> void:
-	var over_team: PSTeam = _team(1, "central", 10000)
+	var over_team: PSTeam = _team(1, "league1", 10000)
 	var over_players: Array = [_player({"id": 1, "team_id": 1, "salary": 10500})]
 	# 予算超過中でも年俸総額が減る (or 変わらない) 交換は常に許可。
 	assert_bool(TeamFinance.trade_payroll_ok(over_players, over_team, 600, 400)).is_true()
 	# 予算超過中に年俸総額が増える交換は不可。
 	assert_bool(TeamFinance.trade_payroll_ok(over_players, over_team, 400, 600)).is_false()
 
-	var team: PSTeam = _team(2, "central", 10000)
+	var team: PSTeam = _team(2, "league1", 10000)
 	var players: Array = [_player({"id": 2, "team_id": 2, "salary": 9000})]
 	# 増える交換でも、上限内に収まるなら許可。
 	assert_bool(TeamFinance.trade_payroll_ok(players, team, 100, 900)).is_true()
@@ -140,7 +140,7 @@ func test_trade_payroll_ok_decreasing_allowed_increasing_blocked() -> void:
 
 
 func test_fa_user_sign_blocked_when_over_budget() -> void:
-	var teams: Array = [_team(1, "central", 10000), _team(2, "central", 10000)]
+	var teams: Array = [_team(1, "league1", 10000), _team(2, "league1", 10000)]
 	var players: Array = [_player({"id": 1, "team_id": 1, "salary": 5000})]
 	var entry: Dictionary = {
 		"player_id": 99, "from_team": 2, "available": true,
@@ -166,7 +166,7 @@ func test_fa_cpu_never_signs_over_budget_team() -> void:
 		"offer_salary": 50000, "compensation_money": 0,
 		"position": 3, "war": 1.0, "value": 70, "salary": 8000,
 	}
-	var teams: Array = [_team(1, "central", 5000), _team(2, "central", 200000), _team(3, "central", 200000)]
+	var teams: Array = [_team(1, "league1", 5000), _team(2, "league1", 200000), _team(3, "league1", 200000)]
 	var state: Dictionary = {"complete": false, "user_team_id": 0, "declared": [entry], "signings": []}
 	var season: PSSeason = _season()
 	# CPU受諾は確率判定 (_contract_success_chance) を経る。予算ゲート自体は決定的だが、
@@ -179,8 +179,8 @@ func test_fa_cpu_never_signs_over_budget_team() -> void:
 
 
 func test_fa_compensation_transfers_funds() -> void:
-	var signer: PSTeam = _team(1, "central", 100000)
-	var former: PSTeam = _team(2, "central", 100000)
+	var signer: PSTeam = _team(1, "league1", 100000)
+	var former: PSTeam = _team(2, "league1", 100000)
 	var teams: Array = [signer, former]
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
 	var players: Array = [declarer]
@@ -196,7 +196,7 @@ func test_fa_compensation_transfers_funds() -> void:
 
 
 func test_fa_stay_ignores_budget() -> void:
-	var from_team: PSTeam = _team(2, "central", 100)
+	var from_team: PSTeam = _team(2, "league1", 100)
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
 	var players: Array = [declarer]
 	var entry: Dictionary = {
@@ -215,8 +215,8 @@ func test_fa_stay_ignores_budget() -> void:
 # --- 複数年契約 (FA複数年オファー, 2026-07-17 Step2a) ------------------------
 
 func test_fa_signing_sets_multi_year_contract_keys() -> void:
-	var signer: PSTeam = _team(1, "central", 100000)
-	var former: PSTeam = _team(2, "central", 100000)
+	var signer: PSTeam = _team(1, "league1", 100000)
+	var former: PSTeam = _team(2, "league1", 100000)
 	var teams: Array = [signer, former]
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
 	var players: Array = [declarer]
@@ -272,7 +272,7 @@ func test_fa_success_chance_increases_with_offer_years() -> void:
 
 
 func test_fa_user_offer_years_clamped_to_age_limit() -> void:
-	var teams: Array = [_team(1, "central", 999999), _team(2, "central", 100000)]
+	var teams: Array = [_team(1, "league1", 999999), _team(2, "league1", 100000)]
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 5000, "age": 37})
 	var players: Array = [declarer]
 	var entry: Dictionary = {
@@ -289,7 +289,7 @@ func test_fa_user_offer_years_clamped_to_age_limit() -> void:
 
 
 func test_foreign_user_sign_blocked_when_over_budget() -> void:
-	var teams: Array = [_team(1, "central", 5000)]
+	var teams: Array = [_team(1, "league1", 5000)]
 	var players: Array = [_player({"id": 1, "team_id": 1, "salary": 4000})]
 	var candidate: Dictionary = {
 		"candidate_id": 1, "available": true, "salary": 2000, "position": 3,
@@ -307,7 +307,7 @@ func test_foreign_user_sign_blocked_when_over_budget() -> void:
 
 
 func test_released_user_sign_blocked_when_over_budget() -> void:
-	var teams: Array = [_team(1, "central", 5000)]
+	var teams: Array = [_team(1, "league1", 5000)]
 	var candidate_player: PSPlayer = _player({"id": 50, "team_id": 0, "salary": 2000, "position": 3})
 	candidate_player.source_data["released"] = true
 	var players: Array = [_player({"id": 1, "team_id": 1, "salary": 4000}), candidate_player]
@@ -325,8 +325,8 @@ func test_trade_validation_blocks_payroll_increase_over_budget() -> void:
 	var season: PSSeason = _season()
 
 	# 自軍が超過方向: user_team の残額が小さく、受け取り年俸が放出年俸を大きく上回る。
-	var user_team: PSTeam = _team(1, "central", 5000)
-	var cpu_team: PSTeam = _team(2, "central", 100000)
+	var user_team: PSTeam = _team(1, "league1", 5000)
+	var cpu_team: PSTeam = _team(2, "league1", 100000)
 	var teams: Array = [user_team, cpu_team]
 	var give: PSPlayer = _player({"id": 11, "team_id": 1, "salary": 3000})
 	var receive: PSPlayer = _player({"id": 21, "team_id": 2, "salary": 9000})
@@ -336,8 +336,8 @@ func test_trade_validation_blocks_payroll_increase_over_budget() -> void:
 	assert_str(str(result.get("message", ""))).contains("予算")
 
 	# 相手球団が超過方向: 相手球団の残額が小さい。
-	var rich_user: PSTeam = _team(3, "central", 5000)
-	var poor_cpu: PSTeam = _team(4, "central", 800)
+	var rich_user: PSTeam = _team(3, "league1", 5000)
+	var poor_cpu: PSTeam = _team(4, "league1", 800)
 	var teams2: Array = [rich_user, poor_cpu]
 	var give2: PSPlayer = _player({"id": 12, "team_id": 3, "salary": 1000})
 	var receive2: PSPlayer = _player({"id": 31, "team_id": 4, "salary": 500})
@@ -366,7 +366,7 @@ func _stats(wins: int, losses: int) -> PSStats:
 	return stats
 
 
-func _team(id: int, league: String = "central", funds: int = 400000) -> PSTeam:
+func _team(id: int, league: String = "league1", funds: int = 400000) -> PSTeam:
 	return PSTeam.from_dict({"id": id, "name": "T%d" % id, "short_name": "T%d" % id, "league": league, "funds": funds})
 
 

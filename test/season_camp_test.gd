@@ -285,7 +285,7 @@ func _team(team_id: int) -> PSTeam:
 		"id": team_id,
 		"name": "Team %d" % team_id,
 		"short_name": "T%d" % team_id,
-		"league": "central",
+		"league": "league1",
 	})
 
 

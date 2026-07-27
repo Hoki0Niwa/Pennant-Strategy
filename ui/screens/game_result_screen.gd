@@ -824,10 +824,10 @@ func _build_ps_entry(stage_key: String, game: Dictionary) -> Dictionary:
 
 func _ps_stage_short(stage_key: String) -> String:
 	match stage_key:
-		"cs1_central": return "CS1 第1L"
-		"cs1_pacific": return "CS1 第2L"
-		"cs2_central": return "CSF 第1L"
-		"cs2_pacific": return "CSF 第2L"
+		"cs1_league1": return "CS1 第1L"
+		"cs1_league2": return "CS1 第2L"
+		"cs2_league1": return "CSF 第1L"
+		"cs2_league2": return "CSF 第2L"
 		"japan_series": return "日本S"
 	return stage_key
 

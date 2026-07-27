@@ -908,7 +908,7 @@ func _on_player_selected(player_id: int) -> void:
 
 func _build_team_order() -> void:
 	_team_ids = []
-	for league_key in ["central", "pacific"]:
+	for league_key in ["league1", "league2"]:
 		var ids: Array = []
 		for team_row in GameDb.teams:
 			var team: PSTeam = team_row as PSTeam

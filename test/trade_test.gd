@@ -286,7 +286,7 @@ func _season(day: int) -> PSSeason:
 
 
 func _team(id: int) -> PSTeam:
-	return PSTeam.from_dict({"id": id, "name": "T%d" % id, "league": "central"})
+	return PSTeam.from_dict({"id": id, "name": "T%d" % id, "league": "league1"})
 
 
 func _player(data: Dictionary) -> PSPlayer:

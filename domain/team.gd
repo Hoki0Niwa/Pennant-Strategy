@@ -42,7 +42,7 @@ func overall() -> int:
 
 
 func league_label() -> String:
-	return "第1リーグ" if league == "central" else "第2リーグ"
+	return "第1リーグ" if league == "league1" else "第2リーグ"
 
 
 func to_dict() -> Dictionary:

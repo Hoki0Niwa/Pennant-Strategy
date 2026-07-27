@@ -131,7 +131,7 @@ static func is_over_budget(funds: int, payroll: int) -> bool:
 
 
 # リーグ内最終順位 {team_id: rank(1始まり)}。win_rate 降順、同率は wins 降順で順位付け
-# (standings_screen._build_league_rows と同一基準)。リーグは team.league ("central"/"pacific") で分ける。
+# (standings_screen._build_league_rows と同一基準)。リーグは team.league ("league1"/"league2") で分ける。
 static func final_ranks(season: PSSeason, teams: Array) -> Dictionary:
 	var by_league: Dictionary = {}
 	for team_row in teams:

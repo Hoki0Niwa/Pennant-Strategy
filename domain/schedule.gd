@@ -60,20 +60,20 @@ static func generate_pennant_schedule(
 		return team_a.id < team_b.id
 	)
 
-	var centrals: Array = []
-	var pacifics: Array = []
+	var league1_ids: Array = []
+	var league2_ids: Array = []
 	var leagues_by_team_id: Dictionary = {}
 	for team_row in team_rows:
 		var team: PSTeam = team_row as PSTeam
 		leagues_by_team_id[team.id] = team.league
-		if team.league == "central":
-			centrals.append(team.id)
+		if team.league == "league1":
+			league1_ids.append(team.id)
 		else:
-			pacifics.append(team.id)
+			league2_ids.append(team.id)
 
 	var teams_per_league: int = _rule_int("teams_per_league", 6)
-	if centrals.size() != teams_per_league or pacifics.size() != teams_per_league:
-		push_warning("Pennant schedule requires %d central + %d pacific teams." % [teams_per_league, teams_per_league])
+	if league1_ids.size() != teams_per_league or league2_ids.size() != teams_per_league:
+		push_warning("Pennant schedule requires %d league1 + %d league2 teams." % [teams_per_league, teams_per_league])
 		return []
 	if teams_per_league != 6:
 		push_warning("Current NPB-style schedule generator only supports 6 teams per league.")
@@ -81,7 +81,7 @@ static func generate_pennant_schedule(
 
 	var template_rows: Array = _load_template_rows(year, season_number)
 	var games: Array = _schedule_from_template(
-		template_rows, centrals, pacifics, leagues_by_team_id, dh_by_league, year, season_number
+		template_rows, league1_ids, league2_ids, leagues_by_team_id, dh_by_league, year, season_number
 	)
 	sort_by_day(games)
 	var validation: Dictionary = validate_schedule(games, team_rows)
@@ -181,14 +181,14 @@ static func validate_schedule(games: Array, teams: Array) -> Dictionary:
 # テンプレートの月日を対象年度の開幕日基準 day へ変換し、バケット名を実球団 id に置き換える。
 static func _schedule_from_template(
 	template_rows: Array,
-	centrals: Array,
-	pacifics: Array,
+	league1_ids: Array,
+	league2_ids: Array,
 	leagues_by_team_id: Dictionary,
 	dh_by_league: Dictionary,
 	year: int,
 	season_number: int
 ) -> Array:
-	var bucket_to_team: Dictionary = _bucket_assignment(centrals, pacifics, year, season_number)
+	var bucket_to_team: Dictionary = _bucket_assignment(league1_ids, league2_ids, year, season_number)
 	var opening_date: String = SeasonCalendar.opening_date_for_year(year)
 	var base_opening_date: String = SeasonCalendar.opening_date_for_year(TEMPLATE_BASE_YEAR)
 	var games: Array = []
@@ -206,7 +206,7 @@ static func _schedule_from_template(
 		var home_id: int = int(bucket_to_team.get(str(row.get("home_bucket", "")), 0))
 		var is_interleague: bool = bool(row.get("is_interleague", false))
 		if is_interleague:
-			var sides: Array = _interleague_home_away_for_year(away_id, home_id, leagues_by_team_id, centrals, pacifics, year)
+			var sides: Array = _interleague_home_away_for_year(away_id, home_id, leagues_by_team_id, league1_ids, league2_ids, year)
 			away_id = int(sides[0])
 			home_id = int(sides[1])
 		var series_id: int = int(row.get("series_id", -1))
@@ -227,7 +227,7 @@ static func _schedule_from_template(
 	return games
 
 
-# 交流戦の主催権は「central/pacific内の球団ID昇順index」だけで固定して決め、年度2年周期で
+# 交流戦の主催権は「league1/league2内の球団ID昇順index」だけで固定して決め、年度2年周期で
 # 丸ごと反転させる。バケット割当(年ごとの対戦カードのシャッフル)には依存しないため、
 # 同一カード(実球団Avs実球団B)は2年間Aが主催→次の2年間はBが主催、という安定した周期になる。
 # (シャッフルに home/away を委ねると年ごとにほぼランダムになり、周期性が出せないため分離した。)
@@ -235,33 +235,33 @@ static func _interleague_home_away_for_year(
 	away_id: int,
 	home_id: int,
 	leagues_by_team_id: Dictionary,
-	centrals: Array,
-	pacifics: Array,
+	league1_ids: Array,
+	league2_ids: Array,
 	year: int
 ) -> Array:
-	var away_is_central: bool = str(leagues_by_team_id.get(away_id, "")) == "central"
-	var central_id: int = away_id if away_is_central else home_id
-	var pacific_id: int = home_id if away_is_central else away_id
-	var central_index: int = centrals.find(central_id)
-	var pacific_index: int = pacifics.find(pacific_id)
-	var base_central_home: bool = (central_index + pacific_index) % 2 == 0
+	var away_is_league1: bool = str(leagues_by_team_id.get(away_id, "")) == "league1"
+	var league1_id: int = away_id if away_is_league1 else home_id
+	var league2_id: int = home_id if away_is_league1 else away_id
+	var league1_index: int = league1_ids.find(league1_id)
+	var league2_index: int = league2_ids.find(league2_id)
+	var base_league1_home: bool = (league1_index + league2_index) % 2 == 0
 	@warning_ignore("integer_division")
 	var half_cycle: int = (year - TEMPLATE_BASE_YEAR) / 2
 	var flipped: bool = (half_cycle % 2) != 0
-	var central_home: bool = base_central_home != flipped
-	if central_home:
-		return [pacific_id, central_id]
-	return [central_id, pacific_id]
+	var league1_home: bool = base_league1_home != flipped
+	if league1_home:
+		return [league2_id, league1_id]
+	return [league1_id, league2_id]
 
 
 # C1..C6/P1..P6 へ球団 id を割り当てる。リーグ内の並びだけを seed で変え、リーグ所属は固定する。
-static func _bucket_assignment(centrals: Array, pacifics: Array, year: int, season_number: int) -> Dictionary:
-	var central_order: Array = _deterministic_shuffle(centrals, bucket_seed_for_season(year, season_number))
-	var pacific_order: Array = _deterministic_shuffle(pacifics, bucket_seed_for_season(year, season_number) + 7919)
+static func _bucket_assignment(league1_ids: Array, league2_ids: Array, year: int, season_number: int) -> Dictionary:
+	var league1_order: Array = _deterministic_shuffle(league1_ids, bucket_seed_for_season(year, season_number))
+	var league2_order: Array = _deterministic_shuffle(league2_ids, bucket_seed_for_season(year, season_number) + 7919)
 	var out: Dictionary = {}
 	for i in range(6):
-		out["C%d" % (i + 1)] = int(central_order[i])
-		out["P%d" % (i + 1)] = int(pacific_order[i])
+		out["C%d" % (i + 1)] = int(league1_order[i])
+		out["P%d" % (i + 1)] = int(league2_order[i])
 	return out
 
 
@@ -339,13 +339,13 @@ static func _template_row_from_csv(row: Dictionary) -> Dictionary:
 
 
 static func _generated_template_rows(year: int, season_number: int) -> Array:
-	var centrals: Array = []
-	var pacifics: Array = []
+	var league1_ids: Array = []
+	var league2_ids: Array = []
 	for i in range(1, 7):
-		var central_bucket: String = "C%d" % i
-		var pacific_bucket: String = "P%d" % i
-		centrals.append(central_bucket)
-		pacifics.append(pacific_bucket)
+		var league1_bucket: String = "C%d" % i
+		var league2_bucket: String = "P%d" % i
+		league1_ids.append(league1_bucket)
+		league2_ids.append(league2_bucket)
 
 	var rows: Array = []
 	var target_opening: String = SeasonCalendar.opening_date_for_year(year)
@@ -356,8 +356,8 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 		push_error("Failed to build NPB-style calendar blocks.")
 		return []
 
-	var central_rounds: Array = _round_robin_rounds(centrals)
-	var pacific_rounds: Array = _round_robin_rounds(pacifics)
+	var league1_rounds: Array = _round_robin_rounds(league1_ids)
+	var league2_rounds: Array = _round_robin_rounds(league2_ids)
 	var series_id: int = 1
 
 	# 同一カード(5カード)を1巡とする構造は変えず、巡目ごとにカード順だけをシャッフルする
@@ -367,8 +367,8 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 	@warning_ignore("integer_division")
 	var cycles_count: int = intra_days.size() / ROUNDS_PER_CYCLE
 	var round_order_seed: int = bucket_seed_for_season(year, season_number)
-	var central_round_orders: Array = _round_orders_for_cycles(cycles_count, round_order_seed + 31)
-	var pacific_round_orders: Array = _round_orders_for_cycles(cycles_count, round_order_seed + 53113)
+	var league1_round_orders: Array = _round_orders_for_cycles(cycles_count, round_order_seed + 31)
+	var league2_round_orders: Array = _round_orders_for_cycles(cycles_count, round_order_seed + 53113)
 
 	# 実際のNPBは「8×3連戦+終盤に単独1試合」のような単一ルールではなく、対戦カードごとに
 	# 「7×3連戦+2連戦×2」等も混在する(docs/agent_memory 参照: 2026年公式日程を12球団分検証済み)。
@@ -387,29 +387,29 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 	var slot_is_holiday_monday: Array = _slot_is_holiday_monday_flags(intra_days, target_opening)
 
 	var cycle_length_seed: int = bucket_seed_for_season(year, season_number)
-	var central_protected_cycles: Array = _gw_protected_cycles_by_round_index(central_round_orders, intra_days, target_opening)
-	var pacific_protected_cycles: Array = _gw_protected_cycles_by_round_index(pacific_round_orders, intra_days, target_opening)
+	var league1_protected_cycles: Array = _gw_protected_cycles_by_round_index(league1_round_orders, intra_days, target_opening)
+	var league2_protected_cycles: Array = _gw_protected_cycles_by_round_index(league2_round_orders, intra_days, target_opening)
 	# 祝日月曜始まりのカードは短縮対象から除外する(火/金カードと違い「前寄せ/後ろ寄せ」の
 	# 内部アンカーを別途持たせずに済むよう、稀な祝日月曜カードは常に3連戦のままにする)。
-	_mark_holiday_monday_slots_protected(central_protected_cycles, central_round_orders, slot_is_holiday_monday)
-	_mark_holiday_monday_slots_protected(pacific_protected_cycles, pacific_round_orders, slot_is_holiday_monday)
+	_mark_holiday_monday_slots_protected(league1_protected_cycles, league1_round_orders, slot_is_holiday_monday)
+	_mark_holiday_monday_slots_protected(league2_protected_cycles, league2_round_orders, slot_is_holiday_monday)
 	# 開幕戦・交流戦明け・オールスター明けは長い休養の直後なので、必ず3連戦にする
 	# (短縮カードだと不自然、ユーザー指摘)。intra_days は両リーグ共通なので判定も共通。
 	var long_break_protected_block_indices: Dictionary = _long_break_protected_block_indices(intra_days)
-	_mark_long_break_slots_protected(central_protected_cycles, central_round_orders, long_break_protected_block_indices)
-	_mark_long_break_slots_protected(pacific_protected_cycles, pacific_round_orders, long_break_protected_block_indices)
+	_mark_long_break_slots_protected(league1_protected_cycles, league1_round_orders, long_break_protected_block_indices)
+	_mark_long_break_slots_protected(league2_protected_cycles, league2_round_orders, long_break_protected_block_indices)
 	# 単独1試合(length=1)は9月以降限定で組む(ユーザー指摘、2026-07-08)。
-	var central_is_september: Array = _is_september_or_later_by_round_index(central_round_orders, intra_days, target_opening)
-	var pacific_is_september: Array = _is_september_or_later_by_round_index(pacific_round_orders, intra_days, target_opening)
+	var league1_is_september: Array = _is_september_or_later_by_round_index(league1_round_orders, intra_days, target_opening)
+	var league2_is_september: Array = _is_september_or_later_by_round_index(league2_round_orders, intra_days, target_opening)
 
-	var central_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, central_round_orders, cycle_length_seed + 88001, central_protected_cycles, same_week_as_next, central_is_september)
-	var pacific_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, pacific_round_orders, cycle_length_seed + 271828, pacific_protected_cycles, same_week_as_next, pacific_is_september)
+	var league1_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league1_round_orders, cycle_length_seed + 88001, league1_protected_cycles, same_week_as_next, league1_is_september)
+	var league2_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league2_round_orders, cycle_length_seed + 271828, league2_protected_cycles, same_week_as_next, league2_is_september)
 	# 単独1試合は実際には「他の対戦カードがその窓の残り日へ相乗りする」ことが多い
 	# (ユーザー指摘: 木曜移動日の2連戦相当を単独戦と誤認していた、という反省を踏まえた再設計)。
 	# 相乗り元(ドナー)は同じ9月以降のどこかの巡にある別 round_index の length=3 を
 	# 1試合分だけ2に短縮して提供する(ドナー自身の総試合数は変わらない)。
-	var central_companions: Dictionary = _assign_single_game_companions(central_cycle_plans, central_round_orders, central_protected_cycles, central_is_september, same_week_as_next, cycle_length_seed + 313111)
-	var pacific_companions: Dictionary = _assign_single_game_companions(pacific_cycle_plans, pacific_round_orders, pacific_protected_cycles, pacific_is_september, same_week_as_next, cycle_length_seed + 707909)
+	var league1_companions: Dictionary = _assign_single_game_companions(league1_cycle_plans, league1_round_orders, league1_protected_cycles, league1_is_september, same_week_as_next, cycle_length_seed + 313111)
+	var league2_companions: Dictionary = _assign_single_game_companions(league2_cycle_plans, league2_round_orders, league2_protected_cycles, league2_is_september, same_week_as_next, cycle_length_seed + 707909)
 
 	for block_index in range(INTRALEAGUE_BLOCK_COUNT):
 		var position_in_cycle: int = block_index % ROUNDS_PER_CYCLE
@@ -417,73 +417,73 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 		var cycle_index: int = block_index / ROUNDS_PER_CYCLE
 		var cycle_number: int = cycle_index + 1
 
-		var central_round_index: int = int((central_round_orders[cycle_index] as Array)[position_in_cycle])
-		var central_plan: Dictionary = central_cycle_plans[central_round_index] as Dictionary
-		var central_length: int = int((central_plan.get("lengths", []) as Array)[cycle_index])
-		var central_designated_home: bool = bool((central_plan.get("designated_home", []) as Array)[cycle_index])
-		var central_specs: Array = []
-		if central_companions.has(block_index):
-			var central_companion: Dictionary = central_companions[block_index] as Dictionary
+		var league1_round_index: int = int((league1_round_orders[cycle_index] as Array)[position_in_cycle])
+		var league1_plan: Dictionary = league1_cycle_plans[league1_round_index] as Dictionary
+		var league1_length: int = int((league1_plan.get("lengths", []) as Array)[cycle_index])
+		var league1_designated_home: bool = bool((league1_plan.get("designated_home", []) as Array)[cycle_index])
+		var league1_specs: Array = []
+		if league1_companions.has(block_index):
+			var league1_companion: Dictionary = league1_companions[block_index] as Dictionary
 			series_id = _append_intraleague_series_specs_with_day_offset(
-				central_specs, central_rounds[central_round_index] as Array, cycle_number, series_id,
-				central_designated_home, int(central_companion.get("recipient_day_offset", 0))
+				league1_specs, league1_rounds[league1_round_index] as Array, cycle_number, series_id,
+				league1_designated_home, int(league1_companion.get("recipient_day_offset", 0))
 			)
-			var central_donor_round_index: int = int(central_companion.get("donor_round_index", 0))
-			var central_donor_plan: Dictionary = central_cycle_plans[central_donor_round_index] as Dictionary
-			var central_donor_cycle_index: int = int(central_companion.get("donor_cycle_index", cycle_index))
-			var central_donor_designated_home: bool = bool((central_donor_plan.get("designated_home", []) as Array)[central_donor_cycle_index])
+			var league1_donor_round_index: int = int(league1_companion.get("donor_round_index", 0))
+			var league1_donor_plan: Dictionary = league1_cycle_plans[league1_donor_round_index] as Dictionary
+			var league1_donor_cycle_index: int = int(league1_companion.get("donor_cycle_index", cycle_index))
+			var league1_donor_designated_home: bool = bool((league1_donor_plan.get("designated_home", []) as Array)[league1_donor_cycle_index])
 			series_id = _append_intraleague_series_specs_with_day_offset(
-				central_specs, central_rounds[central_donor_round_index] as Array, cycle_number, series_id,
-				central_donor_designated_home, int(central_companion.get("companion_day_offset", 1))
+				league1_specs, league1_rounds[league1_donor_round_index] as Array, cycle_number, series_id,
+				league1_donor_designated_home, int(league1_companion.get("companion_day_offset", 1))
 			)
 		else:
 			series_id = _append_intraleague_series_specs(
-				central_specs,
-				central_rounds[central_round_index] as Array,
+				league1_specs,
+				league1_rounds[league1_round_index] as Array,
 				cycle_number,
 				series_id,
-				central_length,
-				central_designated_home
+				league1_length,
+				league1_designated_home
 			)
-		_append_series_rows(rows, int(intra_days[block_index]), central_specs, target_opening)
+		_append_series_rows(rows, int(intra_days[block_index]), league1_specs, target_opening)
 
-		var pacific_round_index: int = int((pacific_round_orders[cycle_index] as Array)[position_in_cycle])
-		var pacific_plan: Dictionary = pacific_cycle_plans[pacific_round_index] as Dictionary
-		var pacific_length: int = int((pacific_plan.get("lengths", []) as Array)[cycle_index])
-		var pacific_designated_home: bool = bool((pacific_plan.get("designated_home", []) as Array)[cycle_index])
-		var pacific_specs: Array = []
-		if pacific_companions.has(block_index):
-			var pacific_companion: Dictionary = pacific_companions[block_index] as Dictionary
+		var league2_round_index: int = int((league2_round_orders[cycle_index] as Array)[position_in_cycle])
+		var league2_plan: Dictionary = league2_cycle_plans[league2_round_index] as Dictionary
+		var league2_length: int = int((league2_plan.get("lengths", []) as Array)[cycle_index])
+		var league2_designated_home: bool = bool((league2_plan.get("designated_home", []) as Array)[cycle_index])
+		var league2_specs: Array = []
+		if league2_companions.has(block_index):
+			var league2_companion: Dictionary = league2_companions[block_index] as Dictionary
 			series_id = _append_intraleague_series_specs_with_day_offset(
-				pacific_specs, pacific_rounds[pacific_round_index] as Array, cycle_number, series_id,
-				pacific_designated_home, int(pacific_companion.get("recipient_day_offset", 0))
+				league2_specs, league2_rounds[league2_round_index] as Array, cycle_number, series_id,
+				league2_designated_home, int(league2_companion.get("recipient_day_offset", 0))
 			)
-			var pacific_donor_round_index: int = int(pacific_companion.get("donor_round_index", 0))
-			var pacific_donor_plan: Dictionary = pacific_cycle_plans[pacific_donor_round_index] as Dictionary
-			var pacific_donor_cycle_index: int = int(pacific_companion.get("donor_cycle_index", cycle_index))
-			var pacific_donor_designated_home: bool = bool((pacific_donor_plan.get("designated_home", []) as Array)[pacific_donor_cycle_index])
+			var league2_donor_round_index: int = int(league2_companion.get("donor_round_index", 0))
+			var league2_donor_plan: Dictionary = league2_cycle_plans[league2_donor_round_index] as Dictionary
+			var league2_donor_cycle_index: int = int(league2_companion.get("donor_cycle_index", cycle_index))
+			var league2_donor_designated_home: bool = bool((league2_donor_plan.get("designated_home", []) as Array)[league2_donor_cycle_index])
 			series_id = _append_intraleague_series_specs_with_day_offset(
-				pacific_specs, pacific_rounds[pacific_donor_round_index] as Array, cycle_number, series_id,
-				pacific_donor_designated_home, int(pacific_companion.get("companion_day_offset", 1))
+				league2_specs, league2_rounds[league2_donor_round_index] as Array, cycle_number, series_id,
+				league2_donor_designated_home, int(league2_companion.get("companion_day_offset", 1))
 			)
 		else:
 			series_id = _append_intraleague_series_specs(
-				pacific_specs,
-				pacific_rounds[pacific_round_index] as Array,
+				league2_specs,
+				league2_rounds[league2_round_index] as Array,
 				cycle_number,
 				series_id,
-				pacific_length,
-				pacific_designated_home
+				league2_length,
+				league2_designated_home
 			)
-		_append_series_rows(rows, int(intra_days[block_index]), pacific_specs, target_opening)
+		_append_series_rows(rows, int(intra_days[block_index]), league2_specs, target_opening)
 
 	for card_index in range(interleague_days.size()):
 		var interleague_specs: Array = []
-		for central_index in range(centrals.size()):
-			var pacific_index: int = (central_index + card_index) % pacifics.size()
-			var c_id: String = str(centrals[central_index])
-			var p_id: String = str(pacifics[pacific_index])
-			var ha: Array = _interleague_home_pair(c_id, p_id, central_index, pacific_index)
+		for league1_index in range(league1_ids.size()):
+			var league2_index: int = (league1_index + card_index) % league2_ids.size()
+			var c_id: String = str(league1_ids[league1_index])
+			var p_id: String = str(league2_ids[league2_index])
+			var ha: Array = _interleague_home_pair(c_id, p_id, league1_index, league2_index)
 			interleague_specs.append(_series_spec(str(ha[1]), str(ha[0]), true, series_id, -1))
 			series_id += 1
 		_append_series_rows(rows, int(interleague_days[card_index]), interleague_specs, target_opening)
@@ -513,7 +513,7 @@ static func _make_template_row(day: int, away_bucket: String, home_bucket: Strin
 
 # 戻り値の "interleague" と "intra" はどちらも実際のスケジューリングにそのまま使う実カレンダー。
 # カードの短縮(1・2連戦)は開始日を前倒ししない固定週間隔方式(_append_series_rows の
-# カード内アンカー参照)なので、"intra" は central/pacific 両リーグで共有できる。
+# カード内アンカー参照)なので、"intra" は league1/league2 両リーグで共有できる。
 static func _template_three_game_block_days(year: int) -> Dictionary:
 	var base_opening: String = SeasonCalendar.opening_date_for_year(TEMPLATE_BASE_YEAR)
 	# 曜日の並び (Tue/Fri 判定・交流戦/オールスター期間) は「開幕日=必ず金曜」という不変条件のおかげで
@@ -778,10 +778,10 @@ static func _extra_home_bucket(team_a: String, team_b: String) -> String:
 	return team_a if index_a < index_b else team_b
 
 
-static func _interleague_home_pair(central_id: Variant, pacific_id: Variant, central_index: int, pacific_index: int) -> Array:
-	if (central_index + pacific_index) % 2 == 0:
-		return [central_id, pacific_id]
-	return [pacific_id, central_id]
+static func _interleague_home_pair(league1_id: Variant, league2_id: Variant, league1_index: int, league2_index: int) -> Array:
+	if (league1_index + league2_index) % 2 == 0:
+		return [league1_id, league2_id]
+	return [league2_id, league1_id]
 
 
 static func _round_robin_rounds(team_ids: Array) -> Array:
@@ -1115,7 +1115,7 @@ static func _make_game(
 	series_game_no: int,
 	cycle_number: int
 ) -> Dictionary:
-	var home_league: String = str(leagues_by_team_id.get(home_team_id, "central"))
+	var home_league: String = str(leagues_by_team_id.get(home_team_id, "league1"))
 	var dh_enabled: bool = bool(dh_by_league.get(home_league, true))
 	return {
 		"day": day,

@@ -7,8 +7,8 @@ extends "res://ui/components/dashboard_screen.gd"
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const LEAGUES: Array = [
-	{"key": "central", "label": "第1リーグ"},
-	{"key": "pacific", "label": "第2リーグ"},
+	{"key": "league1", "label": "第1リーグ"},
+	{"key": "league2", "label": "第2リーグ"},
 ]
 
 const RANKING_TOP_COUNT: int = 7

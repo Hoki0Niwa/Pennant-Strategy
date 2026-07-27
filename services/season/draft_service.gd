@@ -1141,8 +1141,8 @@ static func _empty_team_counts(teams: Array) -> Dictionary:
 
 static func _draft_reverse_order(teams: Array, season: PSSeason) -> Array:
 	var by_league: Dictionary = {
-		"central": [],
-		"pacific": [],
+		"league1": [],
+		"league2": [],
 	}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
@@ -1156,7 +1156,7 @@ static func _draft_reverse_order(teams: Array, season: PSSeason) -> Array:
 		)
 
 	var priority: String = _priority_league(season.year if season != null else 0)
-	var other: String = "pacific" if priority == "central" else "central"
+	var other: String = "league2" if priority == "league1" else "league1"
 	var priority_teams: Array = by_league[priority] as Array
 	var other_teams: Array = by_league[other] as Array
 	var order: Array = []
@@ -1193,7 +1193,7 @@ static func _team_rank_cmp(a: PSTeam, b: PSTeam, season: PSSeason) -> bool:
 
 
 static func _priority_league(year: int) -> String:
-	return "central" if year % 2 == 1 else "pacific"
+	return "league1" if year % 2 == 1 else "league2"
 
 
 static func _generate_candidate_pool(count: int) -> Array:
