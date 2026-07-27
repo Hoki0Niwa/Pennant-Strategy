@@ -2104,7 +2104,7 @@ static func process_contract_update(players: Array, teams: Array, season: PSSeas
 # (上記「契約更新: 延長交渉」節) に集約。ここには契約ロック判定など共有ヘルパーのみ残す。
 
 # 年俸再査定をスキップすべきか。FA移籍・戦力外獲得で今オフに合意した単年ロック (翌オフには
-# 通常の成績査定へ戻る、旧セーブ互換のため存続) と、複数年契約でカバーされている年 (契約満了年の
+# 通常の成績査定へ戻る) と、複数年契約でカバーされている年 (契約満了年の
 # オフは対象外、PSPlayer.is_multi_year_locked_offseason 参照) の OR。
 static func _contract_salary_is_locked(player: PSPlayer, year: int) -> bool:
 	if year <= 0:

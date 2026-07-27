@@ -183,7 +183,8 @@ func breaking_score() -> int:
 	return _z_breaking_score() if _has_pitching_z() else 50
 
 
-# 変化球アーセナルを返す。保存済みがあればそれを、無ければ z から派生 (後方互換)。
+# 変化球アーセナルを返す。明示的に持っていればそれを、無ければ z から派生する。
+# (初期シード/生成選手は arsenal を持たず、キャンプの球種習得で初めて明示値が入る。)
 # derive_from_z は決定論的なので呼ぶたびに同じ結果になる (role 適性が安定する)。
 func arsenal_or_derived() -> Array:
 	if not arsenal_snapshot.is_empty():
@@ -192,7 +193,6 @@ func arsenal_or_derived() -> Array:
 
 
 # 怪我の表示ラベル ("部位名(重症度)")。健康なら空文字。
-# 旧セーブ (type/severity 無し・injury_days>0) は日数からティアを推定する (PSInjuryModel)。
 func injury_display_label() -> String:
 	return PSInjuryModel.display_label(injury_type, injury_severity, injury_days)
 

@@ -37,21 +37,6 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	OFFSEASON_STEP_GROWTH,
 	OFFSEASON_STEP_CONTRACT_UPDATE,
 ]
-# 旧セーブ移行用: 数値ステップ時代 (〜2026-07-20) の番号 = この配列の index。
-# offseason_results の旧キー "step_<番号>" も同じ対応でIDへ読み替える。
-const _LEGACY_OFFSEASON_STEP_IDS: Array[String] = [
-	OFFSEASON_STEP_RETIREMENT,
-	OFFSEASON_STEP_RELEASE_EDIT,
-	OFFSEASON_STEP_RELEASE_COMMIT,
-	OFFSEASON_STEP_DRAFT_MAIN,
-	OFFSEASON_STEP_DRAFT_DEVELOPMENT,
-	OFFSEASON_STEP_RELEASED_MARKET,
-	OFFSEASON_STEP_FA_MARKET,
-	OFFSEASON_STEP_FOREIGN_MARKET,
-	OFFSEASON_STEP_CAMP,
-	OFFSEASON_STEP_GROWTH,
-	OFFSEASON_STEP_CONTRACT_UPDATE,
-]
 
 const OFFSEASON_PANEL_NONE: String = "none"
 const OFFSEASON_PANEL_RESULTS: String = "results"
@@ -120,7 +105,7 @@ var auto_trade_for_user_team: bool = false
 # ドラフト完全ウェーバー制。ON のとき1巡目の入札・抽選を行わず、本指名の全巡を
 # 前年下位球団から順 (スネークなし) に指名する。次回のドラフト生成から適用。
 var draft_full_waiver: bool = false
-# 新規ゲームと設定キーを持たない旧セーブは、進行消失を避けるため自動セーブを有効にする。
+# 進行消失を避けるため、新規ゲームの自動セーブは既定で有効。
 const DEFAULT_AUTO_SAVE_ENABLED: bool = true
 var auto_save_enabled: bool = DEFAULT_AUTO_SAVE_ENABLED
 var league_dh_enabled: Dictionary = {
@@ -1457,29 +1442,11 @@ func finalize_offseason() -> bool:
 	return start_next_season()
 
 
-# セーブ値のステップを現行IDへ正規化する。旧セーブは int 番号 (= _LEGACY_OFFSEASON_STEP_IDS の
-# index) で保存されているため、String 化と同時にここで読み替える。
+# セーブ値のステップを現行IDへ正規化する (未知のIDは先頭ステップへ倒す)。
 func _normalize_saved_offseason_step(raw_step: Variant) -> String:
 	if raw_step is String and OFFSEASON_STEP_ORDER.has(raw_step):
 		return raw_step
-	if raw_step is int or raw_step is float:
-		var legacy_index: int = clampi(int(raw_step), 0, _LEGACY_OFFSEASON_STEP_IDS.size() - 1)
-		return _LEGACY_OFFSEASON_STEP_IDS[legacy_index]
 	return OFFSEASON_STEP_RETIREMENT
-
-
-# offseason_results の旧キー "step_<番号>" をステップIDキーへ読み替える (新形式キーはそのまま)。
-func _migrate_offseason_result_keys(results: Dictionary) -> Dictionary:
-	var migrated: Dictionary = {}
-	for key in results.keys():
-		var key_text: String = str(key)
-		if key_text.begins_with("step_") and key_text.trim_prefix("step_").is_valid_int():
-			var legacy_index: int = int(key_text.trim_prefix("step_"))
-			if legacy_index >= 0 and legacy_index < _LEGACY_OFFSEASON_STEP_IDS.size():
-				migrated[_LEGACY_OFFSEASON_STEP_IDS[legacy_index]] = results[key]
-				continue
-		migrated[key_text] = results[key]
-	return migrated
 
 
 func simulate_next_game(during_skip: bool = false) -> Dictionary:
@@ -1831,15 +1798,14 @@ func restore_from_save(data: Dictionary) -> bool:
 		GameDb.replace_players_from_rows(player_rows)
 
 	# R4 Step1: チーム予算 (funds) を復元。teams 本体は初期シードから再ロードされるため、
-	# funds だけ id 一致で上書きする (キー欠落 = 旧セーブ は初期値のまま)。
+	# funds だけ id 一致で上書きする。
 	var saved_funds: Dictionary = data.get("team_funds", {}) as Dictionary
 	for funds_key in saved_funds.keys():
 		var team: PSTeam = GameDb.get_team(int(funds_key))
 		if team != null:
 			team.funds = int(saved_funds[funds_key])
 
-	# 年次予算キャップ導入 (2026-07-12): previous_rank も毎オフ更新されるため funds と同様に復元する
-	# (キー欠落 = 旧セーブ はシード値のまま、最初のオフで再計算される)。
+	# 年次予算キャップ導入 (2026-07-12): previous_rank も毎オフ更新されるため funds と同様に復元する。
 	var saved_ranks: Dictionary = data.get("team_previous_ranks", {}) as Dictionary
 	for rank_key in saved_ranks.keys():
 		var ranked_team: PSTeam = GameDb.get_team(int(rank_key))
@@ -1847,11 +1813,6 @@ func restore_from_save(data: Dictionary) -> bool:
 			ranked_team.previous_rank = int(saved_ranks[rank_key])
 
 	var saved_auto_lineup: Dictionary = data.get("team_auto_lineup", {}) as Dictionary
-	if not data.has("team_auto_lineup"):
-		for team_value in GameDb.teams:
-			var default_lineup_team: PSTeam = team_value as PSTeam
-			if default_lineup_team != null:
-				default_lineup_team.auto_lineup = true
 	for lineup_key in saved_auto_lineup.keys():
 		var lineup_team: PSTeam = GameDb.get_team(int(lineup_key))
 		if lineup_team != null:
@@ -1859,7 +1820,7 @@ func restore_from_save(data: Dictionary) -> bool:
 
 	selected_team_id = int(data.get("selected_team_id", 0))
 	offseason_step = _normalize_saved_offseason_step(data.get("offseason_step", OFFSEASON_STEP_RETIREMENT))
-	offseason_results = _migrate_offseason_result_keys((data.get("offseason_results", {}) as Dictionary).duplicate(true))
+	offseason_results = (data.get("offseason_results", {}) as Dictionary).duplicate(true)
 	draft_state = (data.get("draft_state", {}) as Dictionary).duplicate(true)
 	released_market_state = (data.get("released_market_state", {}) as Dictionary).duplicate(true)
 	geneki_draft_state = (data.get("geneki_draft_state", {}) as Dictionary).duplicate(true)
@@ -1875,11 +1836,9 @@ func restore_from_save(data: Dictionary) -> bool:
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
 	auto_save_enabled = bool(data.get("auto_save_enabled", DEFAULT_AUTO_SAVE_ENABLED))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
-	# 旧セーブはリーグキーを "central"/"pacific" で保存している。読み込み時だけ引き継ぎ、
-	# 保存は常に新キー ("league1"/"league2") で行う。
 	league_dh_enabled = {
-		"league1": bool(saved_dh_settings.get("league1", saved_dh_settings.get("central", true))),
-		"league2": bool(saved_dh_settings.get("league2", saved_dh_settings.get("pacific", true))),
+		"league1": bool(saved_dh_settings.get("league1", true)),
+		"league2": bool(saved_dh_settings.get("league2", true)),
 	}
 	var post_data: Dictionary = data.get("current_postseason", {}) as Dictionary
 	current_postseason = PSPostseasonResult.from_dict(post_data) if not post_data.is_empty() else null
@@ -1887,7 +1846,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	current_awards = PSAwards.from_dict(awards_data) if not awards_data.is_empty() else null
 	var season_data: Dictionary = data.get("season", {}) as Dictionary
 	current_season = PSSeason.from_dict(season_data) if not season_data.is_empty() else null
-	# 新形式セーブは選手履歴が blob に含まれず season_history テーブル側にある。
+	# 選手履歴は blob ではなく season_history テーブル側にある。
 	SaveService.hydrate_season_history(current_season)
 	_apply_dh_settings_to_current_schedule()
 	PSDefenseAlignmentProfile.reset_cache()

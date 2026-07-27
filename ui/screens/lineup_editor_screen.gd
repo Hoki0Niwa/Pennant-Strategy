@@ -780,9 +780,6 @@ func _load_backups(season: PSSeason) -> void:
 			var pid: int = int(id_value)
 			if pid > 0 and _is_fielder(pid):
 				list.append(pid)
-		# 旧セーブ後方互換: backup_ids 無し・sub_id ありなら控え1扱い。
-		if list.is_empty() and int(slot.get("sub_id", 0)) > 0 and _is_fielder(int(slot.get("sub_id", 0))):
-			list.append(int(slot.get("sub_id", 0)))
 		if not list.is_empty():
 			_backups[pos] = list
 		var interval: int = int(slot.get("sub_start_interval", 0))

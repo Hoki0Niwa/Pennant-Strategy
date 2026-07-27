@@ -45,27 +45,12 @@ static func from_dict(data: Dictionary) -> PSAwards:
 	var awards: PSAwards = PSAwards.new()
 	awards.year = int(data.get("year", 0))
 	awards.season_number = int(data.get("season_number", 1))
-	# 旧セーブ/旧シーズンアーカイブはリーグを "central"/"pacific" で保存している。
-	# 読み込み時だけ引き継ぎ、保存は常に新キー ("league1"/"league2") で行う。
-	awards.mvp_league1_player_id = int(data.get("mvp_league1_player_id", data.get("mvp_central_player_id", 0)))
-	awards.mvp_league2_player_id = int(data.get("mvp_league2_player_id", data.get("mvp_pacific_player_id", 0)))
-	awards.rookie_league1_player_id = int(data.get("rookie_league1_player_id", data.get("rookie_central_player_id", 0)))
-	awards.rookie_league2_player_id = int(data.get("rookie_league2_player_id", data.get("rookie_pacific_player_id", 0)))
-	awards.batting_titles = _migrate_league_keys(data.get("batting_titles", {}) as Dictionary)
-	awards.pitching_titles = _migrate_league_keys(data.get("pitching_titles", {}) as Dictionary)
-	awards.best_nine = _migrate_league_keys(data.get("best_nine", {}) as Dictionary)
-	awards.golden_glove = _migrate_league_keys(data.get("golden_glove", {}) as Dictionary)
+	awards.mvp_league1_player_id = int(data.get("mvp_league1_player_id", 0))
+	awards.mvp_league2_player_id = int(data.get("mvp_league2_player_id", 0))
+	awards.rookie_league1_player_id = int(data.get("rookie_league1_player_id", 0))
+	awards.rookie_league2_player_id = int(data.get("rookie_league2_player_id", 0))
+	awards.batting_titles = (data.get("batting_titles", {}) as Dictionary).duplicate(true)
+	awards.pitching_titles = (data.get("pitching_titles", {}) as Dictionary).duplicate(true)
+	awards.best_nine = (data.get("best_nine", {}) as Dictionary).duplicate(true)
+	awards.golden_glove = (data.get("golden_glove", {}) as Dictionary).duplicate(true)
 	return awards
-
-
-# リーグ別辞書の旧キー ("central"/"pacific") を新キーへ寄せる。新キーが既にあればそちらを優先。
-static func _migrate_league_keys(source: Dictionary) -> Dictionary:
-	var out: Dictionary = source.duplicate(true)
-	for legacy_key in {"central": "league1", "pacific": "league2"}:
-		if not out.has(legacy_key):
-			continue
-		var new_key: String = "league1" if legacy_key == "central" else "league2"
-		if not out.has(new_key):
-			out[new_key] = out[legacy_key]
-		out.erase(legacy_key)
-	return out

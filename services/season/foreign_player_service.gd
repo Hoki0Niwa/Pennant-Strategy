@@ -96,50 +96,6 @@ static func create_foreign_market_state(players: Array, teams: Array, season: PS
 	}
 
 
-static func _ensure_state_v3(state: Dictionary) -> void:
-	var max_candidate_id: int = 0
-	for candidate_value in state.get("candidates", []) as Array:
-		max_candidate_id = maxi(max_candidate_id, int((candidate_value as Dictionary).get("candidate_id", 0)))
-	if int(state.get("version", 0)) >= 3:
-		# 壊れた/手動編集されたセーブでも、生成先の配列だけは安全に復元する。
-		if not state.has("next_candidate_id"):
-			state["next_candidate_id"] = max_candidate_id + 1
-		if not state.has("next_request_id"):
-			state["next_request_id"] = 1
-		if not state.has("requests"):
-			state["requests"] = []
-		if not state.has("user_request"):
-			state["user_request"] = {}
-		if not state.has("user_candidate_ids"):
-			state["user_candidate_ids"] = []
-		return
-	state["version"] = 3
-	state["next_candidate_id"] = max_candidate_id + 1
-	state["next_request_id"] = 1
-	state["requests"] = []
-	state["user_request"] = {}
-	state["user_candidate_ids"] = []
-
-
-# v3→v4: 契約市場フェーズを追加。移行時点で進行中だった v3 セーブは、対象選手の再判定をせず
-# scout フェーズへ直接復帰する (中断していた手動スカウトの継続を優先し、遡って契約市場を
-# 割り込ませない)。
-static func _ensure_state_v4(state: Dictionary) -> void:
-	_ensure_state_v3(state)
-	if int(state.get("version", 0)) >= 4:
-		if not state.has("phase"):
-			state["phase"] = "scout"
-		if not state.has("contract_entries"):
-			state["contract_entries"] = []
-		if not state.has("contract_signings"):
-			state["contract_signings"] = []
-		return
-	state["version"] = 4
-	state["phase"] = "scout"
-	state["contract_entries"] = []
-	state["contract_signings"] = []
-
-
 # スカウト操作 (configure_user_scout_request / submit_user_foreign_decision / auto_pick_for_user) の
 # 共通フェーズガード。phase が "scout" 以外 (契約市場が未確定/結果表示中、またはスカウト結果表示中) なら
 # 空でない {ok:false, message, state} を返す。呼び出し元はこれが空なら処理を継続してよい。
@@ -153,7 +109,6 @@ static func _scout_phase_guard(state: Dictionary) -> Dictionary:
 
 
 static func configure_user_scout_request(state: Dictionary, position: String, archetype: String, budget_band: String) -> Dictionary:
-	_ensure_state_v4(state)
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "外国人補強は既に完了しています。", "state": state}
 	var phase_block: Dictionary = _scout_phase_guard(state)
@@ -183,7 +138,6 @@ static func configure_user_scout_request(state: Dictionary, position: String, ar
 
 
 static func submit_user_foreign_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
-	_ensure_state_v4(state)
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "外国人補強は既に完了しています。", "state": state}
 	var phase_block: Dictionary = _scout_phase_guard(state)
@@ -220,7 +174,6 @@ static func submit_user_foreign_decision(state: Dictionary, players: Array, team
 
 
 static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	_ensure_state_v4(state)
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
@@ -254,7 +207,6 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 # 留め、専用の結果パネル ("次へ" 操作) を経てから complete を立てる。show_result=false (CPU自動経路/
 # レポーター/「すべてAIに任せる」) は結果パネルで止まらず即 complete=true にする。
 static func complete_foreign_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0, show_result: bool = false) -> Dictionary:
-	_ensure_state_v4(state)
 	# 契約市場 (残留/引き抜き) が未解決なら、スカウトへ進む前に自動解決する。この経路は常に全自動
 	# (auto_user_team=true) かつ結果パネルなし (show_result=false) で契約市場を通過する。
 	if str(state.get("phase", "scout")) == "contract":
@@ -304,7 +256,6 @@ static func complete_foreign_market_automatically(state: Dictionary, players: Ar
 
 
 static func complete_all_foreign_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	_ensure_state_v4(state)
 	# 手動検索中の候補を閉じてから、自球団を除外せず全チームを同じAIロジックへ流す。
 	_close_request_candidates(state, state.get("user_candidate_ids", []) as Array, true)
 	state["user_request"] = {}
@@ -313,7 +264,6 @@ static func complete_all_foreign_market_automatically(state: Dictionary, players
 
 
 static func finalize_foreign_market(state: Dictionary) -> Dictionary:
-	_ensure_state_v4(state)
 	if bool(state.get("finalized", false)):
 		return state.get("final_result", {}) as Dictionary
 	var signings: Array = (state.get("signings", []) as Array).duplicate(true)
@@ -353,7 +303,6 @@ static func finalize_foreign_market(state: Dictionary) -> Dictionary:
 
 
 static func available_user_candidates(state: Dictionary, players: Array, teams: Array) -> Array:
-	_ensure_state_v4(state)
 	var rows: Array = []
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var need: Dictionary = FaMarketService._build_position_need(players, teams)
@@ -420,7 +369,7 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, _se
 # ============================================================ 外国人契約市場 (残留/引き抜き)
 
 # 市場入りの対象: 在籍中 (非引退) の外国人で、複数年契約中でない者
-# (契約キー欠落の旧セーブ/初期シード外国人は contract_end_year=0 なので全員対象になる=意図した移行挙動)。
+# (初期シードの外国人は contract_end_year=0 なので全員対象になる=意図した挙動)。
 static func _build_contract_market_entries(players: Array, teams: Array, season: PSSeason) -> Array:
 	var year: int = season.year if season != null else 0
 	var league_ctx: Dictionary = {}
@@ -752,7 +701,6 @@ static func _apply_contract_departure(player: PSPlayer, team_id: int, year: int)
 # 経由せず直接 "scout" へ進む。対象が最初から無ければ create_foreign_market_state の時点で
 # 既に "scout" になっており、この関数は何もしない。
 static func resolve_foreign_contract_market(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0, auto_user_team: bool = false, show_result: bool = true) -> Dictionary:
-	_ensure_state_v4(state)
 	if str(state.get("phase", "contract")) != "contract":
 		return {"ok": true, "state": state}
 	var year: int = int(state.get("year", season.year if season != null else 0))
@@ -780,7 +728,6 @@ static func resolve_foreign_contract_market(state: Dictionary, players: Array, t
 
 # 契約市場の結果パネル ("次へ") から呼ばれ、phase を "contract_result" → "scout" へ進める。
 static func advance_foreign_contract_result(state: Dictionary) -> Dictionary:
-	_ensure_state_v4(state)
 	if str(state.get("phase", "")) != "contract_result":
 		return {"ok": false, "message": "外国人契約市場の結果は表示されていません。", "state": state}
 	state["phase"] = "scout"
@@ -789,7 +736,6 @@ static func advance_foreign_contract_result(state: Dictionary) -> Dictionary:
 
 # 外国人スカウトの結果パネル ("次へ") から呼ばれ、phase "scout_result" を経て complete を立てる。
 static func advance_foreign_scout_result(state: Dictionary) -> Dictionary:
-	_ensure_state_v4(state)
 	if str(state.get("phase", "")) != "scout_result":
 		return {"ok": false, "message": "外国人補強の結果は表示されていません。", "state": state}
 	state["complete"] = true
@@ -799,7 +745,6 @@ static func advance_foreign_scout_result(state: Dictionary) -> Dictionary:
 # ユーザーの契約提示 (自軍満了者への残留提示、または他球団満了者への引き抜き提示)。
 # 予算/枠は速報チェックのみで、最終確認は resolve_foreign_contract_market の採択時に再度行う。
 static func submit_user_contract_offer(state: Dictionary, players: Array, teams: Array, _season: PSSeason, player_id: int, years: int) -> Dictionary:
-	_ensure_state_v4(state)
 	if str(state.get("phase", "contract")) != "contract":
 		return {"ok": false, "message": "外国人契約市場は既に終了しています。", "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
@@ -835,7 +780,6 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 
 
 static func withdraw_user_contract_offer(state: Dictionary, player_id: int) -> Dictionary:
-	_ensure_state_v4(state)
 	var entry: Dictionary = _contract_entry_by_player_id(state, player_id)
 	if entry.is_empty():
 		return {"ok": false, "message": "その選手は外国人契約市場の対象ではありません。", "state": state}

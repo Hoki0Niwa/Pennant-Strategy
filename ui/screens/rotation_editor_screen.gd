@@ -588,8 +588,6 @@ func _relief_from_roles(roles: Dictionary) -> Dictionary:
 	var long_ids: Array = []
 	for id_value in roles.get("long_ids", []) as Array:
 		long_ids.append(int(id_value))
-	if int(roles.get("long_id", 0)) > 0 and not long_ids.has(int(roles.get("long_id", 0))):
-		long_ids.append(int(roles.get("long_id", 0)))
 	var middle: Array = []
 	for id_value in roles.get("middle_ids", []) as Array:
 		middle.append(int(id_value))

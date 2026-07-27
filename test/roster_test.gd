@@ -205,28 +205,12 @@ func test_foreign_user_can_sign_then_issue_another_request() -> void:
 		assert_str(str(candidate.get("scout_position", ""))).is_equal("reliever")
 		assert_str(str(candidate.get("archetype", ""))).is_equal("strikeout")
 
-
-func test_foreign_scout_request_migrates_legacy_candidate_ids_without_collision() -> void:
-	Rng.set_seed_value(20260715)
-	var legacy_candidate: Dictionary = {"candidate_id": 54, "available": true}
-	var state: Dictionary = {
-		"version": 2,
-		"year": 2026,
-		"user_team_id": 1,
-		"complete": false,
-		"candidates": [legacy_candidate],
-		"signings": [],
-	}
-	var result: Dictionary = ForeignPlayerService.configure_user_scout_request(state, "outfield", "defense", "standard")
-	assert_bool(bool(result.get("ok", false))).is_true()
-	# v2 セーブは v3 (候補ID採番) → v4 (契約市場フェーズ) と連続移行し、既存候補が無い旧セーブは
-	# scout フェーズへ直接復帰する。
-	assert_int(int(state.get("version", 0))).is_equal(4)
-	assert_str(str(state.get("phase", ""))).is_equal("scout")
-	var candidate_ids: Array = state.get("user_candidate_ids", []) as Array
-	assert_int(candidate_ids.size()).is_equal(ForeignPlayerService.scout_candidate_count("standard"))
-	assert_int(int(candidate_ids[0])).is_equal(55)
-	assert_int(int(state.get("next_candidate_id", 0))).is_equal(58)
+	# 候補IDは state.next_candidate_id で採番するので、リクエストをまたいでも衝突しない。
+	var seen_ids: Dictionary = {}
+	for candidate_value in state.get("candidates", []) as Array:
+		var candidate_id: int = int((candidate_value as Dictionary).get("candidate_id", 0))
+		assert_bool(seen_ids.has(candidate_id)).is_false()
+		seen_ids[candidate_id] = true
 
 
 # --- FA日数 -------------------------------------------------------------------

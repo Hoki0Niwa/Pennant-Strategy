@@ -94,7 +94,7 @@ static func aggregate_biases(arsenal: Array) -> Dictionary:
 	}
 
 
-# z 能力から妥当な arsenal を *決定論的* に合成する (後方互換 derive-on-read と生成の単一ソース)。
+# z 能力から妥当な arsenal を *決定論的* に合成する (derive-on-read と生成の単一ソース)。
 # mastery は PSPitcherUsageModel の既存合成 (synth_mastery_values) をそのまま採用するため、
 # 役割適性 (starter_depth_rating 等) は従来挙動を保つ。type のみ z リーンと player_id ハッシュで割当。
 # 注: derive-on-read で繰り返し呼ばれるため Rng を使わず player_id ハッシュで決定論にする。

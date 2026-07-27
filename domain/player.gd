@@ -158,7 +158,7 @@ var source_data: Dictionary = {}
 var z_abilities: Dictionary = {}
 var raw_abilities: Dictionary = {}
 # 変化球(球種)アーセナル: [{ "type": <String>, "mastery": <float z> }, ...]。
-# 空の場合は record 側 arsenal_or_derived() が z から派生する (後方互換)。詳細 PSPitchTypes。
+# 空の場合は record 側 arsenal_or_derived() が z から派生する (初期シード/生成選手は空)。詳細 PSPitchTypes。
 var arsenal: Array = []
 var fatigue: int
 var injury_days: int
@@ -213,7 +213,7 @@ func apply_dict(data: Dictionary) -> void:
 	fixed_slot = int(data.get("fixed_slot", 0))
 	allowed_slots = _normalize_slot_array(data.get("allowed_slots", []))
 	preferred_slots = _normalize_slot_array(data.get("preferred_slots", []))
-	# FA閾値: 保存値があれば尊重、無ければ (初期シード/旧セーブ) 出身から既定計算。
+	# FA閾値: 保存値があれば尊重、無ければ (初期シード CSV は列を持たない) 出身から既定計算。
 	fa_eligible_years = int(data.get("fa_eligible_years", 0))
 	if fa_eligible_years <= 0:
 		fa_eligible_years = _default_fa_eligible_years()

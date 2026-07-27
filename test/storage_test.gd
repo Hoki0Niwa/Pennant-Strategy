@@ -116,12 +116,6 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	AppState.contract_update_state["phase"] = "resolved"
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 
-	var legacy_payload: Dictionary = payload.duplicate(true)
-	legacy_payload.erase("team_auto_lineup")
-	team.auto_lineup = false
-	assert_bool(AppState.restore_from_save(legacy_payload)).is_true()
-	assert_bool((GameDb.get_team(team.id) as PSTeam).auto_lineup).is_true()
-
 	_restore_app_state(old_state, test_save_id)
 
 

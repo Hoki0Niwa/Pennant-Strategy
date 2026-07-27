@@ -2,14 +2,14 @@ extends RefCounted
 class_name SQLiteStore
 
 const SaveContext = preload("res://services/storage/save_context.gd")
-const RUNTIME_TEMPLATE_DB_PATH = "res://data/pennant_strategy.sqlite"
 
-# SQLite の user_version に保存する永続化スキーマ世代。
-# required columns と indexes が揃っているかを起動時に確認する。
+# SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
+# セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
+# 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
 const SCHEMA_VERSION: int = 6
 
-# スキーマ構築 (CREATE TABLE / INDEX / レガシー検出 / PRAGMA table_info) はプロセス内で
-# 一度実行できれば十分。毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
+# スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
+# 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
 # 固定オーバーヘッドが積み上がるため、成功後はこのフラグでスキップする。
 static var _schema_ensured: bool = false
 static var _schema_ensured_path: String = ""
@@ -283,7 +283,7 @@ static func seed_record_fingerprints(fingerprints: Dictionary) -> void:
 	_fingerprint_db_path = runtime_db_path()
 
 
-# 正規化テーブルから全選手年度記録を復元する。RecordStore.load_records() では blob より優先される。
+# 正規化テーブルから全選手年度記録を復元する (RecordStore.load_records() の唯一の hydrate 元)。
 static func load_all_player_season_record_dicts() -> Array:
 	var db: Object = _open_runtime_db()
 	if db == null:
@@ -293,20 +293,6 @@ static func load_all_player_season_record_dicts() -> Array:
 	var ps_rows: Array = _select_with_bindings(db, "SELECT * FROM pitcher_stats", [])
 	_close(db)
 	return _merge_normalized_rows(psr_rows, bs_rows, ps_rows)
-
-
-# 正規化テーブルがまだ空なら、古い blob だけのセーブとして扱って hydrate ルートへ戻す。
-static func normalized_tables_empty() -> bool:
-	if not is_available():
-		return true
-	var db: Object = _open_runtime_db()
-	if db == null:
-		return true
-	var rows: Array = _select_with_bindings(db, "SELECT COUNT(*) AS count FROM player_season_records", [])
-	_close(db)
-	if rows.is_empty():
-		return true
-	return int((rows[0] as Dictionary).get("count", 0)) == 0
 
 
 # -----------------------------------------------------------------------------
@@ -792,9 +778,6 @@ static func _open_runtime_db() -> Object:
 	var runtime_path: String = runtime_db_path()
 	if runtime_path.is_empty():
 		return null
-	if not _ensure_runtime_db_file(runtime_path):
-		return null
-
 	var db: Object = ClassDB.instantiate("SQLite") as Object
 	if db == null:
 		return null
@@ -820,43 +803,12 @@ static func _open_runtime_db() -> Object:
 	return db
 
 
-static func _ensure_runtime_db_file(runtime_path: String) -> bool:
-	if FileAccess.file_exists(runtime_path):
-		return true
-	# Per-save runtime DBs must start empty; copying the bundled seed/template DB can
-	# bring an older record schema into a brand-new save folder.
-	if SaveContext.has_active_save():
-		return true
-
-	var template_path: String = ProjectSettings.globalize_path(RUNTIME_TEMPLATE_DB_PATH)
-	var global_runtime_path: String = ProjectSettings.globalize_path(runtime_path)
-	if FileAccess.file_exists(global_runtime_path):
-		return true
-	if not FileAccess.file_exists(template_path):
-		return true
-
-	if DirAccess.copy_absolute(template_path, global_runtime_path) == OK:
-		return true
-
-	var source: FileAccess = FileAccess.open(template_path, FileAccess.READ)
-	if source == null:
-		return true
-
-	var bytes: PackedByteArray = source.get_buffer(source.get_length())
-	var target: FileAccess = FileAccess.open(global_runtime_path, FileAccess.WRITE)
-	if target == null:
-		return true
-
-	target.store_buffer(bytes)
-	return true
-
-
 static func _ensure_runtime_schema(db: Object) -> bool:
 	var statements: Array = [
 		"CREATE TABLE IF NOT EXISTS runtime_blobs (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 		# --- 永続化スキーマ v1: 年度別選手記録の正規化テーブル ---
-		# blob (runtime_blobs.record_store) と dual-write される。読み込みは新テーブル優先、
-		# 空なら blob から hydrate する。
+		# 選手年度レコードはここが真実。blob (runtime_blobs.record_store) 側には
+		# team_records / season_archives だけを残す。
 		"""CREATE TABLE IF NOT EXISTS player_season_records (
 			player_id INTEGER NOT NULL,
 			year INTEGER NOT NULL,
@@ -980,121 +932,6 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 	for statement_row in statements:
 		var statement: String = str(statement_row)
 		if not _execute(db, statement):
-			return false
-	if not _ensure_player_season_raw_abilities_column(db):
-		return false
-	if not _ensure_player_season_advanced_stats_column(db):
-		return false
-	if not _ensure_player_season_arsenal_snapshot_column(db):
-		return false
-	if not _ensure_player_season_season_injury_days_column(db):
-		return false
-	if not _ensure_player_season_injury_return_day_column(db):
-		return false
-	if not _ensure_player_season_injury_type_column(db):
-		return false
-	if not _ensure_player_season_injury_severity_column(db):
-		return false
-	if not _ensure_player_season_fa_eligible_years_column(db):
-		return false
-	if not _ensure_pitcher_batted_ball_columns(db):
-		return false
-	return true
-
-
-static func _ensure_player_season_raw_abilities_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "raw_abilities_snapshot_json":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN raw_abilities_snapshot_json TEXT NOT NULL DEFAULT '{}'")
-
-
-static func _ensure_player_season_advanced_stats_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "advanced_stats_json":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN advanced_stats_json TEXT NOT NULL DEFAULT '{}'")
-
-
-static func _ensure_player_season_arsenal_snapshot_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "arsenal_snapshot_json":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN arsenal_snapshot_json TEXT NOT NULL DEFAULT '[]'")
-
-
-static func _ensure_player_season_fa_eligible_years_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "fa_eligible_years":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN fa_eligible_years INTEGER NOT NULL DEFAULT 0")
-
-
-static func _ensure_player_season_season_injury_days_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "season_injury_days":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN season_injury_days INTEGER NOT NULL DEFAULT 0")
-
-
-static func _ensure_player_season_injury_return_day_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "injury_return_day":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_return_day INTEGER NOT NULL DEFAULT 0")
-
-
-static func _ensure_player_season_injury_type_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "injury_type":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_type TEXT NOT NULL DEFAULT ''")
-
-
-static func _ensure_player_season_injury_severity_column(db: Object) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(player_season_records)")
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		if str(col.get("name", "")) == "injury_severity":
-			return true
-	return _execute(db, "ALTER TABLE player_season_records ADD COLUMN injury_severity INTEGER NOT NULL DEFAULT 0")
-
-
-static func _ensure_pitcher_batted_ball_columns(db: Object) -> bool:
-	return _ensure_table_columns(db, "pitcher_stats", {
-		"ground_balls_allowed": "INTEGER NOT NULL DEFAULT 0",
-		"line_drives_allowed": "INTEGER NOT NULL DEFAULT 0",
-		"infield_flies_allowed": "INTEGER NOT NULL DEFAULT 0",
-		"outfield_flies_allowed": "INTEGER NOT NULL DEFAULT 0",
-	})
-
-
-static func _ensure_table_columns(db: Object, table_name: String, column_defs: Dictionary) -> bool:
-	var cols: Array = _query(db, "PRAGMA table_info(%s)" % table_name)
-	var existing: Dictionary = {}
-	for col_value in cols:
-		var col: Dictionary = col_value as Dictionary
-		existing[str(col.get("name", ""))] = true
-	for column_value in column_defs.keys():
-		var column_name: String = str(column_value)
-		if bool(existing.get(column_name, false)):
-			continue
-		var column_def: String = str(column_defs[column_value])
-		if not _execute(db, "ALTER TABLE %s ADD COLUMN %s %s" % [table_name, column_name, column_def]):
 			return false
 	return true
 

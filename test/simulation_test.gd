@@ -1229,7 +1229,7 @@ func test_saved_relief_roles_are_kept_in_reliever_pool() -> void:
 			"closer_id": role_pick.player_id,
 			"setup_ids": [],
 			"middle_ids": [],
-			"long_id": 0,
+			"long_ids": [],
 		},
 	}
 

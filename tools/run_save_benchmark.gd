@@ -2,8 +2,7 @@ extends Node
 
 # アクティブセーブの save/load 所要時間を実測する調査ツール (headless 可)。
 # 実行: godot --headless res://tools/run_save_benchmark.tscn
-# 注意: アクティブセーブへ実際に書き込む (旧形式セーブは履歴分離形式へ移行される)。
-# 計測前にセーブフォルダのバックアップを取ること。
+# 注意: アクティブセーブへ実際に書き込む。計測前にセーブフォルダのバックアップを取ること。
 
 
 func _ready() -> void:
@@ -25,8 +24,7 @@ func _ready() -> void:
 		return
 	_print_history_sizes()
 
-	# 1回目: 旧形式セーブなら履歴の全日分書き込み (移行) が入る。
-	# 2回目以降が定常コスト (日送りオートセーブ1回に相当)。
+	# 1回目はキャッシュ未シードの分だけ重い。2回目以降が定常コスト (日送りオートセーブ1回に相当)。
 	for i in range(3):
 		var s0: int = Time.get_ticks_msec()
 		var ok: bool = SaveService.save_state(AppState)
@@ -35,7 +33,7 @@ func _ready() -> void:
 			i, s1 - s0, str(ok), SQLiteStore.last_record_upsert_count,
 		])
 
-	# 新形式での再ロード時間
+	# 保存直後の再ロード時間
 	var r0: int = Time.get_ticks_msec()
 	var payload2: Dictionary = SaveService.load_state()
 	var r1: int = Time.get_ticks_msec()

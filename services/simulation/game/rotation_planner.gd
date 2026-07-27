@@ -340,8 +340,8 @@ static func relief_role_by_pitcher(saved: Dictionary, available_relievers: Array
 	var relief_roles: Dictionary = saved.get("relief_roles", {}) as Dictionary
 	if relief_roles.is_empty():
 		return default_relief_role_by_pitcher(available_relievers)
-	# long は複数可 (long_ids 配列)。旧セーブの単数 long_id も読む。
-	for id_value in _long_ids(relief_roles):
+	# long は複数可 (long_ids 配列)。
+	for id_value in relief_roles.get("long_ids", []) as Array:
 		_add_role_id(roles, int(id_value), RELIEF_ROLE_LONG, allowed, restrict)
 	for id_value in relief_roles.get("middle_ids", []) as Array:
 		_add_role_id(roles, int(id_value), RELIEF_ROLE_MIDDLE, allowed, restrict)
@@ -368,15 +368,6 @@ static func default_relief_role_by_pitcher(available_relievers: Array) -> Dictio
 	return roles
 
 
-# long ロールの player_id 群 (long_ids 配列 + 旧 long_id 単数)。
-static func _long_ids(relief_roles: Dictionary) -> Array:
-	var ids: Array = []
-	for id_value in relief_roles.get("long_ids", []) as Array:
-		_append_unique_id(ids, int(id_value))
-	_append_unique_id(ids, int(relief_roles.get("long_id", 0)))
-	return ids
-
-
 static func relief_role_order_ids(saved: Dictionary) -> Array:
 	var relief_roles: Dictionary = saved.get("relief_roles", {}) as Dictionary
 	if relief_roles.is_empty():
@@ -387,7 +378,7 @@ static func relief_role_order_ids(saved: Dictionary) -> Array:
 		_append_unique_id(ids, int(id_value))
 	for id_value in relief_roles.get("middle_ids", []) as Array:
 		_append_unique_id(ids, int(id_value))
-	for id_value in _long_ids(relief_roles):
+	for id_value in relief_roles.get("long_ids", []) as Array:
 		_append_unique_id(ids, int(id_value))
 	return ids
 

@@ -274,21 +274,9 @@ static func tier_name(severity: int) -> String:
 	return str(TIER_NAMES.get(severity, "軽傷"))
 
 
-# 旧セーブ後方互換: 明示 severity が無い (=0 だが injury_days>0) とき日数からティアを推定。
-static func severity_from_days(days: int) -> int:
-	if days <= 15:
-		return TIER_MINOR
-	if days <= 45:
-		return TIER_MODERATE
-	if days <= 150:
-		return TIER_MAJOR
-	return TIER_SEVERE
-
-
 # UI 表示ラベル "部位名(重症度)"。健康(injury_days<=0)なら空文字。
 static func display_label(injury_type: String, injury_severity: int, injury_days: int) -> String:
 	if injury_days <= 0:
 		return ""
-	var sev: int = injury_severity if injury_severity > 0 else severity_from_days(injury_days)
 	var type_label: String = injury_type if not injury_type.is_empty() else "故障"
-	return "%s(%s)" % [type_label, tier_name(sev)]
+	return "%s(%s)" % [type_label, tier_name(injury_severity)]

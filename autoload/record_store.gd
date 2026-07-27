@@ -212,7 +212,7 @@ func to_dict() -> Dictionary:
 
 func load_from_dict(payload: Dictionary) -> void:
 	# メモリ側を丸ごと入れ替えるため「前回永続化した内容」のキャッシュは無効。
-	# 空キャッシュ = 次回 save は全行書き込み (正規化テーブルが blob 未migrateで空の場合に必須)。
+	# 空キャッシュ = 次回 save は全行書き込み。
 	SQLiteStoreService.reset_record_fingerprints()
 	_player_records.clear()
 	_team_records.clear()
@@ -289,9 +289,8 @@ func load_records() -> void:
 		records_changed.emit()
 		return
 
-	# 新テーブルが populated ならそこから hydrate (検索高速化の本命)。
-	# team_records / season_archives はまだ blob 管理なので、その分は後段で blob から拾う。
-	if not SQLiteStoreService.normalized_tables_empty():
+	# 選手年度レコードは正規化テーブルが真実、team_records / season_archives は blob 側。
+	if SQLiteStoreService.is_available():
 		var psr_dicts: Array = SQLiteStoreService.load_all_player_season_record_dicts()
 		var fingerprints: Dictionary = {}
 		for row_value in psr_dicts:
@@ -301,18 +300,13 @@ func load_records() -> void:
 			fingerprints["%d:%d:%d" % [record.player_id, record.year, record.season_number]] = record.to_dict().hash()
 		# 正規化テーブルから hydrate した = DB は今のメモリ内容を保持している。
 		# フィンガープリントをシードしておくと、セッション初回の save も変更行だけの書き込みで済む。
-		# (blob からのロード時はテーブルが空なのでシードせず、全行書き込みで migrate させる。)
 		SQLiteStoreService.seed_record_fingerprints(fingerprints)
-		# team_records / season_archives は依然 blob 側にあるので blob からも読む。
 		var blob_payload: Dictionary = SQLiteStoreService.load_record_store()
-		_load_team_and_archives_from_blob(blob_payload)
-		records_changed.emit()
-		return
-
-	var sqlite_payload: Dictionary = SQLiteStoreService.load_record_store()
-	if not sqlite_payload.is_empty():
-		load_from_dict(sqlite_payload)
-		return
+		# 両方空 = このセーブは SQLite へ書けていない。JSON fallback を読みにいく。
+		if not (_player_records.is_empty() and blob_payload.is_empty()):
+			_load_team_and_archives_from_blob(blob_payload)
+			records_changed.emit()
+			return
 
 	var records_path: String = SaveContext.records_path()
 	if records_path.is_empty() or not FileAccess.file_exists(records_path):

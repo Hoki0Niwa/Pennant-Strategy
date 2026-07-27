@@ -92,7 +92,7 @@ func _draw_save_row(meta: Dictionary, y: float) -> void:
 	var updated: String = str(meta.get("updated_at", ""))
 	if not updated.is_empty():
 		parts.append("最終セーブ %s" % updated)
-	var detail: String = "  ・  ".join(parts) if not parts.is_empty() else "詳細情報なし (旧形式のセーブ)"
+	var detail: String = "  ・  ".join(parts) if not parts.is_empty() else "詳細情報なし"
 	_text(detail, Vector2(x, y + 66.0), 14, MUTED, LIST_W - 320.0)
 
 

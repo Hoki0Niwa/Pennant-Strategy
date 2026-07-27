@@ -463,7 +463,7 @@ func _injury_summary_for_season(season: PSSeason) -> Dictionary:
 			injured_players += 1
 			total_season_injury_days += season_days
 			max_injury_days = max(max_injury_days, season_days)
-			var severity_key: String = _injury_severity_key(record.injury_severity, season_days)
+			var severity_key: String = _injury_severity_key(record.injury_severity)
 			severity_counts[severity_key] = int(severity_counts.get(severity_key, 0)) + 1
 		if record.injury_days > 0:
 			currently_injured += 1
@@ -479,11 +479,8 @@ func _injury_summary_for_season(season: PSSeason) -> Dictionary:
 	}
 
 
-func _injury_severity_key(severity: int, injury_days: int) -> String:
-	var normalized: int = severity
-	if normalized <= 0 and injury_days > 0:
-		normalized = PSInjuryModel.severity_from_days(injury_days)
-	match normalized:
+func _injury_severity_key(severity: int) -> String:
+	match severity:
 		PSInjuryModel.TIER_MINOR:
 			return "minor"
 		PSInjuryModel.TIER_MODERATE:

@@ -153,11 +153,11 @@ static func _group_history_by_day(history: Dictionary) -> Dictionary:
 	return out
 
 
-# blob に履歴が入っていない新形式セーブでは、season_history テーブルから履歴を復元して
-# season へ直接代入する (restore_from_save が PSSeason.from_dict の後に呼ぶ)。
+# season_history テーブルから履歴を復元して season へ直接代入する
+# (restore_from_save が PSSeason.from_dict の後に呼ぶ)。
 # payload 経由にせず直接代入するのは、from_dict の duplicate(true) による
 # 数十MB構造の深コピーを避けるため (テーブルから再構成した Dictionary は共有元が無い)。
-# 旧形式 (blob に履歴あり) は from_dict が復元済みなので何もしない。
+# JSON fallback セーブは blob に履歴を含むので from_dict が復元済み = ここは何もしない。
 static func hydrate_season_history(season: PSSeason) -> void:
 	if season == null or not SQLiteStoreService.is_available():
 		return
@@ -207,7 +207,7 @@ static func delete_current_save() -> Array:
 
 # セーブ選択 UI 用: 全 save_* フォルダのメタ情報を新しい順で返す。
 # 各要素: {save_id, is_active, team_name, year, season_number, date, offseason_active, updated_at}
-# (メタ未保存の旧セーブは save_id / is_active のみ確実)。
+# (メタが読めない場合は save_id / is_active のみ確実)。
 static func list_saves() -> Array:
 	var active_id: String = SaveContext.active_save_id()
 	var out: Array = []

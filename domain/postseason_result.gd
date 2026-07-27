@@ -117,12 +117,10 @@ static func from_dict(data: Dictionary) -> PSPostseasonResult:
 	var result: PSPostseasonResult = PSPostseasonResult.new()
 	result.year = int(data.get("year", 0))
 	result.season_number = int(data.get("season_number", 1))
-	# 旧セーブ/旧シーズンアーカイブはステージキーが "cs1_central" 等で保存されている。
-	# 読み込み時だけ引き継ぎ、保存は常に新キーで行う。
-	result.cs1_league1 = (data.get("cs1_league1", data.get("cs1_central", {})) as Dictionary).duplicate(true)
-	result.cs1_league2 = (data.get("cs1_league2", data.get("cs1_pacific", {})) as Dictionary).duplicate(true)
-	result.cs2_league1 = (data.get("cs2_league1", data.get("cs2_central", {})) as Dictionary).duplicate(true)
-	result.cs2_league2 = (data.get("cs2_league2", data.get("cs2_pacific", {})) as Dictionary).duplicate(true)
+	result.cs1_league1 = (data.get("cs1_league1", {}) as Dictionary).duplicate(true)
+	result.cs1_league2 = (data.get("cs1_league2", {}) as Dictionary).duplicate(true)
+	result.cs2_league1 = (data.get("cs2_league1", {}) as Dictionary).duplicate(true)
+	result.cs2_league2 = (data.get("cs2_league2", {}) as Dictionary).duplicate(true)
 	result.japan_series = (data.get("japan_series", {}) as Dictionary).duplicate(true)
 	result.champion_team_id = int(data.get("champion_team_id", 0))
 	result.current_day = int(data.get("current_day", 0))
