@@ -1,6 +1,7 @@
 extends RefCounted
 class_name SaveService
 
+const AppVersion = preload("res://services/app_version.gd")
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
@@ -206,7 +207,8 @@ static func delete_current_save() -> Array:
 
 
 # セーブ選択 UI 用: 全 save_* フォルダのメタ情報を新しい順で返す。
-# 各要素: {save_id, is_active, team_name, year, season_number, date, offseason_active, updated_at}
+# 各要素: {save_id, is_active, team_name, year, season_number, date, offseason_active, updated_at,
+#          app_version}
 # (メタが読めない場合は save_id / is_active のみ確実)。
 static func list_saves() -> Array:
 	var active_id: String = SaveContext.active_save_id()
@@ -239,6 +241,9 @@ static func _write_save_meta(app_state) -> void:
 		return
 	var meta: Dictionary = {
 		"updated_at": Time.get_datetime_string_from_system(false, true),
+		# 最後に保存したときのアプリ版数。旧セーブ互換は持たない方針 (移行コードを書かない) なので
+		# ロード時の分岐には一切使わず、セーブ一覧での注意表示と不具合報告の照合にだけ使う。
+		"app_version": AppVersion.current(),
 	}
 	var team: PSTeam = GameDb.get_team(app_state.selected_team_id)
 	if team != null:

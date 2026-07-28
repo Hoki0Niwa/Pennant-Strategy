@@ -6,13 +6,12 @@ extends Control
 # _draw() の先頭で _draw_shell(title, team, season) を呼んでから本文を描く。
 # 固有アクションは _add_button()、サイドバーナビは _build_nav_buttons() で生成する。
 
+const AppVersion = preload("res://services/app_version.gd")
 const DeveloperTools = preload("res://services/development/developer_tools.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 const GameDialogStyle = preload("res://ui/components/game_dialog_style.gd")
 
 const BASE: Vector2 = Vector2(1920, 1080)
-const VERSION_SETTING: String = "application/config/version"
-const VERSION_FALLBACK: String = "0.1.0-alpha"
 
 # --- パレット ---
 const BG: Color = Color(0.047, 0.056, 0.068)
@@ -154,7 +153,7 @@ func _draw_sidebar() -> void:
 
 
 func _app_version_label() -> String:
-	return "v%s" % str(ProjectSettings.get_setting(VERSION_SETTING, VERSION_FALLBACK))
+	return AppVersion.label()
 
 
 func _draw_header(title: String, team: PSTeam, season: PSSeason) -> void:

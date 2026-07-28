@@ -3,6 +3,7 @@
 # 新しいテストは test/ 配下に *_test.gd を追加するだけで自動検出される(専用 .tscn 不要)。
 extends GdUnitTestSuite
 
+const AppVersion = preload("res://services/app_version.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
@@ -45,11 +46,70 @@ func test_dashboard_long_date_includes_weekday() -> void:
 
 
 func test_dashboard_version_comes_from_project_metadata() -> void:
-	assert_str(str(ProjectSettings.get_setting("application/config/version", ""))).is_equal("0.1.0-alpha")
+	# 版数の実値はここに書かない (書くとリリースのたびにテストが落ち、バンプ手順が形骸化する)。
+	# 検証するのは不変条件だけ: 設定値が semver 形式であること、AppVersion が設定値をそのまま返し
+	# 表示が "v" 付きであること、フォールバック定数が実版数を複製していないこと。
+	var configured: String = str(ProjectSettings.get_setting(AppVersion.SETTING, ""))
+	var semver: RegEx = RegEx.new()
+	semver.compile("^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.]+)?$")
+	assert_object(semver.search(configured)).is_not_null()
+	assert_str(AppVersion.current()).is_equal(configured)
+	assert_str(AppVersion.label()).is_equal("v%s" % configured)
+	assert_str(AppVersion.label("9.9.9")).is_equal("v9.9.9")
+	assert_str(AppVersion.FALLBACK).is_not_empty()
+	assert_str(AppVersion.FALLBACK).is_not_equal(configured)
+
 	var dashboard_script: GDScript = load("res://ui/components/dashboard_screen.gd") as GDScript
 	var dashboard: Control = dashboard_script.new()
-	assert_str(str(dashboard.call("_app_version_label"))).is_equal("v0.1.0-alpha")
+	assert_str(str(dashboard.call("_app_version_label"))).is_equal("v%s" % configured)
 	dashboard.free()
+
+
+func test_save_select_screen_flags_saves_from_other_versions() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	AppState.current_screen = "save_select"
+
+	var screen_script: GDScript = load("res://ui/screens/save_select_screen.gd") as GDScript
+	var screen: Control = screen_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# 保存したセーブが一覧に出て、版数付きメタが読めている (= 描画経路が実データで通る)。
+	assert_array(screen._saves).is_not_empty()
+	var current_meta: Dictionary = {}
+	for row_value in screen._saves:
+		var row: Dictionary = row_value as Dictionary
+		if str(row.get("save_id", "")) == test_save_id:
+			current_meta = row
+	assert_str(str(current_meta.get("app_version", ""))).is_equal(AppVersion.current())
+
+	# 注意チップの判定: 同版=出さない / 別版=出す / 版数不明 (メタ無し)=判定不能なので出さない。
+	assert_bool(screen._is_other_version(current_meta)).is_false()
+	assert_bool(screen._is_other_version({"app_version": "0.0.1-other"})).is_true()
+	assert_bool(screen._is_other_version({})).is_false()
+
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
 
 
 func test_autoloads_registered() -> void:

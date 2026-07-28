@@ -1,5 +1,6 @@
 extends GdUnitTestSuite
 
+const AppVersion = preload("res://services/app_version.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
@@ -444,6 +445,9 @@ func test_save_selection_list_load_delete() -> void:
 	assert_bool(bool(first_meta.get("is_active", true))).is_false()
 	assert_str(str(first_meta.get("team_name", ""))).is_equal(first_team.name)
 	assert_int(int(first_meta.get("season_number", 0))).is_equal(1)
+	# 保存時のアプリ版数が記録される (セーブ一覧の「別バージョン」注意表示と不具合報告用。
+	# ロード時の互換分岐には使わない)。
+	assert_str(str(first_meta.get("app_version", ""))).is_equal(AppVersion.current())
 
 	# 1つ目を選択ロード → アクティブが切り替わり、選択球団も復元される
 	var payload: Dictionary = SaveService.load_save(first_id)

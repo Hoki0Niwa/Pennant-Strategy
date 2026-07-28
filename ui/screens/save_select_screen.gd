@@ -72,10 +72,15 @@ func _draw_save_row(meta: Dictionary, y: float) -> void:
 		_round(rect, PANEL, BORDER_SOFT, 10)
 
 	var x: float = LIST_X + 26.0
-	# 1行目: セーブ日時 (フォルダ名由来) + 使用中チップ
+	# 1行目: セーブ日時 (フォルダ名由来) + 使用中チップ + 版数違いの注意チップ
 	_text(_format_save_id(str(meta.get("save_id", ""))), Vector2(x, y + 36.0), 19, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var chip_x: float = x + 250.0
 	if is_active:
-		_chip(Rect2(x + 250.0, y + 18.0, 64.0, 24.0), "使用中", BLUE)
+		_chip(Rect2(chip_x, y + 18.0, 64.0, 24.0), "使用中", BLUE)
+		chip_x += 74.0
+	var saved_version: String = str(meta.get("app_version", ""))
+	if _is_other_version(meta):
+		_chip(Rect2(chip_x, y + 18.0, 120.0, 24.0), "別バージョン", AMBER)
 
 	# 2行目: ゲーム内メタ (球団 / 年目 / ゲーム内日付 / 最終更新)
 	var parts: Array = []
@@ -92,8 +97,18 @@ func _draw_save_row(meta: Dictionary, y: float) -> void:
 	var updated: String = str(meta.get("updated_at", ""))
 	if not updated.is_empty():
 		parts.append("最終セーブ %s" % updated)
+	if not saved_version.is_empty():
+		parts.append(AppVersion.label(saved_version))
 	var detail: String = "  ・  ".join(parts) if not parts.is_empty() else "詳細情報なし"
 	_text(detail, Vector2(x, y + 66.0), 14, MUTED, LIST_W - 320.0)
+
+
+# 保存時と現在でアプリ版数が違うセーブか。旧セーブ互換コードは持たない方針なので、
+# 版数をまたぐとロードが失敗したり挙動が変わったりしうる = 一覧で注意を出す判定に使う。
+# 版数が記録されていないセーブ (メタが読めない場合) は判定不能として false を返す。
+func _is_other_version(meta: Dictionary) -> bool:
+	var saved_version: String = str(meta.get("app_version", ""))
+	return not saved_version.is_empty() and saved_version != AppVersion.current()
 
 
 # ============================================================ buttons
