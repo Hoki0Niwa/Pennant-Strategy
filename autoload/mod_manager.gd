@@ -6,10 +6,22 @@ extends Node
 const DEFAULT_RULES_PATH: String = "res://data/rules/default_rules.json"
 const MOD_ROOT: String = "user://mods"
 const MOD_STATE_PATH: String = "user://pennant_strategy_mods.json"
+const RULE_GROUP_PA_PROBABILITY: int = 0
+const RULE_GROUP_PLATE_APPEARANCE: int = 1
+const RULE_GROUP_CONTACT_QUALITY: int = 2
+const RULE_GROUP_PLAY_RESOLVER: int = 3
+const RULE_SNAPSHOT_MARKER: String = "__pennant_strategy_rule_snapshot"
+const HOT_RULE_GROUP_PATHS: Array[String] = [
+	"simulation.pa_probability",
+	"simulation.plate_appearance",
+	"simulation.contact_quality",
+	"simulation.play_resolver",
+]
 
 var _default_rules: Dictionary = {}
 var _rules: Dictionary = {}
 var _rule_cache: Dictionary = {}
+var _hot_rule_groups: Array[Dictionary] = []
 var _data_overrides: Dictionary = {}
 var _active_mods: Array = []
 var last_compatibility_warnings: Array[String] = []
@@ -38,6 +50,7 @@ func reload_mods() -> void:
 		_apply_manifest(manifests[mod_id] as Dictionary)
 
 	_prewarm_rule_cache()
+	_refresh_hot_rule_groups()
 
 
 # マージ済み _rules の全リーフを事前に _rule_cache へ書き込む。以後 rule_value() は
@@ -48,6 +61,8 @@ func _prewarm_rule_cache() -> void:
 
 
 func _prewarm_rule_cache_node(node: Dictionary, prefix: String) -> void:
+	if not prefix.is_empty():
+		_rule_cache[prefix] = node
 	for key_value in node.keys():
 		var key: String = str(key_value)
 		var path: String = key if prefix.is_empty() else "%s.%s" % [prefix, key]
@@ -56,6 +71,18 @@ func _prewarm_rule_cache_node(node: Dictionary, prefix: String) -> void:
 			_prewarm_rule_cache_node(value as Dictionary, path)
 		else:
 			_rule_cache[path] = value
+
+
+func _refresh_hot_rule_groups() -> void:
+	var groups: Array[Dictionary] = []
+	for path in HOT_RULE_GROUP_PATHS:
+		var value: Variant = rule_value(path, {})
+		var group: Dictionary = {}
+		if value is Dictionary:
+			group = value as Dictionary
+		groups.append(group)
+	# reload 中の途中配列を別スレッドへ見せないよう、完成後に参照を一度だけ差し替える。
+	_hot_rule_groups = groups
 
 
 # データファイルの差し替え解決。未指定ならプロジェクト同梱の fallback_path をそのまま使う。
@@ -86,6 +113,31 @@ func rule_value(path: String, fallback: Variant = null) -> Variant:
 func rule_float(path: String, fallback: float) -> float:
 	var value: Variant = rule_value(path, fallback)
 	return float(value) if _is_number_like(value) else fallback
+
+
+# 打席ループ向け。固定groupのDictionaryから短いkeyだけで読み、dot pathの連結を避ける。
+func rule_group_float(group: int, name: String, fallback: float) -> float:
+	var groups: Array[Dictionary] = _hot_rule_groups
+	if group < 0 or group >= groups.size():
+		return fallback
+	var values: Dictionary = groups[group]
+	var value: Variant = values.get(name, fallback)
+	return float(value) if _is_number_like(value) else fallback
+
+
+# reload_mods() で構築済みのsectionを複製し、呼び出し側が共有ルールを変更できない
+# 読み取り専用snapshotとして返す。次回reload後も取得済みsnapshotは変化しない。
+func hot_rule_groups_snapshot() -> Array[Dictionary]:
+	var groups: Array[Dictionary] = _hot_rule_groups
+	var snapshot: Array[Dictionary] = []
+	for group in groups:
+		var copied_group: Dictionary = group.duplicate(true)
+		# 空sectionでも「snapshot指定済み」と判別でき、試合中にglobal rulesへ戻らない。
+		copied_group[RULE_SNAPSHOT_MARKER] = true
+		copied_group.make_read_only()
+		snapshot.append(copied_group)
+	snapshot.make_read_only()
+	return snapshot
 
 
 func rule_int(path: String, fallback: int) -> int:

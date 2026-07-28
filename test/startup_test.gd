@@ -129,6 +129,27 @@ func test_mod_manager_default_rules_and_paths() -> void:
 	assert_float(ModManager.rule_float("simulation.pa_probability.bb_logit_base", -999.0)).is_equal(PSPaProbabilityCalculator.BB_LOGIT_BASE)
 	assert_float(ModManager.rule_float("simulation.pa_probability.bb_create_weight", -999.0)).is_equal(PSPaProbabilityCalculator.BB_CREATE_WEIGHT)
 	assert_float(ModManager.rule_float("simulation.pa_probability.bb_prevent_weight", -999.0)).is_equal(PSPaProbabilityCalculator.BB_PREVENT_WEIGHT)
+	var hot_groups: Array[Dictionary] = ModManager.hot_rule_groups_snapshot()
+	assert_int(hot_groups.size()).is_equal(ModManager.HOT_RULE_GROUP_PATHS.size())
+	assert_bool(hot_groups.is_read_only()).is_true()
+	for group_index in range(hot_groups.size()):
+		var group: Dictionary = hot_groups[group_index]
+		var path: String = ModManager.HOT_RULE_GROUP_PATHS[group_index]
+		assert_bool(group.is_read_only()).is_true()
+		for key_value in group.keys():
+			var key: String = str(key_value)
+			if key == ModManager.RULE_SNAPSHOT_MARKER:
+				continue
+			var expected: float = ModManager.rule_float("%s.%s" % [path, key], -999.0)
+			var actual: float = ModManager.rule_group_float(group_index, key, -999.0)
+			assert_float(actual).is_equal(expected)
+	assert_float(
+		ModManager.rule_group_float(
+			ModManager.RULE_GROUP_PLATE_APPEARANCE,
+			"batter_hr_tail_pivot",
+			PSPlateAppearanceCoordinator.BATTER_HR_TAIL_PIVOT
+		)
+	).is_equal(PSPlateAppearanceCoordinator.BATTER_HR_TAIL_PIVOT)
 	var metadata: Dictionary = ModManager.save_metadata()
 	assert_str(str(metadata.get("rules_profile_id", ""))).is_equal("pennant_strategy_default")
 	assert_int(int(metadata.get("rules_schema_version", 0))).is_equal(1)
@@ -486,7 +507,7 @@ func test_game_result_screen_builds_with_active_season() -> void:
 	AppState.current_screen = "game_results"
 	var test_save_id: String = SaveContext.active_save_id()
 
-	# 開幕日を消化して試合ログ (play_events) をメモリに残し、詳細描画経路を実データで通す。
+	# 開幕日を消化し、未保存pending logから詳細描画できることを実データで通す。
 	var GameSimulator = load("res://services/simulation/game_simulator.gd")
 	GameSimulator.simulate_current_day(AppState.current_season, false)
 
@@ -502,6 +523,18 @@ func test_game_result_screen_builds_with_active_season() -> void:
 	assert_int((screen._box_data.get("rows", []) as Array).size()).is_greater(0)
 	assert_int((screen._pitching.get("rows", []) as Array).size()).is_greater(0)
 	screen.queue_free()
+	await get_tree().process_frame
+
+	# 手動保存でpending logをファイル化し、seasonを再ロードした後も同じ詳細を遅延読込できる。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(AppState.restore_from_save(SaveService.load_state())).is_true()
+	var reloaded_screen: Control = screen_script.new()
+	add_child(reloaded_screen)
+	await get_tree().process_frame
+	assert_int(reloaded_screen._selected_index).is_greater_equal(0)
+	assert_int((reloaded_screen._box_data.get("rows", []) as Array).size()).is_greater(0)
+	assert_int((reloaded_screen._pitching.get("rows", []) as Array).size()).is_greater(0)
+	reloaded_screen.queue_free()
 
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season

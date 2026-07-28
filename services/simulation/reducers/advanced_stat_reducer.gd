@@ -51,6 +51,38 @@ static func to_dict_container(advanced_stats: Dictionary) -> Dictionary:
 	return out
 
 
+# Dictionary 化済みの高度指標を、選手 ID ごとに加算する。
+# target は保存可能な Dictionary のまま維持し、各レコードの加算規則は PSAdvancedStats に集約する。
+static func merge_dict_container(target: Dictionary, source: Dictionary) -> void:
+	_ensure_shape(target)
+	for bucket_name in [BUCKET_PLAYERS, BUCKET_PITCHERS]:
+		var target_bucket: Dictionary = target.get(bucket_name, {}) as Dictionary
+		var source_bucket: Dictionary = source.get(bucket_name, {}) as Dictionary
+		for key_value in source_bucket.keys():
+			var key: String = str(key_value)
+			var target_record = AdvancedStatsRecord.new()
+			var target_value = target_bucket.get(key, null)
+			if target_value is PSAdvancedStats:
+				target_record.add_from(target_value as PSAdvancedStats)
+			elif target_value is Dictionary:
+				target_record.load_from_dict(target_value as Dictionary)
+
+			var source_record = AdvancedStatsRecord.new()
+			var source_value = source_bucket.get(key_value)
+			if source_value is PSAdvancedStats:
+				source_record.add_from(source_value as PSAdvancedStats)
+				source_record.player_id = (source_value as PSAdvancedStats).player_id
+			elif source_value is Dictionary:
+				source_record.load_from_dict(source_value as Dictionary)
+			if source_record.player_id == 0 and key.is_valid_int():
+				source_record.player_id = int(key)
+			if target_record.player_id == 0:
+				target_record.player_id = source_record.player_id
+			target_record.add_from(source_record)
+			target_bucket[key] = target_record.to_dict()
+		target[bucket_name] = target_bucket
+
+
 # 1プレー分のイベントを高度指標へ反映する入口。
 # plate_event / runner_events / fielding_events / defense_alignment が同じ play_event に同居している前提。
 static func apply_play_event(advanced_stats: Dictionary, play_event: Dictionary) -> void:

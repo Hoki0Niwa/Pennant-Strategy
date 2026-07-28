@@ -997,7 +997,7 @@ func _compute_line_aux() -> void:
 		_line_errors[ftid] = int(_line_errors.get(ftid, 0)) + 1
 
 
-# メモリ上の完全結果 (今セッション分) を優先、無ければ年別ログファイルから読む。
+# メモリ上の完全結果を優先し、無ければ未保存の compact log → 年別ログファイルの順に読む。
 func _game_log_for(season: PSSeason, schedule_index: int, game: Dictionary) -> Dictionary:
 	var result: Dictionary = game.get("result", {}) as Dictionary
 	var play_events: Array = result.get("play_events", []) as Array
@@ -1015,7 +1015,7 @@ func _game_log_for(season: PSSeason, schedule_index: int, game: Dictionary) -> D
 				"hold_pitcher_ids": result.get("hold_pitcher_ids", []) as Array,
 			},
 		}
-	return GameLogService.read_game_log(season, schedule_index)
+	return GameLogService.read_available_game_log(season, schedule_index)
 
 
 # ============================================================ helpers

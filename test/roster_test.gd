@@ -671,7 +671,7 @@ func test_foreign_contract_regular_depth_uses_relative_season_performance() -> v
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		var key: String = "%d:%d:%d" % [record.player_id, season.year, season.season_number]
 		previous_records[key] = RecordStore.player_records.get(key, null)
-		RecordStore.player_records[key] = record
+		RecordStore.set_player_record(record, key)
 
 	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [_team(1)], season, 0)
 	var regular_by_id: Dictionary = {}
@@ -687,9 +687,9 @@ func test_foreign_contract_regular_depth_uses_relative_season_performance() -> v
 		var key: String = str(key_value)
 		var previous: Variant = previous_records[key]
 		if previous == null:
-			RecordStore.player_records.erase(key)
+			RecordStore.erase_player_record_by_key(key)
 		else:
-			RecordStore.player_records[key] = previous
+			RecordStore.set_player_record(previous as PSPlayerSeasonRecord, key)
 
 
 func test_foreign_contract_cpu_replaces_shared_release_candidate_through_scouting() -> void:
@@ -710,7 +710,7 @@ func test_foreign_contract_cpu_replaces_shared_release_candidate_through_scoutin
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, season.year, season.season_number)
 	var record_key: String = "%d:%d:%d" % [player.id, season.year, season.season_number]
 	var previous_record: Variant = RecordStore.player_records.get(record_key, null)
-	RecordStore.player_records[record_key] = record
+	RecordStore.set_player_record(record, record_key)
 
 	var state: Dictionary = ForeignPlayerService.create_foreign_market_state(players, [team], season, 0)
 	var entry: Dictionary = (state.get("contract_entries", []) as Array)[0] as Dictionary
@@ -724,9 +724,9 @@ func test_foreign_contract_cpu_replaces_shared_release_candidate_through_scoutin
 	assert_int(TeamFinance.foreign_player_count(players, team.id)).is_equal(ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM)
 
 	if previous_record == null:
-		RecordStore.player_records.erase(record_key)
+		RecordStore.erase_player_record_by_key(record_key)
 	else:
-		RecordStore.player_records[record_key] = previous_record
+		RecordStore.set_player_record(previous_record as PSPlayerSeasonRecord, record_key)
 
 
 func test_foreign_cpu_scout_uses_shared_release_decision_for_candidates() -> void:

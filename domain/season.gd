@@ -1,9 +1,14 @@
 extends RefCounted
 class_name PSSeason
 
+const AdvancedStatReducer = preload("res://services/simulation/reducers/advanced_stat_reducer.gd")
+
 const MONTH_LENGTH_DAYS: int = 28
 const MIN_MONTHLY_GAMES: int = 5
 const SNAPSHOT_RETENTION_DAYS: int = 70
+# 未保存の詳細ゲームログを一時保持する schedule game 内部キー。
+# to_dict() には含めず、GameLogService がファイル書込成功後に削除する。
+const TRANSIENT_GAME_LOG_KEY: String = "_pending_game_log"
 
 var year: int
 var season_number: int
@@ -24,12 +29,33 @@ var last_auto_swap_day: Dictionary = {}
 # { player_id_str: Array of {"day": int, "batter": Dictionary, "pitcher": Dictionary} }
 # 各選手の時系列スナップショット (day 昇順)。月別成績取得 / 月間MVP 等で利用。
 var player_stat_history: Dictionary = {}
-# { player_id_str: Array of game rows }
+# { player_id_str: Array of game rows }。各配列は day / game_index 昇順。
 # 試合別の成績差分。PSSeason に属するため新シーズン作成時に自然にリセットされる。
 var player_game_history: Dictionary = {}
 # シーズン中トレードの状態 (成立ログ / 自軍宛て提案 / 週次チェック日 / 球団別成立数)。
 # スキーマと更新は TradeService に集約。新シーズン作成で自然にリセットされる。
 var trade_state: Dictionary = {}
+# 詳細な試合結果を破棄してもレポートを再構築できる、シーズン単位の軽量集計。
+# 通常プレイでは不要な追加集計コストを避け、SimulationReporter が作る調査用seasonだけ有効化する。
+var collect_simulation_report_data: bool = false
+# 調査用seasonが大量の個別ログを作らないための実行時フラグ。保存データには含めず、
+# ロードした通常seasonでは必ずtrueへ戻して詳細ログ欠落を防ぐ。
+var generate_game_logs: bool = true
+var simulation_report_data: Dictionary = {
+	"advanced_stats": {"players": {}, "pitchers": {}},
+	"advanced_record_counts": {"players": 0, "pitchers": 0},
+	"batted_ball": {
+		"batted_balls": 0,
+		"barrels": 0,
+		"hard_hits": 0,
+		"home_run_batted_balls": 0,
+		"home_run_barrels": 0,
+		"exit_velocity_total": 0.0,
+		"launch_angle_total": 0.0,
+		"distance_total": 0.0,
+	},
+	"runner_event_counts": {},
+}
 
 # 1日分の試合を並列計算する際、team_setup_builder.gd が計算フェーズ内で
 # lineup/fielder_usage/rotation/active_roster の各Dictionaryへ書き込みうる
@@ -387,54 +413,132 @@ func append_player_game_log(player_id: int, row: Dictionary) -> void:
 	if player_id <= 0:
 		return
 	var key: String = str(player_id)
-	var history: Array = (player_game_history.get(key, []) as Array).duplicate(true)
+	var history: Array = player_game_history.get(key, []) as Array
+	var stored_row: Dictionary = row.duplicate(true)
 	var game_index: int = int(row.get("game_index", -1))
-	var replaced: bool = false
+	if history.is_empty():
+		history.append(stored_row)
+		player_game_history[key] = history
+		return
+
+	var last_row: Dictionary = history[history.size() - 1] as Dictionary
+	var last_game_index: int = int(last_row.get("game_index", -2))
+	var row_day: int = int(row.get("day", 0))
+	var last_day: int = int(last_row.get("day", 0))
+	if game_index == last_game_index and row_day == last_day:
+		history[history.size() - 1] = stored_row
+		player_game_history[key] = history
+		return
+	if game_index > last_game_index and _player_game_log_precedes(last_row, stored_row):
+		history.append(stored_row)
+		player_game_history[key] = history
+		return
+
+	var existing_index: int = -1
 	for i in range(history.size()):
 		var existing: Dictionary = history[i] as Dictionary
 		if int(existing.get("game_index", -2)) == game_index:
-			history[i] = row.duplicate(true)
-			replaced = true
+			if int(existing.get("day", 0)) == row_day:
+				history[i] = stored_row
+				player_game_history[key] = history
+				return
+			existing_index = i
 			break
-	if not replaced:
-		history.append(row.duplicate(true))
-	history.sort_custom(func(a: Variant, b: Variant) -> bool:
-		var row_a: Dictionary = a as Dictionary
-		var row_b: Dictionary = b as Dictionary
-		var day_a: int = int(row_a.get("day", 0))
-		var day_b: int = int(row_b.get("day", 0))
-		if day_a == day_b:
-			return int(row_a.get("game_index", 0)) < int(row_b.get("game_index", 0))
-		return day_a < day_b
-	)
+	if existing_index >= 0:
+		history.remove_at(existing_index)
+	history.insert(_player_game_log_insertion_index(history, stored_row), stored_row)
 	player_game_history[key] = history
+
+
+func _player_game_log_insertion_index(history: Array, row: Dictionary) -> int:
+	var low: int = 0
+	var high: int = history.size()
+	while low < high:
+		@warning_ignore("integer_division")
+		var middle: int = (low + high) / 2
+		var existing: Dictionary = history[middle] as Dictionary
+		if _player_game_log_precedes(existing, row):
+			low = middle + 1
+		else:
+			high = middle
+	return low
+
+
+func _player_game_log_precedes(a: Variant, b: Variant) -> bool:
+	var row_a: Dictionary = a as Dictionary
+	var row_b: Dictionary = b as Dictionary
+	var day_a: int = int(row_a.get("day", 0))
+	var day_b: int = int(row_b.get("day", 0))
+	if day_a == day_b:
+		return int(row_a.get("game_index", 0)) < int(row_b.get("game_index", 0))
+	return day_a < day_b
 
 
 func get_player_game_logs(player_id: int) -> Array:
 	var history: Array = (player_game_history.get(str(player_id), []) as Array).duplicate(true)
-	history.sort_custom(func(a: Variant, b: Variant) -> bool:
-		var row_a: Dictionary = a as Dictionary
-		var row_b: Dictionary = b as Dictionary
-		var day_a: int = int(row_a.get("day", 0))
-		var day_b: int = int(row_b.get("day", 0))
-		if day_a == day_b:
-			return int(row_a.get("game_index", 0)) < int(row_b.get("game_index", 0))
-		return day_a < day_b
-	)
+	history.sort_custom(_player_game_log_precedes)
 	return history
 
 
-# 消化済み試合の result から、セーブに残す軽量サマリ列だけを抜き出す。
-# 詳細な box score / play-by-play (1 試合 ~166KB) はセーブ後に読み戻されることが無く
-# (game_result_screen / home_screen は下記スカラーしか参照しない)、保存すると season blob が
-# 1 シーズン 858 試合 × ~166KB ≈ 142MB に肥大化して save/load を極端に重くしていた。
+# 詳細結果を schedule から破棄する前に、レポートで必要な加算可能データだけを保持する。
+func accumulate_game_report_data(result: Dictionary) -> void:
+	if not collect_simulation_report_data:
+		return
+	var advanced_stats: Dictionary = result.get("advanced_stats", {}) as Dictionary
+	var accumulated_advanced: Dictionary = simulation_report_data.get("advanced_stats", {}) as Dictionary
+	AdvancedStatReducer.merge_dict_container(accumulated_advanced, advanced_stats)
+	simulation_report_data["advanced_stats"] = accumulated_advanced
+
+	var advanced_counts: Dictionary = simulation_report_data.get("advanced_record_counts", {}) as Dictionary
+	for bucket_name in [AdvancedStatReducer.BUCKET_PLAYERS, AdvancedStatReducer.BUCKET_PITCHERS]:
+		var source_bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
+		advanced_counts[bucket_name] = int(advanced_counts.get(bucket_name, 0)) + source_bucket.size()
+	simulation_report_data["advanced_record_counts"] = advanced_counts
+
+	var batted_ball: Dictionary = simulation_report_data.get("batted_ball", {}) as Dictionary
+	for event_value in result.get("play_events", []) as Array:
+		var event: Dictionary = event_value as Dictionary
+		var batted_ball_event: Dictionary = event.get("batted_ball_event", {}) as Dictionary
+		if batted_ball_event.is_empty():
+			continue
+		batted_ball["batted_balls"] = int(batted_ball.get("batted_balls", 0)) + 1
+		batted_ball["exit_velocity_total"] = float(batted_ball.get("exit_velocity_total", 0.0)) + float(batted_ball_event.get("exit_velocity", 0.0))
+		batted_ball["launch_angle_total"] = float(batted_ball.get("launch_angle_total", 0.0)) + float(batted_ball_event.get("launch_angle", 0.0))
+		batted_ball["distance_total"] = float(batted_ball.get("distance_total", 0.0)) + float(batted_ball_event.get("distance", 0.0))
+		if bool(batted_ball_event.get("is_barrel", false)):
+			batted_ball["barrels"] = int(batted_ball.get("barrels", 0)) + 1
+		if bool(batted_ball_event.get("is_hard_hit", false)):
+			batted_ball["hard_hits"] = int(batted_ball.get("hard_hits", 0)) + 1
+		if str(batted_ball_event.get("actual_result", "")).contains("home_run"):
+			batted_ball["home_run_batted_balls"] = int(batted_ball.get("home_run_batted_balls", 0)) + 1
+			if bool(batted_ball_event.get("is_barrel", false)):
+				batted_ball["home_run_barrels"] = int(batted_ball.get("home_run_barrels", 0)) + 1
+	simulation_report_data["batted_ball"] = batted_ball
+
+	var runner_counts: Dictionary = simulation_report_data.get("runner_event_counts", {}) as Dictionary
+	var game_runner_counts: Dictionary = result.get("runner_event_counts", {}) as Dictionary
+	for key in game_runner_counts.keys():
+		runner_counts[key] = int(runner_counts.get(key, 0)) + int(game_runner_counts[key])
+	simulation_report_data["runner_event_counts"] = runner_counts
+
+
+# 消化済み試合の result から、schedule とセーブ本体に残す軽量サマリ列だけを抜き出す。
+# 詳細な box score / play-by-play は GameLogService の別ファイル（保存前は transient log）から
+# 必要時に読み、season blob と常駐メモリを試合数に比例して肥大化させない。
 const PERSISTED_RESULT_KEYS: Array = [
 	"winning_team_id", "draw",
 	"winning_pitcher_id", "losing_pitcher_id", "save_pitcher_id", "hold_pitcher_ids",
-	"away_pitcher_id", "home_pitcher_id",
-	"pitcher_outings", "last_lead_change",
-	"runner_event_counts",
 ]
+
+
+# 消化後の schedule が保持する軽量結果。詳細な play_events / lineups / advanced_stats は
+# 試合直後の集計とゲームログ化を終えた時点で破棄し、シーズン進行に比例するメモリ増加を防ぐ。
+func compact_game_result(result: Dictionary) -> Dictionary:
+	var compact: Dictionary = {}
+	for key in PERSISTED_RESULT_KEYS:
+		if result.has(key):
+			compact[key] = result[key]
+	return compact
 
 
 # include_history=false は SQLite の season_history テーブルへ増分永続化するセーブ経路用。
@@ -463,6 +567,8 @@ func to_dict(include_history: bool = true) -> Dictionary:
 		"team_active_rosters": team_active_rosters,
 		"last_auto_swap_day": last_auto_swap_day,
 		"trade_state": trade_state,
+		"collect_simulation_report_data": collect_simulation_report_data,
+		"simulation_report_data": simulation_report_data,
 	}
 	if include_history:
 		out["player_stat_history"] = player_stat_history
@@ -470,8 +576,8 @@ func to_dict(include_history: bool = true) -> Dictionary:
 	return out
 
 
-# schedule をセーブ用に複製し、消化済み試合の重い result を軽量サマリへ差し替える。
-# メモリ上の schedule はそのまま (セッション中の詳細表示には影響しない)。
+# schedule をセーブ用に複製し、消化済み試合の result を正規の軽量サマリへ揃える。
+# 未保存詳細用の transient log は必ず除外する。
 func _schedule_for_save() -> Array:
 	var out: Array = []
 	for game_row in schedule:
@@ -480,12 +586,9 @@ func _schedule_for_save() -> Array:
 			out.append(game)
 			continue
 		var slim_game: Dictionary = game.duplicate()
+		slim_game.erase(TRANSIENT_GAME_LOG_KEY)
 		var full_result: Dictionary = game.get("result", {}) as Dictionary
-		var slim_result: Dictionary = {}
-		for key in PERSISTED_RESULT_KEYS:
-			if full_result.has(key):
-				slim_result[key] = full_result[key]
-		slim_game["result"] = slim_result
+		slim_game["result"] = compact_game_result(full_result)
 		out.append(slim_game)
 	return out
 
@@ -527,5 +630,7 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.player_stat_history = (data.get("player_stat_history", {}) as Dictionary).duplicate(true)
 	season.player_game_history = (data.get("player_game_history", {}) as Dictionary).duplicate(true)
 	season.trade_state = (data.get("trade_state", {}) as Dictionary).duplicate(true)
+	season.collect_simulation_report_data = bool(data["collect_simulation_report_data"])
+	season.simulation_report_data = (data["simulation_report_data"] as Dictionary).duplicate(true)
 
 	return season

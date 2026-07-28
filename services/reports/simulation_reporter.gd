@@ -1,7 +1,6 @@
 extends RefCounted
 class_name SimulationReporter
 
-const AdvancedStatsRecord = preload("res://services/simulation/reducers/advanced_stats_record.gd")
 const AbilityReference = preload("res://services/simulation/pa/ability_reference.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
@@ -85,6 +84,8 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var year: int = start_year + int(season_index)
 		RecordStore.clear_records()
 		var season: PSSeason = SeasonService.create_new_season(GameDb.teams, selected_team_id, year, dh_by_league)
+		season.collect_simulation_report_data = true
+		season.generate_game_logs = false
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(season, false)
 		if not bool(simulation_result.get("ok", false)):
@@ -132,7 +133,6 @@ func run(options: Dictionary = {}) -> Dictionary:
 	Rng.current_seed = original_rng_seed
 	Rng.generator.seed = original_rng_seed
 	Rng.generator.state = original_rng_state
-
 	var report: Dictionary = {
 		"version": 1,
 		"seasons_requested": season_count,
@@ -222,6 +222,8 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var year: int = start_year + int(season_index)
 		RecordStore.clear_records()
 		var season: PSSeason = SeasonService.create_new_season(GameDb.teams, selected_team_id, year, dh_by_league)
+		season.collect_simulation_report_data = true
+		season.generate_game_logs = false
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 		# シーズンごとに進捗 cb をラップして「N/M シーズン」を一緒に表示する
 		var season_label: String = "シーズン %d/%d (%d年)" % [season_index + 1, season_count, year]
@@ -279,7 +281,6 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	Rng.current_seed = original_rng_seed
 	Rng.generator.seed = original_rng_seed
 	Rng.generator.state = original_rng_state
-
 	var cancelled: bool = not cancel_token.is_empty() and bool(cancel_token.get("cancelled", false))
 	var report: Dictionary = {
 		"version": 1,
@@ -951,48 +952,18 @@ func _pitching_summary(stats: PSPitcherStats) -> Dictionary:
 
 func _advanced_aggregate_for_season(season: PSSeason) -> Dictionary:
 	var aggregate: Dictionary = _empty_advanced_aggregate()
-	for game_value in season.schedule:
-		var game: Dictionary = game_value as Dictionary
-		var result: Dictionary = game.get("result", {}) as Dictionary
-		var advanced_stats: Dictionary = result.get("advanced_stats", {}) as Dictionary
-		if advanced_stats.is_empty():
-			continue
-		_accumulate_advanced_stats(aggregate, advanced_stats)
+	var report_data: Dictionary = season.simulation_report_data
+	_accumulate_advanced_stats(aggregate, report_data.get("advanced_stats", {}) as Dictionary)
+	var record_counts: Dictionary = report_data.get("advanced_record_counts", {}) as Dictionary
+	for bucket_name in ["players", "pitchers"]:
+		var bucket: Dictionary = aggregate.get(bucket_name, {}) as Dictionary
+		bucket["records"] = int(record_counts.get(bucket_name, 0))
+		aggregate[bucket_name] = bucket
 	return aggregate
 
 
 func _advanced_records_for_season(season: PSSeason) -> Dictionary:
-	var records: Dictionary = {
-		"players": {},
-		"pitchers": {},
-	}
-	for game_value in season.schedule:
-		var game: Dictionary = game_value as Dictionary
-		var result: Dictionary = game.get("result", {}) as Dictionary
-		var advanced_stats: Dictionary = result.get("advanced_stats", {}) as Dictionary
-		if advanced_stats.is_empty():
-			continue
-		_accumulate_advanced_record_maps(records, advanced_stats)
-	return records
-
-
-func _accumulate_advanced_record_maps(target: Dictionary, advanced_stats: Dictionary) -> void:
-	for bucket_name in ["players", "pitchers"]:
-		var target_bucket: Dictionary = target.get(bucket_name, {}) as Dictionary
-		var source_bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
-		for key_value in source_bucket.keys():
-			var key: String = str(key_value)
-			var target_record = AdvancedStatsRecord.new()
-			target_record.load_from_dict(target_bucket.get(key, {}) as Dictionary)
-			var source_record = AdvancedStatsRecord.new()
-			source_record.load_from_dict(source_bucket.get(key_value, {}) as Dictionary)
-			if source_record.player_id == 0 and key.is_valid_int():
-				source_record.player_id = int(key)
-			if target_record.player_id == 0:
-				target_record.player_id = source_record.player_id
-			target_record.add_from(source_record)
-			target_bucket[key] = target_record.to_dict()
-		target[bucket_name] = target_bucket
+	return (season.simulation_report_data.get("advanced_stats", {}) as Dictionary).duplicate(true)
 
 
 func _empty_advanced_aggregate() -> Dictionary:
@@ -1201,41 +1172,12 @@ func _advanced_wrc_plus(woba: float, denominator: int) -> float:
 
 
 func _batted_ball_aggregate_for_season(season: PSSeason) -> Dictionary:
-	var aggregate: Dictionary = _empty_batted_ball_aggregate()
-	for game_value in season.schedule:
-		var game: Dictionary = game_value as Dictionary
-		var result: Dictionary = game.get("result", {}) as Dictionary
-		var play_events: Array = result.get("play_events", []) as Array
-		for event_value in play_events:
-			var event: Dictionary = event_value as Dictionary
-			var batted_ball_event: Dictionary = event.get("batted_ball_event", {}) as Dictionary
-			if batted_ball_event.is_empty():
-				continue
-			aggregate["batted_balls"] = int(aggregate.get("batted_balls", 0)) + 1
-			aggregate["exit_velocity_total"] = float(aggregate.get("exit_velocity_total", 0.0)) + float(batted_ball_event.get("exit_velocity", 0.0))
-			aggregate["launch_angle_total"] = float(aggregate.get("launch_angle_total", 0.0)) + float(batted_ball_event.get("launch_angle", 0.0))
-			aggregate["distance_total"] = float(aggregate.get("distance_total", 0.0)) + float(batted_ball_event.get("distance", 0.0))
-			if bool(batted_ball_event.get("is_barrel", false)):
-				aggregate["barrels"] = int(aggregate.get("barrels", 0)) + 1
-			if bool(batted_ball_event.get("is_hard_hit", false)):
-				aggregate["hard_hits"] = int(aggregate.get("hard_hits", 0)) + 1
-			if str(batted_ball_event.get("actual_result", "")).contains("home_run"):
-				aggregate["home_run_batted_balls"] = int(aggregate.get("home_run_batted_balls", 0)) + 1
-				if bool(batted_ball_event.get("is_barrel", false)):
-					aggregate["home_run_barrels"] = int(aggregate.get("home_run_barrels", 0)) + 1
-	return aggregate
+	return (season.simulation_report_data.get("batted_ball", {}) as Dictionary).duplicate(true)
 
 
 # 試合結果に集計された走者イベント件数 (game_loop.tally_runner_events) をシーズン合算する。
 func _runner_event_counts_for_season(season: PSSeason) -> Dictionary:
-	var totals: Dictionary = {}
-	for game_value in season.schedule:
-		var game: Dictionary = game_value as Dictionary
-		if not bool(game.get("played", false)):
-			continue
-		var result: Dictionary = game.get("result", {}) as Dictionary
-		_accumulate_runner_events(totals, result.get("runner_event_counts", {}) as Dictionary)
-	return totals
+	return (season.simulation_report_data.get("runner_event_counts", {}) as Dictionary).duplicate(true)
 
 
 func _accumulate_runner_events(target: Dictionary, source: Dictionary) -> void:

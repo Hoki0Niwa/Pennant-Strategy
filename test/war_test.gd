@@ -12,7 +12,6 @@ const TEST_SEASON: int = 0
 
 
 func test_war_allocation_uses_fangraphs_pools_and_role_order() -> void:
-	var store: Dictionary = RecordStore.player_records
 	var added_keys: Array = []
 	var pid: int = 90000
 	var batter_wobas: Array = [0.290, 0.300, 0.310, 0.320, 0.330, 0.305, 0.295, 0.315]
@@ -20,17 +19,26 @@ func test_war_allocation_uses_fangraphs_pools_and_role_order() -> void:
 		for woba_value in batter_wobas:
 			pid += 1
 			var key: String = "wartest_%d" % pid
-			store[key] = _make_batter(team_id, pid, 600, float(woba_value), 5.0)
+			RecordStore.set_player_record(
+				_make_batter(team_id, pid, 600, float(woba_value), 5.0),
+				key
+			)
 			added_keys.append(key)
 		for _i in range(5):  # 先発: 160IP, 全登板が先発
 			pid += 1
 			var skey: String = "wartest_%d" % pid
-			store[skey] = _make_pitcher(team_id, pid, 480, 20, 20, "starter")
+			RecordStore.set_player_record(
+				_make_pitcher(team_id, pid, 480, 20, 20, "starter"),
+				skey
+			)
 			added_keys.append(skey)
 		for _j in range(6):  # 救援: 60IP, 全登板が救援
 			pid += 1
 			var rkey: String = "wartest_%d" % pid
-			store[rkey] = _make_pitcher(team_id, pid, 180, 0, 50, "reliever")
+			RecordStore.set_player_record(
+				_make_pitcher(team_id, pid, 180, 0, 50, "reliever"),
+				rkey
+			)
 			added_keys.append(rkey)
 
 	var meta: Dictionary = {"num_teams": 2, "games_per_team": 162.0}
@@ -38,7 +46,7 @@ func test_war_allocation_uses_fangraphs_pools_and_role_order() -> void:
 	var summary: Dictionary = WarCalculator.league_war_summary(TEST_YEAR, TEST_SEASON, ctx, meta)
 
 	for k in added_keys:
-		store.erase(k)
+		RecordStore.erase_player_record_by_key(k)
 
 	var repl_per_pa: float = float(ctx.get("replacement_runs_per_pa", 0.0))
 	var expected_batter_pool: float = WarCalculator.POSITION_PLAYER_WAR_POOL_FULL_SEASON * (162.0 / WarCalculator.FULL_MLB_GAMES)

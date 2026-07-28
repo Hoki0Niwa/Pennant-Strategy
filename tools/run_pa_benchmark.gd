@@ -19,7 +19,9 @@ func _ready() -> void:
 	])
 	if profile:
 		print("PA benchmark profile_ms=%s" % str(metrics.get("profile_ms", {})))
-	var ok: bool = int(metrics.get("games", 0)) > 0
+	var ok: bool = int(metrics.get("games", 0)) > 0 and bool(metrics.get("valid", false))
+	if profile:
+		ok = ok and float((metrics.get("profile_ms", {}) as Dictionary).get("loop", 0.0)) > 0.0
 	get_tree().quit(0 if ok else 1)
 
 
@@ -32,9 +34,14 @@ func _run_mode(label: String, games_per_mode: int, profile: bool = false) -> Dic
 
 	var start_ms: int = Time.get_ticks_msec()
 	var games: int = 0
+	var valid: bool = true
 	while games < games_per_mode:
 		var simulation: Dictionary = GameSimulator.simulate_next_unplayed_game(season, false)
 		if not bool(simulation.get("ok", false)):
+			break
+		if not _has_valid_game_results(simulation):
+			push_error("PA benchmark received an invalid game result")
+			valid = false
 			break
 		games += 1
 	var elapsed_ms: int = Time.get_ticks_msec() - start_ms
@@ -45,6 +52,7 @@ func _run_mode(label: String, games_per_mode: int, profile: bool = false) -> Dic
 		"elapsed_ms": elapsed_ms,
 		"msec_per_game": msec_per_game,
 		"profile_ms": GameSimulator.profile_totals_msec() if profile else {},
+		"valid": valid,
 	}
 
 
@@ -53,3 +61,21 @@ func _games_per_mode() -> int:
 	if raw.is_valid_int():
 		return max(1, int(raw))
 	return DEFAULT_GAMES_PER_MODE
+
+
+func _has_valid_game_results(simulation: Dictionary) -> bool:
+	var results: Array = simulation.get("results", []) as Array
+	if results.is_empty() and simulation.has("result"):
+		results = [simulation]
+	if results.is_empty():
+		return false
+	for result_value in results:
+		var result_row: Dictionary = result_value as Dictionary
+		var game_result: Dictionary = result_row.get("result", {}) as Dictionary
+		if (game_result.get("innings", []) as Array).is_empty():
+			return false
+		if int(game_result.get("away_team_id", 0)) <= 0 or int(game_result.get("home_team_id", 0)) <= 0:
+			return false
+		if int(game_result.get("next_play_event_index", 0)) <= 0:
+			return false
+	return true

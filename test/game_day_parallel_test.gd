@@ -7,6 +7,8 @@ extends GdUnitTestSuite
 
 const TRIAL_COUNT: int = 20
 const FIXED_SEED: int = 424242
+const REMAINING_TEST_DAY_COUNT: int = 2
+const GameLogService = preload("res://services/storage/game_log_service.gd")
 
 
 func test_parallel_day_matches_sequential_day_deterministically() -> void:
@@ -23,6 +25,54 @@ func test_async_day_matches_parallel_day_deterministically() -> void:
 	var sync_signature: String = _run_one_day(false)
 	var async_signature: String = await _run_one_day_async()
 	assert_bool(async_signature == sync_signature).is_true()
+
+
+func test_remaining_season_paths_complete_and_match_sequential_days() -> void:
+	var sequential: Dictionary = _run_short_remaining_season_sync(true)
+	var parallel: Dictionary = _run_short_remaining_season_sync(false)
+	var async_parallel: Dictionary = await _run_short_remaining_season_async({})
+
+	assert_int(int(parallel.get("simulated_count", 0))).is_equal(int(sequential.get("simulated_count", 0)))
+	assert_int(int(async_parallel.get("simulated_count", 0))).is_equal(int(sequential.get("simulated_count", 0)))
+	assert_str(str(parallel.get("signature", ""))).is_equal(str(sequential.get("signature", "")))
+	assert_str(str(async_parallel.get("signature", ""))).is_equal(str(sequential.get("signature", "")))
+
+
+func test_remaining_season_async_cancels_at_day_boundary_and_resumes_cleanly() -> void:
+	var uninterrupted: Dictionary = _run_short_remaining_season_sync(false)
+	var season: PSSeason = _new_short_season()
+	var first_day: int = season.current_day
+	var total_games: int = season.schedule.size()
+	var first_day_games: int = _game_count_for_day(season, first_day)
+	var cancel_token: Dictionary = {"cancelled": false}
+	var progress_calls: Array = []
+	var progress_cb: Callable = func(done: int, total: int, label: String) -> void:
+		progress_calls.append([done, total, label])
+		if progress_calls.size() == 1:
+			cancel_token["cancelled"] = true
+
+	var partial_result: Dictionary = await GameSimulator.simulate_remaining_season_async(
+		season, false, {}, get_tree(), progress_cb, cancel_token
+	)
+	assert_bool(bool(partial_result.get("ok", false))).is_true()
+	assert_bool(bool(partial_result.get("cancelled", false))).is_true()
+	assert_int(int(partial_result.get("simulated_count", 0))).is_equal(first_day_games)
+	assert_int(_played_game_count_for_day(season, first_day)).is_equal(first_day_games)
+	assert_int(_played_game_count(season)).is_equal(first_day_games)
+	assert_int(progress_calls.size()).is_equal(first_day_games)
+	var last_progress: Array = progress_calls[progress_calls.size() - 1] as Array
+	assert_int(int(last_progress[0])).is_equal(first_day_games)
+	assert_int(int(last_progress[1])).is_equal(total_games)
+
+	cancel_token["cancelled"] = false
+	var resumed_result: Dictionary = await GameSimulator.simulate_remaining_season_async(
+		season, false, {}, get_tree(), Callable(), cancel_token
+	)
+	assert_bool(bool(resumed_result.get("ok", false))).is_true()
+	assert_bool(bool(resumed_result.get("cancelled", false))).is_false()
+	assert_int(int(resumed_result.get("simulated_count", 0))).is_equal(total_games - first_day_games)
+	assert_int(_played_game_count(season)).is_equal(total_games)
+	assert_str(_simulation_state_signature(season)).is_equal(str(uninterrupted.get("signature", "")))
 
 
 func _run_one_day_async() -> String:
@@ -57,6 +107,127 @@ func _run_one_day(force_sequential: bool) -> String:
 	var day_result: Dictionary = GameSimulator.simulate_current_day(season, false, {}, force_sequential)
 	assert_bool(bool(day_result.get("ok", false))).is_true()
 	return _day_signature(day_result)
+
+
+func _run_short_remaining_season_sync(force_sequential: bool) -> Dictionary:
+	var season: PSSeason = _new_short_season()
+	var expected_count: int = season.schedule.size()
+	var result: Dictionary = GameSimulator.simulate_remaining_season(
+		season, false, {}, force_sequential
+	)
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_int(int(result.get("simulated_count", 0))).is_equal(expected_count)
+	assert_int(_played_game_count(season)).is_equal(expected_count)
+	return {
+		"simulated_count": int(result.get("simulated_count", 0)),
+		"signature": _simulation_state_signature(season),
+	}
+
+
+func _run_short_remaining_season_async(cancel_token: Dictionary) -> Dictionary:
+	var season: PSSeason = _new_short_season()
+	var expected_count: int = season.schedule.size()
+	var result: Dictionary = await GameSimulator.simulate_remaining_season_async(
+		season, false, {}, get_tree(), Callable(), cancel_token
+	)
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(result.get("cancelled", false))).is_false()
+	assert_int(int(result.get("simulated_count", 0))).is_equal(expected_count)
+	assert_int(_played_game_count(season)).is_equal(expected_count)
+	return {
+		"simulated_count": int(result.get("simulated_count", 0)),
+		"signature": _simulation_state_signature(season),
+	}
+
+
+func _new_short_season() -> PSSeason:
+	GameDb.load_initial_data()
+	Rng.set_seed_value(FIXED_SEED)
+	RecordStore.clear_records()
+	PSBattingOrderProfile.reset_cache()
+	PSDefenseAlignmentProfile.reset_cache()
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+	_keep_first_schedule_days(season, REMAINING_TEST_DAY_COUNT)
+	return season
+
+
+func _keep_first_schedule_days(season: PSSeason, day_count: int) -> void:
+	var selected_days: Array = []
+	var short_schedule: Array = []
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var day: int = int(game.get("day", 0))
+		if not selected_days.has(day):
+			if selected_days.size() >= day_count:
+				continue
+			selected_days.append(day)
+		if selected_days.has(day):
+			short_schedule.append(game)
+	season.schedule = short_schedule
+	season.current_day = int(selected_days[0])
+
+
+func _game_count_for_day(season: PSSeason, day: int) -> int:
+	var count: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) == day:
+			count += 1
+	return count
+
+
+func _played_game_count_for_day(season: PSSeason, day: int) -> int:
+	var count: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) == day and bool(game.get("played", false)):
+			count += 1
+	return count
+
+
+func _played_game_count(season: PSSeason) -> int:
+	var count: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("played", false)):
+			count += 1
+	return count
+
+
+func _simulation_state_signature(season: PSSeason) -> String:
+	var event_parts: Array = []
+	for game_index in range(season.schedule.size()):
+		var game: Dictionary = season.schedule[game_index] as Dictionary
+		# schedule.result は消化直後に軽量化されるため、未保存の compact log を含む
+		# read_available_game_log 経由で PA・交代・投手起用の決定性を比較する。
+		var available_log: Dictionary = GameLogService.read_available_game_log(season, game_index)
+		var events_json: String = JSON.stringify(available_log)
+		event_parts.append("%d:%d:%d:%d:%d:%d" % [
+			int(game.get("away_team_id", 0)),
+			int(game.get("home_team_id", 0)),
+			int(game.get("away_score", 0)),
+			int(game.get("home_score", 0)),
+			events_json.length(),
+			events_json.hash(),
+		])
+	var season_json: String = JSON.stringify(season.to_dict())
+	var records_json: String = JSON.stringify(RecordStore.to_dict())
+	var player_rows: Array = []
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player != null:
+			player_rows.append(player.to_dict())
+	var players_json: String = JSON.stringify(player_rows)
+	return "%d:%d|%d:%d|%d:%d|%s" % [
+		season_json.length(),
+		season_json.hash(),
+		records_json.length(),
+		records_json.hash(),
+		players_json.length(),
+		players_json.hash(),
+		"|".join(event_parts),
+	]
 
 
 # 各試合の得点・play_events全体のハッシュを連結した短いシグネチャを返す。

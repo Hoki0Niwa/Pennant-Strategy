@@ -193,12 +193,12 @@ func test_bad_primary_defense_creates_convert_pressure_candidate() -> void:
 	record.advanced_stats.fielding_chances_by_position = {"6": 300}
 	record.advanced_stats.oaa_by_position = {"6": -15.0}
 	var key: String = "801:9000:0"
-	RecordStore.player_records[key] = record
+	RecordStore.set_player_record(record, key)
 
 	# 補強需要はゼロに飽和させ、守備実績圧力だけで提案されることを確認する。
 	var profile: Dictionary = _saturated_profile()
 	var rows: Array = CampServiceRef._fielder_candidates(fielder, profile, season)
-	RecordStore.player_records.erase(key)
+	RecordStore.erase_player_record_by_key(key)
 
 	var convert_expected: float = -1.0
 	var harder_pressure_found: bool = false
@@ -218,9 +218,9 @@ func test_bad_primary_defense_creates_convert_pressure_candidate() -> void:
 	var ok_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 9000, 0)
 	ok_record.advanced_stats.fielding_chances_by_position = {"6": 300}
 	ok_record.advanced_stats.oaa_by_position = {"6": 1.0}
-	RecordStore.player_records[key] = ok_record
+	RecordStore.set_player_record(ok_record, key)
 	var ok_rows: Array = CampServiceRef._fielder_candidates(fielder, profile, season)
-	RecordStore.player_records.erase(key)
+	RecordStore.erase_player_record_by_key(key)
 	for row in ok_rows:
 		var entry: Dictionary = row as Dictionary
 		if str(entry.get("training_type", "")) == CampServiceRef.TRAIN_POSITION_CONVERT:

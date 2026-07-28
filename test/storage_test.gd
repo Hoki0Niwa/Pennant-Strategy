@@ -36,6 +36,29 @@ func test_new_save_folder_scopes_storage_paths() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_report_game_log_suppression_is_scoped_to_its_season() -> void:
+	var report_season: PSSeason = PSSeason.new()
+	report_season.generate_game_logs = false
+	report_season.schedule = [{}]
+	var normal_season: PSSeason = PSSeason.new()
+	normal_season.schedule = [{}]
+	var result: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 3,
+		"home_score": 2,
+		"innings": [{"inning": 1, "away": 1, "home": 0}],
+	}
+
+	GameLogService.stage_game_log(report_season, 0, result)
+	GameLogService.stage_game_log(normal_season, 0, result)
+
+	assert_bool((report_season.schedule[0] as Dictionary).has(PSSeason.TRANSIENT_GAME_LOG_KEY)).is_false()
+	assert_bool((normal_season.schedule[0] as Dictionary).has(PSSeason.TRANSIENT_GAME_LOG_KEY)).is_true()
+	var restored_report_season: PSSeason = PSSeason.from_dict(report_season.to_dict())
+	assert_bool(restored_report_season.generate_game_logs).is_true()
+
+
 func test_save_state_records_mod_metadata() -> void:
 	var old_state: Dictionary = _capture_app_state()
 	var test_save_id: String = ""
@@ -144,6 +167,138 @@ func test_player_record_identity_refresh_preserves_season_decision_inputs() -> v
 	assert_int(refreshed.last_pitched_team_game).is_equal(82)
 
 
+func test_team_player_index_partitions_history_and_returns_fresh_arrays() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var players: Array = GameDb.players.slice(0, 5)
+	var rows: Array = []
+	var specs: Array = [
+		[players[0], 2, 2026, 1],
+		[players[1], 1, 2025, 1],
+		[players[2], 1, 2026, 1],
+		[players[3], 2, 2026, 1],
+		[players[4], 1, 2026, 2],
+		[players[1], 1, 2026, 1],
+	]
+	for spec_value in specs:
+		var spec: Array = spec_value as Array
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			spec[0] as PSPlayer,
+			int(spec[2]),
+			int(spec[3])
+		)
+		record.team_id = int(spec[1])
+		rows.append(record.to_dict())
+	RecordStore.load_from_dict({
+		"player_records": rows,
+		"team_records": [],
+		"season_archives": [],
+	})
+
+	var index_ready: bool = RecordStore.prepare_team_player_index()
+	var records_view_is_read_only: bool = RecordStore.player_records.is_read_only()
+	var payload_before: String = JSON.stringify(RecordStore.to_dict())
+	var first_query: Array = RecordStore.get_team_player_records(1, 2026, 1)
+	var first_ids: Array = _player_record_ids(first_query)
+	first_query.clear()
+	first_query.append(null)
+	var second_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(1, 2026, 1)
+	)
+	var team_two_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(2, 2026, 1)
+	)
+	var other_season_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(1, 2026, 2)
+	)
+	var old_year_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(1, 2025, 1)
+	)
+	var missing: Array = RecordStore.get_team_player_records(99, 2026, 1)
+	var payload_after: String = JSON.stringify(RecordStore.to_dict())
+	RecordStore.load_from_dict(original_records)
+
+	assert_bool(index_ready).is_true()
+	assert_bool(records_view_is_read_only).is_true()
+	assert_array(first_ids).is_equal([
+		(players[2] as PSPlayer).id,
+		(players[1] as PSPlayer).id,
+	])
+	assert_array(second_ids).is_equal(first_ids)
+	assert_array(team_two_ids).is_equal([
+		(players[0] as PSPlayer).id,
+		(players[3] as PSPlayer).id,
+	])
+	assert_array(other_season_ids).is_equal([(players[4] as PSPlayer).id])
+	assert_array(old_year_ids).is_equal([(players[1] as PSPlayer).id])
+	assert_array(missing).is_empty()
+	assert_str(payload_after).is_equal(payload_before)
+
+
+func test_ensure_season_records_rebuilds_team_index_without_losing_history() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var target_team_id: int = (GameDb.players[0] as PSPlayer).team_id
+	var team_players: Array = []
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player.team_id == target_team_id and not player.is_retired():
+			team_players.append(player)
+			if team_players.size() == 3:
+				break
+	assert_int(team_players.size()).is_equal(3)
+	var active_player: PSPlayer = team_players[0] as PSPlayer
+	var removed_player: PSPlayer = team_players[1] as PSPlayer
+	var added_player: PSPlayer = team_players[2] as PSPlayer
+	var season: PSSeason = PSSeason.new()
+	season.year = 2199
+	season.season_number = 2
+	var historical: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		active_player,
+		2198,
+		1
+	)
+	var active_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		active_player,
+		season.year,
+		season.season_number
+	)
+	var removed_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		removed_player,
+		season.year,
+		season.season_number
+	)
+	RecordStore.load_from_dict({
+		"player_records": [
+			historical.to_dict(),
+			active_record.to_dict(),
+			removed_record.to_dict(),
+		],
+		"team_records": [],
+		"season_archives": [],
+	})
+
+	RecordStore.ensure_season_records(
+		season,
+		[],
+		[active_player, added_player],
+		false
+	)
+	var current_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(
+			target_team_id,
+			season.year,
+			season.season_number
+		)
+	)
+	var historical_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(target_team_id, 2198, 1)
+	)
+	RecordStore.load_from_dict(original_records)
+
+	assert_array(current_ids).is_equal([active_player.id, added_player.id])
+	assert_array(current_ids).not_contains([removed_player.id])
+	assert_array(historical_ids).is_equal([active_player.id])
+
+
 func test_start_offseason_archives_season_without_postseason() -> void:
 	var old_state: Dictionary = _capture_app_state()
 	var old_player_rows: Array = []
@@ -200,6 +355,13 @@ func test_unsaved_simulation_does_not_persist_records_or_logs() -> void:
 	assert_bool(bool(result.get("ok", false))).is_true()
 	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
 	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
+	var unsaved_game: Dictionary = AppState.current_season.schedule[first_game_index] as Dictionary
+	var compact_result: Dictionary = unsaved_game.get("result", {}) as Dictionary
+	assert_bool(compact_result.has("play_events")).is_false()
+	assert_bool(unsaved_game.has(PSSeason.TRANSIENT_GAME_LOG_KEY)).is_true()
+	assert_bool(GameLogService.read_available_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
+	var serialized_schedule: Array = AppState.current_season.to_dict().get("schedule", []) as Array
+	assert_bool((serialized_schedule[first_game_index] as Dictionary).has(PSSeason.TRANSIENT_GAME_LOG_KEY)).is_false()
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
 
 	var reloaded: Dictionary = SaveService.load_state()
@@ -226,8 +388,10 @@ func test_manual_save_flushes_pending_game_logs() -> void:
 	var result: Dictionary = AppState.simulate_next_game()
 	assert_bool(bool(result.get("ok", false))).is_true()
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
+	assert_bool(GameLogService.read_available_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
 
 	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool((AppState.current_season.schedule[first_game_index] as Dictionary).has(PSSeason.TRANSIENT_GAME_LOG_KEY)).is_false()
 	var written_log: Dictionary = GameLogService.read_game_log(AppState.current_season, first_game_index)
 	assert_bool(written_log.is_empty()).is_false()
 	assert_int((written_log.get("innings", []) as Array).size()).is_greater(0)
@@ -237,6 +401,29 @@ func test_manual_save_flushes_pending_game_logs() -> void:
 	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
 	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_auto_save_flushes_compact_game_log_and_clears_pending() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var test_save_id: String = ""
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.auto_save_enabled = true
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+
+	var first_game_index: int = _first_unplayed_game_index(AppState.current_season)
+	var result: Dictionary = AppState.simulate_next_game()
+	assert_bool(bool(result.get("ok", false))).is_true()
+
+	var game: Dictionary = AppState.current_season.schedule[first_game_index] as Dictionary
+	assert_bool((game.get("result", {}) as Dictionary).has("play_events")).is_false()
+	assert_bool(game.has(PSSeason.TRANSIENT_GAME_LOG_KEY)).is_false()
+	var written_log: Dictionary = GameLogService.read_game_log(AppState.current_season, first_game_index)
+	assert_array(written_log.get("pa_log", []) as Array).is_not_empty()
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
 
 	_restore_app_state(old_state, test_save_id)
 
@@ -309,8 +496,56 @@ func test_player_season_stats_round_trip_through_normalized_tables() -> void:
 	assert_int(reloaded.arsenal_snapshot.size()).is_equal(1)
 	assert_str(str((reloaded.arsenal_snapshot[0] as Dictionary).get("type", ""))).is_equal("slider")
 	assert_float(float((reloaded.arsenal_snapshot[0] as Dictionary).get("mastery", 0.0))).is_equal(1.25)
+	var indexed_ids: Array = _player_record_ids(RecordStore.get_team_player_records(
+		reloaded.team_id,
+		season.year,
+		season.season_number
+	))
+	var wrong_team_ids: Array = _player_record_ids(RecordStore.get_team_player_records(
+		reloaded.team_id + 1000,
+		season.year,
+		season.season_number
+	))
+	assert_int(indexed_ids.count(target_id)).is_equal(1)
+	assert_array(wrong_team_ids).not_contains([target_id])
 
 	_restore_app_state(old_state, test_save_id)
+
+
+func test_player_game_history_appends_in_place_and_keeps_replacements_sorted() -> void:
+	var season: PSSeason = PSSeason.new()
+	var player_id: int = 42
+	var first_row: Dictionary = {
+		"game_index": 0,
+		"day": 1,
+		"label": "first",
+		"batter": {"hits": 1},
+	}
+	season.append_player_game_log(player_id, first_row)
+	var stored_history: Array = season.player_game_history.get(str(player_id), []) as Array
+	(first_row.get("batter", {}) as Dictionary)["hits"] = 99
+
+	season.append_player_game_log(player_id, {"game_index": 1, "day": 1, "label": "second"})
+	season.append_player_game_log(player_id, {"game_index": 6, "day": 2, "label": "third"})
+	assert_int(stored_history.size()).is_equal(3)
+	assert_int(int(((stored_history[0] as Dictionary).get("batter", {}) as Dictionary).get("hits", 0))).is_equal(1)
+
+	season.append_player_game_log(player_id, {"game_index": 6, "day": 2, "label": "third-replaced"})
+	season.append_player_game_log(player_id, {"game_index": 0, "day": 1, "label": "first-replaced"})
+	season.append_player_game_log(player_id, {"game_index": 4, "day": 1, "label": "inserted"})
+	season.append_player_game_log(player_id, {"game_index": 1, "day": 3, "label": "second-moved"})
+
+	var logs: Array = season.get_player_game_logs(player_id)
+	var expected_days: Array = [1, 1, 2, 3]
+	var expected_indices: Array = [0, 4, 6, 1]
+	var expected_labels: Array = ["first-replaced", "inserted", "third-replaced", "second-moved"]
+	assert_int(logs.size()).is_equal(expected_indices.size())
+	assert_int(stored_history.size()).is_equal(expected_indices.size())
+	for index in range(logs.size()):
+		var row: Dictionary = logs[index] as Dictionary
+		assert_int(int(row.get("day", 0))).is_equal(int(expected_days[index]))
+		assert_int(int(row.get("game_index", -1))).is_equal(int(expected_indices[index]))
+		assert_str(str(row.get("label", ""))).is_equal(str(expected_labels[index]))
 
 
 func test_season_history_split_saves_incrementally_and_round_trips() -> void:
@@ -403,7 +638,7 @@ func test_record_store_saves_only_changed_rows() -> void:
 
 	# メモリから消えたレコードは save で DB からも消える
 	var removed_id: int = target.player_id
-	RecordStore.player_records.erase("%d:%d:%d" % [removed_id, season.year, season.season_number])
+	RecordStore.erase_player_record(removed_id, season.year, season.season_number)
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	RecordStore.load_records()
 	assert_object(RecordStore.get_player_record(removed_id, season.year, season.season_number)).is_null()
@@ -604,3 +839,10 @@ func _record_count_for_season(year: int, season_number: int) -> int:
 		if record.year == year and record.season_number == season_number:
 			count += 1
 	return count
+
+
+func _player_record_ids(records: Array) -> Array:
+	var ids: Array = []
+	for record_value in records:
+		ids.append((record_value as PSPlayerSeasonRecord).player_id)
+	return ids

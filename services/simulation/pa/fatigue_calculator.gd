@@ -50,9 +50,44 @@ static func factor_for_pitcher(pitcher: PSPlayerSeasonRecord, is_reliever: bool,
 	return clamp(1.0 - PSBalanceProfile.sigmoid(x), 0.0, 1.0)
 
 
+# create_outing() が固定した閾値を使い、登板中は球数だけを変えて疲労係数を計算する。
+static func factor_for_outing(
+	pitcher: PSPlayerSeasonRecord,
+	usage: Dictionary,
+	outing_pitches: int = -1
+) -> float:
+	if pitcher == null:
+		return 1.0
+	if usage.is_empty() or not usage.has("fatigue_start_pitches"):
+		var fallback_role: String = str(usage.get("role", PSPitcherUsageModel.ROLE_STARTER))
+		var fallback_pitches: int = (
+			int(usage.get("pitches", 0))
+			if outing_pitches < 0
+			else outing_pitches
+		)
+		return factor_for_pitcher(
+			pitcher,
+			fallback_role != PSPitcherUsageModel.ROLE_STARTER,
+			max(0, fallback_pitches)
+		)
+	var pitches: int = int(usage.get("pitches", 0)) if outing_pitches < 0 else outing_pitches
+	var role: String = str(usage.get("role", PSPitcherUsageModel.ROLE_STARTER))
+	var start: float = float(usage.get("fatigue_start_pitches", 0.0))
+	if role == PSPitcherUsageModel.ROLE_STARTER:
+		var limit: float = float(usage.get("fatigue_limit_pitches", start + 1.0))
+		return _starter_factor(start, limit, pitches)
+	var fatigue_width: float = max(1.0, float(usage.get("fatigue_width", FATIGUE_BASE_WIDTH)))
+	var x: float = (float(pitches) - start) / fatigue_width
+	return clamp(1.0 - PSBalanceProfile.sigmoid(x), 0.0, 1.0)
+
+
 static func _starter_factor_for_pitcher(pitcher: PSPlayerSeasonRecord, outing_pitches: int) -> float:
 	var start: float = float(max(1, PSPitcherUsageModel.starter_fatigue_start_pitches(pitcher)))
 	var limit: float = float(max(int(start) + 1, PSPitcherUsageModel.starter_stamina_limit_pitches(pitcher)))
+	return _starter_factor(start, limit, outing_pitches)
+
+
+static func _starter_factor(start: float, limit: float, outing_pitches: int) -> float:
 	var pitches: float = float(max(0, outing_pitches))
 	if pitches <= start:
 		return 1.0
@@ -64,17 +99,22 @@ static func _starter_factor_for_pitcher(pitcher: PSPlayerSeasonRecord, outing_pi
 # 疲労を反映した pitcher_z のコピーを返す（破壊的でない）。
 # (1 - fatigue_factor) * FATIGUE_*_DROP を該当 z-key から減算する。
 static func apply_drops(pitcher_z: Dictionary, fatigue_factor: float) -> Dictionary:
-	var adjusted: Dictionary = pitcher_z.duplicate(true)
+	var adjusted: Dictionary = pitcher_z.duplicate()
+	apply_drops_in_place(adjusted, fatigue_factor)
+	return adjusted
+
+
+# 呼び出し側が打席専用のコピーを所有している場合に、追加の Dictionary 複製をせず疲労を反映する。
+static func apply_drops_in_place(adjusted: Dictionary, fatigue_factor: float) -> void:
 	var drop_amount: float = 1.0 - clamp(fatigue_factor, 0.0, 1.0)
 	if drop_amount <= 0.0:
-		return adjusted
+		return
 	_drop(adjusted, "Pit_KCreate", drop_amount * FATIGUE_K_DROP)
 	_drop(adjusted, "Pit_BBPrevent", drop_amount * FATIGUE_CONTROL_DROP)
 	_drop(adjusted, "Pit_ImpactLimit", drop_amount * FATIGUE_IMPACT_DROP)
 	_drop(adjusted, "Pit_BarrelDeny", drop_amount * FATIGUE_BARREL_DROP)
 	_drop(adjusted, "Pit_LoftControl", drop_amount * FATIGUE_LOFT_DROP)
 	_drop(adjusted, "Pit_Efficiency", drop_amount * FATIGUE_EFFICIENCY_DROP)
-	return adjusted
 
 
 

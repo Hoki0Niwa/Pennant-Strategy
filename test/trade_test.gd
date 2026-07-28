@@ -60,10 +60,14 @@ func test_execute_trade_moves_players_rosters_and_fa_days() -> void:
 	var season: PSSeason = _season(1)
 	var player_a: PSPlayer = _player_with_z(11, 1, 3, false, 2.0)
 	var player_b: PSPlayer = _player_with_z(21, 2, 6, false, 1.5)
+	var player_a_peer: PSPlayer = _player_with_z(12, 1, 4, false, 0.5)
+	var player_b_peer: PSPlayer = _player_with_z(22, 2, 5, false, 0.5)
 	var players: Array = [player_a, player_b]
 	RecordStore.load_from_dict({
 		"player_records": [
 			PSPlayerSeasonRecord.from_player(player_a, season.year, season.season_number).to_dict(),
+			PSPlayerSeasonRecord.from_player(player_b_peer, season.year, season.season_number).to_dict(),
+			PSPlayerSeasonRecord.from_player(player_a_peer, season.year, season.season_number).to_dict(),
 			PSPlayerSeasonRecord.from_player(player_b, season.year, season.season_number).to_dict(),
 		],
 		"team_records": [],
@@ -80,6 +84,12 @@ func test_execute_trade_moves_players_rosters_and_fa_days() -> void:
 	var roster_2: Array = season.get_active_roster(2).get("player_ids", []) as Array
 	var moved_days_a: int = season.get_active_roster_days(2, 11)
 	var moved_days_b: int = season.get_active_roster_days(1, 21)
+	var indexed_team_1_ids: Array = _record_ids(
+		RecordStore.get_team_player_records(1, season.year, season.season_number)
+	)
+	var indexed_team_2_ids: Array = _record_ids(
+		RecordStore.get_team_player_records(2, season.year, season.season_number)
+	)
 	RecordStore.load_from_dict(original_records)
 
 	assert_bool(entry.is_empty()).is_false()
@@ -87,6 +97,8 @@ func test_execute_trade_moves_players_rosters_and_fa_days() -> void:
 	assert_int(player_b.team_id).is_equal(1)
 	assert_int(record_a.team_id).is_equal(2)
 	assert_int(record_b.team_id).is_equal(1)
+	assert_array(indexed_team_1_ids).is_equal([12, 21])
+	assert_array(indexed_team_2_ids).is_equal([11, 22])
 	assert_array(roster_1).contains([21])
 	assert_array(roster_1).not_contains([11])
 	assert_array(roster_2).contains([11])
@@ -317,3 +329,10 @@ func _player_with_z(id: int, team_id: int, position: int, dev: bool, z_value: fl
 		"development_player": dev,
 		"z_abilities": z,
 	})
+
+
+func _record_ids(records: Array) -> Array:
+	var ids: Array = []
+	for record_value in records:
+		ids.append((record_value as PSPlayerSeasonRecord).player_id)
+	return ids

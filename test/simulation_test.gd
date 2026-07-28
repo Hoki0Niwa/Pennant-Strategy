@@ -791,6 +791,46 @@ func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
 	assert_float(float(average_precomp.get("pitcher_stuff_z", 0.0))).is_equal(0.0)
 
 
+func test_pa_game_cache_reuses_static_views_and_keeps_pitcher_adjustment_local() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(814, "Cached Batter", 0.8)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(804, "Cached Pitcher", 0.6)
+	var catcher: PSPlayerSeasonRecord = _fielder(815, "Cached Catcher", 0.4)
+	catcher.position = 2
+	catcher.z_abilities_snapshot["C_Framing"] = 0.7
+	catcher.z_abilities_snapshot["C_GameCall"] = 0.5
+	var defense: Dictionary = {
+		"fielders": [{"record": catcher, "position": 2}],
+	}
+	var cache: Dictionary = PSPlateAppearanceCoordinator.create_game_cache()
+	var first: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		batter,
+		pitcher,
+		defense,
+		{},
+		false,
+		cache
+	)
+	var first_pitcher_z: Dictionary = first.get("pitcher_z", {}) as Dictionary
+	first_pitcher_z["Pit_KCreate"] = -999.0
+	var second: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		batter,
+		pitcher,
+		defense,
+		{},
+		false,
+		cache
+	)
+
+	assert_bool(is_same(first.get("batter_z"), second.get("batter_z"))).is_true()
+	assert_bool(is_same(first.get("catcher_z"), second.get("catcher_z"))).is_true()
+	assert_bool(is_same(first.get("pitcher_z"), second.get("pitcher_z"))).is_false()
+	assert_float(float((second.get("pitcher_z", {}) as Dictionary).get("Pit_KCreate", 0.0))).is_greater(-10.0)
+	assert_int((cache.get(PSPlateAppearanceCoordinator.CACHE_BATTER_Z_VIEWS, {}) as Dictionary).size()).is_equal(1)
+	assert_int((cache.get(PSPlateAppearanceCoordinator.CACHE_PITCHER_Z_VIEWS, {}) as Dictionary).size()).is_equal(1)
+	assert_int((cache.get(PSPlateAppearanceCoordinator.CACHE_CATCHER_Z_VIEWS, {}) as Dictionary).size()).is_equal(1)
+	assert_bool(is_same(defense.get("catcher", null), catcher)).is_true()
+
+
 func test_pitcher_stuff_contact_quality_ev_effect_is_saturated() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state
@@ -816,6 +856,15 @@ func test_tto_penalty_flows_into_pa_weights() -> void:
 	var fresh_context: Dictionary = PSPitcherUsageModel.plate_context(starter, fresh_usage)
 	var tto_context: Dictionary = PSPitcherUsageModel.plate_context(starter, tto_usage)
 	assert_int(int(tto_context.get("pitcher_tto_penalty", 0))).is_greater(0)
+	var cached_arsenal: Dictionary = fresh_usage.get(
+		PSPitcherUsageModel.USAGE_ARSENAL_CACHE_KEY,
+		{}
+	) as Dictionary
+	PSPitcherUsageModel.plate_context(starter, fresh_usage)
+	assert_bool(is_same(
+		cached_arsenal,
+		fresh_usage.get(PSPitcherUsageModel.USAGE_ARSENAL_CACHE_KEY, {})
+	)).is_true()
 
 	var fresh_precomp: Dictionary = PSPlateAppearanceCoordinator._build_precomp(null, starter, {}, fresh_context, false)
 	var tto_precomp: Dictionary = PSPlateAppearanceCoordinator._build_precomp(null, starter, {}, tto_context, false)
@@ -878,6 +927,17 @@ func test_pitcher_stamina_affects_starter_fatigue_and_long_relief_usage() -> voi
 	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 50)).is_greater_equal(0.98)
 	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 95)).is_greater(0.70)
 	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 115)).is_less(0.45)
+	var cached_usage: Dictionary = PSPitcherUsageModel.create_outing(
+		high_stamina,
+		PSPitcherUsageModel.ROLE_STARTER
+	)
+	for pitches in [50, 95, 115]:
+		assert_float(
+			PSFatigueCalculator.factor_for_outing(high_stamina, cached_usage, pitches)
+		).is_equal_approx(
+			PSFatigueCalculator.factor_for_pitcher(high_stamina, false, pitches),
+			0.000001
+		)
 	assert_float(PSFatigueCalculator.factor_for_pitcher(high_stamina, false, 130)).is_equal(0.0)
 	assert_float(PSFatigueCalculator.start_threshold(high_stamina, true)).is_equal(
 		PSFatigueCalculator.start_threshold(low_stamina, true))
@@ -2161,3 +2221,151 @@ func test_error_difficulty_compensates_for_position_opportunities() -> void:
 		+ float(PSPlayResolver.THROW_ERROR_BASE_BY_POSITION[6])
 	)
 	assert_float(third_nominal).is_less_equal(short_nominal * 1.4)
+
+
+func test_season_report_data_accumulates_and_survives_serialization() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.collect_simulation_report_data = true
+	season.accumulate_game_report_data({
+		"advanced_stats": {
+			"players": {
+				"10": _report_advanced_record(10, 2, 1.1, 0.4, 0.2, 6),
+				"11": _report_advanced_record(11, 1, 0.4, -0.1, -0.2, 8),
+			},
+			"pitchers": {
+				"20": _report_advanced_record(20, 3, 1.5, 0.3, 0.0, 1),
+			},
+		},
+		"play_events": [
+			{"batted_ball_event": {
+				"exit_velocity": 100.0,
+				"launch_angle": 30.0,
+				"distance": 400.0,
+				"is_barrel": true,
+				"is_hard_hit": true,
+				"actual_result": "home_run_center",
+			}},
+			{"batted_ball_event": {}},
+		],
+		"runner_event_counts": {"wild_pitch": 2, "balk": 1},
+	})
+	season.accumulate_game_report_data({
+		"advanced_stats": {
+			"players": {
+				"10": _report_advanced_record(10, 1, 0.7, 0.2, 0.1, 6),
+			},
+			"pitchers": {
+				"20": _report_advanced_record(20, 1, 0.7, -0.2, 0.0, 1),
+				"21": _report_advanced_record(21, 1, 0.2, 0.1, 0.0, 1),
+			},
+		},
+		"play_events": [
+			{"batted_ball_event": {
+				"exit_velocity": 95.0,
+				"launch_angle": 10.0,
+				"distance": 280.0,
+				"is_barrel": false,
+				"is_hard_hit": true,
+				"actual_result": "double_left",
+			}},
+		],
+		"runner_event_counts": {"wild_pitch": 1, "passed_ball": 1},
+	})
+
+	var reporter: SimulationReporter = SimulationReporter.new()
+	var records: Dictionary = reporter._advanced_records_for_season(season)
+	var player_10: Dictionary = (records.get("players", {}) as Dictionary).get("10", {}) as Dictionary
+	assert_int(int(player_10.get("plate_appearances", 0))).is_equal(3)
+	assert_float(float(player_10.get("woba_numerator", 0.0))).is_equal_approx(1.8, 0.000001)
+	assert_int(int(player_10.get("fielding_chances", 0))).is_equal(2)
+	assert_int(int((player_10.get("fielding_chances_by_position", {}) as Dictionary).get("6", 0))).is_equal(2)
+
+	var advanced: Dictionary = reporter._advanced_aggregate_for_season(season)
+	var player_aggregate: Dictionary = advanced.get("players", {}) as Dictionary
+	var pitcher_aggregate: Dictionary = advanced.get("pitchers", {}) as Dictionary
+	assert_int(int(player_aggregate.get("records", 0))).is_equal(3)
+	assert_int(int(player_aggregate.get("plate_appearances", 0))).is_equal(4)
+	assert_float(float(player_aggregate.get("woba_numerator", 0.0))).is_equal_approx(2.2, 0.000001)
+	assert_int(int(pitcher_aggregate.get("records", 0))).is_equal(3)
+	assert_int(int(pitcher_aggregate.get("plate_appearances", 0))).is_equal(5)
+
+	var batted_ball: Dictionary = reporter._batted_ball_aggregate_for_season(season)
+	assert_int(int(batted_ball.get("batted_balls", 0))).is_equal(2)
+	assert_int(int(batted_ball.get("barrels", 0))).is_equal(1)
+	assert_int(int(batted_ball.get("hard_hits", 0))).is_equal(2)
+	assert_int(int(batted_ball.get("home_run_batted_balls", 0))).is_equal(1)
+	assert_int(int(batted_ball.get("home_run_barrels", 0))).is_equal(1)
+	assert_float(float(batted_ball.get("exit_velocity_total", 0.0))).is_equal(195.0)
+	assert_float(float(batted_ball.get("launch_angle_total", 0.0))).is_equal(40.0)
+	assert_float(float(batted_ball.get("distance_total", 0.0))).is_equal(680.0)
+
+	var runner_counts: Dictionary = reporter._runner_event_counts_for_season(season)
+	assert_int(int(runner_counts.get("wild_pitch", 0))).is_equal(3)
+	assert_int(int(runner_counts.get("balk", 0))).is_equal(1)
+	assert_int(int(runner_counts.get("passed_ball", 0))).is_equal(1)
+
+	var restored: PSSeason = PSSeason.from_dict(season.to_dict())
+	var restored_player_10: Dictionary = (
+		(reporter._advanced_records_for_season(restored).get("players", {}) as Dictionary)
+		.get("10", {}) as Dictionary
+	)
+	assert_int(int(restored_player_10.get("plate_appearances", 0))).is_equal(3)
+	assert_float(float(restored_player_10.get("woba_numerator", 0.0))).is_equal_approx(1.8, 0.000001)
+	assert_int(int(reporter._batted_ball_aggregate_for_season(restored).get("batted_balls", 0))).is_equal(2)
+	assert_int(int(reporter._runner_event_counts_for_season(restored).get("wild_pitch", 0))).is_equal(3)
+	assert_bool(restored.collect_simulation_report_data).is_true()
+	restored.accumulate_game_report_data({
+		"advanced_stats": {"players": {}, "pitchers": {}},
+		"play_events": [],
+		"runner_event_counts": {"wild_pitch": 2},
+	})
+	assert_int(int(reporter._runner_event_counts_for_season(restored).get("wild_pitch", 0))).is_equal(5)
+
+
+func test_long_autoplay_prepares_every_season_for_streaming_report_aggregation() -> void:
+	var season: PSSeason = PSSeason.new()
+	assert_bool(season.collect_simulation_report_data).is_false()
+	assert_bool(season.generate_game_logs).is_true()
+
+	var reporter: PSLongAutoplayReporter = PSLongAutoplayReporter.new()
+	reporter._prepare_report_season(season)
+
+	assert_bool(season.collect_simulation_report_data).is_true()
+	assert_bool(season.generate_game_logs).is_false()
+
+
+func _report_advanced_record(
+	player_id: int,
+	plate_appearances: int,
+	woba_numerator: float,
+	re24: float,
+	bsr: float,
+	position: int
+) -> Dictionary:
+	var position_key: String = str(position)
+	var zone: String = "outfield" if position >= 7 else "infield"
+	return {
+		"player_id": player_id,
+		"plate_appearances": plate_appearances,
+		"woba_denominator": plate_appearances,
+		"xwoba_denominator": plate_appearances,
+		"woba_numerator": woba_numerator,
+		"xwoba_numerator": woba_numerator + 0.05,
+		"re24_sum": re24,
+		"bsr_sum": bsr,
+		"fielding_chances": 1,
+		"fielding_outs": 1,
+		"fielding_chances_by_position": {position_key: 1},
+		"fielding_chances_by_oaa_zone": {zone: 1},
+		"fielding_outs_by_position": {position_key: 1},
+		"fielding_outs_by_oaa_zone": {zone: 1},
+		"defensive_outs_by_position": {position_key: 3},
+		"defensive_outs_by_oaa_zone": {zone: 3},
+		"oaa_by_zone": {zone: 0.1},
+		"oaa_by_position": {position_key: 0.1},
+		"rngr_by_position": {position_key: 0.05},
+		"errr_by_position": {position_key: 0.01},
+		"dpr_by_position": {position_key: 0.02},
+		"uzr_by_position": {position_key: 0.08},
+		"drs_by_position": {position_key: 0.08},
+	}

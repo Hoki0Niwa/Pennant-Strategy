@@ -2,9 +2,14 @@ extends RefCounted
 class_name PSGameLoop
 
 
-static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dictionary:
+static func simulate_game(
+	away_setup: Dictionary,
+	home_setup: Dictionary,
+	rule_groups: Array[Dictionary] = []
+) -> Dictionary:
 	var away_pitcher: PSPlayerSeasonRecord = away_setup["pitcher"] as PSPlayerSeasonRecord
 	var home_pitcher: PSPlayerSeasonRecord = home_setup["pitcher"] as PSPlayerSeasonRecord
+	var pa_cache: Dictionary = PSPlateAppearanceCoordinator.create_game_cache(rule_groups)
 	var result: Dictionary = {
 		"away_team_id": int(away_setup.get("team_id", 0)),
 		"home_team_id": int(home_setup.get("team_id", 0)),
@@ -41,7 +46,7 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 		PSBullpenManager.substitute_reliever(home_setup, inning, result)
 		var home_inning_pitcher_id: int = int((home_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 		_record_substitution(result, inning, "top", home_team_id, "pitching", home_prev_pitcher_id, home_inning_pitcher_id, 1, -1)
-		var away_runs: int = simulate_half_inning(away_setup, home_setup, inning, result, inning, "top")
+		var away_runs: int = simulate_half_inning(away_setup, home_setup, inning, result, inning, "top", 0, pa_cache)
 		result["away_score"] = int(result["away_score"]) + away_runs
 
 		var home_runs: int = 0
@@ -56,7 +61,16 @@ static func simulate_game(away_setup: Dictionary, home_setup: Dictionary) -> Dic
 			away_inning_pitcher_id = int((away_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 			_record_substitution(result, inning, "bottom", away_team_id_sub, "pitching", away_prev_pitcher_id, away_inning_pitcher_id, 1, -1)
 			var home_run_limit: int = bottom_half_walkoff_run_limit(result, inning)
-			home_runs = simulate_half_inning(home_setup, away_setup, inning + 1, result, inning, "bottom", home_run_limit)
+			home_runs = simulate_half_inning(
+				home_setup,
+				away_setup,
+				inning + 1,
+				result,
+				inning,
+				"bottom",
+				home_run_limit,
+				pa_cache
+			)
 			result["home_score"] = int(result["home_score"]) + home_runs
 			if inning >= GameSimulator.REGULATION_INNINGS and int(result["home_score"]) > int(result["away_score"]):
 				result["walkoff"] = true
@@ -162,7 +176,8 @@ static func simulate_half_inning(
 	game_result: Dictionary = {},
 	inning: int = 0,
 	half: String = "",
-	run_limit: int = 0
+	run_limit: int = 0,
+	pa_cache: Dictionary = {}
 ) -> int:
 	var bases: Array = [null, null, null]
 	var outs: int = 0
@@ -269,9 +284,15 @@ static func simulate_half_inning(
 		var bases_before: Array = bases.duplicate()
 		var outs_before: int = outs
 		var runs_before: int = runs
-		var outcome: Dictionary = resolve_plate_outcome(batter, pitcher, defense, bases, outs, {
-			"runner_intents": deferred_steal_intents,
-		})
+		var outcome: Dictionary = resolve_plate_outcome(
+			batter,
+			pitcher,
+			defense,
+			bases,
+			outs,
+			{"runner_intents": deferred_steal_intents},
+			pa_cache
+		)
 		var event_index: int = next_play_event_index(game_result)
 		outcome = PSRunnerActionModel.apply_runner_in_motion_to_outcome(
 			event_index,
@@ -1303,12 +1324,23 @@ static func resolve_plate_outcome(
 	defense: Dictionary,
 	bases: Array,
 	outs: int,
-	batting_context: Dictionary = {}
+	batting_context: Dictionary = {},
+	pa_cache: Dictionary = {}
 ) -> Dictionary:
 	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(defense, pitcher)
 	var pitching_context: Dictionary = PSPitcherUsageModel.plate_context(pitcher, usage)
 	var is_reliever: bool = str(pitching_context.get("pitcher_role", PSPitcherUsageModel.ROLE_SHORT_RELIEF)) != PSPitcherUsageModel.ROLE_STARTER
-	return PSPlateAppearanceCoordinator.resolve(batter, pitcher, defense, bases, outs, is_reliever, pitching_context, batting_context)
+	return PSPlateAppearanceCoordinator.resolve(
+		batter,
+		pitcher,
+		defense,
+		bases,
+		outs,
+		is_reliever,
+		pitching_context,
+		batting_context,
+		pa_cache
+	)
 
 
 # 打席結果が失策のとき、その打球を扱った守備選手に失策を1つ計上する。

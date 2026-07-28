@@ -11,8 +11,10 @@ func _ready() -> void:
 		GameDb.load_initial_data()
 
 	var days: int = _days()
-	var sequential: Dictionary = _run_mode("sequential", days, true)
-	var parallel: Dictionary = _run_mode("parallel", days, false)
+	var history_years: int = _history_years()
+	var lookup_repeats: int = _lookup_repeats()
+	var sequential: Dictionary = _run_mode("sequential", days, true, history_years, lookup_repeats)
+	var parallel: Dictionary = _run_mode("parallel", days, false, history_years, lookup_repeats)
 
 	var speedup: float = 0.0
 	var seq_ms: int = int(sequential.get("elapsed_ms", 0))
@@ -27,11 +29,20 @@ func _ready() -> void:
 	get_tree().quit(0 if ok else 1)
 
 
-func _run_mode(label: String, days: int, force_sequential: bool) -> Dictionary:
+func _run_mode(
+	label: String,
+	days: int,
+	force_sequential: bool,
+	history_years: int,
+	lookup_repeats: int
+) -> Dictionary:
 	Rng.set_seed_value(SEED)
 	RecordStore.clear_records()
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	_seed_history_records(season, history_years)
 	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+	if lookup_repeats > 0:
+		_benchmark_team_record_lookups(label, season, history_years, lookup_repeats)
 
 	var start_ms: int = Time.get_ticks_msec()
 	var days_simulated: int = 0
@@ -60,3 +71,60 @@ func _days() -> int:
 	if raw.is_valid_int():
 		return max(1, int(raw))
 	return DEFAULT_DAYS
+
+
+func _history_years() -> int:
+	var raw: String = OS.get_environment("PS_DAY_BENCH_HISTORY_YEARS")
+	if raw.is_valid_int():
+		return max(0, int(raw))
+	return 0
+
+
+func _lookup_repeats() -> int:
+	var raw: String = OS.get_environment("PS_RECORD_LOOKUP_BENCH_REPEATS")
+	if raw.is_valid_int():
+		return max(0, int(raw))
+	return 0
+
+
+func _seed_history_records(current_season: PSSeason, history_years: int) -> void:
+	for year_offset in range(history_years, 0, -1):
+		var historical_season: PSSeason = PSSeason.new()
+		historical_season.year = current_season.year - year_offset
+		historical_season.season_number = current_season.season_number
+		RecordStore.ensure_season_records(historical_season, GameDb.teams, GameDb.players, false)
+
+
+func _benchmark_team_record_lookups(
+	label: String,
+	season: PSSeason,
+	history_years: int,
+	repeats: int
+) -> void:
+	var lookup_count: int = 0
+	var matched_count: int = 0
+	var start_usec: int = Time.get_ticks_usec()
+	for _repeat in range(repeats):
+		for team_value in GameDb.teams:
+			var team: PSTeam = team_value as PSTeam
+			matched_count += RecordStore.get_team_player_records(
+				team.id,
+				season.year,
+				season.season_number
+			).size()
+			lookup_count += 1
+	var elapsed_usec: int = Time.get_ticks_usec() - start_usec
+	var usec_per_lookup: float = (
+		0.0
+		if lookup_count == 0
+		else float(elapsed_usec) / float(lookup_count)
+	)
+	print("[%s] record_lookup history_years=%d records=%d lookups=%d matched=%d elapsed_ms=%.1f usec_per_lookup=%.2f" % [
+		label,
+		history_years,
+		RecordStore.player_records.size(),
+		lookup_count,
+		matched_count,
+		float(elapsed_usec) / 1000.0,
+		usec_per_lookup,
+	])

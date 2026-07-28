@@ -544,9 +544,12 @@ static func _move_players(season: PSSeason, moving: Array, from_team_id: int, to
 		player.source_data["traded_year"] = season.year
 		player.source_data["traded_from_team"] = from_team_id
 		PSCareerLog.log_trade(player, season.year, from_team_id, to_team_id)
-		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
-		if record != null:
-			record.team_id = to_team_id
+		RecordStore.set_player_record_team(
+			player.id,
+			season.year,
+			season.season_number,
+			to_team_id
+		)
 
 
 # 一軍ロスターの出場枠を入れ替える: 出て行った選手を外し、空いた枠に来た選手を

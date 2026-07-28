@@ -56,6 +56,7 @@ const PLATOON_WEIGHT: float = 0.3
 #   tto_round_weight: float (coordinator の TTO_PENALTY_PER_ROUND[round])
 #   framing_strikes: float (C_Framing * coordinator の FRAMING_SCALE)
 static func build_weights(precomp: Dictionary) -> Dictionary:
+	var rules: Dictionary = precomp.get("_pa_probability_rules", {}) as Dictionary
 	var batter_z: Dictionary = precomp.get("batter_z", {}) as Dictionary
 	var pitcher_z: Dictionary = precomp.get("pitcher_z", {}) as Dictionary
 	var platoon_sign: float = float(precomp.get("platoon_sign", 0.0))
@@ -64,7 +65,7 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	var command_leak: float = float(precomp.get("pitcher_command_leak", 0.0))
 	var arsenal_k_bias: float = float(precomp.get("arsenal_k_bias", 0.0))
 	var catcher_z: Dictionary = precomp.get("catcher_z", {}) as Dictionary
-	var platoon_weight: float = _rule_float("platoon_weight", PLATOON_WEIGHT)
+	var platoon_weight: float = _rule_float(rules, "platoon_weight", PLATOON_WEIGHT)
 
 	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
 	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0))
@@ -76,29 +77,29 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 
 	var platoon_term: float = bat_platoon * platoon_sign * platoon_weight
 
-	var k_logit: float = _rule_float("k_logit_base", K_LOGIT_BASE)
-	k_logit += pit_k_create * _rule_float("k_create_weight", K_CREATE_WEIGHT)
-	k_logit -= bat_k_avoid * _rule_float("k_avoid_weight", K_AVOID_WEIGHT)
-	k_logit += pit_edge_rate * _rule_float("arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
-	k_logit += arsenal_k_bias * _rule_float("arsenal_tendency_k_weight", ARSENAL_TENDENCY_K_WEIGHT)  # 球種構成のK寄り傾向(微差)。
-	k_logit += framing_strikes * _rule_float("framing_k_coef", FRAMING_K_COEF)
-	k_logit += c_game_call * _rule_float("gamecall_k_coef", GAMECALL_K_COEF)
-	k_logit -= tto_round_weight * _rule_float("tto_k_drop", TTO_K_DROP)
+	var k_logit: float = _rule_float(rules, "k_logit_base", K_LOGIT_BASE)
+	k_logit += pit_k_create * _rule_float(rules, "k_create_weight", K_CREATE_WEIGHT)
+	k_logit -= bat_k_avoid * _rule_float(rules, "k_avoid_weight", K_AVOID_WEIGHT)
+	k_logit += pit_edge_rate * _rule_float(rules, "arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
+	k_logit += arsenal_k_bias * _rule_float(rules, "arsenal_tendency_k_weight", ARSENAL_TENDENCY_K_WEIGHT)  # 球種構成のK寄り傾向(微差)。
+	k_logit += framing_strikes * _rule_float(rules, "framing_k_coef", FRAMING_K_COEF)
+	k_logit += c_game_call * _rule_float(rules, "gamecall_k_coef", GAMECALL_K_COEF)
+	k_logit -= tto_round_weight * _rule_float(rules, "tto_k_drop", TTO_K_DROP)
 	k_logit -= platoon_term
 
-	var bb_logit: float = _rule_float("bb_logit_base", BB_LOGIT_BASE)
-	bb_logit += bat_bb_create * _rule_float("bb_create_weight", BB_CREATE_WEIGHT)
-	bb_logit -= pit_bb_prevent * _rule_float("bb_prevent_weight", BB_PREVENT_WEIGHT)
-	bb_logit -= framing_strikes * _rule_float("framing_bb_coef", FRAMING_BB_COEF)
-	bb_logit -= c_game_call * _rule_float("gamecall_bb_coef", GAMECALL_BB_COEF)
-	bb_logit += tto_round_weight * _rule_float("tto_bb_drop", TTO_BB_DROP)
-	bb_logit += command_leak * _rule_float("command_leak_bb_weight", 0.10)
+	var bb_logit: float = _rule_float(rules, "bb_logit_base", BB_LOGIT_BASE)
+	bb_logit += bat_bb_create * _rule_float(rules, "bb_create_weight", BB_CREATE_WEIGHT)
+	bb_logit -= pit_bb_prevent * _rule_float(rules, "bb_prevent_weight", BB_PREVENT_WEIGHT)
+	bb_logit -= framing_strikes * _rule_float(rules, "framing_bb_coef", FRAMING_BB_COEF)
+	bb_logit -= c_game_call * _rule_float(rules, "gamecall_bb_coef", GAMECALL_BB_COEF)
+	bb_logit += tto_round_weight * _rule_float(rules, "tto_bb_drop", TTO_BB_DROP)
+	bb_logit += command_leak * _rule_float(rules, "command_leak_bb_weight", 0.10)
 
-	var hbp_logit: float = _rule_float("hbp_logit_base", HBP_LOGIT_BASE)
-	hbp_logit -= pit_bb_prevent * _rule_float("hbp_bb_prevent_weight", 0.30)
-	hbp_logit += command_leak * _rule_float("command_leak_hbp_weight", 0.06)
+	var hbp_logit: float = _rule_float(rules, "hbp_logit_base", HBP_LOGIT_BASE)
+	hbp_logit -= pit_bb_prevent * _rule_float(rules, "hbp_bb_prevent_weight", 0.30)
+	hbp_logit += command_leak * _rule_float(rules, "command_leak_hbp_weight", 0.06)
 
-	var bip_logit: float = PSBalanceProfile.logit(_rule_float("league_bip_base", LEAGUE_BIP_BASE))
+	var bip_logit: float = PSBalanceProfile.logit(_rule_float(rules, "league_bip_base", LEAGUE_BIP_BASE))
 
 	return {
 		OUTCOME_STRIKEOUT: k_logit,
@@ -108,8 +109,17 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	}
 
 
-static func _rule_float(name: String, fallback: float) -> float:
-	return ModManager.rule_float("simulation.pa_probability." + name, fallback)
+static func _rule_float(rules: Dictionary, name: String, fallback: float) -> float:
+	if rules.has(name):
+		var value: Variant = rules[name]
+		if value is int or value is float:
+			return float(value)
+		if value is String and str(value).is_valid_float():
+			return float(value)
+		return fallback
+	if not rules.is_empty():
+		return fallback
+	return ModManager.rule_group_float(ModManager.RULE_GROUP_PA_PROBABILITY, name, fallback)
 
 
 # softmax で 1 カテゴリを抽選する。

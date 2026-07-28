@@ -34,6 +34,8 @@ const RELIEVER_FATIGUE_LIMIT: int = 145
 const RELIEVER_EMERGENCY_FATIGUE_LIMIT: int = 188
 const INJURY_RETURN_HARD_REST_DAYS: int = 1
 const INJURY_RETURN_SOFT_REST_DAYS: int = 3
+const USAGE_ARSENAL_CACHE_KEY: String = "_pa_arsenal_summary"
+const USAGE_ARSENAL_BIASES_CACHE_KEY: String = "_pa_arsenal_biases"
 
 # ピッチグレードは z スケール (リーグ平均 0)。display 45 相当 = z -0.4 を「実戦級」の閾値とする。
 const EFFECTIVE_PITCH_Z: float = -0.4
@@ -152,11 +154,22 @@ static func long_relief_target_pitches(record: PSPlayerSeasonRecord) -> int:
 
 static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Dictionary:
 	var resolved_role: String = _normalized_role(role)
+	var workload_pitches: int = outing_workload_pitches(record, resolved_role)
+	var fatigue_start_pitches: float = PSFatigueCalculator.start_threshold(
+		record,
+		resolved_role != ROLE_STARTER
+	)
+	var fatigue_limit_pitches: float = float(workload_pitches)
+	if resolved_role == ROLE_STARTER:
+		fatigue_limit_pitches = float(max(int(fatigue_start_pitches) + 1, workload_pitches))
 	return {
 		"record": record,
 		"pitcher_id": 0 if record == null else record.player_id,
 		"role": resolved_role,
-		"workload_pitches": outing_workload_pitches(record, resolved_role),
+		"workload_pitches": workload_pitches,
+		"fatigue_start_pitches": fatigue_start_pitches,
+		"fatigue_limit_pitches": fatigue_limit_pitches,
+		"fatigue_width": PSFatigueCalculator.width(record),
 		"pitches": 0,
 		"batters_faced": 0,
 		"outs": 0,
@@ -183,23 +196,30 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 	if record == null or usage.is_empty():
 		return {}
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
-	var arsenal: Dictionary = arsenal_summary(record)
+	var arsenal: Dictionary = _arsenal_summary_for_usage(record, usage)
 	var ratio: float = outing_ratio(record, usage)
-	var fatigue_load: float = outing_fatigue_load(record, usage)
-	var usage_penalty: int = in_game_usage_penalty(record, usage)
-	var tto_penalty: int = times_through_order_penalty(record, usage)
+	var outing_pitches: int = int(usage.get("pitches", 0))
+	var fatigue_factor: float = PSFatigueCalculator.factor_for_outing(record, usage, outing_pitches)
+	var fatigue_load: float = (
+		1.0 - fatigue_factor
+		if role == ROLE_STARTER
+		else max(0.0, ratio - 0.82)
+	)
+	var trouble: float = float(usage.get("trouble_score", 0.0))
+	var usage_penalty: int = _in_game_usage_penalty(role, ratio, trouble, fatigue_load)
+	var tto_penalty: int = times_through_order_penalty(record, usage, arsenal)
 	var arsenal_bonus: int = role_arsenal_bonus(role, arsenal)
 	# 球種構成の傾向(微差)。type 別 K寄り/ゴロ寄り/被弾を mastery 加重で集計し中心化済み。
-	var arsenal_biases: Dictionary = PSPitchTypes.aggregate_biases(arsenal.get("arsenal", []) as Array)
-	var trouble: float = float(usage.get("trouble_score", 0.0))
+	var arsenal_biases: Dictionary = _arsenal_biases_for_usage(usage, arsenal)
 	var stamina_pressure: float = fatigue_load if role == ROLE_STARTER else max(0.0, ratio - 0.92)
 	var command_leak: float = clamp(max(0.0, trouble - 3.0) * 0.55 + stamina_pressure * 2.4, 0.0, 5.0)
 	var contact_damage: float = clamp(max(0.0, trouble - 3.5) * 0.48 + max(0.0, stamina_pressure - 0.15) * 3.0, 0.0, 5.0)
 	return {
 		"pitcher_role": role,
-		"pitcher_outing_pitches": int(usage.get("pitches", 0)),
+		"pitcher_outing_pitches": outing_pitches,
 		"pitcher_outing_workload": _usage_workload_pitches(record, usage, role),
 		"pitcher_fatigue_ratio": ratio,
+		"pitcher_fatigue_factor": fatigue_factor,
 		"pitcher_usage_penalty": usage_penalty,
 		"pitcher_tto_penalty": tto_penalty,
 		"pitcher_arsenal_bonus": arsenal_bonus,
@@ -223,9 +243,18 @@ static func in_game_usage_penalty(record: PSPlayerSeasonRecord, usage: Dictionar
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
 	var ratio: float = outing_ratio(record, usage)
 	var trouble: float = float(usage.get("trouble_score", 0.0))
+	var fatigue_load: float = outing_fatigue_load(record, usage)
+	return _in_game_usage_penalty(role, ratio, trouble, fatigue_load)
+
+
+static func _in_game_usage_penalty(
+	role: String,
+	ratio: float,
+	trouble: float,
+	fatigue_load: float
+) -> int:
 	var penalty: float = 0.0
 	if role == ROLE_STARTER:
-		var fatigue_load: float = outing_fatigue_load(record, usage)
 		if fatigue_load > 0.25:
 			penalty += (fatigue_load - 0.25) * 24.0
 		if fatigue_load > 0.55:
@@ -245,7 +274,11 @@ static func in_game_usage_penalty(record: PSPlayerSeasonRecord, usage: Dictionar
 	return int(clamp(round(penalty), 0.0, 42.0))
 
 
-static func times_through_order_penalty(record: PSPlayerSeasonRecord, usage: Dictionary) -> int:
+static func times_through_order_penalty(
+	record: PSPlayerSeasonRecord,
+	usage: Dictionary,
+	arsenal: Dictionary = {}
+) -> int:
 	if record == null or usage.is_empty():
 		return 0
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
@@ -254,8 +287,8 @@ static func times_through_order_penalty(record: PSPlayerSeasonRecord, usage: Dic
 	var times_seen: int = int(floor(float(usage.get("batters_faced", 0)) / 9.0))
 	if times_seen <= 0:
 		return 0
-	var arsenal: Dictionary = arsenal_summary(record)
-	var depth_rating: float = starter_depth_rating(arsenal)
+	var resolved_arsenal: Dictionary = arsenal if not arsenal.is_empty() else arsenal_summary(record)
+	var depth_rating: float = starter_depth_rating(resolved_arsenal)
 	var penalty: float = 0.0
 	if times_seen >= 1:
 		penalty += 1.0
@@ -417,7 +450,7 @@ static func should_pull_after_plate_appearance(
 		# イニング途中の交代は「炎上が止まらない」緊急時のみ。通常の交代は回またぎ
 		# (should_pull_for_next_half) で判断し、序盤の数失点では立て直しのチャンスを与える。
 		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
-		if PSFatigueCalculator.factor_for_pitcher(record, false, pitches) <= STARTER_MID_INNING_FATIGUE_FLOOR and not complete_game_chase:
+		if PSFatigueCalculator.factor_for_outing(record, usage, pitches) <= STARTER_MID_INNING_FATIGUE_FLOOR and not complete_game_chase:
 			return true
 		if inning <= 4:
 			# 序盤は5〜6失点級の炎上が続くときだけ即交代。2回3失点程度では降ろさない。
@@ -472,7 +505,7 @@ static func starter_projected_fatigue_factor(record: PSPlayerSeasonRecord, usage
 	if record == null or usage.is_empty():
 		return 1.0
 	var projected_pitches: int = int(round(float(int(usage.get("pitches", 0))) + max(0.0, extra_pitches)))
-	return PSFatigueCalculator.factor_for_pitcher(record, false, projected_pitches)
+	return PSFatigueCalculator.factor_for_outing(record, usage, projected_pitches)
 
 
 static func starter_projected_next_inning_effective_factor(record: PSPlayerSeasonRecord, usage: Dictionary) -> float:
@@ -504,11 +537,11 @@ static func outing_fatigue_load(record: PSPlayerSeasonRecord, usage: Dictionary)
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
 	if role != ROLE_STARTER:
 		return max(0.0, outing_ratio(record, usage) - 0.82)
-	return 1.0 - PSFatigueCalculator.factor_for_pitcher(record, false, int(usage.get("pitches", 0)))
+	return 1.0 - PSFatigueCalculator.factor_for_outing(record, usage)
 
 
 static func _starter_stamina_is_spent(record: PSPlayerSeasonRecord, usage: Dictionary) -> bool:
-	return PSFatigueCalculator.factor_for_pitcher(record, false, int(usage.get("pitches", 0))) <= STARTER_CURRENT_FATIGUE_FLOOR
+	return PSFatigueCalculator.factor_for_outing(record, usage) <= STARTER_CURRENT_FATIGUE_FLOOR
 
 
 static func _starter_next_inning_would_exhaust(record: PSPlayerSeasonRecord, usage: Dictionary, inning: int, runs_allowed: int) -> bool:
@@ -564,7 +597,7 @@ static func _starter_can_chase_complete_game(record: PSPlayerSeasonRecord, usage
 	var projected_pitches: float = float(int(usage.get("pitches", 0))) + float(remaining_outs) * STARTER_COMPLETE_GAME_PITCHES_PER_OUT
 	if projected_pitches > float(starter_complete_game_pitch_limit(record)):
 		return false
-	return PSFatigueCalculator.factor_for_pitcher(record, false, int(round(projected_pitches))) >= STARTER_COMPLETE_GAME_FATIGUE_FLOOR
+	return PSFatigueCalculator.factor_for_outing(record, usage, int(round(projected_pitches))) >= STARTER_COMPLETE_GAME_FATIGUE_FLOOR
 
 
 static func post_game_fatigue_gain(record: PSPlayerSeasonRecord, usage: Dictionary) -> int:
@@ -726,6 +759,28 @@ static func synth_mastery_values(record: PSPlayerSeasonRecord) -> Array:
 	return (pitcher_profile(record).get("pitch_values", []) as Array).duplicate()
 
 
+static func _arsenal_summary_for_usage(
+	record: PSPlayerSeasonRecord,
+	usage: Dictionary
+) -> Dictionary:
+	if usage.has(USAGE_ARSENAL_CACHE_KEY):
+		return usage[USAGE_ARSENAL_CACHE_KEY] as Dictionary
+	var summary: Dictionary = arsenal_summary(record)
+	usage[USAGE_ARSENAL_CACHE_KEY] = summary
+	return summary
+
+
+static func _arsenal_biases_for_usage(
+	usage: Dictionary,
+	arsenal: Dictionary
+) -> Dictionary:
+	if usage.has(USAGE_ARSENAL_BIASES_CACHE_KEY):
+		return usage[USAGE_ARSENAL_BIASES_CACHE_KEY] as Dictionary
+	var biases: Dictionary = PSPitchTypes.aggregate_biases(arsenal.get("arsenal", []) as Array)
+	usage[USAGE_ARSENAL_BIASES_CACHE_KEY] = biases
+	return biases
+
+
 static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 	if record == null:
 		return {
@@ -740,7 +795,11 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 	var profile: Dictionary = pitcher_profile(record)
 	# 実 arsenal (保存済み or z 派生) の mastery を pitch_values として採用する。
 	# derive-on-read は synth_mastery_values と同値なので、従来の役割適性挙動を保つ。
-	var arsenal_entries: Array = record.arsenal_or_derived()
+	var arsenal_entries: Array = (
+		record.arsenal_snapshot
+		if not record.arsenal_snapshot.is_empty()
+		else PSPitchTypes.derive_from_z(record, profile.get("pitch_values", []) as Array)
+	)
 	var values: Array = []
 	for entry_value in arsenal_entries:
 		var entry: Dictionary = entry_value as Dictionary

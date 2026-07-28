@@ -98,10 +98,17 @@ static func aggregate_biases(arsenal: Array) -> Dictionary:
 # mastery は PSPitcherUsageModel の既存合成 (synth_mastery_values) をそのまま採用するため、
 # 役割適性 (starter_depth_rating 等) は従来挙動を保つ。type のみ z リーンと player_id ハッシュで割当。
 # 注: derive-on-read で繰り返し呼ばれるため Rng を使わず player_id ハッシュで決定論にする。
-static func derive_from_z(record: PSPlayerSeasonRecord) -> Array:
+static func derive_from_z(
+	record: PSPlayerSeasonRecord,
+	precomputed_masteries: Array = []
+) -> Array:
 	if record == null:
 		return []
-	var masteries: Array = PSPitcherUsageModel.synth_mastery_values(record)
+	var masteries: Array = (
+		precomputed_masteries
+		if not precomputed_masteries.is_empty()
+		else PSPitcherUsageModel.synth_mastery_values(record)
+	)
 	if masteries.is_empty():
 		return []
 	var sorted_masteries: Array = masteries.duplicate()

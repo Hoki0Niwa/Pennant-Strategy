@@ -8,10 +8,6 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # 試合結果画面が必要時に遅延読込する。1 試合 1 ファイルなので長期オートプレイでも O(1) 書き込み。
 #   <save_folder>/game_logs/<year>_s<season>/g<game_index>.json
 
-# テスト/オートプレイで書き込みを抑止したい場合に false にする。
-static var enabled: bool = true
-
-
 static func log_root() -> String:
 	return SaveContext.game_log_root()
 
@@ -141,32 +137,64 @@ static func _assign_hr_numbers(pa_log: Array, season: PSSeason) -> void:
 		pa["hr_number"] = maxi(idx, pre + idx)
 
 
-static func write_game_log(season: PSSeason, game_index: int, result: Dictionary) -> void:
-	if not enabled or season == null:
+static func stage_game_log(season: PSSeason, game_index: int, result: Dictionary) -> void:
+	if season == null or game_index < 0 or game_index >= season.schedule.size():
 		return
-	if log_root().is_empty():
-		return
-	DirAccess.make_dir_recursive_absolute(_season_dir(season))
+	var game: Dictionary = season.schedule[game_index] as Dictionary
+	if season.generate_game_logs:
+		# full result を捨てる前に、画面表示と後続保存に必要な情報だけを1度だけ作る。
+		game[PSSeason.TRANSIENT_GAME_LOG_KEY] = build_game_log(result, season)
+	else:
+		game.erase(PSSeason.TRANSIENT_GAME_LOG_KEY)
+	season.schedule[game_index] = game
+
+
+static func write_game_log(season: PSSeason, game_index: int, result: Dictionary) -> bool:
+	if season == null or log_root().is_empty():
+		return false
+	return _write_game_log_payload(season, game_index, build_game_log(result, season))
+
+
+static func _write_game_log_payload(season: PSSeason, game_index: int, payload: Dictionary) -> bool:
+	if season == null or log_root().is_empty() or payload.is_empty():
+		return false
+	var dir_error: Error = DirAccess.make_dir_recursive_absolute(_season_dir(season))
+	if dir_error != OK:
+		return false
 	var file: FileAccess = FileAccess.open(_game_path(season, game_index), FileAccess.WRITE)
 	if file == null:
-		return
-	file.store_string(JSON.stringify(build_game_log(result, season)))
+		return false
+	file.store_string(JSON.stringify(payload))
+	var write_ok: bool = file.get_error() == OK
 	file.close()
+	return write_ok
 
 
-static func write_pending_game_logs(season: PSSeason) -> void:
-	if not enabled or season == null:
-		return
-	if log_root().is_empty():
-		return
+static func write_pending_game_logs(season: PSSeason) -> bool:
+	if season == null or log_root().is_empty():
+		return false
 	for index in range(season.schedule.size()):
 		var game: Dictionary = season.schedule[index] as Dictionary
 		if not bool(game.get("played", false)):
 			continue
+		var pending: Dictionary = game.get(PSSeason.TRANSIENT_GAME_LOG_KEY, {}) as Dictionary
+		if not pending.is_empty():
+			if not _write_game_log_payload(season, index, pending):
+				return false
+			game.erase(PSSeason.TRANSIENT_GAME_LOG_KEY)
+			season.schedule[index] = game
+			continue
+
+		# full result を持つ呼び出し元にも対応する。書込成功後だけ compact するので、
+		# I/O 失敗時は詳細をメモリに残したまま再試行できる。
 		var result: Dictionary = game.get("result", {}) as Dictionary
 		if not _has_detailed_payload(result):
 			continue
-		write_game_log(season, index, result)
+		if not write_game_log(season, index, result):
+			return false
+		game["result"] = season.compact_game_result(result)
+		season.schedule[index] = game
+	return true
 
 
 # postseason 版の write_pending_game_logs。auto_save_enabled=false 中に消化した PS 試合は
@@ -176,7 +204,7 @@ static func write_pending_game_logs(season: PSSeason) -> void:
 # PSPostseasonResult.to_dict() でスリム化しないと、reload 後に box score / play-by-play が
 # 復元不能になる (post_<stage>_<game_num>.json が存在しないため)。
 static func write_pending_postseason_game_logs(postseason: PSPostseasonResult, season: PSSeason) -> void:
-	if not enabled or postseason == null or season == null:
+	if postseason == null or season == null:
 		return
 	if log_root().is_empty():
 		return
@@ -195,7 +223,7 @@ static func _has_detailed_payload(result: Dictionary) -> bool:
 
 
 static func write_postseason_game_log(season: PSSeason, stage_key: String, game_num: int, result: Dictionary) -> void:
-	if not enabled or season == null:
+	if season == null:
 		return
 	if log_root().is_empty():
 		return
@@ -243,3 +271,15 @@ static func read_game_log(season: PSSeason, game_index: int) -> Dictionary:
 	if parsed is Dictionary:
 		return parsed as Dictionary
 	return {}
+
+
+# 画面用の遅延読込。auto-save OFF でまだファイル化していない試合は、schedule 内の
+# compact pending log を返す。read_game_log() は「永続化済みファイルだけ」の契約を保つ。
+static func read_available_game_log(season: PSSeason, game_index: int) -> Dictionary:
+	if season == null or game_index < 0 or game_index >= season.schedule.size():
+		return {}
+	var game: Dictionary = season.schedule[game_index] as Dictionary
+	var pending: Dictionary = game.get(PSSeason.TRANSIENT_GAME_LOG_KEY, {}) as Dictionary
+	if not pending.is_empty():
+		return pending
+	return read_game_log(season, game_index)

@@ -7,13 +7,18 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 
 var _records_loaded: bool = false
 var _player_records: Dictionary = {}
+var _player_records_view: Dictionary = {}
+# year -> season_number -> team_id -> player record primary keys。
+# 完成済みindexを一括差し替えし、日次並列workerは読み取りだけを行う。
+var _team_player_record_keys_by_year: Dictionary = {}
+var _indexed_player_record_count: int = 0
 var _team_records: Dictionary = {}
 var _season_archives: Array = []
 
 var player_records: Dictionary:
 	get:
 		ensure_loaded()
-		return _player_records
+		return _player_records_view
 
 var team_records: Dictionary:
 	get:
@@ -75,6 +80,8 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 			_player_records.erase(key)
 			changed = true
 
+	if changed or _indexed_player_record_count != _player_records.size():
+		_rebuild_team_player_record_index()
 	if changed:
 		if persist:
 			save_records()
@@ -149,12 +156,73 @@ func get_player_career_pitcher_stats(player_id: int) -> PSPitcherStats:
 
 func get_team_player_records(team_id: int, year: int, season_number: int) -> Array:
 	ensure_loaded()
+	if _indexed_player_record_count != _player_records.size():
+		_rebuild_team_player_record_index()
 	var records: Array = []
-	for record_row in _player_records.values():
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record.team_id == team_id and record.year == year and record.season_number == season_number:
+	var seasons_by_number: Dictionary = _team_player_record_keys_by_year.get(year, {}) as Dictionary
+	var teams_by_id: Dictionary = seasons_by_number.get(season_number, {}) as Dictionary
+	var record_keys: Array = teams_by_id.get(team_id, []) as Array
+	for record_key_value in record_keys:
+		var record: PSPlayerSeasonRecord = _player_records.get(record_key_value) as PSPlayerSeasonRecord
+		# membership変更は専用API経由だが、record参照自体は可変なので防御的に所属を再確認する。
+		if record != null and record.team_id == team_id \
+				and record.year == year and record.season_number == season_number:
 			records.append(record)
 	return records
+
+
+func prepare_team_player_index() -> bool:
+	ensure_loaded()
+	if not _records_loaded:
+		return false
+	if _indexed_player_record_count != _player_records.size():
+		_rebuild_team_player_record_index()
+	return true
+
+
+func set_player_record_team(
+	player_id: int,
+	year: int,
+	season_number: int,
+	team_id: int
+) -> bool:
+	ensure_loaded()
+	var record: PSPlayerSeasonRecord = _player_records.get(
+		_season_key(player_id, year, season_number)
+	) as PSPlayerSeasonRecord
+	if record == null:
+		return false
+	if record.team_id == team_id:
+		return true
+	record.team_id = team_id
+	# 移籍は稀なので、全体挿入順と完全に同じbucket順を保つためindexを一括再構築する。
+	_rebuild_team_player_record_index()
+	return true
+
+
+func set_player_record(record: PSPlayerSeasonRecord, storage_key: Variant = null) -> bool:
+	if record == null:
+		return false
+	ensure_loaded()
+	var resolved_key: Variant = storage_key
+	if resolved_key == null:
+		resolved_key = _season_key(record.player_id, record.year, record.season_number)
+	_player_records[resolved_key] = record
+	_rebuild_team_player_record_index()
+	return true
+
+
+func erase_player_record_by_key(storage_key: Variant) -> bool:
+	ensure_loaded()
+	if not _player_records.has(storage_key):
+		return false
+	_player_records.erase(storage_key)
+	_rebuild_team_player_record_index()
+	return true
+
+
+func erase_player_record(player_id: int, year: int, season_number: int) -> bool:
+	return erase_player_record_by_key(_season_key(player_id, year, season_number))
 
 
 func get_current_player_records_for_team(team_id: int) -> Array:
@@ -167,6 +235,7 @@ func get_current_player_records_for_team(team_id: int) -> Array:
 func clear_records() -> void:
 	SQLiteStoreService.reset_record_fingerprints()
 	_player_records.clear()
+	_clear_team_player_record_index()
 	_team_records.clear()
 	_season_archives.clear()
 	_records_loaded = true
@@ -215,6 +284,7 @@ func load_from_dict(payload: Dictionary) -> void:
 	# 空キャッシュ = 次回 save は全行書き込み。
 	SQLiteStoreService.reset_record_fingerprints()
 	_player_records.clear()
+	_clear_team_player_record_index()
 	_team_records.clear()
 	_season_archives.clear()
 
@@ -223,6 +293,7 @@ func load_from_dict(payload: Dictionary) -> void:
 		var player_row: Dictionary = row as Dictionary
 		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(player_row)
 		_player_records[_season_key(record.player_id, record.year, record.season_number)] = record
+	_rebuild_team_player_record_index()
 
 	var team_rows: Array = payload.get("team_records", []) as Array
 	for row in team_rows:
@@ -273,6 +344,7 @@ func save_records() -> bool:
 func load_records() -> void:
 	SQLiteStoreService.reset_record_fingerprints()
 	_player_records.clear()
+	_clear_team_player_record_index()
 	_team_records.clear()
 	_season_archives.clear()
 	_records_loaded = true
@@ -301,6 +373,7 @@ func load_records() -> void:
 		# 正規化テーブルから hydrate した = DB は今のメモリ内容を保持している。
 		# フィンガープリントをシードしておくと、セッション初回の save も変更行だけの書き込みで済む。
 		SQLiteStoreService.seed_record_fingerprints(fingerprints)
+		_rebuild_team_player_record_index()
 		var blob_payload: Dictionary = SQLiteStoreService.load_record_store()
 		# 両方空 = このセーブは SQLite へ書けていない。JSON fallback を読みにいく。
 		if not (_player_records.is_empty() and blob_payload.is_empty()):
@@ -355,6 +428,49 @@ func _load_team_and_archives_from_blob(blob_payload: Dictionary) -> void:
 
 func _season_key(entity_id: int, year: int, season_number: int) -> String:
 	return "%d:%d:%d" % [entity_id, year, season_number]
+
+
+func _clear_team_player_record_index() -> void:
+	_team_player_record_keys_by_year = {}
+	_indexed_player_record_count = 0
+	_refresh_player_records_view()
+
+
+func _rebuild_team_player_record_index() -> void:
+	var rebuilt: Dictionary = {}
+	for record_key_value in _player_records.keys():
+		var record: PSPlayerSeasonRecord = _player_records[record_key_value] as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		var seasons_by_number: Dictionary = rebuilt.get(record.year, {}) as Dictionary
+		if not rebuilt.has(record.year):
+			rebuilt[record.year] = seasons_by_number
+		var teams_by_id: Dictionary = seasons_by_number.get(record.season_number, {}) as Dictionary
+		if not seasons_by_number.has(record.season_number):
+			seasons_by_number[record.season_number] = teams_by_id
+		var record_keys: Array = teams_by_id.get(record.team_id, []) as Array
+		if not teams_by_id.has(record.team_id):
+			teams_by_id[record.team_id] = record_keys
+		record_keys.append(record_key_value)
+
+	for seasons_value in rebuilt.values():
+		var seasons_by_number: Dictionary = seasons_value as Dictionary
+		for teams_value in seasons_by_number.values():
+			var teams_by_id: Dictionary = teams_value as Dictionary
+			for record_keys_value in teams_by_id.values():
+				(record_keys_value as Array).make_read_only()
+			teams_by_id.make_read_only()
+		seasons_by_number.make_read_only()
+	rebuilt.make_read_only()
+	_team_player_record_keys_by_year = rebuilt
+	_indexed_player_record_count = _player_records.size()
+	_refresh_player_records_view()
+
+
+func _refresh_player_records_view() -> void:
+	var view: Dictionary = _player_records.duplicate()
+	view.make_read_only()
+	_player_records_view = view
 
 
 func _record_identity_changed(record: PSPlayerSeasonRecord, player: PSPlayer) -> bool:

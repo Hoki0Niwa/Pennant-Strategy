@@ -156,7 +156,7 @@ static func starter_should_be_hit_for_in_scoring_chance(
 		return false
 	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(setup, starter, PSPitcherUsageModel.ROLE_STARTER)
 	var projected_factor: float = PSPitcherUsageModel.starter_projected_next_inning_effective_factor(starter, usage)
-	var current_factor: float = PSFatigueCalculator.factor_for_pitcher(starter, false, int(usage.get("pitches", 0)))
+	var current_factor: float = PSFatigueCalculator.factor_for_outing(starter, usage)
 	if projected_factor <= 0.28:
 		return true
 	if current_factor <= 0.30:
@@ -762,6 +762,8 @@ static func replace_fielder(setup: Dictionary, outgoing_player_id: int, replacem
 				"position": position,
 			}
 			setup["fielders"] = fielders
+			if position == 2:
+				setup["catcher"] = replacement
 			return
 
 

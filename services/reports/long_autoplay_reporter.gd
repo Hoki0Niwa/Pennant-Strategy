@@ -5,7 +5,6 @@ const SimulationReporterScript = preload("res://services/reports/simulation_repo
 const CampServiceRef = preload("res://services/season/camp_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const ReportHealth = preload("res://services/reports/report_health.gd")
-const GameLogService = preload("res://services/storage/game_log_service.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
@@ -85,15 +84,14 @@ func run(options: Dictionary = {}) -> Dictionary:
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, selected_team_id, start_year, dh_by_league)
 
 	for season_index in range(season_count):
+		_prepare_report_season(season)
 		RecordStore.clear_records()
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 
 		var roster_before: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
-		GameLogService.enabled = false  # 長期レポートは試合ログを書かない (大量ファイル回避)
 		# 実プレイ経路 (AppState) と同じ週次入替/トレードのフックを有効にする
 		# (ctx 無しだと一二軍入替AI・シーズン中トレードが一切走らず、実挙動から乖離する)。
 		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(season, false, _auto_swap_ctx(selected_team_id))
-		GameLogService.enabled = true
 		if not bool(simulation_result.get("ok", false)):
 			errors.append({
 				"year": season.year,
@@ -219,6 +217,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	for season_index in range(season_count):
 		if _is_cancelled(cancel_token):
 			break
+		_prepare_report_season(season)
 		RecordStore.clear_records()
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 
@@ -231,11 +230,9 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 				var effective_total: int = max(1, total)
 				var scaled_done: int = progress_base + int(round(float(done) / float(effective_total) * float(season_total_games)))
 				outer_progress_cb.call(scaled_done, total_progress_units, season_label)
-		GameLogService.enabled = false  # 長期レポートは試合ログを書かない (大量ファイル回避)
 		var simulation_result: Dictionary = await GameSimulator.simulate_remaining_season_async(
 			season, false, _auto_swap_ctx(selected_team_id), tree, inner_cb, cancel_token
 		)
-		GameLogService.enabled = true
 		if bool(simulation_result.get("cancelled", false)) or _is_cancelled(cancel_token):
 			break
 		if not bool(simulation_result.get("ok", false)):
@@ -329,6 +326,14 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	report["distributions"] = ReportHealth.long_distributions(report)
 	report["health"] = ReportHealth.long_health(report)
 	return report
+
+
+# SimulationReporter の詳細集計は schedule の full result ではなく、この逐次集計を読む。
+# 新season生成のたび、試合を始める前に必ずopt-inする。
+func _prepare_report_season(season: PSSeason) -> void:
+	if season != null:
+		season.collect_simulation_report_data = true
+		season.generate_game_logs = false
 
 
 # 実プレイ (AppState._build_auto_swap_ctx) と同等の日次フック設定。自軍もCPU自動管理する。

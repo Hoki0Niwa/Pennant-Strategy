@@ -21,14 +21,18 @@ static func save_state(app_state) -> bool:
 			push_error("Could not create save folder.")
 			return false
 
+	var season_data: Dictionary = {}
+	var history_in_blob: bool = true
+	if app_state.current_season != null:
+		if not GameLogService.write_pending_game_logs(app_state.current_season):
+			push_error("Could not flush pending game logs before saving game state.")
+			return false
+
 	if not RecordStore.save_records():
 		push_error("Could not write record store before saving game state.")
 		return false
 
-	var season_data: Dictionary = {}
-	var history_in_blob: bool = true
 	if app_state.current_season != null:
-		GameLogService.write_pending_game_logs(app_state.current_season)
 		# 選手履歴 (試合別差分 / 日次スナップショット) は season_history テーブルへ日単位で
 		# 増分永続化し、成功したときだけ blob から外す (失敗時は従来通り blob に全量を残す)。
 		history_in_blob = not _persist_season_history(app_state.current_season)

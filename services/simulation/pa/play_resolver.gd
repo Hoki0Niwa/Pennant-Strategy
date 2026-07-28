@@ -308,7 +308,8 @@ static func resolve(
 	bases: Array,
 	outs: int,
 	physics: Dictionary,
-	contact_quality: Dictionary
+	contact_quality: Dictionary,
+	rules: Dictionary = {}
 ) -> Dictionary:
 	var spray: float = float(physics.get("spray_angle", 0.0))
 	var distance: float = float(physics.get("distance", 0.0))
@@ -319,8 +320,8 @@ static func resolve(
 	if absf(spray) > FAIR_HALF_ANGLE_DEG:
 		return {"result": RESULT_FOUL_BACK, "category": RESULT_FOUL_BACK, "bases": 0}
 
-	var hr_line: float = _hr_line(spray) * _rule_float("park_distance_scale", PARK_DISTANCE_SCALE)
-	hr_line += _rule_float("hr_wall_clearance", HR_WALL_CLEARANCE)
+	var hr_line: float = _hr_line(spray) * _rule_float(rules, "park_distance_scale", PARK_DISTANCE_SCALE)
+	hr_line += _rule_float(rules, "hr_wall_clearance", HR_WALL_CLEARANCE)
 	if distance >= hr_line and trajectory != PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
 		var hr_field: int = _outfield_position_for_spray(spray, distance, trajectory)
 		var hr_field_name: String = "left" if hr_field == 7 else ("right" if hr_field == 9 else "center")
@@ -340,14 +341,32 @@ static func resolve(
 	var ability_teamwork: float = float(ability_profile.get("teamwork", DEFAULT_FIELDING_AXIS_Z))
 	var batter_contact: float = _batter_contact(batter)
 
-	var catch_prob_neutral: float = _catch_probability_neutral(trajectory, position, distance, hang_time, ev, batter_contact, spray)
+	var catch_prob_neutral: float = _catch_probability_neutral(
+		trajectory,
+		position,
+		distance,
+		hang_time,
+		ev,
+		batter_contact,
+		spray,
+		rules
+	)
 	var catch_prob_used: float = _catch_probability_used(catch_prob_neutral, ability_profile, position, trajectory)
 
 	if bool(contact_quality.get("protective_out", false)):
 		return _enrich(_out_outcome(trajectory, position), catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 
 	var first_baseman: PSPlayerSeasonRecord = _fielder_record(defense, 3)
-	var error_type: String = _roll_error_type(trajectory, position, catch_prob_neutral, ev, ability_accuracy, ability_arm, first_baseman)
+	var error_type: String = _roll_error_type(
+		trajectory,
+		position,
+		catch_prob_neutral,
+		ev,
+		ability_accuracy,
+		ability_arm,
+		first_baseman,
+		rules
+	)
 	if error_type != "":
 		var error_bases: int = _error_advance_bases(error_type)
 		return _enrich(_error_outcome(position, error_type, error_bases), catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
@@ -359,7 +378,11 @@ static func resolve(
 		and position >= 3 and position <= 6
 		and _has_runner(bases, 0) and outs < 2
 	)
-	var double_play_probability: float = _double_play_probability(batter, ability_teamwork, position, ev) if double_play_opportunity else 0.0
+	var double_play_probability: float = (
+		_double_play_probability(batter, ability_teamwork, position, ev, rules)
+		if double_play_opportunity
+		else 0.0
+	)
 
 	if Rng.roll_float() < catch_prob_used:
 		# 捕球成功。併殺機会なら併殺を試みる（捕球できた後に二つ目のアウトを狙う）。
@@ -429,7 +452,8 @@ static func resolve(
 			distance,
 			hang_time,
 			position,
-			ability_arm
+			ability_arm,
+			rules
 		)
 		if sacrifice_fly_probability > 0.0 and Rng.roll_float() < sacrifice_fly_probability:
 			var sacrifice_fly_outcome: Dictionary = _sacrifice_fly_outcome(position)
@@ -551,7 +575,8 @@ static func _catch_probability_neutral(
 	hang_time: float,
 	ev: float,
 	batter_contact: float,
-	spray: float = 0.0
+	spray: float = 0.0,
+	rules: Dictionary = {}
 ) -> float:
 	var _unused_contact: float = batter_contact
 	var lateral: float = _lateral_difficulty(position, spray)
@@ -568,7 +593,11 @@ static func _catch_probability_neutral(
 		PSBattedBallPhysicsResolver.TRAJECTORY_POPUP:
 			base = _popup_catch_probability(position, hang_time, lateral, hard)
 
-	return clamp(base + _rule_float("catch_prob_calibration_bias", CATCH_PROB_CALIBRATION_BIAS), CATCH_PROB_MIN, CATCH_PROB_MAX)
+	return clamp(
+		base + _rule_float(rules, "catch_prob_calibration_bias", CATCH_PROB_CALIBRATION_BIAS),
+		CATCH_PROB_MIN,
+		CATCH_PROB_MAX
+	)
 
 
 static func _grounder_catch_probability(
@@ -726,7 +755,8 @@ static func _roll_error_type(
 	ev: float,
 	ability_secure: float,
 	ability_throw: float,
-	first_baseman: PSPlayerSeasonRecord
+	first_baseman: PSPlayerSeasonRecord,
+	rules: Dictionary = {}
 ) -> String:
 	var makeable: float = clamp(catch_prob_neutral, 0.0, 1.0)
 	var hardness: float = clamp((ev - FIELD_ERROR_HARDNESS_EV_FLOOR) / FIELD_ERROR_HARDNESS_EV_RANGE, 0.0, 1.0)
@@ -743,12 +773,12 @@ static func _roll_error_type(
 		return "fielding" if Rng.roll_float() < OF_FIELD_ERROR_RATE * of_error_multiplier else ""
 
 	# 内野・投手・捕手の捕球失策。弾道の捌きにくさ + 打球の強さ + 守備(secure)能力 + 位置別捕球難度。
-	var field_base: float = _rule_float("field_error_base_liner", FIELD_ERROR_BASE_LINER)
+	var field_base: float = _rule_float(rules, "field_error_base_liner", FIELD_ERROR_BASE_LINER)
 	match trajectory:
 		PSBattedBallPhysicsResolver.TRAJECTORY_GROUNDER:
-			field_base = _rule_float("field_error_base_grounder", FIELD_ERROR_BASE_GROUNDER)
+			field_base = _rule_float(rules, "field_error_base_grounder", FIELD_ERROR_BASE_GROUNDER)
 		PSBattedBallPhysicsResolver.TRAJECTORY_FLY, PSBattedBallPhysicsResolver.TRAJECTORY_POPUP:
-			field_base = _rule_float("field_error_base_fly", FIELD_ERROR_BASE_FLY)
+			field_base = _rule_float(rules, "field_error_base_fly", FIELD_ERROR_BASE_FLY)
 	var secure_deficiency: float = max(0.0, ERROR_SECURE_REFERENCE_Z - ability_secure)
 	var position_difficulty: float = float(FIELD_ERROR_POSITION_DIFFICULTY.get(position, 1.0))
 	var field_chance: float = makeable * position_difficulty * (
@@ -801,10 +831,16 @@ static func _error_advance_bases(error_type: String) -> int:
 
 
 # 併殺成立確率。守備側の併殺完成力(z)と打者走力(z)、打球の強さで増減する。
-static func _double_play_probability(batter: PSPlayerSeasonRecord, completion: float, position: int, ev: float) -> float:
+static func _double_play_probability(
+	batter: PSPlayerSeasonRecord,
+	completion: float,
+	position: int,
+	ev: float,
+	rules: Dictionary = {}
+) -> float:
 	# 打者の走力 z。0.0 が平均、速いほど一塁到達が早く併殺を崩す。
 	var batter_speed: float = 0.0 if batter == null else batter.z_ability("Run_Speed", 0.0)
-	var chance: float = _rule_float("double_play_base", DOUBLE_PLAY_BASE)
+	var chance: float = _rule_float(rules, "double_play_base", DOUBLE_PLAY_BASE)
 	# 二遊間(2B/SS)は併殺機会が多く、三塁は中程度に補正する。
 	var position_multiplier: float = 1.0
 	match position:
@@ -1592,7 +1628,8 @@ static func _sacrifice_fly_probability(
 	distance: float,
 	hang_time: float,
 	position: int,
-	fielder_arm: float
+	fielder_arm: float,
+	rules: Dictionary = {}
 ) -> float:
 	if trajectory != PSBattedBallPhysicsResolver.TRAJECTORY_FLY or outs > 1:
 		return 0.0
@@ -1628,7 +1665,7 @@ static func _sacrifice_fly_probability(
 			position_bonus = -0.22
 
 	var chance: float = (
-		_rule_float("sacrifice_fly_base", SACRIFICE_FLY_BASE)
+		_rule_float(rules, "sacrifice_fly_base", SACRIFICE_FLY_BASE)
 		+ depth_factor * SACRIFICE_FLY_DEPTH_WEIGHT
 		+ hang_factor * SACRIFICE_FLY_HANG_WEIGHT
 		+ runner_speed * SACRIFICE_FLY_SPEED_WEIGHT_Z
@@ -2079,5 +2116,14 @@ static func _round_float(value: float, digits: int) -> float:
 	return round(value * scale) / scale
 
 
-static func _rule_float(name: String, fallback: float) -> float:
-	return ModManager.rule_float("simulation.play_resolver.%s" % name, fallback)
+static func _rule_float(rules: Dictionary, name: String, fallback: float) -> float:
+	if rules.has(name):
+		var value: Variant = rules[name]
+		if value is int or value is float:
+			return float(value)
+		if value is String and str(value).is_valid_float():
+			return float(value)
+		return fallback
+	if not rules.is_empty():
+		return fallback
+	return ModManager.rule_group_float(ModManager.RULE_GROUP_PLAY_RESOLVER, name, fallback)
