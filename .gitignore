@@ -37,3 +37,6 @@ __pycache__/
 /_shot_*
 /_crop_*
 /_warnscan.*
+
+# 配布用ZIPの出力先 (リリース資材、Git管理しない)
+/dist/
