@@ -411,6 +411,32 @@ func test_record_store_saves_only_changed_rows() -> void:
 	_restore_app_state(old_state, test_save_id)
 
 
+func test_save_state_rebuilds_schema_when_runtime_db_recreated_at_same_path() -> void:
+	# スキーマ構築はプロセス内で1回に間引かれるが、キャッシュがパスだけを見ていると
+	# 「セーブを消して同じ save_id で作り直した」ときに空 DB へスキーマを張らず、
+	# 以後の保存が "no such table" で SQLite 経路から落ちる。ファイルの有無も見て張り直す。
+	var old_state: Dictionary = _capture_app_state()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(SQLiteStoreService.load_game_state().is_empty()).is_false()
+
+	# DB ファイルだけを消す (= 同一パスに空 DB が作り直される状況)。
+	var db_path: String = SQLiteStoreService.runtime_db_path()
+	assert_str(db_path).is_not_empty()
+	assert_int(DirAccess.remove_absolute(ProjectSettings.globalize_path(db_path))).is_equal(OK)
+	assert_bool(SQLiteStoreService.runtime_db_file_exists()).is_false()
+
+	# 保存が SQLite 経路のまま成立する (JSON fallback ではなく DB から読み戻せる)。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(SQLiteStoreService.load_game_state().is_empty()).is_false()
+
+	_restore_app_state(old_state, test_save_id)
+
+
 func test_save_selection_list_load_delete() -> void:
 	# セーブ選択機能: list_saves のメタ情報 / load_save でのアクティブ切替ロード /
 	# delete_save での個別削除 (save_select 画面のバックエンド)。

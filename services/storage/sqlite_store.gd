@@ -782,6 +782,11 @@ static func _open_runtime_db() -> Object:
 	if db == null:
 		return null
 
+	# セーブフォルダを消して同じ save_id で作り直すと、同一パスに空の DB ができる。
+	# パスだけを見るキャッシュではスキーマ作成を飛ばして "no such table" になるため、
+	# 実ファイルの有無も判定に入れる (open_db がファイルを作るので必ず open 前に見る)。
+	var db_file_missing: bool = not FileAccess.file_exists(ProjectSettings.globalize_path(runtime_path))
+
 	db.set("path", runtime_path)
 	db.set("foreign_keys", true)
 	db.set("verbosity_level", 0)
@@ -793,12 +798,16 @@ static func _open_runtime_db() -> Object:
 	_execute(db, "PRAGMA journal_mode = WAL")
 	_execute(db, "PRAGMA synchronous = NORMAL")
 
-	if (not _schema_ensured) or _schema_ensured_path != runtime_path:
+	if db_file_missing or (not _schema_ensured) or _schema_ensured_path != runtime_path:
 		if not _ensure_runtime_schema(db):
 			_close(db)
 			return null
 		_schema_ensured = true
 		_schema_ensured_path = runtime_path
+		# 空 DB を開いた直後は「前回永続化した内容」の前提も崩れている
+		# (同一パスの作り直しでは _fingerprint_cache_valid が誤って true になる)。
+		if db_file_missing:
+			reset_record_fingerprints()
 
 	return db
 
