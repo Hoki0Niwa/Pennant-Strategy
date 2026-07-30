@@ -32,6 +32,14 @@ var player_stat_history: Dictionary = {}
 # { player_id_str: Array of game rows }。各配列は day / game_index 昇順。
 # 試合別の成績差分。PSSeason に属するため新シーズン作成時に自然にリセットされる。
 var player_game_history: Dictionary = {}
+# 試合ごとのスタメン (打順/守備位置) 記録。day / game_index 昇順の Dictionary 配列。
+# 各行: {year, season_number, team_id, game_index, day, date, opponent_id, home_away,
+#        result, score_for, score_against, starter_pitcher_id, dh,
+#        slots: [{slot, pos, pid}, ...]}。SQLite load_team_lineup_history() の戻り値と
+# 同じキー集合を持つ (PSLineupHistory が当季/過去季を分岐なしで扱えるようにするため)。
+# player_game_history と異なり、SQLite の team_lineup_history テーブルは年度・シーズンを
+# またいで永続する (season_history のような当季限定 DELETE は行わない)。
+var team_lineup_history: Array = []
 # シーズン中トレードの状態 (成立ログ / 自軍宛て提案 / 週次チェック日 / 球団別成立数)。
 # スキーマと更新は TradeService に集約。新シーズン作成で自然にリセットされる。
 var trade_state: Dictionary = {}
@@ -480,6 +488,41 @@ func get_player_game_logs(player_id: int) -> Array:
 	return history
 
 
+# 同じ (team_id, game_index) の行は上書きし、day → game_index 昇順を維持したまま挿入する。
+func append_team_lineup(row: Dictionary) -> void:
+	var team_id: int = int(row.get("team_id", 0))
+	var game_index: int = int(row.get("game_index", -1))
+	var stored_row: Dictionary = row.duplicate(true)
+	for i in range(team_lineup_history.size()):
+		var existing: Dictionary = team_lineup_history[i] as Dictionary
+		if int(existing.get("team_id", 0)) == team_id and int(existing.get("game_index", -1)) == game_index:
+			team_lineup_history[i] = stored_row
+			return
+	team_lineup_history.insert(_team_lineup_insertion_index(stored_row), stored_row)
+
+
+func _team_lineup_insertion_index(row: Dictionary) -> int:
+	var low: int = 0
+	var high: int = team_lineup_history.size()
+	while low < high:
+		@warning_ignore("integer_division")
+		var middle: int = (low + high) / 2
+		var existing: Dictionary = team_lineup_history[middle] as Dictionary
+		if _team_lineup_precedes(existing, row):
+			low = middle + 1
+		else:
+			high = middle
+	return low
+
+
+func _team_lineup_precedes(a: Dictionary, b: Dictionary) -> bool:
+	var day_a: int = int(a.get("day", 0))
+	var day_b: int = int(b.get("day", 0))
+	if day_a == day_b:
+		return int(a.get("game_index", 0)) < int(b.get("game_index", 0))
+	return day_a < day_b
+
+
 # 詳細結果を schedule から破棄する前に、レポートで必要な加算可能データだけを保持する。
 func accumulate_game_report_data(result: Dictionary) -> void:
 	if not collect_simulation_report_data:
@@ -573,6 +616,7 @@ func to_dict(include_history: bool = true) -> Dictionary:
 	if include_history:
 		out["player_stat_history"] = player_stat_history
 		out["player_game_history"] = player_game_history
+		out["team_lineup_history"] = team_lineup_history
 	return out
 
 
@@ -629,6 +673,7 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.last_auto_swap_day = (data.get("last_auto_swap_day", {}) as Dictionary).duplicate(true)
 	season.player_stat_history = (data.get("player_stat_history", {}) as Dictionary).duplicate(true)
 	season.player_game_history = (data.get("player_game_history", {}) as Dictionary).duplicate(true)
+	season.team_lineup_history = (data.get("team_lineup_history", []) as Array).duplicate(true)
 	season.trade_state = (data.get("trade_state", {}) as Dictionary).duplicate(true)
 	season.collect_simulation_report_data = bool(data["collect_simulation_report_data"])
 	season.simulation_report_data = (data["simulation_report_data"] as Dictionary).duplicate(true)

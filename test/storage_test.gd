@@ -599,6 +599,82 @@ func test_season_history_split_saves_incrementally_and_round_trips() -> void:
 	_restore_app_state(old_state, test_save_id)
 
 
+func test_team_lineup_history_round_trips_and_preserves_other_seasons() -> void:
+	# team_lineup_history は season_history と違い年度・シーズンをまたいで永続する
+	# (これが機能の要)。他年度の行を保存しても消えないこと、ロード時に slots_json が
+	# 構造化された "slots" キーへ復元されることを検証する。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	var season: PSSeason = AppState.current_season
+
+	var other_year: int = season.year - 5
+	var other_row: Dictionary = {
+		"team_id": 1, "game_index": 0, "day": 1, "date": "2020-04-01",
+		"opponent_id": 2, "home_away": "home", "result": "勝",
+		"score_for": 5, "score_against": 2, "starter_pitcher_id": 901, "dh": false,
+		"slots": [{"slot": 1, "pos": 8, "pid": 101}, {"slot": 9, "pos": 1, "pid": 901}],
+	}
+	assert_bool(SQLiteStoreService.save_team_lineup_history(other_year, 1, [other_row], 1)).is_true()
+
+	var current_row: Dictionary = {
+		"team_id": 1, "game_index": 0, "day": 1, "date": "2026-04-01",
+		"opponent_id": 2, "home_away": "away", "result": "敗",
+		"score_for": 2, "score_against": 5, "starter_pitcher_id": 902, "dh": true,
+		"slots": [
+			{"slot": 1, "pos": 8, "pid": 201}, {"slot": 2, "pos": 4, "pid": 202},
+			{"slot": 3, "pos": 10, "pid": 203},
+		],
+	}
+	assert_bool(SQLiteStoreService.save_team_lineup_history(season.year, season.season_number, [current_row], season.current_day)).is_true()
+
+	# 他年度の行はそのまま残る (season_history のような他年度 DELETE は行わない)。
+	var other_loaded: Array = SQLiteStoreService.load_team_lineup_history(other_year, 1)
+	assert_int(other_loaded.size()).is_equal(1)
+	var other_slots: Array = (other_loaded[0] as Dictionary).get("slots", []) as Array
+	assert_int(other_slots.size()).is_equal(2)
+	assert_int(int((other_slots[0] as Dictionary).get("pid", 0))).is_equal(101)
+
+	# 当季の行も往復し、slots が構造化された配列として復元される。
+	var current_loaded: Array = SQLiteStoreService.load_team_lineup_history(season.year, season.season_number, 1)
+	assert_int(current_loaded.size()).is_equal(1)
+	var loaded_row: Dictionary = current_loaded[0] as Dictionary
+	assert_int(int(loaded_row.get("starter_pitcher_id", 0))).is_equal(902)
+	assert_bool(bool(loaded_row.get("dh", false))).is_true()
+	var loaded_slots: Array = loaded_row.get("slots", []) as Array
+	assert_int(loaded_slots.size()).is_equal(3)
+	assert_int(int((loaded_slots[2] as Dictionary).get("pos", 0))).is_equal(10)
+
+	# list_lineup_history_seasons に両年度が現れる。
+	var seasons: Array = SQLiteStoreService.list_lineup_history_seasons()
+	var found_other: bool = false
+	var found_current: bool = false
+	for row_value in seasons:
+		var row: Dictionary = row_value as Dictionary
+		if int(row.get("year", 0)) == other_year and int(row.get("season_number", 0)) == 1:
+			found_other = true
+		if int(row.get("year", 0)) == season.year and int(row.get("season_number", 0)) == season.season_number:
+			found_current = true
+	assert_bool(found_other).is_true()
+	assert_bool(found_current).is_true()
+
+	# 巻き戻し防御: current_day より未来の行は次回保存で消える。
+	var future_row: Dictionary = current_row.duplicate(true)
+	future_row["game_index"] = 1
+	future_row["day"] = 99
+	assert_bool(SQLiteStoreService.save_team_lineup_history(season.year, season.season_number, [future_row], season.current_day)).is_true()
+	assert_int(SQLiteStoreService.load_team_lineup_history(season.year, season.season_number, 1).size()).is_equal(2)
+	assert_bool(SQLiteStoreService.save_team_lineup_history(season.year, season.season_number, [], season.current_day)).is_true()
+	assert_int(SQLiteStoreService.load_team_lineup_history(season.year, season.season_number, 1).size()).is_equal(1)
+
+	_restore_app_state(old_state, test_save_id)
+
+
 func test_record_store_saves_only_changed_rows() -> void:
 	# save_records はレコード内容のフィンガープリントで変更行だけを upsert する。
 	# 過去年度の不変レコードや、日送り時の二重 save_records 呼び出しの2回目が

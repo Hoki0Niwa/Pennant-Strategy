@@ -6,7 +6,7 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
 # セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
 # 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
-const SCHEMA_VERSION: int = 6
+const SCHEMA_VERSION: int = 7
 
 # スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
 # 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -363,6 +363,121 @@ static func load_season_history(year: int, season_number: int, kind: String, max
 			if not out.has(player_key):
 				out[player_key] = []
 			(out[player_key] as Array).append_array(entries)
+	return out
+
+
+# -----------------------------------------------------------------------------
+# スタメン履歴 (team_lineup_history): 年度・シーズンをまたいで永続する試合別打順記録
+# -----------------------------------------------------------------------------
+
+# rows は season.team_lineup_history と同じ形の Dictionary 配列 (キー slots は Array)。
+# season_history と違い、他年度・他シーズンの行は一切 DELETE しない (これが本テーブルの
+# season_history との決定的な違い = 過去年度をまたいだ閲覧を成立させる不変条件)。
+# 巻き戻し防御として当該 year/season_number の day > current_day の行だけを消し、
+# 既永続の MAX(day) 未満の日は書き込みをスキップする (最終永続日は同日中の再セーブで
+# 内容が増えうるため書き直す)。全体を 1 トランザクションで行う。
+static func save_team_lineup_history(year: int, season_number: int, rows: Array, current_day: int) -> bool:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return false
+	if not _execute(db, "BEGIN TRANSACTION"):
+		_close(db)
+		return false
+
+	var ok: bool = true
+	ok = ok and _query_with_bindings(db, "DELETE FROM team_lineup_history WHERE year = ? AND season_number = ? AND day > ?", [year, season_number, current_day])
+
+	var last_day: int = 0
+	if ok:
+		var max_rows: Array = _select_with_bindings(db, "SELECT MAX(day) AS max_day FROM team_lineup_history WHERE year = ? AND season_number = ?", [year, season_number])
+		if not max_rows.is_empty():
+			var max_day_value: Variant = (max_rows[0] as Dictionary).get("max_day", null)
+			if max_day_value != null:
+				last_day = int(max_day_value)
+
+	if ok:
+		for row_value in rows:
+			var row: Dictionary = row_value as Dictionary
+			var day: int = int(row.get("day", 0))
+			if day < last_day:
+				continue
+			var slots_json: String = JSON.stringify(row.get("slots", []))
+			var sql: String = "INSERT OR REPLACE INTO team_lineup_history (year, season_number, team_id, game_index, day, date, opponent_id, home_away, result, score_for, score_against, starter_pitcher_id, dh, slots_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+			var bindings: Array = [
+				year, season_number,
+				int(row.get("team_id", 0)),
+				int(row.get("game_index", 0)),
+				day,
+				str(row.get("date", "")),
+				int(row.get("opponent_id", 0)),
+				str(row.get("home_away", "")),
+				str(row.get("result", "")),
+				int(row.get("score_for", 0)),
+				int(row.get("score_against", 0)),
+				int(row.get("starter_pitcher_id", 0)),
+				1 if bool(row.get("dh", false)) else 0,
+				slots_json,
+			]
+			if not _query_with_bindings(db, sql, bindings):
+				ok = false
+				break
+
+	if ok:
+		ok = _execute(db, "COMMIT")
+	else:
+		_execute(db, "ROLLBACK")
+	_close(db)
+	return ok
+
+
+# 指定年度・シーズンのスタメン履歴を day, game_index 昇順で返す。team_id == 0 は全球団。
+# 各行の slots_json はパース済みの "slots" キー (Array) へ変換して返す。
+static func load_team_lineup_history(year: int, season_number: int, team_id: int = 0) -> Array:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return []
+	var sql: String = "SELECT * FROM team_lineup_history WHERE year = ? AND season_number = ?"
+	var bindings: Array = [year, season_number]
+	if team_id != 0:
+		sql += " AND team_id = ?"
+		bindings.append(team_id)
+	sql += " ORDER BY day ASC, game_index ASC"
+	var rows: Array = _select_with_bindings(db, sql, bindings)
+	_close(db)
+
+	var out: Array = []
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		out.append({
+			"year": int(row.get("year", 0)),
+			"season_number": int(row.get("season_number", 0)),
+			"team_id": int(row.get("team_id", 0)),
+			"game_index": int(row.get("game_index", 0)),
+			"day": int(row.get("day", 0)),
+			"date": str(row.get("date", "")),
+			"opponent_id": int(row.get("opponent_id", 0)),
+			"home_away": str(row.get("home_away", "")),
+			"result": str(row.get("result", "")),
+			"score_for": int(row.get("score_for", 0)),
+			"score_against": int(row.get("score_against", 0)),
+			"starter_pitcher_id": int(row.get("starter_pitcher_id", 0)),
+			"dh": int(row.get("dh", 0)) != 0,
+			"slots": _parse_json_array(str(row.get("slots_json", "[]"))),
+		})
+	return out
+
+
+# 保存済みのスタメン履歴が存在する (year, season_number) の組を新しい順で返す。
+static func list_lineup_history_seasons() -> Array:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return []
+	var rows: Array = _select_with_bindings(db, "SELECT DISTINCT year, season_number FROM team_lineup_history ORDER BY year DESC, season_number DESC", [])
+	_close(db)
+	var out: Array = []
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		out.append({"year": int(row.get("year", 0)), "season_number": int(row.get("season_number", 0))})
 	return out
 
 
@@ -937,6 +1052,27 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			payload_json TEXT NOT NULL,
 			PRIMARY KEY (year, season_number, kind, day)
 		)""",
+		# --- 永続化スキーマ v7: スタメン履歴 (試合ごとの打順/守備位置) ---
+		# season_history と異なり年度・シーズンをまたいで永続する (行を消すのは巻き戻し防御の
+		# day > current_day のときだけ)。過去シーズンの記録を球団・年度指定で読み返す用途のため。
+		"""CREATE TABLE IF NOT EXISTS team_lineup_history (
+			year INTEGER NOT NULL,
+			season_number INTEGER NOT NULL,
+			team_id INTEGER NOT NULL,
+			game_index INTEGER NOT NULL,
+			day INTEGER NOT NULL,
+			date TEXT NOT NULL DEFAULT '',
+			opponent_id INTEGER NOT NULL DEFAULT 0,
+			home_away TEXT NOT NULL DEFAULT '',
+			result TEXT NOT NULL DEFAULT '',
+			score_for INTEGER NOT NULL DEFAULT 0,
+			score_against INTEGER NOT NULL DEFAULT 0,
+			starter_pitcher_id INTEGER NOT NULL DEFAULT 0,
+			dh INTEGER NOT NULL DEFAULT 0,
+			slots_json TEXT NOT NULL DEFAULT '[]',
+			PRIMARY KEY (year, season_number, team_id, game_index)
+		)""",
+		"CREATE INDEX IF NOT EXISTS idx_tlh_team ON team_lineup_history(year, season_number, team_id, day)",
 	]
 	for statement_row in statements:
 		var statement: String = str(statement_row)

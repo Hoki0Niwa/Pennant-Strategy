@@ -504,7 +504,9 @@ func _batter_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Arra
 		{"label": "OPS", "value": _rate_short(bs.ops())},
 		{"label": "wOBA", "value": _rate_short(ad.woba()) if played else "-"},
 		{"label": "wRC+", "value": str(int(round(ad.wrc_plus()))) if played else "-"},
-		{"label": "OAA", "value": _signed1(oaa_total) if played else "-", "color": _pm_color(oaa_total)},
+		# 色は表示値 (_signed1 = 小数1桁) に合わせて丸めてから判定する。生値で判定すると
+		# "+0.0" と出ている OAA が緑/赤になる (基底 _pm_color は 0 ちょうどしか中立にしない)。
+		{"label": "OAA", "value": _signed1(oaa_total) if played else "-", "color": _pm_color(snappedf(oaa_total, 0.1))},
 		{"label": "WAR", "value": _signed1(float(war.get("war", 0.0))) if played else "-", "color": _war_color(float(war.get("war", 0.0)))},
 	]
 
@@ -591,14 +593,6 @@ func _draw_stat_grid(panel: Rect2, cells: Array, cols: int) -> void:
 
 func _signed1(value: float) -> String:
 	return "%+.1f" % value
-
-
-func _pm_color(value: float) -> Color:
-	if value > 0.05:
-		return GREEN
-	if value < -0.05:
-		return RED
-	return TEXT
 
 
 func _draw_drag_ghost() -> void:

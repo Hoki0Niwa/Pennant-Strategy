@@ -9,6 +9,7 @@ extends Node
 #
 # 状態別撮影モード: -- --states
 #   通常の画面単位撮影とは別に、選手詳細/能力・成績一覧/チーム詳細のタブ・絞り込み違いや、
+#   シーズン履歴の4ビュー切替(年度別/歴代記録/タイトル履歴/スタメン履歴)、
 #   シーズン終了後〜ポストシーズン〜表彰〜オフシーズン各ステップまで、これまで撮っていなかった
 #   UI 状態を reports/ui_shots/states/ へ撮影する (崩れ調査用)。--simdays 未指定なら
 #   STATES_DEFAULT_SIMDAYS 日分を内部で自動進行する (全ゼロ表を避けるため)。
@@ -38,9 +39,13 @@ const DEFAULT_SCREENS: Array = [
 const PLAYER_DETAIL_SCRIPT: String = "res://ui/screens/player_detail_screen.gd"
 const ABILITY_STATS_SCRIPT: String = "res://ui/screens/ability_stats_screen.gd"
 const TEAM_DETAIL_SCRIPT: String = "res://ui/screens/team_detail_screen.gd"
+const HISTORY_SCRIPT: String = "res://ui/screens/history_screen.gd"
+
+# シーズン履歴: 右上チップで切り替える4ビュー (画面側 VIEW_CHIPS の key と一致させる)。
+const HISTORY_VIEWS: Array = ["year", "alltime", "titles", "lineup"]
 
 # 選手詳細: 下部タブ全種 (id はそのまま画面側 TABS の id と一致させる)。
-const PD_TABS: Array = ["season", "games", "monthly", "stats", "advanced", "abilities", "career"]
+const PD_TABS: Array = ["season", "games", "monthly", "usage", "stats", "advanced", "abilities", "career"]
 # 投手/野手それぞれ「候補が非空になるまで」試す絞り込み id の優先順。
 const PD_PITCHER_FILTER_TRY: Array = ["starter", "reliever"]
 const PD_BATTER_FILTER_TRY: Array = ["pos2", "pos3", "pos4", "pos5", "pos6", "pos7", "pos8", "pos9"]
@@ -178,6 +183,7 @@ func _run_state_capture() -> void:
 	await _capture_player_detail(STATES_DIR)
 	await _capture_ability_stats(STATES_DIR)
 	await _capture_team_detail(STATES_DIR)
+	await _capture_history_views(STATES_DIR)
 	await _capture_season_progression(STATES_DIR)
 
 	print("[state] 撮影完了: %d 枚" % _state_manifest.size())
@@ -277,7 +283,22 @@ func _capture_team_detail(states_dir: String) -> void:
 		_shot(states_dir, "team_detail_team%d_%s" % [tid, league])
 
 
-# --- 4. シーズン終了 -> ポストシーズン -> 表彰 -> オフシーズン ---
+# --- 4. シーズン履歴 (4ビュー切替) ---
+
+func _capture_history_views(states_dir: String) -> void:
+	AppState.request_screen("history")
+	await _wait_frames()
+	var hs: Node = _find_screen_node(_main_node, HISTORY_SCRIPT)
+	if hs == null:
+		print("[state] history 画面ノードが見つかりません。スキップします")
+		return
+	for view_key in HISTORY_VIEWS:
+		hs.call("_set_view", view_key)
+		await _wait_frames()
+		_shot(states_dir, "history_%s" % view_key)
+
+
+# --- 5. シーズン終了 -> ポストシーズン -> 表彰 -> オフシーズン ---
 
 func _capture_season_progression(states_dir: String) -> void:
 	var season: PSSeason = AppState.current_season

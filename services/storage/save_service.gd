@@ -127,7 +127,8 @@ static func load_state() -> Dictionary:
 	return {}
 
 
-# season.to_dict の履歴2種を SQLite season_history テーブルへ日単位で増分保存する。
+# season.to_dict の履歴3種 (試合別成績差分 / 日次statsスナップショット / スタメン履歴) を
+# SQLite の season_history / team_lineup_history テーブルへ日単位で増分保存する。
 # 成功時 true (= blob から履歴を外してよい)。
 static func _persist_season_history(season: PSSeason) -> bool:
 	if not SQLiteStoreService.is_available():
@@ -137,7 +138,9 @@ static func _persist_season_history(season: PSSeason) -> bool:
 		return false
 	var stat_days: Dictionary = _group_history_by_day(season.player_stat_history)
 	var retention_cutoff: int = season.current_day - PSSeason.SNAPSHOT_RETENTION_DAYS
-	return SQLiteStoreService.save_season_history(season.year, season.season_number, "stat", stat_days, season.current_day, retention_cutoff)
+	if not SQLiteStoreService.save_season_history(season.year, season.season_number, "stat", stat_days, season.current_day, retention_cutoff):
+		return false
+	return SQLiteStoreService.save_team_lineup_history(season.year, season.season_number, season.team_lineup_history, season.current_day)
 
 
 # {player_id_str: [entries]} を {day:int → {player_id_str: [その日のentries]}} へ変換する。
@@ -170,6 +173,8 @@ static func hydrate_season_history(season: PSSeason) -> void:
 		season.player_game_history = SQLiteStoreService.load_season_history(season.year, season.season_number, "game", season.current_day)
 	if season.player_stat_history.is_empty():
 		season.player_stat_history = SQLiteStoreService.load_season_history(season.year, season.season_number, "stat", season.current_day)
+	if season.team_lineup_history.is_empty():
+		season.team_lineup_history = SQLiteStoreService.load_team_lineup_history(season.year, season.season_number)
 
 
 # 肥大化した DB ファイルを必要に応じて切り詰める (freelist が多いときだけ VACUUM)。
@@ -354,6 +359,7 @@ static func _state_fingerprint(snapshot: Dictionary) -> int:
 	# 成績更新は同時に season の日付・日程結果も変わるため、分離ストアの全レコード再構築は行わない。
 	season_data.erase("player_stat_history")
 	season_data.erase("player_game_history")
+	season_data.erase("team_lineup_history")
 	var comparable: Dictionary = {
 		"selected_team_id": snapshot.get("selected_team_id", 0),
 		"season": season_data,

@@ -1654,6 +1654,56 @@ func test_pitcher_run_charges_match_actual_scores() -> void:
 	assert_int(earned_runs_total).is_less_equal(runs_allowed_total)
 
 
+# 試合消化後、両チーム分のスタメン行が season.team_lineup_history へ記録されること
+# (9枠・starter_pitcher_id が入っていること)。UI の「スタメン履歴」機能のデータ元。
+func test_game_simulation_records_team_lineup_history_for_both_teams() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	Rng.set_seed_value(20260729)
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var simulation: Dictionary = GameSimulator.simulate_next_unplayed_game(season, false)
+	assert_bool(bool(simulation.get("ok", false))).is_true()
+	var result: Dictionary = simulation.get("result", {}) as Dictionary
+	var away_team_id: int = int(result.get("away_team_id", 0))
+	var home_team_id: int = int(result.get("home_team_id", 0))
+
+	assert_int(season.team_lineup_history.size()).is_equal(2)
+	var away_row: Dictionary = {}
+	var home_row: Dictionary = {}
+	for row_value in season.team_lineup_history:
+		var row: Dictionary = row_value as Dictionary
+		if int(row.get("team_id", 0)) == away_team_id:
+			away_row = row
+		elif int(row.get("team_id", 0)) == home_team_id:
+			home_row = row
+
+	for row in [away_row, home_row]:
+		assert_bool(row.is_empty()).is_false()
+		assert_int((row.get("slots", []) as Array).size()).is_equal(9)
+		assert_int(int(row.get("starter_pitcher_id", 0))).is_greater(0)
+		assert_int(int(row.get("game_index", -1))).is_equal(0)
+		assert_int(int(row.get("year", 0))).is_equal(season.year)
+		assert_int(int(row.get("season_number", 0))).is_equal(season.season_number)
+
+	assert_int(int(away_row.get("starter_pitcher_id", 0))).is_equal(int(result.get("away_pitcher_id", 0)))
+	assert_int(int(home_row.get("starter_pitcher_id", 0))).is_equal(int(result.get("home_pitcher_id", 0)))
+	assert_str(str(away_row.get("home_away", ""))).is_equal("away")
+	assert_str(str(home_row.get("home_away", ""))).is_equal("home")
+	assert_int(int(away_row.get("opponent_id", 0))).is_equal(home_team_id)
+	assert_int(int(home_row.get("opponent_id", 0))).is_equal(away_team_id)
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+
 # 無死一・三塁の併殺: 一塁走者は封殺、三塁走者は生還する(打点は付かない: 規則9.04)。
 func test_double_play_scores_third_runner_with_no_rbi_when_no_outs() -> void:
 	var batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()

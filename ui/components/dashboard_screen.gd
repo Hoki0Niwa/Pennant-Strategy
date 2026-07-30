@@ -453,6 +453,16 @@ func _pos_color(pos: int) -> Color:
 			return MUTED
 
 
+# WAR / OAA / wRC+ など「高い=好」の ± 指標の文字色。プラス=GREEN / マイナス=RED / ゼロ=MUTED。
+# 能力段階色 (`_table_rating_color` の 優秀=青) とは別系統なので取り違えない。
+func _pm_color(value: float) -> Color:
+	if value > 0.0:
+		return GREEN
+	if value < 0.0:
+		return RED
+	return MUTED
+
+
 # 簡易ラインアイコン。base 座標の box 内に正規化座標で描く。
 func _icon(name: String, box: Rect2, color: Color) -> void:
 	var r: Rect2 = _r(box)

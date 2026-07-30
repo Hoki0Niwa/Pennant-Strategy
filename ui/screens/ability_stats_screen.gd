@@ -1062,12 +1062,3 @@ func _eval_color(score: int) -> Color:
 	if score >= 45:
 		return AMBER
 	return RED
-
-
-# WAR / ± 系の増減指標は 緑=好(プラス) / 赤=悪(マイナス) で能力段階色とは別系統。
-func _pm_color(value: float) -> Color:
-	if value > 0.0:
-		return GREEN
-	if value < 0.0:
-		return RED
-	return MUTED

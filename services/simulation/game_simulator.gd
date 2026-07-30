@@ -881,6 +881,7 @@ static func _apply_game_result(season: PSSeason, calc: Dictionary, persist: bool
 		_profile_add("decisions", now_decisions - profile_start)
 		profile_start = now_decisions
 	_record_player_game_logs(season, game_index, game, result, pre_player_stats)
+	_record_team_lineups(season, game_index, game, result)
 	# 後段レポートに必要な値をシーズン単位へ集約し、画面用の compact ログを作ってから、
 	# schedule から play_events / advanced_stats 等の完全結果を外す。呼び出し結果の result は
 	# 完全版のまま返すため、単発プローブや当日結果コールバックの契約は維持される。
@@ -1104,6 +1105,76 @@ static func _record_player_game_logs(season: PSSeason, game_index: int, game: Di
 			"batter": batter_dict,
 			"pitcher": pitcher_dict,
 		})
+
+
+# 両チームのスタメン(打順/守備位置)を season.team_lineup_history へ記録する。
+# _apply_game_result は状態反映フェーズであり必ずメインスレッドで逐次呼ばれるため
+# (計算フェーズの並列化とは別区間)、season.append_team_lineup への書き込みはスレッド安全。
+static func _record_team_lineups(season: PSSeason, game_index: int, game: Dictionary, result: Dictionary) -> void:
+	if season == null:
+		return
+	var lineups: Dictionary = result.get("lineups", {}) as Dictionary
+	var away_team_id: int = int(game.get("away_team_id", result.get("away_team_id", 0)))
+	var home_team_id: int = int(game.get("home_team_id", result.get("home_team_id", 0)))
+	var away_score: int = int(result.get("away_score", game.get("away_score", 0)))
+	var home_score: int = int(result.get("home_score", game.get("home_score", 0)))
+	var day: int = int(game.get("day", season.current_day))
+	var date: String = str(game.get("date", ""))
+
+	var away_lineup: Dictionary = lineups.get("away", {}) as Dictionary
+	var home_lineup: Dictionary = lineups.get("home", {}) as Dictionary
+	if not away_lineup.is_empty():
+		season.append_team_lineup(_team_lineup_row(
+			season, game_index, day, date, away_team_id, home_team_id, "away",
+			away_score, home_score, int(result.get("away_pitcher_id", 0)), away_lineup,
+		))
+	if not home_lineup.is_empty():
+		season.append_team_lineup(_team_lineup_row(
+			season, game_index, day, date, home_team_id, away_team_id, "home",
+			home_score, away_score, int(result.get("home_pitcher_id", 0)), home_lineup,
+		))
+
+
+# SQLiteStore.load_team_lineup_history() が返す行と同じキー集合を持たせる (year/season_number
+# 込み) ことで、当季 (season.team_lineup_history 由来) と過去季 (SQLite 由来) を
+# PSLineupHistory 側が分岐なしで扱える。
+static func _team_lineup_row(
+	season: PSSeason,
+	game_index: int,
+	day: int,
+	date: String,
+	team_id: int,
+	opponent_id: int,
+	home_away: String,
+	score_for: int,
+	score_against: int,
+	starter_pitcher_id: int,
+	lineup: Dictionary,
+) -> Dictionary:
+	var slots: Array = []
+	for slot_value in (lineup.get("slots", []) as Array):
+		var slot: Dictionary = slot_value as Dictionary
+		slots.append({
+			"slot": int(slot.get("slot", 0)),
+			"pos": int(slot.get("position", 0)),
+			"pid": int(slot.get("player_id", 0)),
+		})
+	return {
+		"year": season.year,
+		"season_number": season.season_number,
+		"team_id": team_id,
+		"game_index": game_index,
+		"day": day,
+		"date": date,
+		"opponent_id": opponent_id,
+		"home_away": home_away,
+		"result": _team_result_label(score_for, score_against),
+		"score_for": score_for,
+		"score_against": score_against,
+		"starter_pitcher_id": starter_pitcher_id,
+		"dh": bool(lineup.get("dh", false)),
+		"slots": slots,
+	}
 
 
 static func _player_game_log_candidate_ids(result: Dictionary, pre_player_stats: Dictionary) -> Array:

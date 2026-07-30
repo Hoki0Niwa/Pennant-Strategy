@@ -895,6 +895,55 @@ func test_history_screen_builds_with_archive() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+# シーズン履歴に統合されたスタメン履歴ビュー (VIEW_LINEUP)。年度別ビューとは独立の集計経路
+# (_refresh_lineup) を通るため、切替後も build + 1フレーム描画が落ちないことを別途検証する。
+func test_history_screen_builds_lineup_view() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_save_id: String = SaveContext.active_save_id()
+
+	Rng.set_seed_value(20260730)
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.current_screen = "history"
+
+	# スタメン履歴ビューの表示データを作るため1試合消化する
+	# (PSLineupHistory.available_seasons() は当季を含むので、この時点で当季分が拾える)。
+	var simulation: Dictionary = GameSimulator.simulate_next_unplayed_game(season, false)
+	assert_bool(bool(simulation.get("ok", false))).is_true()
+	var result: Dictionary = simulation.get("result", {}) as Dictionary
+	var away_team_id: int = int(result.get("away_team_id", 0))
+
+	var script: GDScript = load("res://ui/screens/history_screen.gd") as GDScript
+	var screen: Control = script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# 試合を消化した球団を選び直して再集計し、VIEW_LINEUP へ切替える。
+	screen._team_id = away_team_id
+	screen._refresh_lineup()
+	screen._set_view(screen.VIEW_LINEUP)
+	await get_tree().process_frame
+
+	assert_str(screen._view).is_equal(screen.VIEW_LINEUP)
+	assert_int((screen._lu_position_groups as Array).size()).is_greater(0)
+	assert_int((screen._lu_game_rows as Array).size()).is_greater(0)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_awards_screen_builds_with_current_awards() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season

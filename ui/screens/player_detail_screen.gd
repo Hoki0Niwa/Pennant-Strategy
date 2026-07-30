@@ -50,11 +50,16 @@ const TABS: Array = [
 	{"id": "season", "label": "今季"},
 	{"id": "games", "label": "試合履歴"},
 	{"id": "monthly", "label": "月間成績"},
+	{"id": "usage", "label": "起用"},
 	{"id": "stats", "label": "過去成績"},
 	{"id": "advanced", "label": "過去指標"},
 	{"id": "abilities", "label": "能力の変遷"},
 	{"id": "career", "label": "経歴"},
 ]
+
+# 起用タブの列キー。守備位置は投手/DHを含む全10、打順スロットは1..9固定。
+const USAGE_POSITIONS: Array = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+const ORDER_SLOTS: Array = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 # 能力バーは上から一定間隔で詰める (守備適性は最大7つ想定)。
 const ABILITY_BAR_H: float = 36.0
@@ -83,6 +88,9 @@ var _advanced_rows: Array = []             # 過去指標タブ (遅延計算)
 var _advanced_built: bool = false
 var _season_groups: Array = []             # 今季タブ (カテゴリ別カード, 遅延計算)
 var _season_built: bool = false
+var _usage_pos_rows: Array = []            # 起用タブ左表 (守備位置別、遅延計算)
+var _usage_order_rows: Array = []          # 起用タブ右表 (打順別、遅延計算)
+var _usage_built: bool = false
 var _arsenal_types: Array = []             # 投手: 能力変遷表の変化球カラム順 (全シーズンの和集合)
 var _war_ctx_cache: Dictionary = {}        # "year-sn" -> league_ctx
 var _scroll_zones: Array = []              # [{rect, key, max}] ホイールスクロール領域
@@ -130,10 +138,13 @@ func _draw() -> void:
 	_draw_apt(APT_RECT)
 	_draw_profile(PROFILE_RECT)
 	_draw_eval(EVAL_RECT)
-	if _active_tab == "season":
-		_draw_season(TABLE_RECT)
-	else:
-		_draw_table(TABLE_RECT)
+	match _active_tab:
+		"season":
+			_draw_season(TABLE_RECT)
+		"usage":
+			_draw_usage(TABLE_RECT)
+		_:
+			_draw_table(TABLE_RECT)
 
 
 # --- 識別バー (名前 + 絞り込み chip + インライン メタ) ---
@@ -460,6 +471,158 @@ func _draw_season(rect: Rect2) -> void:
 		y += float(grows) * SEASON_CARD_H + float(grows - 1) * gap + section_gap
 	if max_off > 0:
 		_text_right("%d / %d" % [offset, max_off], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+
+
+# 起用タブ: TABLE_RECT を左右2表に分け、守備位置別/打順別のスタメン数を並べて見せる。
+# 列見出しの色は共有基底 _pos_color (=lineup_editor_screen._pos_badge と同一) を使う。
+func _draw_usage(rect: Rect2) -> void:
+	_ensure_usage()
+	var gap: float = 16.0
+	var left_w: float = floorf((rect.size.x - gap) * 0.5)
+	var right_w: float = rect.size.x - gap - left_w
+	var left_rect: Rect2 = Rect2(rect.position.x, rect.position.y, left_w, rect.size.y)
+	var right_rect: Rect2 = Rect2(rect.position.x + left_w + gap, rect.position.y, right_w, rect.size.y)
+	_draw_usage_table(left_rect, "守備位置別スタメン", _usage_position_columns(), _usage_pos_rows, "usage_pos", true)
+	_draw_usage_table(right_rect, "打順別スタメン", _usage_order_columns(), _usage_order_rows, "usage_order", false)
+
+
+# 1枚分の起用表。cols は [{"key":int, "label":String, "color":Color}]。use_badges=true の列見出しは
+# _chip で色付きバッジ、false は通常の太字テキスト (打順の数字はポジション色を持たないため)。
+# タブボタンがヘッダ帯に重なるため、他の表タブ (_draw_table) と同じく上部を空けて開始する。
+func _draw_usage_table(rect: Rect2, title: String, cols: Array, rows: Array, scroll_key_suffix: String, use_badges: bool) -> void:
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
+	var inner_pad: float = 16.0
+	var inner_x: float = rect.position.x + inner_pad
+	var usable: float = rect.size.x - inner_pad * 2.0
+	var title_y: float = rect.position.y + 74.0
+	_round(Rect2(inner_x + 2.0, title_y - 13.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(title, Vector2(inner_x + 11.0, title_y), 14, TEXT, 260.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+	var year_w: float = 62.0
+	var total_w: float = 52.0
+	var col_w: float = (usable - year_w - total_w) / float(cols.size())
+	var header_top: float = rect.position.y + 108.0
+	var band_top: float = header_top - 18.0
+	_round(Rect2(inner_x, band_top, usable, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text("年度", Vector2(inner_x + 4.0, header_top), 12, MUTED, year_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var cx: float = inner_x + year_w
+	for col_value in cols:
+		var col: Dictionary = col_value as Dictionary
+		if use_badges:
+			var badge_w: float = minf(col_w - 6.0, 32.0)
+			_chip(Rect2(cx + (col_w - badge_w) * 0.5, band_top + 3.0, badge_w, 20.0), str(col["label"]), col["color"] as Color)
+		else:
+			_text(str(col["label"]), Vector2(cx + 2.0, header_top), 12, MUTED, col_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+		cx += col_w
+	_text_right("計", cx + total_w - 6.0, header_top, 12, MUTED, total_w - 8.0, true)
+	var line_y: float = header_top + 8.0
+	_line(Vector2(inner_x, line_y), Vector2(rect.end.x - inner_pad, line_y), BORDER, 1.5)
+
+	if rows.is_empty():
+		_text("記録がありません", Vector2(inner_x + 6.0, rect.position.y + rect.size.y * 0.55), 14, MUTED)
+		return
+
+	var row_top: float = line_y + 6.0
+	var area_h: float = rect.end.y - row_top - 8.0
+	var row_h: float = LOWER_TABLE_ROW_H
+	var visible: int = maxi(1, int(area_h / row_h))
+	var scroll_key: String = _scroll_key_for_tab(scroll_key_suffix)
+	var max_off: int = maxi(0, rows.size() - visible)
+	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_off)
+	_scroll[scroll_key] = offset
+	if max_off > 0:
+		_scroll_zones.append({"rect": rect, "key": scroll_key, "max": max_off})
+
+	var drawn: int = 0
+	for vi in range(visible):
+		var ri: int = offset + vi
+		if ri >= rows.size():
+			break
+		var row: Dictionary = rows[ri] as Dictionary
+		var ry: float = row_top + float(vi) * row_h
+		var is_total_row: bool = bool(row.get("is_total", false))
+		var no_record: bool = bool(row.get("no_record", false))
+		if is_total_row:
+			_round(Rect2(rect.position.x + 10.0, ry + 1.0, rect.size.x - 20.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 6, 0)
+		var base_color: Color = BLUE if is_total_row else TEXT
+		if no_record:
+			base_color = FAINT
+		var ty: float = ry + row_h * 0.5 + 5.0
+		_text(str(row.get("year", "")), Vector2(inner_x + 4.0, ty), 13, base_color, year_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_total_row)
+		var ccx: float = inner_x + year_w
+		for col_value in cols:
+			var col: Dictionary = col_value as Dictionary
+			var value: int = int(row.get("c_%d" % int(col["key"]), 0))
+			var cell_text: String = "-" if (no_record or value <= 0) else str(value)
+			var cell_color: Color = FAINT if (no_record or value <= 0) else base_color
+			_text(cell_text, Vector2(ccx + 2.0, ty), 13, cell_color, col_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
+			ccx += col_w
+		var total_value: int = int(row.get("total", 0))
+		var total_text: String = "-" if (no_record or total_value <= 0) else str(total_value)
+		var total_color: Color = FAINT if (no_record or total_value <= 0) else base_color
+		_text_right(total_text, ccx + total_w - 6.0, ty, 13, total_color, total_w - 8.0, is_total_row)
+		_line(Vector2(inner_x, ry + row_h), Vector2(inner_x + usable, ry + row_h), HAIRLINE, 1.0)
+		drawn += 1
+	if max_off > 0:
+		_text_right("%d / %d" % [mini(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+
+
+func _usage_position_columns() -> Array:
+	var cols: Array = []
+	for pos in USAGE_POSITIONS:
+		cols.append({"key": pos, "label": str(POS_SHORT.get(pos, "?")), "color": _pos_color(pos)})
+	return cols
+
+
+func _usage_order_columns() -> Array:
+	var cols: Array = []
+	for slot in ORDER_SLOTS:
+		cols.append({"key": slot, "label": str(slot), "color": MUTED})
+	return cols
+
+
+# 起用タブの集計はリーグ全体を年度ごとに走査するため、他の遅延構築タブと同様に開いたとき1度だけ計算する。
+# 年度は _records (当該選手の全シーズン記録) から取り、_basic_rows と同じ古い順 + 通算行の並びに合わせる。
+func _ensure_usage() -> void:
+	if _usage_built:
+		return
+	_usage_built = true
+	_usage_pos_rows = []
+	_usage_order_rows = []
+	if _record == null:
+		return
+	var career_position: Dictionary = {}
+	var career_order: Dictionary = {}
+	var career_total: int = 0
+	for record_value in _records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		var summary: Dictionary = PSLineupHistory.player_summary(_player_id, record.year, record.season_number)
+		var by_position: Dictionary = summary.get("by_position", {}) as Dictionary
+		var by_order: Dictionary = summary.get("by_order", {}) as Dictionary
+		var total_starts: int = int(summary.get("total_starts", 0))
+		_usage_pos_rows.append(_usage_row(USAGE_POSITIONS, "%d年" % record.year, by_position, total_starts, false))
+		_usage_order_rows.append(_usage_row(ORDER_SLOTS, "%d年" % record.year, by_order, total_starts, false))
+		for key_value in by_position.keys():
+			career_position[key_value] = int(career_position.get(key_value, 0)) + int(by_position[key_value])
+		for key_value in by_order.keys():
+			career_order[key_value] = int(career_order.get(key_value, 0)) + int(by_order[key_value])
+		career_total += total_starts
+	_usage_pos_rows.append(_usage_row(USAGE_POSITIONS, "通算", career_position, career_total, true))
+	_usage_order_rows.append(_usage_row(ORDER_SLOTS, "通算", career_order, career_total, true))
+
+
+# no_record はその年度にスタメン記録が1件も無い (=機能の記録開始より前) ことを示し、行全体を "-" 表示にする
+# トリガーになる。計 (total) は表示している列の合計 (打順別は非DH投手の打順欠落分だけ位置別より少なくなり得る)。
+func _usage_row(keys: Array, year_label: String, counts: Dictionary, total_starts: int, is_total: bool) -> Dictionary:
+	var row: Dictionary = {"year": year_label, "is_total": is_total, "no_record": total_starts <= 0}
+	var sum_value: int = 0
+	for key_value in keys:
+		var key: int = int(key_value)
+		var value: int = int(counts.get(key, 0))
+		row["c_%d" % key] = value
+		sum_value += value
+	row["total"] = sum_value
+	return row
 
 
 # 描画本体は基底 _draw_data_table に集約 (2026-06-24)。タブボタンはヘッダ帯に重なるため見出しは描かず
@@ -1005,6 +1168,9 @@ func _refresh() -> void:
 	_advanced_built = false
 	_season_groups = []
 	_season_built = false
+	_usage_pos_rows = []
+	_usage_order_rows = []
+	_usage_built = false
 	_arsenal_types = []
 	_career_rows = _build_career_rows()
 
