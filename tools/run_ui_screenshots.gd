@@ -42,7 +42,7 @@ const TEAM_DETAIL_SCRIPT: String = "res://ui/screens/team_detail_screen.gd"
 const HISTORY_SCRIPT: String = "res://ui/screens/history_screen.gd"
 
 # シーズン履歴: 右上チップで切り替える4ビュー (画面側 VIEW_CHIPS の key と一致させる)。
-const HISTORY_VIEWS: Array = ["year", "alltime", "titles", "lineup"]
+const HISTORY_VIEWS: Array = ["year", "career", "titles", "lineup"]
 
 # 選手詳細: 下部タブ全種 (id はそのまま画面側 TABS の id と一致させる)。
 const PD_TABS: Array = ["season", "games", "monthly", "usage", "stats", "advanced", "abilities", "career"]

@@ -770,6 +770,12 @@ static func process_retirement(players: Array, season: PSSeason) -> Dictionary:
 			player.source_data["retired"] = true
 			player.source_data["retired_age"] = player.age
 			player.team_id = 0
+			# 当季レコード自身にも「このシーズンの終わりに引退した」印を残す。record.source_data は
+			# from_player() 時点の player.source_data の複製で、以後 player 側を更新しても自動追随
+			# しないため、レコード側にも明示的に立てる必要がある。RecordStore.get_team_player_records
+			# は既定でこの印を持つレコードを除外する (現ロスター集計に引退者を含めないため)。
+			if record != null:
+				record.source_data[RecordStore.RETIRED_AT_SEASON_END_KEY] = true
 			retired.append({
 				"player_id": player.id,
 				"name": player.name,

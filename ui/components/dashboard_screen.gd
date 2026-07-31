@@ -761,8 +761,13 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 			"rank":
 				_text(str(row.get("rank", "")), Vector2(cx + 4.0, ty), cell_size, AMBER if is_leader else base_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_leader)
 			"team":
-				_dot(Vector2(cx + 9.0, ry + row_h * 0.5), 5.0, row.get("color", MUTED) as Color)
-				_text(str(row.get("team", "")), Vector2(cx + 20.0, ty), cell_size, base_color, content_w - 24.0, HORIZONTAL_ALIGNMENT_LEFT, cell_bold)
+				# 名前/色は row[key] / row[key+"_color"] を優先し、無ければ row["team"] / row["color"]
+				# にフォールバックする。既存の呼び出し (key=="team") はフォールバック経路そのままで
+				# 従来どおり動く。1行に複数の team 列を持たせたい画面 (例: タイトル履歴の両リーグ列)
+				# は key を "team" 以外にして row[key]/row[key+"_color"] を個別に持たせればよい。
+				var team_color: Color = row.get("%s_color" % key, row.get("color", MUTED)) as Color
+				_dot(Vector2(cx + 9.0, ry + row_h * 0.5), 5.0, team_color)
+				_text(str(row.get(key, row.get("team", ""))), Vector2(cx + 20.0, ty), cell_size, base_color, content_w - 24.0, HORIZONTAL_ALIGNMENT_LEFT, cell_bold)
 			"pos_badge":
 				# 守備位置/役割を色付きチップで描く。row[key]=表示文字 / row[key+"_color"]=色。
 				# row[key+"_dev"]=true なら育成選手としてアウトライン (枠のみ) で描く。

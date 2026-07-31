@@ -5,6 +5,11 @@ signal records_changed
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 
+# PSPlayerSeasonRecord.source_data のキー。process_retirement がその選手の当季レコードに
+# 「このシーズンの終わりに引退した」印として立てる (スキーマ変更なしで永続化するため
+# source_data を使う。player_season_records テーブルの source_data_json 列に既に乗る)。
+const RETIRED_AT_SEASON_END_KEY: String = "retired_at_season_end"
+
 var _records_loaded: bool = false
 var _player_records: Dictionary = {}
 var _player_records_view: Dictionary = {}
@@ -49,7 +54,10 @@ func ensure_loaded() -> void:
 func ensure_season_records(season: PSSeason, teams: Array, players: Array, persist: bool = true) -> void:
 	ensure_loaded()
 	var changed: bool = false
-	var active_players_by_id: Dictionary = {}
+	# GameDb.players に存在する選手 (引退済みも含む) の id 集合。次の erase ループが
+	# 「GameDb から完全に消えた選手」の当季レコードだけを消し、引退で source_data["retired"]=true に
+	# なっただけの選手の最終シーズン成績を erase から守る。
+	var known_players_by_id: Dictionary = {}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		var key: String = _season_key(team.id, season.year, season.season_number)
@@ -59,9 +67,12 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
+		known_players_by_id[player.id] = player
 		if player.is_retired():
+			# 引退者は新規レコード作成・identity 更新の対象外 (引退後に空のシーズンレコードを
+			# 作ってしまわないため)。既存の当季レコードは known_players_by_id に含まれることで
+			# 下の erase ループから守られ、そのまま保持される。
 			continue
-		active_players_by_id[player.id] = player
 		var key: String = _season_key(player.id, season.year, season.season_number)
 		if not _player_records.has(key):
 			_player_records[key] = PSPlayerSeasonRecord.from_player(player, season.year, season.season_number)
@@ -76,7 +87,7 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 		var record: PSPlayerSeasonRecord = _player_records[key] as PSPlayerSeasonRecord
 		if record.year != season.year or record.season_number != season.season_number:
 			continue
-		if not active_players_by_id.has(record.player_id):
+		if not known_players_by_id.has(record.player_id):
 			_player_records.erase(key)
 			changed = true
 
@@ -154,7 +165,12 @@ func get_player_career_pitcher_stats(player_id: int) -> PSPitcherStats:
 	return career_stats
 
 
-func get_team_player_records(team_id: int, year: int, season_number: int) -> Array:
+# include_retired=false (既定) では、その年のオフに引退した選手のレコード (process_retirement が
+# source_data[RETIRED_AT_SEASON_END_KEY]=true を立てたもの) を除外する。本番呼び出し22箇所は
+# すべて season.year/season.season_number = 当季で「現ロスター」の意味で使っているため、既定を
+# 除外にすることで呼び出し側を1つも変えずに従来どおりの見え方を保てる。過去年度をチーム軸で
+# (その年に実際に在籍した全員という意味で) 引きたい将来の用途では include_retired=true を渡す。
+func get_team_player_records(team_id: int, year: int, season_number: int, include_retired: bool = false) -> Array:
 	ensure_loaded()
 	if _indexed_player_record_count != _player_records.size():
 		_rebuild_team_player_record_index()
@@ -167,6 +183,8 @@ func get_team_player_records(team_id: int, year: int, season_number: int) -> Arr
 		# membership変更は専用API経由だが、record参照自体は可変なので防御的に所属を再確認する。
 		if record != null and record.team_id == team_id \
 				and record.year == year and record.season_number == season_number:
+			if not include_retired and _record_marks_retired_at_season_end(record):
+				continue
 			records.append(record)
 	return records
 
@@ -225,11 +243,11 @@ func erase_player_record(player_id: int, year: int, season_number: int) -> bool:
 	return erase_player_record_by_key(_season_key(player_id, year, season_number))
 
 
-func get_current_player_records_for_team(team_id: int) -> Array:
+func get_current_player_records_for_team(team_id: int, include_retired: bool = false) -> Array:
 	var season: PSSeason = AppState.current_season
 	if season == null:
 		return []
-	return get_team_player_records(team_id, season.year, season.season_number)
+	return get_team_player_records(team_id, season.year, season.season_number, include_retired)
 
 
 func clear_records() -> void:
@@ -471,6 +489,10 @@ func _refresh_player_records_view() -> void:
 	var view: Dictionary = _player_records.duplicate()
 	view.make_read_only()
 	_player_records_view = view
+
+
+func _record_marks_retired_at_season_end(record: PSPlayerSeasonRecord) -> bool:
+	return bool(record.source_data.get(RETIRED_AT_SEASON_END_KEY, false))
 
 
 func _record_identity_changed(record: PSPlayerSeasonRecord, player: PSPlayer) -> bool:

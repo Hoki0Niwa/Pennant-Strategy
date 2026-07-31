@@ -858,12 +858,29 @@ func test_history_screen_builds_with_archive() -> void:
 	var team: PSTeam = GameDb.teams[0] as PSTeam
 	AppState.select_team(team.id)
 	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
 	var test_save_id: String = SaveContext.active_save_id()
 	AppState.current_screen = "history"
+
+	# 通算記録/シーズン記録の文脈列 (試合/打率/本/打点 等) を非ゼロ値で検証するため1試合消化する。
+	var simulation: Dictionary = GameSimulator.simulate_next_unplayed_game(season, false)
+	assert_bool(bool(simulation.get("ok", false))).is_true()
+
+	# タイトル履歴の値復元を実データで検証するため、自軍の実在打者レコードを1件取得する。
+	var team_records: Array = RecordStore.get_team_player_records(team.id, season.year, season.season_number)
+	var real_batter: PSPlayerSeasonRecord = _first_record(team_records, false)
+	assert_object(real_batter).is_not_null()
 
 	# アーカイブを1件、永続化せずに live 配列へ直接差し込んで集計経路を検証する。
 	var archives: Array = RecordStore.get_season_archives()
 	var archive: PSSeasonArchive = _make_test_archive()
+	# MVP は実在の選手・当季年度に差し替えて値復元経路 (受賞年レコードから成績を引く) を検証する。
+	# 他部門 (id=1..4/year=2099 のまま) と首位打者 (id=999999 に差し替え) は該当レコードが無いため
+	# フォールバック ("-") 経路の検証に残す。
+	archive.year = season.year
+	archive.season_number = season.season_number
+	archive.awards.mvp_league1_player_id = real_batter.player_id
+	(archive.awards.batting_titles["league1"] as Dictionary)["average"] = 999999
 	archives.append(archive)
 
 	var script: GDScript = load("res://ui/screens/history_screen.gd") as GDScript
@@ -880,6 +897,46 @@ func test_history_screen_builds_with_archive() -> void:
 	assert_int(screen._award_cards.size()).is_equal(4)
 	assert_int(screen._bat_rows.size()).is_equal(PSAwards.BATTING_CATEGORIES.size())
 	assert_int(screen._pit_rows.size()).is_equal(PSAwards.PITCHING_CATEGORIES.size())
+
+	# 通算記録ビュー: 文脈列 (試合/打率/本/打点、登板/勝/防御率/奪三振) が入り、率系部門もクラッシュ
+	# せず構築できること (規定未達なら空配列が正当な結果なので、games=集計対象が確実にいる部門で検証)。
+	screen._build_career()
+	var career_bat_rows: Array = screen._career_bat_by_key.get("games", []) as Array
+	assert_int(career_bat_rows.size()).is_greater(0)
+	var career_bat_row: Dictionary = career_bat_rows[0] as Dictionary
+	assert_bool(career_bat_row.has("avg")).is_true()
+	assert_bool(career_bat_row.has("hr")).is_true()
+	assert_bool(career_bat_row.has("rbi")).is_true()
+	assert_bool(career_bat_row.has("team")).is_true()
+	var season_bat_rows: Array = screen._season_bat_by_key.get("games", []) as Array
+	assert_int(season_bat_rows.size()).is_greater(0)
+	assert_bool((season_bat_rows[0] as Dictionary).has("year")).is_true()
+	assert_bool(screen._career_bat_by_key.has("average")).is_true()
+	assert_bool(screen._career_pit_by_key.has("era")).is_true()
+
+	screen._set_view(screen.VIEW_CAREER)
+	await get_tree().process_frame
+	screen._set_career_key(true, "average")
+	await get_tree().process_frame
+	screen._set_career_key(false, "era")
+	await get_tree().process_frame
+
+	# タイトル履歴: 実在レコードは値復元 (球団/記録が "-" にならない)、存在しないレコードは
+	# 名前のみ表示してフォールバックする。
+	assert_int(screen._title_rows.size()).is_greater(0)
+	var mvp_row: Dictionary = screen._title_rows[0] as Dictionary
+	assert_str(str(mvp_row.get("p1_value", ""))).is_not_equal("-")
+	assert_str(str(mvp_row.get("p1_team", ""))).is_not_equal("-")
+
+	screen._set_title_key("bat_average")
+	var avg_row: Dictionary = screen._title_rows[0] as Dictionary
+	assert_str(str(avg_row.get("p1_value", ""))).is_equal("-")
+	assert_str(str(avg_row.get("p1_team", ""))).is_equal("-")
+	assert_str(str(avg_row.get("p1_name", ""))).is_not_equal("(該当なし)")
+
+	screen._set_view(screen.VIEW_TITLES)
+	await get_tree().process_frame
+
 	screen.queue_free()
 
 	archives.erase(archive)
@@ -931,6 +988,15 @@ func test_history_screen_builds_lineup_view() -> void:
 	assert_str(screen._view).is_equal(screen.VIEW_LINEUP)
 	assert_int((screen._lu_position_groups as Array).size()).is_greater(0)
 	assert_int((screen._lu_game_rows as Array).size()).is_greater(0)
+
+	# 概要モード (既定=上位3名) で build + 1フレーム描画が落ちないこと。
+	assert_str(screen._lu_pos_mode).is_equal(screen.LU_POS_MODE_TOP3)
+	await get_tree().process_frame
+
+	# 詳細モード (全員) に切替えても再集計せず落ちないこと (データは _lu_position_groups を使い回す)。
+	screen._set_lineup_pos_mode(screen.LU_POS_MODE_ALL)
+	await get_tree().process_frame
+	assert_str(screen._lu_pos_mode).is_equal(screen.LU_POS_MODE_ALL)
 	screen.queue_free()
 
 	AppState.selected_team_id = old_team_id

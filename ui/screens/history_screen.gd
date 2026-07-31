@@ -2,16 +2,23 @@ extends "res://ui/components/dashboard_screen.gd"
 
 # シーズン履歴画面。4ビューを右上チップで切り替える (R7 記録・履歴基盤 + スタメン履歴統合)。
 # - 年度別: season_archives から過去年度を選び、最終順位・ポストシーズン・表彰を復元表示。
-# - 歴代記録: 全選手の通算リーダーとシーズン最高記録 (RecordStore の全年度レコードを集計、
-#   カウント系部門のみ。率系は規定の扱いが年度横断で曖昧なため対象外)。
-# - タイトル履歴: 部門を選んで年度×両リーグの歴代受賞者を一覧。
+# - 通算記録: 全選手の通算リーダーとシーズン最高記録 (RecordStore の全年度レコードを集計)。
+#   カウント系部門に加え、規定 (打席/投球回) を満たす選手のみを対象にした率系部門 (打率/OPS/
+#   防御率/WHIP) も扱う。シーズン記録側の規定は rankings_screen.gd の per-team-game 式を流用し、
+#   通算側は CAREER_MIN_PA/CAREER_MIN_OUTS の固定下限を使う。各表は文脈列 (打者=試合/打率/本/打点、
+#   投手=登板/勝/防御率/奪三振) を選択部門と併記し、選択部門の「記録」列を強調 (strong) する。
+# - タイトル履歴: 部門を選んで年度×両リーグの歴代受賞者を一覧。PSAwards は受賞者の player_id しか
+#   持たないため、受賞年の PSPlayerSeasonRecord から該当部門の成績値を都度復元して表示する
+#   (PSAwards のスキーマ自体は変更しない)。MVP/新人王は単一部門を持たないので代表的な成績ライン
+#   (打者=打率/本/打点、投手=勝/防御率) を出す。レコードが引けない (引退等で消失) 場合は名前のみ
+#   表示し、球団・記録は "-" にフォールバックする。
 # - スタメン履歴: 選択した年度・球団の「守備位置別スタメン数(+成績)」と「試合別打線」。
 #   データ取得は PSLineupHistory (services/reports/lineup_history_service.gd、読み取り専用の
 #   集計 API) に一任し、この画面は表示用の整形・キャッシュ・入力(独自の年度/球団プルダウン・
 #   下段表のホイールスクロール・選手セルのホバー連動ハイライト)のみを担う。年度別ビューの
 #   ◀/▶ (_archives ベース、当季を含まない) とは独立に、スタメン履歴専用の年度プルダウン
 #   (PSLineupHistory.available_seasons() 由来、当季を含む) を持つ。
-# 重い集計は _refresh / _refresh_lineup / _build_alltime で1度だけ行いキャッシュし、
+# 重い集計は _refresh / _refresh_lineup / _build_career で1度だけ行いキャッシュし、
 # _draw は描画専念。
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
@@ -70,32 +77,56 @@ const HIST_COLUMNS: Array = [
 	{"title": "得失", "key": "diff", "w": 70,  "align": "r", "fmt": "diff"},
 ]
 
-# --- 歴代記録 / タイトル履歴 / スタメン履歴 ビュー ---
+# --- 通算記録 / タイトル履歴 / スタメン履歴 ビュー ---
 const VIEW_YEAR: String = "year"
-const VIEW_ALLTIME: String = "alltime"
+const VIEW_CAREER: String = "career"
 const VIEW_TITLES: String = "titles"
 const VIEW_LINEUP: String = "lineup"
 const VIEW_CHIPS: Array = [
 	{"key": VIEW_YEAR, "label": "年度別"},
-	{"key": VIEW_ALLTIME, "label": "歴代記録"},
+	{"key": VIEW_CAREER, "label": "通算記録"},
 	{"key": VIEW_TITLES, "label": "タイトル履歴"},
 	{"key": VIEW_LINEUP, "label": "スタメン履歴"},
 ]
+# ビュー切替チップはヘッダ行 (home の「本日を終了」等と同じ y=22/高さ42/右端1900) に置く。
+# y=96 の帯は各ビュー固有のコントロール専用になるため、部門チップの折り返し・右寄せ判定は
+# 画面のコンテンツ右端 (_content_right_x()) だけを基準にすればよい。
 
-const ALLTIME_TOP_N: int = 12
-const ALLTIME_BAT_CATEGORIES: Array = [
-	{"key": "hits", "label": "安打"},
-	{"key": "home_runs", "label": "本塁打"},
-	{"key": "runs_batted_in", "label": "打点"},
-	{"key": "stolen_bases", "label": "盗塁"},
-	{"key": "games", "label": "出場"},
+# 通算記録の上位表示件数。CAREER_BAT_RECT等 (高さ448) に row_h=28 で収まる上限 (13*28=364 <= 368)。
+const CAREER_TOP_N: int = 13
+
+# 率系部門の通算下限 (調整ノブ)。低打席/低投球回のシーズンで異常値が上位に出るのを防ぐ。
+# 打率/OPS: MLBの通算打率ランキングで慣習的に使われる 3000打席を目安値として採用。
+const CAREER_MIN_PA: int = 3000
+# 防御率/WHIP: Baseball-Referenceの通算防御率ランキングの目安 (1000投球回=3000アウト) を採用。
+const CAREER_MIN_OUTS: int = 3000
+
+# シーズン記録の率系部門は rankings_screen.gd の規定打席/規定投球回 (所属球団のその時点の試合数
+# 基準) をそのまま流用する。[[project_ability_stats_qualifier_filter]] に既知の重複あり (3箇所目)
+# だが、新しい式を発明せず既存定義を踏襲する。
+const SEASON_QUALIFIER_PA_PER_TEAM_GAME: float = 3.1
+const SEASON_QUALIFIER_OUTS_PER_TEAM_GAME: float = 3.0
+
+# fmt: "記録"列と率系部門のソート方向を決める書式トークン (int/rate/f2)。qualifier: 規定の種別
+# ("pa"=規定打席 / "outs"=規定投球回、空なら規定なし=カウント系)。ascending: true で昇順ソート
+# (防御率/WHIPは小さいほど上位)。
+const CAREER_BAT_CATEGORIES: Array = [
+	{"key": "hits", "label": "安打", "fmt": "int"},
+	{"key": "home_runs", "label": "本塁打", "fmt": "int"},
+	{"key": "runs_batted_in", "label": "打点", "fmt": "int"},
+	{"key": "stolen_bases", "label": "盗塁", "fmt": "int"},
+	{"key": "games", "label": "出場", "fmt": "int"},
+	{"key": "average", "label": "打率", "fmt": "rate", "qualifier": "pa"},
+	{"key": "ops", "label": "OPS", "fmt": "rate", "qualifier": "pa"},
 ]
-const ALLTIME_PIT_CATEGORIES: Array = [
-	{"key": "wins", "label": "勝利"},
-	{"key": "saves", "label": "S"},
-	{"key": "holds", "label": "H"},
-	{"key": "strikeouts", "label": "奪三振"},
-	{"key": "games", "label": "登板"},
+const CAREER_PIT_CATEGORIES: Array = [
+	{"key": "wins", "label": "勝利", "fmt": "int"},
+	{"key": "saves", "label": "S", "fmt": "int"},
+	{"key": "holds", "label": "H", "fmt": "int"},
+	{"key": "strikeouts", "label": "奪三振", "fmt": "int"},
+	{"key": "games", "label": "登板", "fmt": "int"},
+	{"key": "era", "label": "防御率", "fmt": "f2", "qualifier": "outs", "ascending": true},
+	{"key": "whip", "label": "WHIP", "fmt": "f2", "qualifier": "outs", "ascending": true},
 ]
 const TITLE_HISTORY_CATEGORIES: Array = [
 	{"key": "mvp", "label": "MVP"},
@@ -117,18 +148,93 @@ const CAREER_BAT_RECT: Rect2 = Rect2(262, 150, 808, 448)
 const CAREER_PIT_RECT: Rect2 = Rect2(1092, 150, 808, 448)
 const SEASON_BAT_RECT: Rect2 = Rect2(262, 610, 808, 448)
 const SEASON_PIT_RECT: Rect2 = Rect2(1092, 610, 808, 448)
-const TITLE_TABLE_RECT: Rect2 = Rect2(262, 190, 1240, 868)
+# 他ビューのパネルと同じコンテンツ幅 (262..1900 = 1638) を使う。旧 1240 幅は増設した列
+# (選手・球団・記録 を第1/第2リーグ別に7列) に対して狭すぎ、右側に約400pxの空白が残っていた。
+const TITLE_TABLE_RECT: Rect2 = Rect2(262, 190, 1638, 868)
 
-const ALLTIME_COLUMNS: Array = [
-	{"title": "順",   "key": "rank",   "w": 44,  "align": "l", "fmt": "rank"},
-	{"title": "選手", "key": "player", "w": 220, "align": "l", "fmt": "str", "strong": true},
-	{"title": "在籍", "key": "span",   "w": 120, "align": "l", "fmt": "str"},
-	{"title": "記録", "key": "value",  "w": 90,  "align": "r", "fmt": "int", "sep_before": true},
-]
+# 通算/シーズン記録テーブルの列は打者/投手モードで固定 (部門チップを切り替えても列構成は変わらない)。
+# 文脈列 (試合/打率/本/打点、または登板/勝/防御率/奪三振) を選択部門の値と併記し、選択部門を保持する
+# 「記録」列だけ strong で強調する。「記録」列の fmt はカテゴリ定義 (int/rate/f2) から都度差し込む。
+func _career_bat_columns(category: Dictionary) -> Array:
+	return [
+		{"title": "順",   "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
+		{"title": "選手", "key": "player", "w": 190, "align": "l", "fmt": "str", "strong": true},
+		{"title": "球団", "key": "team",   "w": 140, "align": "l", "fmt": "team", "sep_before": true},
+		{"title": "在籍", "key": "span",   "w": 110, "align": "l", "fmt": "str"},
+		{"title": "試合", "key": "g",      "w": 74,  "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "打率", "key": "avg",    "w": 82,  "align": "r", "fmt": "rate"},
+		{"title": "本",   "key": "hr",     "w": 64,  "align": "r", "fmt": "int"},
+		{"title": "打点", "key": "rbi",    "w": 74,  "align": "r", "fmt": "int"},
+		{"title": "記録", "key": "value",  "w": 90,  "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+	]
+
+
+func _career_pit_columns(category: Dictionary) -> Array:
+	return [
+		{"title": "順",   "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
+		{"title": "選手", "key": "player", "w": 190, "align": "l", "fmt": "str", "strong": true},
+		{"title": "球団", "key": "team",   "w": 140, "align": "l", "fmt": "team", "sep_before": true},
+		{"title": "在籍", "key": "span",   "w": 110, "align": "l", "fmt": "str"},
+		{"title": "登板", "key": "g",      "w": 74,  "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "勝",   "key": "wins",   "w": 60,  "align": "r", "fmt": "int"},
+		{"title": "防御率", "key": "era",  "w": 84,  "align": "r", "fmt": "f2"},
+		{"title": "奪三振", "key": "so",   "w": 80,  "align": "r", "fmt": "int"},
+		{"title": "記録", "key": "value",  "w": 90,  "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+	]
+
+
+# シーズン記録は「在籍」の代わりに「年度」列 (達成年度) を持つ以外は通算と同じ文脈列構成。
+func _season_bat_columns(category: Dictionary) -> Array:
+	return [
+		{"title": "順",   "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
+		{"title": "選手", "key": "player", "w": 170, "align": "l", "fmt": "str", "strong": true},
+		{"title": "球団", "key": "team",   "w": 130, "align": "l", "fmt": "team", "sep_before": true},
+		{"title": "年度", "key": "year",   "w": 76,  "align": "l", "fmt": "str", "sep_before": true},
+		{"title": "試合", "key": "g",      "w": 70,  "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "打率", "key": "avg",    "w": 80,  "align": "r", "fmt": "rate"},
+		{"title": "本",   "key": "hr",     "w": 60,  "align": "r", "fmt": "int"},
+		{"title": "打点", "key": "rbi",    "w": 70,  "align": "r", "fmt": "int"},
+		{"title": "記録", "key": "value",  "w": 88,  "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+	]
+
+
+func _season_pit_columns(category: Dictionary) -> Array:
+	return [
+		{"title": "順",   "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
+		{"title": "選手", "key": "player", "w": 170, "align": "l", "fmt": "str", "strong": true},
+		{"title": "球団", "key": "team",   "w": 130, "align": "l", "fmt": "team", "sep_before": true},
+		{"title": "年度", "key": "year",   "w": 76,  "align": "l", "fmt": "str", "sep_before": true},
+		{"title": "登板", "key": "g",      "w": 70,  "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "勝",   "key": "wins",   "w": 56,  "align": "r", "fmt": "int"},
+		{"title": "防御率", "key": "era",  "w": 80,  "align": "r", "fmt": "f2"},
+		{"title": "奪三振", "key": "so",   "w": 76,  "align": "r", "fmt": "int"},
+		{"title": "記録", "key": "value",  "w": 88,  "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+	]
+
+
+# 年度 / 第1リーグ[選手・球団・記録] / 第2リーグ[選手・球団・記録] の7列。両リーグのブロックは
+# 同じ列幅比率にして対称に見せ、ブロック境界(年度|第1・第1|第2)と各ブロック内の記録境界に
+# sep_before の縦ヘアラインを入れる。
+# "team" fmt はリーグ毎に別セル (p1_team/p2_team) を持つため、基底 _draw_data_table 側の
+# team 列描画を row[key]/row[key+"_color"] 参照に対応させてある (通常の単一 team 列は後方互換)。
+# **列幅は `_draw_data_table` の `factor = usable/Σw` で一律スケールされるため w の比率がそのまま
+# 見た目の比率になる**(usable=1638-inner_pad*2=1614)。球団は色ドット+短縮名1文字しか持たず
+# 実測 60px 強で足りるため w=64 に絞り、年度も "2027年" 相当で足りる w=70 に絞る。
+# **記録は左揃え**(他画面の数値専用「記録」列は右揃えだが、ここは可変長の複合文字列
+# 例: ".371 / 29本 / 81点" なので、球団の直後で左揃えにして地続きに読ませる)。右揃えのまま列を
+# 広げると「球団の短い文字列の直後〜記録の右詰め文字列の直前」に大きな空白の谷ができてしまう
+# (2026-07-31 に実測して判明。列幅の比率だけ直しても解消しなかった)。左揃えなら余った幅は
+# ブロック末尾(次ブロックの sep_before 罫線の直前、または表の右端)に流れるだけなので目立たない。
+# 空いた幅は 選手(可変長の氏名) と 記録 に回す。球団のような「内容に対して桁違いに広い列」を
+# 作らないことが列間の不自然な空白を避ける要点。
 const TITLE_COLUMNS: Array = [
-	{"title": "年度",       "key": "year",    "w": 120, "align": "l", "fmt": "str"},
-	{"title": "第1リーグ", "key": "league1", "w": 320, "align": "l", "fmt": "str"},
-	{"title": "第2リーグ", "key": "league2", "w": 320, "align": "l", "fmt": "str"},
+	{"title": "年度", "key": "year",     "w": 70,  "align": "l", "fmt": "str"},
+	{"title": "選手", "key": "p1_name",  "w": 260, "align": "l", "fmt": "str", "strong": true, "sep_before": true},
+	{"title": "球団", "key": "p1_team",  "w": 64,  "align": "l", "fmt": "team"},
+	{"title": "記録", "key": "p1_value", "w": 300, "align": "l", "fmt": "str", "sep_before": true},
+	{"title": "選手", "key": "p2_name",  "w": 260, "align": "l", "fmt": "str", "strong": true, "sep_before": true},
+	{"title": "球団", "key": "p2_team",  "w": 64,  "align": "l", "fmt": "team"},
+	{"title": "記録", "key": "p2_value", "w": 300, "align": "l", "fmt": "str", "sep_before": true},
 ]
 
 # --- スタメン履歴 ビュー ---
@@ -146,13 +252,32 @@ const LINEUP_SLOT_COUNT: int = 9
 const LINEUP_GAME_COLUMN_COUNT: int = LINEUP_SLOT_COUNT + 1
 
 # --- レイアウト基準 (base 座標) ---
-# 独自の年度/球団プルダウンはチップ行 (右上) と干渉しないよう左寄せに置く
-# (年度別ビューの ◀/▶・年度ラベルとは領域が近いが _view で排他的に描画されるため衝突しない)。
-const LINEUP_SEL_Y: float = 122.0
+# 独自の年度/球団プルダウンはビュー切替チップがヘッダ行(y=22)へ移ったので、
+# y=96 の帯を自由に使って左寄せに置く (年度別ビューの ◀/▶・年度ラベルとは領域が近いが
+# _view で排他的に描画されるため衝突しない)。ラベル("年度"/"球団")は表示しないので、
+# 帯の中で値と▼だけが縦中央に来るよう LINEUP_SEL_Y を基準に組む。
+const LINEUP_SEL_Y: float = 106.0
 const LINEUP_SEASON_X: float = 262.0
 const LINEUP_TEAM_X: float = 640.0
-const POSITION_RECT: Rect2 = Rect2(262, 144, 1638, 486)
-const GAMES_RECT: Rect2 = Rect2(262, 646, 1638, 410)
+# 年度の値テキスト(22px)・球団名(18px)・▼マーカー(13px)は異なるフォントサイズ・ウェイトで、
+# いずれも draw_string のベースライン指定なので同じ y を渡しても視覚中心は揃わない
+# (ascent/descent が字体ごとに違う)。実測 (reports/ui_shots の history_lineup.png を対象文字色の
+# RGB に一致するピクセルを連結成分化しグリフの y 範囲を測定) でベースラインを詰め、値・▼・
+# 球団バッジ(28px角、中心 y ≈ LINEUP_SEL_Y+10) の視覚中心が揃う値にしてある。
+const LINEUP_VALUE_BASELINE_Y: float = LINEUP_SEL_Y + 17.0
+const LINEUP_ARROW_BASELINE_Y: float = LINEUP_SEL_Y + 15.0
+# 守備位置別スタメン数パネル / 試合別打線パネルの矩形はモードで縦配分が変わる (詳細モードは
+# 全員分の行を見せるためパネルを大きく取り、概要モードはカードの中身が3行+見出しで収まるぶん
+# パネルを詰めて空いた縦幅を試合別打線へ回す)。両パネルの下端は 1056 で揃える。
+const POSITION_RECT_ALL: Rect2 = Rect2(262, 144, 1638, 486)
+const GAMES_RECT_ALL: Rect2 = Rect2(262, 646, 1638, 410)
+const POSITION_RECT_TOP3: Rect2 = Rect2(262, 144, 1638, 388)
+const GAMES_RECT_TOP3: Rect2 = Rect2(262, 548, 1638, 508)
+
+# 守備位置別スタメン数パネルの表示モード。既定は概要(上位3名) = カードグリッド、
+# 「全員」は従来のグループ化テーブル (詳細モード)。
+const LU_POS_MODE_TOP3: String = "top3"
+const LU_POS_MODE_ALL: String = "all"
 
 # 守備位置別テーブルの縦積み単位 (グループ見出し / 列見出し / 選手行) の高さとピクセル単位スクロール歩幅。
 const POS_GROUP_HEADER_H: float = 34.0
@@ -160,6 +285,26 @@ const POS_COL_HEADER_H: float = 22.0
 const POS_ROW_H: float = 26.0
 const POS_GROUP_GAP: float = 14.0
 const POS_SCROLL_STEP: float = 30.0
+
+# 概要モード (守備位置カードグリッド) のレイアウト定数。列数固定 5 × 可変行数、
+# カード幅は枚数(DH有無)に依存しない (5列グリッドの1マス分で決まる)。
+const LU_CARD_COLS: int = 5
+const LU_CARD_GAP: float = 14.0
+const LU_CARD_TOP_N: int = 3
+const LU_CARD_PAD_X: float = 10.0
+const LU_CARD_HEADER_H: float = 40.0
+const LU_CARD_COLHEAD_H: float = 20.0
+const LU_CARD_ROW_START: float = LU_CARD_HEADER_H + LU_CARD_COLHEAD_H + 4.0
+const LU_CARD_ROW_H: float = 26.0
+const LU_CARD_STAT_GAP: float = 10.0
+
+# カード内の列見出しラベル (キーは POS_BATTER_COLUMNS/POS_PITCHER_COLUMNS の一部と共有)。
+const CARD_HEADER_BATTER: Dictionary = {
+	"starts": "スタメン", "avg": "打率", "hr": "本", "ops": "OPS", "war": "WAR",
+}
+const CARD_HEADER_PITCHER: Dictionary = {
+	"starts": "先発", "era": "防御率", "war": "WAR",
+}
 
 # 野手グループの列 (lineup_editor_screen の一軍登録野手一覧の列 + 打席/四球/三振。
 # 列順は player_detail_screen の過去成績タブ (試合〜盗塁 → 率系 → 四球/三振) の並びに準じる)。
@@ -213,17 +358,17 @@ var _bat_rows: Array = []                   # 打撃タイトル行 {label, leag
 var _pit_rows: Array = []                   # 投手タイトル行
 
 var _view: String = VIEW_YEAR
-var _alltime_bat_key: String = "hits"
-var _alltime_pit_key: String = "wins"
+var _career_bat_key: String = "hits"
+var _career_pit_key: String = "wins"
 var _title_key: String = "mvp"
-var _alltime_built: bool = false
+var _career_built: bool = false
 var _career_bat_by_key: Dictionary = {}     # category key → 行 Array
 var _career_pit_by_key: Dictionary = {}
 var _season_bat_by_key: Dictionary = {}
 var _season_pit_by_key: Dictionary = {}
 var _title_rows: Array = []                 # タイトル履歴 (選択部門の年度別行、新しい順)
 
-# スタメン履歴ビュー用キャッシュ (年度別/歴代記録/タイトル履歴とは独立)。
+# スタメン履歴ビュー用キャッシュ (年度別/通算記録/タイトル履歴とは独立)。
 var _lu_seasons: Array = []                 # PSLineupHistory.available_seasons() の結果 (新しい順)
 var _lu_sel_season_index: int = 0
 var _team_id: int = 0
@@ -241,6 +386,7 @@ var _lu_scroll_zones: Array = []            # [{rect, key, max}] ホイールス
 var _hover_pid: int = 0                     # 上下パネルを跨いで連動ハイライトする選手 (0=なし)
 var _lu_pos_row_hits: Array = []            # {rect, pid} 守備位置別テーブルの選手行 (ホバー/相互ハイライト用)
 var _lu_game_cell_hits: Array = []          # {rect, pid} 試合別打線の選手セル (ホバー/相互ハイライト用)
+var _lu_pos_mode: String = LU_POS_MODE_TOP3 # 守備位置別スタメン数パネルの表示モード (既定=概要/上位3名)
 
 var _season_menu_button: Button = null
 var _team_menu_button: Button = null
@@ -272,8 +418,8 @@ func _draw() -> void:
 	_draw_shell("シーズン履歴", team, season)
 
 	match _view:
-		VIEW_ALLTIME:
-			_draw_alltime_view()
+		VIEW_CAREER:
+			_draw_career_view()
 			return
 		VIEW_TITLES:
 			_draw_titles_view()
@@ -301,26 +447,33 @@ func _draw() -> void:
 	_draw_titles(PIT_RECT, "投手タイトル", _pit_rows)
 
 
-# ============================================================ 歴代記録 / タイトル履歴 ビュー
+# ============================================================ 通算記録 / タイトル履歴 ビュー
 
-func _draw_alltime_view() -> void:
-	_build_alltime()
-	if (_career_bat_by_key.get(_alltime_bat_key, []) as Array).is_empty() \
-			and (_career_pit_by_key.get(_alltime_pit_key, []) as Array).is_empty():
+func _draw_career_view() -> void:
+	_build_career()
+	if (_career_bat_by_key.get(_career_bat_key, []) as Array).is_empty() \
+			and (_career_pit_by_key.get(_career_pit_key, []) as Array).is_empty():
 		_round(Rect2(560, 380, 800, 240), PANEL, BORDER, 12)
 		_text("まだ成績の記録がありません", Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
 		return
-	var bat_label: String = _category_label(ALLTIME_BAT_CATEGORIES, _alltime_bat_key)
-	var pit_label: String = _category_label(ALLTIME_PIT_CATEGORIES, _alltime_pit_key)
-	_draw_alltime_table(CAREER_BAT_RECT, "通算打撃リーダー: %s" % bat_label, _career_bat_by_key.get(_alltime_bat_key, []) as Array)
-	_draw_alltime_table(CAREER_PIT_RECT, "通算投手リーダー: %s" % pit_label, _career_pit_by_key.get(_alltime_pit_key, []) as Array)
-	_draw_alltime_table(SEASON_BAT_RECT, "シーズン打撃記録: %s" % bat_label, _season_bat_by_key.get(_alltime_bat_key, []) as Array)
-	_draw_alltime_table(SEASON_PIT_RECT, "シーズン投手記録: %s" % pit_label, _season_pit_by_key.get(_alltime_pit_key, []) as Array)
-
-
-func _draw_alltime_table(rect: Rect2, title: String, rows: Array) -> void:
-	_draw_data_table(rect, ALLTIME_COLUMNS, rows, {
-		"title": title, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
+	var bat_cat: Dictionary = _category_by_key(CAREER_BAT_CATEGORIES, _career_bat_key)
+	var pit_cat: Dictionary = _category_by_key(CAREER_PIT_CATEGORIES, _career_pit_key)
+	var bat_label: String = str(bat_cat.get("label", _career_bat_key))
+	var pit_label: String = str(pit_cat.get("label", _career_pit_key))
+	_draw_data_table(CAREER_BAT_RECT, _career_bat_columns(bat_cat), _career_bat_by_key.get(_career_bat_key, []) as Array, {
+		"title": "通算打撃リーダー: %s" % bat_label, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
+		"cell_size": 13, "empty_text": "記録がありません",
+	})
+	_draw_data_table(CAREER_PIT_RECT, _career_pit_columns(pit_cat), _career_pit_by_key.get(_career_pit_key, []) as Array, {
+		"title": "通算投手リーダー: %s" % pit_label, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
+		"cell_size": 13, "empty_text": "記録がありません",
+	})
+	_draw_data_table(SEASON_BAT_RECT, _season_bat_columns(bat_cat), _season_bat_by_key.get(_career_bat_key, []) as Array, {
+		"title": "シーズン打撃記録: %s" % bat_label, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
+		"cell_size": 13, "empty_text": "記録がありません",
+	})
+	_draw_data_table(SEASON_PIT_RECT, _season_pit_columns(pit_cat), _season_pit_by_key.get(_career_pit_key, []) as Array, {
+		"title": "シーズン投手記録: %s" % pit_label, "header_top": 58.0, "row_h": 28.0, "alt_rows": true,
 		"cell_size": 13, "empty_text": "記録がありません",
 	})
 
@@ -338,11 +491,17 @@ func _draw_titles_view() -> void:
 
 
 func _category_label(categories: Array, key: String) -> String:
+	return str(_category_by_key(categories, key).get("label", key))
+
+
+# 部門定義 (fmt/qualifier/ascending 等) をキーから引く。TITLE_HISTORY_CATEGORIES のような
+# label のみの用途は _category_label 経由でこれを使う。
+func _category_by_key(categories: Array, key: String) -> Dictionary:
 	for category_value in categories:
 		var category: Dictionary = category_value as Dictionary
 		if str(category.get("key", "")) == key:
-			return str(category.get("label", key))
-	return key
+			return category
+	return {}
 
 
 # ============================================================ 順位表 (順位表画面から流用)
@@ -580,27 +739,35 @@ func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
 
 func _draw_lineup_view() -> void:
 	_draw_lineup_selectors()
-	_draw_position_panel(POSITION_RECT)
-	_draw_games_panel(GAMES_RECT)
+	_draw_position_panel(_lineup_position_rect())
+	_draw_games_panel(_lineup_games_rect())
+
+
+# 2パネルの矩形はモード依存。_draw / _build_buttons / スクロール領域 / 当たり矩形が全て
+# この2関数経由で同じ Rect を参照する (どちらかだけ古い定数を見ると当たり判定がズレる)。
+func _lineup_position_rect() -> Rect2:
+	return POSITION_RECT_TOP3 if _lu_pos_mode == LU_POS_MODE_TOP3 else POSITION_RECT_ALL
+
+
+func _lineup_games_rect() -> Rect2:
+	return GAMES_RECT_TOP3 if _lu_pos_mode == LU_POS_MODE_TOP3 else GAMES_RECT_ALL
 
 
 # --- 年度/球団プルダウン (player_detail の閲覧球団プルダウンと同じ部品・挙動) ---
 
 func _draw_lineup_selectors() -> void:
-	_text("年度", Vector2(LINEUP_SEASON_X, LINEUP_SEL_Y - 18.0), 11, FAINT)
 	var label: String = _lineup_season_label_current()
-	_text(label, Vector2(LINEUP_SEASON_X, LINEUP_SEL_Y + 10.0), 22, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	# ▼ は「押せる」ことの唯一の手掛かり (当たり判定 _lineup_season_hotspot_rect も 30px 分見込んでいる)。
-	_text("▼", Vector2(LINEUP_SEASON_X + _measure(label, 22) + 10.0, LINEUP_SEL_Y + 6.0), 13, MUTED)
+	_text(label, Vector2(LINEUP_SEASON_X, LINEUP_VALUE_BASELINE_Y), 22, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	# ▼ は「押せる」ことの唯一の手掛かり (当たり判定 _lineup_season_hotspot_rect も追従して見込んでいる)。
+	_text("▼", Vector2(LINEUP_SEASON_X + _measure(label, 22) + 10.0, LINEUP_ARROW_BASELINE_Y), 13, MUTED)
 
 	var team: PSTeam = GameDb.get_team(_team_id)
 	if team == null:
 		return
-	_text("球団", Vector2(LINEUP_TEAM_X, LINEUP_SEL_Y - 18.0), 11, FAINT)
 	_team_badge(Rect2(LINEUP_TEAM_X, LINEUP_SEL_Y - 4.0, 28.0, 28.0), team)
-	_text(team.name, Vector2(LINEUP_TEAM_X + 38.0, LINEUP_SEL_Y + 18.0), 18, TEXT)
+	_text(team.name, Vector2(LINEUP_TEAM_X + 38.0, LINEUP_VALUE_BASELINE_Y), 18, TEXT)
 	var nx: float = LINEUP_TEAM_X + 38.0 + _measure(team.name, 18) + 10.0
-	_text("▼", Vector2(nx, LINEUP_SEL_Y + 15.0), 13, MUTED)
+	_text("▼", Vector2(nx, LINEUP_ARROW_BASELINE_Y), 13, MUTED)
 
 
 func _lineup_season_label_current() -> String:
@@ -618,13 +785,17 @@ func _lineup_season_label(year: int, season_number: int) -> String:
 func _lineup_season_hotspot_rect() -> Rect2:
 	var label: String = _lineup_season_label_current()
 	var w: float = _measure(label, 22)
-	return Rect2(LINEUP_SEASON_X - 6.0, LINEUP_SEL_Y - 20.0, w + 12.0 + 30.0, 42.0)
+	var top: float = LINEUP_SEL_Y - 6.0
+	var bottom: float = LINEUP_VALUE_BASELINE_Y + 8.0
+	return Rect2(LINEUP_SEASON_X - 6.0, top, w + 12.0 + 30.0, bottom - top)
 
 
 func _lineup_team_hotspot_rect() -> Rect2:
 	var team: PSTeam = GameDb.get_team(_team_id)
 	var name_w: float = _measure(team.name, 18) if team != null else 0.0
-	return Rect2(LINEUP_TEAM_X - 6.0, LINEUP_SEL_Y - 6.0, 38.0 + name_w + 28.0, 36.0)
+	var top: float = LINEUP_SEL_Y - 6.0
+	var bottom: float = LINEUP_VALUE_BASELINE_Y + 8.0
+	return Rect2(LINEUP_TEAM_X - 6.0, top, 38.0 + name_w + 28.0, bottom - top)
 
 
 # --- 守備位置別スタメン数 (グループ=守備位置、行=選手の縦積みテーブル) ---
@@ -634,7 +805,15 @@ func _draw_position_panel(rect: Rect2) -> void:
 	if _lu_rows.is_empty() or _lu_position_groups.is_empty():
 		_text("記録がありません", Vector2(rect.position.x + 24.0, rect.position.y + rect.size.y * 0.5), 16, MUTED)
 		return
+	if _lu_pos_mode == LU_POS_MODE_ALL:
+		_draw_position_table(rect)
+	else:
+		_draw_position_cards(rect)
 
+
+# 詳細モード (「全員」): 従来のグループ化テーブル。スクロールしないと全守備位置を見渡せないが、
+# 野手16列 / 投手12列の全項目を選手全員分見せる (概要モードでは上位3名+主要項目のみ)。
+func _draw_position_table(rect: Rect2) -> void:
 	var inner_x: float = rect.position.x + 18.0
 	var usable: float = rect.size.x - 36.0
 	var view_top: float = rect.position.y + 60.0
@@ -656,6 +835,141 @@ func _draw_position_panel(rect: Rect2) -> void:
 		y = _draw_position_group(_lu_position_groups[gi] as Dictionary, inner_x, usable, y, view_top, view_bottom)
 		if gi < _lu_position_groups.size() - 1:
 			y += POS_GROUP_GAP
+
+
+# 概要モード (「上位3名」既定): 守備位置ごとのカードを 5列 × 可変行のグリッドで敷き詰める。
+# スクロールなしで全守備位置を一望できることが目的なので、枚数が変わっても (DH無しで9枚等)
+# 列数は固定のまま行数だけ ceil(枚数/5) で伸縮させる。
+func _draw_position_cards(rect: Rect2) -> void:
+	var inner_x: float = rect.position.x + 18.0
+	var usable: float = rect.size.x - 36.0
+	var view_top: float = rect.position.y + 60.0
+	var view_bottom: float = rect.end.y - 14.0
+	var n: int = _lu_position_groups.size()
+	if n == 0:
+		return
+
+	var cols: int = LU_CARD_COLS
+	var rows: int = int(ceil(float(n) / float(cols)))
+	var card_w: float = (usable - float(cols - 1) * LU_CARD_GAP) / float(cols)
+	var card_h: float = (view_bottom - view_top - float(rows - 1) * LU_CARD_GAP) / float(rows)
+	for i in range(n):
+		var col: int = i % cols
+		var row: int = int(i / cols)
+		var cx: float = inner_x + float(col) * (card_w + LU_CARD_GAP)
+		var cy: float = view_top + float(row) * (card_h + LU_CARD_GAP)
+		_draw_position_card(Rect2(cx, cy, card_w, card_h), _lu_position_groups[i] as Dictionary)
+
+
+# 1守備位置分のカード。枠線なし PANEL_2 塗り (post カードと同じ意匠) + ヘッダ下ヘアライン。
+func _draw_position_card(card: Rect2, group: Dictionary) -> void:
+	_round(card, PANEL_2, Color.TRANSPARENT, 8, 0)
+	var pos: int = int(group.get("pos", 0))
+	var is_pitcher_group: bool = bool(group.get("is_pitcher", false))
+	var rows: Array = group.get("rows", []) as Array
+
+	var badge_w: float = 36.0
+	_chip(Rect2(card.position.x + LU_CARD_PAD_X, card.position.y + 9.0, badge_w, 22.0), _position_group_badge_label(pos), _pos_color(pos))
+	_text("%d試合" % int(group.get("total_games", 0)), Vector2(card.position.x + LU_CARD_PAD_X + badge_w + 8.0, card.position.y + 26.0), 12, MUTED)
+	_line(Vector2(card.position.x + LU_CARD_PAD_X, card.position.y + LU_CARD_HEADER_H), Vector2(card.end.x - LU_CARD_PAD_X, card.position.y + LU_CARD_HEADER_H), HAIRLINE, 1.0)
+
+	if rows.is_empty():
+		_text("記録なし", Vector2(card.position.x + LU_CARD_PAD_X, card.position.y + LU_CARD_ROW_START + 18.0), 12, FAINT)
+		return
+
+	# 列 x 座標はカード単位で1回だけ決め、列見出しと選手行の両方がそれを参照する
+	# (行ごとに文字幅で計算し直すと、桁数の違いで列がずれるため)。
+	var layout: Dictionary = _card_column_layout(card, rows, is_pitcher_group)
+	_draw_position_card_col_header(card, layout, is_pitcher_group)
+
+	var top_n: int = mini(LU_CARD_TOP_N, rows.size())
+	for i in range(top_n):
+		var row: Dictionary = rows[i] as Dictionary
+		var ry: float = card.position.y + LU_CARD_ROW_START + float(i) * LU_CARD_ROW_H
+		_draw_position_card_row(card, ry, row, layout)
+
+
+# カード内の列レイアウトを1回だけ算出する。各列の幅は見出しラベルと表示対象行(最大 LU_CARD_TOP_N件)
+# の実測文字幅の最大値+ガター。右端(WAR)から左へ積み、名前列に残る幅を stats_left_x として返す。
+# 優先度の低い項目(配列末尾、スタメン数は先頭固定で最後まで残る)から、名前の最大幅を確保できる
+# まで削る (カード幅(約300px)に収まらない場合の縮退)。
+func _card_column_layout(card: Rect2, rows: Array, is_pitcher_group: bool) -> Dictionary:
+	var keys: Array = ["starts", "era", "war"] if is_pitcher_group else ["starts", "avg", "hr", "ops", "war"]
+	var headers: Dictionary = CARD_HEADER_PITCHER if is_pitcher_group else CARD_HEADER_BATTER
+	var top_n: int = mini(LU_CARD_TOP_N, rows.size())
+
+	var col_w: Dictionary = {}
+	for key_value in keys:
+		var key: String = str(key_value)
+		var w: float = _measure(str(headers.get(key, "")), 11)
+		for i in range(top_n):
+			w = maxf(w, _measure(_pos_cell_text(key, rows[i] as Dictionary), 12))
+		col_w[key] = w + LU_CARD_STAT_GAP
+
+	var name_w: float = 0.0
+	for i in range(top_n):
+		name_w = maxf(name_w, _measure(str((rows[i] as Dictionary).get("name", "-")), 12))
+	var avail: float = card.size.x - LU_CARD_PAD_X * 2.0 - name_w - 6.0
+
+	var shown: Array = keys.duplicate()
+	while shown.size() > 1:
+		var total: float = 0.0
+		for key_value in shown:
+			total += float(col_w[key_value])
+		if total <= avail:
+			break
+		shown.remove_at(shown.size() - 1)
+
+	var positions: Dictionary = {}
+	var x: float = card.end.x - LU_CARD_PAD_X
+	for i in range(shown.size() - 1, -1, -1):
+		var key: String = str(shown[i])
+		var w: float = float(col_w[key])
+		positions[key] = {"right": x, "w": w}
+		x -= w
+
+	return {"keys": shown, "positions": positions, "stats_left_x": x}
+
+
+# 列見出し行。意匠は基底 _draw_data_table のヘッダ (MUTED の小さい bold + 下端の細いルール) に
+# 準じ、帯の塗りは足さない。x 座標は _card_column_layout が選手行と共有する。
+func _draw_position_card_col_header(card: Rect2, layout: Dictionary, is_pitcher_group: bool) -> void:
+	var headers: Dictionary = CARD_HEADER_PITCHER if is_pitcher_group else CARD_HEADER_BATTER
+	var positions: Dictionary = layout["positions"] as Dictionary
+	var header_top: float = card.position.y + LU_CARD_HEADER_H
+	var ty: float = header_top + LU_CARD_COLHEAD_H - 6.0
+	for key_value in layout["keys"] as Array:
+		var key: String = str(key_value)
+		var pos: Dictionary = positions[key] as Dictionary
+		_text_right(str(headers.get(key, "")), float(pos["right"]), ty, 11, MUTED, float(pos["w"]), true)
+	var line_y: float = header_top + LU_CARD_COLHEAD_H
+	_line(Vector2(card.position.x + LU_CARD_PAD_X, line_y), Vector2(card.end.x - LU_CARD_PAD_X, line_y), HAIRLINE, 1.0)
+
+
+# カード内の選手1行。数値は _card_column_layout の共有 x 座標で右詰めに並べ、名前はその左に
+# 残った幅いっぱいへ左詰めで置く。表示テキスト/色は詳細モードの _pos_cell_text/_pos_cell_color を
+# そのまま再利用し、2モード間で値・色の食い違いを防ぐ。当たり矩形は描画に使う row_rect を
+# そのまま _lu_pos_row_hits へ積む (別式で組み直さない不変条件)。
+func _draw_position_card_row(card: Rect2, y: float, row: Dictionary, layout: Dictionary) -> void:
+	var pid: int = int(row.get("pid", 0))
+	var row_rect: Rect2 = Rect2(card.position.x + 4.0, y, card.size.x - 8.0, LU_CARD_ROW_H)
+	if pid > 0 and pid == _hover_pid:
+		_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.08), Color.TRANSPARENT, 0, 0)
+		_round(Rect2(row_rect.position.x, row_rect.position.y, 3.0, row_rect.size.y), BLUE, Color.TRANSPARENT, 0, 0)
+
+	var ty: float = y + LU_CARD_ROW_H * 0.5 + 5.0
+	var positions: Dictionary = layout["positions"] as Dictionary
+	for key_value in layout["keys"] as Array:
+		var key: String = str(key_value)
+		var pos: Dictionary = positions[key] as Dictionary
+		_text_right(_pos_cell_text(key, row), float(pos["right"]), ty, 12, _pos_cell_color(key, row), float(pos["w"]))
+
+	var name: String = str(row.get("name", "-"))
+	var name_w: float = float(layout["stats_left_x"]) - card.position.x - LU_CARD_PAD_X - 6.0
+	_text(name, Vector2(card.position.x + LU_CARD_PAD_X, ty), 12, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+	if pid > 0:
+		_lu_pos_row_hits.append({"rect": row_rect, "pid": pid})
 
 
 # 1守備位置分のグループ (見出し + 列見出し + 選手行) を描き、次のグループの開始 y を返す。
@@ -932,16 +1246,30 @@ func _draw_game_row(inner_x: float, date_w: float, opp_w: float, result_w: float
 
 # ============================================================ buttons
 
+# ビュー切替チップ行の左端 x (base 座標、ヘッダ行)。チップは右端 1900 基準・108px幅・
+# 116px刻みで左へ並ぶため、個数が増えるほど左端は左へ伸びる。ビューチップ自身の配置は
+# 必ずこの関数を経由する (個数が変わっても home の他ヘッダボタンと同じ右端 1900 を保つ)。
+func _view_chip_row_left() -> float:
+	return 1900.0 - 116.0 * float(VIEW_CHIPS.size())
+
+
+# 各ビュー固有の右上コンテンツ (通算記録の部門チップ、タイトル履歴の折返し判定) が右端の
+# 基準にするコンテンツ領域の右端。ビュー切替チップはヘッダ行にあり y=96 の帯とは競合しない
+# ため、単純に画面のコンテンツ右端 (TABLE_B/AWARD_RECT 等と同じ x=1900) を返せばよい。
+func _content_right_x() -> float:
+	return 1900.0
+
+
 func _build_buttons() -> void:
 	_clear_buttons()
 	_build_nav_buttons()
 
-	# ビュー切替チップ (右上、全ビュー共通)。
-	var vx: float = 1900.0 - 116.0 * VIEW_CHIPS.size()
+	# ビュー切替チップ (ヘッダ行、home の「本日を終了」等と同じ y=22/高さ42/右端1900)。
+	var vx: float = _view_chip_row_left()
 	for chip_value in VIEW_CHIPS:
 		var chip: Dictionary = chip_value as Dictionary
 		var key: String = str(chip.get("key", ""))
-		_add_button("view_%s" % key, str(chip.get("label", "")), Rect2(vx, 96, 108, 30),
+		_add_button("view_%s" % key, str(chip.get("label", "")), Rect2(vx, 22, 108, 42),
 			func() -> void: _set_view(key), "chip_active" if _view == key else "chip")
 		vx += 116.0
 
@@ -954,12 +1282,14 @@ func _build_buttons() -> void:
 					func() -> void: _step_year(1), "chip" if not at_oldest else "nav")
 				_add_button("year_next", "▶", NAV_NEXT,
 					func() -> void: _step_year(-1), "chip" if not at_newest else "nav")
-		VIEW_ALLTIME:
-			_build_category_chips("bat", ALLTIME_BAT_CATEGORIES, _alltime_bat_key, CAREER_BAT_RECT.position.x, 108.0,
-				func(key: String) -> void: _set_alltime_key(true, key))
-			_build_category_chips("pit", ALLTIME_PIT_CATEGORIES, _alltime_pit_key, CAREER_PIT_RECT.position.x, 108.0,
-				func(key: String) -> void: _set_alltime_key(false, key))
+		VIEW_CAREER:
+			var career_bound: float = _content_right_x()
+			_build_category_chips("bat", CAREER_BAT_CATEGORIES, _career_bat_key, CAREER_BAT_RECT.position.x, 108.0,
+				func(key: String) -> void: _set_career_key(true, key), career_bound)
+			_build_category_chips("pit", CAREER_PIT_CATEGORIES, _career_pit_key, CAREER_PIT_RECT.position.x, 108.0,
+				func(key: String) -> void: _set_career_key(false, key), career_bound)
 		VIEW_TITLES:
+			var title_bound: float = _content_right_x()
 			var tx: float = TITLE_TABLE_RECT.position.x
 			var ty: float = 96.0
 			for category_value in TITLE_HISTORY_CATEGORIES:
@@ -967,7 +1297,7 @@ func _build_buttons() -> void:
 				var t_key: String = str(category.get("key", ""))
 				var t_label: String = str(category.get("label", ""))
 				var w: float = max(76.0, _measure(t_label, 12) + 30.0)
-				if tx + w > 1560.0:
+				if tx + w > title_bound:
 					tx = TITLE_TABLE_RECT.position.x
 					ty += 38.0
 				_add_button("title_%s" % t_key, t_label, Rect2(tx, ty, w, 30),
@@ -976,21 +1306,65 @@ func _build_buttons() -> void:
 		VIEW_LINEUP:
 			_season_menu_button = _add_button("lineup_season_menu", "", _lineup_season_hotspot_rect(), _on_lineup_season_menu_pressed, "nav")
 			_team_menu_button = _add_button("lineup_team_menu", "", _lineup_team_hotspot_rect(), _on_lineup_team_menu_pressed, "nav")
+			_build_lineup_pos_mode_chips()
 
 	_layout_buttons()
 
 
-# 歴代記録ビューの部門チップ (打者/投手テーブルの上に横並び)。
-func _build_category_chips(prefix: String, categories: Array, active_key: String, x: float, y: float, on_pick: Callable) -> void:
-	var cx: float = x
+# 通算記録ビューの部門チップ (打者/投手テーブルの上に横並び)。既定は対象テーブル (rect) の左端
+# 揃えだが、部門数が多く右端がビュー切替チップ行の領域 (right_bound) へ食い込む場合は、
+# チップ群全体を right_bound 右端揃えへ寄せて避ける (投手側は5部門で幅が伸びやすく、テーブル数が
+# 増えたり部門が増えたときにも同じ計算で自動的に避ける)。
+func _build_category_chips(prefix: String, categories: Array, active_key: String, x: float, y: float, on_pick: Callable, right_bound: float = 1900.0) -> void:
+	var widths: Array = []
+	var total: float = 0.0
 	for category_value in categories:
-		var category: Dictionary = category_value as Dictionary
+		var label: String = str((category_value as Dictionary).get("label", ""))
+		var w: float = max(64.0, _measure(label, 12) + 28.0)
+		widths.append(w)
+		total += w
+	if categories.size() > 1:
+		total += 8.0 * float(categories.size() - 1)
+
+	var cx: float = x
+	if cx + total > right_bound:
+		cx = right_bound - total
+
+	for i in range(categories.size()):
+		var category: Dictionary = categories[i] as Dictionary
 		var key: String = str(category.get("key", ""))
 		var label: String = str(category.get("label", ""))
-		var w: float = max(64.0, _measure(label, 12) + 28.0)
+		var w: float = float(widths[i])
 		_add_button("%s_%s" % [prefix, key], label, Rect2(cx, y, w, 30),
 			func() -> void: on_pick.call(key), "chip_active" if active_key == key else "chip")
 		cx += w + 8.0
+
+
+# 守備位置別スタメン数パネルのヘッダ右端に置く概要/詳細切替チップ。
+# game_result の打席結果パネル (ビジター/ホーム切替) と同じ配置作法 = パネルヘッダ右に右詰め。
+func _build_lineup_pos_mode_chips() -> void:
+	var top3_label: String = "上位3名"
+	var all_label: String = "全員"
+	var w_all: float = max(64.0, _measure(all_label, 12) + 28.0)
+	var w_top3: float = max(64.0, _measure(top3_label, 12) + 28.0)
+	var rect: Rect2 = _lineup_position_rect()
+	var x_all: float = rect.end.x - 12.0 - w_all
+	var x_top3: float = x_all - 6.0 - w_top3
+	var y: float = rect.position.y + 14.0
+	_add_button("lu_pos_mode_top3", top3_label, Rect2(x_top3, y, w_top3, 28),
+		func() -> void: _set_lineup_pos_mode(LU_POS_MODE_TOP3), "chip_active" if _lu_pos_mode == LU_POS_MODE_TOP3 else "chip")
+	_add_button("lu_pos_mode_all", all_label, Rect2(x_all, y, w_all, 28),
+		func() -> void: _set_lineup_pos_mode(LU_POS_MODE_ALL), "chip_active" if _lu_pos_mode == LU_POS_MODE_ALL else "chip")
+
+
+# モード切替は表示のみの変更 (_lu_position_groups は _refresh_lineup で作った集計をそのまま使い回す
+# = 再集計しない)。ホバー当たり矩形は _draw 冒頭で毎回リセットされるので、切替後も古い矩形は残らない。
+func _set_lineup_pos_mode(mode: String) -> void:
+	if _lu_pos_mode == mode:
+		return
+	_lu_pos_mode = mode
+	_build_buttons()
+	queue_redraw()
 
 
 func _set_view(view: String) -> void:
@@ -1003,11 +1377,11 @@ func _set_view(view: String) -> void:
 	queue_redraw()
 
 
-func _set_alltime_key(batting: bool, key: String) -> void:
+func _set_career_key(batting: bool, key: String) -> void:
 	if batting:
-		_alltime_bat_key = key
+		_career_bat_key = key
 	else:
-		_alltime_pit_key = key
+		_career_pit_key = key
 	_build_buttons()
 	queue_redraw()
 
@@ -1188,17 +1562,17 @@ func _refresh() -> void:
 
 # 全年度の選手レコードから通算リーダーとシーズン最高記録を部門別に構築する。
 # 画面インスタンス生成ごとに1回だけ (10年×~900レコードで数ms、初回は RecordStore の
-# 全履歴 hydrate が乗るため歴代記録ビューを開いたときに限り実行する)。
-func _build_alltime() -> void:
-	if _alltime_built:
+# 全履歴 hydrate が乗るため通算記録ビューを開いたときに限り実行する)。
+func _build_career() -> void:
+	if _career_built:
 		return
-	_alltime_built = true
-	var career: Dictionary = {}          # player_id → {name, first, last, bat, pit}
-	var season_bat: Dictionary = {}      # category key → Array[{value, name, year}]
+	_career_built = true
+	var career: Dictionary = {}          # player_id → {name, team_id, first, last, bat, pit}
+	var season_bat: Dictionary = {}      # category key → Array[行]
 	var season_pit: Dictionary = {}
-	for category_value in ALLTIME_BAT_CATEGORIES:
+	for category_value in CAREER_BAT_CATEGORIES:
 		season_bat[str((category_value as Dictionary)["key"])] = []
-	for category_value in ALLTIME_PIT_CATEGORIES:
+	for category_value in CAREER_PIT_CATEGORIES:
 		season_pit[str((category_value as Dictionary)["key"])] = []
 
 	for record_row in RecordStore.player_records.values():
@@ -1207,75 +1581,167 @@ func _build_alltime() -> void:
 			continue
 		var entry: Dictionary = career.get(record.player_id, {}) as Dictionary
 		if entry.is_empty():
-			entry = {"name": record.name, "first": record.year, "last": record.year,
+			entry = {"name": record.name, "team_id": record.team_id, "first": record.year, "last": record.year,
 				"bat": PSBatterStats.new(), "pit": PSPitcherStats.new()}
 		entry["first"] = mini(int(entry["first"]), record.year)
 		if record.year >= int(entry["last"]):
+			# 通算テーブルの球団表示は最終在籍年 (最新シーズン) の所属とする。
 			entry["last"] = record.year
 			entry["name"] = record.name
+			entry["team_id"] = record.team_id
 		(entry["bat"] as PSBatterStats).add_from(record.batter_stats)
 		(entry["pit"] as PSPitcherStats).add_from(record.pitcher_stats)
 		career[record.player_id] = entry
 
-		for category_value in ALLTIME_BAT_CATEGORIES:
-			var key: String = str((category_value as Dictionary)["key"])
-			var value: int = int(record.batter_stats.get(key))
-			if value > 0:
-				(season_bat[key] as Array).append({"value": value, "name": record.name, "year": record.year})
-		for category_value in ALLTIME_PIT_CATEGORIES:
-			var key: String = str((category_value as Dictionary)["key"])
-			var value: int = int(record.pitcher_stats.get(key))
-			if value > 0:
-				(season_pit[key] as Array).append({"value": value, "name": record.name, "year": record.year})
+		for category_value in CAREER_BAT_CATEGORIES:
+			var category: Dictionary = category_value as Dictionary
+			var key: String = str(category["key"])
+			var qualifier: String = str(category.get("qualifier", ""))
+			if qualifier == "pa" and record.batter_stats.plate_appearances < _season_qualifier_pa(record):
+				continue
+			var value: float = _batter_metric_value(record.batter_stats, key)
+			if qualifier.is_empty() and value <= 0.0:
+				continue
+			(season_bat[key] as Array).append(_season_bat_entry(record, value))
+		for category_value in CAREER_PIT_CATEGORIES:
+			var category: Dictionary = category_value as Dictionary
+			var key: String = str(category["key"])
+			var qualifier: String = str(category.get("qualifier", ""))
+			if qualifier == "outs" and record.pitcher_stats.outs_pitched < _season_qualifier_outs(record):
+				continue
+			var value: float = _pitcher_metric_value(record.pitcher_stats, key)
+			if qualifier.is_empty() and value <= 0.0:
+				continue
+			(season_pit[key] as Array).append(_season_pit_entry(record, value))
 
-	for category_value in ALLTIME_BAT_CATEGORIES:
-		var key: String = str((category_value as Dictionary)["key"])
-		_career_bat_by_key[key] = _career_leader_rows(career, "bat", key)
-		_season_bat_by_key[key] = _season_best_rows(season_bat[key] as Array)
-	for category_value in ALLTIME_PIT_CATEGORIES:
-		var key: String = str((category_value as Dictionary)["key"])
-		_career_pit_by_key[key] = _career_leader_rows(career, "pit", key)
-		_season_pit_by_key[key] = _season_best_rows(season_pit[key] as Array)
+	for category_value in CAREER_BAT_CATEGORIES:
+		var category: Dictionary = category_value as Dictionary
+		var key: String = str(category["key"])
+		_career_bat_by_key[key] = _career_leader_rows(career, "bat", category)
+		_season_bat_by_key[key] = _season_best_rows(season_bat[key] as Array, bool(category.get("ascending", false)))
+	for category_value in CAREER_PIT_CATEGORIES:
+		var category: Dictionary = category_value as Dictionary
+		var key: String = str(category["key"])
+		_career_pit_by_key[key] = _career_leader_rows(career, "pit", category)
+		_season_pit_by_key[key] = _season_best_rows(season_pit[key] as Array, bool(category.get("ascending", false)))
 
 
-func _career_leader_rows(career: Dictionary, stats_key: String, category_key: String) -> Array:
+# 打者/投手のカウント系はフィールドをそのまま、率系 (打率/OPS, 防御率/WHIP) は導出メソッドを読む。
+func _batter_metric_value(stats: PSBatterStats, key: String) -> float:
+	match key:
+		"average":
+			return stats.batting_average()
+		"ops":
+			return stats.ops()
+		_:
+			return float(stats.get(key))
+
+
+func _pitcher_metric_value(stats: PSPitcherStats, key: String) -> float:
+	match key:
+		"era":
+			return stats.era()
+		"whip":
+			return stats.whip()
+		_:
+			return float(stats.get(key))
+
+
+# 文脈列 (試合/打率/本/打点、登板/勝/防御率/奪三振) のセル値。通算/シーズンどちらの行にも使う。
+func _batter_context_cells(stats: PSBatterStats) -> Dictionary:
+	return {"g": stats.games, "avg": stats.batting_average(), "hr": stats.home_runs, "rbi": stats.runs_batted_in}
+
+
+func _pitcher_context_cells(stats: PSPitcherStats) -> Dictionary:
+	return {"g": stats.games, "wins": stats.wins, "era": stats.era(), "so": stats.strikeouts}
+
+
+func _season_bat_entry(record: PSPlayerSeasonRecord, value: float) -> Dictionary:
+	var row: Dictionary = {
+		"value": value, "player": record.name, "year": "%d年" % record.year,
+		"team": _team_short(record.team_id), "color": _team_color(record.team_id),
+	}
+	row.merge(_batter_context_cells(record.batter_stats))
+	return row
+
+
+func _season_pit_entry(record: PSPlayerSeasonRecord, value: float) -> Dictionary:
+	var row: Dictionary = {
+		"value": value, "player": record.name, "year": "%d年" % record.year,
+		"team": _team_short(record.team_id), "color": _team_color(record.team_id),
+	}
+	row.merge(_pitcher_context_cells(record.pitcher_stats))
+	return row
+
+
+# rankings_screen.gd の規定打席/規定投球回 (所属球団のその時点の試合数基準) をそのまま流用する。
+# get_team_record は record.year/season_number だけで引けるため、過去年度でも current_season を
+# 必要としない。
+func _season_qualifier_pa(record: PSPlayerSeasonRecord) -> int:
+	return int(max(1, ceil(SEASON_QUALIFIER_PA_PER_TEAM_GAME * float(_team_games_for_record(record)))))
+
+
+func _season_qualifier_outs(record: PSPlayerSeasonRecord) -> int:
+	return int(max(1, ceil(SEASON_QUALIFIER_OUTS_PER_TEAM_GAME * float(_team_games_for_record(record)))))
+
+
+func _team_games_for_record(record: PSPlayerSeasonRecord) -> int:
+	var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(record.team_id, record.year, record.season_number)
+	return int(team_record.stats.games) if team_record != null else 0
+
+
+func _career_leader_rows(career: Dictionary, stats_key: String, category: Dictionary) -> Array:
+	var key: String = str(category["key"])
+	var ascending: bool = bool(category.get("ascending", false))
+	var qualifier: String = str(category.get("qualifier", ""))
 	var entries: Array = []
 	for player_id in career.keys():
 		var entry: Dictionary = career[player_id] as Dictionary
-		var value: int = int((entry[stats_key] as Object).get(category_key))
-		if value <= 0:
+		var bat_stats: PSBatterStats = entry["bat"] as PSBatterStats
+		var pit_stats: PSPitcherStats = entry["pit"] as PSPitcherStats
+		if qualifier == "pa" and bat_stats.plate_appearances < CAREER_MIN_PA:
 			continue
-		entries.append({"value": value, "name": str(entry["name"]), "first": int(entry["first"]), "last": int(entry["last"])})
-	entries.sort_custom(func(a, b) -> bool:
-		return int((a as Dictionary)["value"]) > int((b as Dictionary)["value"]))
-	var rows: Array = []
-	for i in range(mini(ALLTIME_TOP_N, entries.size())):
-		var entry: Dictionary = entries[i] as Dictionary
-		rows.append({
-			"rank": i + 1,
-			"player": str(entry["name"]),
+		if qualifier == "outs" and pit_stats.outs_pitched < CAREER_MIN_OUTS:
+			continue
+		var value: float = _batter_metric_value(bat_stats, key) if stats_key == "bat" else _pitcher_metric_value(pit_stats, key)
+		if qualifier.is_empty() and value <= 0.0:
+			continue
+		var row: Dictionary = {
+			"value": value, "player": str(entry["name"]),
 			"span": "%d-%d" % [int(entry["first"]), int(entry["last"])],
-			"value": int(entry["value"]),
-		})
-	return rows
-
-
-func _season_best_rows(entries: Array) -> Array:
+			"team": _team_short(int(entry["team_id"])), "color": _team_color(int(entry["team_id"])),
+		}
+		row.merge(_batter_context_cells(bat_stats) if stats_key == "bat" else _pitcher_context_cells(pit_stats))
+		entries.append(row)
 	entries.sort_custom(func(a, b) -> bool:
-		return int((a as Dictionary)["value"]) > int((b as Dictionary)["value"]))
+		var av: float = float((a as Dictionary)["value"])
+		var bv: float = float((b as Dictionary)["value"])
+		return av < bv if ascending else av > bv
+	)
 	var rows: Array = []
-	for i in range(mini(ALLTIME_TOP_N, entries.size())):
-		var entry: Dictionary = entries[i] as Dictionary
-		rows.append({
-			"rank": i + 1,
-			"player": str(entry["name"]),
-			"span": "%d年" % int(entry["year"]),
-			"value": int(entry["value"]),
-		})
+	for i in range(mini(CAREER_TOP_N, entries.size())):
+		var row: Dictionary = entries[i] as Dictionary
+		row["rank"] = i + 1
+		rows.append(row)
 	return rows
 
 
-# 選択中のタイトル部門について、年度×両リーグの受賞者一覧を作る (新しい順)。
+func _season_best_rows(entries: Array, ascending: bool = false) -> Array:
+	entries.sort_custom(func(a, b) -> bool:
+		var av: float = float((a as Dictionary)["value"])
+		var bv: float = float((b as Dictionary)["value"])
+		return av < bv if ascending else av > bv
+	)
+	var rows: Array = []
+	for i in range(mini(CAREER_TOP_N, entries.size())):
+		var row: Dictionary = entries[i] as Dictionary
+		row["rank"] = i + 1
+		rows.append(row)
+	return rows
+
+
+# 選択中のタイトル部門について、年度×両リーグの受賞者一覧を作る (新しい順)。PSAwards は player_id
+# しか持たないため、受賞年の PSPlayerSeasonRecord から都度、球団と成績値を復元する。
 func _build_title_history_rows() -> void:
 	_title_rows = []
 	var archives: Array = RecordStore.get_season_archives()
@@ -1299,11 +1765,89 @@ func _build_title_history_rows() -> void:
 				var pit_key: String = _title_key.substr(4)
 				league1_id = int((a.pitching_titles.get("league1", {}) as Dictionary).get(pit_key, 0))
 				league2_id = int((a.pitching_titles.get("league2", {}) as Dictionary).get(pit_key, 0))
-		_title_rows.append({
-			"year": "%d年" % archive.year,
-			"league1": _player_label(league1_id),
-			"league2": _player_label(league2_id),
-		})
+		var row: Dictionary = {"year": "%d年" % archive.year}
+		var p1: Dictionary = _title_player_cell(league1_id, archive)
+		var p2: Dictionary = _title_player_cell(league2_id, archive)
+		row["p1_name"] = p1["name"]
+		row["p1_team"] = p1["team"]
+		row["p1_team_color"] = p1["team_color"]
+		row["p1_value"] = p1["value"]
+		row["p2_name"] = p2["name"]
+		row["p2_team"] = p2["team"]
+		row["p2_team_color"] = p2["team_color"]
+		row["p2_value"] = p2["value"]
+		_title_rows.append(row)
+
+
+# 受賞者1名分のセル ({name, team, team_color, value})。受賞年のレコードが引けない (引退などで
+# 消失) 場合は名前だけ解決し、球団・記録は "-" にフォールバックする。
+func _title_player_cell(pid: int, archive: PSSeasonArchive) -> Dictionary:
+	var cell: Dictionary = {"name": _player_label(pid), "team": "-", "team_color": MUTED, "value": "-"}
+	if pid <= 0:
+		return cell
+	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(pid, archive.year, archive.season_number)
+	if record == null:
+		return cell
+	cell["team"] = _team_short(record.team_id)
+	cell["team_color"] = _team_color(record.team_id)
+	cell["value"] = _title_value_from_record(record)
+	return cell
+
+
+# MVP/新人王は単一部門を持たないため代表的な成績ラインを出す。他部門はその部門の成績値のみ。
+func _title_value_from_record(record: PSPlayerSeasonRecord) -> String:
+	if _title_key == "mvp" or _title_key == "rookie":
+		return _title_representative_line(record)
+	if _title_key.begins_with("bat_"):
+		return _title_batting_value_text(record.batter_stats, _title_key.substr(4))
+	if _title_key.begins_with("pit_"):
+		return _title_pitching_value_text(record.pitcher_stats, _title_key.substr(4))
+	return "-"
+
+
+func _title_representative_line(record: PSPlayerSeasonRecord) -> String:
+	if record.is_pitcher():
+		return "%d勝 / 防%0.2f" % [record.pitcher_stats.wins, record.pitcher_stats.era()]
+	return "%s / %d本 / %d点" % [_rate_short(record.batter_stats.batting_average()), record.batter_stats.home_runs, record.batter_stats.runs_batted_in]
+
+
+func _title_batting_value_text(stats: PSBatterStats, key: String) -> String:
+	match key:
+		"average":
+			return _rate_short(stats.batting_average())
+		"home_runs":
+			return "%d本" % stats.home_runs
+		"rbi":
+			return "%d点" % stats.runs_batted_in
+		"stolen_bases":
+			return "%d盗" % stats.stolen_bases
+		"hits":
+			return "%d安打" % stats.hits
+		_:
+			return "-"
+
+
+func _title_pitching_value_text(stats: PSPitcherStats, key: String) -> String:
+	match key:
+		"wins":
+			return "%d勝" % stats.wins
+		"era":
+			return "%0.2f" % stats.era()
+		"strikeouts":
+			return "%d奪三振" % stats.strikeouts
+		"saves":
+			return "%dS" % stats.saves
+		"holds":
+			return "%dH" % stats.holds
+		"win_rate":
+			return _rate_short(_pitcher_win_rate(stats))
+		_:
+			return "-"
+
+
+func _pitcher_win_rate(stats: PSPitcherStats) -> float:
+	var denom: int = stats.wins + stats.losses
+	return float(stats.wins) / float(denom) if denom > 0 else 0.0
 
 
 func _build_league_rows(archive: PSSeasonArchive, league_key: String) -> Array:

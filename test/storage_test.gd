@@ -299,6 +299,163 @@ func test_ensure_season_records_rebuilds_team_index_without_losing_history() -> 
 	assert_array(historical_ids).is_equal([active_player.id])
 
 
+# 引退選手の最終シーズン成績が ensure_season_records の erase ループで消える回帰テスト
+# (docs/agent_memory/project_record_store_data_protection.md の「引退選手の最終シーズン成績が
+# 消える」節)。process_retirement で source_data["retired"]=true が立った後、同オフ内で
+# ensure_season_records が再度回っても当季の成績が残ることを確認する。
+func test_process_retirement_marks_final_season_record_without_erasing_stats() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var team_id: int = (GameDb.players[0] as PSPlayer).team_id
+	var player: PSPlayer = PSPlayer.from_dict((GameDb.players[0] as PSPlayer).to_dict())
+	player.team_id = team_id
+	player.source_data.erase("retired")
+	# 段階的強制引退は48歳で確率によらず必ず引退するため、_should_retire を決定的にする。
+	player.age = 48
+
+	var season: PSSeason = PSSeason.new()
+	season.year = 2201
+	season.season_number = 1
+
+	var current_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, season.year, season.season_number)
+	current_record.batter_stats.hits = 180
+	var prior_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, season.year - 1, season.season_number)
+	prior_record.batter_stats.hits = 165
+	RecordStore.load_from_dict({
+		"player_records": [current_record.to_dict(), prior_record.to_dict()],
+		"team_records": [],
+		"season_archives": [],
+	})
+
+	var players: Array = [player]
+	var retirement_result: Dictionary = OffseasonService.process_retirement(players, season)
+	# process_retirement と同じオフ内で、他ステップが呼ぶ ensure_season_records が再度走っても
+	# 当季レコードが erase されないことを確認する (これがバグ本体の再現条件)。
+	RecordStore.ensure_season_records(season, [], players, false)
+
+	var kept_current: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
+	var kept_prior: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year - 1, season.season_number)
+	var default_team_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+	)
+	var including_retired_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(team_id, season.year, season.season_number, true)
+	)
+	RecordStore.load_from_dict(original_records)
+
+	assert_int(int(retirement_result.get("retired_count", 0))).is_equal(1)
+	assert_bool(player.is_retired()).is_true()
+	assert_object(kept_current).is_not_null()
+	assert_int(kept_current.batter_stats.hits).is_equal(180)
+	assert_object(kept_prior).is_not_null()
+	assert_int(kept_prior.batter_stats.hits).is_equal(165)
+	assert_array(default_team_ids).not_contains([player.id])
+	assert_array(including_retired_ids).contains([player.id])
+
+
+# ensure_season_records 単体の erase 意図確認: 引退済み (source_data["retired"]=true) の選手は
+# GameDb.players に残っている限り当季レコードを保持し、GameDb.players から完全に消えた選手は
+# 従来どおり当季レコードが erase される。非引退選手のレコード新規作成も従来どおり動く。
+func test_ensure_season_records_keeps_retired_record_but_erases_fully_removed_player() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var target_team_id: int = (GameDb.players[0] as PSPlayer).team_id
+	var team_players: Array = []
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player.team_id == target_team_id and not player.is_retired():
+			team_players.append(player)
+			if team_players.size() == 3:
+				break
+	assert_int(team_players.size()).is_equal(3)
+	var active_player: PSPlayer = team_players[0] as PSPlayer
+	var fully_removed_player: PSPlayer = team_players[1] as PSPlayer
+	var newly_added_player: PSPlayer = team_players[2] as PSPlayer
+
+	var retired_player: PSPlayer = PSPlayer.from_dict(active_player.to_dict())
+	retired_player.id = active_player.id + 1000000
+	retired_player.team_id = target_team_id
+	retired_player.source_data["retired"] = true
+
+	var season: PSSeason = PSSeason.new()
+	season.year = 2202
+	season.season_number = 1
+	var retired_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(retired_player, season.year, season.season_number)
+	var fully_removed_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fully_removed_player, season.year, season.season_number)
+	RecordStore.load_from_dict({
+		"player_records": [retired_record.to_dict(), fully_removed_record.to_dict()],
+		"team_records": [],
+		"season_archives": [],
+	})
+
+	# fully_removed_player はあえて players 配列に含めない (GameDb.players から完全に消えた状態)。
+	RecordStore.ensure_season_records(
+		season,
+		[],
+		[retired_player, active_player, newly_added_player],
+		false
+	)
+	var current_ids: Array = _player_record_ids(
+		RecordStore.get_team_player_records(target_team_id, season.year, season.season_number, true)
+	)
+	RecordStore.load_from_dict(original_records)
+
+	assert_array(current_ids).contains([retired_player.id])
+	assert_array(current_ids).contains([active_player.id])
+	assert_array(current_ids).contains([newly_added_player.id])
+	assert_array(current_ids).not_contains([fully_removed_player.id])
+
+
+# 実プレイでの再現条件を通した回帰テスト: AppState.start_offseason() が引退を確定してオートセーブし、
+# その後セーブから再開する (RecordStore.load_records → ensure_season_records の実行順) と、
+# 旧実装では引退選手の最終シーズン成績が正規化テーブルからも失われていた。
+func test_retired_player_final_season_stats_survive_offseason_save_reload() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var old_player_rows: Array = []
+	for player_value in GameDb.players:
+		old_player_rows.append((player_value as PSPlayer).to_dict())
+	var test_save_id: String = ""
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	var target_player: PSPlayer = null
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player.team_id == team.id and not player.is_retired():
+			target_player = player
+			break
+	assert_object(target_player).is_not_null()
+	var target_player_id: int = target_player.id
+	# 段階的強制引退は48歳で確率1.0(確実)になる。テストの引退判定を決定的にする。
+	target_player.age = 48
+
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = true
+	for game_value in AppState.current_season.schedule:
+		(game_value as Dictionary)["played"] = true
+	AppState.current_postseason = null
+	AppState.current_awards = null
+
+	var season: PSSeason = AppState.current_season
+	var season_record: PSPlayerSeasonRecord = RecordStore.get_player_record(target_player_id, season.year, season.season_number)
+	assert_object(season_record).is_not_null()
+	season_record.batter_stats.hits = 180
+
+	# start_offseason() は引退判定 (process_retirement) 直後に auto_save_enabled を見てオートセーブする。
+	var result: Dictionary = AppState.start_offseason()
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(target_player.is_retired()).is_true()
+
+	# オフシーズン中にセーブから再開する経路 (RecordStore.load_records → ensure_season_records) を再現する。
+	var reloaded: Dictionary = SaveService.load_state()
+	assert_bool(AppState.restore_from_save(reloaded)).is_true()
+
+	var kept_record: PSPlayerSeasonRecord = RecordStore.get_player_record(target_player_id, season.year, season.season_number)
+	assert_object(kept_record).is_not_null()
+	assert_int(kept_record.batter_stats.hits).is_equal(180)
+
+	GameDb.replace_players_from_rows(old_player_rows)
+	_restore_app_state(old_state, test_save_id)
+
+
 func test_start_offseason_archives_season_without_postseason() -> void:
 	var old_state: Dictionary = _capture_app_state()
 	var old_player_rows: Array = []
