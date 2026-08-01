@@ -158,7 +158,8 @@ var source_data: Dictionary = {}
 var z_abilities: Dictionary = {}
 var raw_abilities: Dictionary = {}
 # 変化球(球種)アーセナル: [{ "type": <String>, "mastery": <float z> }, ...]。
-# 空の場合は record 側 arsenal_or_derived() が z から派生する (初期シード/生成選手は空)。詳細 PSPitchTypes。
+# 初期シード投手は読み込み時に backfill され、ドラフト/外国人の生成投手は生成時に埋まるので通常は非空。
+# 空の場合(旧セーブ等)は record 側 arsenal_or_derived() が z から派生する。詳細 PSPitchTypes。
 var arsenal: Array = []
 var fatigue: int
 var injury_days: int

@@ -184,7 +184,7 @@ func breaking_score() -> int:
 
 
 # 変化球アーセナルを返す。明示的に持っていればそれを、無ければ z から派生する。
-# (初期シード/生成選手は arsenal を持たず、キャンプの球種習得で初めて明示値が入る。)
+# (現行の投手は初期シード backfill / 生成時に明示値を持つ。派生は旧セーブ等のフォールバック。)
 # derive_from_z は決定論的なので呼ぶたびに同じ結果になる (role 適性が安定する)。
 func arsenal_or_derived() -> Array:
 	if not arsenal_snapshot.is_empty():

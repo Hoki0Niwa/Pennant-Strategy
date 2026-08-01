@@ -6,7 +6,7 @@ class_name PSPlayerCsvIo
 # 設計方針:
 # - z_abilities / raw_abilities / position_aptitudes / position_experience はドット記法の
 #   個別列に平坦化（例 z_abilities.Bat_Impact）。能力値は編集しやすいよう列に展開する。
-# - source_data は内部由来情報なので 1 セルに JSON 文字列で格納（source_data_json 列）。
+# - source_data / arsenal は可変構造なので 1 セルに JSON 文字列で格納（*_json 列）。
 # - 旧能力 (batting_abilities/fielding_abilities/legacy_abilities) は含めない（z が正準）。
 # - クォート/エスケープは FileAccess.store_csv_line / get_csv_line に委譲（RFC 準拠）。
 # - PSPlayer.to_dict() / PSTeam.to_dict() と 1 対 1 でラウンドトリップする。
@@ -29,6 +29,8 @@ const FLAT_DICT_FIELDS: Array = [
 	"z_abilities", "raw_abilities", "position_aptitudes", "position_experience",
 ]
 const JSON_DICT_FIELDS: Array = ["source_data"]
+# 変化球アーセナルは可変長の配列なので列に平坦化できない。source_data と同様 1 セルに JSON で持つ。
+const JSON_ARRAY_FIELDS: Array = ["arsenal"]
 
 const TEAM_META_ORDER: Array = [
 	"id", "name", "short_name", "league", "color", "previous_rank", "funds", "auto_lineup",
@@ -129,7 +131,30 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int, ca
 			kept_entries.append(entry)
 		source[PSCareerLog.KEY] = kept_entries
 	out["source_data"] = source
+	_normalize_arsenal(out)
 	return out
+
+
+# 初期世界の投手に変化球アーセナルの実データを持たせ、現行ルールへ揃える。
+# 1) 空なら生成して埋める: 旧シード CSV には arsenal 列が無く、初期選手だけが arsenal 空 =
+#    z からの派生表示に頼る状態だった (派生は z で一意に決まるため球種構成に個性が無く、
+#    ドラフト/外国人の生成投手とも扱いが違った)。生成器はそれらと同じ
+#    PSPitchTypes.generate_arsenal。seed は選手 ID 由来で固定するので起動ごと・読み込み経路ごとに
+#    ブレず、世界 Rng も消費しない。
+# 2) 直球(ストレート)が無ければ1本を直球へ読み替える: 直球がシンカー等に差し替わりうる頃に
+#    書き出されたシード CSV を、全投手が直球を持つ現行ルールへ揃える。
+# どちらも既存データを尊重する形なので再正規化しても結果が変わらない (冪等)。
+static func _normalize_arsenal(out: Dictionary) -> void:
+	if int(out.get("position", 0)) != 1:
+		return
+	var existing: Variant = out.get("arsenal", [])
+	if existing is Array and not (existing as Array).is_empty():
+		out["arsenal"] = PSPitchTypes.ensure_straight((existing as Array).duplicate(true))
+		return
+	out["arsenal"] = PSPitchTypes.generate_arsenal(
+		out.get("z_abilities", {}) as Dictionary,
+		absi(hash(int(out.get("id", 0))))
+	)
 
 static func write_players(path: String, player_dicts: Array) -> bool:
 	var flat_keys: Dictionary = _collect_flat_keys(player_dicts)
@@ -190,6 +215,8 @@ static func _player_columns(flat_keys: Dictionary) -> Array:
 			columns.append("%s.%s" % [field, str(key)])
 	for field in JSON_DICT_FIELDS:
 		columns.append("%s_json" % field)
+	for field in JSON_ARRAY_FIELDS:
+		columns.append("%s_json" % field)
 	return columns
 
 
@@ -204,6 +231,9 @@ static func _player_row_cells(row: Dictionary, columns: Array, _flat_keys: Dicti
 static func _player_cell_value(row: Dictionary, column: String) -> String:
 	if column.ends_with("_json"):
 		var field: String = column.substr(0, column.length() - 5)
+		if JSON_ARRAY_FIELDS.has(field):
+			var a: Variant = row.get(field, [])
+			return JSON.stringify(a if a is Array else [])
 		var d: Variant = row.get(field, {})
 		return JSON.stringify(d if d is Dictionary else {})
 	var dot: int = column.find(".")
@@ -240,8 +270,11 @@ static func _player_dict_from_cells(columns: Array, cells: PackedStringArray) ->
 		var cell: String = str(cells[i])
 		if column.ends_with("_json"):
 			var field: String = column.substr(0, column.length() - 5)
-			var parsed: Variant = JSON.parse_string(cell) if not cell.is_empty() else {}
-			data[field] = parsed if parsed is Dictionary else {}
+			var parsed: Variant = JSON.parse_string(cell) if not cell.is_empty() else null
+			if JSON_ARRAY_FIELDS.has(field):
+				data[field] = parsed if parsed is Array else []
+			else:
+				data[field] = parsed if parsed is Dictionary else {}
 			continue
 		var dot: int = column.find(".")
 		if dot >= 0:

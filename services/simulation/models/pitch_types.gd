@@ -5,7 +5,7 @@ class_name PSPitchTypes
 # 設計方針 (docs/agent_memory 参照):
 #  - mastery(完成度) は per-pitch の z スケール (平均0/σ≈1)。投手の10個の Pit_* z は不変・正準のまま。
 #  - 球種 type は「傾向(K寄り/ゴロ寄り/被弾)」を *わずかに* 付与するラベル。傾向差は微差 (較正フェーズで強める前提)。
-#  - arsenal データ = [{ "type": <String>, "mastery": <float z> }, ...]。ストレート(直球)を必ず1本含む。
+#  - arsenal データ = [{ "type": <String>, "mastery": <float z> }, ...]。ストレート(four_seam)は全投手が必ず1本持つ。
 
 # --- タクソノミ (NPB 準拠) ---
 const FOUR_SEAM: String = "four_seam"
@@ -21,7 +21,8 @@ const ALL_TYPES: Array[String] = [
 	FOUR_SEAM, TWO_SEAM, SINKER, CUTTER, SLIDER, CURVE, FORK, CHANGEUP,
 ]
 
-# 直球(ストレート)系。最低1本はこのいずれかを持つ。
+# 速球系。このうち FOUR_SEAM(ストレート) は全投手が必ず持ち、ツーシーム/シンカーは
+# 「動く速球」として変化球枠から追加で持ちうる (assign_types を参照)。
 const FASTBALL_TYPES: Array[String] = [FOUR_SEAM, TWO_SEAM, SINKER]
 
 # UI 表示用の日本語名。
@@ -126,37 +127,118 @@ static func derive_from_z(
 	return arsenal
 
 
-# 球種数・投手リーン・seed_value から、降順 mastery に対応する type 列を返す。直球を必ず1本含む。
+# --- 生成 (実データとしてのアーセナルを作る) ---
+# 球種数: 持久(=先発度)が高いほど多い。mastery は stuff 系 z にアンカーし、出し球(0本目)を最良に逓減。
+const GENERATED_COUNT_BASE: float = 4.0
+const GENERATED_COUNT_STAMINA_WEIGHT: float = 0.7
+const GENERATED_COUNT_MIN: int = 3
+const GENERATED_COUNT_MAX: int = 6
+const GENERATED_TOP_MASTERY_BONUS: float = 0.35
+const GENERATED_MASTERY_STEP: float = 0.5
+const GENERATED_MASTERY_NOISE: float = 0.9
+const MASTERY_MIN: float = -2.0
+const MASTERY_MAX: float = 2.8
+
+
+# z 能力 + seed から arsenal を生成する (ドラフト/外国人/初期シード投手の単一ソース)。
+#  - 直球を必ず1本含み、残りは投手リーン(K vs ムーブ)に応じた変化球から割当 (assign_types)。
+#  - mastery は stuff 系 z (KCreate/BarrelDeny/EdgeRate) にアンカーしノイズを足す
+#    (→ エースは良い球種を持ちやすく z と矛盾しない)。スケールは synth mastery と同じ [-2.0, 2.8]。
+# derive_from_z との違い: あちらは z から一意に決まる「派生表示」で個性が無い。こちらは seed_value で
+# 球種数・構成・完成度が散るので、**保存される実データ**を作るときはこちらを使う。
+# 乱数はローカル RandomNumberGenerator に閉じるため、同じ seed_value なら常に同じアーセナルになる
+# (初期シードの読み込み時 backfill が起動ごとにブレないための要件)。
+static func generate_arsenal(z_abilities: Dictionary, seed_value: int) -> Array:
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = hash(seed_value)
+	var k: float = float(z_abilities.get("Pit_KCreate", 0.0))
+	var move: float = float(z_abilities.get("Pit_LoftControl", 0.0))
+	var barrel_deny: float = float(z_abilities.get("Pit_BarrelDeny", 0.0))
+	var edge: float = float(z_abilities.get("Pit_EdgeRate", 0.0))
+	var stamina: float = float(z_abilities.get("Pit_Stamina", 0.0))
+	var pitch_count: int = clampi(
+		int(round(GENERATED_COUNT_BASE + stamina * GENERATED_COUNT_STAMINA_WEIGHT + float(rng.randi_range(-1, 1)))),
+		GENERATED_COUNT_MIN,
+		GENERATED_COUNT_MAX
+	)
+	var types: Array = assign_types(pitch_count, k - move, rng.randi_range(0, 1000000))
+	var anchor: float = k * 0.5 + barrel_deny * 0.3 + edge * 0.2
+	var arsenal: Array = []
+	for i in range(pitch_count):
+		var noise: float = (rng.randf() - 0.5) * GENERATED_MASTERY_NOISE
+		var mastery: float = anchor + GENERATED_TOP_MASTERY_BONUS - float(i) * GENERATED_MASTERY_STEP + noise
+		arsenal.append({
+			"type": str(types[i]) if i < types.size() else FOUR_SEAM,
+			"mastery": clampf(mastery, MASTERY_MIN, MASTERY_MAX),
+		})
+	return arsenal
+
+
+# 既存 arsenal に直球(ストレート)が無ければ1本ぶんを直球へ読み替えて返す (本数は変えない)。
+# assign_types が直球を保証する前に作られたデータ (シンカー/ツーシームが直球の代役だった頃の
+# シード CSV や生成結果) を、全投手が直球を持つ現行ルールへ揃えるための正規化。
+# 読み替え先は「代役になっていた速球系のうち最良のもの」を優先し、無ければ最良球。
+static func ensure_straight(arsenal: Array) -> Array:
+	if arsenal == null or arsenal.is_empty():
+		return arsenal
+	var fastball_index: int = -1
+	var best_index: int = -1
+	var fastball_mastery: float = -INF
+	var best_mastery: float = -INF
+	for i in range(arsenal.size()):
+		var entry: Dictionary = arsenal[i] as Dictionary
+		if entry == null:
+			continue
+		var type_key: String = str(entry.get("type", ""))
+		if type_key == FOUR_SEAM:
+			return arsenal
+		var mastery: float = float(entry.get("mastery", 0.0))
+		if mastery > best_mastery:
+			best_mastery = mastery
+			best_index = i
+		if FASTBALL_TYPES.has(type_key) and mastery > fastball_mastery:
+			fastball_mastery = mastery
+			fastball_index = i
+	var target: int = fastball_index if fastball_index >= 0 else best_index
+	if target < 0:
+		return arsenal
+	var converted: Dictionary = (arsenal[target] as Dictionary).duplicate(true)
+	converted["type"] = FOUR_SEAM
+	arsenal[target] = converted
+	return arsenal
+
+
+# 球種数・投手リーン・seed_value から、降順 mastery に対応する type 列を返す。
+# **直球(ストレート=four_seam)は全投手が必ず1本持つ。** ツーシーム/シンカーは「動く速球」として
+# 変化球側の候補に置き、直球の代わりにはしない (実際の投手も直球は全員が持つ球種のため)。
 # lean>0: 奪三振タイプ(power)。lean<0: ゴロ/ムーブ系(movement)。derive_from_z と生成の双方が使う。
 static func assign_types(count: int, lean: float, seed_value: int) -> Array:
 	if count <= 0:
 		return []
-	var fastball: String = SINKER if lean <= -0.45 else FOUR_SEAM
 	var breaking: Array
 	if lean >= 0.2:
 		breaking = [SLIDER, FORK, CURVE, CUTTER, CHANGEUP, TWO_SEAM]
 	elif lean <= -0.2:
-		breaking = [TWO_SEAM, CHANGEUP, CURVE, SINKER, SLIDER, CUTTER]
+		# ゴロ/ムーブ系は動く速球 (ツーシーム/シンカー) を優先候補にして持ち味を残す。
+		breaking = [TWO_SEAM, SINKER, CHANGEUP, CURVE, SLIDER, CUTTER]
 	else:
 		breaking = [SLIDER, CHANGEUP, CURVE, CUTTER, FORK, TWO_SEAM]
 	# seed_value で先頭を回転させ、投手ごとに球種構成を散らす。
 	var rot: int = seed_value % maxi(1, breaking.size())
 	breaking = breaking.slice(rot) + breaking.slice(0, rot)
-	# 直球と重複する候補は除く (シンカー直球のとき breaking のシンカーを除外など)。
+	# 直球が変化球候補に混じっていたら除く (同じ球種が2本並ぶのを防ぐ保険)。
 	var filtered: Array = []
 	for t in breaking:
-		if t != fastball:
+		if t != FOUR_SEAM:
 			filtered.append(t)
 	breaking = filtered
-	# 直球スロット: ゴロ系投手は最良球が直球(シンカー)、それ以外は最良球は変化球で直球は2番手。
-	var fastball_slot: int = 0 if (lean <= -0.2 or count == 1) else 1
-	if fastball_slot >= count:
-		fastball_slot = 0
+	# 直球スロット: 最良球は変化球 (決め球) で直球は2番手。球種が1本しかないときだけ直球そのもの。
+	var fastball_slot: int = 0 if count == 1 else 1
 	var types: Array = []
 	var bi: int = 0
 	for i in range(count):
 		if i == fastball_slot:
-			types.append(fastball)
+			types.append(FOUR_SEAM)
 		else:
 			types.append(breaking[bi % breaking.size()] if not breaking.is_empty() else FOUR_SEAM)
 			bi += 1

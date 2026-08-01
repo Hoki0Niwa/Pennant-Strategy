@@ -370,6 +370,86 @@ func test_initial_seed_csv_career_log_has_no_future_years() -> void:
 	assert_int(dated_entries).is_greater(0)
 
 
+# --- 初期シード投手の変化球アーセナル ----------------------------------------
+# 旧シード CSV には arsenal 列が無く、初期選手だけ変化球の実データを持たなかった
+# (z 派生表示に頼るため球種構成に個性が無く、生成投手とも扱いが違った)。
+
+func test_initial_seed_csv_pitchers_all_have_arsenal() -> void:
+	var rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(
+		PSPlayerCsvIo.read_players(GameDb.CSV_PLAYER_PATH), SeasonService.DEFAULT_START_YEAR
+	)
+	var pitchers: int = 0
+	var distinct_lines: Dictionary = {}
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		if int(row.get("position", 0)) != 1:
+			assert_array(row.get("arsenal", []) as Array).override_failure_message(
+				"野手 %s に変化球が付いています" % str(row.get("name", "?"))
+			).is_empty()
+			continue
+		pitchers += 1
+		var arsenal: Array = row.get("arsenal", []) as Array
+		assert_int(arsenal.size()).override_failure_message(
+			"投手 %s の変化球が空です" % str(row.get("name", "?"))
+		).is_greater_equal(PSPitchTypes.GENERATED_COUNT_MIN)
+		var straight_count: int = 0
+		for entry_value in arsenal:
+			if str((entry_value as Dictionary).get("type", "")) == PSPitchTypes.FOUR_SEAM:
+				straight_count += 1
+		assert_int(straight_count).override_failure_message(
+			"投手 %s の直球(ストレート)が %d 本です (全投手ちょうど1本)" % [str(row.get("name", "?")), straight_count]
+		).is_equal(1)
+		distinct_lines[PSPitchTypes.arsenal_line(arsenal)] = true
+	assert_int(pitchers).is_greater(0)
+	# 派生 (z から一意) と違い個性が出ること: 球種構成+グレードの組み合わせが十分に散る。
+	assert_int(distinct_lines.size()).is_greater(int(float(pitchers) * 0.25))
+
+
+# backfill は選手 ID 決定論。起動ごと/読み込み経路ごとにブレず、再正規化でも上書きしない (冪等)。
+func test_initial_seed_arsenal_backfill_is_deterministic_and_idempotent() -> void:
+	var row: Dictionary = {
+		"id": 4242,
+		"position": 1,
+		"z_abilities": {"Pit_KCreate": 0.8, "Pit_LoftControl": -0.2, "Pit_BarrelDeny": 0.5, "Pit_EdgeRate": 0.3, "Pit_Stamina": 1.1},
+	}
+	var once: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	var again: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
+	assert_array(again.get("arsenal", []) as Array).is_equal(once.get("arsenal", []) as Array)
+	var twice: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(once, 2026)
+	assert_array(twice.get("arsenal", []) as Array).is_equal(once.get("arsenal", []) as Array)
+	# 別 ID なら別のアーセナルになりうる (ID 依存であることの確認)。
+	var other_row: Dictionary = row.duplicate(true)
+	other_row["id"] = 4243
+	var other: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(other_row, 2026)
+	assert_int((other.get("arsenal", []) as Array).size()).is_greater(0)
+
+
+# CSV は arsenal を JSON 1 セルで往復する。ここが落ちると世界エクスポートで変化球が消える。
+func test_player_csv_roundtrip_preserves_arsenal() -> void:
+	var path: String = "user://test_arsenal_roundtrip.csv"
+	var arsenal: Array = [
+		{"type": PSPitchTypes.FOUR_SEAM, "mastery": 1.25},
+		{"type": PSPitchTypes.FORK, "mastery": -0.5},
+	]
+	var rows: Array = [{
+		"id": 991, "name": "変化球 太郎", "position": 1, "team_id": 1,
+		"z_abilities": {"Pit_KCreate": 0.4}, "source_data": {"draft_year": 2020},
+		"arsenal": arsenal,
+	}, {
+		"id": 992, "name": "野手 次郎", "position": 5, "team_id": 1,
+		"z_abilities": {"Bat_Impact": 0.4}, "source_data": {},
+	}]
+	assert_bool(PSPlayerCsvIo.write_players(path, rows)).is_true()
+	var back: Array = PSPlayerCsvIo.read_players(path)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	assert_int(back.size()).is_equal(2)
+	var pitcher: Dictionary = back[0] as Dictionary
+	assert_int((pitcher.get("arsenal", []) as Array).size()).is_equal(2)
+	assert_str(str(((pitcher["arsenal"] as Array)[1] as Dictionary).get("type", ""))).is_equal(PSPitchTypes.FORK)
+	assert_float(float(((pitcher["arsenal"] as Array)[0] as Dictionary).get("mastery", 0.0))).is_equal_approx(1.25, 0.0001)
+	assert_array((back[1] as Dictionary).get("arsenal", []) as Array).is_empty()
+
+
 func test_released_market_respects_foreign_held_cap() -> void:
 	var open_team_players: Array = _released_market_foreign_cap_players(3)
 	var open_result: Dictionary = ReleasedMarket.process_released_market(

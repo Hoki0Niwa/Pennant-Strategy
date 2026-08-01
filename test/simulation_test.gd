@@ -1447,6 +1447,63 @@ func test_all_teams_field_rotation_and_bullpen_with_stored_roles() -> void:
 		SaveContext.delete_current_save_data()
 
 
+# 直球(ストレート)は投手リーン・球種数・seed に関わらず全投手がちょうど1本持つ。
+# ゴロ/ムーブ系はかつて直球そのものがシンカーに差し替わっていたため、その回帰も兼ねる。
+func test_assign_types_always_includes_exactly_one_straight() -> void:
+	for lean in [-1.5, -0.5, -0.3, 0.0, 0.3, 1.5]:
+		for count in range(1, PSPitchTypes.GENERATED_COUNT_MAX + 1):
+			for seed_value in [0, 1, 2, 3, 4, 5, 12345]:
+				var types: Array = PSPitchTypes.assign_types(count, float(lean), seed_value)
+				assert_int(types.size()).is_equal(count)
+				var straight: int = 0
+				var seen: Dictionary = {}
+				for type_value in types:
+					if str(type_value) == PSPitchTypes.FOUR_SEAM:
+						straight += 1
+					seen[str(type_value)] = true
+				assert_int(straight).override_failure_message(
+					"lean=%s count=%d seed=%d の直球が %d 本" % [str(lean), count, seed_value, straight]
+				).is_equal(1)
+				# 同じ球種が2本並ばないこと (直球が変化球候補にも入っていた場合の重複検出)。
+				assert_int(seen.size()).is_equal(count)
+
+
+# 直球が無い旧データは「代役だった速球系の最良球」を直球へ読み替えて揃える (本数は変えない)。
+func test_ensure_straight_retypes_substitute_fastball() -> void:
+	var legacy: Array = [
+		{"type": PSPitchTypes.CHANGEUP, "mastery": 1.4},
+		{"type": PSPitchTypes.SINKER, "mastery": 0.9},
+		{"type": PSPitchTypes.TWO_SEAM, "mastery": 0.2},
+	]
+	var fixed: Array = PSPitchTypes.ensure_straight(legacy)
+	assert_int(fixed.size()).is_equal(3)
+	assert_str(str((fixed[1] as Dictionary).get("type", ""))).is_equal(PSPitchTypes.FOUR_SEAM)
+	assert_float(float((fixed[1] as Dictionary).get("mastery", 0.0))).is_equal_approx(0.9, 0.0001)
+	assert_str(str((fixed[0] as Dictionary).get("type", ""))).is_equal(PSPitchTypes.CHANGEUP)
+	# 速球系が1本も無ければ最良球を直球にする。
+	var no_fastball: Array = PSPitchTypes.ensure_straight([
+		{"type": PSPitchTypes.SLIDER, "mastery": 0.3},
+		{"type": PSPitchTypes.CURVE, "mastery": 1.1},
+	])
+	assert_str(str((no_fastball[1] as Dictionary).get("type", ""))).is_equal(PSPitchTypes.FOUR_SEAM)
+	# 既に直球があれば何も変えない (冪等)。
+	var already: Array = [
+		{"type": PSPitchTypes.FOUR_SEAM, "mastery": 0.5},
+		{"type": PSPitchTypes.SINKER, "mastery": 1.2},
+	]
+	assert_array(PSPitchTypes.ensure_straight(already)).is_equal(already)
+
+
+# ゴロ/ムーブ系は直球に加えて動く速球 (ツーシーム/シンカー) を持ちやすい。
+func test_assign_types_movement_lean_keeps_moving_fastball() -> void:
+	var with_moving: int = 0
+	for seed_value in range(0, 12):
+		var types: Array = PSPitchTypes.assign_types(4, -0.8, seed_value)
+		if types.has(PSPitchTypes.TWO_SEAM) or types.has(PSPitchTypes.SINKER):
+			with_moving += 1
+	assert_int(with_moving).is_greater(6)
+
+
 func _pitcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
 	record.player_id = player_id
