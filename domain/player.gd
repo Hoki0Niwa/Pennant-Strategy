@@ -246,6 +246,18 @@ func contract_years_remaining(offseason_year: int) -> int:
 	return maxi(0, int(source_data.get("contract_end_year", 0)) - offseason_year)
 
 
+# 今オフ FA宣言したか。宣言はオフ冒頭の FA宣言ステップで決まるが、ロースターからの離脱
+# (team_id=0) は FA市場ステップまで起きない。その間に戦力外/現役ドラフト/引退で消えないよう、
+# 各ステップはこのフラグで宣言者を対象外にする。
+func is_fa_declared(offseason_year: int) -> bool:
+	return offseason_year > 0 and int(source_data.get("fa_declared_year", 0)) == offseason_year
+
+
+# 今オフ FA権を新規取得したか。取得したてのFA権者は戦力外/育成降格の対象にしない。
+func is_new_fa_holder(offseason_year: int) -> bool:
+	return offseason_year > 0 and int(source_data.get("fa_eligible_year", 0)) == offseason_year
+
+
 # R4 Step1: 出身から FA閾値 (8=高卒 / 7=その他) を推定する。
 #  - 生成選手は source_data["draft_source"] に出身種別が入る。
 #  - 初期シード選手は列が無いため、デビュー年齢 (age - years + 1) が18以下なら高卒と推定。

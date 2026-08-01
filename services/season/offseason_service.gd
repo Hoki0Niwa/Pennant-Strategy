@@ -149,18 +149,34 @@ const GEN_MAX_VELOCITY_MIN: int = 140
 const GEN_MAX_VELOCITY_MAX: int = 160
 
 
-# 複数年契約中(契約満了年のオフを除く)の選手が release_ids / demote_ids に含まれていたら
-# 拒否する。ユーザーの手動選択 (戦力外エディタ) は compute_release_candidates_for_team を
-# 経由しないため、確定時点でここを単独のガード地点にする。
+# 戦力外/育成降格にできない選手 (空文字=可能)。ユーザーの手動選択 (戦力外エディタ) は
+# compute_release_candidates_for_team を経由しないため、確定時点でここを単独のガード地点にする。
+#  - 複数年契約中 (契約満了年のオフは除く)
+#  - 今オフ FA権を新規取得した選手 (取得したてで手放すのは不自然)
+#  - 今オフ FA宣言した選手 (FA市場ステップで離脱するまで在籍が続くだけ)
+static func release_block_reason(player: PSPlayer, offseason_year: int) -> String:
+	if player == null:
+		return ""
+	if player.is_multi_year_locked_offseason(offseason_year):
+		return "複数年契約中(残%d年)" % player.contract_years_remaining(offseason_year)
+	if player.is_fa_declared(offseason_year):
+		return "今オフFA宣言済み"
+	if player.is_new_fa_holder(offseason_year):
+		return "今オフFA権を新規取得"
+	return ""
+
+
 static func reject_locked_release_or_demote(players: Array, release_ids: Array, demote_ids: Array, offseason_year: int) -> Dictionary:
 	for id_value in release_ids:
 		var player: PSPlayer = _find_player_by_id(players, int(id_value))
-		if player != null and player.is_multi_year_locked_offseason(offseason_year):
-			return {"ok": false, "message": "%s は複数年契約中のため戦力外にできません(残%d年)" % [player.name, player.contract_years_remaining(offseason_year)]}
+		var reason: String = release_block_reason(player, offseason_year)
+		if not reason.is_empty():
+			return {"ok": false, "message": "%s は%sのため戦力外にできません" % [player.name, reason]}
 	for id_value in demote_ids:
 		var player: PSPlayer = _find_player_by_id(players, int(id_value))
-		if player != null and player.is_multi_year_locked_offseason(offseason_year):
-			return {"ok": false, "message": "%s は複数年契約中のため育成降格にできません(残%d年)" % [player.name, player.contract_years_remaining(offseason_year)]}
+		var reason: String = release_block_reason(player, offseason_year)
+		if not reason.is_empty():
+			return {"ok": false, "message": "%s は%sのため育成降格にできません" % [player.name, reason]}
 	return {"ok": true}
 
 
@@ -379,10 +395,11 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			continue
 		if _has_rookie_release_protection(player):
 			continue
-		# 複数年契約中(契約満了年のオフを除く)は常時カット・計画カットどちらの候補にもしない。
-		# これは _should_demote_to_development 経由の育成降格保護も兼ねる (呼び出し元
-		# process_cpu_releases がこの関数の返す cut_ids からしか降格判定を行わないため)。
-		if player.is_multi_year_locked_offseason(offseason_year):
+		# 複数年契約中・今オフFA権新規取得・今オフFA宣言済みは、常時カット・計画カットどちらの
+		# 候補にもしない (release_block_reason が単一ソース)。これは _should_demote_to_development
+		# 経由の育成降格保護も兼ねる (呼び出し元 process_cpu_releases がこの関数の返す cut_ids から
+		# しか降格判定を行わないため)。
+		if not release_block_reason(player, offseason_year).is_empty():
 			continue
 		if not bool(data.get("surplus", false)):
 			continue
@@ -754,9 +771,14 @@ static func process_demotion(players: Array, team_id: int, player_ids: Array, ye
 
 static func process_retirement(players: Array, season: PSSeason) -> Dictionary:
 	var retired: Array = []
+	var year: int = season.year if season != null else 0
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired():
+			continue
+		# 直前のFA宣言ステップで宣言した選手は今オフ引退しない (宣言した本人が数日後に
+		# 引退するのは不自然で、FA市場の候補が消える事故も防げる)。
+		if player.is_fa_declared(year):
 			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
@@ -1691,32 +1713,50 @@ static func _empty_growth_kind_counts() -> Dictionary:
 	return counts
 
 
-# --- 契約更新: 延長交渉 (国内選手の複数年契約、契約市場/FA複数年オファーの発生源に続く3本目) ---
-# 対象は contract_status が「FA権間近」「FA可能」の非外国人・非育成・非ロック選手のうち、
-# player_value_score がこの水準以上の主力級。1球団あたりプールは価値降順で上限までに絞る。
-const EXTENSION_MIN_VALUE: int = 60
-const EXTENSION_POOL_MAX_PER_TEAM: int = 5
-# 提示年俸 = 市場価値 (foreign_market_salary) × (1 + プレミアム×(年数-1))。外国人契約市場の
-# FOREIGN_MULTI_YEAR_PREMIUM と同じ考え方 (複数年ほど選手側に有利な年俸を積む)。
-const EXTENSION_SALARY_PREMIUM: float = 0.05
-# 受諾確率の基準値。年数ボーナス/年俸プレミアム加点、FA宣言意欲ペナルティを加減して clamp する。
-const EXTENSION_BASE_ACCEPT: float = 0.55
-const EXTENSION_ACCEPT_CHANCE_MIN: float = 0.05
-const EXTENSION_ACCEPT_CHANCE_MAX: float = 0.95
-# 提示年俸が市場価値を上回る分の加点上限 (FaMarketService._contract_success_chance の同種加点と同スケール)。
-const EXTENSION_SALARY_BONUS_MAX: float = 0.10
-const EXTENSION_SALARY_BONUS_DIVISOR: float = 50000.0
-# FA宣言意欲 (FaMarketService._declaration_chance) が高い選手ほど、引き留めても心変わりしやすい
-# と見なして受諾確率から差し引く係数。declaration_chance (0.02〜0.30 程度) にそのまま乗じる。
-const EXTENSION_DECLARE_PENALTY: float = 1.0
-# CPU球団が1オフに提示できる延長件数の上限 (自球団もこの基準で自動判断されうる、下記参照)。
-const CPU_EXTENSION_MAX_PER_YEAR: int = 2
+# --- 契約年数の決定 (FA市場の直後、国内選手の複数年契約の発生源) ---
+# 対象は日本人 (非外国人・非育成) の在籍選手のうち、
+#   ① 今オフ FA権を新規取得し、FA宣言しなかった選手 (fa_eligible_year == year)
+#   ② 複数年契約が今オフ満了した選手 (contract_total_years >= 2 かつ contract_end_year == year)
+#   ③ FA宣言したが引き取り手がなく元球団に残留した選手 (fa_returned_year == year)
+# の3種。それ以外は自動的に単年契約で、年俸だけが最終ステップの契約更改で査定される。
+# **宣言しなかった (=残留が確定した) 選手が年数を拒否することはないので、決めた年数は必ず成立する。**
+# 年俸 = base × (1 + プレミアム×(年数-1))。外国人契約市場の FOREIGN_MULTI_YEAR_PREMIUM と同じ考え方
+# (複数年ほど選手側に有利な年俸を積む)。base は ③ が FA提示額、①② が通常の年俸査定額。
+const CONTRACT_YEARS_PREMIUM: float = 0.05
+# CPU球団の既定年数。value がこの水準以上なら対応する年数を基準にし、年齢上限
+# (FaMarketService.fa_offer_max_years) と予算で切り下げる。リーグ全体の複数年契約の量を決める
+# 唯一の調整ノブなので、long_autoplay の multi_year_active 列で張り付きを監視する。
+const CONTRACT_YEARS_VALUE_TIERS: Array = [
+	{"min_value": 75, "years": 4},
+	{"min_value": 68, "years": 3},
+	{"min_value": 62, "years": 2},
+]
 
 
-# 延長交渉候補プール ({player_id, team_id, name, age, position, role, value, current_salary,
-# market_salary, max_years, declare_chance, user_offer:{}, resolved:false, accepted:false}) を
-# value 降順・1球団あたり EXTENSION_POOL_MAX_PER_TEAM 件までに絞って構築する。
-static func _build_extension_pool(players: Array, teams: Array, season: PSSeason, year: int) -> Array:
+# 契約年数を決める対象か (空文字=対象外)。判定順は fa_returned が先 — FA宣言して残留した選手は
+# 新規取得年と重なりうるが、年俸が既にFA提示額で確定している点で扱いが違うため。
+static func _contract_years_reason(player: PSPlayer, year: int) -> String:
+	if int(player.source_data.get("fa_returned_year", 0)) == year:
+		return "fa_returned"
+	if player.is_fa_declared(year):
+		# 宣言して他球団と契約した選手は、その交渉で年数まで決まっている。
+		return ""
+	if player.is_multi_year_locked_offseason(year):
+		# 複数年契約の期間中は年数を決め直さない (満了年のオフだけ contract_end で拾う)。
+		return ""
+	if int(player.source_data.get("fa_eligible_year", 0)) == year:
+		return "new_fa"
+	if int(player.source_data.get("contract_total_years", 0)) >= 2 and int(player.source_data.get("contract_end_year", 0)) == year:
+		return "contract_end"
+	return ""
+
+
+# 契約年数の決定候補プール ({player_id, team_id, name, age, position, role, value, current_salary,
+# base_salary, max_years, reason, decided:false, years:0, salary:0}) を value 降順で構築する。
+# 全球団分を持ち、UI は自軍だけを表示する (CPU分は確定時にまとめて決まる)。
+# 年齢上限が1年の選手 (36歳以上) は選べる年数が単年しかないので、ここで単年として確定させて
+# プールには入れない (満了した複数年契約のキーもこの時点で消える)。
+static func _build_contract_years_pool(players: Array, season: PSSeason, year: int) -> Array:
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
@@ -1727,22 +1767,20 @@ static func _build_extension_pool(players: Array, teams: Array, season: PSSeason
 			continue
 		if player.team_id <= 0:
 			continue
-		if player.contract_status != "FA権間近" and player.contract_status != "FA可能":
-			continue
-		if player.is_multi_year_locked_offseason(year):
-			continue
-		if int(player.source_data.get("extension_refused_year", 0)) == year:
-			continue
-		var max_years: int = FaMarketService.fa_offer_max_years(player.age)
-		if max_years < 2:
-			continue
-		var value: int = player_value_score(player)
-		if value < EXTENSION_MIN_VALUE:
+		var reason: String = _contract_years_reason(player, year)
+		if reason.is_empty():
 			continue
 		var record: PSPlayerSeasonRecord = null
 		if season != null:
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
-		var war: float = _season_war(record, league_ctx)
+		# 複数年の年俸ベース: FA残留組は交渉で決まった提示額、それ以外は通常の年俸査定額。
+		var base_salary: int = int(player.source_data.get("fa_contract_salary", player.salary))
+		if reason != "fa_returned":
+			base_salary = _compute_new_salary(player, record, _season_war(record, league_ctx))
+		var max_years: int = FaMarketService.fa_offer_max_years(player.age)
+		if max_years < 2:
+			_apply_contract_years(player, 1, base_salary, year)
+			continue
 		entries.append({
 			"player_id": player.id,
 			"team_id": player.team_id,
@@ -1750,57 +1788,52 @@ static func _build_extension_pool(players: Array, teams: Array, season: PSSeason
 			"age": player.age,
 			"position": player.position,
 			"role": player.role,
-			"value": value,
+			"value": player_value_score(player),
 			"current_salary": player.salary,
-			"market_salary": foreign_market_salary(player, record, war),
+			"base_salary": base_salary,
 			"max_years": max_years,
-			"declare_chance": FaMarketService._declaration_chance(player, year),
-			"user_offer": {},
-			"resolved": false,
-			"accepted": false,
+			"reason": reason,
+			"decided": false,
+			"years": 0,
+			"salary": 0,
 		})
 	entries.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
 		if int(da.get("value", 0)) != int(db.get("value", 0)):
 			return int(da.get("value", 0)) > int(db.get("value", 0))
-		return float(da.get("declare_chance", 0.0)) > float(db.get("declare_chance", 0.0))
+		return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
 	)
-	var per_team_count: Dictionary = {}
-	var limited: Array = []
-	for entry_row in entries:
-		var entry: Dictionary = entry_row as Dictionary
-		var team_id: int = int(entry.get("team_id", 0))
-		var count: int = int(per_team_count.get(team_id, 0))
-		if count >= EXTENSION_POOL_MAX_PER_TEAM:
-			continue
-		per_team_count[team_id] = count + 1
-		limited.append(entry)
-	return limited
+	return entries
 
 
-static func _extension_offer_salary(market_salary: int, years: int) -> int:
-	var raw: int = int(round(float(market_salary) * (1.0 + EXTENSION_SALARY_PREMIUM * float(maxi(1, years) - 1))))
+static func _contract_years_salary(base_salary: int, years: int) -> int:
+	var raw: int = int(round(float(base_salary) * (1.0 + CONTRACT_YEARS_PREMIUM * float(maxi(1, years) - 1))))
 	return round_salary_2sig(raw)
 
 
-# 受諾確率 = 基準値 + 年数ボーナス (FaMarketService.FA_SIGN_YEARS_BONUS と同係数を共用) +
-# 提示年俸の市場価値超過分の加点 − FA宣言意欲ペナルティ。
-static func _extension_success_chance(years: int, offer_salary: int, market_salary: int, declare_chance: float) -> float:
-	var chance: float = EXTENSION_BASE_ACCEPT
-	chance += min(FaMarketService.FA_SIGN_YEARS_BONUS_MAX, float(maxi(1, years) - 1) * FaMarketService.FA_SIGN_YEARS_BONUS)
-	chance += min(EXTENSION_SALARY_BONUS_MAX, max(0.0, float(offer_salary - market_salary)) / EXTENSION_SALARY_BONUS_DIVISOR)
-	chance -= declare_chance * EXTENSION_DECLARE_PENALTY
-	return clampf(chance, EXTENSION_ACCEPT_CHANCE_MIN, EXTENSION_ACCEPT_CHANCE_MAX)
+# CPU球団の年数決定。value のティアを年齢上限でクランプし、増額分が予算に収まらない間は
+# 1年ずつ削る (最終的に単年へ落ちる)。
+static func _cpu_contract_years(entry: Dictionary, players: Array, team: PSTeam) -> int:
+	var years: int = 1
+	var value: int = int(entry.get("value", 0))
+	for tier_row in CONTRACT_YEARS_VALUE_TIERS:
+		var tier: Dictionary = tier_row as Dictionary
+		if value >= int(tier.get("min_value", 0)):
+			years = int(tier.get("years", 1))
+			break
+	years = mini(years, maxi(1, int(entry.get("max_years", 1))))
+	var base_salary: int = int(entry.get("base_salary", 0))
+	var current_salary: int = int(entry.get("current_salary", 0))
+	while years >= 2:
+		var delta: int = maxi(0, _contract_years_salary(base_salary, years) - current_salary)
+		if team != null and TeamFinance.can_afford_addition(players, team, delta):
+			break
+		years -= 1
+	return maxi(1, years)
 
 
-# CPU (自球団含む、下記 finalize_contract_extensions 参照) の既定提示年数。年齢上限まで提示する
-# (長期保証で主力を確実に引き留める想定)。
-static func _cpu_extension_years(entry: Dictionary) -> int:
-	return maxi(2, int(entry.get("max_years", 2)))
-
-
-static func _extension_entry_by_player_id(state: Dictionary, player_id: int) -> Dictionary:
+static func _contract_years_entry_by_player_id(state: Dictionary, player_id: int) -> Dictionary:
 	for row in state.get("candidates", []) as Array:
 		var entry: Dictionary = row as Dictionary
 		if int(entry.get("player_id", 0)) == player_id:
@@ -1808,127 +1841,172 @@ static func _extension_entry_by_player_id(state: Dictionary, player_id: int) -> 
 	return {}
 
 
-# ユーザーの延長提示。自球団の候補のみ、年数は [2, max_years] にクランプする。1回勝負
-# (resolved 後の再提示は拒否、拒否された選手は同オフ中 candidates に戻らない)。
-static func submit_extension_offer(state: Dictionary, players: Array, teams: Array, user_team_id: int, player_id: int, years: int) -> Dictionary:
-	if str(state.get("phase", "extension")) != "extension":
-		return {"ok": false, "message": "延長交渉は既に終了しています。", "state": state}
-	var entry: Dictionary = _extension_entry_by_player_id(state, player_id)
+# ユーザーの年数決定。自球団の候補のみ、[1, max_years] にクランプする。決定は state に記録するだけで、
+# 選手への適用は finalize_contract_years でまとめて行う (取り消しできるようにするため)。
+static func submit_contract_years(state: Dictionary, players: Array, teams: Array, user_team_id: int, player_id: int, years: int) -> Dictionary:
+	if bool(state.get("complete", false)):
+		return {"ok": false, "message": "契約年数の決定は既に終了しています。", "state": state}
+	var entry: Dictionary = _contract_years_entry_by_player_id(state, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は延長交渉の対象ではありません。", "state": state}
-	if bool(entry.get("resolved", false)):
-		return {"ok": false, "message": "その選手との交渉は既に終了しています。", "state": state}
+		return {"ok": false, "message": "その選手は契約年数の決定対象ではありません。", "state": state}
 	if int(entry.get("team_id", 0)) != user_team_id:
-		return {"ok": false, "message": "自球団の選手のみ延長交渉できます。", "state": state}
-	var max_years: int = int(entry.get("max_years", 2))
-	var clamped_years: int = clampi(years, 2, maxi(2, max_years))
-	var offer_salary: int = _extension_offer_salary(int(entry.get("market_salary", 0)), clamped_years)
-	var player: PSPlayer = _find_player_by_id(players, player_id)
-	var team: PSTeam = _find_team_by_id(teams, user_team_id)
-	var delta: int = maxi(0, offer_salary - (player.salary if player != null else 0))
-	if not TeamFinance.can_afford_addition(players, team, delta):
-		return {"ok": false, "message": "予算が不足しているため延長を提示できません。", "state": state}
-	entry["user_offer"] = {"years": clamped_years, "salary": offer_salary}
+		return {"ok": false, "message": "自球団の選手のみ契約年数を決められます。", "state": state}
+	var clamped_years: int = clampi(years, 1, maxi(1, int(entry.get("max_years", 1))))
+	var salary: int = _contract_years_salary(int(entry.get("base_salary", 0)), clamped_years)
+	if clamped_years >= 2:
+		var player: PSPlayer = _find_player_by_id(players, player_id)
+		var team: PSTeam = _find_team_by_id(teams, user_team_id)
+		var delta: int = maxi(0, salary - (player.salary if player != null else 0))
+		if not TeamFinance.can_afford_addition(players, team, delta):
+			return {"ok": false, "message": "予算が不足しているためこの年数では契約できません。", "state": state}
+	entry["decided"] = true
+	entry["years"] = clamped_years
+	entry["salary"] = salary
+	entry["method"] = "user"
 	return {"ok": true, "state": state}
 
 
-static func withdraw_extension_offer(state: Dictionary, player_id: int) -> Dictionary:
-	var entry: Dictionary = _extension_entry_by_player_id(state, player_id)
+static func withdraw_contract_years(state: Dictionary, player_id: int) -> Dictionary:
+	var entry: Dictionary = _contract_years_entry_by_player_id(state, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は延長交渉の対象ではありません。", "state": state}
-	entry["user_offer"] = {}
+		return {"ok": false, "message": "その選手は契約年数の決定対象ではありません。", "state": state}
+	entry["decided"] = false
+	entry["years"] = 0
+	entry["salary"] = 0
+	entry.erase("method")
 	return {"ok": true, "state": state}
 
 
-static func _apply_extension(player: PSPlayer, years: int, salary: int, year: int) -> void:
+# 自球団の未決定分をCPUと同じ基準で埋める (UI の「自動で決める」)。
+static func auto_decide_contract_years(state: Dictionary, players: Array, teams: Array, user_team_id: int) -> Dictionary:
+	var decided_count: int = 0
+	for entry_row in state.get("candidates", []) as Array:
+		var entry: Dictionary = entry_row as Dictionary
+		if bool(entry.get("decided", false)) or int(entry.get("team_id", 0)) != user_team_id:
+			continue
+		var team: PSTeam = _find_team_by_id(teams, user_team_id)
+		var years: int = _cpu_contract_years(entry, players, team)
+		entry["decided"] = true
+		entry["years"] = years
+		entry["salary"] = _contract_years_salary(int(entry.get("base_salary", 0)), years)
+		entry["method"] = "auto"
+		decided_count += 1
+	return {"ok": true, "decided_count": decided_count, "state": state}
+
+
+# 契約年数を選手へ適用する。単年 (years<=1) は契約キーを消すだけで年俸は触らない
+# (新規FA権/複数年満了は最終ステップの契約更改で査定、FA残留は fa_signed_year ロックにより
+# FA提示額のまま)。キーを消すことで「複数年契約が今オフ満了」の検出が翌年以降に誤爆しない。
+static func _apply_contract_years(player: PSPlayer, years: int, salary: int, year: int) -> void:
+	if player == null:
+		return
+	if years <= 1:
+		player.source_data.erase("contract_end_year")
+		player.source_data.erase("contract_total_years")
+		player.source_data.erase("contract_signed_year")
+		return
 	player.salary = salary
 	player.source_data["contract_end_year"] = year + years
 	player.source_data["contract_total_years"] = years
 	player.source_data["contract_signed_year"] = year
-	player.source_data.erase("extension_refused_year")
 	PSCareerLog.log_contract_extension(player, year, player.team_id, salary, years)
 
 
-# 未解決の候補 (ユーザー提示済み、または未提示=CPU基準で自動判断) を一括解決する。
-# 自球団の未提示候補も含め全球団を同じ基準で扱う (外国人契約市場 finalize と同じ設計、
-# 何もしなければCPU同様に自動判断される穏当なデフォルト)。CPU提示は1球団あたり
-# CPU_EXTENSION_MAX_PER_YEAR件までで、候補は value 降順・declare_chance 降順の優先順で消費する。
-static func _resolve_remaining_extension_candidates(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> void:
-	var year: int = int(state.get("year", season.year if season != null else 0))
-	var candidates: Array = state.get("candidates", []) as Array
-	var extension_signings: Array = state.get("extension_signings", []) as Array
-	var cpu_counts: Dictionary = {}
-	for entry_row in candidates:
+# 未決定の候補 (CPU球団分、および自動確定経路での自球団分) をCPU基準で埋めてから、
+# 全候補を選手へ適用する。宣言しなかった=残留確定なので拒否判定は無く、決めた年数は必ず成立する。
+static func _resolve_contract_years(state: Dictionary, players: Array, teams: Array) -> Array:
+	var year: int = int(state.get("year", 0))
+	var decisions: Array = []
+	for entry_row in state.get("candidates", []) as Array:
 		var entry: Dictionary = entry_row as Dictionary
-		if bool(entry.get("resolved", false)):
-			continue
 		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 		if player == null:
-			entry["resolved"] = true
 			continue
-		var team_id: int = int(entry.get("team_id", 0))
-		var user_offer: Dictionary = entry.get("user_offer", {}) as Dictionary
-		var years: int
-		var offer_salary: int
-		var method: String
-		if not user_offer.is_empty():
-			years = maxi(2, int(user_offer.get("years", 2)))
-			offer_salary = int(user_offer.get("salary", entry.get("market_salary", 0)))
-			method = "user"
-		else:
-			if int(cpu_counts.get(team_id, 0)) >= CPU_EXTENSION_MAX_PER_YEAR:
-				entry["resolved"] = true
-				continue
-			years = _cpu_extension_years(entry)
-			offer_salary = _extension_offer_salary(int(entry.get("market_salary", 0)), years)
-			var team: PSTeam = _find_team_by_id(teams, team_id)
-			var delta: int = maxi(0, offer_salary - player.salary)
-			if team == null or not TeamFinance.can_afford_addition(players, team, delta):
-				entry["resolved"] = true
-				continue
-			cpu_counts[team_id] = int(cpu_counts.get(team_id, 0)) + 1
-			method = "cpu"
-		var chance: float = _extension_success_chance(years, offer_salary, int(entry.get("market_salary", 0)), float(entry.get("declare_chance", 0.0)))
-		entry["resolved"] = true
-		entry["offer_years"] = years
-		entry["offer_salary"] = offer_salary
-		entry["success_chance"] = chance
-		entry["method"] = method
-		if Rng.roll_float() <= chance:
-			_apply_extension(player, years, offer_salary, year)
-			entry["accepted"] = true
-			extension_signings.append({
-				"player_id": player.id, "name": player.name, "age": player.age,
-				"position": player.position, "role": player.role,
-				"team_id": team_id, "from_team": team_id, "to_team": team_id,
-				"salary": player.salary, "offer_salary": player.salary, "contract_years": years,
-				"value": int(entry.get("value", 0)), "method": method, "success_chance": chance,
-			})
-		else:
-			entry["accepted"] = false
-			player.source_data["extension_refused_year"] = year
-	state["candidates"] = candidates
-	state["extension_signings"] = extension_signings
+		if not bool(entry.get("decided", false)):
+			var team: PSTeam = _find_team_by_id(teams, int(entry.get("team_id", 0)))
+			var cpu_years: int = _cpu_contract_years(entry, players, team)
+			entry["decided"] = true
+			entry["years"] = cpu_years
+			entry["salary"] = _contract_years_salary(int(entry.get("base_salary", 0)), cpu_years)
+			entry["method"] = "cpu"
+		var years: int = maxi(1, int(entry.get("years", 1)))
+		var old_salary: int = player.salary
+		_apply_contract_years(player, years, int(entry.get("salary", player.salary)), year)
+		decisions.append({
+			"player_id": player.id, "name": player.name, "age": player.age,
+			"position": player.position, "role": player.role,
+			"team_id": player.team_id, "from_team": player.team_id, "to_team": player.team_id,
+			"old_salary": old_salary, "salary": player.salary, "offer_salary": player.salary,
+			"contract_years": years, "reason": str(entry.get("reason", "")),
+			"value": int(entry.get("value", 0)), "method": str(entry.get("method", "cpu")),
+		})
+	return decisions
 
 
-# 契約更新state (延長候補プール構築済み) を受け取り、未解決分を解決してから年俸再査定+予算会計を行う。
-# 二重実行防止: finalized なら結果をキャッシュから返す (再査定・延長解決は一度だけ)。
-static func finalize_contract_extensions(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+# 契約年数ステップの state を作る。候補ゼロなら対話パネル不要なのでその場で確定させる。
+static func create_contract_years_state(players: Array, _teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
+	var year: int = season.year if season != null else 0
+	var candidates: Array = _build_contract_years_pool(players, season, year)
+	var state: Dictionary = {
+		"version": 1,
+		"year": year,
+		"user_team_id": user_team_id,
+		"complete": candidates.is_empty(),
+		"finalized": false,
+		"candidates": candidates,
+	}
+	if candidates.is_empty():
+		state["finalized"] = true
+		state["final_result"] = _contract_years_result(state, [])
+	return state
+
+
+# 自球団の未決定候補が残っているか (AppState が「次へ」をブロックするのに使う)。
+static func pending_contract_years_count(state: Dictionary, user_team_id: int) -> int:
+	var count: int = 0
+	for row in state.get("candidates", []) as Array:
+		var entry: Dictionary = row as Dictionary
+		if int(entry.get("team_id", 0)) == user_team_id and not bool(entry.get("decided", false)):
+			count += 1
+	return count
+
+
+# 未決定分をCPU基準で埋めて全候補を適用し、ステップ結果を返す。
+# 二重実行防止: finalized ならキャッシュを返す。
+static func finalize_contract_years(state: Dictionary, players: Array, teams: Array) -> Dictionary:
 	if bool(state.get("finalized", false)):
 		return state.get("final_result", {}) as Dictionary
-	if str(state.get("phase", "extension")) == "extension":
-		_resolve_remaining_extension_candidates(state, players, teams, season)
-	var result: Dictionary = _finalize_salary_and_budget(state, players, teams, season)
-	state["phase"] = "done"
+	var decisions: Array = _resolve_contract_years(state, players, teams)
+	var result: Dictionary = _contract_years_result(state, decisions)
 	state["complete"] = true
 	state["finalized"] = true
 	state["final_result"] = result
 	return result
 
 
-# 延長解決後の年俸再査定 (ロック中=延長成立済み含むはスキップ) + 予算会計。
-static func _finalize_salary_and_budget(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	var year: int = int(state.get("year", season.year if season != null else 0))
+static func _contract_years_result(state: Dictionary, decisions: Array) -> Dictionary:
+	var multi_year: Array = []
+	for row in decisions:
+		if int((row as Dictionary).get("contract_years", 1)) >= 2:
+			multi_year.append(row)
+	multi_year.sort_custom(func(a, b) -> bool:
+		return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
+	)
+	return {
+		"title": "契約年数",
+		"year": int(state.get("year", 0)),
+		"decisions": decisions,
+		"decided_count": decisions.size(),
+		"multi_year_signings": multi_year,
+		"multi_year_count": multi_year.size(),
+	}
+
+
+# 契約更改 (オフ最終ステップ): 全選手の年俸再査定 + 球団別の予算会計。
+# FA日数の締めと contract_status 遷移はオフ冒頭の FA宣言ステップ
+# (accrue_fa_days_and_update_status) が済ませているので、ここは年俸だけを扱う。
+static func process_contract_renewal(players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	var year: int = season.year if season != null else 0
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
@@ -1976,15 +2054,6 @@ static func _finalize_salary_and_budget(state: Dictionary, players: Array, teams
 		return int((a as Dictionary)["delta"]) < int((b as Dictionary)["delta"])
 	)
 
-	var new_fa: Array = (state.get("new_fa", []) as Array).duplicate(true)
-	new_fa.sort_custom(func(a, b) -> bool:
-		var da: Dictionary = a as Dictionary
-		var db: Dictionary = b as Dictionary
-		if int(da["team_id"]) == int(db["team_id"]):
-			return int(da["age"]) > int(db["age"])
-		return int(da["team_id"]) < int(db["team_id"])
-	)
-
 	var team_budgets: Array = []
 	var over_budget_count: int = 0
 	if teams != null:
@@ -2008,37 +2077,20 @@ static func _finalize_salary_and_budget(state: Dictionary, players: Array, teams
 			return int((a as Dictionary)["team_id"]) < int((b as Dictionary)["team_id"])
 		)
 
-	var extension_signings: Array = state.get("extension_signings", []) as Array
-	var extension_accepted: int = 0
-	for row in extension_signings:
-		if bool((row as Dictionary).get("accepted", true)):
-			extension_accepted += 1
-	var extension_offers: int = 0
-	for row in state.get("candidates", []) as Array:
-		if bool((row as Dictionary).get("resolved", false)):
-			extension_offers += 1
-
 	return {
 		"raises": raises.slice(0, 20),
 		"cuts": cuts.slice(0, 20),
 		"raises_count": raises.size(),
 		"cuts_count": cuts.size(),
-		"new_fa": new_fa,
-		"new_fa_count": new_fa.size(),
 		"team_budgets": team_budgets,
 		"over_budget_count": over_budget_count,
-		"extension_signings": extension_signings,
-		"extension_signings_count": extension_signings.size(),
-		"extension_offers_count": extension_offers,
-		"extension_accepted_count": extension_accepted,
 	}
 
 
-# 契約更新state: Phase A (FA日数accrue + contract_status遷移 + 延長交渉候補プール構築) を実行する。
-# 候補ゼロなら Phase B (年俸再査定+予算会計) を即実行し phase="done" で返す (対話パネル不要)。
-# 候補があれば phase="extension" で停止し、submit_extension_offer / finalize_contract_extensions
-# を経て確定する (外国人契約市場の contract/scout 2フェーズ設計と同じパターン)。
-static func create_contract_update_state(players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
+# オフ冒頭 (FA宣言ステップ) の FA権処理: 当年の1軍登録日数を締めてから、全選手の
+# contract_status を遷移させる。今オフ新しく「FA可能」になった選手の一覧を返す。
+# FaMarketService.create_declaration_state から呼ばれ、宣言抽選より前に必ず1度だけ走る。
+static func accrue_fa_days_and_update_status(players: Array, teams: Array, season: PSSeason) -> Array:
 	var year: int = season.year if season != null else 0
 	if season != null and teams != null:
 		var team_ids: Array = []
@@ -2078,36 +2130,14 @@ static func create_contract_update_state(players: Array, teams: Array, season: P
 			var years_since_eligible: int = int(floor(float(maxi(0, player.fa_service_days() - player.fa_service_days_required())) / float(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)))
 			player.source_data["fa_eligible_year"] = year - years_since_eligible
 			player.source_data["fa_pass_count"] = maxi(0, years_since_eligible)
-
-	var candidates: Array = _build_extension_pool(players, teams, season, year)
-	var state: Dictionary = {
-		"version": 1,
-		"phase": "extension" if not candidates.is_empty() else "done",
-		"year": year,
-		"user_team_id": user_team_id,
-		"complete": candidates.is_empty(),
-		"finalized": false,
-		"new_fa": new_fa,
-		"candidates": candidates,
-		"extension_signings": [],
-	}
-	if candidates.is_empty():
-		var result: Dictionary = _finalize_salary_and_budget(state, players, teams, season)
-		state["finalized"] = true
-		state["final_result"] = result
-	return state
-
-
-# 完全自動ラッパー (CPU長期検証/レポーター/旧テスト互換用)。延長交渉は候補全員をCPU基準で
-# 自動解決してから年俸再査定+予算会計まで一括で終える。
-static func process_contract_update(players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
-	var state: Dictionary = create_contract_update_state(players, teams, season, user_team_id)
-	return finalize_contract_extensions(state, players, teams, season)
-
-
-# --- STEP 5 (R4): 契約更新 (年俸再査定 + FA権遷移 + 予算会計) ---
-# 実装は create_contract_update_state / finalize_contract_extensions / process_contract_update
-# (上記「契約更新: 延長交渉」節) に集約。ここには契約ロック判定など共有ヘルパーのみ残す。
+	new_fa.sort_custom(func(a, b) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		if int(da["team_id"]) == int(db["team_id"]):
+			return int(da["age"]) > int(db["age"])
+		return int(da["team_id"]) < int(db["team_id"])
+	)
+	return new_fa
 
 # 年俸再査定をスキップすべきか。FA移籍・戦力外獲得で今オフに合意した単年ロック (翌オフには
 # 通常の成績査定へ戻る) と、複数年契約でカバーされている年 (契約満了年の

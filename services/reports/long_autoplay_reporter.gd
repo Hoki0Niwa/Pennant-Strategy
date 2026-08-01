@@ -356,7 +356,7 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,geneki_moved,geneki_round2,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio,foreign_retained,foreign_poached,foreign_multi_year_signed,extension_offers,extension_accepted,multi_year_active")
+	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,geneki_moved,geneki_round2,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio,foreign_retained,foreign_poached,foreign_multi_year_signed,contract_years_total,contract_years_multi,multi_year_active")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -469,8 +469,8 @@ func csv_text(report: Dictionary) -> String:
 			int(offseason.get("foreign_retained_count", 0)),
 			int(offseason.get("foreign_poached_count", 0)),
 			int(offseason.get("foreign_multi_year_signed_count", 0)),
-			int(offseason.get("extension_offers_count", 0)),
-			int(offseason.get("extension_accepted_count", 0)),
+			int(offseason.get("contract_years_total_count", 0)),
+			int(offseason.get("contract_years_multi_count", 0)),
 			int(offseason.get("multi_year_active_count", 0)),
 		]
 		lines.append(_csv_values(csv_values))
@@ -478,14 +478,18 @@ func csv_text(report: Dictionary) -> String:
 
 
 func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
+	# FA宣言 (オフ冒頭)。FA日数の締めと contract_status 遷移もここで済ませる。実フロー
+	# (app_state.start_offseason) と同じく引退より前に走らせる。
+	var declaration_result: Dictionary = FaMarketService.create_declaration_state(GameDb.players, GameDb.teams, season)
+
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, season)
 	GameDb.rebuild_player_indices()
 
-	# 年次予算キャップ (2026-07-12): 実フロー (app_state.start_offseason) と同じく引退直後・
+	# 年次予算キャップ (2026-07-12): 実フロー (app_state.advance_offseason) と同じく引退直後・
 	# 補強フェーズより前に再計算する。長期検証はポストシーズンを実施しないため日本一ボーナスは常に0。
 	var budget_result: Dictionary = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, season, 0)
 
-	# R4/R5/R7 調整: 順番は 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → キャンプ → 成長。
+	# 順番は 戦力外 → ドラフト → 戦力外獲得 → 現役ドラフト → FA → 契約年数 → 外国人 → キャンプ → 成長。
 	# 外国人の去就 (残留/引き抜き/退団) は戦力外ステップではなく外国人契約市場ステップが決める。
 	var release_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, 0, season)
 	GameDb.rebuild_player_indices()
@@ -519,6 +523,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var fa_result: Dictionary = FaMarketService.process_fa_market(GameDb.players, GameDb.teams, season, 0)
 	GameDb.rebuild_player_indices()
 
+	# 契約年数 (FA市場の直後)。user_team_id=0 なので全球団がCPU基準で自動決定される。
+	var contract_years_state: Dictionary = OffseasonService.create_contract_years_state(GameDb.players, GameDb.teams, season, 0)
+	var contract_years_result: Dictionary = OffseasonService.finalize_contract_years(contract_years_state, GameDb.players, GameDb.teams)
+
 	# 外国人補強 (FA後)。生成選手を外国人枠に追加。
 	var foreign_result: Dictionary = ForeignPlayerService.process_foreign_market(GameDb.players, GameDb.teams, season, 0)
 	GameDb.rebuild_player_indices()
@@ -537,12 +545,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var dev_release_result: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, 0, season.year)
 	GameDb.rebuild_player_indices()
 
-	# R4 Step1: 契約更新 (年俸再査定 + FA権遷移 + 予算会計)。長期検証で FA権到達が累積するよう
-	# 実フローと同様 advance_players_one_year の直前に実行する。延長交渉 (Step3) は user_team_id=0
-	# のため全球団がCPU基準で自動解決される (実フローの「AIに任せる」相当)。
-	var contract_result: Dictionary = OffseasonService.process_contract_update(GameDb.players, GameDb.teams, season)
-	# 延長交渉のcap saturation監視 (毎年上限に機械的に張り付いていないか) と、複数年契約中選手の
-	# 全リーグ総数 (制度が定着後どの程度の規模で推移するかの監視)。
+	# 契約更改 (全選手の年俸再査定 + 予算会計)。実フローと同様 advance_players_one_year の直前に実行する。
+	var contract_result: Dictionary = OffseasonService.process_contract_renewal(GameDb.players, GameDb.teams, season)
+	# 複数年契約中選手の全リーグ総数 (制度が定着後どの程度の規模で推移するかの監視)。
+	# cap saturation ([[feedback_cap_saturation_pattern]]) の監視対象は contract_years_multi 側。
 	var multi_year_active_count: int = 0
 	for active_player_row in GameDb.players:
 		var active_player: PSPlayer = active_player_row as PSPlayer
@@ -608,7 +614,7 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"growers_count": int(growth_result.get("growers_count", 0)),
 		"decayers_count": int(growth_result.get("decayers_count", 0)),
 		"growth_kind_counts": (growth_result.get("growth_kind_counts", {}) as Dictionary).duplicate(true),
-		"new_fa_count": int(contract_result.get("new_fa_count", 0)),
+		"new_fa_count": int(declaration_result.get("new_fa_count", 0)),
 		"over_budget_count": int(contract_result.get("over_budget_count", 0)),
 		"fa_moved_count": int(fa_result.get("moved_count", 0)),
 		"fa_declared_count": int(fa_result.get("declared_count", 0)),
@@ -625,8 +631,8 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"foreign_multi_year_signed_count": int(foreign_result.get("contract_multi_year_count", 0)),
 		"camp_actions_count": int(camp_result.get("actions_count", 0)),
 		"camp_pitch_learning_count": int(camp_result.get("normal_pitch_learning_count", 0)),
-		"extension_offers_count": int(contract_result.get("extension_offers_count", 0)),
-		"extension_accepted_count": int(contract_result.get("extension_accepted_count", 0)),
+		"contract_years_total_count": int(contract_years_result.get("decided_count", 0)),
+		"contract_years_multi_count": int(contract_years_result.get("multi_year_count", 0)),
 		"multi_year_active_count": multi_year_active_count,
 	}
 

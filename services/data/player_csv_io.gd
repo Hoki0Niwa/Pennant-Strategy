@@ -94,11 +94,14 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int, ca
 	if int(source.get("fa_days_accrued_year", 0)) > initial_year:
 		source.erase("fa_days_accrued_year")
 		source.erase("fa_active_days_last_season")
-	# 初期世界は全員無契約 (単年) で開始する。複数年契約の発生源 (FA/外国人/延長交渉) が
-	# 生成した情報がシードに紛れ込んでいても無視する。
+	# 初期世界は全員無契約 (単年) で開始する。複数年契約の発生源 (FA/外国人/契約年数決定) が
+	# 生成した情報がシードに紛れ込んでいても無視する。オフ進行中のマーカー
+	# (今オフFA宣言した / FA市場で引き取り手がなく残留した) も同様に落とす。
 	source.erase("contract_end_year")
 	source.erase("contract_total_years")
 	source.erase("contract_signed_year")
+	source.erase("fa_declared_year")
+	source.erase("fa_returned_year")
 
 	# draft_year / traded_year は現役ドラフトの適格判定 (当年ドラフト新人・当年トレード獲得の
 	# 除外) に使われる (geneki_draft_service.gd)。進化後ワールドの未来年がそのまま残っていると

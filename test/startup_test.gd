@@ -1312,54 +1312,120 @@ func test_offseason_screen_builds_each_step() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
-# 契約更新 延長交渉パネル (OFFSEASON_PANEL_CONTRACT_EXTENSION) が実データで populate/draw できるか。
-# 候補は GameDb.players に登録せず注入した Array だけで作る (GdUnit プロセス内で共有される
-# GameDb.players を汚染しないため)。_ext_entry_row は player==null (GameDb未登録) を許容する。
-func test_offseason_screen_builds_contract_extension_panel() -> void:
+# 契約年数パネル (OFFSEASON_PANEL_CONTRACT_YEARS) が実データで populate/draw できるか。
+# 表は他画面と同じ選手レコード表なので、候補には **PSPlayerSeasonRecord を引ける選手** が要る
+# (`_record_for_people_entry` は GameDb 未登録だと null を返し行が落ちる)。そこで GameDb 上の
+# 実選手を1人借り、source_data だけ一時的に書き換えて対象条件を満たさせる。
+func test_offseason_screen_builds_contract_years_panel() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
 	var old_active: bool = AppState.offseason_active
 	var old_step: String = AppState.offseason_step
-	var old_state: Dictionary = AppState.contract_update_state.duplicate(true)
+	var old_state: Dictionary = AppState.contract_years_state.duplicate(true)
 
 	var team: PSTeam = GameDb.teams[0] as PSTeam
 	AppState.selected_team_id = team.id
+	var candidate: PSPlayer = null
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player.team_id == team.id and not player.is_retired() and not player.foreign_player and not player.development_player:
+			candidate = player
+			break
+	assert_object(candidate).is_not_null()
+	var old_source_data: Dictionary = candidate.source_data.duplicate(true)
+	var old_age: int = candidate.age
+
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
 	season.calendar_start_date = "2026-03-27"
 	AppState.current_season = season
 	AppState.offseason_active = true
-	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_YEARS
 
 	var OffseasonServiceRef = load("res://services/season/offseason_service.gd")
-	# player_value_score が EXTENSION_MIN_VALUE(60) 以上になるよう主要な z 能力を平均より高くする
-	# (z_abilities={} の平均的選手だと閾値を下回りプールが空になり phase が "done" のままになる)。
-	var strong_z: Dictionary = {}
-	for key in ["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "IF_Reach", "IF_Secure", "Run_Speed"]:
-		strong_z[key] = 2.5
-	var candidate: PSPlayer = PSPlayer.from_dict({
-		"id": 999901, "team_id": team.id, "position": 3, "role": "fielder", "age": 26, "years": 8,
-		"salary": 6000, "contract_status": "FA可能", "z_abilities": strong_z, "raw_abilities": {},
-		"source_data": {"fa_nissuu": 9999},
-	})
-	AppState.contract_update_state = OffseasonServiceRef.create_contract_update_state([candidate], [team], season, team.id)
-	assert_str(str(AppState.contract_update_state.get("phase", ""))).is_equal("extension")
+	# 今オフFA権を新規取得した選手 (fa_eligible_year == 当年) が契約年数の対象になる。
+	candidate.age = 26
+	candidate.source_data["fa_eligible_year"] = 2026
+	candidate.source_data.erase("fa_declared_year")
+	candidate.source_data.erase("contract_end_year")
+	AppState.contract_years_state = OffseasonServiceRef.create_contract_years_state([candidate], [team], season, team.id)
+	assert_bool(bool(AppState.contract_years_state.get("complete", true))).is_false()
 
 	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
 	var screen: Control = script.new()
 	add_child(screen)
 	await get_tree().process_frame
-	assert_str(str(screen._active_panel)).is_equal(AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION)
-	var total_rows: int = (screen._ext_pitcher_rows as Array).size() + (screen._ext_fielder_rows as Array).size()
+	assert_str(str(screen._active_panel)).is_equal(AppState.OFFSEASON_PANEL_CONTRACT_YEARS)
+	var total_rows: int = (screen._cy_pitcher_rows as Array).size() + (screen._cy_fielder_rows as Array).size()
 	assert_int(total_rows).is_equal(1)
 	screen.queue_free()
 
+	candidate.source_data = old_source_data
+	candidate.age = old_age
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season
 	AppState.offseason_active = old_active
 	AppState.offseason_step = old_step
-	AppState.contract_update_state = old_state
+	AppState.contract_years_state = old_state
+
+
+# FA宣言ステップは表示専用の結果パネル。宣言/残留の一覧が描画できるか。
+func test_offseason_screen_draws_fa_declaration_result() -> void:
+	var old_active: bool = AppState.offseason_active
+	var old_step: String = AppState.offseason_step
+	var old_results: Dictionary = AppState.offseason_results.duplicate(true)
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	# 一覧は選手レコード表なので、記録を引ける実選手 (GameDb 上) を使う。宣言者と残留者を1人ずつ。
+	var sample: Array = []
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if player.team_id == team.id and not player.is_retired():
+			sample.append(player)
+		if sample.size() >= 2:
+			break
+	assert_int(sample.size()).is_equal(2)
+	var declared_player: PSPlayer = sample[0] as PSPlayer
+	var stayed_player: PSPlayer = sample[1] as PSPlayer
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_FA_DECLARATION
+	AppState.offseason_results = {
+		AppState.OFFSEASON_STEP_FA_DECLARATION: {
+			"title": "FA宣言",
+			"holder_count": 2, "declared_count": 1, "new_fa_count": 1,
+			"entries": [
+				{"player_id": declared_player.id, "name": declared_player.name, "age": declared_player.age,
+					"position": declared_player.position, "role": declared_player.role,
+					"team_id": team.id, "salary": declared_player.salary, "value": 72, "fa_pass_count": 0,
+					"declared": true, "is_new_fa": true},
+				{"player_id": stayed_player.id, "name": stayed_player.name, "age": stayed_player.age,
+					"position": stayed_player.position, "role": stayed_player.role,
+					"team_id": team.id, "salary": stayed_player.salary, "value": 65, "fa_pass_count": 2,
+					"declared": false, "is_new_fa": false},
+			],
+		},
+	}
+
+	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
+	var screen: Control = script.new()
+	add_child(screen)
+	await get_tree().process_frame
+	assert_str(str(screen._active_panel)).is_equal(AppState.OFFSEASON_PANEL_RESULTS)
+	var view: Dictionary = AppState.get_offseason_view_state()
+	assert_bool(bool(view.get("is_interactive", true))).is_false()
+	assert_str(str(view.get("title", ""))).is_equal("FA宣言")
+	# 宣言しなかった選手の行はグレーアウト (__dim) される。
+	var rows: Array = []
+	for entry_value in (AppState.offseason_results[AppState.OFFSEASON_STEP_FA_DECLARATION] as Dictionary).get("entries", []) as Array:
+		rows.append(screen.call("_fa_declaration_row", entry_value as Dictionary))
+	assert_bool(bool((rows[0] as Dictionary).get("__dim", true))).is_false()
+	assert_bool(bool((rows[1] as Dictionary).get("__dim", false))).is_true()
+	screen.queue_free()
+
+	AppState.offseason_active = old_active
+	AppState.offseason_step = old_step
+	AppState.offseason_results = old_results
 
 
 func test_offseason_salary_table_layout_and_market_salary_priority() -> void:
@@ -1389,7 +1455,7 @@ func test_offseason_view_state_exposes_ui_phase() -> void:
 	var old_active: bool = AppState.offseason_active
 	var old_step: String = AppState.offseason_step
 	var old_draft_state: Dictionary = AppState.draft_state.duplicate(true)
-	var old_contract_update_state: Dictionary = AppState.contract_update_state.duplicate(true)
+	var old_contract_years_state: Dictionary = AppState.contract_years_state.duplicate(true)
 
 	AppState.offseason_active = false
 	var inactive: Dictionary = AppState.get_offseason_view_state()
@@ -1410,19 +1476,19 @@ func test_offseason_view_state_exposes_ui_phase() -> void:
 	assert_str(str(draft_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_DRAFT)
 	assert_str(str(draft_view.get("status", ""))).is_equal("本指名")
 
-	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
-	AppState.contract_update_state = {"complete": false, "phase": "extension"}
-	var ext_view: Dictionary = AppState.get_offseason_view_state()
-	assert_str(str(ext_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION)
-	assert_bool(bool(ext_view.get("is_interactive", false))).is_true()
-	AppState.contract_update_state = {"complete": true, "phase": "done"}
-	var ext_done_view: Dictionary = AppState.get_offseason_view_state()
-	assert_bool(bool(ext_done_view.get("is_interactive", true))).is_false()
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_YEARS
+	AppState.contract_years_state = {"complete": false, "candidates": []}
+	var years_view: Dictionary = AppState.get_offseason_view_state()
+	assert_str(str(years_view.get("active_panel", ""))).is_equal(AppState.OFFSEASON_PANEL_CONTRACT_YEARS)
+	assert_bool(bool(years_view.get("is_interactive", false))).is_true()
+	AppState.contract_years_state = {"complete": true, "candidates": []}
+	var years_done_view: Dictionary = AppState.get_offseason_view_state()
+	assert_bool(bool(years_done_view.get("is_interactive", true))).is_false()
 
 	AppState.offseason_active = old_active
 	AppState.offseason_step = old_step
 	AppState.draft_state = old_draft_state
-	AppState.contract_update_state = old_contract_update_state
+	AppState.contract_years_state = old_contract_years_state
 
 
 # 外国人ステップ (step7) は phase "contract"→"contract_result"→"scout"→"scout_result" の4段が

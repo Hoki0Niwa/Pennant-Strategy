@@ -69,9 +69,109 @@ static func process_fa_market(players: Array, teams: Array, season: PSSeason, us
 	return finalize_fa_market(state, players, season)
 
 
-static func create_fa_market_state(players: Array, teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
+# オフ冒頭の「FA宣言」ステップ。FA日数の締めと contract_status 遷移を済ませてから宣言者を抽選し、
+# **宣言したという事実 (fa_declared_year) だけ**を選手に記録する。実際のロースター離脱
+# (team_id=0 / free_agent) は FA市場ステップまで起こさない — 先に離脱させると戦力外・ドラフトが
+# 見る在籍人数がずれ、OPENING_ROSTER_TARGET から逆算する編成計画が丸ごと動いてしまうため。
+# 表示専用ステップなので state は持たず、結果 dict をそのまま返す。
+static func create_declaration_state(players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var year: int = season.year if season != null else 0
+	var new_fa: Array = OffseasonService.accrue_fa_days_and_update_status(players, teams, season)
 	var declared: Array = _select_declarers(players, teams, season, year)
+	var declared_ids: Dictionary = {}
+	for row in declared:
+		var declared_entry: Dictionary = row as Dictionary
+		var declared_player: PSPlayer = _find_player_by_id(players, int(declared_entry.get("player_id", 0)))
+		if declared_player == null:
+			continue
+		declared_player.source_data["fa_declared_year"] = year
+		declared_player.source_data["fa_eligible_year"] = int(declared_entry.get("fa_eligible_year", year))
+		declared_ids[declared_player.id] = true
+	var passed_count: int = _increment_non_declared_fa_passes(players, year, declared_ids)
+
+	var new_fa_ids: Dictionary = {}
+	for row in new_fa:
+		new_fa_ids[int((row as Dictionary).get("player_id", 0))] = true
+	var entries: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.is_retired() or player.team_id <= 0:
+			continue
+		if player.foreign_player or player.development_player or not player.is_fa_eligible():
+			continue
+		entries.append({
+			"player_id": player.id,
+			"name": player.name,
+			"age": player.age,
+			"position": player.position,
+			"role": player.role,
+			"team_id": player.team_id,
+			"from_team": player.team_id,
+			"salary": player.salary,
+			"value": OffseasonService.player_value_score(player),
+			"fa_nissuu": player.fa_service_days(),
+			"fa_pass_count": _fa_pass_count(player, year),
+			"contract_years_remaining": player.contract_years_remaining(year),
+			"declared": declared_ids.has(player.id),
+			"is_new_fa": new_fa_ids.has(player.id),
+		})
+	# 宣言者を先頭に、あとは価値降順 (球団をまたいで「今オフ動く選手」から目に入るようにする)。
+	entries.sort_custom(func(a, b) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		if bool(da.get("declared", false)) != bool(db.get("declared", false)):
+			return bool(da.get("declared", false))
+		if int(da.get("value", 0)) != int(db.get("value", 0)):
+			return int(da.get("value", 0)) > int(db.get("value", 0))
+		return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
+	)
+	return {
+		"title": "FA宣言",
+		"year": year,
+		"entries": entries,
+		"holder_count": entries.size(),
+		"declared_count": declared_ids.size(),
+		"new_fa": new_fa,
+		"new_fa_count": new_fa.size(),
+		"passed_count": passed_count,
+	}
+
+
+# FA宣言ステップで宣言済みの選手からFA市場のエントリを組み立てる。宣言後に引退した選手は除く。
+static func _declared_entries(players: Array, season: PSSeason, year: int) -> Array:
+	var league_ctx: Dictionary = {}
+	if season != null:
+		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	var rank_by_player_id: Dictionary = _build_fa_rank_by_player_id(players)
+	var entries: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.is_retired() or player.team_id <= 0:
+			continue
+		if not player.is_fa_declared(year):
+			continue
+		var record: PSPlayerSeasonRecord = null
+		if season != null:
+			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
+		var war: float = _record_war(record, league_ctx)
+		var value: int = OffseasonService.player_value_score(player)
+		var entry: Dictionary = _declaration_entry(player, record, value, war, rank_by_player_id, year, _declaration_chance(player, year))
+		entry.erase("declare_score")
+		entry["available"] = true
+		entries.append(entry)
+	entries.sort_custom(func(a, b) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		if int(da.get("value", 0)) != int(db.get("value", 0)):
+			return int(da.get("value", 0)) > int(db.get("value", 0))
+		return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
+	)
+	return entries
+
+
+static func create_fa_market_state(players: Array, _teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
+	var year: int = season.year if season != null else 0
+	var declared: Array = _declared_entries(players, season, year)
 	for row in declared:
 		var entry: Dictionary = row as Dictionary
 		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
@@ -234,25 +334,22 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 		return state.get("final_result", {}) as Dictionary
 	var year: int = season.year if season != null else int(state.get("year", 0))
 	var returned_count: int = 0
-	var declared_ids: Dictionary = {}
 	for row in state.get("declared", []) as Array:
 		var entry: Dictionary = row as Dictionary
-		declared_ids[int(entry.get("player_id", 0))] = true
 		if not bool(entry.get("available", true)):
 			continue
 		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 		if player == null:
 			continue
-		var offer_years: int = maxi(1, int(entry.get("offer_years", 1)))
+		# 引き取り手がなく元球団へ戻る選手。年俸は提示額で確定するが、**契約年数は決めない** —
+		# 直後の契約年数ステップで球団が決める (fa_returned_year がその対象マーカー)。
 		player.team_id = int(entry.get("from_team", 0))
 		player.salary = int(entry.get("offer_salary", player.salary))
 		player.source_data.erase("free_agent")
 		player.source_data["fa_signed_year"] = year
 		player.source_data["fa_contract_salary"] = player.salary
 		player.source_data["fa_pass_count"] = 0
-		player.source_data["contract_end_year"] = year + offer_years
-		player.source_data["contract_total_years"] = offer_years
-		player.source_data["contract_signed_year"] = year
+		player.source_data["fa_returned_year"] = year
 		if not player.source_data.has("fa_eligible_year"):
 			player.source_data["fa_eligible_year"] = int(entry.get("fa_eligible_year", year))
 		PSCareerLog.log_fa_stay(player, year, player.team_id, player.salary)
@@ -260,7 +357,6 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 		entry["returned"] = true
 		returned_count += 1
 
-	var passed_count: int = _increment_non_declared_fa_passes(players, year, declared_ids)
 	var signings: Array = (state.get("signings", []) as Array).duplicate(true)
 	signings.sort_custom(func(a, b) -> bool:
 		return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
@@ -294,10 +390,8 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 		"moved_count": signings.size(),
 		"failed_negotiations": (state.get("failed_negotiations", []) as Array).duplicate(true),
 		"returned_count": returned_count,
-		"passed_count": passed_count,
 	}
 	state["returned_count"] = returned_count
-	state["passed_count"] = passed_count
 	state["finalized"] = true
 	state["complete"] = true
 	state["final_result"] = result

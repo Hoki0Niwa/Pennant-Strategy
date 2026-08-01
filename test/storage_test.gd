@@ -109,25 +109,24 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	assert_int(generated_base_order.size()).is_equal(9)
 	team.auto_lineup = false
 	AppState.offseason_active = true
-	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
-	AppState.contract_update_state = {
-		"phase": "extension",
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_RENEWAL
+	AppState.contract_years_state = {
+		"year": 2026,
 		"complete": false,
-		"candidates": [{"player_id": 101, "team_id": team.id, "value": 72.5}],
-		"offers": {"101": {"years": 3, "salary": 18000}},
+		"candidates": [{"player_id": 101, "team_id": team.id, "value": 72.5, "decided": true, "years": 3, "salary": 18000}],
 	}
 
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	var payload: Dictionary = SaveService.load_state()
 	assert_bool(payload.has("team_auto_lineup")).is_true()
-	assert_bool(payload.has("contract_update_state")).is_true()
+	assert_bool(payload.has("contract_years_state")).is_true()
 
 	team.auto_lineup = true
-	AppState.contract_update_state = {}
+	AppState.contract_years_state = {}
 	assert_bool(AppState.restore_from_save(payload)).is_true()
 	team = GameDb.get_team(team.id)
 	assert_bool(team.auto_lineup).is_false()
-	assert_str(JSON.stringify(AppState.contract_update_state)).is_equal(JSON.stringify(payload["contract_update_state"]))
+	assert_str(JSON.stringify(AppState.contract_years_state)).is_equal(JSON.stringify(payload["contract_years_state"]))
 	assert_str(JSON.stringify(AppState.current_season.get_auto_batting_order(team.id, true))).is_equal(
 		JSON.stringify(generated_base_order)
 	)
@@ -137,7 +136,7 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 	team.auto_lineup = false
 	assert_bool(SaveService.is_state_current(AppState)).is_true()
-	AppState.contract_update_state["phase"] = "resolved"
+	AppState.contract_years_state["year"] = 2027
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 
 	_restore_app_state(old_state, test_save_id)
@@ -404,7 +403,7 @@ func test_ensure_season_records_keeps_retired_record_but_erases_fully_removed_pl
 	assert_array(current_ids).not_contains([fully_removed_player.id])
 
 
-# 実プレイでの再現条件を通した回帰テスト: AppState.start_offseason() が引退を確定してオートセーブし、
+# 実プレイでの再現条件を通した回帰テスト: 引退ステップが引退を確定してオートセーブし、
 # その後セーブから再開する (RecordStore.load_records → ensure_season_records の実行順) と、
 # 旧実装では引退選手の最終シーズン成績が正規化テーブルからも失われていた。
 func test_retired_player_final_season_stats_survive_offseason_save_reload() -> void:
@@ -439,9 +438,15 @@ func test_retired_player_final_season_stats_survive_offseason_save_reload() -> v
 	assert_object(season_record).is_not_null()
 	season_record.batter_stats.hits = 180
 
-	# start_offseason() は引退判定 (process_retirement) 直後に auto_save_enabled を見てオートセーブする。
+	# start_offseason() はFA宣言ステップ、引退判定はその次のステップ。どちらも直後に
+	# auto_save_enabled を見てオートセーブする。
 	var result: Dictionary = AppState.start_offseason()
 	assert_bool(bool(result.get("ok", false))).is_true()
+	# FA宣言した選手は同オフ引退しない仕様なので、判定を決定的にするため宣言印を外してから進める。
+	target_player.source_data.erase("fa_declared_year")
+	var retirement_step: Dictionary = AppState.advance_offseason()
+	assert_bool(bool(retirement_step.get("ok", false))).is_true()
+	assert_str(AppState.offseason_step).is_equal(AppState.OFFSEASON_STEP_RETIREMENT)
 	assert_bool(target_player.is_retired()).is_true()
 
 	# オフシーズン中にセーブから再開する経路 (RecordStore.load_records → ensure_season_records) を再現する。
@@ -599,7 +604,7 @@ func test_unsaved_next_season_progress_does_not_persist_records() -> void:
 	assert_bool(SaveService.save_state(AppState)).is_true()
 
 	var saved_season_number: int = AppState.current_season.season_number
-	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_UPDATE
+	AppState.offseason_step = AppState.OFFSEASON_STEP_CONTRACT_RENEWAL
 	assert_bool(AppState.finalize_offseason()).is_true()
 	var unsaved_season: PSSeason = AppState.current_season
 	assert_int(unsaved_season.season_number).is_equal(saved_season_number + 1)
@@ -987,7 +992,7 @@ func _capture_app_state() -> Dictionary:
 		"fa_state": AppState.fa_state.duplicate(true),
 		"foreign_state": AppState.foreign_state.duplicate(true),
 		"camp_state": AppState.camp_state.duplicate(true),
-		"contract_update_state": AppState.contract_update_state.duplicate(true),
+		"contract_years_state": AppState.contract_years_state.duplicate(true),
 		"offseason_active": AppState.offseason_active,
 		"postseason_active": AppState.postseason_active,
 		"current_postseason": AppState.current_postseason,
@@ -1013,7 +1018,7 @@ func _restore_app_state(old_state: Dictionary, test_save_id: String) -> void:
 	AppState.fa_state = (old_state.get("fa_state", {}) as Dictionary).duplicate(true)
 	AppState.foreign_state = (old_state.get("foreign_state", {}) as Dictionary).duplicate(true)
 	AppState.camp_state = (old_state.get("camp_state", {}) as Dictionary).duplicate(true)
-	AppState.contract_update_state = (old_state.get("contract_update_state", {}) as Dictionary).duplicate(true)
+	AppState.contract_years_state = (old_state.get("contract_years_state", {}) as Dictionary).duplicate(true)
 	AppState.offseason_active = bool(old_state.get("offseason_active", false))
 	AppState.postseason_active = bool(old_state.get("postseason_active", false))
 	AppState.current_postseason = old_state.get("current_postseason", null) as PSPostseasonResult

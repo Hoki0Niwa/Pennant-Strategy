@@ -11,6 +11,7 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 # オフシーズン進行はステップID (String) で管理する。順序は OFFSEASON_STEP_ORDER が単一ソースで、
 # ステップの挿入・並べ替えはこの配列の編集だけで完結する (番号の振り直しは存在しない)。
 # offseason_results のキーもこのIDをそのまま使う。
+const OFFSEASON_STEP_FA_DECLARATION: String = "fa_declaration"
 const OFFSEASON_STEP_RETIREMENT: String = "retirement"
 const OFFSEASON_STEP_RELEASE_EDIT: String = "release_edit"
 const OFFSEASON_STEP_RELEASE_COMMIT: String = "release_commit"
@@ -19,11 +20,13 @@ const OFFSEASON_STEP_DRAFT_DEVELOPMENT: String = "draft_development"
 const OFFSEASON_STEP_RELEASED_MARKET: String = "released_market"
 const OFFSEASON_STEP_GENEKI_DRAFT: String = "geneki_draft"
 const OFFSEASON_STEP_FA_MARKET: String = "fa_market"
+const OFFSEASON_STEP_CONTRACT_YEARS: String = "contract_years"
 const OFFSEASON_STEP_FOREIGN_MARKET: String = "foreign_market"
 const OFFSEASON_STEP_CAMP: String = "camp"
 const OFFSEASON_STEP_GROWTH: String = "growth"
-const OFFSEASON_STEP_CONTRACT_UPDATE: String = "contract_update"
+const OFFSEASON_STEP_CONTRACT_RENEWAL: String = "contract_renewal"
 const OFFSEASON_STEP_ORDER: Array[String] = [
+	OFFSEASON_STEP_FA_DECLARATION,
 	OFFSEASON_STEP_RETIREMENT,
 	OFFSEASON_STEP_RELEASE_EDIT,
 	OFFSEASON_STEP_RELEASE_COMMIT,
@@ -32,10 +35,11 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	OFFSEASON_STEP_RELEASED_MARKET,
 	OFFSEASON_STEP_GENEKI_DRAFT,
 	OFFSEASON_STEP_FA_MARKET,
+	OFFSEASON_STEP_CONTRACT_YEARS,
 	OFFSEASON_STEP_FOREIGN_MARKET,
 	OFFSEASON_STEP_CAMP,
 	OFFSEASON_STEP_GROWTH,
-	OFFSEASON_STEP_CONTRACT_UPDATE,
+	OFFSEASON_STEP_CONTRACT_RENEWAL,
 ]
 
 const OFFSEASON_PANEL_NONE: String = "none"
@@ -50,7 +54,7 @@ const OFFSEASON_PANEL_FOREIGN_CONTRACT: String = "foreign_contract"
 const OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT: String = "foreign_contract_result"
 const OFFSEASON_PANEL_FOREIGN_RESULT: String = "foreign_result"
 const OFFSEASON_PANEL_CAMP: String = "camp"
-const OFFSEASON_PANEL_CONTRACT_EXTENSION: String = "contract_extension"
+const OFFSEASON_PANEL_CONTRACT_YEARS: String = "contract_years"
 
 var current_screen: String = "start"
 # 画面遷移の戻る/進む用スタック。各要素は画面名と選択中 player_id のスナップショット。
@@ -90,7 +94,7 @@ var geneki_draft_state: Dictionary = {}
 var fa_state: Dictionary = {}
 var foreign_state: Dictionary = {}
 var camp_state: Dictionary = {}
-var contract_update_state: Dictionary = {}
+var contract_years_state: Dictionary = {}
 var offseason_active: bool = false
 var postseason_active: bool = false
 var current_postseason: PSPostseasonResult = null
@@ -297,10 +301,10 @@ func get_offseason_view_state() -> Dictionary:
 				active_panel = OFFSEASON_PANEL_CAMP
 				title = "キャンプ"
 				interactive = true
-		OFFSEASON_STEP_CONTRACT_UPDATE:
-			if not contract_update_state.is_empty() and not bool(contract_update_state.get("complete", false)):
-				active_panel = OFFSEASON_PANEL_CONTRACT_EXTENSION
-				title = "契約更新(延長交渉)"
+		OFFSEASON_STEP_CONTRACT_YEARS:
+			if not contract_years_state.is_empty() and not bool(contract_years_state.get("complete", false)):
+				active_panel = OFFSEASON_PANEL_CONTRACT_YEARS
+				title = "契約年数の決定"
 				interactive = true
 
 	if not interactive:
@@ -345,7 +349,7 @@ func start_new_season() -> bool:
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
-	contract_update_state = {}
+	contract_years_state = {}
 	offseason_active = false
 	postseason_active = false
 	current_postseason = null
@@ -379,7 +383,7 @@ func start_next_season() -> bool:
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
-	contract_update_state = {}
+	contract_years_state = {}
 	offseason_active = false
 	postseason_active = false
 	current_postseason = null
@@ -515,23 +519,21 @@ func start_offseason() -> Dictionary:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
 	_archive_current_season_if_needed()
 	postseason_active = false
-	# Step 0: 引退判定を即時実行して結果を保存する (引退者除外後の payroll で予算を算定するため、
-	# 年次予算再計算はこの直後に行う)。
-	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, current_season)
-	retirement_result["title"] = "引退判定"
-	var champion_id: int = current_postseason.champion_team_id if current_postseason != null else 0
-	retirement_result["budgets"] = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, current_season, champion_id)
-	offseason_step = OFFSEASON_STEP_RETIREMENT
-	offseason_results = {OFFSEASON_STEP_RETIREMENT: retirement_result}
+	# Step 0: FA宣言を即時実行して結果を保存する (FA日数の締めと contract_status 遷移もここで
+	# 済ませる)。宣言は事実の記録だけで、ロースター離脱は FA市場ステップまで起こらない。
+	var declaration_result: Dictionary = FaMarketService.create_declaration_state(GameDb.players, GameDb.teams, current_season)
+	declaration_result["title"] = "FA宣言"
+	offseason_step = OFFSEASON_STEP_FA_DECLARATION
+	offseason_results = {OFFSEASON_STEP_FA_DECLARATION: declaration_result}
 	draft_state = {}
 	released_market_state = {}
 	geneki_draft_state = {}
 	fa_state = {}
 	foreign_state = {}
 	camp_state = {}
-	contract_update_state = {}
+	contract_years_state = {}
 	offseason_active = true
-	last_status_message = str(retirement_result.get("title", ""))
+	last_status_message = str(declaration_result.get("title", ""))
 	_save_if_enabled()
 	# 年に一度の節目で、肥大化していれば DB ファイルを切り詰める (freelist 回収)。
 	if auto_save_enabled:
@@ -617,8 +619,8 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "外国人補強が進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_CAMP and not _is_camp_complete():
 		return {"ok": false, "message": "キャンプが進行中です。先に完了してください"}
-	if offseason_step == OFFSEASON_STEP_CONTRACT_UPDATE and not _is_contract_update_complete():
-		return {"ok": false, "message": "契約更新の延長交渉が進行中です。先に完了してください"}
+	if offseason_step == OFFSEASON_STEP_CONTRACT_YEARS and not _is_contract_years_complete():
+		return {"ok": false, "message": "契約年数の決定が進行中です。先に完了してください"}
 	if offseason_steps_complete():
 		return {"ok": false, "message": "オフシーズン処理は完了しています。「翌年開始」で次シーズンへ進んでください"}
 	var current_index: int = offseason_step_index()
@@ -630,9 +632,16 @@ func advance_offseason() -> Dictionary:
 	var has_result_to_store: bool = true
 
 	match next_step:
+		OFFSEASON_STEP_RETIREMENT:
+			# 引退者を除外した後の payroll で年次予算を算定するため、予算再計算はこの直後に行う。
+			step_result = OffseasonService.process_retirement(GameDb.players, current_season)
+			step_result["title"] = "引退判定"
+			var champion_id: int = current_postseason.champion_team_id if current_postseason != null else 0
+			step_result["budgets"] = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, current_season, champion_id)
+			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_RELEASE_EDIT:
-			# 引退結果 (step 0) から戦力外エディタ (step 1) へのナビゲートのみ。
-			# step 1 は editor 表示なので結果データは持たない。
+			# 引退結果から戦力外エディタへのナビゲートのみ。
+			# 戦力外エディタは editor 表示なので結果データは持たない。
 			has_result_to_store = false
 		OFFSEASON_STEP_DRAFT_MAIN:
 			# R4/R5 調整: 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長 の順。
@@ -696,12 +705,15 @@ func advance_offseason() -> Dictionary:
 			var dev_rel: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, selected_team_id, current_season.year if current_season != null else 0)
 			step_result["dev_released_count"] = int(dev_rel.get("released_count", 0))
 			GameDb.rebuild_player_indices()
-		OFFSEASON_STEP_CONTRACT_UPDATE:
-			contract_update_state = OffseasonService.create_contract_update_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
-			if _is_contract_update_complete():
-				step_result = _finalize_contract_update_if_complete()
+		OFFSEASON_STEP_CONTRACT_YEARS:
+			contract_years_state = OffseasonService.create_contract_years_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
+			if _is_contract_years_complete():
+				step_result = _finalize_contract_years_if_complete()
 			else:
-				step_result = {"title": "契約更新", "contract_update_in_progress": true}
+				step_result = {"title": "契約年数", "contract_years_in_progress": true}
+		OFFSEASON_STEP_CONTRACT_RENEWAL:
+			step_result = OffseasonService.process_contract_renewal(GameDb.players, GameDb.teams, current_season)
+			step_result["title"] = "契約更改"
 		_:
 			return {"ok": false, "message": "不正なステップID: %s" % next_step}
 
@@ -1376,63 +1388,83 @@ func _finalize_camp_if_complete() -> Dictionary:
 	return result
 
 
-# 契約更新ステップの延長交渉 (自軍の候補に年数を選んで提示、予算/上限年数は entry.max_years でクランプ)。
-func submit_contract_extension_offer(player_id: int, years: int) -> Dictionary:
-	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_UPDATE:
-		return {"ok": false, "message": "契約更新は現在有効ではありません"}
-	if contract_update_state.is_empty():
-		return {"ok": false, "message": "契約更新が初期化されていません"}
-	var result: Dictionary = OffseasonService.submit_extension_offer(contract_update_state, GameDb.players, GameDb.teams, selected_team_id, player_id, years)
-	contract_update_state = result.get("state", contract_update_state) as Dictionary
+# 契約年数ステップ: 自軍の候補に年数 (1〜entry.max_years) を決める。決めた年数は必ず成立する。
+func submit_contract_years(player_id: int, years: int) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_YEARS:
+		return {"ok": false, "message": "契約年数の決定は現在有効ではありません"}
+	if contract_years_state.is_empty():
+		return {"ok": false, "message": "契約年数の決定が初期化されていません"}
+	var result: Dictionary = OffseasonService.submit_contract_years(contract_years_state, GameDb.players, GameDb.teams, selected_team_id, player_id, years)
+	contract_years_state = result.get("state", contract_years_state) as Dictionary
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
 
 
-func withdraw_contract_extension_offer(player_id: int) -> Dictionary:
-	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_UPDATE:
-		return {"ok": false, "message": "契約更新は現在有効ではありません"}
-	if contract_update_state.is_empty():
-		return {"ok": false, "message": "契約更新が初期化されていません"}
-	var result: Dictionary = OffseasonService.withdraw_extension_offer(contract_update_state, player_id)
-	contract_update_state = result.get("state", contract_update_state) as Dictionary
+func withdraw_contract_years(player_id: int) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_YEARS:
+		return {"ok": false, "message": "契約年数の決定は現在有効ではありません"}
+	if contract_years_state.is_empty():
+		return {"ok": false, "message": "契約年数の決定が初期化されていません"}
+	var result: Dictionary = OffseasonService.withdraw_contract_years(contract_years_state, player_id)
+	contract_years_state = result.get("state", contract_years_state) as Dictionary
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
 
 
-# 延長交渉を確定する: 未提示分はCPU基準 (自軍含む) で自動判断し、全候補を解決してから
-# 年俸再査定+予算会計まで一括で終える。専用UIパネルが無くてもこれ一つで進行できる。
-func finalize_contract_extensions() -> Dictionary:
-	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_UPDATE:
-		return {"ok": false, "message": "契約更新は現在有効ではありません"}
-	if contract_update_state.is_empty():
-		return {"ok": false, "message": "契約更新が初期化されていません"}
-	_finalize_contract_update_if_complete_force()
-	GameDb.rebuild_player_indices()
+# 自軍の未決定分をCPUと同じ基準 (価値/年齢/予算) で一括決定する (UIの「自動で決める」)。
+func auto_decide_contract_years() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_YEARS:
+		return {"ok": false, "message": "契約年数の決定は現在有効ではありません"}
+	if contract_years_state.is_empty():
+		return {"ok": false, "message": "契約年数の決定が初期化されていません"}
+	var result: Dictionary = OffseasonService.auto_decide_contract_years(contract_years_state, GameDb.players, GameDb.teams, selected_team_id)
+	contract_years_state = result.get("state", contract_years_state) as Dictionary
 	_save_if_enabled()
-	return {"ok": true, "state": contract_update_state}
+	return result
 
 
-func _is_contract_update_complete() -> bool:
-	return not contract_update_state.is_empty() and bool(contract_update_state.get("complete", false))
+# 契約年数を確定する。自軍に未決定が残っていたら拒否 (UI側でもボタンを無効化している)。
+# CPU球団の未決定分はここで一括決定される。
+func finalize_contract_years() -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_CONTRACT_YEARS:
+		return {"ok": false, "message": "契約年数の決定は現在有効ではありません"}
+	if contract_years_state.is_empty():
+		return {"ok": false, "message": "契約年数の決定が初期化されていません"}
+	var pending: int = pending_contract_years_count()
+	if pending > 0:
+		return {"ok": false, "message": "契約年数が未決定の選手が %d 人います" % pending}
+	_finalize_contract_years_force()
+	_save_if_enabled()
+	return {"ok": true, "state": contract_years_state}
 
 
-func _finalize_contract_update_if_complete() -> Dictionary:
-	if not _is_contract_update_complete():
-		return {"title": "契約更新", "contract_update_in_progress": true}
-	return _finalize_contract_update_if_complete_force()
+func pending_contract_years_count() -> int:
+	if contract_years_state.is_empty():
+		return 0
+	return OffseasonService.pending_contract_years_count(contract_years_state, selected_team_id)
 
 
-# finalize_contract_extensions は phase=="extension" のまま呼ばれる (ユーザーが確定ボタンを押す
-# 経路) ので、_is_contract_update_complete による早期リターンを経ずに直接サービス層を呼ぶ。
-# OffseasonService.finalize_contract_extensions 自体は finalized フラグで二重実行を防ぐ。
-func _finalize_contract_update_if_complete_force() -> Dictionary:
-	var result: Dictionary = OffseasonService.finalize_contract_extensions(contract_update_state, GameDb.players, GameDb.teams, current_season)
+func _is_contract_years_complete() -> bool:
+	return not contract_years_state.is_empty() and bool(contract_years_state.get("complete", false))
+
+
+func _finalize_contract_years_if_complete() -> Dictionary:
+	if not _is_contract_years_complete():
+		return {"title": "契約年数", "contract_years_in_progress": true}
+	return _finalize_contract_years_force()
+
+
+# ユーザーが確定ボタンを押す経路は complete==false のまま呼ばれるので、_is_contract_years_complete
+# を経ずに直接サービス層を呼ぶ。OffseasonService.finalize_contract_years 自体は finalized フラグで
+# 二重実行を防ぐ。
+func _finalize_contract_years_force() -> Dictionary:
+	var result: Dictionary = OffseasonService.finalize_contract_years(contract_years_state, GameDb.players, GameDb.teams)
 	GameDb.rebuild_player_indices()
-	result["title"] = "契約更新"
-	offseason_results[OFFSEASON_STEP_CONTRACT_UPDATE] = result
-	last_status_message = "契約更新"
+	result["title"] = "契約年数"
+	offseason_results[OFFSEASON_STEP_CONTRACT_YEARS] = result
+	last_status_message = "契約年数"
 	return result
 
 
@@ -1446,7 +1478,7 @@ func finalize_offseason() -> bool:
 func _normalize_saved_offseason_step(raw_step: Variant) -> String:
 	if raw_step is String and OFFSEASON_STEP_ORDER.has(raw_step):
 		return raw_step
-	return OFFSEASON_STEP_RETIREMENT
+	return OFFSEASON_STEP_ORDER[0]
 
 
 func simulate_next_game(during_skip: bool = false) -> Dictionary:
@@ -1827,7 +1859,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	fa_state = (data.get("fa_state", {}) as Dictionary).duplicate(true)
 	foreign_state = (data.get("foreign_state", {}) as Dictionary).duplicate(true)
 	camp_state = (data.get("camp_state", {}) as Dictionary).duplicate(true)
-	contract_update_state = (data.get("contract_update_state", {}) as Dictionary).duplicate(true)
+	contract_years_state = (data.get("contract_years_state", {}) as Dictionary).duplicate(true)
 	offseason_active = bool(data.get("offseason_active", false))
 	postseason_active = bool(data.get("postseason_active", false))
 	auto_roster_swap_for_user_team = bool(data.get("auto_roster_swap_for_user_team", false))

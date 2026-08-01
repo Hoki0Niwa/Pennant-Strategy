@@ -182,6 +182,8 @@ const BODY: Rect2 = Rect2(262, 256, 1638, 804)
 # 外国人契約市場: 上段=自軍の契約切れ (最大4人・1表) / 下段=他球団の契約切れ (投手/野手タブ)。
 const FGC_HOME_RECT: Rect2 = Rect2(262, 284, 1638, 196)
 const FGC_AWAY_RECT: Rect2 = Rect2(262, 492, 1638, 568)
+# 契約年数: ステータス行のぶんだけ BODY を下げた1表。
+const CY_BODY_RECT: Rect2 = Rect2(262, 284, 1638, 776)
 # キャンプ: 上段=候補ボード(全幅) / 下段=特別練習メニュー・成功率・成功時獲得適性の3パネル。
 const CAMP_BOARD: Rect2 = Rect2(262, 324, 1638, 512)
 const CAMP_MENU: Rect2 = Rect2(262, 850, 654, 210)
@@ -337,19 +339,22 @@ var _camp_result_tab: String = "pitcher"
 # 選手の成長 結果。一覧はドラフトと同じ候補タブで投手/野手/各守備位置を切り替える。
 var _growth_tab: String = "pitcher"
 
-# 契約更新 結果。自チームの選手一覧 (投手/野手タブ・昨シーズン成績付き)。
+# 契約更改 結果。自チームの選手一覧 (投手/野手タブ・昨シーズン成績付き)。
 var _contract_tab: String = "pitcher"
 
-# 契約更新 延長交渉 (step10 前段)。自軍候補のみの1表 (投手/野手タブ)。
-var selected_ext_player_id: int = 0
-var _ext_tab: String = PLAYER_TAB_PITCHER
-var _ext_pitcher_rows: Array = []
-var _ext_fielder_rows: Array = []
-var _ext_by_id: Dictionary = {}
-var _ext_status_text: String = ""
-# 提示する契約年数。0 = 未選択 (提示済みならその年数、なければ2年)。下限2年・上限は entry.max_years。
-var selected_ext_offer_years: int = 0
-var _ext_confirm_dialog: ConfirmationDialog = null
+# FA宣言 結果。FA権保有者一覧 (投手/野手タブ)。
+var _fa_declaration_tab: String = PLAYER_TAB_PITCHER
+
+# 契約年数の決定 (FA市場の直後)。自軍候補のみの1表 (投手/野手タブ)。
+var selected_cy_player_id: int = 0
+var _cy_tab: String = PLAYER_TAB_PITCHER
+var _cy_pitcher_rows: Array = []
+var _cy_fielder_rows: Array = []
+var _cy_by_id: Dictionary = {}
+var _cy_status_text: String = ""
+# 選択中の契約年数。0 = 未選択 (決定済みならその年数、なければ単年)。上限は entry.max_years。
+var selected_cy_years: int = 0
+var _cy_confirm_dialog: ConfirmationDialog = null
 
 
 func _ready() -> void:
@@ -388,8 +393,8 @@ func _refresh() -> void:
 				_populate_foreign()
 			AppState.OFFSEASON_PANEL_CAMP:
 				_populate_camp()
-			AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION:
-				_populate_contract_extension()
+			AppState.OFFSEASON_PANEL_CONTRACT_YEARS:
+				_populate_contract_years()
 	_build_buttons()
 	queue_redraw()
 
@@ -575,16 +580,17 @@ func _build_buttons() -> void:
 			])
 			_build_candidate_tabs(_camp_candidate_rows, _camp_tab, _set_camp_tab, "camp")
 			_build_camp_chips()
-		AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION:
-			var ext_entry: Dictionary = _ext_by_id.get(selected_ext_player_id, {}) as Dictionary
-			var ext_has_offer: bool = not (ext_entry.get("user_offer", {}) as Dictionary).is_empty()
+		AppState.OFFSEASON_PANEL_CONTRACT_YEARS:
+			var cy_entry: Dictionary = _cy_by_id.get(selected_cy_player_id, {}) as Dictionary
+			var cy_pending: int = AppState.pending_contract_years_count()
 			_action_row([
-				{"id": "ext_submit", "label": "延長を提示する", "cb": _on_ext_submit_pressed, "kind": "primary", "w": 160, "disabled": ext_entry.is_empty()},
-				{"id": "ext_withdraw", "label": "提示を取り下げる", "cb": _on_ext_withdraw_pressed, "kind": "action", "w": 170, "disabled": not ext_has_offer},
-				{"id": "ext_finalize", "label": "交渉を終えて次へ", "cb": _on_ext_finalize_pressed, "kind": "primary", "w": 200},
+				{"id": "cy_submit", "label": "年数を決定", "cb": _on_cy_submit_pressed, "kind": "primary", "w": 140, "disabled": cy_entry.is_empty()},
+				{"id": "cy_withdraw", "label": "決定を取り消す", "cb": _on_cy_withdraw_pressed, "kind": "action", "w": 150, "disabled": not bool(cy_entry.get("decided", false))},
+				{"id": "cy_finalize", "label": "確定して次へ", "cb": _on_cy_finalize_pressed, "kind": "primary", "w": 150, "disabled": cy_pending > 0},
+				{"id": "cy_auto", "label": "自動で決めて次へ", "cb": _on_cy_auto_pressed, "kind": "action", "w": 180, "disabled": cy_pending <= 0},
 			])
-			_build_player_tabs("ext", _ext_tab, _ext_pitcher_rows.size(), _ext_fielder_rows.size(), _set_ext_tab)
-			_build_ext_year_chips()
+			_build_player_tabs("cy", _cy_tab, _cy_pitcher_rows.size(), _cy_fielder_rows.size(), _set_cy_tab)
+			_build_cy_year_chips()
 		_:
 			_build_result_people_tabs()
 			_build_step_result_tabs()
@@ -653,9 +659,18 @@ func _build_step_result_tabs() -> void:
 		_build_candidate_tabs(_growth_board_entries(), _growth_tab, _set_growth_tab, "growth")
 	elif step == AppState.OFFSEASON_STEP_CAMP:
 		_build_candidate_tabs(_camp_result_entries(), _camp_result_tab, _set_camp_result_tab, "camp_res")
-	elif step == AppState.OFFSEASON_STEP_CONTRACT_UPDATE:
+	elif step == AppState.OFFSEASON_STEP_CONTRACT_RENEWAL:
 		var counts: Dictionary = _player_row_pitcher_fielder_counts(_contract_player_rows())
 		_build_player_tabs("contract", _contract_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_contract_tab)
+	elif step == AppState.OFFSEASON_STEP_FA_DECLARATION:
+		var declaration_result: Dictionary = _view.get("result", {}) as Dictionary
+		var declaration_counts: Dictionary = _entry_pitcher_fielder_counts(declaration_result.get("entries", []) as Array)
+		_build_player_tabs("fa_decl", _fa_declaration_tab, int(declaration_counts.get(PLAYER_TAB_PITCHER, 0)), int(declaration_counts.get(PLAYER_TAB_FIELDER, 0)), _set_fa_declaration_tab)
+	elif step == AppState.OFFSEASON_STEP_CONTRACT_YEARS:
+		var years_result: Dictionary = _view.get("result", {}) as Dictionary
+		var years_rows: Array = _result_signing_player_rows(years_result.get("multi_year_signings", []) as Array)
+		var years_counts: Dictionary = _player_row_pitcher_fielder_counts(years_rows)
+		_build_player_tabs("result_years", _result_people_tab, int(years_counts.get(PLAYER_TAB_PITCHER, 0)), int(years_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 	elif step == AppState.OFFSEASON_STEP_GENEKI_DRAFT:
 		var geneki_result: Dictionary = _view.get("result", {}) as Dictionary
 		var move_rows: Array = _result_signing_player_rows(geneki_result.get("moves", []) as Array)
@@ -718,9 +733,21 @@ func _contract_player_rows(_result: Dictionary = {}) -> Array:
 				"old_salary": record.salary,
 				"new_salary": current_salary,
 				"salary_delta": current_salary - record.salary,
+				"contract_years": _player_contract_years(player, season.year),
 			},
 		})
 	return rows
+
+
+# 契約更改表に出す契約年数。複数年契約の期間中はその総年数、FA権保有者が単年を選んだ場合は 1 (単年)。
+# **FA権未取得の選手は 0 を返し "-" で描く** — 契約年数を決める場面が無く自動更新されるだけなので、
+# 自分で単年を選んだ選手と同じ「単年」表記にすると区別がつかない (ユーザー指摘)。
+func _player_contract_years(player: PSPlayer, offseason_year: int) -> int:
+	if player == null:
+		return 0
+	if player.is_multi_year_locked_offseason(offseason_year):
+		return maxi(1, int(player.source_data.get("contract_total_years", 1)))
+	return 1 if player.is_fa_eligible() else 0
 
 
 # キャンプ結果の特別練習アクションを候補タブで絞り込めるよう role/aptitudes を補う。
@@ -939,8 +966,8 @@ func _on_row_clicked(kind: String, meta: int) -> void:
 			_build_buttons()
 			queue_redraw()
 		"ext":
-			selected_ext_player_id = meta
-			selected_ext_offer_years = 0
+			selected_cy_player_id = meta
+			selected_cy_years = 0
 			_build_buttons()
 			queue_redraw()
 		"foreign":
@@ -1122,8 +1149,8 @@ func _draw() -> void:
 			_draw_foreign_panel()
 		AppState.OFFSEASON_PANEL_CAMP:
 			_draw_camp_panel()
-		AppState.OFFSEASON_PANEL_CONTRACT_EXTENSION:
-			_draw_contract_extension_panel()
+		AppState.OFFSEASON_PANEL_CONTRACT_YEARS:
+			_draw_contract_years_panel()
 		_:
 			_draw_results(BODY)
 
@@ -1142,6 +1169,8 @@ func _draw_subheader() -> void:
 # 各ステップの正準名 (結果データの有無に依存しない)。ヘッダ見出しに使う。
 func _step_name(step: String) -> String:
 	match step:
+		AppState.OFFSEASON_STEP_FA_DECLARATION:
+			return "FA宣言"
 		AppState.OFFSEASON_STEP_RETIREMENT:
 			return "引退"
 		AppState.OFFSEASON_STEP_RELEASE_EDIT:
@@ -1158,14 +1187,16 @@ func _step_name(step: String) -> String:
 			return "現役ドラフト"
 		AppState.OFFSEASON_STEP_FA_MARKET:
 			return "FA市場"
+		AppState.OFFSEASON_STEP_CONTRACT_YEARS:
+			return "契約年数"
 		AppState.OFFSEASON_STEP_FOREIGN_MARKET:
 			return "外国人補強"
 		AppState.OFFSEASON_STEP_CAMP:
 			return "キャンプ"
 		AppState.OFFSEASON_STEP_GROWTH:
 			return "選手の成長"
-		AppState.OFFSEASON_STEP_CONTRACT_UPDATE:
-			return "契約更新"
+		AppState.OFFSEASON_STEP_CONTRACT_RENEWAL:
+			return "契約更改"
 		_:
 			return "オフシーズン"
 
@@ -1628,72 +1659,6 @@ func _draw_foreign_contract_panel() -> void:
 		"該当する引き抜き候補がいません。", true, false, "fgc_market_away", true, true)
 
 
-# 契約市場の一覧表。tab_space=true は投手/野手タブぶん見出しを右へ逃がす (選手レコード表と同じ幅)。
-func _draw_fgc_table(rect: Rect2, title: String, include_team: bool, rows: Array, scroll_key: String, empty_text: String, tab_space: bool) -> void:
-	_draw_data_table(rect, _fgc_columns(include_team), rows, {
-		"panel": true,
-		"title": title, "title_size": 15, "title_pad": 222.0 if tab_space else 16.0, "title_y": 28.0,
-		"title_width": rect.size.x - (254.0 if tab_space else 48.0),
-		# タブ行 (rect.y+14〜46 に _build_player_tabs が重ねる) とヘッダ帯が重ならないよう深めに取る。
-		"header_top": 68.0 if tab_space else 50.0,
-		"default_align": "", "cell_size": 13, "header_size": 12, "row_h": 28.0,
-		"empty_text": empty_text,
-		"scroll_key": scroll_key, "sel_kind": "fgc", "selected_id": selected_fgc_player_id,
-		"hits": _row_hits, "scroll": _scroll, "scroll_zones": _scroll_zones,
-		"alt_rows": true,
-	})
-
-
-# 契約市場一覧の列。他球団分のみ 現球団 列を持つ。評価は能力段階色 (_grade_color)、金額は万円。
-func _fgc_columns(include_team: bool) -> Array:
-	var cols: Array = [
-		{"title": "守備", "key": "pos", "w": 52, "fmt": "pos_badge"},
-		{"title": "選手", "key": "name", "w": 150, "fmt": "string", "strong": true},
-		{"title": "年齢", "key": "age", "w": 64, "fmt": "int", "gap_after": 20},
-	]
-	if include_team:
-		cols.append({"title": "現球団", "key": "team", "w": 84, "fmt": "team", "align": "left"})
-	cols.append({"title": "評価", "key": "value", "w": 56, "fmt": "int", "sep_before": true})
-	cols.append({"title": "今季成績", "key": "stat", "w": 400, "fmt": "string"})
-	cols.append({"title": "現年俸", "key": "salary", "w": 96, "fmt": "comma", "sep_before": true})
-	cols.append({"title": "提示年俸", "key": "market_salary", "w": 96, "fmt": "comma"})
-	cols.append({"title": "上限年数", "key": "max_years", "w": 76, "fmt": "string", "align": "right"})
-	cols.append({"title": "提示状態", "key": "offer", "w": 140, "fmt": "string", "align": "right", "sep_before": true})
-	return cols
-
-
-# 契約市場エントリ1件を一覧行モデルへ変換。提示状態はユーザー提示 (user_offer) の有無で変わる。
-func _fgc_entry_row(entry: Dictionary) -> Dictionary:
-	var pid: int = int(entry.get("player_id", 0))
-	var player: PSPlayer = GameDb.get_player(pid)
-	var from_team_id: int = int(entry.get("from_team_id", 0))
-	var badge: Dictionary = _pick_pos_badge(entry)
-	var value: int = int(entry.get("value", 0))
-	var offer: Dictionary = entry.get("user_offer", {}) as Dictionary
-	var offer_text: String = "-"
-	var offer_color: Color = FAINT
-	if not offer.is_empty():
-		offer_text = "%d年 %s 提示中" % [int(offer.get("years", 1)), _format_money_compact(int(offer.get("salary", 0)))]
-		offer_color = BLUE
-	return {
-		"pos": str(badge.get("text", "")),
-		"pos_color": badge.get("color", MUTED) as Color,
-		"name": str(entry.get("name", "")),
-		"age": int(entry.get("age", 0)),
-		"team": _team_short(from_team_id),
-		"color": _team_color(from_team_id),
-		"value": value,
-		"value_color": _grade_color(value),
-		"stat": _release_stat_text(player) if player != null else "",
-		"salary": player.salary if player != null else 0,
-		"market_salary": int(entry.get("market_salary", 0)),
-		"max_years": "%d年" % maxi(1, int(entry.get("max_years", 1))),
-		"offer": offer_text,
-		"offer_color": offer_color,
-		"__meta": pid,
-	}
-
-
 # 契約市場エントリ (未解決) を選手レコード表の行モデルへ変換する。契約情報 (現年俸/提示年俸/
 # 上限年数/提示状態) を entry へ積み、team_mode "fgc_market"/"fgc_market_away" (_draw_pitcher_table_header
 # 等) がこれらの値で FIP/盗塁・WHIP/OAA 相当の枠を差し替えて描画する。入力の並び順 (契約市場サービスの
@@ -1730,24 +1695,17 @@ func _fgc_market_player_rows(entries: Array) -> Array:
 	return rows
 
 
-# 契約更新: 延長交渉パネル。自軍候補のみの1表 (投手/野手タブ、_fgc_columns/_fgc_entry_row と
-# 同じ列構成を国内選手向けに再利用)。年数チップは右上 (_build_ext_year_chips)。
-func _draw_contract_extension_panel() -> void:
-	if not _ext_status_text.is_empty():
-		_text(_ext_status_text, Vector2(INNER_L, BODY.position.y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
-	var rows: Array = _ext_pitcher_rows if _ext_tab == PLAYER_TAB_PITCHER else _ext_fielder_rows
-	var title: String = "延長交渉候補 %s %d人" % ["投手" if _ext_tab == PLAYER_TAB_PITCHER else "野手", rows.size()]
-	_draw_data_table(BODY, _fgc_columns(false), rows, {
-		"panel": true,
-		"title": title, "title_size": 15, "title_pad": 222.0, "title_y": 28.0,
-		"title_width": BODY.size.x - 254.0,
-		"header_top": 68.0,
-		"default_align": "", "cell_size": 13, "header_size": 12, "row_h": 28.0,
-		"empty_text": "延長交渉の対象となる選手がいません。",
-		"scroll_key": "ext_%s" % _ext_tab, "sel_kind": "ext", "selected_id": selected_ext_player_id,
-		"hits": _row_hits, "scroll": _scroll, "scroll_zones": _scroll_zones,
-		"alt_rows": true,
-	})
+# 契約年数の決定パネル。自軍候補のみの1表 (投手/野手タブ)。他画面と同じ選手レコード表を使い、
+# 契約情報 (年数/基準年俸/区分/現年俸) は team_mode "contract_years" が成績列の一部を差し替えて出す。
+# 年数チップは右上 (_build_cy_year_chips)。
+func _draw_contract_years_panel() -> void:
+	if not _cy_status_text.is_empty():
+		_text(_cy_status_text, Vector2(INNER_L, BODY.position.y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var pitcher_tab: bool = _cy_tab == PLAYER_TAB_PITCHER
+	var rows: Array = _cy_pitcher_rows if pitcher_tab else _cy_fielder_rows
+	var title: String = "契約年数の対象 %s %d人" % ["投手" if pitcher_tab else "野手", rows.size()]
+	_draw_player_record_table(CY_BODY_RECT, title, rows, pitcher_tab, "cy", "cy_%s" % _cy_tab, "",
+		selected_cy_player_id, "契約年数を決める選手がいません。", true, false, "contract_years", true, true)
 
 
 # 外国人補強パネル: 条件指定3行とスカウト候補4人。能力値はスカウト推定値を表示する。
@@ -1854,8 +1812,12 @@ func _draw_results(rect: Rect2) -> void:
 		_text(str(_view.get("status", "結果データがありません")), Vector2(rect.position.x, rect.position.y + 24), 16, MUTED)
 		return
 	match step:
+		AppState.OFFSEASON_STEP_FA_DECLARATION:
+			_draw_fa_declaration_result(rect, result)
 		AppState.OFFSEASON_STEP_RETIREMENT:
 			_draw_people_result(rect, "引退した選手", result, "retired", "今オフは引退者がいませんでした。")
+		AppState.OFFSEASON_STEP_CONTRACT_YEARS:
+			_draw_contract_years_result(rect, result)
 		AppState.OFFSEASON_STEP_RELEASE_COMMIT:
 			_draw_release_result(rect, result)
 		AppState.OFFSEASON_STEP_DRAFT_MAIN:
@@ -1877,7 +1839,7 @@ func _draw_results(rect: Rect2) -> void:
 			_draw_camp_result(rect, result)
 		AppState.OFFSEASON_STEP_GROWTH:
 			_draw_growth_result(rect, result)
-		AppState.OFFSEASON_STEP_CONTRACT_UPDATE:
+		AppState.OFFSEASON_STEP_CONTRACT_RENEWAL:
 			_draw_contract_result(rect, result)
 
 
@@ -1993,7 +1955,7 @@ func _draw_fa_result(rect: Rect2, result: Dictionary) -> void:
 	var heading: String = "FA市場: 宣言 %d人 / 移籍 %d人 / 残留 %d人" % [
 		int(result.get("declared_count", 0)), int(result.get("moved_count", 0)), int(result.get("returned_count", 0)),
 	]
-	# team_mode "fa_result": "move" と同じ球団列レイアウトに加え、FIP/盗塁の枠へ成立した契約年数を出す。
+	# team_mode "fa_result": "move" と同じ球団列レイアウト + 年俸の隣に契約年数列 (_has_contract_years_column)。
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("signings", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "fa_result_%s" % _result_people_tab, "", 0,
 		"今オフは FA 移籍が成立しませんでした。", true, false, "fa_result", true)
@@ -2126,33 +2088,84 @@ func _draw_growth_result(rect: Rect2, result: Dictionary) -> void:
 		title, columns, _growth_rows(entries), "growth_board_%s" % _growth_tab, "", 0, true)
 
 
-# 契約更新: 自チームの選手一覧 (投手/野手タブ・昨シーズン成績付き)。戦力外/FA と同じレコード表。
+# 契約更改: 自チームの全選手の新年俸一覧 (投手/野手タブ・今季成績付き)。戦力外/FA と同じレコード表を
+# 全高で1表だけ描く (複数年契約の年数は直前の「契約年数」ステップが決めるので、ここは年俸だけ)。
 func _draw_contract_result(rect: Rect2, result: Dictionary) -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var team_name: String = team.short_name if team != null else ""
-	var heading: String = "%s 契約更新 (昇給 %d / 減給 %d / 新規FA権 %d / 予算超過球団 %d)" % [
-		team_name, int(result.get("raises_count", 0)), int(result.get("cuts_count", 0)), int(result.get("new_fa_count", 0)),
+	var heading: String = "%s 契約更改 (昇給 %d / 減給 %d / 予算超過球団 %d)" % [
+		team_name, int(result.get("raises_count", 0)), int(result.get("cuts_count", 0)),
 		int(result.get("over_budget_count", 0)),
 	]
-	var extension_signings: Array = result.get("extension_signings", []) as Array
-	if extension_signings.is_empty():
-		# タブ行 (投手/野手) は _build_step_result_tabs が BODY 左上に重ねる。
-		_draw_player_record_table(rect, heading, _contract_player_rows(result), _contract_tab == PLAYER_TAB_PITCHER,
-			"", "contract_%s" % _contract_tab, "", 0, "自チームの選手記録がありません。", true, false, "contract")
+	# タブ行 (投手/野手) は _build_step_result_tabs が BODY 左上に重ねる。
+	_draw_player_record_table(rect, heading, _contract_player_rows(result), _contract_tab == PLAYER_TAB_PITCHER,
+		"", "contract_%s" % _contract_tab, "", 0, "自チームの選手記録がありません。", true, false, "contract")
+
+
+# 契約年数: 成立した複数年契約の一覧 (全球団)。単年は一覧に出さない (件数のみ見出しに出す)。
+func _draw_contract_years_result(rect: Rect2, result: Dictionary) -> void:
+	var multi_year: Array = result.get("multi_year_signings", []) as Array
+	var heading: String = "契約年数 (対象 %d人 / 複数年契約 %d件)" % [
+		int(result.get("decided_count", 0)), int(result.get("multi_year_count", 0)),
+	]
+	_draw_player_record_table(rect, heading, _result_signing_player_rows(multi_year), _result_people_tab == PLAYER_TAB_PITCHER,
+		"", "contract_years_result_%s" % _result_people_tab, "", 0, "今オフは複数年契約が成立しませんでした。",
+		true, false, "contract_years_result", true)
+
+
+# FA宣言: FA権保有者と、その選手が宣言したか残留したかの一覧 (全球団)。表示専用。
+# 他画面と同じ選手レコード表を使い、権利/去就は team_mode "fa_declaration" が FIP(盗塁)/WHIP(OAA)
+# 相当の枠を差し替えて出す。残留 (=今オフ動かない) 選手は行ごとグレーアウトする。
+func _draw_fa_declaration_result(rect: Rect2, result: Dictionary) -> void:
+	var pitcher_table: bool = _fa_declaration_tab == PLAYER_TAB_PITCHER
+	var rows: Array = []
+	for row_value in result.get("entries", []) as Array:
+		var row: Dictionary = _fa_declaration_row(row_value as Dictionary)
+		if not row.is_empty():
+			rows.append(row)
+	var heading: String = "FA権保有者 %d人 / 宣言 %d人 (うち今オフ新規取得 %d人)" % [
+		int(result.get("holder_count", 0)), int(result.get("declared_count", 0)), int(result.get("new_fa_count", 0)),
+	]
+	_draw_player_record_table(rect, heading, rows, pitcher_table, "", "fa_decl_%s" % _fa_declaration_tab, "",
+		0, "FA権を持つ選手がいません。", true, false, "fa_declaration", true)
+
+
+func _fa_declaration_row(entry: Dictionary) -> Dictionary:
+	var pid: int = int(entry.get("player_id", 0))
+	var record: PSPlayerSeasonRecord = _record_for_people_entry(entry)
+	if record == null:
+		return {}
+	var declared: bool = bool(entry.get("declared", false))
+	var row_entry: Dictionary = {
+		"player_id": pid,
+		"team_id": int(entry.get("team_id", 0)),
+		"position": int(entry.get("position", record.position)),
+		"role": str(entry.get("role", record.role)),
+		"salary": int(entry.get("salary", record.salary)),
+		"offer_text": "新規取得" if bool(entry.get("is_new_fa", false)) else "保有%d年目" % (int(entry.get("fa_pass_count", 0)) + 1),
+		"offer_color": BLUE if bool(entry.get("is_new_fa", false)) else MUTED,
+		"outcome_label": "宣言" if declared else "残留",
+		"outcome_color": AMBER if declared else MUTED,
+	}
+	return {"record": record, "player": GameDb.get_player(pid), "entry": row_entry, "__dim": not declared}
+
+
+func _entry_pitcher_fielder_counts(entries: Array) -> Dictionary:
+	var counts: Dictionary = {PLAYER_TAB_PITCHER: 0, PLAYER_TAB_FIELDER: 0}
+	for row_value in entries:
+		var key: String = PLAYER_TAB_PITCHER if int((row_value as Dictionary).get("position", 0)) == 1 else PLAYER_TAB_FIELDER
+		counts[key] = int(counts.get(key, 0)) + 1
+	return counts
+
+
+func _set_fa_declaration_tab(tab_id: String) -> void:
+	if tab_id != PLAYER_TAB_PITCHER and tab_id != PLAYER_TAB_FIELDER:
 		return
-	# 延長交渉が成立した年は上段=延長成立選手 (自軍+CPU、契約年数付き) / 下段=従来の年俸増減表。
-	var accepted: int = 0
-	for row in extension_signings:
-		if bool((row as Dictionary).get("accepted", true)):
-			accepted += 1
-	var ext_heading: String = "複数年延長: 提示 %d件 / 成立 %d件" % [int(result.get("extension_offers_count", 0)), accepted]
-	var half: float = (rect.size.y - 50.0) / 2.0
-	_draw_player_record_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), ext_heading,
-		_result_signing_player_rows(extension_signings), _contract_tab == PLAYER_TAB_PITCHER, "",
-		"contract_ext_result_%s" % _contract_tab, "", 0, "今オフは複数年延長が成立しませんでした。", true, false, "extension_result", true)
-	var lower: Rect2 = Rect2(rect.position.x, rect.position.y + half + 56.0, rect.size.x, half - 6.0)
-	_draw_player_record_table(lower, heading, _contract_player_rows(result), _contract_tab == PLAYER_TAB_PITCHER,
-		"", "contract_%s" % _contract_tab, "", 0, "自チームの選手記録がありません。", false, false, "contract")
+	if _fa_declaration_tab == tab_id:
+		return
+	_fa_declaration_tab = tab_id
+	_build_buttons()
+	queue_redraw()
 
 
 func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
@@ -2290,6 +2303,10 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 			_draw_pitcher_player_row(rect, row, y, effective_team_mode, career_stats, show_salary, show_offer_years)
 		else:
 			_draw_fielder_player_row(rect, row, y, effective_team_mode, career_stats, show_salary, show_offer_years)
+		# 行モデルの `__dim` は「対象外/非該当」を表すグレーアウト (例: FA宣言しなかった選手)。
+		# セルごとに色を持たせず、描画後に背景色の半透明を重ねて行全体を一様に沈める。
+		if bool(row.get("__dim", false)):
+			_round(row_rect, Color(PANEL.r, PANEL.g, PANEL.b, 0.62), Color.TRANSPARENT, 6, 0)
 		if not sel_kind.is_empty():
 			_row_hits.append({"rect": row_rect, "kind": sel_kind, "meta": record.player_id})
 		# 縞の代わりに全行の下へヘアライン区切り (基底 _draw_data_table と同じ表現)。
@@ -2323,16 +2340,18 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
 		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
-	elif team_mode == "team" or team_mode == "extension_result" or team_mode == "fgc_market_away":
+	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text("現球団" if team_mode == "fgc_market_away" else "球団", Vector2(float(xs["team_x"]), y), 11, FAINT)
 	_text("役割", Vector2(float(xs["role_x"]), y), 11, FAINT, 52.0, HORIZONTAL_ALIGNMENT_CENTER)
 	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
 	if xs.has("salary_r"):
-		_text_cell("年数" if _is_fgc_market_mode(team_mode) else "年俸", float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_fgc_market_mode(team_mode) else 76.0)
+		_text_cell("年数" if _is_contract_offer_mode(team_mode) else "年俸", float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_contract_offer_mode(team_mode) else 76.0)
 	if xs.has("offer_years_r"):
-		_text_cell("提示年俸" if _is_fgc_market_mode(team_mode) else "年数", float(xs["offer_years_r"]), y, 11, FAINT, 66.0 if _is_fgc_market_mode(team_mode) else 46.0)
+		_text_cell(_offer_amount_label(team_mode), float(xs["offer_years_r"]), y, 11, FAINT, 66.0 if _is_contract_offer_mode(team_mode) else 46.0)
 	if team_mode == "contract":
 		_text_cell("年俸増減", float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
+	if xs.has("contract_years_r"):
+		_text_cell("契約年数", float(xs["contract_years_r"]), y, 11, FAINT, 52.0)
 	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
 	_text_cell("在", float(xs["years_r"]), y, 11, FAINT, 30.0)
 	_text_cell("怪", float(xs["inj_r"]), y, 11, FAINT, 30.0)
@@ -2349,18 +2368,8 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 	_text_cell("H", float(xs["hld_r"]), y, 11, FAINT, 28.0)
 	_text_cell("投球回", float(xs["ip_r"]), y, 11, FAINT, 62.0)
 	_text_cell("防御率", float(xs["era_r"]), y, 11, FAINT, 62.0)
-	var fip_label: String = "FIP"
-	if team_mode == "fa_result" or team_mode == "fgc_result" or team_mode == "extension_result":
-		fip_label = "契約年数"
-	elif _is_fgc_market_mode(team_mode):
-		fip_label = "提示状態"
-	_text_cell(fip_label, float(xs["fip_r"]), y, 11, FAINT, 54.0)
-	var whip_label: String = "WHIP"
-	if team_mode == "fgc_result":
-		whip_label = "去就"
-	elif _is_fgc_market_mode(team_mode):
-		whip_label = "現年俸"
-	_text_cell(whip_label, float(xs["whip_r"]), y, 11, FAINT, 58.0)
+	_text_cell(_contract_slot_label(team_mode, "FIP"), float(xs["fip_r"]), y, 11, FAINT, 54.0)
+	_text_cell(_outcome_slot_label(team_mode, "WHIP"), float(xs["whip_r"]), y, 11, FAINT, 58.0)
 	if not xs.has("salary_r"):
 		_text_cell("K/9", float(xs["k9_r"]), y, 11, FAINT, 54.0)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
@@ -2372,16 +2381,18 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
 		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
-	elif team_mode == "team" or team_mode == "extension_result" or team_mode == "fgc_market_away":
+	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text("現球団" if team_mode == "fgc_market_away" else "球団", Vector2(float(xs["team_x"]), y), 11, FAINT)
 	_text("守備", Vector2(float(xs["role_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
 	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
 	if xs.has("salary_r"):
-		_text_cell("年数" if _is_fgc_market_mode(team_mode) else "年俸", float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_fgc_market_mode(team_mode) else 76.0)
+		_text_cell("年数" if _is_contract_offer_mode(team_mode) else "年俸", float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_contract_offer_mode(team_mode) else 76.0)
 	if xs.has("offer_years_r"):
-		_text_cell("提示年俸" if _is_fgc_market_mode(team_mode) else "年数", float(xs["offer_years_r"]), y, 11, FAINT, 66.0 if _is_fgc_market_mode(team_mode) else 46.0)
+		_text_cell(_offer_amount_label(team_mode), float(xs["offer_years_r"]), y, 11, FAINT, 66.0 if _is_contract_offer_mode(team_mode) else 46.0)
 	if team_mode == "contract":
 		_text_cell("年俸増減", float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
+	if xs.has("contract_years_r"):
+		_text_cell("契約年数", float(xs["contract_years_r"]), y, 11, FAINT, 52.0)
 	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
 	_text_cell("在", float(xs["years_r"]), y, 11, FAINT, 30.0)
 	_text_cell("怪", float(xs["inj_r"]), y, 11, FAINT, 30.0)
@@ -2397,12 +2408,7 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 	_text_cell("打率", float(xs["avg_r"]), y, 11, FAINT, 52.0)
 	_text_cell("本", float(xs["hr_r"]), y, 11, FAINT, 34.0)
 	_text_cell("打点", float(xs["rbi_r"]), y, 11, FAINT, 44.0)
-	var sb_label: String = "盗塁"
-	if team_mode == "fa_result" or team_mode == "fgc_result" or team_mode == "extension_result":
-		sb_label = "契約年数"
-	elif _is_fgc_market_mode(team_mode):
-		sb_label = "提示状態"
-	_text_cell(sb_label, float(xs["sb_r"]), y, 11, FAINT, 44.0)
+	_text_cell(_contract_slot_label(team_mode, "盗塁"), float(xs["sb_r"]), y, 11, FAINT, 44.0)
 	if not xs.has("salary_r"):
 		_text_cell("出塁率", float(xs["obp_r"]), y, 11, FAINT, 62.0)
 	_text_cell("OPS", float(xs["ops_r"]), y, 11, FAINT, 54.0)
@@ -2411,12 +2417,7 @@ func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _caree
 	else:
 		_text_cell("wOBA", float(xs["woba_r"]), y, 11, FAINT, 60.0)
 		_text_cell("wRC+", float(xs["wrc_r"]), y, 11, FAINT, 56.0)
-	var oaa_label: String = "OAA"
-	if team_mode == "fgc_result":
-		oaa_label = "去就"
-	elif _is_fgc_market_mode(team_mode):
-		oaa_label = "現年俸"
-	_text_cell(oaa_label, float(xs["oaa_r"]), y, 11, FAINT, 54.0)
+	_text_cell(_outcome_slot_label(team_mode, "OAA"), float(xs["oaa_r"]), y, 11, FAINT, 54.0)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
@@ -2428,7 +2429,7 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
 		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
-	elif team_mode == "team" or team_mode == "extension_result" or team_mode == "fgc_market_away":
+	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
 	_role_badge(Rect2(float(xs["role_x"]), y - 16.0, 52.0, 22.0), record)
 	_draw_identity_cells(record, player, entry, xs, y, team_mode)
@@ -2449,19 +2450,16 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	_text_cell(str(ps.holds), float(xs["hld_r"]), y, 13, MUTED, 28.0)
 	_text_cell(_ip_str(ps), float(xs["ip_r"]), y, 13, TEXT, 62.0)
 	_text_cell(_era_str_from_stats(ps), float(xs["era_r"]), y, 13, TEXT, 62.0)
-	# fa_result / fgc_result / extension_result はFIPの代わりに成立した契約年数 (entry.contract_years)
-	# を出す (退団 = contract_years 0 は "-")。fgc_result はさらに WHIP 枠へ去就ラベルを出す。
-	# fgc_market/fgc_market_away (契約市場・未解決) は FIP/WHIP 枠へ提示年俸/提示状態を出す。
-	if team_mode == "fa_result" or team_mode == "fgc_result" or team_mode == "extension_result":
-		var contract_years: int = int(entry.get("contract_years", 1))
-		_text_cell(("%d年" % contract_years) if contract_years > 0 else "-", float(xs["fip_r"]), y, 13, TEXT, 54.0)
-	elif _is_fgc_market_mode(team_mode):
+	# 契約系の team_mode は FIP/WHIP 枠を契約情報へ差し替える (見出しは _contract_slot_label /
+	# _outcome_slot_label が単一ソース)。契約提示系 (fgc_market* / contract_years) は提示状態・現年俸、
+	# fa_declaration は権利・去就。成立した契約年数は年俸の隣の専用列 (contract_years_r) が出す。
+	if _is_contract_offer_mode(team_mode) or team_mode == "fa_declaration":
 		_text_cell(str(entry.get("offer_text", "-")), float(xs["fip_r"]), y, 13, entry.get("offer_color", FAINT) as Color, 54.0)
 	else:
 		_text_cell(_fip_text(record, career_stats), float(xs["fip_r"]), y, 13, MUTED, 54.0)
-	if team_mode == "fgc_result":
+	if team_mode == "fgc_result" or team_mode == "fa_declaration":
 		_text_cell(str(entry.get("outcome_label", "")), float(xs["whip_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, 58.0)
-	elif _is_fgc_market_mode(team_mode):
+	elif _is_contract_offer_mode(team_mode):
 		_text_cell(str(entry.get("fgc_current_salary_text", "-")), float(xs["whip_r"]), y, 13, MUTED, 58.0)
 	else:
 		_text_cell(_whip_str(ps), float(xs["whip_r"]), y, 13, MUTED, 58.0)
@@ -2477,7 +2475,7 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
 		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
-	elif team_mode == "team" or team_mode == "extension_result" or team_mode == "fgc_market_away":
+	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
 	_position_badge(Rect2(float(xs["role_x"]), y - 16.0, 40.0, 22.0), record.position, record.development_player)
 	_draw_identity_cells(record, player, entry, xs, y, team_mode)
@@ -2499,14 +2497,9 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	_text_cell(_rate_short(bs.batting_average()), float(xs["avg_r"]), y, 13, TEXT, 52.0)
 	_text_cell(str(bs.home_runs), float(xs["hr_r"]), y, 13, TEXT, 34.0)
 	_text_cell(str(bs.runs_batted_in), float(xs["rbi_r"]), y, 13, MUTED, 44.0)
-	# fa_result / fgc_result / extension_result は盗塁の代わりに成立した契約年数
-	# (entry.contract_years) を出す (退団 = contract_years 0 は "-")。fgc_result はさらに OAA 枠へ
-	# 去就ラベルを出す。fgc_market/fgc_market_away (契約市場・未解決) は盗塁/OAA 枠へ
-	# 提示年俸/提示状態を出す。
-	if team_mode == "fa_result" or team_mode == "fgc_result" or team_mode == "extension_result":
-		var contract_years: int = int(entry.get("contract_years", 1))
-		_text_cell(("%d年" % contract_years) if contract_years > 0 else "-", float(xs["sb_r"]), y, 13, TEXT, 44.0)
-	elif _is_fgc_market_mode(team_mode):
+	# 契約系の team_mode は盗塁/OAA 枠を契約情報へ差し替える (投手表の FIP/WHIP 枠と対応、
+	# 見出しは _contract_slot_label / _outcome_slot_label が単一ソース)。
+	if _is_contract_offer_mode(team_mode) or team_mode == "fa_declaration":
 		_text_cell(str(entry.get("offer_text", "-")), float(xs["sb_r"]), y, 13, entry.get("offer_color", FAINT) as Color, 44.0)
 	else:
 		_text_cell(str(bs.stolen_bases), float(xs["sb_r"]), y, 13, MUTED, 44.0)
@@ -2518,9 +2511,9 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	else:
 		_text_cell(_rate_short(ad.woba()) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
 		_text_cell(str(int(round(ad.wrc_plus()))) if played else "-", float(xs["wrc_r"]), y, 13, MUTED, 56.0)
-	if team_mode == "fgc_result":
+	if team_mode == "fgc_result" or team_mode == "fa_declaration":
 		_text_cell(str(entry.get("outcome_label", "")), float(xs["oaa_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, 54.0)
-	elif _is_fgc_market_mode(team_mode):
+	elif _is_contract_offer_mode(team_mode):
 		_text_cell(str(entry.get("fgc_current_salary_text", "-")), float(xs["oaa_r"]), y, 13, MUTED, 54.0)
 	else:
 		_text_cell(_oaa_str(ad) if played else "-", float(xs["oaa_r"]), y, 13, _oaa_color(ad) if played else MUTED, 54.0)
@@ -2533,10 +2526,12 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 	_text(record.name, Vector2(float(xs["name_x"]), y), 13, TEXT, name_limit_x - float(xs["name_x"]), HORIZONTAL_ALIGNMENT_LEFT, true)
 	# 契約市場 (fgc_market) は前方2列を [年数][提示年俸] にする。salary_r 枠に年数、offer_years_r 枠に
 	# 提示年俸 (億表示・幅広) を描く。現年俸は後方 (whip_r/oaa_r 枠) へ回す (_draw_*_player_row 側)。
-	var fgc_market: bool = _is_fgc_market_mode(team_mode)
+	var fgc_market: bool = _is_contract_offer_mode(team_mode)
 	if xs.has("salary_r"):
 		if fgc_market:
-			_text_cell("%d年" % int(entry.get("fgc_years", 1)), float(xs["salary_r"]), y, 13, TEXT, 44.0)
+			# 年数は既定で "N年"。決定状態そのものを見せたい一覧 (契約年数) は fgc_years_text で上書きする。
+			_text_cell(str(entry.get("fgc_years_text", "%d年" % int(entry.get("fgc_years", 1)))),
+				float(xs["salary_r"]), y, 13, entry.get("fgc_years_color", TEXT) as Color, 44.0)
 		else:
 			_text_cell(_comma(_player_table_salary(entry, record)), float(xs["salary_r"]), y, 13, TEXT, 76.0)
 	if xs.has("offer_years_r"):
@@ -2547,6 +2542,17 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 	if xs.has("salary_delta_r"):
 		var salary_delta: int = int(entry.get("salary_delta", 0))
 		_text_cell(_salary_delta_text(salary_delta), float(xs["salary_delta_r"]), y, 13, _salary_delta_color(salary_delta), 80.0)
+	if xs.has("contract_years_r"):
+		# 契約年数は 1 を「単年」、2年以上を "N年" と出す。0 以下 (FA権未取得で年数を決める場面が無い、
+		# 退団で契約自体が無い) は "-"。
+		var contract_years: int = int(entry.get("contract_years", 1))
+		var contract_years_text: String = "-"
+		if contract_years == 1:
+			contract_years_text = "単年"
+		elif contract_years >= 2:
+			contract_years_text = "%d年" % contract_years
+		_text_cell(contract_years_text, float(xs["contract_years_r"]), y, 13,
+			BLUE if contract_years >= 2 else (MUTED if contract_years == 1 else FAINT), 52.0)
 	_text_cell(str(record.age), float(xs["age_r"]), y, 13, MUTED, 40.0)
 	_text_cell(str(record.years), float(xs["years_r"]), y, 13, MUTED, 30.0)
 	var injury: int = _record_injury_days(record, player, entry)
@@ -2565,9 +2571,52 @@ func _player_table_salary(entry: Dictionary, record: PSPlayerSeasonRecord) -> in
 
 
 # 外国人契約市場 (未解決) の team_mode。"fgc_market" は自軍 (現球団列なし)、"fgc_market_away" は
-# 他球団 (現球団列あり)。どちらも FIP/盗塁・WHIP/OAA 相当の枠へ提示年俸/提示状態を出す。
+# 他球団 (現球団列あり)。
 func _is_fgc_market_mode(team_mode: String) -> bool:
 	return team_mode == "fgc_market" or team_mode == "fgc_market_away"
+
+
+# 「契約年数を決める」系の一覧 (外国人契約市場と国内の契約年数ステップ) の team_mode。
+# 前方2列を [年数][金額] にし、FIP/盗塁・WHIP/OAA 相当の枠を契約情報へ差し替える点が共通。
+func _is_contract_offer_mode(team_mode: String) -> bool:
+	return _is_fgc_market_mode(team_mode) or team_mode == "contract_years"
+
+
+# FIP (投手) / 盗塁 (野手) 枠の見出し。契約系の team_mode はここを契約情報へ差し替える。
+func _contract_slot_label(team_mode: String, default_label: String) -> String:
+	match team_mode:
+		"fgc_market", "fgc_market_away":
+			return "提示状態"
+		"contract_years":
+			return "区分"
+		"fa_declaration":
+			return "権利"
+	return default_label
+
+
+# WHIP (投手) / OAA (野手) 枠の見出し。契約系の team_mode はここを去就・現年俸へ差し替える。
+func _outcome_slot_label(team_mode: String, default_label: String) -> String:
+	match team_mode:
+		"fgc_result", "fa_declaration":
+			return "去就"
+		"fgc_market", "fgc_market_away", "contract_years":
+			return "現年俸"
+	return default_label
+
+
+# 前方2列目 (offer_years_r 枠) の見出し。契約提示系だけ金額を出すのでモードごとに呼び分ける。
+func _offer_amount_label(team_mode: String) -> String:
+	if team_mode == "contract_years":
+		return "基準年俸"
+	if _is_fgc_market_mode(team_mode):
+		return "提示年俸"
+	return "年数"
+
+
+# 年俸の隣に「契約年数」列を出す team_mode。列の幅は選手名の余白から捻出するので、
+# 右側の成績ブロックの位置は変わらない (レイアウト崩れを起こさずに1列足せる唯一の空き)。
+func _has_contract_years_column(team_mode: String) -> bool:
+	return team_mode == "contract" or team_mode == "fa_result" or team_mode == "fgc_result" or team_mode == "contract_years_result"
 
 
 func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, show_offer_years: bool = false) -> Dictionary:
@@ -2581,8 +2630,9 @@ func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, 
 			"role_x": cleft + 18.0,
 			"jersey_x": cleft + 78.0,
 			"name_x": cleft + 104.0,
-			"salary_r": cleft + 338.0,
-			"salary_delta_r": cleft + 418.0,
+			"salary_r": cleft + 286.0,
+			"salary_delta_r": cleft + 366.0,
+			"contract_years_r": cleft + 424.0,
 			"age_r": cleft + 486.0,
 			"years_r": cleft + 532.0,
 			"inj_r": cleft + 578.0,
@@ -2621,7 +2671,7 @@ func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, 
 	var team_shift: float = 0.0
 	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
 		team_shift = 120.0
-	elif team_mode == "team" or team_mode == "extension_result" or team_mode == "fgc_market_away":
+	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		team_shift = 68.0
 	var left: float = rect.position.x
 	var right: float = rect.end.x
@@ -2631,6 +2681,8 @@ func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, 
 		# show_offer_years (FA候補一覧) は年俸の直後に提示年数を挿し込み、以降の左詰め列を後ろへ送る。
 		# 右詰め列 (g_r 以降) は成績側の余白を消費するのみでここでは動かさない。
 		var years_shift: float = 46.0 if show_offer_years else 0.0
+		# 契約年数列は選手名の余白 (52px) を使うので、年俸列だけ左へ寄せて後続列は動かさない。
+		var salary_shift: float = -52.0 if _has_contract_years_column(team_mode) else 0.0
 		var salary_xs: Dictionary = {
 			"team_x": left + 18.0,
 			"team_from_x": left + 18.0,
@@ -2638,7 +2690,7 @@ func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, 
 			"role_x": left + 18.0 + team_shift,
 			"jersey_x": left + 78.0 + team_shift,
 			"name_x": left + 104.0 + team_shift,
-			"salary_r": left + 338.0 + team_shift,
+			"salary_r": left + 338.0 + team_shift + salary_shift,
 			"age_r": left + 406.0 + team_shift + years_shift,
 			"years_r": left + 452.0 + team_shift + years_shift,
 			"inj_r": left + 498.0 + team_shift + years_shift,
@@ -2676,7 +2728,9 @@ func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, 
 		}
 		if show_offer_years:
 			# 契約市場は offer_years_r 枠に提示年俸 (億表示・66px) を描くため右へ広げる (年数列と衝突させない)。
-			salary_xs["offer_years_r"] = (left + 408.0 + team_shift) if _is_fgc_market_mode(team_mode) else (left + 384.0 + team_shift)
+			salary_xs["offer_years_r"] = (left + 408.0 + team_shift) if _is_contract_offer_mode(team_mode) else (left + 384.0 + team_shift)
+		if _has_contract_years_column(team_mode):
+			salary_xs["contract_years_r"] = left + 338.0 + team_shift
 		return salary_xs
 	var rating_shift: float = min(team_shift, 68.0)
 	return {
@@ -4079,183 +4133,219 @@ func _on_foreign_scout_result_next_pressed() -> void:
 	_refresh()
 
 
-# ============================================================ populate: 契約更新 延長交渉
+# ============================================================ populate: 契約年数の決定
 
-# AppState.contract_update_state.candidates (value降順) を投手/野手タブの一覧行へ変換する。
-# 対象は常に自軍選手のみ (延長交渉は他球団選手を対象にしない)。
-func _populate_contract_extension() -> void:
-	var state: Dictionary = AppState.contract_update_state
-	_ext_pitcher_rows = []
-	_ext_fielder_rows = []
-	_ext_by_id = {}
-	var offer_count: int = 0
+# AppState.contract_years_state.candidates (value降順) から自軍分を投手/野手タブの一覧行へ変換する。
+# 他球団の候補は確定時にCPU基準で決まるので表示しない。
+func _populate_contract_years() -> void:
+	var state: Dictionary = AppState.contract_years_state
+	_cy_pitcher_rows = []
+	_cy_fielder_rows = []
+	_cy_by_id = {}
+	var decided_count: int = 0
 	for row in state.get("candidates", []) as Array:
 		var entry: Dictionary = row as Dictionary
-		if bool(entry.get("resolved", false)):
+		if int(entry.get("team_id", 0)) != AppState.selected_team_id:
 			continue
 		var pid: int = int(entry.get("player_id", 0))
-		_ext_by_id[pid] = entry
-		if not (entry.get("user_offer", {}) as Dictionary).is_empty():
-			offer_count += 1
-		var table_row: Dictionary = _ext_entry_row(entry)
+		_cy_by_id[pid] = entry
+		if bool(entry.get("decided", false)):
+			decided_count += 1
+		var table_row: Dictionary = _cy_entry_row(entry)
+		if table_row.is_empty():
+			continue
 		if int(entry.get("position", 0)) == 1:
-			_ext_pitcher_rows.append(table_row)
+			_cy_pitcher_rows.append(table_row)
 		else:
-			_ext_fielder_rows.append(table_row)
-	var total: int = _ext_pitcher_rows.size() + _ext_fielder_rows.size()
-	_ext_status_text = "契約更新: 延長交渉候補 %d人 / 提示中%d件。提示の無い選手 (自軍含む) は確定時にAIが自動判断します。" % [total, offer_count]
-	_ensure_ext_selection()
+			_cy_fielder_rows.append(table_row)
+	var total: int = _cy_pitcher_rows.size() + _cy_fielder_rows.size()
+	_cy_status_text = "契約年数の決定: 対象 %d人 / 決定済み %d人。全員決めるまで次へ進めません (「自動で決める」で残りを一括決定)。" % [total, decided_count]
+	_ensure_cy_selection()
 
 
-# 契約更新エントリ1件を一覧行モデルへ変換。列構成は外国人契約市場の自軍表 (_fgc_columns/_fgc_entry_row)
-# と同じ (守備/選手/年齢/評価/今季成績/現年俸/提示年俸/上限年数/提示状態)、球団列は持たない。
-func _ext_entry_row(entry: Dictionary) -> Dictionary:
+# 対象区分の表示ラベル。_build_contract_years_pool の reason と対応する。
+const CONTRACT_YEARS_REASON_LABELS: Dictionary = {
+	"new_fa": "FA権取得",
+	"contract_end": "契約満了",
+	"fa_returned": "FA残留",
+}
+
+
+# 候補1件を選手レコード表の行モデルへ変換する。契約情報 (決定年数/基準年俸/区分/現年俸) を entry へ積み、
+# team_mode "contract_years" がこれらの値で 年俸/年数・FIP(盗塁)/WHIP(OAA) 相当の枠を差し替えて描画する。
+# 契約市場の `_fgc_market_player_rows` と同じ形。
+func _cy_entry_row(entry: Dictionary) -> Dictionary:
 	var pid: int = int(entry.get("player_id", 0))
+	var record: PSPlayerSeasonRecord = _record_for_people_entry(entry)
+	if record == null:
+		return {}
 	var player: PSPlayer = GameDb.get_player(pid)
-	var badge: Dictionary = _pick_pos_badge(entry)
-	var value: int = int(entry.get("value", 0))
-	var offer: Dictionary = entry.get("user_offer", {}) as Dictionary
-	var offer_text: String = "-"
-	var offer_color: Color = FAINT
-	if not offer.is_empty():
-		offer_text = "%d年 %s 提示中" % [int(offer.get("years", 2)), _format_money_compact(int(offer.get("salary", 0)))]
-		offer_color = BLUE
-	return {
-		"pos": str(badge.get("text", "")),
-		"pos_color": badge.get("color", MUTED) as Color,
-		"name": str(entry.get("name", "")),
-		"age": int(entry.get("age", 0)),
-		"value": value,
-		"value_color": _grade_color(value),
-		"stat": _release_stat_text(player) if player != null else "",
-		"salary": player.salary if player != null else int(entry.get("current_salary", 0)),
-		"market_salary": int(entry.get("market_salary", 0)),
-		"max_years": "%d年" % maxi(2, int(entry.get("max_years", 2))),
-		"offer": offer_text,
-		"offer_color": offer_color,
-		"__meta": pid,
+	var decided: bool = bool(entry.get("decided", false))
+	var years: int = maxi(1, int(entry.get("years", 1)))
+	var decided_salary: int = int(entry.get("salary", 0))
+	var current_salary: int = player.salary if player != null else int(entry.get("current_salary", 0))
+	var row_entry: Dictionary = {
+		"player_id": pid,
+		"team_id": int(entry.get("team_id", 0)),
+		"position": int(entry.get("position", record.position)),
+		"role": str(entry.get("role", record.role)),
+		"salary": current_salary,
+		# 年数枠に決定状態そのものを出す (未決定は AMBER で目立たせる)。
+		"fgc_years_text": ("単年" if years <= 1 else "%d年" % years) if decided else "未決定",
+		"fgc_years_color": (TEXT if years <= 1 else BLUE) if decided else AMBER,
+		# 基準年俸は決定済みならその年数での年俸、未決定なら単年ベースの査定額
+		# (entry.salary は未決定のとき 0 なので base_salary へフォールバックする)。
+		"market_salary_text": _format_money_compact(decided_salary if decided_salary > 0 else int(entry.get("base_salary", 0))),
+		"fgc_current_salary_text": _format_money_compact(current_salary),
+		"offer_text": str(CONTRACT_YEARS_REASON_LABELS.get(str(entry.get("reason", "")), "")),
+		"offer_color": MUTED,
 	}
+	return {"record": record, "player": player, "entry": row_entry}
 
 
 # 選択中の選手が現在タブに無ければ、そのタブの先頭候補を選ぶ。
-func _ensure_ext_selection() -> void:
-	var rows: Array = _ext_pitcher_rows if _ext_tab == PLAYER_TAB_PITCHER else _ext_fielder_rows
-	var visible_ids: Dictionary = {}
+func _ensure_cy_selection() -> void:
+	var rows: Array = _cy_pitcher_rows if _cy_tab == PLAYER_TAB_PITCHER else _cy_fielder_rows
+	var ids: Array = []
 	for row_value in rows:
-		visible_ids[int((row_value as Dictionary).get("__meta", 0))] = true
-	if selected_ext_player_id > 0 and visible_ids.has(selected_ext_player_id):
+		var record: PSPlayerSeasonRecord = (row_value as Dictionary).get("record", null) as PSPlayerSeasonRecord
+		if record != null:
+			ids.append(record.player_id)
+	if selected_cy_player_id > 0 and ids.has(selected_cy_player_id):
 		return
-	selected_ext_player_id = 0
-	selected_ext_offer_years = 0
-	if not rows.is_empty():
-		selected_ext_player_id = int((rows[0] as Dictionary).get("__meta", 0))
+	selected_cy_player_id = 0
+	selected_cy_years = 0
+	if not ids.is_empty():
+		selected_cy_player_id = int(ids[0])
 
 
-func _set_ext_tab(tab_id: String) -> void:
+func _set_cy_tab(tab_id: String) -> void:
 	if tab_id != PLAYER_TAB_PITCHER and tab_id != PLAYER_TAB_FIELDER:
 		return
-	if _ext_tab == tab_id:
+	if _cy_tab == tab_id:
 		return
-	_ext_tab = tab_id
-	_ensure_ext_selection()
+	_cy_tab = tab_id
+	_ensure_cy_selection()
 	_build_buttons()
 	queue_redraw()
 
 
-# 提示年数チップ (_build_fgc_year_chips と同じ idiom)。延長は最低2年からなので range は 2〜max_years。
-func _build_ext_year_chips() -> void:
-	if selected_ext_player_id <= 0:
+# 契約年数チップ (_build_fgc_year_chips と同じ idiom)。単年も明示的な選択肢なので range は 1〜max_years。
+func _build_cy_year_chips() -> void:
+	if selected_cy_player_id <= 0:
 		return
-	var entry: Dictionary = _ext_by_id.get(selected_ext_player_id, {}) as Dictionary
+	var entry: Dictionary = _cy_by_id.get(selected_cy_player_id, {}) as Dictionary
 	if entry.is_empty():
 		return
-	var max_years: int = maxi(2, int(entry.get("max_years", 2)))
-	var current_years: int = selected_ext_offer_years if selected_ext_offer_years > 0 else _ext_default_offer_years(entry)
+	var max_years: int = maxi(1, int(entry.get("max_years", 1)))
+	var current_years: int = selected_cy_years if selected_cy_years > 0 else _cy_default_years(entry)
 	var y: float = BODY.position.y + 16.0
 	var x: float = BODY.end.x
 	var widths: Array = []
-	for n in range(2, max_years + 1):
-		var w: float = 14.0 + _measure("%d年" % n, 13) + 14.0
+	for n in range(1, max_years + 1):
+		var w: float = 14.0 + _measure(_cy_year_label(n), 13) + 14.0
 		widths.append(w)
 		x -= w + 8.0
 	x += 8.0
 	for i in range(widths.size()):
-		var n: int = i + 2
-		var label: String = "%d年" % n
+		var n: int = i + 1
 		var w: float = float(widths[i])
-		_add_button("ext_years_%d" % n, label, Rect2(x, y, w, 32.0),
-			func(years: int = n) -> void: _select_ext_offer_years(years),
+		_add_button("cy_years_%d" % n, _cy_year_label(n), Rect2(x, y, w, 32.0),
+			func(years: int = n) -> void: _select_cy_years(years),
 			"chip_active" if n == current_years else "chip")
 		x += w + 8.0
 
 
-# 年数チップ未選択時の既定年数: 提示済みならその年数、なければ下限の2年。
-func _ext_default_offer_years(entry: Dictionary) -> int:
-	var offer: Dictionary = entry.get("user_offer", {}) as Dictionary
-	return int(offer.get("years", 2)) if not offer.is_empty() else 2
+func _cy_year_label(years: int) -> String:
+	return "単年" if years <= 1 else "%d年" % years
 
 
-func _select_ext_offer_years(years: int) -> void:
-	selected_ext_offer_years = years
+# 年数チップ未選択時の既定年数: 決定済みならその年数、なければ単年。
+func _cy_default_years(entry: Dictionary) -> int:
+	return maxi(1, int(entry.get("years", 1))) if bool(entry.get("decided", false)) else 1
+
+
+func _select_cy_years(years: int) -> void:
+	selected_cy_years = years
 	_build_buttons()
 	queue_redraw()
 
 
-func _on_ext_submit_pressed() -> void:
-	if selected_ext_player_id <= 0:
-		_set_status("延長を提示する選手を選択してください。", RED)
+func _on_cy_submit_pressed() -> void:
+	if selected_cy_player_id <= 0:
+		_set_status("契約年数を決める選手を選択してください。", RED)
 		return
-	var entry: Dictionary = _ext_by_id.get(selected_ext_player_id, {}) as Dictionary
-	var years: int = selected_ext_offer_years if selected_ext_offer_years > 0 else _ext_default_offer_years(entry)
-	var result: Dictionary = AppState.submit_contract_extension_offer(selected_ext_player_id, years)
+	var entry: Dictionary = _cy_by_id.get(selected_cy_player_id, {}) as Dictionary
+	var years: int = selected_cy_years if selected_cy_years > 0 else _cy_default_years(entry)
+	var result: Dictionary = AppState.submit_contract_years(selected_cy_player_id, years)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "延長の提示に失敗しました。")), RED)
+		_set_status(str(result.get("message", "契約年数の決定に失敗しました。")), RED)
 		return
 	_refresh()
 
 
-func _on_ext_withdraw_pressed() -> void:
-	if selected_ext_player_id <= 0:
+func _on_cy_withdraw_pressed() -> void:
+	if selected_cy_player_id <= 0:
 		return
-	var result: Dictionary = AppState.withdraw_contract_extension_offer(selected_ext_player_id)
+	var result: Dictionary = AppState.withdraw_contract_years(selected_cy_player_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "提示の取り下げに失敗しました。")), RED)
+		_set_status(str(result.get("message", "決定の取り消しに失敗しました。")), RED)
 		return
-	selected_ext_offer_years = 0
+	selected_cy_years = 0
 	_refresh()
 
 
-# 確定 = 未提示分のCPU提示生成 (自軍含む) + 全候補の一括解決 + 年俸再査定/予算会計。
-func _on_ext_finalize_pressed() -> void:
-	var offer_count: int = 0
-	for entry_value in _ext_by_id.values():
-		if not ((entry_value as Dictionary).get("user_offer", {}) as Dictionary).is_empty():
-			offer_count += 1
-	var dialog: ConfirmationDialog = _ensure_ext_confirm_dialog()
-	dialog.dialog_text = "延長交渉を終えて契約更新を確定します。\n自分の提示 %d件 / 提示の無い選手 (自軍含む) はAIが自動判断します。\nよろしいですか？" % offer_count
+# 自軍の未決定分をCPUと同じ基準 (価値/年齢/予算) で決め、そのまま確定まで進める
+# (決めてから確定ボタンを押させるのは二度手間なので、戦力外編集の「自動で決定して次へ」と同じ扱い)。
+func _on_cy_auto_pressed() -> void:
+	var auto_result: Dictionary = AppState.auto_decide_contract_years()
+	if not bool(auto_result.get("ok", false)):
+		_set_status(str(auto_result.get("message", "自動決定に失敗しました。")), RED)
+		return
+	var result: Dictionary = AppState.finalize_contract_years()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "契約年数の確定に失敗しました。")), RED)
+		return
+	selected_cy_player_id = 0
+	selected_cy_years = 0
+	_refresh()
+
+
+# 確定 = 自軍の決定内容を適用し、他球団の候補をCPU基準で一括決定する。
+func _on_cy_finalize_pressed() -> void:
+	var pending: int = AppState.pending_contract_years_count()
+	if pending > 0:
+		_set_status("契約年数が未決定の選手が %d 人います。" % pending, RED)
+		return
+	var multi_year: int = 0
+	for entry_value in _cy_by_id.values():
+		if int((entry_value as Dictionary).get("years", 1)) >= 2:
+			multi_year += 1
+	var dialog: ConfirmationDialog = _ensure_cy_confirm_dialog()
+	dialog.dialog_text = "決めた契約年数で確定します。\n自軍 %d人 (うち複数年 %d人)。\nよろしいですか？" % [_cy_by_id.size(), multi_year]
 	dialog.popup_centered(Vector2i(520, 210))
 
 
-func _ensure_ext_confirm_dialog() -> ConfirmationDialog:
-	if _ext_confirm_dialog != null and is_instance_valid(_ext_confirm_dialog):
-		return _ext_confirm_dialog
-	_ext_confirm_dialog = ConfirmationDialog.new()
-	_ext_confirm_dialog.title = "延長交渉の確認"
-	_ext_confirm_dialog.ok_button_text = "確定する"
-	_ext_confirm_dialog.cancel_button_text = "キャンセル"
-	_ext_confirm_dialog.confirmed.connect(_on_ext_finalize_confirmed)
-	add_child(_ext_confirm_dialog)
-	_style_confirmation_dialog(_ext_confirm_dialog)
-	return _ext_confirm_dialog
+func _ensure_cy_confirm_dialog() -> ConfirmationDialog:
+	if _cy_confirm_dialog != null and is_instance_valid(_cy_confirm_dialog):
+		return _cy_confirm_dialog
+	_cy_confirm_dialog = ConfirmationDialog.new()
+	_cy_confirm_dialog.title = "契約年数の確認"
+	_cy_confirm_dialog.ok_button_text = "確定する"
+	_cy_confirm_dialog.cancel_button_text = "キャンセル"
+	_cy_confirm_dialog.confirmed.connect(_on_cy_finalize_confirmed)
+	add_child(_cy_confirm_dialog)
+	_style_confirmation_dialog(_cy_confirm_dialog)
+	return _cy_confirm_dialog
 
 
-func _on_ext_finalize_confirmed() -> void:
-	var result: Dictionary = AppState.finalize_contract_extensions()
+func _on_cy_finalize_confirmed() -> void:
+	var result: Dictionary = AppState.finalize_contract_years()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "契約更新の確定に失敗しました。")), RED)
+		_set_status(str(result.get("message", "契約年数の確定に失敗しました。")), RED)
 		return
-	selected_ext_player_id = 0
-	selected_ext_offer_years = 0
+	selected_cy_player_id = 0
+	selected_cy_years = 0
 	_refresh()
 
 

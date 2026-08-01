@@ -479,7 +479,7 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
-	var contract_result: Dictionary = Offseason.process_contract_update([signed], [], season)
+	var contract_result: Dictionary = Offseason.process_contract_renewal([signed], [], season)
 	assert_int(signed.salary).is_equal(2800)
 	assert_int(int(contract_result.get("raises_count", -1))).is_equal(0)
 	assert_int(int(contract_result.get("cuts_count", -1))).is_equal(0)
@@ -488,7 +488,7 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 
 # --- 複数年契約ロック (契約基盤 Step1) ---------------------------------------
 
-func test_contract_update_skips_salary_reassessment_while_multi_year_locked() -> void:
+func test_contract_renewal_skips_salary_reassessment_while_multi_year_locked() -> void:
 	var locked: PSPlayer = _player({
 		"id": 9420, "team_id": 1, "salary": 300, "years": 3,
 		"source_data": {"contract_end_year": 2028, "contract_signed_year": 2026, "contract_total_years": 3},
@@ -497,13 +497,13 @@ func test_contract_update_skips_salary_reassessment_while_multi_year_locked() ->
 	season.year = 2026
 	season.season_number = 1
 
-	Offseason.process_contract_update([locked], [], season)
+	Offseason.process_contract_renewal([locked], [], season)
 	assert_int(locked.salary).is_equal(300)
 	assert_bool(locked.is_multi_year_locked_offseason(2026)).is_true()
 
 	# 契約最終年 (2028) のオフは契約満了扱いでロックが外れ、再査定が走る。
 	season.year = 2028
-	Offseason.process_contract_update([locked], [], season)
+	Offseason.process_contract_renewal([locked], [], season)
 	assert_bool(locked.is_multi_year_locked_offseason(2028)).is_false()
 	assert_int(locked.salary).is_not_equal(300)
 
@@ -994,79 +994,79 @@ func test_foreign_market_skips_both_contract_phases_when_no_entries() -> void:
 	assert_bool(bool(advance_contract.get("ok", true))).is_false()
 
 
-# --- 契約更新: 延長交渉 (複数年契約 Step3) ----------------------------------
+# --- 契約年数の決定 (FA市場の直後) ------------------------------------------
 
-# create_contract_update_state の Phase A は contract_status を実データ (FA日数) から
-# 再計算して上書きするため、延長交渉の統合テストでは手動で contract_status を立てるのではなく
-# fa_nissuu を必要日数以上にして「FA可能」へ実際に遷移させる。
-func _extension_eligible_player(id: int, team_id: int, z_value: float, age: int = 24) -> PSPlayer:
+# 対象は ①今オフFA権を新規取得して宣言しなかった選手 ②複数年契約が今オフ満了した選手
+# ③FA宣言したが引き取り手がなく残留した選手 の3種。
+func _contract_years_player(id: int, team_id: int, z_value: float, age: int = 24) -> PSPlayer:
 	var p: PSPlayer = _player_with_z(id, team_id, 3, false, z_value)
 	p.age = age
-	p.source_data["fa_nissuu"] = p.fa_service_days_required()
+	p.source_data["fa_eligible_year"] = 2026
 	return p
 
 
-func test_extension_pool_filters_eligible_candidates() -> void:
+func test_contract_years_pool_covers_new_fa_contract_end_and_fa_returned() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
-	var teams: Array = [_team(1)]
 
-	var eligible: PSPlayer = _player_with_z(9500, 1, 3, false, 2.5)
-	eligible.contract_status = "FA権間近"
-	eligible.age = 27
+	var new_fa: PSPlayer = _contract_years_player(9500, 1, 2.5, 27)
 
-	var wrong_status: PSPlayer = _player_with_z(9501, 1, 3, false, 2.5)
-	wrong_status.contract_status = "通常"
+	var contract_end: PSPlayer = _player_with_z(9501, 1, 3, false, 2.5)
+	contract_end.source_data["contract_total_years"] = 3
+	contract_end.source_data["contract_end_year"] = 2026
 
-	var foreign: PSPlayer = _player_with_z(9502, 1, 3, false, 2.5)
-	foreign.contract_status = "FA可能"
+	var fa_returned: PSPlayer = _player_with_z(9502, 1, 3, false, 2.5)
+	fa_returned.source_data["fa_declared_year"] = 2026
+	fa_returned.source_data["fa_returned_year"] = 2026
+	fa_returned.source_data["fa_contract_salary"] = 12000
+
+	# FA権未取得 (今オフ何も起きていない) は自動的に単年なので対象外。
+	var untouched: PSPlayer = _player_with_z(9503, 1, 3, false, 2.5)
+
+	# 宣言して他球団と契約した選手は交渉時に年数が決まっているので対象外。
+	var declared_moved: PSPlayer = _contract_years_player(9504, 1, 2.5)
+	declared_moved.source_data["fa_declared_year"] = 2026
+
+	# 複数年契約が継続中 (満了年ではない) の選手も対象外。
+	var still_locked: PSPlayer = _contract_years_player(9505, 1, 2.5)
+	still_locked.source_data["contract_total_years"] = 3
+	still_locked.source_data["contract_end_year"] = 2028
+
+	var foreign: PSPlayer = _contract_years_player(9506, 1, 2.5)
 	foreign.foreign_player = true
 
-	var dev: PSPlayer = _player_with_z(9503, 1, 3, true, 2.5)
-	dev.contract_status = "FA可能"
+	var dev: PSPlayer = _player_with_z(9507, 1, 3, true, 2.5)
+	dev.source_data["fa_eligible_year"] = 2026
 
-	var locked: PSPlayer = _player_with_z(9504, 1, 3, false, 2.5)
-	locked.contract_status = "FA可能"
-	locked.source_data["contract_end_year"] = 2027
-
-	var refused: PSPlayer = _player_with_z(9505, 1, 3, false, 2.5)
-	refused.contract_status = "FA可能"
-	refused.source_data["extension_refused_year"] = 2026
-
-	var low_value: PSPlayer = _player_with_z(9506, 1, 3, false, -3.0)
-	low_value.contract_status = "FA可能"
-
-	var too_old: PSPlayer = _player_with_z(9507, 1, 3, false, 2.5)
-	too_old.contract_status = "FA可能"
-	too_old.age = 40  # fa_offer_max_years(40) == 1 < 2, 延長交渉の対象外。
-
-	var players: Array = [eligible, wrong_status, foreign, dev, locked, refused, low_value, too_old]
-	var pool: Array = Offseason._build_extension_pool(players, teams, season, 2026)
+	var players: Array = [new_fa, contract_end, fa_returned, untouched, declared_moved, still_locked, foreign, dev]
+	var pool: Array = Offseason._build_contract_years_pool(players, season, 2026)
 	var ids: Array = []
+	var reasons: Array = []
 	for row in pool:
 		ids.append(int((row as Dictionary).get("player_id", 0)))
-	assert_array(ids).contains_exactly([9500])
+		reasons.append(str((row as Dictionary).get("reason", "")))
+	assert_array(ids).contains_exactly_in_any_order([9500, 9501, 9502])
+	assert_array(reasons).contains_exactly_in_any_order(["new_fa", "contract_end", "fa_returned"])
 
 
-func test_extension_pool_limits_per_team_by_value_descending() -> void:
+# 年齢上限が1年 (36歳以上) の選手は選べる年数が単年しかないので、プールに入れずその場で確定する。
+# 満了した複数年契約のキーもここで消え、翌オフに「契約満了」で再検出されない。
+func test_contract_years_pool_auto_resolves_age_capped_player_to_single_year() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
-	var teams: Array = [_team(1)]
-	var players: Array = []
-	# EXTENSION_POOL_MAX_PER_TEAM(5) を超える6人を value 降順で作り、上限を超えて絞られることを確認する。
-	for i in range(6):
-		var p: PSPlayer = _player_with_z(9520 + i, 1, 3, false, 1.0 + float(i) * 0.3)
-		p.contract_status = "FA可能"
-		players.append(p)
-	var pool: Array = Offseason._build_extension_pool(players, teams, season, 2026)
-	assert_int(pool.size()).is_equal(Offseason.EXTENSION_POOL_MAX_PER_TEAM)
-	# 最も value が低い候補 (9520) は溢れて除外される。
-	var ids: Array = []
-	for row in pool:
-		ids.append(int((row as Dictionary).get("player_id", 0)))
-	assert_array(ids).not_contains([9520])
+	var old_player: PSPlayer = _player_with_z(9510, 1, 12, false, 2.5)
+	old_player.age = 38
+	old_player.source_data["contract_total_years"] = 3
+	old_player.source_data["contract_end_year"] = 2026
+
+	var pool: Array = Offseason._build_contract_years_pool([old_player], season, 2026)
+	assert_array(pool).is_empty()
+	assert_bool(old_player.source_data.has("contract_end_year")).is_false()
+	assert_bool(old_player.source_data.has("contract_total_years")).is_false()
+	var pool_next_year: Array = Offseason._build_contract_years_pool([old_player], season, 2027)
+	assert_array(pool_next_year).is_empty()
 
 
 func test_round_salary_2sig_boundaries() -> void:
@@ -1109,22 +1109,39 @@ func test_foreign_offer_salary_rounds_to_2_significant_figures() -> void:
 	assert_int(offer).is_equal(10000)
 
 
-func test_extension_offer_salary_applies_multi_year_premium() -> void:
-	assert_int(Offseason._extension_offer_salary(10000, 1)).is_equal(10000)
-	assert_int(Offseason._extension_offer_salary(10000, 3)).is_equal(11000)
+func test_contract_years_salary_applies_multi_year_premium() -> void:
+	assert_int(Offseason._contract_years_salary(10000, 1)).is_equal(10000)
+	assert_int(Offseason._contract_years_salary(10000, 3)).is_equal(11000)
 
 
-func test_extension_success_chance_increases_with_years_and_decreases_with_declare_chance() -> void:
-	var short_chance: float = Offseason._extension_success_chance(2, 10000, 10000, 0.0)
-	var long_chance: float = Offseason._extension_success_chance(4, 10000, 10000, 0.0)
-	assert_float(long_chance).is_greater(short_chance)
-	var eager_to_leave_chance: float = Offseason._extension_success_chance(2, 10000, 10000, 0.3)
-	assert_float(eager_to_leave_chance).is_less(short_chance)
+# CPUの年数は value のティアで決まり、年齢上限でクランプされる。
+func test_cpu_contract_years_uses_value_tiers_and_age_cap() -> void:
+	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "league1", "funds": 500000})
+	var star: Dictionary = {"value": 80, "max_years": 4, "base_salary": 10000, "current_salary": 10000}
+	assert_int(Offseason._cpu_contract_years(star, [], team)).is_equal(4)
+	var mid: Dictionary = {"value": 64, "max_years": 4, "base_salary": 10000, "current_salary": 10000}
+	assert_int(Offseason._cpu_contract_years(mid, [], team)).is_equal(2)
+	var fringe: Dictionary = {"value": 50, "max_years": 4, "base_salary": 10000, "current_salary": 10000}
+	assert_int(Offseason._cpu_contract_years(fringe, [], team)).is_equal(1)
+	# 年齢上限 (33-35歳=2年) がティアより短ければそちらが効く。
+	var old_star: Dictionary = {"value": 80, "max_years": 2, "base_salary": 10000, "current_salary": 10000}
+	assert_int(Offseason._cpu_contract_years(old_star, [], team)).is_equal(2)
 
 
-func test_apply_extension_sets_contract_keys_and_skips_next_salary_reassessment() -> void:
+# 予算に収まらない年数は1年ずつ削られ、最終的に単年へ落ちる。
+# 増額分 (提示額 - 現年俸) が判定対象なので、大幅昇給になる候補で確かめる。
+func test_cpu_contract_years_falls_back_to_single_year_when_over_budget() -> void:
+	var star: Dictionary = {"value": 80, "max_years": 4, "base_salary": 10000, "current_salary": 5000}
+	var rich: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "league1", "funds": 500000})
+	assert_int(Offseason._cpu_contract_years(star, [], rich)).is_equal(4)
+	# どの年数の増額分 (最短の2年でも +5000) も賄えない予算では単年になる。
+	var broke: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "league1", "funds": 4000})
+	assert_int(Offseason._cpu_contract_years(star, [], broke)).is_equal(1)
+
+
+func test_apply_contract_years_sets_keys_and_single_year_erases_them() -> void:
 	var player: PSPlayer = _player({"id": 9530, "team_id": 1, "salary": 5000})
-	Offseason._apply_extension(player, 3, 12000, 2026)
+	Offseason._apply_contract_years(player, 3, 12000, 2026)
 	assert_int(int(player.source_data.get("contract_end_year", 0))).is_equal(2029)
 	assert_int(int(player.source_data.get("contract_total_years", 0))).is_equal(3)
 	assert_int(int(player.source_data.get("contract_signed_year", 0))).is_equal(2026)
@@ -1133,99 +1150,86 @@ func test_apply_extension_sets_contract_keys_and_skips_next_salary_reassessment(
 	assert_bool(Offseason._contract_salary_is_locked(player, 2028)).is_true()
 	assert_bool(Offseason._contract_salary_is_locked(player, 2029)).is_false()
 
+	# 単年は契約キーを消すだけで年俸は触らない (契約更改の査定に委ねる)。
+	Offseason._apply_contract_years(player, 1, 99999, 2029)
+	assert_bool(player.source_data.has("contract_end_year")).is_false()
+	assert_int(player.salary).is_equal(12000)
 
-func test_contract_update_state_phase_and_auto_done_when_no_candidates() -> void:
+
+func test_contract_years_state_auto_completes_without_candidates() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
 	var players: Array = [_player({"id": 9540, "team_id": 1, "salary": 5000})]
-	var state: Dictionary = Offseason.create_contract_update_state(players, [_team(1)], season, 1)
-	assert_str(str(state.get("phase", ""))).is_equal("done")
+	var state: Dictionary = Offseason.create_contract_years_state(players, [_team(1)], season, 1)
 	assert_bool(bool(state.get("complete", false))).is_true()
-
-	var eligible: PSPlayer = _extension_eligible_player(9541, 1, 2.5)
-	var players2: Array = [eligible]
-	var state2: Dictionary = Offseason.create_contract_update_state(players2, [_team(1)], season, 1)
-	assert_str(str(state2.get("phase", ""))).is_equal("extension")
-	assert_bool(bool(state2.get("complete", false))).is_false()
-	var result: Dictionary = Offseason.finalize_contract_extensions(state2, players2, [_team(1)], season)
-	assert_str(str(state2.get("phase", ""))).is_equal("done")
-	assert_bool(bool(state2.get("complete", false))).is_true()
-	assert_dict(result).contains_keys(["extension_signings", "extension_offers_count", "extension_accepted_count"])
+	assert_int(int((state.get("final_result", {}) as Dictionary).get("decided_count", -1))).is_equal(0)
 
 
-func test_cpu_extension_offers_capped_per_team_per_year() -> void:
+# 決めた年数は必ず成立する (受諾判定は無い)。CPU球団の未決定分は確定時にまとめて決まる。
+func test_finalize_contract_years_applies_every_decision() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
 	var team: PSTeam = _team(1)
-	var players: Array = []
-	for i in range(3):
-		var p: PSPlayer = _extension_eligible_player(9550 + i, 1, 2.0)
-		p.salary = 3000
-		players.append(p)
-	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 0)
-	assert_int((state.get("candidates", []) as Array).size()).is_equal(3)
-	Offseason.finalize_contract_extensions(state, players, [team], season)
-	var offered: int = 0
-	for row in state.get("candidates", []) as Array:
-		if (row as Dictionary).has("success_chance"):
-			offered += 1
-	assert_int(offered).is_equal(Offseason.CPU_EXTENSION_MAX_PER_YEAR)
+	var user_player: PSPlayer = _contract_years_player(9541, 1, 2.5, 26)
+	var cpu_player: PSPlayer = _contract_years_player(9542, 2, 2.5, 26)
+	var players: Array = [user_player, cpu_player]
+	var state: Dictionary = Offseason.create_contract_years_state(players, [team, _team(2)], season, 1)
+	assert_int((state.get("candidates", []) as Array).size()).is_equal(2)
+	assert_bool(bool(state.get("complete", false))).is_false()
+	assert_int(Offseason.pending_contract_years_count(state, 1)).is_equal(1)
+
+	assert_bool(bool(Offseason.submit_contract_years(state, players, [team, _team(2)], 1, user_player.id, 3).get("ok", false))).is_true()
+	assert_int(Offseason.pending_contract_years_count(state, 1)).is_equal(0)
+
+	var result: Dictionary = Offseason.finalize_contract_years(state, players, [team, _team(2)])
+	assert_bool(bool(state.get("complete", false))).is_true()
+	assert_int(int(user_player.source_data.get("contract_end_year", 0))).is_equal(2029)
+	assert_int(int(result.get("decided_count", 0))).is_equal(2)
+	# CPU球団の候補も同時に決まる (単年なら契約キーは付かない)。
+	assert_bool((cpu_player.source_data.get("contract_total_years", 0) as int) >= 2 or not cpu_player.source_data.has("contract_end_year")).is_true()
 
 
-func test_extension_offer_blocked_when_team_over_budget() -> void:
+func test_submit_contract_years_clamps_years_and_requires_own_team() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
-	var player: PSPlayer = _extension_eligible_player(9560, 1, 2.5, 26)
-	player.salary = 500
-	var players: Array = [player]
-	# funds を現行年俸ちょうどにし、複数年プレミアム込みの増額分を一切払えないようにする。
-	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "T1", "short_name": "T1", "league": "league1", "funds": 500})
-	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 0)
-	assert_int((state.get("candidates", []) as Array).size()).is_equal(1)
-	Offseason.finalize_contract_extensions(state, players, [team], season)
-	var entry: Dictionary = (state.get("candidates", []) as Array)[0] as Dictionary
-	# 延長は予算不足で提示されないが、通常の年俸再査定 (ロック対象外) は独立に進む。
-	assert_bool(entry.has("success_chance")).is_false()
-	assert_int(int(player.source_data.get("contract_end_year", 0))).is_equal(0)
-
-
-func test_extension_refused_year_blocks_same_year_renegotiation() -> void:
-	var season: PSSeason = PSSeason.new()
-	season.year = 2026
-	season.season_number = 1
-	var player: PSPlayer = _player_with_z(9570, 1, 3, false, 2.5)
-	player.contract_status = "FA可能"
-	player.source_data["extension_refused_year"] = 2026
-	var players: Array = [player]
-	var pool: Array = Offseason._build_extension_pool(players, [_team(1)], season, 2026)
-	assert_array(pool).is_empty()
-	# 翌オフは再交渉可能 (同オフ限定のブロック)。
-	var pool_next_year: Array = Offseason._build_extension_pool(players, [_team(1)], season, 2027)
-	assert_int(pool_next_year.size()).is_equal(1)
-
-
-func test_submit_extension_offer_clamps_years_and_requires_own_team() -> void:
-	var season: PSSeason = PSSeason.new()
-	season.year = 2026
-	season.season_number = 1
-	var player: PSPlayer = _extension_eligible_player(9580, 1, 2.5, 26)
+	var player: PSPlayer = _contract_years_player(9580, 1, 2.5, 26)
 	var players: Array = [player]
 	var team: PSTeam = _team(1)
-	var state: Dictionary = Offseason.create_contract_update_state(players, [team], season, 1)
-	assert_str(str(state.get("phase", ""))).is_equal("extension")
+	var state: Dictionary = Offseason.create_contract_years_state(players, [team], season, 1)
+	assert_bool(bool(state.get("complete", false))).is_false()
 
-	# 他球団扱い (user_team_id=2) では提示できない。
-	var other_team_result: Dictionary = Offseason.submit_extension_offer(state, players, [team], 2, player.id, 3)
+	# 他球団扱い (user_team_id=2) では決められない。
+	var other_team_result: Dictionary = Offseason.submit_contract_years(state, players, [team], 2, player.id, 3)
 	assert_bool(bool(other_team_result.get("ok", true))).is_false()
 
 	var max_years: int = FaMarketService.fa_offer_max_years(player.age)
-	var result: Dictionary = Offseason.submit_extension_offer(state, players, [team], 1, player.id, max_years + 5)
+	var result: Dictionary = Offseason.submit_contract_years(state, players, [team], 1, player.id, max_years + 5)
 	assert_bool(bool(result.get("ok", false))).is_true()
-	var entry: Dictionary = Offseason._extension_entry_by_player_id(state, player.id)
-	assert_int(int((entry.get("user_offer", {}) as Dictionary).get("years", 0))).is_equal(max_years)
+	var entry: Dictionary = Offseason._contract_years_entry_by_player_id(state, player.id)
+	assert_int(int(entry.get("years", 0))).is_equal(max_years)
+
+	# 取り消すと未決定に戻る。
+	assert_bool(bool(Offseason.withdraw_contract_years(state, player.id).get("ok", false))).is_true()
+	assert_int(Offseason.pending_contract_years_count(state, 1)).is_equal(1)
+
+
+# 今オフFA権を新規取得した選手と、今オフFA宣言した選手は戦力外/育成降格にできない。
+func test_release_block_reason_covers_new_fa_holder_and_declared() -> void:
+	var new_fa: PSPlayer = _player({"id": 9590, "team_id": 1, "source_data": {"fa_eligible_year": 2026}})
+	var declared: PSPlayer = _player({"id": 9591, "team_id": 1, "source_data": {"fa_declared_year": 2026}})
+	var normal: PSPlayer = _player({"id": 9592, "team_id": 1})
+	assert_str(Offseason.release_block_reason(new_fa, 2026)).is_not_empty()
+	assert_str(Offseason.release_block_reason(declared, 2026)).is_not_empty()
+	assert_str(Offseason.release_block_reason(normal, 2026)).is_empty()
+	# 翌オフには保護が外れる。
+	assert_str(Offseason.release_block_reason(new_fa, 2027)).is_empty()
+
+	assert_bool(bool(Offseason.reject_locked_release_or_demote([new_fa], [9590], [], 2026).get("ok", true))).is_false()
+	assert_bool(bool(Offseason.reject_locked_release_or_demote([declared], [], [9591], 2026).get("ok", true))).is_false()
+	assert_bool(bool(Offseason.reject_locked_release_or_demote([normal], [9592], [], 2026).get("ok", false))).is_true()
 
 
 func test_fa_declare_excludes_multi_year_locked_player() -> void:

@@ -423,6 +423,10 @@ func _capture_offseason_steps(states_dir: String) -> void:
 				action_result = AppState.complete_foreign_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_FOREIGN_RESULT:
 				action_result = AppState.advance_foreign_scout_result()
+			elif panel == AppState.OFFSEASON_PANEL_CONTRACT_YEARS:
+				# 自軍分をAI基準で埋めてから確定する (UI の「自動で決めて次へ」と同じ経路)。
+				AppState.auto_decide_contract_years()
+				action_result = AppState.finalize_contract_years()
 			elif panel == AppState.OFFSEASON_PANEL_CAMP:
 				action_result = AppState.finish_camp()
 			if not bool(action_result.get("ok", false)):

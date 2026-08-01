@@ -234,7 +234,9 @@ func test_fa_signing_sets_multi_year_contract_keys() -> void:
 	assert_int(int(signing.get("contract_years", 0))).is_equal(3)
 
 
-func test_fa_stay_also_sets_multi_year_contract_keys() -> void:
+# 引き取り手がなく元球団へ戻る宣言者は、年俸だけ確定して**契約年数は付けない**。
+# 直後の契約年数ステップが決めるため、その目印 (fa_returned_year) だけを立てる。
+func test_fa_stay_defers_contract_years_to_contract_years_step() -> void:
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
 	var players: Array = [declarer]
 	var entry: Dictionary = {
@@ -244,9 +246,13 @@ func test_fa_stay_also_sets_multi_year_contract_keys() -> void:
 	var season: PSSeason = _season()
 	season.year = 2030
 	FaMarketService.finalize_fa_market(state, players, season)
-	assert_int(int(declarer.source_data.get("contract_end_year", 0))).is_equal(2032)
-	assert_int(int(declarer.source_data.get("contract_total_years", 0))).is_equal(2)
-	assert_int(int(declarer.source_data.get("contract_signed_year", 0))).is_equal(2030)
+	assert_int(declarer.team_id).is_equal(2)
+	assert_int(declarer.salary).is_equal(50000)
+	assert_int(int(declarer.source_data.get("fa_returned_year", 0))).is_equal(2030)
+	assert_bool(declarer.source_data.has("contract_end_year")).is_false()
+	assert_bool(declarer.source_data.has("contract_total_years")).is_false()
+	# 年俸は FA契約ロック (fa_signed_year) で契約更改の再査定から守られる。
+	assert_int(int(declarer.source_data.get("fa_signed_year", 0))).is_equal(2030)
 
 
 func test_fa_offer_max_years_age_boundaries() -> void:
