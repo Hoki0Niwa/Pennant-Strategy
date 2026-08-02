@@ -1697,10 +1697,10 @@ static func _empty_growth_kind_counts() -> Dictionary:
 #   ① 今オフ FA権を新規取得し、FA宣言しなかった選手 (fa_eligible_year == year)
 #   ② 複数年契約が今オフ満了した選手 (contract_total_years >= 2 かつ contract_end_year == year)
 #   ③ FA宣言したが引き取り手がなく元球団に残留した選手 (fa_returned_year == year)
-# の3種。それ以外は自動的に単年契約で、年俸だけが最終ステップの契約更改で査定される。
+# の3種。それ以外は自動的に単年契約で、年俸は契約更改 (このステップの手前) の査定額で確定する。
 # **宣言しなかった (=残留が確定した) 選手が年数を拒否することはないので、決めた年数は必ず成立する。**
 # 年俸 = base × (1 + プレミアム×(年数-1))。外国人契約市場の FOREIGN_MULTI_YEAR_PREMIUM と同じ考え方
-# (複数年ほど選手側に有利な年俸を積む)。base は ③ が FA提示額、①② が通常の年俸査定額。
+# (複数年ほど選手側に有利な年俸を積む)。base は3種とも契約更改後の現年俸 (player.salary)。
 const CONTRACT_YEARS_PREMIUM: float = 0.05
 # CPU球団の既定年数。value がこの水準以上なら対応する年数を基準にし、年齢上限
 # (FaMarketService.fa_offer_max_years) と予算で切り下げる。リーグ全体の複数年契約の量を決める
@@ -1713,7 +1713,7 @@ const CONTRACT_YEARS_VALUE_TIERS: Array = [
 
 
 # 契約年数を決める対象か (空文字=対象外)。判定順は fa_returned が先 — FA宣言して残留した選手は
-# 新規取得年と重なりうるが、年俸が既にFA提示額で確定している点で扱いが違うため。
+# 新規取得年と重なりうるが、区分表示 (FA残留) を分けるため先に拾う。
 static func _contract_years_reason(player: PSPlayer, year: int) -> String:
 	if int(player.source_data.get("fa_returned_year", 0)) == year:
 		return "fa_returned"
@@ -1735,10 +1735,7 @@ static func _contract_years_reason(player: PSPlayer, year: int) -> String:
 # 全球団分を持ち、UI は自軍だけを表示する (CPU分は確定時にまとめて決まる)。
 # 年齢上限が1年の選手 (36歳以上) は選べる年数が単年しかないので、ここで単年として確定させて
 # プールには入れない (満了した複数年契約のキーもこの時点で消える)。
-static func _build_contract_years_pool(players: Array, season: PSSeason, year: int) -> Array:
-	var league_ctx: Dictionary = {}
-	if season != null:
-		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+static func _build_contract_years_pool(players: Array, year: int) -> Array:
 	var entries: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -1749,13 +1746,10 @@ static func _build_contract_years_pool(players: Array, season: PSSeason, year: i
 		var reason: String = _contract_years_reason(player, year)
 		if reason.is_empty():
 			continue
-		var record: PSPlayerSeasonRecord = null
-		if season != null:
-			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
-		# 複数年の年俸ベース: FA残留組は交渉で決まった提示額、それ以外は通常の年俸査定額。
-		var base_salary: int = int(player.source_data.get("fa_contract_salary", player.salary))
-		if reason != "fa_returned":
-			base_salary = _compute_new_salary(player, record, _season_war(record, league_ctx))
+		# 複数年の年俸ベースは現年俸。このステップは契約更改 (年俸再査定) の後に走るので、
+		# player.salary は既に来季の査定額 = 単年契約ならそのまま確定する額になっている
+		# (FA残留組も査定額のまま戻ってくる)。ここで再査定すると二重に昇給する。
+		var base_salary: int = player.salary
 		var max_years: int = FaMarketService.fa_offer_max_years(player.age)
 		if max_years < 2:
 			_apply_contract_years(player, 1, base_salary, year)
@@ -1874,8 +1868,8 @@ static func auto_decide_contract_years(state: Dictionary, players: Array, teams:
 
 
 # 契約年数を選手へ適用する。単年 (years<=1) は契約キーを消すだけで年俸は触らない
-# (新規FA権/複数年満了は最終ステップの契約更改で査定、FA残留は fa_signed_year ロックにより
-# FA提示額のまま)。キーを消すことで「複数年契約が今オフ満了」の検出が翌年以降に誤爆しない。
+# (3区分とも直前の契約更改で査定済みなので、単年ならその額がそのまま来季の年俸)。
+# キーを消すことで「複数年契約が今オフ満了」の検出が翌年以降に誤爆しない。
 static func _apply_contract_years(player: PSPlayer, years: int, salary: int, year: int) -> void:
 	if player == null:
 		return
@@ -1925,7 +1919,7 @@ static func _resolve_contract_years(state: Dictionary, players: Array, teams: Ar
 # 契約年数ステップの state を作る。候補ゼロなら対話パネル不要なのでその場で確定させる。
 static func create_contract_years_state(players: Array, _teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
 	var year: int = season.year if season != null else 0
-	var candidates: Array = _build_contract_years_pool(players, season, year)
+	var candidates: Array = _build_contract_years_pool(players, year)
 	var state: Dictionary = {
 		"version": 1,
 		"year": year,
@@ -1981,9 +1975,12 @@ static func _contract_years_result(state: Dictionary, decisions: Array) -> Dicti
 	}
 
 
-# 契約更改 (オフ最終ステップ): 全選手の年俸再査定 + 球団別の予算会計。
+# 契約更改 (現役ドラフトの直後・FA市場の直前): 全選手の年俸再査定 + 球団別の予算会計。
 # FA日数の締めと contract_status 遷移はオフ冒頭の FA宣言ステップ
 # (accrue_fa_days_and_update_status) が済ませているので、ここは年俸だけを扱う。
+# **補強市場より前に置くのが重要** — ここを抜けた時点で player.salary が来季の確定額になるため、
+# 以降の FA/外国人/トレードの予算ゲートが来季 payroll に対して正確に効く。
+# 今オフ入団した選手 (ドラフト新人/戦力外獲得) は契約額のまま (_contract_salary_is_locked)。
 static func process_contract_renewal(players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var year: int = season.year if season != null else 0
 	var league_ctx: Dictionary = {}
@@ -2118,15 +2115,19 @@ static func accrue_fa_days_and_update_status(players: Array, teams: Array, seaso
 	)
 	return new_fa
 
-# 年俸再査定をスキップすべきか。FA移籍・戦力外獲得で今オフに合意した単年ロック (翌オフには
-# 通常の成績査定へ戻る) と、複数年契約でカバーされている年 (契約満了年の
-# オフは対象外、PSPlayer.is_multi_year_locked_offseason 参照) の OR。
+# 年俸再査定をスキップすべきか。「今オフ入団した選手は契約した金額のまま来季を迎える」
+# (ドラフト指名・戦力外獲得・FA移籍で今オフに合意した単年ロック。翌オフには通常の成績査定へ戻る) と、
+# 複数年契約でカバーされている年 (契約満了年のオフは対象外、
+# PSPlayer.is_multi_year_locked_offseason 参照) の OR。
+# ※ ドラフト新人は前年の成績を持たないため、査定を通すと市場価値 floor まで落ちて
+#   1試合も出ないうちに減額される (指名時の年俸がそのまま1年目の年俸になるのが正しい)。
 static func _contract_salary_is_locked(player: PSPlayer, year: int) -> bool:
 	if year <= 0:
 		return false
+	var drafted_this_offseason: bool = int(player.source_data.get("draft_year", 0)) == year
 	var fa_locked: bool = int(player.source_data.get("fa_signed_year", 0)) == year and player.source_data.has("fa_contract_salary")
 	var released_locked: bool = int(player.source_data.get("released_signed_year", 0)) == year and player.source_data.has("released_contract_salary")
-	return fa_locked or released_locked or player.is_multi_year_locked_offseason(year)
+	return drafted_this_offseason or fa_locked or released_locked or player.is_multi_year_locked_offseason(year)
 
 
 # 1軍登録日数と FA閾値から contract_status を決める。

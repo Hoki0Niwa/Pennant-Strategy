@@ -354,9 +354,10 @@ func test_appstate_advances_into_geneki_step_and_completes() -> void:
 	assert_bool(stored.is_empty()).is_false()
 	assert_str(str(stored.get("title", ""))).is_equal("現役ドラフト")
 
-	var adv_fa: Dictionary = AppState.advance_offseason()
-	assert_bool(bool(adv_fa.get("ok", false))).is_true()
-	assert_str(AppState.offseason_step).is_equal(AppState.OFFSEASON_STEP_FA_MARKET)
+	# 現役ドラフトの次は契約更改 (年俸再査定)。FA市場はその後。
+	var adv_renewal: Dictionary = AppState.advance_offseason()
+	assert_bool(bool(adv_renewal.get("ok", false))).is_true()
+	assert_str(AppState.offseason_step).is_equal(AppState.OFFSEASON_STEP_CONTRACT_RENEWAL)
 
 	# 後始末 (startup_test の save cleanup パターン)。
 	AppState.selected_team_id = old_team_id

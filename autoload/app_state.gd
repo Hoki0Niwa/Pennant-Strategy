@@ -34,12 +34,16 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	OFFSEASON_STEP_DRAFT_DEVELOPMENT,
 	OFFSEASON_STEP_RELEASED_MARKET,
 	OFFSEASON_STEP_GENEKI_DRAFT,
+	# 契約更改 (全選手の年俸再査定) は補強市場より前に置く。ここを通過した時点で player.salary が
+	# 来季の確定額になり、以降の FA/外国人/トレードの予算ゲートが来季 payroll に対して正確になる
+	# (旧: 最終ステップで再査定していたため、ゲートを通した後に payroll だけが上振れし
+	#  翌季を予算超過で開始していた)。
+	OFFSEASON_STEP_CONTRACT_RENEWAL,
 	OFFSEASON_STEP_FA_MARKET,
 	OFFSEASON_STEP_CONTRACT_YEARS,
 	OFFSEASON_STEP_FOREIGN_MARKET,
 	OFFSEASON_STEP_CAMP,
 	OFFSEASON_STEP_GROWTH,
-	OFFSEASON_STEP_CONTRACT_RENEWAL,
 ]
 
 const OFFSEASON_PANEL_NONE: String = "none"

@@ -29,10 +29,13 @@ const OPENING_ROSTER_TARGET: int = 68
 const DEVELOPMENT_ROSTER_LIMIT: int = 10
 
 # --- 年次予算キャップ (2026-07-12 経済オーバーホール) ---
-# 毎オフ開始時 (start_offseason) に funds = BASE + 順位ボーナス (+リーグ優勝 +日本一) で
+# 毎オフ開始時 (引退判定の直後) に funds = BASE + 順位ボーナス (+リーグ優勝 +日本一) で
 # 全球団再計算する。繰越なし (前年の残額は破棄)。単位: 万円。
-# シード球団の実payroll平均は約342,000万なので BASE=360,000 は「開幕時に1-2球団だけ超過する」水準。
-const BUDGET_BASE: int = 360000
+# 2026-08-01: 契約更改 (年俸再査定) を補強市場より前へ移し、予算ゲートが来季 payroll に対して
+# 正確に効くようにしたため、キャップは「超過を事後的に許す上限」ではなく「その年に使い切れる枠」に
+# なった。360,000 のままだと枠が先に尽きて支配下が 68 目標に届かない球団が出るので 390,000 へ引き上げ。
+# 較正の指標は long_autoplay の over_budget_count(0 が目標) / final_room_min / post_team_shienka_min。
+const BUDGET_BASE: int = 390000
 const BUDGET_RANK_BONUS: Dictionary = {1: 24000, 2: 18000, 3: 13000, 4: 9000, 5: 6000, 6: 3000}
 const BUDGET_LEAGUE_CHAMPION_BONUS: int = 10000
 const BUDGET_JAPAN_CHAMPION_BONUS: int = 15000

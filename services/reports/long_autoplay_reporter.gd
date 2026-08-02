@@ -489,7 +489,8 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# 補強フェーズより前に再計算する。長期検証はポストシーズンを実施しないため日本一ボーナスは常に0。
 	var budget_result: Dictionary = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, season, 0)
 
-	# 順番は 戦力外 → ドラフト → 戦力外獲得 → 現役ドラフト → FA → 契約年数 → 外国人 → キャンプ → 成長。
+	# 順番は 戦力外 → ドラフト → 戦力外獲得 → 現役ドラフト → 契約更改 → FA → 契約年数 → 外国人 →
+	# キャンプ → 成長 (AppState.OFFSEASON_STEP_ORDER と同じ)。
 	# 外国人の去就 (残留/引き抜き/退団) は戦力外ステップではなく外国人契約市場ステップが決める。
 	var release_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, 0, season)
 	GameDb.rebuild_player_indices()
@@ -519,7 +520,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var geneki_result: Dictionary = GenekiDraftService.finalize_geneki_draft(geneki_state, GameDb.players, GameDb.teams, season)
 	GameDb.rebuild_player_indices()
 
-	# FA市場 (戦力外獲得後)。team_id が動くので再構築。
+	# 契約更改 (補強市場の直前)。ここで player.salary が来季の確定額になり、以降の
+	# FA/外国人の予算ゲートが来季 payroll に対して正確に効く。
+	var contract_result: Dictionary = OffseasonService.process_contract_renewal(GameDb.players, GameDb.teams, season)
+
+	# FA市場 (契約更改後)。team_id が動くので再構築。
 	var fa_result: Dictionary = FaMarketService.process_fa_market(GameDb.players, GameDb.teams, season, 0)
 	GameDb.rebuild_player_indices()
 
@@ -545,8 +550,6 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var dev_release_result: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, 0, season.year)
 	GameDb.rebuild_player_indices()
 
-	# 契約更改 (全選手の年俸再査定 + 予算会計)。実フローと同様 advance_players_one_year の直前に実行する。
-	var contract_result: Dictionary = OffseasonService.process_contract_renewal(GameDb.players, GameDb.teams, season)
 	# 複数年契約中選手の全リーグ総数 (制度が定着後どの程度の規模で推移するかの監視)。
 	# cap saturation ([[feedback_cap_saturation_pattern]]) の監視対象は contract_years_multi 側。
 	var multi_year_active_count: int = 0
@@ -576,7 +579,7 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var released_average_age: float = _safe_div(float(released_age_sum), float(released_age_count))
 
 	# 年次予算再計算直後 (補強フェーズ開始前) の残額。offseason 中の署名で目減りする前の
-	# 「今オフどれだけ配分できたか」の指標。offseason 完了後の実効拘束は over_budget_count 側を見る。
+	# 「今オフどれだけ配分できたか」の指標。offseason 完了後の実効拘束は over_budget_* 側を見る。
 	var budget_rooms: Array = []
 	for budget_row in budget_result.get("team_budgets", []) as Array:
 		budget_rooms.append(int((budget_row as Dictionary).get("room", 0)))
@@ -590,9 +593,33 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 			budget_room_min = mini(budget_room_min, int(room_value))
 		budget_room_avg = float(room_sum) / float(budget_rooms.size())
 
+	# オフ完了時点 (来季開幕ロースター) の予算拘束。予算キャップの較正はこの3列を見る:
+	#   over_budget_count = 超過球団数 (0 が目標) / final_payroll_max = 最も重い球団の年俸総額
+	#   final_room_min    = 最も苦しい球団の残額 (負なら超過額)
+	var over_budget_count: int = 0
+	var final_payroll_sum: int = 0
+	var final_payroll_max: int = 0
+	var final_room_min: int = 0
+	var budget_team_count: int = 0
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		var final_payroll: int = TeamFinance.team_payroll(GameDb.players, team.id)
+		var final_room: int = TeamFinance.budget_room(team.funds, final_payroll)
+		if TeamFinance.is_over_budget(team.funds, final_payroll):
+			over_budget_count += 1
+		final_payroll_sum += final_payroll
+		final_payroll_max = maxi(final_payroll_max, final_payroll)
+		final_room_min = final_room if budget_team_count == 0 else mini(final_room_min, final_room)
+		budget_team_count += 1
+
 	return {
 		"budget_room_avg": budget_room_avg,
 		"budget_room_min": budget_room_min,
+		"final_payroll_avg": _round_float(_safe_div(float(final_payroll_sum), float(budget_team_count)), 0),
+		"final_payroll_max": final_payroll_max,
+		"final_room_min": final_room_min,
 		"retired_count": int(retirement_result.get("retired_count", 0)),
 		"released_count": int(release_result.get("released_count", 0)),
 		"released_pitcher_count": released_pitcher_count,
@@ -615,7 +642,9 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"decayers_count": int(growth_result.get("decayers_count", 0)),
 		"growth_kind_counts": (growth_result.get("growth_kind_counts", {}) as Dictionary).duplicate(true),
 		"new_fa_count": int(declaration_result.get("new_fa_count", 0)),
-		"over_budget_count": int(contract_result.get("over_budget_count", 0)),
+		"over_budget_count": over_budget_count,
+		"contract_renewal_raises": int(contract_result.get("raises_count", 0)),
+		"contract_renewal_cuts": int(contract_result.get("cuts_count", 0)),
 		"fa_moved_count": int(fa_result.get("moved_count", 0)),
 		"fa_declared_count": int(fa_result.get("declared_count", 0)),
 		"geneki_moved_count": int(geneki_result.get("moved_count", 0)),

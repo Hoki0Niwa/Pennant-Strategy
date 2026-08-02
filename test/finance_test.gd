@@ -48,6 +48,18 @@ func test_recompute_reports_over_budget() -> void:
 	assert_bool(TeamFinance.is_over_budget(team2.funds, TeamFinance.team_payroll(players, 2))).is_true()
 
 
+# 予算ゲートが「来季 payroll」に対して正確に効くための前提: 契約更改 (全選手の年俸再査定) は
+# 補強市場より前に走る。ここを最終ステップへ戻すと、ゲート通過後に payroll だけが上振れして
+# 翌季を予算超過で開始する構造に逆戻りする。
+func test_contract_renewal_precedes_reinforcement_markets() -> void:
+	var order: Array = AppState.OFFSEASON_STEP_ORDER
+	var renewal_index: int = order.find(AppState.OFFSEASON_STEP_CONTRACT_RENEWAL)
+	assert_int(renewal_index).is_greater(order.find(AppState.OFFSEASON_STEP_RETIREMENT))
+	assert_int(renewal_index).is_less(order.find(AppState.OFFSEASON_STEP_FA_MARKET))
+	assert_int(renewal_index).is_less(order.find(AppState.OFFSEASON_STEP_CONTRACT_YEARS))
+	assert_int(renewal_index).is_less(order.find(AppState.OFFSEASON_STEP_FOREIGN_MARKET))
+
+
 func test_can_afford_addition_boundary() -> void:
 	var team: PSTeam = _team(1, "league1", 10000)
 	var players: Array = [_player({"id": 1, "team_id": 1, "salary": 9000})]
@@ -195,8 +207,11 @@ func test_fa_compensation_transfers_funds() -> void:
 	assert_int(declarer.salary).is_equal(20000)
 
 
-func test_fa_stay_ignores_budget() -> void:
-	var from_team: PSTeam = _team(2, "league1", 100)
+# FA宣言したが引き取り手がなかった選手は元球団へ戻るが、**市場提示額は適用されない** —
+# 年俸は直前の契約更改で査定済みの額 (= player.salary) のまま。予算ゲートを通らない残留経路で
+# payroll が跳ねるのを防ぐと同時に、「他球団の関心が無かったのに市場プレミアムが付く」不整合も消える。
+func test_fa_stay_keeps_renewal_salary_instead_of_offer() -> void:
+	var from_team: PSTeam = _team(2, "league1", 100000)
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
 	var players: Array = [declarer]
 	var entry: Dictionary = {
@@ -206,10 +221,9 @@ func test_fa_stay_ignores_budget() -> void:
 	var season: PSSeason = _season()
 	FaMarketService.finalize_fa_market(state, players, season)
 	assert_int(declarer.team_id).is_equal(2)
-	assert_int(declarer.salary).is_equal(50000)
-	# 残留は予算ゲート対象外: 予算100のまま提示年俸50000が通っても資金は動かない。
-	assert_int(from_team.funds).is_equal(100)
-	assert_bool(TeamFinance.is_over_budget(from_team.funds, TeamFinance.team_payroll(players, 2))).is_true()
+	assert_int(declarer.salary).is_equal(8000)
+	# 残留自体は資金移動を伴わない (補償金が発生するのは移籍のみ)。
+	assert_int(from_team.funds).is_equal(100000)
 
 
 # --- 複数年契約 (FA複数年オファー, 2026-07-17 Step2a) ------------------------
@@ -234,7 +248,7 @@ func test_fa_signing_sets_multi_year_contract_keys() -> void:
 	assert_int(int(signing.get("contract_years", 0))).is_equal(3)
 
 
-# 引き取り手がなく元球団へ戻る宣言者は、年俸だけ確定して**契約年数は付けない**。
+# 引き取り手がなく元球団へ戻る宣言者には**契約年数を付けない**。
 # 直後の契約年数ステップが決めるため、その目印 (fa_returned_year) だけを立てる。
 func test_fa_stay_defers_contract_years_to_contract_years_step() -> void:
 	var declarer: PSPlayer = _player({"id": 99, "team_id": 0, "salary": 8000})
@@ -247,11 +261,11 @@ func test_fa_stay_defers_contract_years_to_contract_years_step() -> void:
 	season.year = 2030
 	FaMarketService.finalize_fa_market(state, players, season)
 	assert_int(declarer.team_id).is_equal(2)
-	assert_int(declarer.salary).is_equal(50000)
+	assert_int(declarer.salary).is_equal(8000)
 	assert_int(int(declarer.source_data.get("fa_returned_year", 0))).is_equal(2030)
 	assert_bool(declarer.source_data.has("contract_end_year")).is_false()
 	assert_bool(declarer.source_data.has("contract_total_years")).is_false()
-	# 年俸は FA契約ロック (fa_signed_year) で契約更改の再査定から守られる。
+	# FA権行使済みの履歴 (現役ドラフト対象外の判定などが参照する) は残る。
 	assert_int(int(declarer.source_data.get("fa_signed_year", 0))).is_equal(2030)
 
 

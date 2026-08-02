@@ -341,10 +341,11 @@ static func finalize_fa_market(state: Dictionary, players: Array, season: PSSeas
 		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 		if player == null:
 			continue
-		# 引き取り手がなく元球団へ戻る選手。年俸は提示額で確定するが、**契約年数は決めない** —
-		# 直後の契約年数ステップで球団が決める (fa_returned_year がその対象マーカー)。
+		# 引き取り手がなく元球団へ戻る選手。**年俸は直前の契約更改で査定済みの額のまま**で、
+		# 市場提示額 (offer_salary) は適用しない — 他球団の関心が無かった以上、市場プレミアムは
+		# 付かないという扱い。予算ゲートを通らない残留経路で payroll が跳ねるのも防ぐ。
+		# **契約年数も決めない** — 直後の契約年数ステップで球団が決める (fa_returned_year がその対象マーカー)。
 		player.team_id = int(entry.get("from_team", 0))
-		player.salary = int(entry.get("offer_salary", player.salary))
 		player.source_data.erase("free_agent")
 		player.source_data["fa_signed_year"] = year
 		player.source_data["fa_contract_salary"] = player.salary

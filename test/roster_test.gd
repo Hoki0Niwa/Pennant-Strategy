@@ -566,6 +566,25 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 	assert_bool(Offseason._contract_salary_is_locked(signed, 2027)).is_false()
 
 
+# 今オフ指名したドラフト新人は指名時の年俸のまま来季を迎える。前年の成績を持たないため
+# 査定を通すと市場価値 floor まで落ち、1試合も出ないうちに減額されてしまう。
+func test_contract_renewal_keeps_draft_rookie_salary() -> void:
+	var rookie: PSPlayer = _player({
+		"id": 9304, "team_id": 1, "salary": 1500, "years": 1, "age": 18,
+		"source_data": {"draft_year": 2026, "draft_round": 1, "rookie_year": true},
+	})
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+
+	assert_bool(Offseason._contract_salary_is_locked(rookie, 2026)).is_true()
+	var contract_result: Dictionary = Offseason.process_contract_renewal([rookie], [], season)
+	assert_int(rookie.salary).is_equal(1500)
+	assert_int(int(contract_result.get("cuts_count", -1))).is_equal(0)
+	# 翌オフ (1年目の成績が付いた後) からは通常の査定へ戻る。
+	assert_bool(Offseason._contract_salary_is_locked(rookie, 2027)).is_false()
+
+
 # --- 複数年契約ロック (契約基盤 Step1) ---------------------------------------
 
 func test_contract_renewal_skips_salary_reassessment_while_multi_year_locked() -> void:
@@ -1086,10 +1105,6 @@ func _contract_years_player(id: int, team_id: int, z_value: float, age: int = 24
 
 
 func test_contract_years_pool_covers_new_fa_contract_end_and_fa_returned() -> void:
-	var season: PSSeason = PSSeason.new()
-	season.year = 2026
-	season.season_number = 1
-
 	var new_fa: PSPlayer = _contract_years_player(9500, 1, 2.5, 27)
 
 	var contract_end: PSPlayer = _player_with_z(9501, 1, 3, false, 2.5)
@@ -1120,7 +1135,7 @@ func test_contract_years_pool_covers_new_fa_contract_end_and_fa_returned() -> vo
 	dev.source_data["fa_eligible_year"] = 2026
 
 	var players: Array = [new_fa, contract_end, fa_returned, untouched, declared_moved, still_locked, foreign, dev]
-	var pool: Array = Offseason._build_contract_years_pool(players, season, 2026)
+	var pool: Array = Offseason._build_contract_years_pool(players, 2026)
 	var ids: Array = []
 	var reasons: Array = []
 	for row in pool:
@@ -1133,19 +1148,16 @@ func test_contract_years_pool_covers_new_fa_contract_end_and_fa_returned() -> vo
 # 年齢上限が1年 (36歳以上) の選手は選べる年数が単年しかないので、プールに入れずその場で確定する。
 # 満了した複数年契約のキーもここで消え、翌オフに「契約満了」で再検出されない。
 func test_contract_years_pool_auto_resolves_age_capped_player_to_single_year() -> void:
-	var season: PSSeason = PSSeason.new()
-	season.year = 2026
-	season.season_number = 1
 	var old_player: PSPlayer = _player_with_z(9510, 1, 12, false, 2.5)
 	old_player.age = 38
 	old_player.source_data["contract_total_years"] = 3
 	old_player.source_data["contract_end_year"] = 2026
 
-	var pool: Array = Offseason._build_contract_years_pool([old_player], season, 2026)
+	var pool: Array = Offseason._build_contract_years_pool([old_player], 2026)
 	assert_array(pool).is_empty()
 	assert_bool(old_player.source_data.has("contract_end_year")).is_false()
 	assert_bool(old_player.source_data.has("contract_total_years")).is_false()
-	var pool_next_year: Array = Offseason._build_contract_years_pool([old_player], season, 2027)
+	var pool_next_year: Array = Offseason._build_contract_years_pool([old_player], 2027)
 	assert_array(pool_next_year).is_empty()
 
 
