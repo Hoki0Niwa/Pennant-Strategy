@@ -222,6 +222,21 @@ static func process_release(players: Array, team_id: int, player_ids: Array, yea
 
 # --- 自動戦力外通告: CPU球団一括 ---
 
+# 戦力外/育成降格の結果行 (release/demote で同じ shape)。**mutation の前に**作ること
+# (_apply_release_mutation は team_id をクリアするため、後から作ると所属が消える)。
+static func _roster_move_entry(player: PSPlayer, team_id: int) -> Dictionary:
+	return {
+		"player_id": player.id,
+		"name": player.name,
+		"age": player.age,
+		"team_id": team_id,
+		"position": player.position,
+		"role": player.role,
+		"overall": player_value_score(player),
+		"years": player.years,
+		"salary": player.salary,
+	}
+
 # CPU球団全部に対し、cut_score の低い順に target_size を超えた分を release。
 # 既存の process_release と同じ mutation を適用し、結果配列を返す(同じ shape)。
 static func process_cpu_releases(players: Array, teams: Array, user_team_id: int, season: PSSeason) -> Dictionary:
@@ -234,6 +249,15 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 			continue
 		if team.id == user_team_id:
 			continue
+		var year: int = season.year if season != null else 0
+		# 長期故障の育成降格は**戦力外候補の選定より前**に行う。支配下枠がその分空き、
+		# 放出数 (在籍 + 見込み補強 − 開幕目標) も自動的に1人少なく計画される。
+		for injured_id in compute_long_injury_demotion_candidates_for_team(players, team.id, year):
+			var injured: PSPlayer = _find_player_by_id(players, int(injured_id))
+			if injured == null:
+				continue
+			demoted.append(_roster_move_entry(injured, team.id))
+			_apply_demotion_to_development(injured, year)
 		var cut_ids: Array = compute_release_candidates_for_team(players, team.id, season)
 		var team_released_count: int = 0
 		for pid_v in cut_ids:
@@ -245,25 +269,10 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 				continue
 			if player.is_retired():
 				continue
-			var entry: Dictionary = {
-				"player_id": player.id,
-				"name": player.name,
-				"age": player.age,
-				"team_id": team.id,
-				"position": player.position,
-				"role": player.role,
-				"overall": player_value_score(player),
-				"years": player.years,
-				"salary": player.salary,
-			}
-			# roadmap #3: 若く価値の残る選手は release ではなく育成降格 (育成枠に空きがある間)。
-			if _should_demote_to_development(player) and TeamFinance.has_development_room(players, team.id):
-				_apply_demotion_to_development(player, season.year if season != null else 0)
-				demoted.append(entry)
-			else:
-				_apply_release_mutation(player, season.year if season != null else 0)
-				team_released_count += 1
-				released.append(entry)
+			var release_entry: Dictionary = _roster_move_entry(player, team.id)
+			_apply_release_mutation(player, year)
+			team_released_count += 1
+			released.append(release_entry)
 		if team_released_count > 0:
 			by_team_counts[team.id] = team_released_count
 
@@ -556,6 +565,32 @@ static func _apply_demotion_to_development(player: PSPlayer, year: int = 0) -> v
 # 旧・類型1 素材保持型 (24-26歳の将来性) と旧・類型3 ベテラン確率降格は撤廃
 # (CPU が育成へ落とす選手が多すぎたため。手動の育成降格と育成ドラフトは従来どおり)。
 # 育成枠の空きは呼び出し側 (process_cpu_releases / has_development_room) で確認済み。
+# 長期故障による育成降格の対象 (非破壊、value 降順ではなく player 順)。**戦力外候補かどうかとは独立**に
+# 判定する — 怪我人は戦力外候補になる前に保護される (_can_claim_release_slot は30歳未満を無条件、
+# 30歳以上も season_injury_days の excuse でスロット保持者にし、ReleaseValueProjector も usage を底上げする)
+# ため、release の振り分けとしてだけ実装していた頃はこの経路が一度も発火しなかった (2026-08-02 修正)。
+# 育成枠 (DEVELOPMENT_ROSTER_LIMIT) の空き数で頭打ちにするので、CPU と自軍推奨で同じ結果になる。
+static func compute_long_injury_demotion_candidates_for_team(players: Array, team_id: int, offseason_year: int) -> Array:
+	var room: int = maxi(0, TeamFinance.DEVELOPMENT_ROSTER_LIMIT - TeamFinance.development_count(players, team_id))
+	if room <= 0:
+		return []
+	var candidates: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if player.is_retired() or player.development_player:
+			continue
+		if not release_block_reason(player, offseason_year).is_empty():
+			continue
+		if not _should_demote_to_development(player):
+			continue
+		candidates.append(player.id)
+		if candidates.size() >= room:
+			break
+	return candidates
+
+
 static func _should_demote_to_development(player: PSPlayer) -> bool:
 	if player == null or player.foreign_player:
 		return false
@@ -585,7 +620,35 @@ static func _apply_promotion_to_shienka(player: PSPlayer, year: int = 0) -> void
 
 # CPU 自動: 育成選手のうち value が閾値以上の者を、支配下に空きがある範囲で昇格する。
 # excluded_team_id (自軍) は対話プレイではユーザーが手動昇格するため除外する。
+# オフの昇格は soft 目標 (67) で止め、残り3枠はシーズン中に使う。
 static func process_development_promotions(players: Array, teams: Array, excluded_team_id: int = 0, year: int = 0) -> Dictionary:
+	return _promote_ready_development(players, teams, excluded_team_id, year, false)
+
+
+# 支配下登録期限 (7/31、交換期限と同日) の昇格。オフで空けておいた soft 目標 (67) と
+# hard 上限 (70) の差を、ここで使い切る。期限を過ぎると FA も外国人もトレードも無く、
+# 空き枠は翌オフまで死に枠になるため (2026-08-01 ユーザー要望)。
+# 昇格基準はオフと同じ球団相対の即戦力基準で、満たさない育成は昇格させない
+# (枠を埋めること自体は目的にせず、育成制度と人数収支を壊さない)。
+static func process_registration_deadline_promotions(players: Array, teams: Array, excluded_team_id: int, season: PSSeason) -> Dictionary:
+	var year: int = season.year if season != null else 0
+	var result: Dictionary = _promote_ready_development(players, teams, excluded_team_id, year, true)
+	# シーズン中の昇格は当季レコードも支配下へ同期する。一軍登録の可否は
+	# record.development_player で判定されるため、ここを更新しないと昇格しても出場できない。
+	if season != null:
+		for row in result.get("promoted", []) as Array:
+			var record: PSPlayerSeasonRecord = RecordStore.get_player_record(
+				int((row as Dictionary).get("player_id", 0)), season.year, season.season_number
+			)
+			if record == null:
+				continue
+			record.development_player = false
+			record.registered_roster = "支配下"
+	return result
+
+
+# use_hard_limit=false → SHIENKA_SOFT_TARGET(67) で止める / true → SHIENKA_LIMIT(70) まで埋める。
+static func _promote_ready_development(players: Array, teams: Array, excluded_team_id: int, year: int, use_hard_limit: bool) -> Dictionary:
 	var promoted: Array = []
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
@@ -608,8 +671,11 @@ static func process_development_promotions(players: Array, teams: Array, exclude
 		)
 		for dev_row in devs:
 			var dev: PSPlayer = dev_row as PSPlayer
-			# オフの自動昇格は soft 目標 (67) で止め、シーズン中の昇格用に枠を残す。
-			if not TeamFinance.has_shienka_soft_room(players, team.id):
+			var has_room: bool = (
+				TeamFinance.has_shienka_room(players, team.id) if use_hard_limit
+				else TeamFinance.has_shienka_soft_room(players, team.id)
+			)
+			if not has_room:
 				break
 			_apply_promotion_to_shienka(dev, year)
 			promoted.append({
@@ -1128,6 +1194,11 @@ static func generated_arsenal(position: int, z_abilities: Dictionary) -> Array:
 # を引き、残りを持続 player へ書き戻す。翌季の PSPlayerSeasonRecord.from_player が
 # injury_days / injury_type / injury_severity をシードするので、長期離脱が翌季へ持ち越される。
 # 恒久能力低下は発生時 (PSInjuryModel) に適用済みのため、ここは怪我状態の簿記のみ。
+# **実行位置はオフ冒頭 (引退判定ステップ) 固定** — `player.injury_days` を書き換えるのはこの関数だけで、
+# シーズン中は record 側しか動かない。戦力外/育成降格 (_should_demote_to_development) や
+# injury_value_penalty はこの player 側を読むため、キャンプステップに置いていた頃 (〜2026-08-02) は
+# 判定が常に1年前の怪我状態を見ており、今季の大怪我による育成降格が事実上発火しなかった。
+# record から計算するので冪等 (同じオフに複数回呼んでも二重に回復しない)。
 static func process_injury_carryover(players: Array, season: PSSeason) -> Dictionary:
 	if season == null:
 		return {"carried": 0}

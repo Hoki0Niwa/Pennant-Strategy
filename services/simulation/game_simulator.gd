@@ -319,6 +319,17 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dictionary) -> void:
 	var user_team_id: int = int(ctx.get("user_team_id", 0))
 	var include_user: bool = bool(ctx.get("include_user_team", false))
+	# 支配下登録期限 (7/31、交換期限と同日) の最終試合日: オフで 67 止まりにして空けておいた枠を
+	# 育成の即戦力で 70 まで埋める。期限後は FA/外国人/トレードが無く、残した枠が死に枠になるため。
+	# 入替より先に走らせて、昇格したその日から一軍候補に入れる。
+	# 外側の is_window_open_on_day は「期限を過ぎた日は日程走査を省く」ための安いガード。
+	if TradeService.is_window_open_on_day(season, day) \
+			and TradeService.is_last_window_game_day(season, day, _next_scheduled_day_after(season, day)):
+		var promotions: Dictionary = OffseasonService.process_registration_deadline_promotions(
+			GameDb.players, GameDb.teams, 0 if include_user else user_team_id, season
+		)
+		if int(promotions.get("promoted_count", 0)) > 0:
+			GameDb.rebuild_player_indices()
 	TeamAutoAI.run_periodic_roster_swaps(season, GameDb.teams, day, user_team_id, include_user)
 	# シーズン中トレード (交換期限まで週次・低頻度)。成立時は players の team_id が動くので
 	# インデックスを再構築する。自軍もCPU自動管理のとき (オートプレイ/自動入替ON/自動トレードON) は
@@ -329,6 +340,18 @@ static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dict
 	var trade_result: Dictionary = TradeService.run_periodic_trade_check(season, GameDb.players, GameDb.teams, day, trade_user_id)
 	if not (trade_result.get("executed", []) as Array).is_empty():
 		GameDb.rebuild_player_indices()
+
+
+# day より後に試合が組まれている最も早い日 (無ければ -1)。日次フックの「期限内の最終試合日」判定用。
+static func _next_scheduled_day_after(season: PSSeason, day: int) -> int:
+	var next_day: int = -1
+	for game_row in season.schedule:
+		var game_day: int = int((game_row as Dictionary).get("day", 0))
+		if game_day <= day:
+			continue
+		if next_day < 0 or game_day < next_day:
+			next_day = game_day
+	return next_day
 
 
 static func _persist_simulation_outputs(season: PSSeason) -> void:

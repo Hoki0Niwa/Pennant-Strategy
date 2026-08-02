@@ -92,15 +92,31 @@ static func run_periodic_trade_check(season: PSSeason, players: Array, teams: Ar
 # ---- 期限・状態 ---------------------------------------------------------------
 
 static func is_trade_window_open(season: PSSeason) -> bool:
+	return is_window_open_on_day(season, season.current_day if season != null else 0)
+
+
+# 指定 day 時点で交換期限内か。7/31 が支配下登録期限も兼ねるため、育成の期限昇格
+# (OffseasonService.process_registration_deadline_promotions) も同じ判定を使う。
+static func is_window_open_on_day(season: PSSeason, day: int) -> bool:
 	if season == null:
 		return false
 	if str(season.calendar_start_date).is_empty():
-		return season.current_day <= TRADE_WINDOW_FALLBACK_LAST_DAY
-	var date_text: String = SeasonCalendar.date_for_day(season.calendar_start_date, season.current_day)
+		return day <= TRADE_WINDOW_FALLBACK_LAST_DAY
+	var date_text: String = SeasonCalendar.date_for_day(season.calendar_start_date, day)
 	if date_text.is_empty():
-		return season.current_day <= TRADE_WINDOW_FALLBACK_LAST_DAY
+		return day <= TRADE_WINDOW_FALLBACK_LAST_DAY
 	var deadline: String = "%04d-%02d-%02d" % [season.year, TRADE_DEADLINE_MONTH, TRADE_DEADLINE_DAY]
 	return date_text <= deadline
+
+
+# day が「期限内で、次の試合日にはもう期限切れ」= 期限内の最終試合日か。期限日に1度だけ
+# 走らせたい処理 (育成の期限昇格) に使う。**カレンダー上の 7/31 ではなく次の試合日で判定する** —
+# 7/31 が試合の無い日だと日次フックがその day で呼ばれず、素朴な「翌日が期限切れか」判定では
+# 年によって取りこぼす。next_game_day < 0 (以降試合なし) はシーズン終端なので最終日扱い。
+static func is_last_window_game_day(season: PSSeason, day: int, next_game_day: int) -> bool:
+	if not is_window_open_on_day(season, day):
+		return false
+	return next_game_day < 0 or not is_window_open_on_day(season, next_game_day)
 
 
 # season.trade_state を既定スキーマ込みで返す (参照を返すので変更はそのまま永続する)。

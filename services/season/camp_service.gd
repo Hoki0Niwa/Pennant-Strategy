@@ -107,7 +107,6 @@ static func process_camp(players: Array, teams: Array, season: PSSeason, user_te
 
 static func create_camp_state(players: Array, teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
 	var year: int = season.year if season != null else 0
-	var injury_carryover: Dictionary = OffseasonService.process_injury_carryover(players, season)
 	var profiles: Dictionary = _build_team_profiles(players, teams, season)
 	var start_starter_ids: Array = []
 	for player_row in players:
@@ -135,7 +134,6 @@ static func create_camp_state(players: Array, teams: Array, season: PSSeason, us
 		"team_pitcher_balance": _initial_pitcher_balance(profiles),
 		"trained_player_ids": [],
 		"user_finished": false,
-		"injury_carryover": injury_carryover,
 		"start_starter_ids": start_starter_ids,
 		"normal_pitch_learning": [],
 	}
@@ -255,7 +253,6 @@ static func finalize_camp(state: Dictionary, players: Array, season: PSSeason) -
 		"failed_count": actions.size() - success_count,
 		"normal_pitch_learning": normal_pitch,
 		"normal_pitch_learning_count": normal_pitch.size(),
-		"injury_carryover": state.get("injury_carryover", {}),
 	}
 	state["finalized"] = true
 	state["complete"] = true

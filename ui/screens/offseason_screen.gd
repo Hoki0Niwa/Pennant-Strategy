@@ -3044,16 +3044,17 @@ func _build_release_recommendation() -> Dictionary:
 	var season: PSSeason = AppState.current_season
 	if team_id <= 0 or season == null:
 		return {"ok": false, "message": "戦力外候補を計算できません。"}
-	var candidate_ids: Array = OffseasonService.compute_release_candidates_for_team(GameDb.players, team_id, season)
 	var release_ids: Array = []
 	var demote_ids: Array = []
-	for pid_value in candidate_ids:
+	# 長期故障の育成降格は戦力外候補とは独立に拾う (怪我人は候補側で保護されるため、
+	# 候補リストからの振り分けだけでは発火しない。CPU 側 process_cpu_releases と同じ入口)。
+	for pid_value in OffseasonService.compute_long_injury_demotion_candidates_for_team(GameDb.players, team_id, season.year):
+		demote_ids.append(int(pid_value))
+	for pid_value in OffseasonService.compute_release_candidates_for_team(GameDb.players, team_id, season):
 		var pid: int = int(pid_value)
-		var player: PSPlayer = GameDb.get_player(pid)
-		if player != null and OffseasonService._should_demote_to_development(player) and TeamFinance.has_development_room(GameDb.players, team_id):
-			demote_ids.append(pid)
-		else:
-			release_ids.append(pid)
+		if demote_ids.has(pid):
+			continue
+		release_ids.append(pid)
 	# 自軍の育成整理 (CPU は成長ステップの process_development_releases で自動、自軍はここで推奨)。
 	# 中堅は「育成1年で昇格なし」、素材年齢は成長予測ベース。候補は支配下と重複しない。
 	for pid_value in OffseasonService.compute_development_release_candidates_for_team(GameDb.players, team_id):

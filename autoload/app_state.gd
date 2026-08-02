@@ -637,9 +637,15 @@ func advance_offseason() -> Dictionary:
 
 	match next_step:
 		OFFSEASON_STEP_RETIREMENT:
-			# 引退者を除外した後の payroll で年次予算を算定するため、予算再計算はこの直後に行う。
+			# 怪我の越冬回復をオフ冒頭で確定させる。player.injury_days を書き換えるのはここだけで、
+			# シーズン中は record 側しか動かないため、**戦力外/育成降格より前に**適用しないと
+			# 今季の大怪我が判定に一切反映されない (2026-08-02 修正、旧位置はキャンプステップ)。
+			# record.injury_days から計算するので冪等 (再実行しても二重に回復しない)。
+			var carryover: Dictionary = OffseasonService.process_injury_carryover(GameDb.players, current_season)
 			step_result = OffseasonService.process_retirement(GameDb.players, current_season)
+			step_result["injury_carryover"] = carryover
 			step_result["title"] = "引退判定"
+			# 引退者を除外した後の payroll で年次予算を算定するため、予算再計算はこの直後に行う。
 			var champion_id: int = current_postseason.champion_team_id if current_postseason != null else 0
 			step_result["budgets"] = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, current_season, champion_id)
 			GameDb.rebuild_player_indices()

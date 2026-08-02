@@ -24,6 +24,24 @@ func test_trade_window_respects_deadline() -> void:
 	assert_bool(TradeService.is_trade_window_open(season)).is_false()
 
 
+# 支配下登録期限 (7/31) の最終試合日判定。**カレンダー上の 7/31 ではなく「次の試合日」で見る** —
+# 7/31 が試合の無い日だと日次フックがその day で呼ばれず、単純な翌日判定では年によって取りこぼす。
+func test_is_last_window_game_day_uses_next_game_day() -> void:
+	var season: PSSeason = _season(1)
+	# 3/27 開幕なので day127 = 7/31、day128 = 8/1。
+	assert_bool(TradeService.is_window_open_on_day(season, 127)).is_true()
+	assert_bool(TradeService.is_window_open_on_day(season, 128)).is_false()
+	# 期限日に試合がある年: その日が最終試合日。
+	assert_bool(TradeService.is_last_window_game_day(season, 127, 128)).is_true()
+	assert_bool(TradeService.is_last_window_game_day(season, 126, 127)).is_false()
+	# 7/31 が試合の無い日で、次の試合が 8/2 の年: 7/30 が最終試合日になる。
+	assert_bool(TradeService.is_last_window_game_day(season, 126, 129)).is_true()
+	# 期限を過ぎた日はどう呼ばれても false。
+	assert_bool(TradeService.is_last_window_game_day(season, 128, 129)).is_false()
+	# 以降試合なし (-1) はシーズン終端なので最終日扱い。
+	assert_bool(TradeService.is_last_window_game_day(season, 120, -1)).is_true()
+
+
 func test_is_tradeable_excludes_foreign_development_injured_rookie() -> void:
 	assert_bool(TradeService.is_tradeable(_player({"id": 1, "team_id": 1}))).is_true()
 	assert_bool(TradeService.is_tradeable(_player({"id": 2, "team_id": 1, "foreign_player": true}))).is_false()

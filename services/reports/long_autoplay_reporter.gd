@@ -100,6 +100,10 @@ func run(options: Dictionary = {}) -> Dictionary:
 			})
 			break
 
+		# 季末 (オフ処理前) のロースター。開幕時との差が支配下登録期限 (7/31) の育成昇格の効果で、
+		# これがそのまま翌オフの戦力外計画の入力 (在籍数) になる。
+		var roster_end_of_season: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
+
 		var season_report: Dictionary = simulation_reporter.call("_season_report", season) as Dictionary
 		var season_summary: Dictionary = simulation_reporter.call("_public_season_summary", season_report) as Dictionary
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
@@ -121,6 +125,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 			"year": season.year,
 			"season_number": season.season_number,
 			"roster_before_season": roster_before,
+			"roster_end_of_season": roster_end_of_season,
 			"season": season_summary,
 			"leaderboards": leaderboards,
 			"trades": trades_summary,
@@ -243,6 +248,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			})
 			break
 
+		var roster_end_of_season: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
 		var season_report: Dictionary = simulation_reporter.call("_season_report", season) as Dictionary
 		var season_summary: Dictionary = simulation_reporter.call("_public_season_summary", season_report) as Dictionary
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
@@ -266,6 +272,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			"year": season.year,
 			"season_number": season.season_number,
 			"roster_before_season": roster_before,
+			"roster_end_of_season": roster_end_of_season,
 			"season": season_summary,
 			"leaderboards": leaderboards,
 			"trades": trades_summary,
@@ -482,6 +489,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# (app_state.start_offseason) と同じく引退より前に走らせる。
 	var declaration_result: Dictionary = FaMarketService.create_declaration_state(GameDb.players, GameDb.teams, season)
 
+	# 怪我の越冬回復 (実フローと同じく引退判定と同じ位置)。戦力外/育成降格が読む
+	# player.injury_days を今季の値へ更新するので、必ず戦力外ステップより前に走らせる。
+	var injury_carryover: Dictionary = OffseasonService.process_injury_carryover(GameDb.players, season)
+
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, season)
 	GameDb.rebuild_player_indices()
 
@@ -508,6 +519,15 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	if bool(draft_state.get("complete", false)):
 		draft_result = DraftService.finalize_draft(draft_state, GameDb.players)
 	GameDb.rebuild_player_indices()
+	# 本指名 (支配下) と育成指名の内訳。総数だけだと「支配下の指名が細っているのか、
+	# 育成が細っているのか」が区別できず、戦力外/降格の較正で判断を誤る。
+	var draft_main_picks: int = 0
+	var draft_dev_picks: int = 0
+	for rookie_row in draft_result.get("rookies", []) as Array:
+		if bool((rookie_row as Dictionary).get("development_player", false)):
+			draft_dev_picks += 1
+		else:
+			draft_main_picks += 1
 
 	# 戦力外獲得 (ドラフト後FA前)。team_id が動くので再構築。
 	var released_market_result: Dictionary = ReleasedMarketService.process_released_market(
@@ -620,6 +640,7 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"final_payroll_avg": _round_float(_safe_div(float(final_payroll_sum), float(budget_team_count)), 0),
 		"final_payroll_max": final_payroll_max,
 		"final_room_min": final_room_min,
+		"injury_carried_count": int(injury_carryover.get("carried", 0)),
 		"retired_count": int(retirement_result.get("retired_count", 0)),
 		"released_count": int(release_result.get("released_count", 0)),
 		"released_pitcher_count": released_pitcher_count,
@@ -636,6 +657,8 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"dev_released_count": int(dev_release_result.get("released_count", 0)),
 		"draft_complete": bool(draft_state.get("complete", false)),
 		"draft_picks_count": (draft_state.get("picks", []) as Array).size(),
+		"draft_main_picks_count": draft_main_picks,
+		"draft_dev_picks_count": draft_dev_picks,
 		"rookies_count": int(draft_result.get("rookies_count", 0)),
 		"priority_league": str(draft_result.get("priority_league", draft_state.get("priority_league", ""))),
 		"growers_count": int(growth_result.get("growers_count", 0)),

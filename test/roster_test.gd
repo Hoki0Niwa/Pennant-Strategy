@@ -1548,6 +1548,138 @@ func test_promotion_excludes_user_team() -> void:
 	assert_bool(strong_dev.development_player).is_true()
 
 
+# --- 怪我の越冬回復と長期故障の育成降格 ---------------------------------------
+# player.injury_days を書き換えるのは process_injury_carryover だけで、シーズン中は record 側しか
+# 動かない。この関数をオフ冒頭 (引退判定) で走らせないと、戦力外/育成降格が読む player.injury_days が
+# 1年前の値のままになり、今季シーズン絶望の大怪我が判定に一切乗らない (2026-08-02 まで実際にそうなっていた)。
+func test_injury_carryover_feeds_long_injury_demotion() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	# 今季にシーズン絶望級 (300日) を負った若手。player 側はシーズン中ずっと 0 のまま。
+	var injured: PSPlayer = _player_with_z(9720, 1, 3, false, 0.8)
+	injured.age = 24
+	injured.injury_days = 0
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(injured, season.year, season.season_number)
+	record.injury_days = 300
+	var record_key: String = "%d:%d:%d" % [injured.id, season.year, season.season_number]
+	var previous_record: Variant = RecordStore.player_records.get(record_key, null)
+	RecordStore.set_player_record(record, record_key)
+
+	# 越冬回復前は判定材料が無く、降格対象にならない (これが旧実装の状態)。
+	assert_bool(Offseason._should_demote_to_development(injured)).is_false()
+
+	var carryover: Dictionary = Offseason.process_injury_carryover([injured], season)
+	assert_int(injured.injury_days).is_equal(300 - Offseason.OFFSEASON_RECOVERY_DAYS)
+	assert_int(int(carryover.get("carried", 0))).is_equal(1)
+	# 越冬しても 120日以上残る = 来季も長期離脱 → release ではなく育成降格へ回る。
+	assert_bool(Offseason._should_demote_to_development(injured)).is_true()
+
+	# 冪等: record から計算するので、同じオフに複数回呼んでも二重に回復しない。
+	Offseason.process_injury_carryover([injured], season)
+	assert_int(injured.injury_days).is_equal(300 - Offseason.OFFSEASON_RECOVERY_DAYS)
+
+	if previous_record == null:
+		RecordStore.erase_player_record_by_key(record_key)
+	else:
+		RecordStore.set_player_record(previous_record as PSPlayerSeasonRecord, record_key)
+
+
+# 開幕に間に合う程度の離脱 (越冬回復で 120日を切る) は降格対象にしない。
+func test_injury_carryover_keeps_short_absence_out_of_demotion() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	var injured: PSPlayer = _player_with_z(9721, 1, 3, false, 0.8)
+	injured.age = 24
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(injured, season.year, season.season_number)
+	record.injury_days = 140
+	var record_key: String = "%d:%d:%d" % [injured.id, season.year, season.season_number]
+	var previous_record: Variant = RecordStore.player_records.get(record_key, null)
+	RecordStore.set_player_record(record, record_key)
+
+	Offseason.process_injury_carryover([injured], season)
+	assert_int(injured.injury_days).is_equal(140 - Offseason.OFFSEASON_RECOVERY_DAYS)
+	assert_bool(Offseason._should_demote_to_development(injured)).is_false()
+
+	if previous_record == null:
+		RecordStore.erase_player_record_by_key(record_key)
+	else:
+		RecordStore.set_player_record(previous_record as PSPlayerSeasonRecord, record_key)
+
+
+# 長期故障の育成降格は**戦力外候補かどうかと独立**に走る。怪我人は戦力外候補にならないよう
+# 保護されている (_can_claim_release_slot / ReleaseValueProjector の怪我 excuse) ので、
+# 「候補の中から降格へ振り分ける」旧実装では一度も発火しなかった (2026-08-02 修正)。
+func test_long_injury_demotion_runs_independently_of_release_candidates() -> void:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2026
+	season.season_number = 1
+	# 戦力外候補が出ない健全なロスター (若く能力のある支配下) に、長期故障者を1人置く。
+	var players: Array = []
+	for i in range(30):
+		var healthy: PSPlayer = _player_with_z(9730 + i, 1, 3, false, 1.5)
+		healthy.age = 26
+		players.append(healthy)
+	var injured: PSPlayer = _player_with_z(9790, 1, 3, false, 1.5)
+	injured.age = 25
+	injured.injury_days = Offseason.DEMOTE_INJURY_DAYS_LONG + 60
+	players.append(injured)
+
+	# 戦力外候補には入らない (怪我の有無に関わらずロスターに余剰が無い)。
+	assert_array(Offseason.compute_release_candidates_for_team(players, 1, season)).not_contains([injured.id])
+	# それでも独立経路が拾う。
+	assert_array(Offseason.compute_long_injury_demotion_candidates_for_team(players, 1, season.year)).contains([injured.id])
+
+	var result: Dictionary = Offseason.process_cpu_releases(players, [_team(1)], 0, season)
+	assert_int(int(result.get("demoted_count", 0))).is_equal(1)
+	assert_bool(injured.development_player).is_true()
+	assert_int(injured.team_id).is_equal(1)
+
+
+# 複数年契約中など放出できない選手は降格もできない (release_block_reason が単一ソース)。
+func test_long_injury_demotion_respects_release_block_reason() -> void:
+	var locked: PSPlayer = _player_with_z(9795, 1, 3, false, 1.5)
+	locked.age = 25
+	locked.injury_days = Offseason.DEMOTE_INJURY_DAYS_LONG + 60
+	locked.source_data["contract_total_years"] = 3
+	locked.source_data["contract_end_year"] = 2028
+	assert_bool(Offseason._should_demote_to_development(locked)).is_true()
+	assert_array(Offseason.compute_long_injury_demotion_candidates_for_team([locked], 1, 2026)).is_empty()
+
+
+# --- 支配下登録期限 (7/31) の昇格 ---------------------------------------------
+# オフの自動昇格は soft 目標 (67) で止まり、残り3枠は期限昇格が使い切る。期限を過ぎると
+# FA/外国人/トレードが無いので、ここで埋めないと翌オフまで死に枠になる。
+func test_registration_deadline_promotion_fills_up_to_hard_limit() -> void:
+	var players: Array = _support_players(1, TeamFinance.SHIENKA_SOFT_TARGET)
+	var ready_devs: Array = []
+	for i in range(5):
+		var dev: PSPlayer = _player_with_z(9700 + i, 1, 3, true, 2.5)
+		ready_devs.append(dev)
+		players.append(dev)
+
+	# オフの昇格は soft 目標に達しているので1人も上げない。
+	var offseason_result: Dictionary = Offseason.process_development_promotions(players, [_team(1)], 0)
+	assert_int(int(offseason_result.get("promoted_count", 0))).is_equal(0)
+
+	# 期限昇格は hard 上限 (70) まで = 残り3枠ぶんだけ昇格する。
+	var deadline_result: Dictionary = Offseason.process_registration_deadline_promotions(players, [_team(1)], 0, null)
+	assert_int(int(deadline_result.get("promoted_count", 0))).is_equal(
+		TeamFinance.SHIENKA_LIMIT - TeamFinance.SHIENKA_SOFT_TARGET
+	)
+	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(TeamFinance.SHIENKA_LIMIT)
+
+
+# 枠が空いていても即戦力基準に届かない育成は上げない (枠を埋めること自体は目的にしない)。
+func test_registration_deadline_promotion_skips_unready_dev() -> void:
+	var weak_dev: PSPlayer = _player_with_z(9710, 1, 3, true, -3.0)
+	var players: Array = [weak_dev, _player({"id": 9711, "team_id": 1})]
+	var result: Dictionary = Offseason.process_registration_deadline_promotions(players, [_team(1)], 0, null)
+	assert_int(int(result.get("promoted_count", 0))).is_equal(0)
+	assert_bool(weak_dev.development_player).is_true()
+
+
 # --- 即戦力基準は球団相対 --------------------------------------------------
 
 func test_first_team_ready_threshold_is_relative() -> void:
