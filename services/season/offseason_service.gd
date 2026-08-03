@@ -14,28 +14,26 @@ const FORCED_RETIREMENT_CERTAIN_AGE: int = 48
 
 # 自動戦力外通告は、来季の役割スロットから溢れ、かつ将来価値が代替水準を下回る選手だけを対象にする。
 # 開幕支配下目標から逆算する編成計画は人数目標ではなく、候補数の上限としてのみ使う。
-# 見込みドラフト人数 (draft_service の目標と桁を合わせる。厳密一致は不要で、実際の指名数は
-# ドラフト時点の在籍から自動で再計算されるため誤差は自己補正される)。
+# 見込みドラフト人数。**放出数はこの見込みを含む「余り」で決まる**ので、
+# `DraftService.MAIN_DRAFT_TARGET_MIN/MAX`(6〜7) の中央値と合わせておく
+# (2026-08-03: 指名数が固定枠になったため、この見込みが実際の指名数とほぼ一致するようになった)。
 const RELEASE_PLAN_DRAFT_ESTIMATE: int = 7
-# FA/戦力外獲得など後段補強の見込み (draft_service.DRAFT_SIGNING_RESERVE と同じ桁)。
-const RELEASE_PLAN_SIGNING_RESERVE: int = 2
+# ※ 旧 `RELEASE_PLAN_SIGNING_RESERVE`(=2、FA/戦力外獲得の見込み) は 2026-08-03 に撤廃。
+#   「毎年必ず2人補強する」前提は現実と乖離しており (誰も獲らない年が普通)、その2人分だけ
+#   毎年余計に戦力外を出していた。実際に補強した分は翌オフの在籍に乗り、そこで自然に放出へ回る。
 # 育成昇格見込みとして計画に足す上限 (昇格はオフの後段で起こり支配下を増やす)。
 const RELEASE_PLAN_PROMO_CAP: int = 2
 # 1球団が1オフに放出できる上限 (計画暴走の安全弁)。
 const RELEASE_PLAN_MAX_PER_TEAM: int = 15
 # 編成計画に対して許容する上振れ。下限は設けず、該当者が少なければその人数で止める。
-const RECONCILE_UPPER_SLACK: int = 2
+# 2026-08-03 に 2→1: FA/戦力外獲得の見込み枠を撤廃して補強が入らない年が普通になったため、
+# 計画+2 まで切ると開幕支配下が目標 (68) を大きく割る球団が出た (実測 post_team_shienka_min 63)。
+const RECONCILE_UPPER_SLACK: int = 1
 # 入団1年目のみ rookie 保護する。
 const CPU_RELEASE_ROOKIE_PROTECTION_YEARS: int = 1
 # 同一CSV・seed=20260714 の比較レポートで、日本人 years<=2 の projected_value 中央値は60.34。
 # 長期較正で新人中央値より約8点低い52に置き、上げるほど戦力外候補が増える。
 const RELEASE_REPLACEMENT_VALUE: float = 52.0
-
-# 補強需要 (position_need) で投手戦力を測る際に平均する上位投手の枚数。野手は各ポジション
-# 「最良1人」で先発1枠を代表できるが、投手は全員 position=1 に集約されるため「エース1枚」だと
-# どの球団も同水準になり需要がほぼゼロになる。上位 K 枚の平均でロスターの投手 depth を測り、
-# 手薄な球団に投手需要が立つようにする。先発6+中継7 程度を見込む。
-const NEED_PITCHER_DEPTH_SLOTS: int = 12
 
 # 少出場引退に使う役割別上限。戦力外選定には使わない。
 const RETIREMENT_LOW_STARTER_MAX: int = 3
@@ -55,13 +53,23 @@ const FUTURE_GROWTH_WEIGHT: float = 1.0
 const INJURY_PENALTY_PER_30D: float = 1.0
 const INJURY_PENALTY_CAP: float = 6.0
 
-# --- 支配下→育成 降格 (CPU 自動戦力外で release の代わりに振り分け) ---
-# **長期故障のリハビリ型のみ** (2026-07-03 ユーザー方針「怪我以外での育成落ちはなくす」):
-# 越冬で治らない長期故障 (injury_days≥DEMOTE_INJURY_DAYS_LONG) で future_value が残るなら
-# 年齢を問わず release でなく育成へ (2026-07-02、年齢上限撤廃)。
-# 旧・類型1 素材保持型 (24-26歳の将来性) と旧・類型3 ベテラン確率降格は 2026-07-03 撤廃
-# (CPU の育成落ちが多すぎた)。手動の育成降格 (戦力外エディタ) と育成ドラフトは従来どおり。
-# DEMOTE_PROSPECT_MAX_AGE は育成整理 (_should_release_development_player) の素材年齢境界として存続。
+# --- 支配下→育成 降格 ---
+# NPB の実手続きは**「一度自由契約 (戦力外通告) にしてから育成契約を結び直す」**で、シーズン中の
+# 切替は禁止 ([[reference_npb_development_player_rules]])。よって降格は2経路とも戦力外フェーズに置く:
+#
+# ① **当落線上の若手の育成契約** (`compute_prospect_demotion_candidates_for_team`、2026-08-02 再導入):
+#    **戦力外を免れて支配下に残った**素材年齢 (<=DEMOTE_PROSPECT_MAX_AGE) の選手のうち、
+#    来季の一軍にはまだ遠いが育成で伸ばす価値がある選手を育成契約へ回し、支配下枠を空ける。
+#    「戦力外候補を降格へ振り替える」形ではない (放出される予定の選手ではなく、残したうえで
+#    枠を空けたい選手が対象)。**判定は全て球団相対** — 絶対値の閾値は置かない (下記)。
+#    量の目安: 実データ (2023-24の支配下登録リスト) では育成から支配下へ戻った支配下経験者が
+#    年16〜26人おり、降格の母数は**年20〜30人規模**。中身は故障離脱中に枠を空ける目的が主。
+# ② **長期故障のリハビリ型** (`_should_demote_to_development`): 越冬で治らない長期故障
+#    (injury_days≥DEMOTE_INJURY_DAYS_LONG) で future_value が残る選手。**戦力外候補かどうかと独立**
+#    (怪我人は候補に上がらないよう保護されるため。2026-08-02 修正)。年齢は問わない。
+#
+# どちらも育成契約は「支配下経験者」= 1年 (DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA)。
+# 旧・類型3 ベテラン確率降格 (`VETERAN_DEMOTE_*`) は撤廃済み。
 const DEMOTE_PROSPECT_MAX_AGE: int = 26
 const DEMOTE_INJURY_DAYS_LONG: int = 120
 const DEMOTE_INJURY_MIN_FUTURE_VALUE: float = 40.0
@@ -89,11 +97,26 @@ const PROMOTE_READY_CEILING: float = 56.0
 # 届かなくなり放出される (= 年齢の固定上限ではなく見込みで決まる)。
 # 保持の例外: 入団/降格1年目 (years<=1)・降格/育成track獲得の同オフ (dev_demote_hold)・
 # 故障リハビリ中 (injury_days>=DEMOTE_INJURY_DAYS_LONG)。加えて素材年齢 (<=DEMOTE_PROSPECT_MAX_AGE)
-# のみ、即戦力 (現在能力>=相対基準、満枠待ち) と出身別猶予 (高卒4年/大社3年) でも保持する。
+# のみ、即戦力 (現在能力>=相対基準、満枠待ち) と育成契約の猶予シーズン数でも保持する。
 # **中堅以上 (素材年齢超) は「育成での再調整は1年」**: 昇格ステップで支配下に戻れなければ
 # 即戦力水準や成長予測を問わずその年のオフに放出する (ベテラン育成降格・戦力外獲得育成track含む)。
-const DEV_RELEASE_GRACE_HS: int = 4
-const DEV_RELEASE_GRACE_OTHER: int = 3
+#
+# **育成契約の年数上限 (2026-08-02)**。NPB「日本プロ野球育成選手に関する規約」準拠:
+#   - 新規の育成選手 (育成ドラフト入団): 契約期間は3年。3年間同一球団と育成契約した選手が翌年度に
+#     支配下契約されない場合は自由契約 (実際は11月30日付、本ゲームはオフの育成整理で処理)。
+#   - **支配下経験者が育成契約した場合は「次年度に支配下契約されなければ自由契約」= 1年**
+#     (育成降格・戦力外からの育成track再契約が該当。`dev_from_shienka` フラグで判別する)。
+# `PSPlayer.development_seasons_completed` がこの値に達したら、即戦力水準・成長予測・年齢を問わず
+# 無条件に自由契約とする。**これが育成人数の発散を止める構造的な歯止め** — これが無いと
+# 「支配下70が埋まっていて昇格できない即戦力の育成」が満枠待ちのまま無期限に滞留し、
+# 実測で育成年数 最大8年・球団あたり27人まで膨らんだ (2026-08-02、目標人数を外した状態での計測)。
+# 保有数 ≒ 年間の育成指名数 × この年数 で自然に頭打ちになるので、目標人数は持たせない。
+const DEV_CONTRACT_MAX_SEASONS: int = 3
+const DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA: int = 1
+# 育成契約のうち、成長予測を問わず無条件に保持するシーズン数 (最初の N シーズン)。
+# 上限までの残り期間が「将来性 (projected_ceiling) で判断される区間」になるので、
+# DEV_CONTRACT_MAX_SEASONS より小さくしないと将来性判定が一度も効かない。
+const DEV_RELEASE_GRACE_SEASONS: int = 2
 # 成長期待の上振れマージン。期待値ちょうどではなく「覚醒が続いた楽観ケース」まで見込む倍率。
 # 大きいほど放出が遅く (甘く) なる。
 const DEV_PROJECTION_OPTIMISM: float = 2.0
@@ -275,6 +298,13 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 			released.append(release_entry)
 		if team_released_count > 0:
 			by_team_counts[team.id] = team_released_count
+		# 戦力外を免れた当落線上の若手を育成契約へ (放出後の在籍でデプスチャートを取り直す)。
+		for prospect_id in compute_prospect_demotion_candidates_for_team(players, team.id, season):
+			var prospect: PSPlayer = _find_player_by_id(players, int(prospect_id))
+			if prospect == null:
+				continue
+			demoted.append(_roster_move_entry(prospect, team.id))
+			_apply_demotion_to_development(prospect, year)
 
 	released.sort_custom(func(a, b) -> bool:
 		return int((a as Dictionary)["overall"]) > int((b as Dictionary)["overall"])
@@ -292,8 +322,8 @@ static func process_cpu_releases(players: Array, teams: Array, user_team_id: int
 # 外国人の去就 (残留/引き抜き/退団) は ForeignPlayerService の外国人契約市場が一括で決める。
 # 結果の適用経路は別だが、判断は release_depth_chart_evaluations / would_release_player_for_team を共有する。
 # compute_release_candidates_for_team 自体は国内選手だけを戦力外通告の対象にする。
-# ドラフトの外国人枠予約に使う目標保有数だけ、release計画側の見込み流入計算 (_release_expected_inflow)
-# が独立に参照する。
+# ドラフトの外国人枠予約 (FOREIGN_ROSTER_RESERVE_TARGET) と、放出計画の支配下限定目標
+# (DOMESTIC_ROSTER_TARGET) の両方が外国人保有上限として参照する。
 const FOREIGN_ROSTER_LIMIT: int = TeamFinance.FOREIGN_HELD_TARGET
 
 # 指定球団について戦力外候補を選んで player_ids[] を返す。
@@ -423,7 +453,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 			return value_a < value_b
 		return int(((a as Dictionary)["player"] as PSPlayer).id) < int(((b as Dictionary)["player"] as PSPlayer).id)
 	)
-	var plan_count: int = _release_plan_count(players, team_id, evaluations.size())
+	var plan_count: int = _release_plan_count(players, team_id, _domestic_roster_count(players, team_id))
 	var max_cuts: int = mini(RELEASE_PLAN_MAX_PER_TEAM, plan_count + RECONCILE_UPPER_SLACK)
 	for i in range(mini(domestic_candidates.size(), max_cuts)):
 		selected_rows.append(domestic_candidates[i])
@@ -467,28 +497,56 @@ static func _can_claim_release_slot(player: PSPlayer, record: PSPlayerSeasonReco
 	return games > 0
 
 
-# 見込み流入はドラフト、外国人不足、後段補強予約、即戦力の育成昇格で構成する。
+# **支配下 (国内・非外国人) 限定の開幕目標** (2026-08-03)。外国人の去就は戦力外通告ではなく
+# 外国人契約市場が別途決めるため ([[project_foreign_contract_market]])、放出計画は外国人を
+# 一切見ない。OPENING_ROSTER_TARGET(68、支配下+外国人の合計目標) から外国人保有上限
+# (FOREIGN_ROSTER_LIMIT=4、最終的に埋まる前提) を引いた 64 が支配下だけの目標になる。
+# ※ 旧実装は在籍数に外国人を含めたまま「外国人不足 (4−現外国人数)」を見込み流入へ足しており、
+#   数式上は現外国人数の項が打ち消し合って結果は同じだったが、意図が読み取れず外国人数が
+#   4を超える異常系 (通常は起きない) でも打ち消しが崩れる作りだった。ここで明示的に切り離す。
+const DOMESTIC_ROSTER_TARGET: int = TeamFinance.OPENING_ROSTER_TARGET - FOREIGN_ROSTER_LIMIT
+
+
+# 見込み流入はドラフト (固定枠) と即戦力の育成昇格のみで構成する。**外国人は含めない**
+# (放出計画自体が支配下限定のため)。FA/戦力外獲得も**見込みに入れない** (2026-08-03) —
+# 獲るかどうかは年と球団によるので、見込みで先に枠を空けると「補強しなかった年に人数が
+# 足りない」状態になる。
 static func _release_expected_inflow(players: Array, team_id: int) -> int:
-	var foreign_count: int = 0
 	var promo_ready: int = 0
 	var ready_threshold: float = first_team_ready_threshold(players, team_id)
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id or player.is_retired():
 			continue
-		if player.development_player:
-			if float(player_value_score(player)) >= ready_threshold:
-				promo_ready += 1
-		elif player.foreign_player:
-			foreign_count += 1
-	var foreign_shortfall: int = maxi(0, FOREIGN_ROSTER_LIMIT - foreign_count)
-	return RELEASE_PLAN_DRAFT_ESTIMATE + foreign_shortfall + RELEASE_PLAN_SIGNING_RESERVE \
-			+ mini(promo_ready, RELEASE_PLAN_PROMO_CAP)
+		if player.development_player and float(player_value_score(player)) >= ready_threshold:
+			promo_ready += 1
+	return RELEASE_PLAN_DRAFT_ESTIMATE + mini(promo_ready, RELEASE_PLAN_PROMO_CAP)
 
 
-# 開幕目標から見込み流入を引いた放出後ロスターへ、快適水準の比率を比例縮小して割り当てる。
+# 支配下 (非外国人・非育成・非引退) の在籍数。放出計画・スロット予算はすべてこれを母数にする。
+static func _domestic_roster_count(players: Array, team_id: int) -> int:
+	var count: int = 0
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if player.is_retired() or player.development_player or player.foreign_player:
+			continue
+		count += 1
+	return count
+
+
+# 支配下目標から見込み流入を引いた放出後ロスターへ、快適水準の比率を比例縮小して割り当てる。
+# **役割バケツ (fielder:N / pitcher:starter|reliever) は外国人選手も一緒に数える**
+# (release_depth_chart_evaluations が foreign_player を除外せずグループ化するため、
+# 外国人投手も domestic の投手と同じ "pitcher:starter" 枠を奪い合う)。よって post_target は
+# 「支配下の放出後見込み (DOMESTIC_ROSTER_TARGET 基準、外国人非依存)」に**現在の外国人保有数**を
+# 足し戻した総人数にする — ここを外国人抜きのままにすると、外国人を多く抱える球団ほど
+# バケツ内の実際の枠消費 (外国人ぶん) を budget が見込まなくなり、支配下選手が余分に
+# 「余剰」判定されて過剰放出される (2026-08-03、実測で post_team_shienka_min が悪化して発覚)。
 static func _release_slot_budgets(players: Array, team_id: int) -> Dictionary:
-	var post_target: int = maxi(1, TeamFinance.OPENING_ROSTER_TARGET - _release_expected_inflow(players, team_id))
+	var domestic_post_target: int = DOMESTIC_ROSTER_TARGET - _release_expected_inflow(players, team_id)
+	var post_target: int = maxi(1, domestic_post_target + TeamFinance.foreign_player_count(players, team_id))
 	var scale: float = float(post_target) / RELEASE_COMFORT_TOTAL
 	var budgets: Dictionary = {}
 	for position_v in RELEASE_POSITION_COMFORT.keys():
@@ -500,10 +558,12 @@ static func _release_slot_budgets(players: Array, team_id: int) -> Dictionary:
 	return budgets
 
 
-# 編成計画はガードレール用であり、実際の放出数を強制しない。
-static func _release_plan_count(players: Array, team_id: int, roster_count: int) -> int:
+# 編成計画はガードレール用であり、実際の放出数を強制しない。roster_count は**支配下限定**
+# (_domestic_roster_count) で渡すこと — 呼び出し元の release_depth_chart_evaluations は
+# 外国人も含む全在籍を評価するため、そのまま渡すと外国人ぶん過大にカウントされる。
+static func _release_plan_count(players: Array, team_id: int, domestic_roster_count: int) -> int:
 	var inflow: int = _release_expected_inflow(players, team_id)
-	return clampi(roster_count + inflow - TeamFinance.OPENING_ROSTER_TARGET, 0, RELEASE_PLAN_MAX_PER_TEAM)
+	return clampi(domestic_roster_count + inflow - DOMESTIC_ROSTER_TARGET, 0, RELEASE_PLAN_MAX_PER_TEAM)
 
 
 static func _has_rookie_release_protection(player: PSPlayer) -> bool:
@@ -556,6 +616,10 @@ static func _apply_demotion_to_development(player: PSPlayer, year: int = 0) -> v
 	player.registered_roster = "育成"
 	player.salary = DEVELOPMENT_CONTRACT_SALARY
 	player.source_data["dev_demote_hold"] = true
+	# 育成契約の年数カウンタの起点 (PSPlayer.development_seasons_completed)。昇格でリセットされる。
+	player.source_data["development_since_year"] = year
+	# 降格は定義上「支配下経験者の育成契約」= 契約は1年 (DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA)。
+	player.source_data["dev_from_shienka"] = true
 
 
 # CPU 自動: 戦力外候補のうち、release ではなく育成降格 (org 残留) に回すべきか判定する。
@@ -564,16 +628,13 @@ static func _apply_demotion_to_development(player: PSPlayer, year: int = 0) -> v
 # 将来価値が残る選手だけを育成で抱える。年齢は問わない。
 # 旧・類型1 素材保持型 (24-26歳の将来性) と旧・類型3 ベテラン確率降格は撤廃
 # (CPU が育成へ落とす選手が多すぎたため。手動の育成降格と育成ドラフトは従来どおり)。
-# 育成枠の空きは呼び出し側 (process_cpu_releases / has_development_room) で確認済み。
+
 # 長期故障による育成降格の対象 (非破壊、value 降順ではなく player 順)。**戦力外候補かどうかとは独立**に
 # 判定する — 怪我人は戦力外候補になる前に保護される (_can_claim_release_slot は30歳未満を無条件、
 # 30歳以上も season_injury_days の excuse でスロット保持者にし、ReleaseValueProjector も usage を底上げする)
 # ため、release の振り分けとしてだけ実装していた頃はこの経路が一度も発火しなかった (2026-08-02 修正)。
-# 育成枠 (DEVELOPMENT_ROSTER_LIMIT) の空き数で頭打ちにするので、CPU と自軍推奨で同じ結果になる。
+# 育成の人数上限は無い (2026-08-02 撤廃) ので、対象者は全員降格させる。
 static func compute_long_injury_demotion_candidates_for_team(players: Array, team_id: int, offseason_year: int) -> Array:
-	var room: int = maxi(0, TeamFinance.DEVELOPMENT_ROSTER_LIMIT - TeamFinance.development_count(players, team_id))
-	if room <= 0:
-		return []
 	var candidates: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -586,8 +647,51 @@ static func compute_long_injury_demotion_candidates_for_team(players: Array, tea
 		if not _should_demote_to_development(player):
 			continue
 		candidates.append(player.id)
-		if candidates.size() >= room:
-			break
+	return candidates
+
+
+# 当落線上の若手の育成降格候補 (非破壊)。**戦力外を免れて支配下に残った**選手が対象で、
+# 戦力外候補は exclude_ids で除く (CPU は放出後に呼ぶので自然に外れる。自軍推奨は推奨放出リストを渡す)。
+# **判定は絶対値を使わず、既存の相対評価2つの組み合わせだけで決める**:
+#   1. `surplus` かつ `projected_value < RELEASE_REPLACEMENT_VALUE` — `would_release_player_for_team`
+#      (=「その球団なら戦力外相当」) と同じ AND 条件で、戦力外通告・外国人スカウト・戦力外市場と
+#      同じデプスチャート判定を共有する。ここを満たすのに放出されなかった選手 = 放出枠 (計画数) や
+#      保護 (23歳以下/rookie) で生き残った、まさに当落線上の選手。
+#      ※ `would_release_player_for_team` を選手ごとに呼ぶとデプスチャートを毎回作り直して O(n²)
+#        になるため (実測で長期オートプレイが数十分単位に悪化)、評価は1球団1回だけ作って使い回す。
+#   2. `development_projected_ceiling` >= `first_team_ready_threshold` — 成長期待の楽観側まで見れば
+#      その球団の一軍下位水準に届く = 育成で伸ばす価値がある。昇格 (育成→支配下) と同じ物差し。
+# どちらも球団相対なので、強豪は基準が上がり再建球団は下がる (他の編成AIと同じ挙動)。
+# 量のノブは持たない — デプスチャートの余剰と放出計画の差で自然に決まる。
+static func compute_prospect_demotion_candidates_for_team(
+	players: Array, team_id: int, season: PSSeason, exclude_ids: Dictionary = {}
+) -> Array:
+	var offseason_year: int = season.year if season != null else 0
+	var evaluations: Dictionary = release_depth_chart_evaluations(players, team_id, season)
+	if evaluations.is_empty():
+		return []
+	var ready_threshold: float = first_team_ready_threshold(players, team_id)
+	var candidates: Array = []
+	for row in evaluations.values():
+		var data: Dictionary = row as Dictionary
+		var player: PSPlayer = data["player"] as PSPlayer
+		if player == null or player.foreign_player:
+			continue
+		if exclude_ids.has(player.id):
+			continue
+		if player.age > DEMOTE_PROSPECT_MAX_AGE:
+			continue
+		if not release_block_reason(player, offseason_year).is_empty():
+			continue
+		if not bool(data.get("surplus", false)):
+			continue
+		if float(data.get("projected_value", 0.0)) >= RELEASE_REPLACEMENT_VALUE:
+			continue
+		# 全球団が同一評価にならないよう比較閾値を ±DEMOTE_JITTER 揺らす (marginal 層のみに効く)。
+		var jitter: float = 1.0 + (Rng.roll_float() - 0.5) * 2.0 * DEMOTE_JITTER
+		if development_projected_ceiling(player) < ready_threshold * jitter:
+			continue
+		candidates.append(player.id)
 	return candidates
 
 
@@ -601,21 +705,15 @@ static func _should_demote_to_development(player: PSPlayer) -> bool:
 	return future_value_score(player) >= DEMOTE_INJURY_MIN_FUTURE_VALUE * jitter
 
 
-# 出身が高卒か (育成放出の猶予年数を長くする)。生成選手は source_data["draft_source"]、
-# 初期シードはデビュー年齢から PSPlayer.default_fa_eligible_years が推定する (==8 が高卒)。
-static func _is_high_school_origin(player: PSPlayer) -> bool:
-	if player == null:
-		return false
-	var eligible: int = PSPlayer.default_fa_eligible_years(player.foreign_player, player.age, player.years, player.source_data)
-	return eligible == PSPlayer.FA_ELIGIBLE_YEARS_HIGH_SCHOOL
-
-
 # roadmap #3: 支配下登録 (昇格)。育成選手を支配下に戻す。一軍登録可・70枠を消費する。
 static func _apply_promotion_to_shienka(player: PSPlayer, year: int = 0) -> void:
 	PSCareerLog.log_dev_promote(player, year, player.team_id)
 	player.development_player = false
 	player.registered_roster = "支配下"
 	player.salary = maxi(player.salary, SALARY_MIN)
+	# 育成年数のカウンタは支配下登録でリセットする (再降格したらそこから数え直し)。
+	player.source_data.erase("development_since_year")
+	player.source_data.erase("dev_from_shienka")
 
 
 # CPU 自動: 育成選手のうち value が閾値以上の者を、支配下に空きがある範囲で昇格する。
@@ -695,13 +793,20 @@ static func _promote_ready_development(players: Array, teams: Array, excluded_te
 	}
 
 
-# 育成整理の保持/放出判定 (非破壊)。true なら放出対象。
-# 保持: 1年目 (years<=1) / 降格・育成track獲得の同オフ (dev_demote_hold、ここでは見るだけで
-# 消費しない) / 故障リハビリ中。素材年齢 (<=DEMOTE_PROSPECT_MAX_AGE) はさらに
-# 即戦力の満枠待ち・出身別猶予・projected_ceiling (成長予測) でも保持する。
-# 中堅以上 (素材年齢超) は「育成での再調整は1年」: 上記の常時保持以外は無条件で放出対象
-# (ベテランの育成降格・戦力外獲得の育成track を含む。2026-07-02 ユーザー要望)。
-static func _should_release_development_player(dev: PSPlayer, ready_threshold: float) -> bool:
+# 育成整理の保持/放出判定 (非破壊)。true なら放出対象。offseason_year は育成契約の年数判定に使う。
+# 判定順:
+#  1. **育成契約の年数上限**: 新規=DEV_CONTRACT_MAX_SEASONS(3) / 支配下経験者=
+#     DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA(1)。達したら他の保持理由を問わず放出。
+#     即戦力の満枠待ち保持を打ち切る唯一の経路で、育成人数が発散しないのはこれのおかげ。
+#  2. 常時保持: 1年目 (years<=1) / 降格・育成track獲得の同オフ (dev_demote_hold、ここでは
+#     見るだけで消費しない) / 故障リハビリ中。
+#  3. 素材年齢 (<=DEMOTE_PROSPECT_MAX_AGE): 即戦力の満枠待ち・猶予シーズン・
+#     projected_ceiling (成長予測) で保持。中堅以上は「育成での再調整は1年」で無条件放出
+#     (ベテランの育成降格・戦力外獲得の育成track を含む。2026-07-02 ユーザー要望)。
+static func _should_release_development_player(dev: PSPlayer, ready_threshold: float, offseason_year: int) -> bool:
+	var max_seasons: int = DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA if dev.is_development_from_shienka() else DEV_CONTRACT_MAX_SEASONS
+	if dev.development_seasons_completed(offseason_year) >= max_seasons:
+		return true
 	if dev.years <= 1:
 		return false
 	if bool(dev.source_data.get("dev_demote_hold", false)):
@@ -713,23 +818,29 @@ static func _should_release_development_player(dev: PSPlayer, ready_threshold: f
 		var current_value: float = float(player_value_score(dev))
 		if current_value >= ready_threshold:
 			return false
-		# 出身別の猶予年数未満は projected を問わず保持 (高卒は長め)。
-		var grace: int = DEV_RELEASE_GRACE_HS if _is_high_school_origin(dev) else DEV_RELEASE_GRACE_OTHER
-		if dev.years < grace:
+		# 育成契約の最初の数シーズンは成長予測を問わず保持。
+		if dev.development_seasons_completed(offseason_year) < DEV_RELEASE_GRACE_SEASONS:
 			return false
 		# 一軍昇格見込み: 残り成長期待の楽観側まで見込んだ projected_ceiling が
 		# 即戦力基準に届かないなら「昇格見込みほぼ無し」で放出。
-		var growth: float = maxf(0.0, expected_development_score_bonus(dev.age, 6, dev.position))
-		if current_value + growth * DEV_PROJECTION_OPTIMISM >= ready_threshold:
+		if development_projected_ceiling(dev) >= ready_threshold:
 			return false
 	return true
 
 
-# 自軍の戦力外エディタ推奨用: CPU の育成整理 (process_development_releases) と同じ基準で
-# 放出対象になる自軍育成選手の id を返す (非破壊、dev_demote_hold は消費しない)。
-# 自軍は process_development_releases から除外されるため、この候補を戦力外推奨に
-# 合流させないと「条件を満たす育成選手が自軍だけ永久に残る」ことになる (2026-07-02)。
-static func compute_development_release_candidates_for_team(players: Array, team_id: int) -> Array:
+# 育成選手の「一軍に上がれる見込み」= 現在能力 + 残り成長期待の楽観側 (DEV_PROJECTION_OPTIMISM 倍)。
+# 育成整理の判定と、保有目安超過分のトリム順 (低い順に放出) で同じ尺度を使う。
+static func development_projected_ceiling(dev: PSPlayer) -> float:
+	if dev == null:
+		return 0.0
+	var growth: float = maxf(0.0, expected_development_score_bonus(dev.age, 6, dev.position))
+	return float(player_value_score(dev)) + growth * DEV_PROJECTION_OPTIMISM
+
+
+# 育成整理の放出対象 id (非破壊、dev_demote_hold は消費しない)。CPU (process_development_releases) と
+# 自軍の戦力外エディタ推奨が**同じ関数**を使う — 自軍は process_development_releases から除外されるため、
+# ここを共有しないと「条件を満たす育成選手が自軍だけ永久に残る」ことになる (2026-07-02)。
+static func compute_development_release_candidates_for_team(players: Array, team_id: int, offseason_year: int) -> Array:
 	var ready_threshold: float = first_team_ready_threshold(players, team_id)
 	var ids: Array = []
 	for player_row in players:
@@ -738,7 +849,7 @@ static func compute_development_release_candidates_for_team(players: Array, team
 			continue
 		if player.is_retired() or not player.development_player:
 			continue
-		if _should_release_development_player(player, ready_threshold):
+		if _should_release_development_player(player, ready_threshold, offseason_year):
 			ids.append(player.id)
 	return ids
 
@@ -769,28 +880,21 @@ static func process_development_releases(players: Array, teams: Array, excluded_
 			for dev_row in devs:
 				(dev_row as PSPlayer).source_data.erase("dev_demote_hold")
 			continue
-		# 即戦力基準は球団ごとの相対値 (一軍下位レベル)。1度だけ算出して使い回す。
-		var ready_threshold: float = first_team_ready_threshold(players, team.id)
+		# 判定は非破壊の共有関数へ委譲する (自軍の推奨と同じ基準)。dev_demote_hold を見るので、
+		# **フラグの消費より前**に呼ぶこと。
+		var release_ids: Dictionary = {}
+		for id_value in compute_development_release_candidates_for_team(players, team.id, year):
+			release_ids[int(id_value)] = true
+		# 「降格年の保持」フラグはこのオフで消費し、翌オフから通常判定に戻す。
+		for dev_row in devs:
+			(dev_row as PSPlayer).source_data.erase("dev_demote_hold")
 		for dev_row in devs:
 			var dev: PSPlayer = dev_row as PSPlayer
-			# 降格/獲得した同オフは保持 (「降格年の保持」保証)。フラグはここで消費し、翌オフから通常判定。
-			if bool(dev.source_data.get("dev_demote_hold", false)):
-				dev.source_data.erase("dev_demote_hold")
+			if not release_ids.has(dev.id):
 				continue
-			if not _should_release_development_player(dev, ready_threshold):
-				continue
+			var entry: Dictionary = _roster_move_entry(dev, team.id)
 			_apply_release_mutation(dev, year)
-			released.append({
-				"player_id": dev.id,
-				"name": dev.name,
-				"age": dev.age,
-				"team_id": team.id,
-				"position": dev.position,
-				"role": dev.role,
-				"overall": player_value_score(dev),
-				"years": dev.years,
-				"salary": dev.salary,
-			})
+			released.append(entry)
 	return {
 		"released": released,
 		"released_count": released.size(),
@@ -929,68 +1033,13 @@ static func player_value_score(player: PSPlayer) -> int:
 	return PlayerValueEvaluator.overall_score(record)
 
 
-# 球団×ポジションの補強需要 = max(0, リーグ平均戦力 - 自軍戦力)。value 単位 (概ね0〜20)。
-# 野手 (position 2〜9) は各ポジション「最良1人」= その枠のレギュラーを戦力とする。
-# 投手 (position 1) は全員が同一 position に集約されるため、最良1枚 (=エース) で測るとどの球団も
-# 同水準で需要がゼロになる。ロスターの投手 depth を反映させるため上位 NEED_PITCHER_DEPTH_SLOTS 枚の
-# 平均を投手戦力とし、投手が手薄な球団に position 1 の需要が立つようにする。
-# 戦力外獲得・現役ドラフト・FA の各補強AIが共有する単一ソース (以前は FaMarketService と
-# ReleasedMarketService に同一実装が重複していた)。
+# 球団×ポジションの補強需要 {team_id: {1..9: need}}。**実体は TeamDepthChart** (年齢・ポジション・
+# 能力の単一デプスチャート、2026-08-03 に統合)。ここは position 番号のマップを期待する既存呼び出し元
+# (FA / 戦力外獲得 / 現役ドラフト / 外国人) のための互換ビューで、投手 (position 1) は
+# 先発/救援スロットの need の大きい方を返す。
+# 旧実装 (球団ごとに「野手は最良1人・投手は上位12枚平均」を数え直す) は TeamDepthChart へ移した。
 static func position_need(players: Array, teams: Array) -> Dictionary:
-	var best_by_team: Dictionary = {}
-	var pitcher_values_by_team: Dictionary = {}
-	for team_row in teams:
-		var team: PSTeam = team_row as PSTeam
-		if team != null:
-			best_by_team[team.id] = {}
-			pitcher_values_by_team[team.id] = []
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id <= 0:
-			continue
-		if player.is_retired():
-			continue
-		if not best_by_team.has(player.team_id):
-			continue
-		var overall: int = player_value_score(player)
-		if player.is_pitcher():
-			(pitcher_values_by_team[player.team_id] as Array).append(overall)
-		else:
-			var pos_map: Dictionary = best_by_team[player.team_id] as Dictionary
-			if overall > int(pos_map.get(player.position, 0)):
-				pos_map[player.position] = overall
-	# 投手 depth (上位 K 枚平均) を各球団の position 1 戦力として best_by_team に載せる。
-	for team_id in pitcher_values_by_team.keys():
-		(best_by_team[team_id] as Dictionary)[1] = _top_k_mean(pitcher_values_by_team[team_id] as Array, NEED_PITCHER_DEPTH_SLOTS)
-	var league_avg: Dictionary = {}
-	for pos in range(1, 10):
-		var total: float = 0.0
-		var count: int = 0
-		for team_id in best_by_team.keys():
-			total += float((best_by_team[team_id] as Dictionary).get(pos, 0))
-			count += 1
-		league_avg[pos] = total / float(maxi(1, count))
-	var need: Dictionary = {}
-	for team_id in best_by_team.keys():
-		var pos_need: Dictionary = {}
-		var pos_map: Dictionary = best_by_team[team_id] as Dictionary
-		for pos in range(1, 10):
-			pos_need[pos] = max(0.0, float(league_avg[pos]) - float(pos_map.get(pos, 0)))
-		need[team_id] = pos_need
-	return need
-
-
-# 上位 k 枚の value 平均。手薄な球団ほど低くなる (少数しか居なければその平均、空なら0)。
-static func _top_k_mean(values: Array, k: int) -> float:
-	if values.is_empty() or k <= 0:
-		return 0.0
-	var sorted: Array = values.duplicate()
-	sorted.sort_custom(func(a, b) -> bool: return int(a) > int(b))
-	var take: int = mini(k, sorted.size())
-	var total: float = 0.0
-	for i in range(take):
-		total += float(sorted[i])
-	return total / float(take)
+	return TeamDepthChart.position_need_view(TeamDepthChart.build_league(players, teams))
 
 
 # 「今後2〜3年の期待価値」を 1 スカラーに統一したスコア。

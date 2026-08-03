@@ -509,6 +509,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# 本職保護が実績ゼロのベテランを生き残らせる再発バグ (2026-07-02 修正) の監視用で、期待値はほぼ 0。
 	var noshow_thirties_survivor_rows: Array = _noshow_thirties_survivor_rows(season)
 	var noshow_thirties_survivors: int = noshow_thirties_survivor_rows.size()
+	# 戦力外通告 (+当落線上の若手の育成降格) 直後の支配下人数。ここからドラフト・戦力外獲得・
+	# FA・外国人・育成昇格で開幕目標 (OPENING_ROSTER_TARGET) まで積み直す。
+	# 放出計画が過不足なく効いているかは「この人数 + 見込み流入 ≒ 68」で確認する。
+	var post_release_shienka: Dictionary = _shienka_count_stats()
 	var merged_release_result: Dictionary = release_result.duplicate(true)
 
 	# ドラフト (日本人 66 枠まで 6〜7 人補充)。
@@ -569,6 +573,22 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# 育成の整理 (失敗プロスペクト/枠超過を放出し pipeline を循環)。累積で player 数が膨れるのを防ぐ。
 	var dev_release_result: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, 0, season.year)
 	GameDb.rebuild_player_indices()
+
+	# 育成契約の消化シーズン数の分布 (オフ完了時点)。「育成のまま N年で自由契約」ルールの較正用で、
+	# max が伸び続けるなら育成が滞留している (= 人数が発散する) サイン。
+	var dev_tenure_max: int = 0
+	var dev_tenure_sum: int = 0
+	var dev_tenure_count: int = 0
+	for dev_row in GameDb.players:
+		var dev_player: PSPlayer = dev_row as PSPlayer
+		if dev_player == null or dev_player.is_retired() or not dev_player.development_player:
+			continue
+		if dev_player.team_id <= 0:
+			continue
+		var tenure: int = dev_player.development_seasons_completed(season.year)
+		dev_tenure_max = maxi(dev_tenure_max, tenure)
+		dev_tenure_sum += tenure
+		dev_tenure_count += 1
 
 	# 複数年契約中選手の全リーグ総数 (制度が定着後どの程度の規模で推移するかの監視)。
 	# cap saturation ([[feedback_cap_saturation_pattern]]) の監視対象は contract_years_multi 側。
@@ -651,10 +671,15 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"released_age_min": released_age_min,
 		"released_age_max": released_age_max,
 		"noshow_thirties_survivors": noshow_thirties_survivors,
+		"post_release_shienka_avg": float(post_release_shienka.get("avg", 0.0)),
+		"post_release_shienka_min": int(post_release_shienka.get("min", 0)),
+		"post_release_shienka_max": int(post_release_shienka.get("max", 0)),
 		"noshow_thirties_survivor_rows": noshow_thirties_survivor_rows,
 		"demoted_count": int(release_result.get("demoted_count", 0)),
 		"promoted_count": int(promotion_result.get("promoted_count", 0)),
 		"dev_released_count": int(dev_release_result.get("released_count", 0)),
+		"development_tenure_max": dev_tenure_max,
+		"development_tenure_avg": _round_float(_safe_div(float(dev_tenure_sum), float(dev_tenure_count)), 2),
 		"draft_complete": bool(draft_state.get("complete", false)),
 		"draft_picks_count": (draft_state.get("picks", []) as Array).size(),
 		"draft_main_picks_count": draft_main_picks,
@@ -673,6 +698,9 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"geneki_moved_count": int(geneki_result.get("moved_count", 0)),
 		"geneki_round2_count": int(geneki_result.get("round2_count", 0)),
 		"released_signed_count": int(released_market_result.get("signed_count", 0)),
+		# 戦力外獲得を1人も行わなかった球団数。「とりあえず2人獲る」になっていないかの監視用
+		# (2026-08-03、獲得基準を TeamDepthChart の弱点+即戦力/将来性へ厳格化したときに追加)。
+		"released_signed_zero_teams": _teams_without_released_signing(released_market_result),
 		"released_candidates_count": int(released_market_result.get("candidates_count", 0)),
 		"foreign_signed_count": int(foreign_result.get("signed_count", 0)),
 		# 外国人契約市場 (残留/引き抜き/退団) の内訳。foreign_released_count は退団数を指す
@@ -691,6 +719,45 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 
 # 戦力外ステップ後に残った「30歳以上・今季出場ゼロ・入団3年目以降」の日本人支配下選手数。
 # シーズンの過半を怪我で欠場して出場割引を全免除された選手は、意図的な残留として数えない。
+# 現時点の支配下人数の球団別統計 {avg, min, max}。オフの各段階でロースターがどこまで
+# 削れ / 積み直されたかを見るのに使う。
+func _shienka_count_stats() -> Dictionary:
+	var counts: Array = []
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		counts.append(TeamFinance.shienka_count(GameDb.players, team.id))
+	if counts.is_empty():
+		return {"avg": 0.0, "min": 0, "max": 0}
+	var total: int = 0
+	var lowest: int = int(counts[0])
+	var highest: int = int(counts[0])
+	for value in counts:
+		total += int(value)
+		lowest = mini(lowest, int(value))
+		highest = maxi(highest, int(value))
+	return {
+		"avg": _round_float(float(total) / float(counts.size()), 2),
+		"min": lowest,
+		"max": highest,
+	}
+
+
+# 戦力外獲得で1人も獲らなかった球団数。獲得基準が「弱点に合う選手だけ」になっていれば
+# 0人の球団が普通に出る (全球団が毎年上限まで埋めていた頃はここが常に0だった)。
+func _teams_without_released_signing(released_market_result: Dictionary) -> int:
+	var signed_teams: Dictionary = {}
+	for row in released_market_result.get("signings", []) as Array:
+		signed_teams[int((row as Dictionary).get("to_team", 0))] = true
+	var zero_teams: int = 0
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null and not signed_teams.has(team.id):
+			zero_teams += 1
+	return zero_teams
+
+
 func _noshow_thirties_survivor_rows(season: PSSeason) -> Array:
 	var rows: Array = []
 	for player_row in GameDb.players:

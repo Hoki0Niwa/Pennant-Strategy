@@ -2,23 +2,15 @@ extends RefCounted
 class_name DraftService
 
 const Offseason = preload("res://services/season/offseason_service.gd")
-const WarCalculator = preload("res://services/reports/war_calculator.gd")
 const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_model.gd")
 
 # ドラフト指名は候補の素点に、球団ごとの不足ポジション補正を加えて決める。
-# WAR need は「リーグ平均の先発級 WAR との差」を bucket_grade へ足し、
+# need は [[TeamDepthChart]] の `first_team_need` (= 一軍枠の質のリーグ差、value 単位) で、
 # 現有戦力が弱いポジションほど候補評価を押し上げる。
-const WAR_NEED_WEIGHT_ROUND1: float = 1.5
-const WAR_NEED_WEIGHT_LATER: float = 3.0
-# 投手 (position=1) はポジション分解せず単一の need として扱うが、戦力は「最良投手1枚 (エース)」
-# ではなく上位 PITCHER_DEPTH_WAR_SLOTS 枚の WAR 平均 (=投手陣の depth) で測る
-# ([[project_offseason_roster_mechanics]] の position_need と同じ考え方)。旧実装はエース1枚で測って
-# いたため投手 need≈0 になり、その埋め合わせに重みを 1/3 へ落としていた。depth 化で need が実効を
-# 持つようになったので重みは野手と揃える (グロスの投手/野手比は _bucket_balance_score が別途担保)。
-const PITCHER_WAR_NEED_WEIGHT_ROUND1: float = WAR_NEED_WEIGHT_ROUND1
-const PITCHER_WAR_NEED_WEIGHT_LATER: float = WAR_NEED_WEIGHT_LATER
-# 投手 depth を測る上位枚数 (先発6+中継6 程度)。team_position_war の position=1 バケツの players から取る。
-const PITCHER_DEPTH_WAR_SLOTS: int = 12
+# ⚠️ **2026-08-03 に単位が WAR (0〜2程度) から value (0〜15程度) へ変わったため、重みを約1/7へ下げた。**
+# 投手も野手と同じ重みを使う (グロスの投手/野手比は _bucket_balance_score が別途担保する)。
+const POSITION_NEED_WEIGHT_ROUND1: float = 0.2
+const POSITION_NEED_WEIGHT_LATER: float = 0.45
 
 # ポジション別適性保持者の確保。各守備位置で最低 POSITION_DEPTH_TARGET 人の適性保持者を
 # 揃えるようドラフトを誘導する。保持者が少ない位置の候補を優先指名するが、その位置に
@@ -45,22 +37,28 @@ const UTILITY_SUBPOS_WEIGHT: float = 0.6
 const ROSTER_LIMIT: int = 70
 # ドラフトは本指名(支配下)のあと育成ドラフトへ進む2フェーズ制。
 # AppState では別ステップとして表示するが、レポート/テスト用の直接実行では通しで処理できる。
-# 本指名数は編成計画ベース (2026-07-03): 来季開幕支配下の目標 (TeamFinance.OPENING_ROSTER_TARGET)
-# との差分を埋める人数を指名する。戦力外 (offseason_service._release_plan_count) と同じ目標を
-# 共有するため、放出→指名の収支が連動して現実の人数感 (6〜8人前後) に落ち着く。
-# 旧「基本N人+在籍帯の加算表」は撤廃 (差分埋めが在籍帯の役割を兼ねる)。
+# **本指名数は固定の指名枠** (2026-08-03 ユーザー方針)。現実のドラフトは「支配下の空き数」から
+# 逆算するのではなく、毎年おおむね6〜7人を指名し、**誰を取るか**を年齢・ポジション・能力の
+# デプスチャート need で決める運用。人数の帳尻は戦力外側 (offseason_service._release_plan_count が
+# 在籍+見込み流入−開幕目標の「余り」で決める) が合わせる。
+# 旧方式 (2026-07-03〜2026-08-03) は指名数自体を 開幕目標−在籍−補強予約 の差分で決めていたため、
+# 「毎年必ず2人補強する」前提の予約枠が指名数を直接押し下げていた。
+const MAIN_DRAFT_TARGET_MIN: int = 6
+const MAIN_DRAFT_TARGET_MAX: int = 7
+# hard 70枠に対する安全弁 (指名枠より優先)。枠が残り僅かな球団はここで縮む。
 const MAIN_DRAFT_MAX_PICKS: int = 10
 const MAIN_DRAFT_MIN_PICKS: int = 4
-# FA・外国人・戦力外獲得で使うため、本指名後に可能なら残す hard 枠の最低値。
-const DRAFT_SIGNING_RESERVE: int = 2
 # 外国人は4人保有を目標に、不足人数分の支配下枠を本指名で埋め切らず予約する。
 const FOREIGN_ROSTER_RESERVE_TARGET: int = 4
-# 育成→支配下 昇格見込みとしてドラフトから差し引く上限 (これ以上は数えない)。
-const DRAFT_PROMO_RESERVE_CAP: int = 4
-# 昇格見込みで本指名目標を直接減らす上限。基本6人を保つため、4人昇格見込みでも減算は最大2。
-const DRAFT_PROMO_TARGET_REDUCTION_CAP: int = 2
-# 育成ドラフト: 1球団 0〜3。CPU は育成枠の空きと球団ごとの appetite で 0 (指名なし) もあり得る。
-const DEV_DRAFT_MAX_PICKS: int = 3
+# ※ 旧 DRAFT_PROMO_RESERVE_CAP / DRAFT_PROMO_TARGET_REDUCTION_CAP (育成昇格見込みで指名数を控える)
+#   は 2026-08-03 に撤廃。指名枠を固定にしたため「見込みで枠を削る」概念自体が無くなった。
+#   そもそもノブとしてもほぼ効いていなかった (即戦力基準を満たす育成は球団あたり0〜1人しかおらず、
+#   上限2に張り付く球団が出ない。2→1 を試して 73.0→73.2人/年と無変化だった)。
+# 育成ドラフト: 1球団あたりの指名上限 (実際は 0〜この値の一様乱数)。**育成人数を決める唯一のノブ** —
+# 保有数 ≒ 平均指名数 (上限の半分) × 育成契約年数 (OffseasonService.DEV_CONTRACT_MAX_SEASONS) で
+# 決まる。NPB は年間 45〜50人/12球団 (≈4/球団) だが、単一球団が10人超を指名するような編成は
+# ゲームの方針として作らない ([[roadmap_feature_candidates]])。
+const DEV_DRAFT_MAX_PICKS: int = 6
 const MAX_TOTAL_PICKS: int = 200
 const CANDIDATE_POOL_SIZE: int = 320
 const ROOKIE_MIN_AGE: int = 18
@@ -85,11 +83,8 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 	var forward_order: Array = reverse_order.duplicate()
 	forward_order.reverse()
 
-	# 直近完了シーズンの WAR からチーム別ポジション WAR と「不足度」を作る。
-	# create_draft_state は offseason 中に呼ばれ、当該年シーズンは既に終了している。
-	# シーズン未完了 / records 不在のエッジケースでは team_position_need が空になり
-	# WAR ボーナスは加算されない (procedural grade と shortage だけが効く)。
-	var team_position_need: Dictionary = _build_team_position_need(teams, season)
+	# 球団別のポジション補強需要 (デプスチャート由来。成績レコードに依存しない)。
+	var team_position_need: Dictionary = _build_team_position_need(players, teams)
 
 	var state: Dictionary = {
 		"version": 1,
@@ -133,82 +128,28 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 	return advance_until_user_turn_or_complete(state)
 
 
-# 全チームのポジション別 WAR 不足を集計する。
-# 戻り値: {team_id_str: {position: war_deficit}} + "league_average": {position: avg_starter_war}
-# 不足が大きい (war_deficit が高い) ほど、そのチームはそのポジションを補強したい。
-# 野手は各ポジションの最良1枚 (starter_war) の league 平均比。投手 (position=1) は全員が1バケツに
-# 集約されるため最良1枚 (エース) では need が立たず、上位K枚の WAR 平均 (depth, _pitcher_depth_war) で測る。
-static func _build_team_position_need(teams: Array, season: PSSeason) -> Dictionary:
-	if season == null:
-		return {}
-	var year: int = season.year
-	var season_number: int = season.season_number
-	# シーズン未完了 (= player_records にこの year/season の advanced_stats が無い) 場合は
-	# build_league_context が PA=0 のリーグコンテキストを返すので、need も全て 0 になる。
-	var ctx: Dictionary = WarCalculator.build_league_context(year, season_number)
-	var by_team: Dictionary = {}  # team_id_str -> {position: starter_war}
-	var league_starter_totals: Dictionary = {}  # position -> [war values]
-	for team_row in teams:
-		var team: PSTeam = team_row as PSTeam
-		if team == null:
-			continue
-		var team_war: Dictionary = WarCalculator.team_position_war(team.id, year, season_number, ctx)
-		var positions: Dictionary = team_war.get("positions", {}) as Dictionary
-		var team_starter: Dictionary = {}
-		for pos_key in positions.keys():
-			var bucket: Dictionary = positions[pos_key] as Dictionary
-			# 野手は最良1枚 (starter_war) がその枠のレギュラー戦力。投手 (position=1) は全員が
-			# 1 バケツに集約されるため最良1枚 (エース) だとどの球団も同水準で need が立たない。
-			# 投手は上位 K 枚の WAR 平均 (depth) を戦力値にする。
-			var team_value: float = float(bucket.get("starter_war", 0.0))
-			if int(pos_key) == 1:
-				team_value = _pitcher_depth_war(bucket)
-			team_starter[int(pos_key)] = team_value
-			if not league_starter_totals.has(int(pos_key)):
-				league_starter_totals[int(pos_key)] = []
-			(league_starter_totals[int(pos_key)] as Array).append(team_value)
-		by_team[str(team.id)] = team_starter
-
-	# リーグ平均 starter_war を算出 (ポジションごと)。
-	var league_average: Dictionary = {}
-	for pos_key in league_starter_totals.keys():
-		var values: Array = league_starter_totals[pos_key] as Array
-		if values.is_empty():
-			league_average[int(pos_key)] = 0.0
-			continue
-		var total: float = 0.0
-		for v in values:
-			total += float(v)
-		league_average[int(pos_key)] = total / float(values.size())
-
-	# 各チームの不足度 = max(0, league_avg - team_starter)
+# 全チームのポジション別 補強需要を集計する。**実体は [[TeamDepthChart]]** (2026-08-03 統合)。
+# 戻り値: {team_id_str: {position: need}} (position 1 = 先発/救援スロットの need の大きい方)。
+# 旧実装は直近シーズンの WAR (`WarCalculator.team_position_war` + 上位K枚平均) で測っていたが、
+# 需要の実装が4箇所に散る原因になっていたためデプスチャートへ寄せた。副次的な利点:
+#  - 先発と救援を別スロットで測れる (旧実装は全投手が position=1 の1バケツだった)。
+#  - **シーズン未完了・成績レコード不在でも need が出る** (旧実装は WAR が全0になり need も全0だった)。
+# ⚠️ 単位が WAR (0〜2程度) から value (0〜15程度) へ変わるため、重み (POSITION_NEED_WEIGHT_*) も
+#   同じ比率で下げてある。ここを触るときは long_autoplay の draft の投手比を必ず見ること。
+static func _build_team_position_need(players: Array, teams: Array) -> Dictionary:
+	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	var need: Dictionary = {}
-	for team_key in by_team.keys():
-		var team_starter: Dictionary = by_team[team_key] as Dictionary
-		var deficits: Dictionary = {}
-		for pos_key in league_average.keys():
-			var avg: float = float(league_average[pos_key])
-			var team_value: float = float(team_starter.get(int(pos_key), 0.0))
-			var deficit: float = max(0.0, avg - team_value)
-			deficits[int(pos_key)] = deficit
-		need[team_key] = deficits
-
-	need["__league_average"] = league_average
+	for team_id in charts.keys():
+		var chart: Dictionary = charts[team_id] as Dictionary
+		var team_need: Dictionary = {}
+		team_need[1] = maxf(
+			TeamDepthChart.slot_need(chart, TeamDepthChart.SLOT_STARTER),
+			TeamDepthChart.slot_need(chart, TeamDepthChart.SLOT_RELIEVER)
+		)
+		for position in range(2, 10):
+			team_need[position] = TeamDepthChart.slot_need(chart, TeamDepthChart.fielder_slot_key(position))
+		need[str(team_id)] = team_need
 	return need
-
-
-# team_position_war の position=1 バケツ (全投手集約) から投手 depth WAR を返す。
-# players は WAR 降順ソート済みなので上位 PITCHER_DEPTH_WAR_SLOTS 枚の平均を取る。
-# 投手陣が薄い球団ほど下位が低 WAR (救援・入替) で平均が下がり、投手 need が立つ。
-static func _pitcher_depth_war(bucket: Dictionary) -> float:
-	var players: Array = bucket.get("players", []) as Array
-	if players.is_empty():
-		return 0.0
-	var take: int = mini(PITCHER_DEPTH_WAR_SLOTS, players.size())
-	var total: float = 0.0
-	for i in range(take):
-		total += float((players[i] as Dictionary).get("war", 0.0))
-	return total / float(take)
 
 
 static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dictionary:
@@ -378,8 +319,10 @@ static func _begin_development_segment(state: Dictionary) -> void:
 	(state.get("logs", []) as Array).append({"type": "segment", "segment": "development"})
 
 
-# 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS)。育成は人数無制限なので枠でなく appetite だけで決める。
-# CPU は指名なしもあり得る。ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
+# 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS の一様乱数)。育成は人数無制限だが、
+# **育成契約に年数上限がある** (OffseasonService.DEV_CONTRACT_MAX_SEASONS) ので保有数は
+# 「年間指名数 × 契約年数」で自然に頭打ちになる。目標人数を持たせる必要はない (2026-08-02)。
+# CPU は 0 (指名なし) もあり得る。ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
 static func _compute_dev_targets(state: Dictionary) -> Dictionary:
 	var targets: Dictionary = {}
 	var user_team_id: int = int(state.get("user_team_id", 0))
@@ -796,15 +739,12 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	var profile: Dictionary = profiles.get(str(team_id), {}) as Dictionary
 	if str(state.get("segment", "main")) == "development":
-		# 育成ドラフト: 球団ごとの appetite (team_dev_targets) と上限に加え、
-		# 育成ロスターの運用上限 (TeamFinance.DEVELOPMENT_ROSTER_LIMIT) も超えない。
+		# 育成ドラフト: 育成の人数上限は無い (2026-08-02 撤廃) ので、球団ごとの appetite
+		# (team_dev_targets、保有目安との差で決まる) と1球団あたりの上限だけで止める。
 		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
 		var dev_picked: int = int(dev_counts.get(str(team_id), 0))
 		var targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
 		var target: int = int(targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
-		var current_development: int = int(profile.get("initial_development_total", 0))
-		if current_development + dev_picked >= TeamFinance.DEVELOPMENT_ROSTER_LIMIT:
-			return false
 		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS
 	# 本指名: 支配下 hard 空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。
 	# ドラフトは年1回の主補強なので soft 67 では止めず、3人程度で終わる年を避ける。
@@ -898,7 +838,7 @@ static func _team_candidate_score(state: Dictionary, team_id: int, candidate: Di
 	# ポジション別 WAR 不足を補強需要として加算 (Phase C)。
 	# 候補のポジションが「チームのそのポジションの WAR がリーグ平均を下回る」場合に
 	# 候補スコアを押し上げ、CPU が穴ポジションを優先的に補強しやすくする。
-	score += _position_war_need_bonus(state, team_id, candidate, round_no)
+	score += _position_need_bonus(state, team_id, candidate, round_no)
 	# 守備位置別の適性保持者が薄い位置を優先補強 (主力健在なら順位を下げる)。
 	score += _position_aptitude_need_bonus(profile, candidate, round_no)
 	# 本職が最低数 (野手2/捕手6) を下回る位置を強く優先補強。
@@ -917,12 +857,10 @@ static func _team_candidate_score(state: Dictionary, team_id: int, candidate: Di
 	return score
 
 
-# 直近シーズンの WAR を反映したポジション別補強ボーナス。
-# - 野手 (position 2-9): 当該ポジションの「リーグ平均 starter_war - チーム starter_war」を
-#   不足度として使い、不足が大きいほど候補スコアを押し上げる。
-# - 投手 (position 1): 上位K枚の WAR 平均 (投手陣 depth) の不足を、野手と同じ重みで反映する
-#   (旧実装はエース1枚で測り need≈0 だったため重みを落としていたが、depth 化で不要になった)。
-static func _position_war_need_bonus(state: Dictionary, team_id: int, candidate: Dictionary, round_no: int) -> float:
+# デプスチャート由来のポジション別補強ボーナス ([[TeamDepthChart]] の `first_team_need`)。
+# 候補のポジションが「そのスロットの一軍枠の質がリーグ平均を下回る」ほど候補スコアを押し上げ、
+# CPU が穴ポジションを優先的に補強しやすくする。投手 (position 1) は先発/救援の need の大きい方。
+static func _position_need_bonus(state: Dictionary, team_id: int, candidate: Dictionary, round_no: int) -> float:
 	var need: Dictionary = state.get("team_position_need", {}) as Dictionary
 	if need.is_empty():
 		return 0.0
@@ -935,9 +873,7 @@ static func _position_war_need_bonus(state: Dictionary, team_id: int, candidate:
 	var deficit: float = float(team_need.get(position, 0.0))
 	if deficit <= 0.0:
 		return 0.0
-	if position == 1:
-		return deficit * (PITCHER_WAR_NEED_WEIGHT_ROUND1 if round_no == 1 else PITCHER_WAR_NEED_WEIGHT_LATER)
-	return deficit * (WAR_NEED_WEIGHT_ROUND1 if round_no == 1 else WAR_NEED_WEIGHT_LATER)
+	return deficit * (POSITION_NEED_WEIGHT_ROUND1 if round_no == 1 else POSITION_NEED_WEIGHT_LATER)
 
 
 # 守備位置別の適性保持者数に基づく補強需要。
@@ -1004,45 +940,21 @@ static func _bucket_balance_score(profile: Dictionary, bucket: String, round_no:
 	return clamp(pitcher_share - 0.48, -0.18, 0.22) * (30.0 if round_no == 1 else 42.0)
 
 
-# 本指名の球団別目標指名数 (need-driven)。
-#  - 6人を基本線にする。支配下 soft 目標との差分をそのまま使うと普通の球団が最低値に張り付く。
-#  - 戦力外が多く在籍支配下が少ない球団 → 7〜9 (大量入れ替え)。
-#  - キーパーばかりで放出が少ない/昇格見込みがある球団 → 4〜5。
-#  - hard 70枠は最後に必ず守る。
+# 本指名の球団別目標指名数。**人数は毎年6〜7人の固定枠**で、在籍数・昇格見込み・後段補強の
+# いずれからも引かない (2026-08-03 ユーザー方針)。現実のドラフトは空き枠の逆算ではなく
+# 「毎年この人数を指名し、**誰を取るか**を年齢・ポジション・能力の need で決める」運用のため。
+# 人数の帳尻は戦力外側 (`OffseasonService._release_plan_count` が余りで決める) が合わせる。
+# hard 70枠 (+外国人枠の確保) だけが安全弁として枠を縮められる。
 # profiles は _build_team_profiles 済み (initial_total = 戦力外後の在籍支配下)。
-static func _compute_main_draft_targets(players: Array, profiles: Dictionary) -> Dictionary:
-	# 球団別の即戦力基準 (一軍下位レベルの相対値) を先に算出。
-	var ready_threshold_by_team: Dictionary = {}
-	for key in profiles.keys():
-		var tid: int = int(str(key))
-		ready_threshold_by_team[tid] = Offseason.first_team_ready_threshold(players, tid)
-
-	# 球団別の昇格見込み数 (育成のうち現在能力が**自軍の即戦力基準**以上のもの)。
-	var promo_by_team: Dictionary = {}
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.is_retired():
-			continue
-		if not player.development_player:
-			continue
-		var threshold: float = float(ready_threshold_by_team.get(player.team_id, Offseason.PROMOTE_TO_SHIENKA_MIN_VALUE))
-		if float(Offseason.player_value_score(player)) >= threshold:
-			promo_by_team[player.team_id] = int(promo_by_team.get(player.team_id, 0)) + 1
-
+static func _compute_main_draft_targets(_players: Array, profiles: Dictionary) -> Dictionary:
 	var targets: Dictionary = {}
 	for key in profiles.keys():
 		var profile: Dictionary = profiles[key] as Dictionary
 		var current: int = int(profile.get("initial_total", profile.get("total", 0)))
-		var team_id: int = int(str(key))
-		var expected_promo: int = min(DRAFT_PROMO_RESERVE_CAP, int(promo_by_team.get(team_id, 0)))
-		var promotion_reduction: int = min(DRAFT_PROMO_TARGET_REDUCTION_CAP, expected_promo)
-		# 編成計画: 開幕目標 − 在籍 − 後段補強予約 (FA/戦力外獲得 + 外国人不足分) − 昇格見込み。
-		# 戦力外で在籍が減った分だけ自然に指名が増える (放出と指名が同じ目標で連動する)。
-		var reserve: int = _main_draft_signing_reserve(profile)
-		var gap: int = TeamFinance.OPENING_ROSTER_TARGET - current - reserve - promotion_reduction
-		var capacity: int = _main_draft_capacity(current, profile)
-		var target: int = clampi(gap, MAIN_DRAFT_MIN_PICKS, MAIN_DRAFT_MAX_PICKS)
-		targets[key] = min(target, capacity)
+		# 指名枠は固定 (6〜7人)。**在籍数からも昇格見込みからも引かない** — 人数の帳尻は
+		# 戦力外側が余りで合わせる (2026-08-03)。hard 70枠の安全弁だけが枠を縮められる。
+		var target: int = Rng.range_int(MAIN_DRAFT_TARGET_MIN, MAIN_DRAFT_TARGET_MAX)
+		targets[key] = clampi(min(target, _main_draft_capacity(current, profile)), 0, MAIN_DRAFT_MAX_PICKS)
 	return targets
 
 
@@ -1055,10 +967,13 @@ static func _main_draft_capacity(current_shienka: int, profile: Dictionary) -> i
 	return max(MAIN_DRAFT_MIN_PICKS, reserved_capacity)
 
 
+# 本指名で埋め切らずに残す hard 枠。**外国人の不足分だけ**を予約する — 外国人4人保有は編成の前提で
+# 枠を確保しないと成立しないため。FA/戦力外獲得のための一般予約 (旧 DRAFT_SIGNING_RESERVE=2) は
+# 2026-08-03 に撤廃した: 「毎年必ず2人補強する」前提は現実と乖離しており (誰も獲らない年が普通)、
+# その予約が指名枠と戦力外数の両方を押し下げていた。
 static func _main_draft_signing_reserve(profile: Dictionary) -> int:
 	var foreign_count: int = int(profile.get("foreign", 0))
-	var foreign_need: int = max(0, FOREIGN_ROSTER_RESERVE_TARGET - foreign_count)
-	return DRAFT_SIGNING_RESERVE + foreign_need
+	return max(0, FOREIGN_ROSTER_RESERVE_TARGET - foreign_count)
 
 
 static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
@@ -1085,7 +1000,7 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		if player.is_retired():
 			continue
 		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外するが、
-		# 育成ドラフトの運用上限判定用に initial_development_total だけは別途集計する。
+		# 育成ドラフトの appetite (保有目安との差) を出すため initial_development_total を別途集計する。
 		if player.development_player:
 			var key_dev: String = str(player.team_id)
 			if profiles.has(key_dev):
@@ -1453,6 +1368,9 @@ static func _player_data_from_candidate(candidate: Dictionary, player_id: int, t
 	source["draft_candidate_id"] = int(candidate.get("candidate_id", 0))
 	source["draft_method"] = str(pick.get("method", ""))
 	source["draft_lottery"] = bool(pick.get("lottery", false))
+	if is_dev:
+		# 育成契約の年数カウンタの起点 (PSPlayer.development_seasons_completed)。
+		source["development_since_year"] = draft_year
 	PSCareerLog.seed_draft_entry(source, draft_year, team_id, round_no, is_dev)
 	data["source_data"] = source
 	return data

@@ -20,26 +20,25 @@ func test_candidate_positions_favor_up_the_middle() -> void:
 	assert_int(int(counts.get(1, 0))).is_between(1900, 2450)  # 投手 ~54%
 
 
-# 投手需要は「エース1枚」でなく上位K枚の WAR 平均 (depth) で測る。エースが同等でも
-# 下位が薄い球団の投手 depth は低くなり、その差がドラフトの投手 need に出る。
-# これが直らないとドラフトAIが投手陣の薄さを検知できない。
-func test_pitcher_depth_war_uses_top_k_mean_not_single_ace() -> void:
-	# players は WAR 降順ソート済み前提 (team_position_war が保証)。
-	var deep_bucket: Dictionary = {"players": [
-		{"war": 4.0}, {"war": 3.5}, {"war": 3.0}, {"war": 2.5}, {"war": 2.0}, {"war": 1.8},
-	]}
-	# エースは同じ 4.0 だが下位が薄い球団。
-	var thin_bucket: Dictionary = {"players": [
-		{"war": 4.0}, {"war": 0.6}, {"war": 0.4}, {"war": 0.2}, {"war": 0.0}, {"war": -0.3},
-	]}
-	var deep_depth: float = DraftService._pitcher_depth_war(deep_bucket)
-	var thin_depth: float = DraftService._pitcher_depth_war(thin_bucket)
-	# 上位K枚 (ここでは6枚) の平均 = 単純平均。
-	assert_float(deep_depth).is_equal_approx((4.0 + 3.5 + 3.0 + 2.5 + 2.0 + 1.8) / 6.0, 0.001)
-	# エースが同等でも depth の薄い球団の方が値が低い (= 投手 need が立つ)。
-	assert_float(thin_depth).is_less(deep_depth)
-	# 空バケツは 0。
-	assert_float(DraftService._pitcher_depth_war({"players": []})).is_equal_approx(0.0, 0.001)
+# 投手需要は「エース1枚」ではなくローテ/ブルペンの一軍枠の質で測る。エースが同等でも
+# 下位が薄い球団の投手 need は高くなる。これが直らないとドラフトAIが投手陣の薄さを検知できない。
+# (2026-08-03: 判定は WAR ベースの独自実装から TeamDepthChart へ移行。テストもチャート経由に変更)
+func test_pitcher_need_reflects_rotation_depth_not_single_ace() -> void:
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
+	var players: Array = []
+	# team1: エース級が並ぶ厚いローテ。team2: エースは同等だが以降が薄い。
+	for i in range(8):
+		players.append(_pitcher_with_value(1, 1000 + i, 2.5))
+	players.append(_pitcher_with_value(2, 2000, 2.5))
+	for i in range(7):
+		players.append(_pitcher_with_value(2, 2001 + i, -1.5))
+
+	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
+	var deep_need: float = TeamDepthChart.slot_need(charts[1] as Dictionary, TeamDepthChart.SLOT_STARTER)
+	var thin_need: float = TeamDepthChart.slot_need(charts[2] as Dictionary, TeamDepthChart.SLOT_STARTER)
+	# エースが同等でも、下位が薄い球団の方に need が立つ。
+	assert_float(thin_need).is_greater(deep_need)
+	assert_float(deep_need).is_equal_approx(0.0, 0.001)
 
 
 func test_pitcher_candidates_get_initial_role_from_aptitude() -> void:
@@ -101,7 +100,7 @@ func test_generation_role_ratio_roughly_balanced() -> void:
 
 
 func test_main_and_development_segments_split() -> void:
-	# 在籍55 (外国人0) の球団: gap = 目標68−55−予約(2+外国人不足4) = 7。在籍68の球団は hard 空き2まで。
+	# 在籍55 (外国人0) の球団は指名枠 (6〜7) をそのまま使い、在籍68の球団は hard 空き2までに縮む。
 	var teams: Array = [
 		_team(1, "league1", 1),
 		_team(2, "league1", 2),
@@ -132,10 +131,12 @@ func test_main_and_development_segments_split() -> void:
 		else:
 			main_by_team[tid] = int(main_by_team.get(tid, 0)) + 1
 
-	# 本指名: 在籍55の3球団は gap=7、在籍68の球団は hard 空き2。すべて MAIN 上限以下。
-	assert_int(int(main_by_team.get(1, 0))).is_equal(7)
-	assert_int(int(main_by_team.get(2, 0))).is_equal(7)
-	assert_int(int(main_by_team.get(3, 0))).is_equal(7)
+	# 本指名: 枠に余裕がある3球団は指名枠 (MAIN_DRAFT_TARGET_MIN〜MAX) の範囲。
+	# 在籍68の球団は hard 空き2に縮む (枠より capacity が優先)。
+	for tid in [1, 2, 3]:
+		assert_int(int(main_by_team.get(tid, 0))).is_between(
+			DraftService.MAIN_DRAFT_TARGET_MIN, DraftService.MAIN_DRAFT_TARGET_MAX
+		)
 	assert_int(int(main_by_team.get(4, 0))).is_equal(2)
 
 	# 育成: 各球団 0〜3。
@@ -280,48 +281,61 @@ func test_main_draft_can_complete_before_development_step() -> void:
 	assert_int((state.get("candidate_pool", []) as Array).size()).is_equal(pool_size_before)
 
 
-func test_draft_target_scales_with_roster_need() -> void:
-	# 編成計画: 指名数 = 開幕目標68 − 在籍 − 補強予約2 (外国人4人充足時)。
-	# 戦力外で在籍が減った球団ほど多く指名し、目標との差分がそのまま指名数になる。
+# 指名数は在籍数に依らず固定の枠 (2026-08-03 に差分埋めから変更)。枠が足りない球団だけ
+# capacity で縮む — 人数の帳尻は戦力外側 (在籍+見込み流入−開幕目標の余り) が合わせる。
+func test_draft_target_is_fixed_band_regardless_of_roster_size() -> void:
 	var teams: Array = [
 		_team(1, "league1", 1),
 		_team(2, "league2", 2),
 		_team(3, "league1", 3),
 		_team(4, "league2", 4),
 	]
+	var roster_sizes: Array = [56, 58, 60, 62]
 	var players: Array = []
-	_fill_team(players, 1, 56)  # gap = 68-56-2 = 10
-	_fill_team(players, 2, 58)  # gap = 68-58-2 = 8
-	_fill_team(players, 3, 60)  # gap = 68-60-2 = 6
-	_fill_team(players, 4, 62)  # gap = 68-62-2 = 4
+	for index in range(roster_sizes.size()):
+		_fill_team(players, index + 1, int(roster_sizes[index]))
 	for tid in [1, 2, 3, 4]:
 		_mark_foreign(players, tid, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
 	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
-	assert_int(int(targets.get("1", 0))).is_equal(DraftService.MAIN_DRAFT_MAX_PICKS)
-	assert_int(int(targets.get("2", 0))).is_equal(8)
-	assert_int(int(targets.get("3", 0))).is_equal(6)
-	assert_int(int(targets.get("4", 0))).is_equal(DraftService.MAIN_DRAFT_MIN_PICKS)
-	assert_int(int(targets.get("1", 0))).is_greater(int(targets.get("2", 0)))
+	# 在籍が 56〜62 とばらついても、hard 枠に余裕がある限り全球団が同じ枠に収まる。
+	for tid in [1, 2, 3, 4]:
+		assert_int(int(targets.get(str(tid), 0))).is_between(
+			DraftService.MAIN_DRAFT_TARGET_MIN, DraftService.MAIN_DRAFT_TARGET_MAX
+		)
 
 
+# 外国人4人保有は編成の前提なので、不足分だけは hard 枠を予約して指名で埋め切らない。
+# 枠に余裕がある球団では効かず、**枠が詰まっている球団でだけ**指名数が縮む。
 func test_draft_reserves_slots_for_foreign_roster_shortage() -> void:
 	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2), _team(3, "league1", 3)]
+	var roster: int = 62  # hard 空き8。予約後の capacity が指名枠 (6〜7) を下回る帯で比較する。
 	var players: Array = []
-	_fill_team(players, 1, 58)
-	_fill_team(players, 2, 58)
-	_fill_team(players, 3, 58)
-	_mark_foreign(players, 1, 4)
+	for tid in [1, 2, 3]:
+		_fill_team(players, tid, roster)
+	_mark_foreign(players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	_mark_foreign(players, 2, 1)
 	_mark_foreign(players, 3, 0)
 
 	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
 	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
 
-	# 在籍58 → gap = 68−58−予約。外国人が足りない球団ほど予約が増え指名が減る (2/5/6)。
-	assert_int(int(targets.get("1", 0))).is_equal(8)
-	assert_int(int(targets.get("2", 0))).is_equal(5)
-	assert_int(int(targets.get("3", 0))).is_equal(4)
+	# 外国人充足の球団は指名枠のまま。不足している球団は「hard 空き − 不足分」まで縮む
+	# (ただし MAIN_DRAFT_MIN_PICKS を下回らせない)。
+	var capacity: Callable = func(foreign_held: int) -> int:
+		var reserve: int = maxi(0, DraftService.FOREIGN_ROSTER_RESERVE_TARGET - foreign_held)
+		return maxi(
+			DraftService.MAIN_DRAFT_MIN_PICKS,
+			(DraftService.ROSTER_LIMIT - roster) - reserve
+		)
+	assert_int(int(targets.get("1", 0))).is_between(
+		DraftService.MAIN_DRAFT_TARGET_MIN, DraftService.MAIN_DRAFT_TARGET_MAX
+	)
+	assert_int(int(targets.get("2", 0))).is_equal(capacity.call(1))
+	assert_int(int(targets.get("3", 0))).is_equal(capacity.call(0))
+	# 外国人が足りない球団ほど指名が減る。
+	assert_int(int(targets.get("1", 0))).is_greater(int(targets.get("2", 0)))
+	assert_int(int(targets.get("2", 0))).is_greater(int(targets.get("3", 0)))
 
 
 # 1巡目の「入札→公開(reveal)→結果確認(result)」対話フローを一通り検証する。
@@ -472,13 +486,14 @@ func test_headless_create_resolves_first_round_silently() -> void:
 	assert_int(_round_pick_count(state, 1)).is_greater(0)
 
 
-func test_draft_target_accounts_for_promotions() -> void:
-	# 昇格見込みの育成が多い球団は目標から最大2人控える。capacity にマスクされないよう
-	# 在籍58 (capacity 10) で比較する (在籍63だと capacity=5 で縮小が見えない)。
+# 指名枠は固定なので、**育成の昇格見込みがあっても指名数は変わらない** (2026-08-03 に変更。
+# 旧実装は昇格見込みで最大2人控えていた)。人数の帳尻は戦力外側が余りで合わせる。
+func test_draft_target_ignores_development_promotions() -> void:
 	var teams: Array = [_team(1, "league1", 1)]
 	var base_players: Array = []
 	_fill_team(base_players, 1, 58)
 	_mark_foreign(base_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
+	Rng.set_seed_value(20260803)
 	var base_state: Dictionary = DraftService.create_draft_state(base_players, teams, null, 0)
 	var base_target: int = int((base_state.get("team_main_targets", {}) as Dictionary).get("1", 0))
 
@@ -486,12 +501,14 @@ func test_draft_target_accounts_for_promotions() -> void:
 	_fill_team(promo_players, 1, 58)
 	_mark_foreign(promo_players, 1, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
 	_add_dev(promo_players, 1, 4)  # 昇格水準の育成4人 (value>=昇格閾値)
+	Rng.set_seed_value(20260803)
 	var promo_state: Dictionary = DraftService.create_draft_state(promo_players, teams, null, 0)
 	var promo_target: int = int((promo_state.get("team_main_targets", {}) as Dictionary).get("1", 0))
 
-	# 在籍58・外国人4 → gap = 68−58−2 = 8。昇格見込みで −DRAFT_PROMO_TARGET_REDUCTION_CAP。
-	assert_int(base_target).is_equal(8)
-	assert_int(promo_target).is_equal(base_target - DraftService.DRAFT_PROMO_TARGET_REDUCTION_CAP)
+	assert_int(base_target).is_between(
+		DraftService.MAIN_DRAFT_TARGET_MIN, DraftService.MAIN_DRAFT_TARGET_MAX
+	)
+	assert_int(promo_target).is_equal(base_target)
 
 
 # --- helpers -----------------------------------------------------------------
@@ -503,6 +520,25 @@ func _team(id: int, league: String, prev_rank: int) -> PSTeam:
 		"short_name": "T%d" % id,
 		"league": league,
 		"previous_rank": prev_rank,
+	})
+
+
+# 指定 value 帯の先発投手 (z を一律に振って能力差を作る)。デプスチャートの need 検証用。
+func _pitcher_with_value(team_id: int, id: int, z_value: float) -> PSPlayer:
+	var z: Dictionary = {}
+	for key in ["Pit_Power", "Pit_Control", "Pit_Break", "Pit_Stamina"]:
+		z[key] = z_value
+	return PSPlayer.from_dict({
+		"id": id,
+		"team_id": team_id,
+		"age": 26,
+		"years": 5,
+		"position": 1,
+		"role": "starter",
+		"throws": "R",
+		"bats": "R",
+		"z_abilities": z,
+		"raw_abilities": {},
 	})
 
 

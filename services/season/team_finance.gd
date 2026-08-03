@@ -9,8 +9,10 @@ class_name TeamFinance
 
 # 育成選手制度を含むロスター計数の単一ソース。
 #  - 支配下 (development_player == false) のみが SHIENKA_LIMIT(70) 枠を消費する。
-#  - 育成選手 (development_player == true) は NPB 同様に法的な人数上限はないが、ゲーム内では
-#    自然増を防ぐため DEVELOPMENT_ROSTER_LIMIT で運用上のソフト上限を設ける (2026-07-02)。
+#  - 育成選手 (development_player == true) は NPB 同様に**人数上限なし** (2026-08-02、
+#    旧 DEVELOPMENT_ROSTER_LIMIT=10 を撤廃)。抱え込みは枠でも目標人数でもなく
+#    **育成契約の年数上限** (OffseasonService.DEV_CONTRACT_MAX_SEASONS) で止める:
+#    保有数 ≒ 年間の育成指名数 × 契約年数 で自然に頭打ちになる。
 # FA/ドラフト/外国人/戦力外/昇降格/UI はここを参照し、枠判定を一元化する。
 const SHIENKA_LIMIT: int = 70
 # 育成昇格などの自動内部補充はこのソフト目標で止め、
@@ -23,10 +25,6 @@ const SHIENKA_SOFT_TARGET: int = 67
 # 両者が同じ収支で連動するため、リーグ全体の人数が構造的に安定し、戦力外を再実行しても
 # 目標到達済みなら追加カットが出ない (冪等)。NPB の実運用 (開幕支配下 65〜70) に対応する。
 const OPENING_ROSTER_TARGET: int = 68
-# 育成選手の運用上限。これを超える新規降格/育成ドラフト指名/戦力外獲得(育成track)は行わない。
-# 既存の余剰は昇格 (process_development_promotions) と育成整理 (process_development_releases) で
-# 自然に解消される想定。
-const DEVELOPMENT_ROSTER_LIMIT: int = 10
 
 # --- 年次予算キャップ (2026-07-12 経済オーバーホール) ---
 # 毎オフ開始時 (引退判定の直後) に funds = BASE + 順位ボーナス (+リーグ優勝 +日本一) で
@@ -87,11 +85,6 @@ static func has_shienka_room(players: Array, team_id: int) -> bool:
 # オフシーズンの自動補強用の空きがあるか (soft 目標 67)。70 との差をシーズン中用に空ける。
 static func has_shienka_soft_room(players: Array, team_id: int) -> bool:
 	return shienka_count(players, team_id) < SHIENKA_SOFT_TARGET
-
-
-# 育成枠の空きがあるか (運用上限 DEVELOPMENT_ROSTER_LIMIT 未満)。
-static func has_development_room(players: Array, team_id: int) -> bool:
-	return development_count(players, team_id) < DEVELOPMENT_ROSTER_LIMIT
 
 
 # チーム所属 (team_id 一致) のアクティブ選手 (引退/マネージャー候補を除く) の年俸合計。

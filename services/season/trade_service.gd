@@ -196,61 +196,21 @@ static func need_fit(player: PSPlayer, team_need: Dictionary) -> float:
 
 
 # 需要マップ: { team_id: { 2..9: gap, "starter": gap, "reliever": gap } }。
-# 野手はポジション最高値のリーグ平均比 (FA市場と同じ発想)、投手は役割別デプス
-# (先発上位6 / 救援上位8 の平均値) のリーグ平均比。gap が大きいほど補強が必要。
+# **実体は [[TeamDepthChart]]** (2026-08-03 統合)。旧実装は「野手はポジション最高値のリーグ平均比、
+# 投手は役割別デプス (先発上位6/救援上位8の平均) のリーグ平均比」を独自に数え直していたが、
+# デプスチャートの `first_team_need` (= 一軍枠の質のリーグ差) がまったく同じ尺度なのでそちらへ委譲する。
+# 先発/救援の枠数はチャート側の FIRST_TEAM_SLOTS (先発5/救援6) が単一ソースになる。
 static func build_team_needs(players: Array, teams: Array) -> Dictionary:
-	var best_by_team: Dictionary = {}
-	var starter_values: Dictionary = {}
-	var reliever_values: Dictionary = {}
-	for team_row in teams:
-		var team: PSTeam = team_row as PSTeam
-		if team == null:
-			continue
-		best_by_team[team.id] = {}
-		starter_values[team.id] = []
-		reliever_values[team.id] = []
-	for player_row in players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id <= 0 or player.is_retired() or player.development_player:
-			continue
-		if not best_by_team.has(player.team_id):
-			continue
-		var value: int = OffseasonService.player_value_score(player)
-		if player.is_pitcher():
-			if player.is_starter_pitcher():
-				(starter_values[player.team_id] as Array).append(value)
-			else:
-				(reliever_values[player.team_id] as Array).append(value)
-			continue
-		var pos_map: Dictionary = best_by_team[player.team_id] as Dictionary
-		if value > int(pos_map.get(player.position, 0)):
-			pos_map[player.position] = value
-
-	var depth_by_team: Dictionary = {}
-	for team_id in best_by_team.keys():
-		depth_by_team[team_id] = {
-			SLOT_STARTER: _top_average(starter_values[team_id] as Array, SURPLUS_KEEP_STARTERS),
-			SLOT_RELIEVER: _top_average(reliever_values[team_id] as Array, SURPLUS_KEEP_RELIEVERS),
-		}
-
+	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	var need: Dictionary = {}
-	var team_count: int = maxi(1, best_by_team.size())
-	for team_id in best_by_team.keys():
-		need[team_id] = {}
-	for pos in range(2, 10):
-		var total: float = 0.0
-		for team_id in best_by_team.keys():
-			total += float((best_by_team[team_id] as Dictionary).get(pos, 0))
-		var league_avg: float = total / float(team_count)
-		for team_id in best_by_team.keys():
-			(need[team_id] as Dictionary)[pos] = max(0.0, league_avg - float((best_by_team[team_id] as Dictionary).get(pos, 0)))
-	for slot in [SLOT_STARTER, SLOT_RELIEVER]:
-		var total: float = 0.0
-		for team_id in depth_by_team.keys():
-			total += float((depth_by_team[team_id] as Dictionary).get(slot, 0.0))
-		var league_avg: float = total / float(team_count)
-		for team_id in depth_by_team.keys():
-			(need[team_id] as Dictionary)[slot] = max(0.0, league_avg - float((depth_by_team[team_id] as Dictionary).get(slot, 0.0)))
+	for team_id in charts.keys():
+		var chart: Dictionary = charts[team_id] as Dictionary
+		var team_need: Dictionary = {}
+		for pos in range(2, 10):
+			team_need[pos] = TeamDepthChart.slot_need(chart, TeamDepthChart.fielder_slot_key(pos))
+		team_need[SLOT_STARTER] = TeamDepthChart.slot_need(chart, TeamDepthChart.SLOT_STARTER)
+		team_need[SLOT_RELIEVER] = TeamDepthChart.slot_need(chart, TeamDepthChart.SLOT_RELIEVER)
+		need[team_id] = team_need
 	return need
 
 

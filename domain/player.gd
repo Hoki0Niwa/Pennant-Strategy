@@ -259,6 +259,26 @@ func is_new_fa_holder(offseason_year: int) -> bool:
 	return offseason_year > 0 and int(source_data.get("fa_eligible_year", 0)) == offseason_year
 
 
+# 支配下経験のある育成選手か。NPB の規約は「支配下選手登録されたことのある者が育成選手として
+# 契約した次年度に支配下契約されなければ自由契約」で、新規の育成選手 (3年) より契約が短い。
+# 育成降格と、戦力外からの育成track再契約 (元支配下) で立つ。
+func is_development_from_shienka() -> bool:
+	return development_player and bool(source_data.get("dev_from_shienka", false))
+
+
+# 育成契約のまま消化したシーズン数 (育成でなければ 0)。`development_since_year` は
+# 育成になったオフの年 (育成ドラフト指名年 / 降格したオフ / 育成trackでの獲得年) で、
+# 支配下登録 (昇格) で消える。NPB の育成契約の年数上限に相当する判定に使う。
+#   育成になったオフ = 0 / その翌オフ = 1 / …
+func development_seasons_completed(offseason_year: int) -> int:
+	if not development_player or offseason_year <= 0:
+		return 0
+	var since: int = int(source_data.get("development_since_year", 0))
+	if since <= 0:
+		return 0
+	return maxi(0, offseason_year - since)
+
+
 # R4 Step1: 出身から FA閾値 (8=高卒 / 7=その他) を推定する。
 #  - 生成選手は source_data["draft_source"] に出身種別が入る。
 #  - 初期シード選手は列が無いため、デビュー年齢 (age - years + 1) が18以下なら高卒と推定。

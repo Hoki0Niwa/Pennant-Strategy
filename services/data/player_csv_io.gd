@@ -11,6 +11,11 @@ class_name PSPlayerCsvIo
 # - クォート/エスケープは FileAccess.store_csv_line / get_csv_line に委譲（RFC 準拠）。
 # - PSPlayer.to_dict() / PSTeam.to_dict() と 1 対 1 でラウンドトリップする。
 
+# シード育成選手の「育成契約 N年目」推定に使う散らばりの幅 (在籍年数でこの年数までクランプする)。
+# 育成年数の満了ルール (OffseasonService.DEV_CONTRACT_MAX_SEASONS) と同じ値にしておくと、
+# 初期世界の育成選手が満了年で綺麗にばらける。
+const SEED_DEVELOPMENT_TENURE_SPREAD: int = 3
+
 const META_ORDER: Array = [
 	"id", "name", "team_id", "position", "role", "age", "years", "bats", "throws",
 	"height", "weight", "salary", "draft_round", "jersey_number", "sensyu_num",
@@ -114,6 +119,17 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int, ca
 	if source.has("traded_year") and int(source.get("traded_year", 0)) >= initial_year:
 		source.erase("traded_year")
 		source.erase("traded_from_team")
+
+	# 育成契約の年数カウンタ (PSPlayer.development_seasons_completed の起点)。シードには履歴が無いので
+	# 在籍年数から遡って推定する。全員に同じ年を入れると「N年ルール」で初期育成が同じオフに一斉放出
+	# されるため、years でばらけさせて満了年をずらす。支配下選手には持たせない。
+	if bool(out.get("development_player", false)):
+		var since: int = int(source.get("development_since_year", 0))
+		if since <= 0 or since > initial_year:
+			var dev_years: int = clampi(int(out.get("years", 0)), 0, SEED_DEVELOPMENT_TENURE_SPREAD)
+			source["development_since_year"] = initial_year - dev_years
+	else:
+		source.erase("development_since_year")
 
 	# career_log の y も未来年のまま残ると経歴タブに未来年が表示される。世界共通オフセット
 	# (career_log_year_offset) で一括シフトする。シフト後も開始年以降に残るエントリ

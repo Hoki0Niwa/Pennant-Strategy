@@ -33,10 +33,13 @@ func test_shienka_count_excludes_development() -> void:
 func test_room_helpers_track_limits() -> void:
 	var players: Array = _support_players(1, TeamFinance.SHIENKA_LIMIT)
 	assert_bool(TeamFinance.has_shienka_room(players, 1)).is_false()
-	players.append(_player({"id": 999, "team_id": 1, "development_player": true}))
-	# 育成を足しても支配下枠には影響しない。
+	assert_bool(TeamFinance.has_shienka_soft_room(players, 1)).is_false()
+	# 育成を何人足しても支配下枠には影響しない (育成側に人数上限は無い)。
+	for i in range(20):
+		players.append(_player({"id": 990 + i, "team_id": 1, "development_player": true}))
 	assert_bool(TeamFinance.has_shienka_room(players, 1)).is_false()
-	assert_bool(TeamFinance.has_development_room(players, 1)).is_true()
+	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(TeamFinance.SHIENKA_LIMIT)
+	assert_int(TeamFinance.development_count(players, 1)).is_equal(20)
 
 
 # --- 条件指定型外国人スカウト ----------------------------------------------
@@ -1369,19 +1372,38 @@ func test_release_plan_counts_scale_with_roster_size() -> void:
 	var all_players: Array = deep_team + lean_team
 	var deep_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 1, null)
 	var lean_cut: Array = Offseason.compute_release_candidates_for_team(all_players, 2, null)
-	assert_int(deep_cut.size()).is_equal(Offseason.RELEASE_PLAN_MAX_PER_TEAM)
-	assert_int(lean_cut.size()).is_equal(7)
+	# 放出数 = 支配下在籍 + 見込み流入 (ドラフト枠のみ、_plan_team は外国人を作らないので
+	# 育成昇格見込みも常に0) − 支配下限定の開幕目標(DOMESTIC_ROSTER_TARGET) + 上振れ許容。
+	# 期待値は定数から導出する (ノブを回してもここが壊れないように)。
+	var lean_expected: int = clampi(
+		60 + Offseason.RELEASE_PLAN_DRAFT_ESTIMATE - Offseason.DOMESTIC_ROSTER_TARGET,
+		0, Offseason.RELEASE_PLAN_MAX_PER_TEAM
+	) + Offseason.RECONCILE_UPPER_SLACK
+	var deep_expected: int = clampi(
+		70 + Offseason.RELEASE_PLAN_DRAFT_ESTIMATE - Offseason.DOMESTIC_ROSTER_TARGET,
+		0, Offseason.RELEASE_PLAN_MAX_PER_TEAM
+	) + Offseason.RECONCILE_UPPER_SLACK
+	assert_int(deep_cut.size()).is_equal(mini(deep_expected, Offseason.RELEASE_PLAN_MAX_PER_TEAM))
+	assert_int(lean_cut.size()).is_equal(lean_expected)
 	assert_int(deep_cut.size()).is_greater(lean_cut.size())
 	# 上限超過時は projection の低い側だけを残し、戻り値も昇順にする。
 	assert_int(int(deep_cut[0])).is_equal(9500)
-	assert_int(int(deep_cut[-1])).is_equal(9514)
+	assert_int(int(deep_cut[-1])).is_equal(9500 + deep_cut.size() - 1)
 
 
 func test_release_targets_opening_roster_and_is_idempotent() -> void:
 	var players: Array = _plan_team(1, 70, 9700, -1.0)
 	var first_cut: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
 	var remaining: int = players.size() - first_cut.size()
-	assert_int(remaining).is_equal(55)
+	# 放出後の在籍 = 70 − 放出数 (計画 + 上振れ許容、1球団上限でクランプ)。定数から導出する。
+	var planned_cuts: int = mini(
+		clampi(
+			70 + Offseason.RELEASE_PLAN_DRAFT_ESTIMATE - Offseason.DOMESTIC_ROSTER_TARGET,
+			0, Offseason.RELEASE_PLAN_MAX_PER_TEAM
+		) + Offseason.RECONCILE_UPPER_SLACK,
+		Offseason.RELEASE_PLAN_MAX_PER_TEAM
+	)
+	assert_int(remaining).is_equal(70 - planned_cuts)
 	for pid_value in first_cut:
 		var player: PSPlayer = null
 		for row in players:
@@ -1396,8 +1418,36 @@ func test_release_targets_opening_roster_and_is_idempotent() -> void:
 func test_release_plan_bounded_even_when_stats_missing() -> void:
 	var players: Array = _plan_team(1, 66, 9750, 0.0, 32)
 	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
-	assert_int(cut_ids.size()).is_equal(13)
-	assert_int(players.size() - cut_ids.size()).is_equal(53)
+	# 成績レコードが欠けていても放出数は計画値 (支配下在籍 + 見込み流入 − 支配下限定の開幕目標
+	# + 上振れ許容) に収まる。期待値は定数から導出する。
+	var expected: int = clampi(
+		66 + Offseason.RELEASE_PLAN_DRAFT_ESTIMATE - Offseason.DOMESTIC_ROSTER_TARGET,
+		0, Offseason.RELEASE_PLAN_MAX_PER_TEAM
+	) + Offseason.RECONCILE_UPPER_SLACK
+	assert_int(cut_ids.size()).is_equal(expected)
+	assert_int(players.size() - cut_ids.size()).is_equal(66 - expected)
+
+
+# 放出計画は外国人の去就を見ない (2026-08-03、ユーザー要望「外国人の戦力外は専用画面で行うので
+# 放出数計算の対象外にすべき」)。放出数は支配下人数だけで決まり、外国人保有数を 0〜4 の間で
+# 動かしても放出候補数は変わらない。旧実装は「在籍(支配下+外国人)+外国人不足−開幕目標」で
+# 数式上たまたま外国人数の項が打ち消し合っていたが、支配下限定の目標 (DOMESTIC_ROSTER_TARGET)
+# を使う現行実装ではそもそも外国人を一切見ないため、打ち消しに頼らず不変になる。
+func test_release_plan_is_independent_of_foreign_headcount() -> void:
+	var domestic: Array = _plan_team(1, 60, 9500, -1.0)
+	var no_foreign: Array = domestic.duplicate()
+	var full_foreign: Array = domestic.duplicate()
+	for i in range(TeamFinance.FOREIGN_HELD_TARGET):
+		var foreigner: PSPlayer = _player_with_z(9800 + i, 1, 3, false, -1.0)
+		foreigner.foreign_player = true
+		full_foreign.append(foreigner)
+
+	var cut_no_foreign: Array = Offseason.compute_release_candidates_for_team(no_foreign, 1, null)
+	var cut_full_foreign: Array = Offseason.compute_release_candidates_for_team(full_foreign, 1, null)
+	assert_int(cut_no_foreign.size()).is_equal(cut_full_foreign.size())
+	# 外国人自身は放出候補に一切含まれない。
+	for pid_value in cut_full_foreign:
+		assert_int(int(pid_value)).is_less(9800)
 
 
 func test_release_cuts_surplus_noshow_thirties_fielder() -> void:
@@ -1737,30 +1787,35 @@ func test_development_release_keeps_first_year() -> void:
 	var first_year: PSPlayer = _player_with_z(82, 1, 3, true, -2.0)
 	first_year.age = 24
 	first_year.years = 1
+	first_year.source_data["development_since_year"] = 2026
 	var tenured: PSPlayer = _player_with_z(83, 1, 3, true, -2.0)
 	tenured.age = 24
-	tenured.years = 5  # 猶予 (大社3) を超え昇格見込み無し → 放出
+	tenured.years = 5
+	tenured.source_data["development_since_year"] = 2024  # 猶予シーズンを超え昇格見込み無し → 放出
 	var players: Array = [first_year, tenured]
-	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	Offseason.process_development_releases(players, [_team(1)], 0, 2026)
 	assert_bool(first_year.is_retired()).is_false()
 	assert_bool(tenured.is_retired()).is_true()
 
 
-func test_development_release_high_school_longer_grace() -> void:
-	# 同条件 (非 viable・在籍3年) でも高卒は猶予4年で保持、大社は猶予3年で放出。
-	var hs: PSPlayer = _player_with_z(84, 1, 3, true, -2.0)
-	hs.age = 21
-	hs.years = 3
-	hs.source_data = {"draft_source": "high_school"}
-	var college: PSPlayer = _player_with_z(85, 1, 3, true, -2.0)
-	college.age = 21
-	college.years = 3
-	college.source_data = {"draft_source": "university"}
-	var players: Array = [hs, college]
-	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+# 育成契約の最初の DEV_RELEASE_GRACE_SEASONS シーズンは成長予測を問わず保持し、
+# それ以降は昇格見込み (projected_ceiling) で判断する。出身 (高卒/大社) による差は付けない —
+# NPB の育成契約の年数ルールが出身を問わず一律のため (2026-08-02、旧・出身別猶予から変更)。
+func test_development_release_grace_is_counted_in_development_seasons() -> void:
+	var since_year: int = 2026
+	var in_grace: PSPlayer = _player_with_z(84, 1, 3, true, -2.0)
+	in_grace.age = 21
+	in_grace.years = 3
+	in_grace.source_data["development_since_year"] = since_year - (Offseason.DEV_RELEASE_GRACE_SEASONS - 1)
+	var out_of_grace: PSPlayer = _player_with_z(85, 1, 3, true, -2.0)
+	out_of_grace.age = 21
+	out_of_grace.years = 3
+	out_of_grace.source_data["development_since_year"] = since_year - Offseason.DEV_RELEASE_GRACE_SEASONS
+	var players: Array = [in_grace, out_of_grace]
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0, since_year)
 	assert_int(int(result.get("released_count", 0))).is_equal(1)
-	assert_bool(hs.is_retired()).is_false()
-	assert_bool(college.is_retired()).is_true()
+	assert_bool(in_grace.is_retired()).is_false()
+	assert_bool(out_of_grace.is_retired()).is_true()
 
 
 # --- 統一スコア future_value_score / 故障リスク -------------------------------
@@ -1835,34 +1890,93 @@ func test_development_release_cuts_faded_prospect_keeps_ready_and_rehab() -> voi
 	assert_bool(rehab.development_player).is_true()
 
 
-func test_development_release_keeps_many_viable_young() -> void:
-	# 育成は人数無制限: 大量の若い viable 育成は全員保持 (枠超過放出は無し)。
+# 育成の人数に上限は無い代わりに、**育成契約は DEV_CONTRACT_MAX_SEASONS シーズンで満了**する
+# (NPB の「育成のまま3年で自由契約」相当、2026-08-02)。即戦力水準に届いていても
+# 支配下枠が空かずに滞留した選手はここで切れる = 人数が発散しない構造的な歯止め。
+func test_development_contract_expires_after_max_seasons() -> void:
+	var since_year: int = 2026
 	var players: Array = []
-	for i in range(20):
-		var dev: PSPlayer = _player_with_z(2000 + i, 1, 3, true, 0.5)
+	# 全員 viable な若手 (成長予測では誰も放出されない)。育成契約の開始年だけずらす。
+	for i in range(4):
+		var dev: PSPlayer = _player_with_z(2000 + i, 1, 3, true, 1.5)
 		dev.age = 20
+		dev.source_data["development_since_year"] = since_year - i  # 消化 0,1,2,3 シーズン
 		players.append(dev)
-	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
-	assert_int(int(result.get("released_count", 0))).is_equal(0)
-	assert_int(TeamFinance.development_count(players, 1)).is_equal(20)
+	var expiring: PSPlayer = players[Offseason.DEV_CONTRACT_MAX_SEASONS] as PSPlayer
+
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0, since_year)
+	assert_int(int(result.get("released_count", 0))).is_equal(1)
+	assert_bool(expiring.is_retired()).is_true()
+	for i in range(Offseason.DEV_CONTRACT_MAX_SEASONS):
+		assert_bool((players[i] as PSPlayer).is_retired()).is_false()
+
+
+# NPB 規約: 支配下経験者の育成契約は「次年度に支配下契約されなければ自由契約」= 1年で、
+# 新規の育成選手 (3年) より短い。育成降格と戦力外からの育成track再契約が該当する。
+func test_development_contract_from_shienka_expires_after_one_season() -> void:
+	var since_year: int = 2026
+	var demoted: PSPlayer = _player_with_z(2200, 1, 3, true, 1.5)
+	demoted.age = 22
+	demoted.source_data["development_since_year"] = since_year - 1
+	demoted.source_data["dev_from_shienka"] = true
+	var drafted: PSPlayer = _player_with_z(2201, 1, 3, true, 1.5)
+	drafted.age = 22
+	drafted.source_data["development_since_year"] = since_year - 1
+	var players: Array = [demoted, drafted]
+
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0, since_year)
+	assert_int(int(result.get("released_count", 0))).is_equal(1)
+	assert_bool(demoted.is_retired()).is_true()   # 支配下経験者は1年で満了
+	assert_bool(drafted.is_retired()).is_false()  # 育成ドラフト入団は3年
+
+
+# 降格した同じオフは満了しない (降格年 = 消化0シーズン。翌オフに支配下へ戻れなければ放出)。
+func test_demotion_starts_one_season_clock() -> void:
+	var demoted: PSPlayer = _player_with_z(2210, 1, 3, false, 1.5)
+	demoted.age = 22
+	Offseason.process_demotion([demoted], 1, [demoted.id], 2026)
+	assert_bool(demoted.development_player).is_true()
+	assert_bool(demoted.is_development_from_shienka()).is_true()
+	assert_int(demoted.development_seasons_completed(2026)).is_equal(0)
+	assert_int(demoted.development_seasons_completed(2027)).is_equal(1)
+
+
+# 満了は「即戦力の満枠待ち保持」も打ち切る (これが無いと昇格できない即戦力が無期限に滞留した)。
+func test_development_contract_expiry_overrides_ready_hold() -> void:
+	var since_year: int = 2026
+	var ready_dev: PSPlayer = _player_with_z(2100, 1, 3, true, 3.0)
+	ready_dev.age = 22
+	ready_dev.source_data["development_since_year"] = since_year - Offseason.DEV_CONTRACT_MAX_SEASONS
+	var players: Array = [ready_dev]
+	# 年数を渡さない (offseason_year=0) 呼び出しでは満了判定が効かず、満枠待ちで保持される。
+	assert_int(int(Offseason.process_development_releases(players, [_team(1)], 0).get("released_count", 0))).is_equal(0)
+	assert_bool(ready_dev.is_retired()).is_false()
+	# 年数を渡すと満了で放出される。
+	assert_int(int(Offseason.process_development_releases(players, [_team(1)], 0, since_year).get("released_count", 0))).is_equal(1)
+	assert_bool(ready_dev.is_retired()).is_true()
 
 
 func test_development_release_uses_growth_projection_not_fixed_age() -> void:
 	# 現在能力が同じでも、成長期待(年齢とともに縮む)を加味した projected_ceiling が
 	# 即戦力基準に届くかどうかで昇格見込みを判定する(2026-07-02、固定26歳カットオフを撤廃し
-	# 成長予測ベースに変更)。猶予(大社3年)は在籍4年で超えているので3人とも projection で判定される。
+	# 成長予測ベースに変更)。猶予シーズンは超えているので3人とも projection で判定される。
 	# 同じ現在能力(z=0.0)でも22-24歳は成長期待でギリギリ即戦力基準を上回り保持、25歳は下回り放出。
+	var since_year: int = 2026
+	var grace_over: int = since_year - Offseason.DEV_RELEASE_GRACE_SEASONS
 	var young: PSPlayer = _player_with_z(9800, 1, 3, true, 0.0)
 	young.age = 22
 	young.years = 4
+	young.source_data["development_since_year"] = grace_over
 	var still_ok: PSPlayer = _player_with_z(9801, 1, 3, true, 0.0)
 	still_ok.age = 24
 	still_ok.years = 4
+	still_ok.source_data["development_since_year"] = grace_over
 	var faded: PSPlayer = _player_with_z(9802, 1, 3, true, 0.0)
 	faded.age = 25
 	faded.years = 4
+	faded.source_data["development_since_year"] = grace_over
 	var players: Array = [young, still_ok, faded]
-	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0)
+	var result: Dictionary = Offseason.process_development_releases(players, [_team(1)], 0, since_year)
 	assert_int(int(result.get("released_count", 0))).is_equal(1)
 	assert_bool(young.is_retired()).is_false()
 	assert_bool(still_ok.is_retired()).is_false()
@@ -1924,7 +2038,7 @@ func test_compute_development_release_candidates_for_user_team_recommendation() 
 	young_viable.age = 20
 	young_viable.years = 2
 	var players: Array = [midcareer, held, young_viable]
-	var ids: Array = Offseason.compute_development_release_candidates_for_team(players, 1)
+	var ids: Array = Offseason.compute_development_release_candidates_for_team(players, 1, 0)
 	assert_array(ids).contains(9620)
 	assert_array(ids).not_contains(9621)
 	assert_array(ids).not_contains(9622)
@@ -1946,7 +2060,7 @@ func test_process_development_releases_consumes_hold_for_excluded_team() -> void
 	assert_bool(held.is_retired()).is_false()
 	assert_bool(bool(held.source_data.get("dev_demote_hold", false))).is_false()
 	# 消費後 (=翌オフ相当) は推奨候補に入る。
-	var ids: Array = Offseason.compute_development_release_candidates_for_team(players, 1)
+	var ids: Array = Offseason.compute_development_release_candidates_for_team(players, 1, 0)
 	assert_array(ids).contains(9630)
 
 

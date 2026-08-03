@@ -3050,14 +3050,21 @@ func _build_release_recommendation() -> Dictionary:
 	# 候補リストからの振り分けだけでは発火しない。CPU 側 process_cpu_releases と同じ入口)。
 	for pid_value in OffseasonService.compute_long_injury_demotion_candidates_for_team(GameDb.players, team_id, season.year):
 		demote_ids.append(int(pid_value))
+	var excluded: Dictionary = {}
+	for pid_value in demote_ids:
+		excluded[int(pid_value)] = true
 	for pid_value in OffseasonService.compute_release_candidates_for_team(GameDb.players, team_id, season):
 		var pid: int = int(pid_value)
-		if demote_ids.has(pid):
+		if excluded.has(pid):
 			continue
 		release_ids.append(pid)
+		excluded[pid] = true
+	# 戦力外を免れる当落線上の若手を育成降格の推奨に加える (CPU と同じ基準・同じ順序)。
+	for pid_value in OffseasonService.compute_prospect_demotion_candidates_for_team(GameDb.players, team_id, season, excluded):
+		demote_ids.append(int(pid_value))
 	# 自軍の育成整理 (CPU は成長ステップの process_development_releases で自動、自軍はここで推奨)。
 	# 中堅は「育成1年で昇格なし」、素材年齢は成長予測ベース。候補は支配下と重複しない。
-	for pid_value in OffseasonService.compute_development_release_candidates_for_team(GameDb.players, team_id):
+	for pid_value in OffseasonService.compute_development_release_candidates_for_team(GameDb.players, team_id, season.year):
 		release_ids.append(int(pid_value))
 	return {"ok": true, "release_ids": release_ids, "demote_ids": demote_ids}
 

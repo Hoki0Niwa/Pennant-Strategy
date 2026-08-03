@@ -127,6 +127,8 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
 	var candidates: Array = available_user_candidates(state, players, teams)
+	# デプスチャートは1度だけ作って使い回す (候補ごとに作り直すと O(n^2) になる)。
+	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	var best_id: int = 0
 	var best_score: float = -INF
 	for row in candidates:
@@ -134,7 +136,7 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 		if not _can_ai_afford_release(players, teams, user_team_id, entry):
 			continue
 		var team_need: float = float(entry.get("need", 0.0))
-		if not _team_wants_candidate(players, season, user_team_id, entry, team_need):
+		if not _team_wants_candidate(players, charts, user_team_id, entry):
 			continue
 		var score: float = _signing_score(entry, team_need, players, teams, user_team_id)
 		if score < MIN_AI_SIGNING_SCORE:
@@ -150,7 +152,9 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 
 static func complete_released_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
 	_sync_available_contract_salaries(state, players)
-	var need: Dictionary = _build_position_need(players, teams)
+	# 需要とデプスチャートは1パスにつき1度だけ構築する (候補×球団で作り直すと O(n^2))。
+	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
+	var need: Dictionary = TeamDepthChart.position_need_view(charts)
 	var candidates: Array = state.get("candidates", []) as Array
 	candidates.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
@@ -185,7 +189,7 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 			if not _can_ai_afford_release(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
-			if not _team_wants_candidate(players, season, team.id, entry, team_need):
+			if not _team_wants_candidate(players, charts, team.id, entry):
 				continue
 			var score: float = _signing_score(entry, team_need, players, teams, team.id)
 			if score < MIN_AI_SIGNING_SCORE:
@@ -348,6 +352,9 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 	player.source_data.erase("retired_age")
 	player.source_data["released_signed_year"] = year
 	player.source_data["released_from_team"] = int(entry.get("from_team", 0))
+	# 戦力外になった時点で支配下だったか (= 育成契約を結ぶなら「支配下経験者」扱いで契約1年)。
+	# development_player を track で上書きする前に読む必要がある。
+	var was_shienka: bool = not player.development_player
 	player.development_player = track == TRACK_DEVELOPMENT
 	player.registered_roster = track
 	player.salary = int(entry.get(
@@ -361,6 +368,16 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 		# フラグは OffseasonService.process_development_releases が読んで消費する (育成降格と同じ機構)。
 		# 中堅以上はここから1年、翌オフの昇格ステップで支配下に戻れなければ放出される。
 		player.source_data["dev_demote_hold"] = true
+		# 育成契約の年数カウンタもここから数え直す (新しい育成契約なので)。
+		player.source_data["development_since_year"] = year
+		# 支配下から戦力外になった選手の育成契約は1年 (元から育成だった選手は新規と同じ3年)。
+		if was_shienka:
+			player.source_data["dev_from_shienka"] = true
+		else:
+			player.source_data.erase("dev_from_shienka")
+	else:
+		player.source_data.erase("development_since_year")
+		player.source_data.erase("dev_from_shienka")
 	entry["available"] = false
 	entry["signed"] = true
 	entry["to_team"] = to_team_id
@@ -412,9 +429,10 @@ static func _can_team_accept_candidate(players: Array, team_id: int, entry: Dict
 	if bool(entry.get("foreign_player", false)):
 		if _foreign_count_for_team(players, team_id) >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM:
 			return false
-	# 育成track は支配下枠(SHIENKA_LIMIT)を消費しないが、育成ロスターの運用上限は消費する。
+	# 育成track は支配下枠(SHIENKA_LIMIT)を消費せず、育成側にも人数上限は無い (2026-08-02)。
+	# 獲得数は MAX_SIGNINGS_PER_TEAM と獲得スコアの側で抑える。
 	if str(entry.get("track", TRACK_SHIENKA)) == TRACK_DEVELOPMENT:
-		return TeamFinance.has_development_room(players, team_id)
+		return true
 	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
 	return _active_count_for_team(players, team_id) < TeamFinance.SHIENKA_LIMIT
 
@@ -453,34 +471,19 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 # 旧実装は野手=リーグ相対 positional need / 投手=depth-fit と非対称で、投手 need が構造的に立たず
 # 戦力外獲得が極端な野手偏重 (実測 投:野 ≈ 23:84) になっていた。役割数の偏り (投手は深く常に埋まる) と
 # 野手が systematically 高 value な分は `_signing_score` の投手 parity で相殺する。
-static func _team_wants_candidate(players: Array, _season: PSSeason, team_id: int, entry: Dictionary, _team_need: float) -> bool:
+# 獲得基準 (2026-08-03 厳格化、ユーザー方針「戦力外はとりあえず取る枠ではない」)。
+# **自軍のデプスチャート ([[TeamDepthChart]]) に照らして、即戦力 or 将来に賭ける価値がある選手だけ**を獲る:
+#   - 即戦力 = その役割スロットの**一軍当落線** (先発6番手/救援8番手/そのポジションのレギュラー) を上回る
+#   - 将来性 = 24歳以下で、成長の楽観側なら当落線に届き、かつそのスロットが将来空く
+# どちらでもなければ獲らない = **0人で終わるオフが普通に起きる**。
+# 旧基準は「自軍の同役割**最弱**選手を上回れば獲得」で、68人ロスターの最下位を超えれば通るため
+# 事実上ほぼ全候補が該当し、全球団が毎年上限2人まで獲っていた (実測 1.95人/球団/年)。
+static func _team_wants_candidate(players: Array, charts: Dictionary, team_id: int, entry: Dictionary) -> bool:
 	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 	if player == null:
 		return false
-	return int(entry.get("value", 0)) > _role_weakest_value(players, team_id, player)
-
-
-# その球団の「同一役割」の最弱 value。投手はチーム内最弱投手、野手は同ポジションの最弱野手。
-# 該当者ゼロ (空きポジション) は0を返し常にアップグレード扱いにする。
-static func _role_weakest_value(players: Array, team_id: int, candidate: PSPlayer) -> int:
-	var is_pit: bool = candidate.is_pitcher()
-	var pos: int = candidate.position
-	var weakest: int = 2147483647
-	var found: bool = false
-	for row in players:
-		var p: PSPlayer = row as PSPlayer
-		if p == null or p.team_id != team_id or p.is_retired() or p.development_player:
-			continue
-		if is_pit:
-			if not p.is_pitcher():
-				continue
-		elif p.is_pitcher() or p.position != pos:
-			continue
-		var v: int = OffseasonService.player_value_score(p)
-		if v < weakest:
-			weakest = v
-			found = true
-	return weakest if found else 0
+	var evaluation: Dictionary = TeamDepthChart.evaluate_candidate(charts.get(team_id, {}) as Dictionary, player)
+	return bool(evaluation.get("fit", false))
 
 
 # 獲得スコア = 能力 value + WAR + 投手 parity − 年俸負担。旧実装のポジション need 乗算は撤去
