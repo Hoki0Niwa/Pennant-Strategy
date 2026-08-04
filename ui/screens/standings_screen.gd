@@ -153,12 +153,12 @@ func _draw_balance_chart(rect: Rect2) -> void:
 		var n: int = int(round(float(frac) * float(max_abs)))
 		_text_right("0" if n == 0 else "%+d" % n, plot.position.x - 6.0, yy + 4.0, 10, FAINT, 42)
 
-	# x 軸ラベル (試合数)
-	for gx in [0.0, 0.5, 1.0]:
+	# x 軸ラベル (試合数)。右端は最大値と単位を1つのラベルに結合し、番号と文字の重なりを避ける。
+	for gx in [0.0, 0.5]:
 		var px: float = plot.position.x + float(gx) * plot.size.x
 		var gnum: int = int(round(float(gx) * float(max_games)))
 		_text(str(gnum), Vector2(px - 8.0, plot.end.y + 18.0), 10, FAINT)
-	_text_right("試合数", plot.end.x, plot.end.y + 18.0, 10, FAINT, 60)
+	_text_right("%d試合" % max_games, plot.end.x, plot.end.y + 18.0, 10, FAINT, 60)
 
 	# 折れ線 (自軍は最後に太線で重ねる)
 	var self_id: int = AppState.selected_team_id

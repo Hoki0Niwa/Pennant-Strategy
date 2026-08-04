@@ -15,16 +15,18 @@ const WarCalculator = preload("res://services/reports/war_calculator.gd")
 # --- レイアウト基準 (base 1920x1080 座標) ---
 const TOP_STRIP: Rect2 = Rect2(262, 100, 1638, 76)
 const FILTER_Y: float = 190.0
-const LEFT_RECT: Rect2 = Rect2(262, 224, 610, 424)
-const CENTER_RECT: Rect2 = Rect2(906, 224, 350, 424)
-const RIGHT_RECT: Rect2 = Rect2(1290, 224, 610, 424)
-const OFFERS_RECT: Rect2 = Rect2(262, 664, 806, 384)
-const LOG_RECT: Rect2 = Rect2(1094, 664, 806, 384)
+const LEFT_RECT: Rect2 = Rect2(262, 224, 610, 500)
+const CENTER_RECT: Rect2 = Rect2(906, 224, 350, 500)
+const RIGHT_RECT: Rect2 = Rect2(1290, 224, 610, 500)
+const OFFERS_RECT: Rect2 = Rect2(262, 740, 806, 308)
+const LOG_RECT: Rect2 = Rect2(1094, 740, 806, 308)
 
-const SLOT_H: float = 38.0
-const SLOT_GAP: float = 4.0
-const OFFER_CARD_H: float = 150.0
-const OFFER_CARD_GAP: float = 14.0
+const SLOT_H: float = 34.0
+const SLOT_GAP: float = 6.0
+const HEADER_GAP: float = 10.0 # 見出しラベルからその直下の要素までの間隔 (同じ項目として近く保つ)
+const SECTION_GAP: float = 28.0 # トレードブロック内の異なるセクション間の縦間隔 (見出し直下の要素より明確に広くする)
+const OFFER_CARD_H: float = 130.0
+const OFFER_CARD_GAP: float = 10.0
 
 const POS_LABELS: Dictionary = {1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右"}
 
@@ -188,50 +190,50 @@ func _draw_center_block(rect: Rect2, season: PSSeason, window_open: bool) -> voi
 	var y: float = rect.position.y + 50.0
 
 	_text("出す（自軍 → 相手）", Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	y += 12.0
+	y += HEADER_GAP
 	for i in range(TradeService.MAX_PLAYERS_PER_SIDE):
 		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _give_ids[i] if i < _give_ids.size() else 0, "give_slot", season)
 		y += SLOT_H + SLOT_GAP
 
-	y += 8.0
+	y += SECTION_GAP
 	_text("貰う（相手 → 自軍）", Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	y += 12.0
+	y += HEADER_GAP
 	for i in range(TradeService.MAX_PLAYERS_PER_SIDE):
 		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _receive_ids[i] if i < _receive_ids.size() else 0, "receive_slot", season)
 		y += SLOT_H + SLOT_GAP
 
-	y += 10.0
+	y += SECTION_GAP
 	y = _draw_trade_balance(rect, y, card_w)
+	y += 16.0
 	_draw_trade_verdict(rect, y, window_open)
 
 
 func _draw_trade_slot(rect: Rect2, player_id: int, kind: String, season: PSSeason) -> void:
+	var mid_y: float = rect.position.y + rect.size.y * 0.5 + 4.0
 	if player_id <= 0:
 		_round(rect, Color.TRANSPARENT, BORDER_SOFT, 6, 1)
-		_text("（空き）", Vector2(rect.position.x + 12.0, rect.position.y + rect.size.y * 0.62), 12, FAINT)
+		_text("（空き）", Vector2(rect.position.x + 12.0, mid_y), 12, FAINT)
 		return
 	var player: PSPlayer = GameDb.get_player(player_id)
 	if player == null:
 		return
 	_round(rect, PANEL_2, Color.TRANSPARENT, 6, 0)
 	var role: Dictionary = _role_chip(player)
-	_chip(Rect2(rect.position.x + 8.0, rect.position.y + 5.0, 40.0, 18.0), str(role["text"]), role["color"] as Color)
-	_text(player.name, Vector2(rect.position.x + 54.0, rect.position.y + 18.0), 13, TEXT, rect.size.x - 64.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_chip(Rect2(rect.position.x + 8.0, rect.position.y + rect.size.y * 0.5 - 9.0, 40.0, 18.0), str(role["text"]), role["color"] as Color)
+	# 選手一覧パネル (自軍/相手ロースター) と同じ並び (年齢・評価・年俸を名前と横並び) に揃える。
 	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
-	_text("評価 %d   年俸 %s" % [eval, _format_money_compact(player.salary)], Vector2(rect.position.x + 8.0, rect.end.y - 7.0), 11, MUTED, rect.size.x - 16.0)
+	_text_right(_format_money_compact(player.salary), rect.end.x - 8.0, mid_y, 12, MUTED, 76.0)
+	_text_right(str(eval), rect.end.x - 8.0 - 76.0 - 6.0, mid_y, 12, _table_rating_color(eval), 34.0)
+	_text_right("%d歳" % player.age, rect.end.x - 8.0 - 76.0 - 6.0 - 34.0 - 6.0, mid_y, 12, MUTED, 40.0)
+	_text(player.name, Vector2(rect.position.x + 56.0, mid_y), 13, TEXT, rect.size.x - 56.0 - 76.0 - 34.0 - 40.0 - 30.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_row_hits.append({"rect": rect, "kind": kind, "meta": player.id})
 
 
-# 戦力価値差 (trade_value 合計差, 自軍有利=GREEN/不利=RED) + 左右バー + 年俸差。戻り値は次の描画 y。
+# 左右バー + 戦力価値差 (trade_value 合計差, 自軍有利=GREEN/不利=RED) + 年俸差。戻り値は次の描画 y。
 func _draw_trade_balance(rect: Rect2, y: float, w: float) -> float:
 	var give_value: float = _sum_trade_value(_give_ids)
 	var receive_value: float = _sum_trade_value(_receive_ids)
-	var diff: float = receive_value - give_value
-	var diff_color: Color = GREEN if diff > 0.05 else (RED if diff < -0.05 else MUTED)
-	_text("戦力価値差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
-	_text_right(("%+.1f" % diff), rect.end.x - 18.0, y, 15, diff_color, 100.0, true)
-	y += 14.0
 	var max_v: float = max(1.0, max(give_value, receive_value))
 	var bar_w: float = (w - 8.0) * 0.5
 	var give_w: float = bar_w * clampf(give_value / max_v, 0.0, 1.0)
@@ -240,12 +242,17 @@ func _draw_trade_balance(rect: Rect2, y: float, w: float) -> float:
 	_round(Rect2(rect.position.x + 18.0 + bar_w - give_w, y, give_w, 7.0), RED, Color.TRANSPARENT, 4, 0)
 	_round(Rect2(rect.position.x + 18.0 + bar_w + 8.0, y, bar_w, 7.0), PANEL_3, Color.TRANSPARENT, 4, 0)
 	_round(Rect2(rect.position.x + 18.0 + bar_w + 8.0, y, recv_w, 7.0), GREEN, Color.TRANSPARENT, 4, 0)
-	y += 20.0
+	y += 30.0
+	var diff: float = receive_value - give_value
+	var diff_color: Color = GREEN if diff > 0.05 else (RED if diff < -0.05 else MUTED)
+	_text("戦力価値差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text_right(("%+.1f" % diff), rect.end.x - 18.0, y, 15, diff_color, 100.0, true)
+	y += 22.0
 	var salary_diff: int = _sum_salary(_receive_ids) - _sum_salary(_give_ids)
 	_text("年俸差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
 	_text_right("%s%s" % ["+" if salary_diff > 0 else ("-" if salary_diff < 0 else ""), _format_money_compact(absi(salary_diff))],
 		rect.end.x - 18.0, y, 13, TEXT, 120.0)
-	return y + 18.0
+	return y + SECTION_GAP
 
 
 func _draw_trade_verdict(rect: Rect2, y: float, window_open: bool) -> void:
@@ -267,7 +274,7 @@ func _draw_trade_verdict(rect: Rect2, y: float, window_open: bool) -> void:
 		text = str(_eval.get("message", "交渉はまとまりません"))
 		color = RED
 	_text("成立見込み", Vector2(rect.position.x + 18.0, y), 11, MUTED)
-	_text(text, Vector2(rect.position.x + 18.0, y + 20.0), 14, color, rect.size.x - 36.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(text, Vector2(rect.position.x + 18.0, y + 22.0), 14, color, rect.size.x - 36.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # --- 相手球団からの提案 (下段左) ---
@@ -290,11 +297,11 @@ func _offer_card_rect(rect: Rect2, index: int) -> Rect2:
 func _draw_offer_card(rect: Rect2, offer: Dictionary, season: PSSeason) -> void:
 	_round(rect, PANEL_2, Color.TRANSPARENT, 8, 0)
 	var cpu_team: PSTeam = GameDb.get_team(int(offer.get("cpu_team_id", 0)))
-	_text(cpu_team.name if cpu_team != null else "?", Vector2(rect.position.x + 16.0, rect.position.y + 26.0), 15, TEXT, rect.size.x - 220.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("期限 day%d" % int(offer.get("expires_day", 0)), rect.end.x - 16.0, rect.position.y + 22.0, 11, FAINT, 140.0)
-	_line(Vector2(rect.position.x + 16.0, rect.position.y + 34.0), Vector2(rect.end.x - 16.0, rect.position.y + 34.0), HAIRLINE, 1.0)
-	_text("受取: " + _offer_players_text(offer.get("cpu_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 62.0), 13, GREEN, rect.size.x - 32.0)
-	_text("放出: " + _offer_players_text(offer.get("user_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 94.0), 13, RED, rect.size.x - 32.0)
+	_text(cpu_team.name if cpu_team != null else "?", Vector2(rect.position.x + 16.0, rect.position.y + 24.0), 15, TEXT, rect.size.x - 220.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("期限 day%d" % int(offer.get("expires_day", 0)), rect.end.x - 16.0, rect.position.y + 20.0, 11, FAINT, 140.0)
+	_line(Vector2(rect.position.x + 16.0, rect.position.y + 32.0), Vector2(rect.end.x - 16.0, rect.position.y + 32.0), HAIRLINE, 1.0)
+	_text("受取: " + _offer_players_text(offer.get("cpu_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 56.0), 13, GREEN, rect.size.x - 32.0)
+	_text("放出: " + _offer_players_text(offer.get("user_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 80.0), 13, RED, rect.size.x - 32.0)
 
 
 func _offer_players_text(ids: Array, season: PSSeason) -> String:
@@ -389,9 +396,9 @@ func _build_offer_buttons(rect: Rect2, offers: Array) -> void:
 		var offer: Dictionary = offers[i] as Dictionary
 		var card: Rect2 = _offer_card_rect(rect, i)
 		var offer_id: int = int(offer.get("id", 0))
-		_add_button("offer_accept_%d" % offer_id, "受諾", Rect2(card.end.x - 176.0, card.end.y - 38.0, 76.0, 30.0),
+		_add_button("offer_accept_%d" % offer_id, "受諾", Rect2(card.end.x - 176.0, card.end.y - 34.0, 76.0, 28.0),
 			func() -> void: _accept_offer(offer_id), "primary")
-		_add_button("offer_decline_%d" % offer_id, "拒否", Rect2(card.end.x - 92.0, card.end.y - 38.0, 76.0, 30.0),
+		_add_button("offer_decline_%d" % offer_id, "拒否", Rect2(card.end.x - 92.0, card.end.y - 34.0, 76.0, 28.0),
 			func() -> void: _decline_offer(offer_id), "chip")
 
 

@@ -66,7 +66,7 @@ const NAV_GROUPS: Array = [
 		{"id": "lineup_editor", "label": "打順・守備位置", "icon": "lineup"},
 		{"id": "rotation_editor", "label": "投手起用法", "icon": "pitch"},
 		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
-		{"id": "trade", "label": "トレード", "icon": "swap"},
+		{"id": "trade", "label": "トレード", "icon": "hswap"},
 	]},
 	{"title": "設定・その他", "items": [
 		{"id": "options", "label": "オプション", "icon": "options"},
@@ -514,6 +514,13 @@ func _icon(name: String, box: Rect2, color: Color) -> void:
 			seg.call(0.66, 0.18, 0.66, 0.8)
 			seg.call(0.66, 0.8, 0.58, 0.68)
 			seg.call(0.66, 0.8, 0.74, 0.68)
+		"hswap":
+			seg.call(0.18, 0.34, 0.82, 0.34)
+			seg.call(0.82, 0.34, 0.7, 0.24)
+			seg.call(0.82, 0.34, 0.7, 0.44)
+			seg.call(0.18, 0.66, 0.82, 0.66)
+			seg.call(0.18, 0.66, 0.3, 0.56)
+			seg.call(0.18, 0.66, 0.3, 0.76)
 		"lineup":
 			for v in [0.3, 0.5, 0.7]:
 				draw_rect(Rect2(pt.call(0.16, v - 0.06), Vector2(0.12 * r.size.x, 0.12 * r.size.y)), color)
