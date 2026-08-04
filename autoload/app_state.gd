@@ -645,9 +645,9 @@ func advance_offseason() -> Dictionary:
 			step_result = OffseasonService.process_retirement(GameDb.players, current_season)
 			step_result["injury_carryover"] = carryover
 			step_result["title"] = "引退判定"
-			# 引退者を除外した後の payroll で年次予算を算定するため、予算再計算はこの直後に行う。
-			var champion_id: int = current_postseason.champion_team_id if current_postseason != null else 0
-			step_result["budgets"] = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, current_season, champion_id)
+			# 予算は固定 (TeamFinance.FIXED_BUDGET) のため年次改定はしない。前年順位だけ更新する
+			# (draft_service のフォールバック並び替え・team_select_screen の表示用、2026-08-04)。
+			TeamFinance.update_previous_ranks(GameDb.teams, current_season)
 			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_RELEASE_EDIT:
 			# 引退結果から戦力外エディタへのナビゲートのみ。

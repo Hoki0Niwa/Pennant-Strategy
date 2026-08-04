@@ -189,9 +189,6 @@ const CAMP_BOARD: Rect2 = Rect2(262, 324, 1638, 512)
 const CAMP_MENU: Rect2 = Rect2(262, 850, 654, 210)
 const CAMP_RATE: Rect2 = Rect2(932, 850, 476, 210)
 const CAMP_APT: Rect2 = Rect2(1424, 850, 476, 210)
-# 予算改定サマリー (_draw_budget_recompute_summary、引退結果=step_0のみ) が BODY 上部に占める高さ。
-# 投手/野手タブ (_build_result_people_tabs) をこの分だけ下へ逃がして重なりを防ぐ。
-const BUDGET_SUMMARY_BLOCK_H: float = 66.0
 
 # 行ハイライト/選択強調用の補助色。
 const SEL_RELEASE: Color = Color(0.95, 0.6, 0.55)
@@ -646,10 +643,7 @@ func _build_result_people_tabs() -> void:
 		people.append_array(result.get("released", []) as Array)
 		people.append_array(result.get("demoted", []) as Array)
 	var counts: Dictionary = _people_pitcher_fielder_counts(people)
-	# budgets (予算改定サマリー) は step_0 のみ result に含まれ、その分タブを下へ逃がす
-	# (_draw_budget_recompute_summary と同じ高さを共有、ずれるとタブと文字が重なる)。
-	var y_offset: float = BUDGET_SUMMARY_BLOCK_H if result.has("budgets") else 0.0
-	_build_player_tabs("result_people", _result_people_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab, y_offset)
+	_build_player_tabs("result_people", _result_people_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 
 
 # 結果ステップ固有のタブ。成長=候補タブ / キャンプ=自軍・他球団タブ。
@@ -1845,52 +1839,7 @@ func _draw_results(rect: Rect2) -> void:
 
 func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, key: String, empty_text: String) -> void:
 	var people: Array = result.get(key, []) as Array
-	var table_rect: Rect2 = rect
-	if result.has("budgets"):
-		table_rect = _draw_budget_recompute_summary(rect, result.get("budgets", {}) as Dictionary)
-	_draw_people_player_table(table_rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true, true)
-
-
-# 年次予算再計算の結果 (TeamFinance.recompute_annual_budgets の戻り値) を1行+12球団表で表示し、
-# 残り高さを持つ縮小後の rect を返す (下段の表描画に使う)。消費高さは BUDGET_SUMMARY_BLOCK_H と
-# 一致させること (_build_result_people_tabs がタブをこの分だけ下げて重なりを避ける)。
-func _draw_budget_recompute_summary(rect: Rect2, budgets: Dictionary) -> Rect2:
-	var rows: Array = budgets.get("team_budgets", []) as Array
-	if rows.is_empty():
-		return rect
-	var user_team_id: int = AppState.selected_team_id
-	var user_row: Dictionary = {}
-	for row_value in rows:
-		var row: Dictionary = row_value as Dictionary
-		if int(row.get("team_id", 0)) == user_team_id:
-			user_row = row
-			break
-	var y: float = rect.position.y
-	if not user_row.is_empty():
-		var bonus: int = int(user_row.get("rank_bonus", 0)) + int(user_row.get("league_champion_bonus", 0)) + int(user_row.get("japan_champion_bonus", 0))
-		var line: String = "予算改定: ベース%s + 順位(%d位)ボーナス%s → 新予算 %s (年俸総額 %s / 残額 %s)" % [
-			_format_money(int(user_row.get("base", 0))), int(user_row.get("rank", 0)), _format_money(bonus),
-			_format_money(int(user_row.get("funds", 0))), _format_money(int(user_row.get("payroll", 0))),
-			_format_money(int(user_row.get("room", 0))),
-		]
-		_text(line, Vector2(rect.position.x, y + 16.0), 14, AMBER if bool(user_row.get("over_budget", false)) else TEXT, rect.size.x, HORIZONTAL_ALIGNMENT_LEFT, true)
-		y += 28.0
-
-	rows = rows.duplicate()
-	rows.sort_custom(func(a, b) -> bool: return int((a as Dictionary).get("team_id", 0)) < int((b as Dictionary).get("team_id", 0)))
-	var col_w: float = rect.size.x / float(rows.size())
-	var cy: float = y + 18.0
-	for i in range(rows.size()):
-		var row: Dictionary = rows[i] as Dictionary
-		var cx: float = rect.position.x + float(i) * col_w
-		var is_self: bool = int(row.get("team_id", 0)) == user_team_id
-		var color: Color = BLUE if is_self else (AMBER if bool(row.get("over_budget", false)) else MUTED)
-		var team: PSTeam = GameDb.get_team(int(row.get("team_id", 0)))
-		var short_name: String = team.short_name if team != null else str(row.get("name", ""))
-		_text("%s %d位 %s" % [short_name, int(row.get("rank", 0)), _format_money_compact(int(row.get("funds", 0)))], Vector2(cx, cy), 11, color, col_w - 6.0)
-	y = cy + 20.0
-
-	return Rect2(rect.position.x, y, rect.size.x, rect.end.y - y)
+	_draw_people_player_table(rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true, true)
 
 
 func _draw_release_result(rect: Rect2, result: Dictionary) -> void:

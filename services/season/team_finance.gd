@@ -2,7 +2,7 @@ extends RefCounted
 class_name TeamFinance
 
 # チーム予算の会計ヘルパー。
-# funds は年間予算キャップ (recompute_annual_budgets で毎オフ再計算、繰越なし)、
+# funds は全球団共通の固定額 (FIXED_BUDGET、年次改定なし)、
 # payroll は所属アクティブ選手の年俸合計、room は funds - payroll。
 # 予算超過中は can_afford_addition / trade_payroll_ok が補強・年俸増トレードをブロックする
 # (契約更改・ドラフト・育成昇格・キャンプは対象外、常に実行する)。
@@ -26,17 +26,12 @@ const SHIENKA_SOFT_TARGET: int = 67
 # 目標到達済みなら追加カットが出ない (冪等)。NPB の実運用 (開幕支配下 65〜70) に対応する。
 const OPENING_ROSTER_TARGET: int = 68
 
-# --- 年次予算キャップ (2026-07-12 経済オーバーホール) ---
-# 毎オフ開始時 (引退判定の直後) に funds = BASE + 順位ボーナス (+リーグ優勝 +日本一) で
-# 全球団再計算する。繰越なし (前年の残額は破棄)。単位: 万円。
-# 2026-08-01: 契約更改 (年俸再査定) を補強市場より前へ移し、予算ゲートが来季 payroll に対して
-# 正確に効くようにしたため、キャップは「超過を事後的に許す上限」ではなく「その年に使い切れる枠」に
-# なった。360,000 のままだと枠が先に尽きて支配下が 68 目標に届かない球団が出るので 390,000 へ引き上げ。
-# 較正の指標は long_autoplay の over_budget_count(0 が目標) / final_room_min / post_team_shienka_min。
-const BUDGET_BASE: int = 390000
-const BUDGET_RANK_BONUS: Dictionary = {1: 24000, 2: 18000, 3: 13000, 4: 9000, 5: 6000, 6: 3000}
-const BUDGET_LEAGUE_CHAMPION_BONUS: int = 10000
-const BUDGET_JAPAN_CHAMPION_BONUS: int = 15000
+# --- 固定予算 (2026-08-04、順位連動の年次改定を廃止) ---
+# 旧・年次予算キャップ (2026-07-12〜) は毎オフ順位ボーナス等で funds を再計算していたが、
+# 年を追うごとに予算が変わり続ける挙動になっていたため廃止した。全球団同額・毎年不変。
+# 単位: 万円。値は廃止時点のアクティブセーブで最も年俸総額が高かった球団 (約42.09億) を
+# 上回る 43億に設定 (この球団が導入直後から超過扱いにならないよう切り上げ)。
+const FIXED_BUDGET: int = 430000
 
 # AI の補強評価。年俸 AI_SALARY_COST_PER_SCORE 万円につき評価を1点下げる。
 # 小さくすると安さを重視し、大きくすると能力を優先する。
@@ -161,43 +156,38 @@ static func final_ranks(season: PSSeason, teams: Array) -> Dictionary:
 	return ranks
 
 
-# 年次予算再計算 (毎オフ start_offseason で1回呼ぶ)。副作用: 各 team.funds と
-# team.previous_rank を更新する (繰越なし = 旧 funds は完全に上書き)。
-# japan_champion_team_id は PSPostseasonResult.champion_team_id (0 = 日本一ボーナスなし)。
-# 戻り値: {"team_budgets": [{team_id, name, rank, base, rank_bonus, league_champion_bonus,
-#   japan_champion_bonus, funds, payroll, room, over_budget}, ...], "over_budget_count": int,
-#   "japan_champion_team_id": int}
-static func recompute_annual_budgets(players: Array, teams: Array, season: PSSeason, japan_champion_team_id: int = 0) -> Dictionary:
+# 前年順位だけを更新する (毎オフ start_offseason で1回呼ぶ)。予算は固定 (FIXED_BUDGET) のため
+# funds には触れない。previous_rank は draft_service のフォールバック並び替え・
+# team_select_screen の表示にのみ使う。
+static func update_previous_ranks(teams: Array, season: PSSeason) -> void:
 	var ranks: Dictionary = final_ranks(season, teams)
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		team.previous_rank = int(ranks.get(team.id, team.previous_rank))
+
+
+# 固定予算に対する残額サマリー (検証レポート用)。funds は変更しない。
+# 戻り値: {"team_budgets": [{team_id, name, funds, payroll, room, over_budget}, ...],
+#   "over_budget_count": int}
+static func budget_summary(players: Array, teams: Array) -> Dictionary:
 	var team_budgets: Array = []
 	var over_budget_count: int = 0
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue
-		var rank: int = int(ranks.get(team.id, 0))
-		var rank_bonus: int = int(BUDGET_RANK_BONUS.get(rank, 0))
-		var league_champion_bonus: int = BUDGET_LEAGUE_CHAMPION_BONUS if rank == 1 else 0
-		var japan_champion_bonus: int = BUDGET_JAPAN_CHAMPION_BONUS if team.id == japan_champion_team_id else 0
-		var funds: int = BUDGET_BASE + rank_bonus + league_champion_bonus + japan_champion_bonus
-		team.funds = funds
-		team.previous_rank = rank
 		var payroll: int = team_payroll(players, team.id)
-		var room: int = budget_room(funds, payroll)
-		var over: bool = is_over_budget(funds, payroll)
+		var room: int = budget_room(team.funds, payroll)
+		var over: bool = is_over_budget(team.funds, payroll)
 		if over:
 			over_budget_count += 1
 		team_budgets.append({
-			"team_id": team.id, "name": team.name, "rank": rank,
-			"base": BUDGET_BASE, "rank_bonus": rank_bonus,
-			"league_champion_bonus": league_champion_bonus, "japan_champion_bonus": japan_champion_bonus,
-			"funds": funds, "payroll": payroll, "room": room, "over_budget": over,
+			"team_id": team.id, "name": team.name,
+			"funds": team.funds, "payroll": payroll, "room": room, "over_budget": over,
 		})
-	return {
-		"team_budgets": team_budgets,
-		"over_budget_count": over_budget_count,
-		"japan_champion_team_id": japan_champion_team_id,
-	}
+	return {"team_budgets": team_budgets, "over_budget_count": over_budget_count}
 
 
 # 補強ゲート: 追加コスト (年俸 + FA補償金等) を払っても現行 payroll+cost が funds に収まるか。

@@ -1,7 +1,7 @@
 extends GdUnitTestSuite
 
-# 年俸・予算経済オーバーホール (2026-07-12): 年次予算キャップの算定式・ハードゲート
-# (FA/外国人/戦力外獲得/トレード)・FA金銭補償の資金移動を検証する。
+# 年俸・予算経済オーバーホール (2026-07-12、2026-08-04に固定予算へ移行): 予算 (全球団固定額)・
+# ハードゲート (FA/外国人/戦力外獲得/トレード)・FA金銭補償の資金移動を検証する。
 
 
 func test_final_ranks_orders_by_win_rate_then_wins() -> void:
@@ -18,31 +18,25 @@ func test_final_ranks_orders_by_win_rate_then_wins() -> void:
 	assert_int(int(ranks[3])).is_equal(2)
 
 
-func test_recompute_annual_budgets_formula() -> void:
+func test_update_previous_ranks_does_not_touch_funds() -> void:
 	var teams: Array = [_team(1, "league1", 999999), _team(2, "league1", 999999)]
 	var season: PSSeason = _season()
 	season.standings[1] = _stats(80, 40)
 	season.standings[2] = _stats(40, 80)
-	var players: Array = []
-	var result: Dictionary = TeamFinance.recompute_annual_budgets(players, teams, season, 1)
+	TeamFinance.update_previous_ranks(teams, season)
 	var t1: PSTeam = teams[0] as PSTeam
 	var t2: PSTeam = teams[1] as PSTeam
-	# 繰越なし: 旧 funds (999999) は完全に上書きされる。
-	assert_int(t1.funds).is_equal(TeamFinance.BUDGET_BASE + int(TeamFinance.BUDGET_RANK_BONUS[1]) + TeamFinance.BUDGET_LEAGUE_CHAMPION_BONUS + TeamFinance.BUDGET_JAPAN_CHAMPION_BONUS)
+	# 予算は固定 (FIXED_BUDGET) のため順位更新では funds は一切変わらない。
+	assert_int(t1.funds).is_equal(999999)
 	assert_int(t1.previous_rank).is_equal(1)
-	assert_int(t2.funds).is_equal(TeamFinance.BUDGET_BASE + int(TeamFinance.BUDGET_RANK_BONUS[2]))
+	assert_int(t2.funds).is_equal(999999)
 	assert_int(t2.previous_rank).is_equal(2)
-	assert_int(int(result.get("over_budget_count", -1))).is_equal(0)
 
 
-func test_recompute_reports_over_budget() -> void:
-	var teams: Array = [_team(1, "league1"), _team(2, "league1")]
-	var season: PSSeason = _season()
-	season.standings[1] = _stats(50, 50)
-	season.standings[2] = _stats(40, 60)
-	var rank2_funds: int = TeamFinance.BUDGET_BASE + int(TeamFinance.BUDGET_RANK_BONUS[2])
-	var players: Array = [_player({"id": 1, "team_id": 2, "salary": rank2_funds + 1})]
-	var result: Dictionary = TeamFinance.recompute_annual_budgets(players, teams, season, 0)
+func test_budget_summary_reports_over_budget() -> void:
+	var teams: Array = [_team(1, "league1", TeamFinance.FIXED_BUDGET), _team(2, "league1", TeamFinance.FIXED_BUDGET)]
+	var players: Array = [_player({"id": 1, "team_id": 2, "salary": TeamFinance.FIXED_BUDGET + 1})]
+	var result: Dictionary = TeamFinance.budget_summary(players, teams)
 	assert_int(int(result.get("over_budget_count", 0))).is_equal(1)
 	var team2: PSTeam = teams[1] as PSTeam
 	assert_bool(TeamFinance.is_over_budget(team2.funds, TeamFinance.team_payroll(players, 2))).is_true()

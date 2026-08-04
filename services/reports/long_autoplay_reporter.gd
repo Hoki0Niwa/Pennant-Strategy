@@ -496,9 +496,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var retirement_result: Dictionary = OffseasonService.process_retirement(GameDb.players, season)
 	GameDb.rebuild_player_indices()
 
-	# 年次予算キャップ (2026-07-12): 実フロー (app_state.advance_offseason) と同じく引退直後・
-	# 補強フェーズより前に再計算する。長期検証はポストシーズンを実施しないため日本一ボーナスは常に0。
-	var budget_result: Dictionary = TeamFinance.recompute_annual_budgets(GameDb.players, GameDb.teams, season, 0)
+	# 予算は固定 (2026-08-04): 実フロー (app_state.advance_offseason) と同じく引退直後に
+	# 前年順位だけ更新する。budget_result は補強フェーズ開始前 (引退者除外後) の残額スナップショット。
+	TeamFinance.update_previous_ranks(GameDb.teams, season)
+	var budget_result: Dictionary = TeamFinance.budget_summary(GameDb.players, GameDb.teams)
 
 	# 順番は 戦力外 → ドラフト → 戦力外獲得 → 現役ドラフト → 契約更改 → FA → 契約年数 → 外国人 →
 	# キャンプ → 成長 (AppState.OFFSEASON_STEP_ORDER と同じ)。
@@ -618,7 +619,7 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var released_age_count: int = int(release_result.get("released_count", 0))
 	var released_average_age: float = _safe_div(float(released_age_sum), float(released_age_count))
 
-	# 年次予算再計算直後 (補強フェーズ開始前) の残額。offseason 中の署名で目減りする前の
+	# 引退直後 (補強フェーズ開始前) の固定予算に対する残額。offseason 中の署名で目減りする前の
 	# 「今オフどれだけ配分できたか」の指標。offseason 完了後の実効拘束は over_budget_* 側を見る。
 	var budget_rooms: Array = []
 	for budget_row in budget_result.get("team_budgets", []) as Array:
