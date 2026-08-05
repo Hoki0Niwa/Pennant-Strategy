@@ -455,6 +455,21 @@ func _pos_color(pos: int) -> Color:
 
 # WAR / OAA / wRC+ など「高い=好」の ± 指標の文字色。プラス=GREEN / マイナス=RED / ゼロ=MUTED。
 # 能力段階色 (`_table_rating_color` の 優秀=青) とは別系統なので取り違えない。
+# 戦力グレード (StrengthGrade の S〜E) の段階色。**S=青 / A・B=緑 / C・D=黄 / E=赤**
+# (優秀=青 → 低=赤 の順は [[feedback_ui_color_conventions]] どおり。6段階を4色へ均等に割り、
+#  最上位の S と最下位の E だけを単独色にして目立たせる)。
+# ※ 一部の画面が持つ `_grade_color(value: int)` (0-100 の能力値用) とは別物なので名前を分けてある。
+func _strength_grade_color(grade: String) -> Color:
+	match grade:
+		"S":
+			return BLUE
+		"A", "B":
+			return GREEN
+		"C", "D":
+			return AMBER
+	return RED
+
+
 func _pm_color(value: float) -> Color:
 	if value > 0.0:
 		return GREEN

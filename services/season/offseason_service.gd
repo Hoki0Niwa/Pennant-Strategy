@@ -1140,16 +1140,51 @@ static func expected_development_score_bonus(age: int, horizon: int = 6, _positi
 	var total: float = 0.0
 	var future_weight: float = 1.0
 	for offset in range(max(0, horizon)):
-		var projected_age: int = age + offset
-		var probabilities: Dictionary = _growth_kind_probabilities(projected_age)
-		var year_bonus: float = 0.0
-		year_bonus += float(probabilities.get(GROWTH_KIND_AWAKENING, 0.0)) * 8.0
-		year_bonus += float(probabilities.get(GROWTH_KIND_GROWTH, 0.0)) * 2.6
-		year_bonus -= float(probabilities.get(GROWTH_KIND_DECLINE, 0.0)) * 2.0
-		year_bonus -= float(probabilities.get(GROWTH_KIND_MAJOR_DECLINE, 0.0)) * 6.0
-		total += (year_bonus / 100.0) * future_weight
+		total += _growth_year_score_delta(age + offset) * future_weight
 		future_weight *= 0.86
 	return clamp(total, -8.0, 12.0)
+
+
+# その年齢の1オフシーズンで期待される評価スコアの増減 (value 単位)。成長種別の確率 (%) に
+# 種別ごとの score 影響量を掛けた期待値。目安: 25歳以下 +1.6 / 30歳 ±0 / 35歳 -2.0 / 40歳以上 -3.3。
+static func _growth_year_score_delta(age: int) -> float:
+	var probabilities: Dictionary = _growth_kind_probabilities(age)
+	var year_bonus: float = 0.0
+	year_bonus += float(probabilities.get(GROWTH_KIND_AWAKENING, 0.0)) * 8.0
+	year_bonus += float(probabilities.get(GROWTH_KIND_GROWTH, 0.0)) * 2.6
+	year_bonus -= float(probabilities.get(GROWTH_KIND_DECLINE, 0.0)) * 2.0
+	year_bonus -= float(probabilities.get(GROWTH_KIND_MAJOR_DECLINE, 0.0)) * 6.0
+	return year_bonus / 100.0
+
+
+# `years` 年後までの評価スコア増減 (**割引なし**)。expected_development_score_bonus が
+# 「今の価値判断のために将来を割り引いた期待値」なのに対し、こちらは
+# **その年に実際どのくらいの能力になっているか**の推定 (デプスチャートの将来予測用)。
+static func projected_score_delta(age: int, years: int) -> float:
+	var total: float = 0.0
+	for offset in range(maxi(0, years)):
+		total += _growth_year_score_delta(age + offset)
+	return total
+
+
+# `years` 年後もまだ現役でいる確率。強制引退カーブ (_forced_retirement_chance) の生存積で、
+# 40歳未満は 1.0、44歳で ~0.3、48歳で 0。少出場引退 (38歳以上・出場数条件) は成績レコードが
+# 要るのでここでは見ない (将来予測は年齢だけで決まる近似)。
+static func active_survival_chance(age: int, years: int) -> float:
+	var survival: float = 1.0
+	for offset in range(1, maxi(0, years) + 1):
+		survival *= 1.0 - _forced_retirement_chance(age + offset)
+	return clampf(survival, 0.0, 1.0)
+
+
+# `years` 年後の期待戦力値 = (現在値 + 成長/衰えの期待増減) × 現役でいる確率。
+# **加齢の効果を2重に効かせている** — 能力そのものの衰えと、引退でいなくなる見込みの両方。
+# これにより「今は主力でも高齢な選手」のスロットは将来値が落ち、後継の必要性が数値に出る。
+static func projected_value_after(player: PSPlayer, years: int) -> float:
+	if player == null:
+		return 0.0
+	var projected: float = float(player_value_score(player)) + projected_score_delta(player.age, years)
+	return maxf(0.0, projected) * active_survival_chance(player.age, years)
 
 
 # 守備スペクトラムの打撃テール制約。捕手/遊撃 (守備負荷最重量の2位置) の打撃合成

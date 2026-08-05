@@ -1,6 +1,8 @@
 extends "res://ui/components/dashboard_screen.gd"
 
 # チーム詳細画面。選択球団の順位、直近/今後の試合、起用設定、チーム内ランキングをまとめる。
+# 識別バー右のタブで2ページを切り替える: 「概要」(下記の表示要素) と「デプスチャート」
+# (役割スロット別の現在の戦力/将来性。獲得判断の補助)。
 # 表示要素:
 #   - チーム識別バー: バッジ + 球団名 + リーグ + 右端の球団選択プルダウン (全12球団)。
 #   - サマリーバー (2段): 今期のチーム成績。順位/勝敗/勝率/ゲーム差/得点/失点 と
@@ -45,6 +47,43 @@ const RECENT_LIMIT: int = 6
 
 const CLOSER_RED: Color = Color(0.92, 0.24, 0.30)
 
+# --- デプスチャートページ ---
+const PAGE_OVERVIEW: String = "overview"
+const PAGE_DEPTH: String = "depth"
+const TAB_W: float = 132.0
+const TAB_H: float = 34.0
+const DEPTH_RECT: Rect2 = Rect2(262, 246, 1638, 670)
+const DEPTH_NOTE_RECT: Rect2 = Rect2(262, 932, 1638, 116)
+
+# デプスチャート行の x 座標 (base)。バーは残り幅から逆算せず固定で置く。
+const D_CHIP_X: float = 280.0
+const D_COUNT_R: float = 440.0     # 人数 右端
+const D_CUR_BAR_X: float = 458.0   # 現在バー左
+const D_BAR_W: float = 256.0
+const D_CUR_GRADE_X: float = 724.0
+const D_CUR_RANK_X: float = 776.0
+const D_PRO_BAR_X: float = 888.0   # 将来バー左
+const D_PRO_GRADE_X: float = 1154.0
+const D_PRO_RANK_X: float = 1206.0
+const D_GRADE_W: float = 44.0
+const D_AGE_R: float = 1340.0
+const RANK_CHIP_W: float = 72.0
+
+# 主力 / 最有望株の2ブロック。**同じ内部レイアウト** (名前 / 育成chip / 年齢 / 総合) を共有し、
+# 育成 chip の枠は主力側では空くだけ (幾何を揃えるため確保しておく)。
+# 幅は残り領域の**等分**で決める — 個別に x を書くと片方だけ広く見える (ユーザー指摘)。
+# 各ブロック内は右端に D_PLAYER_GUTTER の余白を残し、ブロック間 / 表の右端の空きを揃える。
+const D_PLAYER_AREA_L: float = 1362.0
+const D_PLAYER_AREA_R: float = 1882.0
+const D_PLAYER_BLOCK_W: float = (D_PLAYER_AREA_R - D_PLAYER_AREA_L) / 2.0
+const D_PLAYER_GUTTER: float = 14.0
+const D_HOLDER_X: float = D_PLAYER_AREA_L
+const D_PROSPECT_X: float = D_PLAYER_AREA_L + D_PLAYER_BLOCK_W
+const D_PLAYER_NAME_W: float = 108.0
+const D_PLAYER_CHIP_OFF: float = 112.0
+const D_PLAYER_AGE_ROFF: float = D_PLAYER_BLOCK_W - D_PLAYER_GUTTER - 50.0  # 年齢 右端 = ブロック左 + これ
+const D_PLAYER_VALUE_ROFF: float = D_PLAYER_BLOCK_W - D_PLAYER_GUTTER      # 総合 右端
+
 var _team_id: int = 0
 var _team_ids: Array = []                 # 選択候補 (リーグ→id)
 var _team_menu_button: Button = null
@@ -64,6 +103,13 @@ var _win_pattern: Array = []              # {role, color, name}
 var _recent_games: Array = []             # 直近の自軍試合 (新しい順)
 var _upcoming_games: Array = []           # 今後の自軍試合 (古い順)
 var _ranking_cards: Array = []            # {title, accent, fmt, entries:[{name, value}]}
+
+var _page: String = PAGE_OVERVIEW
+# デプスチャートはリーグ全球団ぶんを1度に組む必要があり (順位/グレードがリーグ相対) 重いので、
+# 画面表示中は使い回す。球団を切り替えても charts は共有し、行 (display_rows) だけ作り直す。
+var _depth_charts: Dictionary = {}
+var _depth_rows: Array = []
+var _depth_summary: Dictionary = {}
 
 
 func _ready() -> void:
@@ -97,6 +143,11 @@ func _draw() -> void:
 		return
 
 	_draw_identity(team)
+	if _page == PAGE_DEPTH:
+		_draw_depth_summary()
+		_draw_depth_chart(DEPTH_RECT)
+		_draw_depth_note(DEPTH_NOTE_RECT)
+		return
 	_draw_statbar()
 	_draw_lineup(LINEUP_RECT)
 	_draw_rotation(ROTATION_RECT)
@@ -445,6 +496,145 @@ func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
 			_line(Vector2(rect.position.x + 10.0, top + float(i + 1) * row_h), Vector2(rect.end.x - 8.0, top + float(i + 1) * row_h), HAIRLINE, 1.0)
 
 
+# --- デプスチャート (獲得判断の補助) ---
+
+# 役割スロット (先発 / 救援 / 守備位置) ごとに「現在の戦力」と「将来性」を並べる。
+# 生値 (評価スケール) は12球団が団子になって読めないので、主役は**同じスロットの全球団を
+# 母集団にした S〜E グレード**。バーの長さ (全球団最大値との比) と順位 chip を補助に添える。
+func _draw_depth_chart(rect: Rect2) -> void:
+	var teams_text: String = "全%d球団中" % int(_depth_summary.get("team_count", 12))
+	_panel(rect, "デプスチャート（役割別の戦力）")
+
+	var hy: float = rect.position.y + 58
+	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_text("枠", Vector2(D_CHIP_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("人数", D_COUNT_R, hy, 11, MUTED, 60, true)
+	_text("現在の戦力（%s）" % teams_text, Vector2(D_CUR_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("将来性（%d年後）" % TeamDepthChart.FUTURE_HORIZON_YEARS, Vector2(D_PRO_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("平均年齢", D_AGE_R, hy, 11, MUTED, 70, true)
+	_draw_depth_player_header("主力", D_HOLDER_X, hy)
+	_draw_depth_player_header("最有望株", D_PROSPECT_X, hy)
+	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
+
+	if _depth_rows.is_empty():
+		_text("デプスチャートを構築できません", Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
+		return
+
+	var top: float = rect.position.y + 74.0
+	var row_h: float = (rect.end.y - top - 10.0) / float(_depth_rows.size())
+	for i in range(_depth_rows.size()):
+		_draw_depth_row(_depth_rows[i] as Dictionary, rect, top + float(i) * row_h, row_h)
+	# 列グループの境界: 識別 (枠/人数) | 評価 …… 主力 | 最有望株。
+	var bottom: float = top + float(_depth_rows.size()) * row_h
+	_line(Vector2(D_CUR_BAR_X - 12.0, hy - 18), Vector2(D_CUR_BAR_X - 12.0, bottom), HAIRLINE, 1.0)
+	_line(Vector2(D_PROSPECT_X - D_PLAYER_GUTTER * 0.5, hy - 18),
+		Vector2(D_PROSPECT_X - D_PLAYER_GUTTER * 0.5, bottom), HAIRLINE, 1.0)
+
+
+func _draw_depth_row(row: Dictionary, rect: Rect2, ry: float, row_h: float) -> void:
+	var cy: float = ry + row_h * 0.5
+	var ty: float = cy + 5.0
+	var total: int = int(row.get("team_count", 0))
+	var holder_count: int = int(row.get("holder_count", 0))
+
+	_chip(Rect2(D_CHIP_X, cy - 12, 48, 24), str(row.get("label", "")), _depth_slot_color(row))
+	_text_right("%d人" % holder_count, D_COUNT_R, ty, 13, MUTED if holder_count > 0 else RED, 60)
+
+	_draw_depth_metric(D_CUR_BAR_X, D_CUR_GRADE_X, D_CUR_RANK_X, cy,
+		str(row.get("current_grade", "")), float(row.get("current_ratio", 0.0)), int(row.get("current_rank", 0)), total)
+	_draw_depth_metric(D_PRO_BAR_X, D_PRO_GRADE_X, D_PRO_RANK_X, cy,
+		str(row.get("future_grade", "")), float(row.get("future_ratio", 0.0)), int(row.get("future_rank", 0)), total)
+
+	var avg_age: float = float(row.get("avg_age", 0.0))
+	_text_right("%0.1f" % avg_age if holder_count > 0 else "-", D_AGE_R, ty, 13, MUTED, 70)
+	_draw_depth_player(row.get("top_holder", {}) as Dictionary, D_HOLDER_X, ty, cy)
+	_draw_depth_player(row.get("top_prospect", {}) as Dictionary, D_PROSPECT_X, ty, cy)
+	_line(Vector2(rect.position.x + 16, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
+
+
+# バー + グレード + 順位 chip の1組。色はグレード基準 (S/A=青 … D/E=赤) で統一し、
+# バーは「全球団最大値に対する比」。最大値比にしているのは、最下位を 0 にする min-max
+# 正規化だとバーが消えて「戦力ゼロ」に見えてしまうため。
+func _draw_depth_metric(bar_x: float, grade_x: float, rank_x: float, cy: float, grade: String, ratio: float, rank: int, total: int) -> void:
+	var color: Color = _strength_grade_color(grade)
+	_round(Rect2(bar_x, cy - 8, D_BAR_W, 16), PANEL_2, Color.TRANSPARENT, 4, 0)
+	if ratio > 0.0:
+		_round(Rect2(bar_x, cy - 8, maxf(4.0, D_BAR_W * ratio), 16), Color(color.r, color.g, color.b, 0.85), Color.TRANSPARENT, 4, 0)
+	_text(grade, Vector2(grade_x, cy + 8.0), 22, color, D_GRADE_W, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_chip(Rect2(rank_x, cy - 11, RANK_CHIP_W, 22), "%d位" % rank if rank > 0 and total > 0 else "-", MUTED)
+
+
+# 代表選手ブロックの見出し (選手名 / 年齢 / 総合)。主力・最有望株で同じ幾何を使う。
+func _draw_depth_player_header(title: String, x: float, hy: float) -> void:
+	_text(title, Vector2(x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("年齢", x + D_PLAYER_AGE_ROFF, hy, 11, MUTED, 40, true)
+	_text_right("総合", x + D_PLAYER_VALUE_ROFF, hy, 11, MUTED, 40, true)
+
+
+# 代表選手セル (名前 / 育成chip / 年齢 / 総合)。該当なしは "—"。
+# 総合はその選手の**現在の**評価値 — 将来の予測値はスロットのグレード側で見せているので、
+# ここで別尺度の数字を混ぜない (主力と最有望株を同じ意味の数字で比べられるようにする)。
+func _draw_depth_player(entry: Dictionary, x: float, ty: float, cy: float) -> void:
+	if entry.is_empty():
+		_text("—", Vector2(x, ty), 13, FAINT)
+		return
+	var player: PSPlayer = GameDb.get_player(int(entry.get("player_id", 0)))
+	_text(player.name if player != null else "-", Vector2(x, ty), 13, TEXT, D_PLAYER_NAME_W)
+	if bool(entry.get("development", false)):
+		_chip(Rect2(x + D_PLAYER_CHIP_OFF, cy - 9, 38, 18), "育成", AMBER)
+	var overall: int = int(round(float(entry.get("overall", 0.0))))
+	_text_right(str(int(entry.get("age", 0))), x + D_PLAYER_AGE_ROFF, ty, 13, MUTED, 40)
+	_text_right(str(overall), x + D_PLAYER_VALUE_ROFF, ty, 13, _table_rating_color(overall), 40, true)
+
+
+# 先発=PINK / 救援=VIOLET (ローテパネルの配色に合わせる)、野手は守備位置色。
+func _depth_slot_color(row: Dictionary) -> Color:
+	var slot: String = str(row.get("slot", ""))
+	if slot == TeamDepthChart.SLOT_STARTER:
+		return PINK
+	if slot == TeamDepthChart.SLOT_RELIEVER:
+		return VIOLET
+	return _pos_color(int(row.get("position", 0)))
+
+
+func _draw_depth_summary() -> void:
+	if _depth_summary.is_empty():
+		return
+	var current_grade: String = str(_depth_summary.get("current_grade", "C"))
+	var future_grade: String = str(_depth_summary.get("future_grade", "C"))
+	var cells: Array = [
+		{"label": "支配下", "value": "%d人" % int(_depth_summary.get("controlled", 0)),
+			"note": "育成 %d人" % int(_depth_summary.get("development", 0)), "note_color": MUTED},
+		{"label": "平均年齢", "value": "%0.1f歳" % float(_depth_summary.get("avg_age", 0.0))},
+		{"label": "24歳以下", "value": "%d人" % int(_depth_summary.get("young", 0)), "color": BLUE},
+		{"label": "現在の戦力", "value": current_grade, "color": _strength_grade_color(current_grade),
+			"note": "%d球団中%d位" % [int(_depth_summary.get("team_count", 12)), int(_depth_summary.get("current_rank", 0))],
+			"note_color": MUTED},
+		{"label": "将来性", "value": future_grade, "color": _strength_grade_color(future_grade),
+			"note": "%d年後" % TeamDepthChart.FUTURE_HORIZON_YEARS, "note_color": MUTED},
+		{"label": "最も弱い枠", "value": str(_depth_summary.get("weakest_label", "-")),
+			"color": RED, "note": str(_depth_summary.get("weakest_note", "")), "note_color": RED},
+	]
+	_stat_strip(Rect2(INNER_L, STAT_Y1, INNER_R - INNER_L, STAT_H), cells)
+
+
+# 指標の意味は表示だけでは伝わらないので凡例を常設する (この画面は他球団も見られるため、
+# 「自軍の弱点」ではなく「表示球団の弱点」を指す点も明示しておく)。
+func _draw_depth_note(rect: Rect2) -> void:
+	var total: int = int(_depth_summary.get("team_count", 12))
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
+	var x: float = rect.position.x + 20.0
+	_text("現在の戦力", Vector2(x, rect.position.y + 32), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("一軍で実際に使う枠（先発5人 / 救援6人 / 野手はレギュラー1人）の評価平均。バーの長さは全%d球団の中での位置。" % total,
+		Vector2(x + 108.0, rect.position.y + 32), 13, MUTED)
+	_text("将来性", Vector2(x, rect.position.y + 62), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("%d年後の同じ枠の予測（育成選手を含む全員が対象。年齢ごとの成長・衰えと引退の見込みを織り込む）。主力が高齢なら下がる。" % TeamDepthChart.FUTURE_HORIZON_YEARS,
+		Vector2(x + 108.0, rect.position.y + 62), 13, MUTED)
+	_text("S〜E", Vector2(x, rect.position.y + 92), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text("全%d球団の同じ枠を並べた中での位置（S=青 / A・B=緑 / C・D=黄 / E=赤）。将来性が D・E の枠が後継を要する枠。" % total,
+		Vector2(x + 108.0, rect.position.y + 92), 13, MUTED)
+
+
 # ============================================================ buttons
 
 func _build_buttons() -> void:
@@ -462,7 +652,24 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(_team_id)
 	_team_menu_button = _add_button("team_menu", "", _logo_hotspot_rect(team), _on_team_menu_pressed, "nav")
 
+	# 識別バー右端のページタブ。概要 ⇄ デプスチャート。
+	var tab_y: float = ID_Y - TAB_H * 0.5
+	_add_button("page_overview", "概要", Rect2(INNER_R - TAB_W * 2.0 - 8.0, tab_y, TAB_W, TAB_H),
+		func() -> void: _set_page(PAGE_OVERVIEW), "chip_active" if _page == PAGE_OVERVIEW else "chip")
+	_add_button("page_depth", "デプスチャート", Rect2(INNER_R - TAB_W, tab_y, TAB_W, TAB_H),
+		func() -> void: _set_page(PAGE_DEPTH), "chip_active" if _page == PAGE_DEPTH else "chip")
+
 	_layout_buttons()
+
+
+func _set_page(page: String) -> void:
+	if _page == page:
+		return
+	_page = page
+	if _page == PAGE_DEPTH:
+		_ensure_depth_rows()
+	_build_buttons()
+	queue_redraw()
 
 
 # プルダウンを開き、選んだ球団へ即切り替える。スタイルは home/game_result の _style_popup と同等。
@@ -537,11 +744,17 @@ func _refresh() -> void:
 	_recent_games = []
 	_upcoming_games = []
 	_ranking_cards = []
+	_depth_rows = []
+	_depth_summary = {}
 
 	var season: PSSeason = AppState.current_season
 	var team: PSTeam = GameDb.get_team(_team_id)
 	if season == null or team == null:
 		return
+
+	# チャート自体はリーグ共通なので球団切り替えでは組み直さない (行だけ作り直す)。
+	if _page == PAGE_DEPTH:
+		_ensure_depth_rows()
 
 	_build_standing(team, season)
 	_build_metric_ranks(team, season)
@@ -564,6 +777,58 @@ func _refresh() -> void:
 	_build_win_pattern(team, season, record_by_id)
 	_build_schedule(team, season)
 	_build_rankings(records)
+
+
+# デプスチャートの構築。順位/グレードがリーグ相対なので全球団ぶんを1度に組む必要があり、
+# 全選手 × 全球団のループになるので**初回のタブ表示まで遅延**させ、以後は使い回す。
+func _ensure_depth_rows() -> void:
+	if _depth_charts.is_empty():
+		_depth_charts = TeamDepthChart.build_league(GameDb.players, GameDb.teams)
+	_depth_rows = TeamDepthChart.display_rows(_depth_charts, _team_id)
+	_build_depth_summary()
+
+
+# サマリーバー用の集計。球団全体のグレードは全スロット合計を全球団で比べた S〜E
+# (TeamDepthChart.team_grades)。「最も弱い枠」は現在の順位が最下位の枠。
+func _build_depth_summary() -> void:
+	_depth_summary = {}
+	if _depth_rows.is_empty():
+		return
+	var controlled: int = 0
+	var development: int = 0
+	var age_total: int = 0
+	var young: int = 0
+	for player_row in (GameDb.players_by_team.get(_team_id, []) as Array):
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.is_retired():
+			continue
+		if player.development_player:
+			development += 1
+		else:
+			controlled += 1
+			age_total += player.age
+		if player.age <= TeamDepthChart.PROSPECT_MAX_AGE:
+			young += 1
+
+	var weakest: Dictionary = {}
+	for row_value in _depth_rows:
+		var row: Dictionary = row_value as Dictionary
+		if weakest.is_empty() or int(row.get("current_rank", 0)) > int(weakest.get("current_rank", 0)):
+			weakest = row
+
+	var grades: Dictionary = TeamDepthChart.team_grades(_depth_charts, _team_id)
+	_depth_summary = {
+		"team_count": int((_depth_rows[0] as Dictionary).get("team_count", 12)),
+		"controlled": controlled,
+		"development": development,
+		"young": young,
+		"avg_age": float(age_total) / float(maxi(1, controlled)),
+		"current_grade": str(grades.get("current_grade", "C")),
+		"future_grade": str(grades.get("future_grade", "C")),
+		"current_rank": int(grades.get("current_rank", 0)),
+		"weakest_label": str(weakest.get("label", "-")),
+		"weakest_note": "現在%s" % str(weakest.get("current_grade", "-")),
+	}
 
 
 func _build_standing(team: PSTeam, season: PSSeason) -> void:

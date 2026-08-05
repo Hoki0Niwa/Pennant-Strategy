@@ -2707,7 +2707,102 @@ func test_depth_chart_upgrade_margin_gates_marginal_candidate() -> void:
 	assert_bool(bool(TeamDepthChart.evaluate_candidate(chart, candidate, 100.0).get("fit", false))).is_false()
 
 
+# 将来側 (future_*) は育成選手も母数に数えるが、支配下の指標 (holders / first_team_value /
+# first_team_line) は一切動かしてはいけない — ここが動くと補強AIの較正済み閾値が全系統ずれる。
+func test_depth_chart_future_counts_development_without_moving_first_team() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	var veteran: PSPlayer = _player_with_z(9850, 1, 3, false, 0.5)
+	veteran.age = 30
+	var rival: PSPlayer = _player_with_z(9851, 2, 3, false, 0.5)
+	rival.age = 30
+	var dev_prospect: PSPlayer = _player_with_z(9852, 1, 3, true, 1.5)
+	dev_prospect.age = 20
+
+	var base_slot: Dictionary = _depth_slot([veteran, rival], teams, 1, 3)
+	var dev_slot: Dictionary = _depth_slot([veteran, rival, dev_prospect], teams, 1, 3)
+
+	assert_int(int(dev_slot["holder_count"])).is_equal(int(base_slot["holder_count"]))
+	assert_float(float(dev_slot["first_team_value"])).is_equal_approx(float(base_slot["first_team_value"]), 0.001)
+	assert_float(float(dev_slot["first_team_line"])).is_equal_approx(float(base_slot["first_team_line"]), 0.001)
+	assert_float(float(dev_slot["future_value"])).is_greater(float(base_slot["future_value"]))
+
+
+# **高齢のレギュラーが居座るスロットは将来性が低い**。同じ現在値でも 38歳と 24歳では
+# 数年後の予測が変わり、future_need (後継の必要性) が高齢側に立つ。
+# 旧実装 (24歳以下の平均) では両者とも「若手ゼロ」で区別できなかった。
+func test_depth_chart_future_value_drops_for_aging_regular() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	var aging: PSPlayer = _player_with_z(9870, 1, 3, false, 1.0)
+	aging.age = 38
+	var young: PSPlayer = _player_with_z(9871, 2, 3, false, 1.0)
+	young.age = 24
+	var players: Array = [aging, young]
+
+	var aging_slot: Dictionary = _depth_slot(players, teams, 1, 3)
+	var young_slot: Dictionary = _depth_slot(players, teams, 2, 3)
+
+	# 現在値は同じ (同じ z の選手) だが、将来値は高齢側が明確に下。
+	assert_float(float(aging_slot["first_team_value"])).is_equal_approx(float(young_slot["first_team_value"]), 0.001)
+	assert_float(float(aging_slot["future_value"])).is_less(float(young_slot["future_value"]))
+	assert_float(float(aging_slot["future_need"])).is_greater(0.0)
+	assert_float(float(young_slot["future_need"])).is_equal_approx(0.0, 0.001)
+
+
+# **将来を託せる若手が既に居るスロットは future が閉じる** (= 同ポジションの重複獲得をしない)。
+# 逆に主力が高齢なだけのスロットは将来の当落線が下がり、同じ候補でも future が立つ。
+func test_depth_chart_existing_prospect_closes_future_route() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	# team1: 24歳の有望株が居る / team2: 38歳のベテランだけ (どちらも現在値は同じ)
+	var prospect: PSPlayer = _player_with_z(9880, 1, 3, false, 1.5)
+	prospect.age = 24
+	var veteran: PSPlayer = _player_with_z(9881, 2, 3, false, 1.5)
+	veteran.age = 38
+	var charts: Dictionary = TeamDepthChart.build_league([prospect, veteran], teams)
+
+	var candidate: PSPlayer = _player_with_z(9882, 0, 3, false, 0.3)
+	candidate.age = 21
+	assert_bool(bool(TeamDepthChart.evaluate_candidate(charts[1] as Dictionary, candidate).get("future", false))) \
+		.override_failure_message("有望株が既に居るスロットで future が立っている").is_false()
+	assert_bool(bool(TeamDepthChart.evaluate_candidate(charts[2] as Dictionary, candidate).get("future", false))) \
+		.override_failure_message("高齢主力しか居ないスロットで future が立たない").is_true()
+
+
+# 表示用ビュー: 現在と将来を別々に順位・グレード付けする。
+func test_depth_chart_display_rows_rank_current_and_future_separately() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	var strong: PSPlayer = _player_with_z(9860, 1, 3, false, 2.0)
+	strong.age = 37
+	var weak: PSPlayer = _player_with_z(9861, 2, 3, false, 1.0)
+	weak.age = 22
+
+	var charts: Dictionary = TeamDepthChart.build_league([strong, weak], teams)
+	var strong_row: Dictionary = _display_row(charts, 1, 3)
+	var young_row: Dictionary = _display_row(charts, 2, 3)
+
+	assert_str(str(strong_row["label"])).is_equal("一塁")
+	assert_int(int(strong_row["current_rank"])).is_equal(1)
+	assert_float(float(strong_row["current_ratio"])).is_equal_approx(1.0, 0.001)
+	# 現在は 37歳の強打者が上でも、3年後は 22歳側が上回る。
+	assert_int(int(young_row["current_rank"])).is_equal(2)
+	assert_int(int(young_row["future_rank"])).is_equal(1)
+	assert_int(int(strong_row["future_rank"])).is_equal(2)
+	assert_int(int(young_row["top_prospect"]["player_id"])).is_equal(9861)
+	assert_array(StrengthGrade.GRADES).contains([str(young_row["future_grade"])])
+
+
 # --- helpers -----------------------------------------------------------------
+
+func _depth_slot(players: Array, teams: Array, team_id: int, position: int) -> Dictionary:
+	var chart: Dictionary = TeamDepthChart.build_league(players, teams)[team_id] as Dictionary
+	return (chart["slots"] as Dictionary)[TeamDepthChart.fielder_slot_key(position)] as Dictionary
+
+
+func _display_row(charts: Dictionary, team_id: int, position: int) -> Dictionary:
+	for row_value in TeamDepthChart.display_rows(charts, team_id):
+		var row: Dictionary = row_value as Dictionary
+		if str(row["slot"]) == TeamDepthChart.fielder_slot_key(position):
+			return row
+	return {}
 
 # position=1 は投手 (role 指定・投手 z を付与)、それ以外は野手として z 一律の選手を作る
 # (need の depth 検証用)。ALL_Z_KEYS は野手系のみなので投手値が動くよう Pit_ 系も一律で入れる。

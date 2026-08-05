@@ -3,8 +3,12 @@ extends "res://ui/components/dashboard_screen.gd"
 # チーム選択画面。ゲーム開始前フローなのでサイドバーは出さず、全チームカードと開始ボタンだけを描く。
 # 第1リーグ(league1)を左カラム、第2リーグ(league2)を右カラムに 2 列ずつ並べる。
 # カードをクリックで選択し、ヘッダの「このチームで開始」ボタン 1 つで開始する。
+#
+# 各カードは球団の戦力を6項目 (先発 / 中継 / 控え / 打撃 / 守備 / 将来性) の S〜E グレードで示す。
+# **数値やバーは出さない** — 12球団の生の評価値は数点差に収まり、数字でもバー長でも差が読めない
+# ([[project_strength_grade]])。グレードはいずれも全12球団を母集団にした相対評価。
 
-const PlayerVisibleRatings = preload("res://services/simulation/player_visible_ratings.gd")
+const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 
 const MARGIN: float = 48.0
 const CENTER_GAP: float = 40.0
@@ -16,7 +20,37 @@ const CARD_TOP: float = 172.0
 const COLS: int = 2
 const GAP: float = 18.0
 
-# 各リーグの {team, bat, pitch, controlled, dev} を _ready でキャッシュ (毎フレーム再計算しない)。
+# 打撃の母数 = スタメン9人。控えの母数 = **そのスタメンから漏れた一軍の野手**。
+# 一軍31人 ≒ 投手15 + 野手16 なので、スタメン9人を除いた 7 人が控え野手にあたる
+# (投手の層は先発/中継で見ているので控えには混ぜない)。
+const LINEUP_COUNT: int = 9
+const BENCH_COUNT: int = 7
+
+# カード内のグレード表示: 横3項目 × 縦2段。GRADE_ROWS の並び順のまま左→右→次段へ流す
+# (上段=投手系+控え / 下段=野手系+将来性)。
+# 項目名とグレードは GRADE_LABEL_W だけ離した**近接した1組**として置く — 列いっぱいに離すと
+# どのグレードがどの項目か読み取れない。
+const GRADE_COLS: int = 3
+const GRADE_ROWS: Array = [
+	{"key": "starter", "label": "先発"},
+	{"key": "relief", "label": "中継"},
+	{"key": "bench", "label": "控え"},
+	{"key": "batting", "label": "打撃"},
+	{"key": "defense", "label": "守備"},
+	{"key": "future", "label": "若手"},
+]
+const GRADE_ROW_H: float = 50.0
+const GRADE_TOP: float = 132.0
+# グレードは GRADE_FS、項目名はそれより一段小さい GRADE_LABEL_FS。同サイズにすると
+# 和文の項目名のほうが字面が大きく見えて主役のグレードが埋もれる。
+# GRADE_LABEL_W はラベル2文字ぶん + グレードとの間隔。
+const GRADE_FS: int = 19
+const GRADE_LABEL_FS: int = 16
+const GRADE_LABEL_W: float = 48.0
+const GRADE_VALUE_W: float = 28.0
+
+# 各リーグの {team, controlled, dev, <key>, <key>_grade …} を _ready でキャッシュ
+# (毎フレーム再計算しない)。
 var _league1: Array = []
 var _league2: Array = []
 var _selected_team_id: int = 0
@@ -32,18 +66,31 @@ func _ready() -> void:
 func _build_infos() -> void:
 	_league1.clear()
 	_league2.clear()
+	# 先発 / 中継 / 控え / 将来性 は [[TeamDepthChart]] の役割スロットをそのまま使う
+	# (一軍で実際に使う枠数と将来予測の定義をデプスチャート画面と共有するため)。
+	var charts: Dictionary = TeamDepthChart.build_league(GameDb.players, GameDb.teams)
+	var infos: Array = []
 	for team_row in GameDb.teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue
-		var info: Dictionary = {
+		var chart: Dictionary = charts.get(team.id, {}) as Dictionary
+		infos.append({
 			"team": team,
-			"bat": _team_batting_rating(team.id),
-			"pitch": _team_pitching_rating(team.id),
+			"starter": _slot_metric(chart, TeamDepthChart.SLOT_STARTER, "first_team_value"),
+			"relief": _slot_metric(chart, TeamDepthChart.SLOT_RELIEVER, "first_team_value"),
+			"bench": _team_bench_score(team.id),
+			"batting": _team_batting_score(team.id),
+			"defense": _team_defense_score(team.id),
+			"future": _team_future_score(chart),
 			"controlled": TeamFinance.controlled_count(GameDb.players, team.id),
 			"dev": TeamFinance.development_count(GameDb.players, team.id),
-		}
-		if team.league == "league1":
+		})
+	for row_value in GRADE_ROWS:
+		_assign_grades(infos, str((row_value as Dictionary)["key"]))
+	for info_value in infos:
+		var info: Dictionary = info_value as Dictionary
+		if (info["team"] as PSTeam).league == "league1":
 			_league1.append(info)
 		else:
 			_league2.append(info)
@@ -51,6 +98,16 @@ func _build_infos() -> void:
 		var first: Array = _league1 if not _league1.is_empty() else _league2
 		if not first.is_empty():
 			_selected_team_id = ((first[0] as Dictionary)["team"] as PSTeam).id
+
+
+# infos の value_key を母集団として S〜E を求め、<value_key>_grade へ書き戻す。
+func _assign_grades(infos: Array, value_key: String) -> void:
+	var sample: Array = []
+	for info_value in infos:
+		sample.append(float((info_value as Dictionary).get(value_key, 0.0)))
+	for info_value in infos:
+		var info: Dictionary = info_value as Dictionary
+		info["%s_grade" % value_key] = StrengthGrade.from_sample(float(info.get(value_key, 0.0)), sample)
 
 
 # ============================================================ draw
@@ -94,29 +151,33 @@ func _draw_card(rect: Rect2, info: Dictionary) -> void:
 	_round(Rect2(rect.position.x, rect.position.y + 12.0, 5.0, rect.size.y - 24.0), team.color, Color.TRANSPARENT, 3, 0)
 
 	_team_badge(Rect2(rect.position.x + 22.0, rect.position.y + 20.0, 46.0, 46.0), team)
-	_text(team.name, Vector2(rect.position.x + 80.0, rect.position.y + 44.0), 20, TEXT, rect.size.x - 96.0)
-	_text("前年 %d位" % team.previous_rank, Vector2(rect.position.x + 80.0, rect.position.y + 68.0), 12, MUTED, rect.size.x - 96.0)
+	_text(team.name, Vector2(rect.position.x + 80.0, rect.position.y + 44.0), 23, TEXT, rect.size.x - 96.0)
+	_text("前年 %d位" % team.previous_rank, Vector2(rect.position.x + 80.0, rect.position.y + 70.0), 14, MUTED, rect.size.x - 96.0)
 	if selected:
-		_chip(Rect2(rect.end.x - 76.0, rect.position.y + 18.0, 58.0, 22.0), "選択中", BLUE)
+		_chip(Rect2(rect.end.x - 82.0, rect.position.y + 18.0, 64.0, 24.0), "選択中", BLUE)
 
 	_line(Vector2(rect.position.x + 18.0, rect.position.y + 92.0), Vector2(rect.end.x - 18.0, rect.position.y + 92.0), BORDER_SOFT, 1.0)
 
-	_draw_bar(rect.position.x + 18.0, rect.position.y + 112.0, rect.size.x - 36.0, "打撃", int(info["bat"]), BLUE)
-	_draw_bar(rect.position.x + 18.0, rect.position.y + 146.0, rect.size.x - 36.0, "投手", int(info["pitch"]), RED)
+	_draw_grades(rect, info)
 
 	_text("支配下 %d名 ・ 育成 %d名" % [int(info["controlled"]), int(info["dev"])],
-		Vector2(rect.position.x + 18.0, rect.position.y + 194.0), 12, MUTED, rect.size.x - 36.0)
+		Vector2(rect.position.x + 18.0, rect.position.y + 246.0), 14, MUTED, rect.size.x - 36.0)
 
 
-func _draw_bar(x: float, y: float, w: float, label: String, value: int, color: Color) -> void:
-	_text(label, Vector2(x, y + 13.0), 12, MUTED)
-	var bx: float = x + 50.0
-	var bw: float = w - 50.0 - 42.0
-	_round(Rect2(bx, y + 2.0, bw, 12.0), PANEL_3, Color.TRANSPARENT, 6, 0)
-	var frac: float = clampf(float(value) / 100.0, 0.0, 1.0)
-	if frac > 0.0:
-		_round(Rect2(bx, y + 2.0, bw * frac, 12.0), color, Color.TRANSPARENT, 6, 0)
-	_text_right(str(value), x + w, y + 13.0, 13, TEXT, 40.0)
+# 6項目のグレードを 横 GRADE_COLS 項目 × 縦2段 で置く。値は S〜E の1文字だけ。
+# 項目名とグレードは近接した1組として置く — 列幅いっぱいに離すと対応が読めない。
+func _draw_grades(rect: Rect2, info: Dictionary) -> void:
+	var inner_x: float = rect.position.x + 18.0
+	var col_w: float = (rect.size.x - 36.0) / float(GRADE_COLS)
+	for i in range(GRADE_ROWS.size()):
+		var row: Dictionary = GRADE_ROWS[i] as Dictionary
+		var x: float = inner_x + float(i % GRADE_COLS) * col_w
+		@warning_ignore("integer_division")
+		var y: float = rect.position.y + GRADE_TOP + GRADE_ROW_H * float(i / GRADE_COLS)
+		var grade: String = str(info.get("%s_grade" % str(row["key"]), "-"))
+		_text(str(row["label"]), Vector2(x, y), GRADE_LABEL_FS, MUTED, GRADE_LABEL_W)
+		_text(grade, Vector2(x + GRADE_LABEL_W, y), GRADE_FS, _strength_grade_color(grade),
+			GRADE_VALUE_W, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # ============================================================ buttons
@@ -174,56 +235,90 @@ func _league_label(infos: Array, fallback: String) -> String:
 	return label if not label.is_empty() else fallback
 
 
-# ============================================================ rating helpers
+# ============================================================ 戦力指標
+# いずれも「グレード化する前の生値」。母集団 (全12球団) 内での相対位置しか使わないので、
+# 指標どうしで尺度が揃っている必要はない (先発と打撃を直接比べることはない)。
 
-func _team_batting_rating(team_id: int) -> int:
+# デプスチャートのスロット指標をそのまま読む (先発/中継の一軍枠の質)。
+func _slot_metric(chart: Dictionary, slot_key: String, metric_key: String) -> float:
+	var slots: Dictionary = chart.get("slots", {}) as Dictionary
+	return float((slots.get(slot_key, {}) as Dictionary).get(metric_key, 0.0))
+
+
+# 控え = **スタメンから漏れた一軍の野手**の評価平均。総合評価順に並べてスタメン相当の
+# LINEUP_COUNT 人を除き、続く BENCH_COUNT 人 (= 一軍が抱える控え野手) を数える。
+# ⚠️ 二軍相当まで含めると「層の厚さ」になってしまい、代打・守備固めの質を表さない。
+func _team_bench_score(team_id: int) -> float:
+	var scores: Array = _controlled_fielder_scores(team_id,
+		func(player: PSPlayer) -> float: return float(OffseasonService.player_value_score(player)))
+	scores.sort()
+	scores.reverse()
+	var total: float = 0.0
+	var used: int = 0
+	for index in range(LINEUP_COUNT, mini(LINEUP_COUNT + BENCH_COUNT, scores.size())):
+		total += float(scores[index])
+		used += 1
+	return total / float(maxi(1, used))
+
+
+# 打撃 = 打力上位 LINEUP_COUNT 人 (≒スタメン) の打撃スコア平均。守備は含めない。
+func _team_batting_score(team_id: int) -> float:
+	var scores: Array = _controlled_fielder_scores(team_id,
+		func(player: PSPlayer) -> float:
+			return float(PlayerValueEvaluator.batting_score(PSPlayerSeasonRecord.from_player(player, 0, 0)))
+	)
+	return _top_average(scores, LINEUP_COUNT)
+
+
+# 守備 = **各守備位置で最良の選手の守備スコア**の平均 = 「組める守備陣の質」。
+# 全野手の平均にすると層の厚い球団が有利になりすぎるため、ポジションごとに1人だけ数える。
+func _team_defense_score(team_id: int) -> float:
+	var best_by_position: Dictionary = {}
+	for player_row in GameDb.get_players_for_team(team_id):
+		var player: PSPlayer = player_row as PSPlayer
+		if not _is_controlled_fielder(player):
+			continue
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
+		for position in range(2, 10):
+			var score: float = float(PlayerValueEvaluator.defensive_score_for_position(record, position))
+			if score > float(best_by_position.get(position, 0.0)):
+				best_by_position[position] = score
+	var total: float = 0.0
+	for position in range(2, 10):
+		total += float(best_by_position.get(position, 0.0))
+	return total / 8.0
+
+
+# 一軍に出せる野手 = 支配下の現役野手 (育成は一軍登録できないので除く)。
+func _is_controlled_fielder(player: PSPlayer) -> bool:
+	return player != null and not player.is_pitcher() and not player.is_retired() and not player.development_player
+
+
+func _controlled_fielder_scores(team_id: int, score_of: Callable) -> Array:
 	var scores: Array = []
 	for player_row in GameDb.get_players_for_team(team_id):
 		var player: PSPlayer = player_row as PSPlayer
-		if player.is_pitcher():
-			continue
-		scores.append(_player_batting_rating(player))
-	return _top_average(scores, 9)
+		if _is_controlled_fielder(player):
+			scores.append(float(score_of.call(player)))
+	return scores
 
 
-func _team_pitching_rating(team_id: int) -> int:
-	var scores: Array = []
-	for player_row in GameDb.get_players_for_team(team_id):
-		var player: PSPlayer = player_row as PSPlayer
-		if not player.is_pitcher():
-			continue
-		scores.append(_player_pitching_rating(player))
-	return _top_average(scores, 12)
+# 将来性 = 全スロットの将来値 (数年後の一軍枠の質) の合計。デプスチャート画面の
+# 「将来性」と同じ定義 ([[project_team_depth_chart]])。
+func _team_future_score(chart: Dictionary) -> float:
+	var total: float = 0.0
+	for slot_key in TeamDepthChart.all_slot_keys():
+		total += _slot_metric(chart, str(slot_key), "future_value")
+	return total
 
 
-func _player_batting_rating(player: PSPlayer) -> int:
-	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
-	var total: int = PlayerVisibleRatings.fielder_contact(record)
-	total += PlayerVisibleRatings.fielder_power(record)
-	total += PlayerVisibleRatings.fielder_speed(record)
-	total += PlayerVisibleRatings.fielder_defense(record)
-	total += PlayerVisibleRatings.fielder_arm(record)
-	total += PlayerVisibleRatings.fielder_discipline(record)
-	return int(round(float(total) / 6.0))
-
-
-func _player_pitching_rating(player: PSPlayer) -> int:
-	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
-	var velocity_score: int = clampi(PlayerVisibleRatings.pitcher_velocity(record) - 70, 1, 100)
-	var total: int = velocity_score
-	total += PlayerVisibleRatings.pitcher_stuff(record)
-	total += PlayerVisibleRatings.pitcher_control(record)
-	total += PlayerVisibleRatings.pitcher_stamina(record)
-	return int(round(float(total) / 4.0))
-
-
-func _top_average(scores: Array, max_count: int) -> int:
+func _top_average(scores: Array, max_count: int) -> float:
 	if scores.is_empty():
-		return 0
+		return 0.0
 	scores.sort()
 	scores.reverse()
 	var count: int = int(min(scores.size(), max_count))
-	var total: int = 0
+	var total: float = 0.0
 	for index in range(count):
-		total += int(scores[index])
-	return int(round(float(total) / float(count)))
+		total += float(scores[index])
+	return total / float(count)

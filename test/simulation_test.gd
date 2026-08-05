@@ -2,6 +2,7 @@ extends GdUnitTestSuite
 
 const SaveContext = preload("res://services/storage/save_context.gd")
 const CampServiceRef = preload("res://services/season/camp_service.gd")
+const Offseason = preload("res://services/season/offseason_service.gd")
 
 
 # CPU の特別練習件数は球団事情で変動し、必要なければ 0、上限は 3。一律 3 にならないこと。
@@ -2336,6 +2337,33 @@ func test_error_difficulty_compensates_for_position_opportunities() -> void:
 		+ float(PSPlayResolver.THROW_ERROR_BASE_BY_POSITION[6])
 	)
 	assert_float(third_nominal).is_less_equal(short_nominal * 1.4)
+
+
+# S〜E グレードは**母集団内の相対位置**で決まる。同じ値でも周りが強ければ落ちる、が要件
+# (12球団の生レーティングが数点差に収まるため、絶対値の閾値では全球団同じ表示になる)。
+func test_strength_grade_is_relative_to_sample() -> void:
+	var tight: Array = [68.0, 69.0, 70.0, 71.0, 72.0, 74.0]
+	# 数点差しかない母集団でも最上位/最下位はきちんと割れる。
+	assert_str(StrengthGrade.from_sample(74.0, tight)).is_equal("S")
+	assert_str(StrengthGrade.from_sample(68.0, tight)).is_equal("E")
+	assert_str(StrengthGrade.from_sample(70.0, tight)).is_equal("C")
+	# 同じ 70 でも、母集団が弱ければ最上位になる。
+	assert_str(StrengthGrade.from_sample(70.0, [60.0, 62.0, 64.0, 66.0, 70.0])).is_equal("S")
+	# 全球団横並び (ばらつき無し) は無理に段階を付けず中央。
+	assert_str(StrengthGrade.from_sample(70.0, [70.0, 70.0, 70.0])).is_equal("C")
+	assert_str(StrengthGrade.from_sample(70.0, [])).is_equal("C")
+
+
+# 将来予測: 成長/衰えの期待値と引退見込みが年齢で単調に効く。
+func test_projected_value_falls_with_age() -> void:
+	assert_float(Offseason.projected_score_delta(22, 3)).is_greater(0.0)
+	assert_float(Offseason.projected_score_delta(30, 3)).is_less(Offseason.projected_score_delta(24, 3))
+	assert_float(Offseason.projected_score_delta(38, 3)).is_less(0.0)
+	# 引退見込み: 40歳未満は3年後も確実に現役、40代は減っていく。
+	assert_float(Offseason.active_survival_chance(30, 3)).is_equal_approx(1.0, 0.001)
+	assert_float(Offseason.active_survival_chance(39, 3)).is_less(1.0)
+	assert_float(Offseason.active_survival_chance(45, 3)).is_less(Offseason.active_survival_chance(41, 3))
+	assert_float(Offseason.active_survival_chance(48, 1)).is_equal_approx(0.0, 0.001)
 
 
 func test_season_report_data_accumulates_and_survives_serialization() -> void:

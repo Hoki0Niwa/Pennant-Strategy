@@ -12,6 +12,13 @@ const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_
 const POSITION_NEED_WEIGHT_ROUND1: float = 0.2
 const POSITION_NEED_WEIGHT_LATER: float = 0.45
 
+# ドラフトで獲った選手が一軍戦力として効いてくるのは数年後なので、需要は
+# **現在 (first_team_need) と将来 (future_need) の加重和**で測る (2026-08-05)。
+# 将来側を主にすることで「今はレギュラーが健在だが高齢で後継が居ない」ポジションを先回りで
+# 補強し、逆に「既に将来を託せる若手が居る」ポジションは重複指名しなくなる。
+# 1.0 にしないのは、現に穴が空いているポジションを無視して数年待つのは不自然なため。
+const FUTURE_NEED_WEIGHT: float = 0.6
+
 # ポジション別適性保持者の確保。各守備位置で最低 POSITION_DEPTH_TARGET 人の適性保持者を
 # 揃えるようドラフトを誘導する。保持者が少ない位置の候補を優先指名するが、その位置に
 # 健在の主力 (overall >= STRONG_STARTER_OVERALL) がいる場合は優先度を下げる
@@ -143,13 +150,20 @@ static func _build_team_position_need(players: Array, teams: Array) -> Dictionar
 		var chart: Dictionary = charts[team_id] as Dictionary
 		var team_need: Dictionary = {}
 		team_need[1] = maxf(
-			TeamDepthChart.slot_need(chart, TeamDepthChart.SLOT_STARTER),
-			TeamDepthChart.slot_need(chart, TeamDepthChart.SLOT_RELIEVER)
+			_slot_draft_need(chart, TeamDepthChart.SLOT_STARTER),
+			_slot_draft_need(chart, TeamDepthChart.SLOT_RELIEVER)
 		)
 		for position in range(2, 10):
-			team_need[position] = TeamDepthChart.slot_need(chart, TeamDepthChart.fielder_slot_key(position))
+			team_need[position] = _slot_draft_need(chart, TeamDepthChart.fielder_slot_key(position))
 		need[str(team_id)] = team_need
 	return need
+
+
+# ドラフト用の需要 = 現在の需要と将来の需要の加重和 (FUTURE_NEED_WEIGHT)。
+# どちらも同じ value 尺度なので、混ぜても POSITION_NEED_WEIGHT_* の較正は保たれる。
+static func _slot_draft_need(chart: Dictionary, slot_key: String) -> float:
+	return TeamDepthChart.slot_need(chart, slot_key) * (1.0 - FUTURE_NEED_WEIGHT) \
+		+ TeamDepthChart.slot_future_need(chart, slot_key) * FUTURE_NEED_WEIGHT
 
 
 static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dictionary:

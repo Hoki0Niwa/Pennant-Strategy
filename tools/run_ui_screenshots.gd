@@ -275,12 +275,24 @@ func _capture_team_detail(states_dir: String) -> void:
 			if int(id_value) != AppState.selected_team_id:
 				targets.append(int(id_value))
 				break
+	# 自軍のデプスチャートページ (獲得判断用の2ページ目)。
+	td.call("_set_page", "depth")
+	await _wait_frames()
+	_shot(states_dir, "team_detail_depth_self")
+	td.call("_set_page", "overview")
+	await _wait_frames()
+
 	for tid in targets:
 		td.call("_on_team_selected", tid)
 		await _wait_frames()
 		var team: PSTeam = GameDb.get_team(tid)
 		var league: String = team.league if team != null else "unknown"
 		_shot(states_dir, "team_detail_team%d_%s" % [tid, league])
+		td.call("_set_page", "depth")
+		await _wait_frames()
+		_shot(states_dir, "team_detail_depth_team%d" % tid)
+		td.call("_set_page", "overview")
+		await _wait_frames()
 
 
 # --- 4. シーズン履歴 (4ビュー切替) ---
