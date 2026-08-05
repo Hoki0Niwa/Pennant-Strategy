@@ -81,7 +81,7 @@ var _status_is_error: bool = false
 var _rotation_set: Dictionary = {}
 
 # 育成→支配下登録は保存まで確定しない (リセットで取り消せる)。{player_id: true}。
-var _pending_shienka: Dictionary = {}
+var _pending_controlled: Dictionary = {}
 
 # 列ごとのスクロールオフセット (行数)。
 var _scroll: Dictionary = {"active": 0, "inactive": 0, "dev": 0}
@@ -188,7 +188,7 @@ func _finish_drag(base_pos: Vector2) -> void:
 	elif src == "inactive" and dst == "active":
 		_promote(id)
 	elif src == "dev" and (dst == "active" or dst == "inactive"):
-		_promote_to_shienka(id)
+		_promote_to_controlled(id)
 	else:
 		_set_status("この移動はできません (育成への降格は戦力外フェーズで行います)", true)
 
@@ -277,7 +277,7 @@ func _draw_stat_cards(s: Dictionary) -> void:
 		{"label": "捕手", "value": str(catchers), "color": c_color, "note": "最低%d" % MIN_CATCHERS},
 		{"label": "外国人", "value": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color,
 			"note": "投%d 野%d（各%d以内）" % [foreign_pitchers, foreign_fielders, FOREIGN_TYPE_MAX]},
-		{"label": "支配下", "value": "%d/%d" % [int(s["shienka"]), TeamFinance.SHIENKA_LIMIT]},
+		{"label": "支配下", "value": "%d/%d" % [int(s["controlled"]), TeamFinance.CONTROLLED_LIMIT]},
 		{"label": "育成", "value": str(int(s["development"])), "color": GREEN},
 	]
 	_stat_strip(Rect2(INNER_L, CARD_Y, INNER_R - INNER_L, CARD_H), cells)
@@ -653,7 +653,7 @@ func _load_initial_state() -> void:
 		queue_redraw()
 		return
 
-	_pending_shienka = {}
+	_pending_controlled = {}
 	_all_records = RecordStore.get_team_player_records(_team_id, season.year, season.season_number)
 
 	# WAR はリーグ文脈が要るので season ごとに1回計算してキャッシュ (rotation_editor と同方式)。
@@ -732,16 +732,16 @@ func _promote(player_id: int) -> void:
 
 # 育成 → 支配下 登録 (2軍へ着地)。**保存まで確定しない** (リセットで取り消せる)。
 # 即時には live player を変えず、表示上だけ育成リストから 2軍へ移す。確定は _on_save_pressed。
-func _promote_to_shienka(player_id: int) -> void:
+func _promote_to_controlled(player_id: int) -> void:
 	var player: PSPlayer = GameDb.get_player(player_id)
 	if player == null or not player.development_player or player.team_id != _team_id:
 		return
-	if _pending_shienka.has(player_id):
+	if _pending_controlled.has(player_id):
 		return
-	if _effective_shienka_count() >= TeamFinance.SHIENKA_LIMIT:
-		_set_status("支配下枠が満杯です (最大%d人)。先に支配下選手を整理してください" % TeamFinance.SHIENKA_LIMIT, true)
+	if _effective_controlled_count() >= TeamFinance.CONTROLLED_LIMIT:
+		_set_status("支配下枠が満杯です (最大%d人)。先に支配下選手を整理してください" % TeamFinance.CONTROLLED_LIMIT, true)
 		return
-	_pending_shienka[player_id] = true
+	_pending_controlled[player_id] = true
 	_development_players.erase(player)
 	# 2軍に表示するため記録を確保 (新人で記録未生成なら player から生成)。
 	var season: PSSeason = AppState.current_season
@@ -755,8 +755,8 @@ func _promote_to_shienka(player_id: int) -> void:
 
 
 # live 支配下数 + 保存待ちの登録予定数。
-func _effective_shienka_count() -> int:
-	return TeamFinance.shienka_count(GameDb.players, _team_id) + _pending_shienka.size()
+func _effective_controlled_count() -> int:
+	return TeamFinance.controlled_count(GameDb.players, _team_id) + _pending_controlled.size()
 
 
 func _on_demote_pressed() -> void:
@@ -775,7 +775,7 @@ func _on_promote_pressed() -> void:
 
 func _on_register_pressed() -> void:
 	if _selected_list == "dev":
-		_promote_to_shienka(_selected_id)
+		_promote_to_controlled(_selected_id)
 	else:
 		_set_status("育成選手を選択してください", true)
 
@@ -816,7 +816,7 @@ func _on_save_pressed() -> void:
 		return
 
 	# 保存待ちの育成→支配下登録をここで確定する (リセットなら _load_initial_state でクリアされ未確定のまま)。
-	_commit_pending_shienka(season)
+	_commit_pending_controlled(season)
 
 	var player_ids: Array = []
 	for id_value in _active_ids.keys():
@@ -828,10 +828,10 @@ func _on_save_pressed() -> void:
 	queue_redraw()
 
 
-func _commit_pending_shienka(season: PSSeason) -> void:
-	if _pending_shienka.is_empty():
+func _commit_pending_controlled(season: PSSeason) -> void:
+	if _pending_controlled.is_empty():
 		return
-	for pid_value in _pending_shienka.keys():
+	for pid_value in _pending_controlled.keys():
 		var pid: int = int(pid_value)
 		var player: PSPlayer = GameDb.get_player(pid)
 		if player == null:
@@ -844,7 +844,7 @@ func _commit_pending_shienka(season: PSSeason) -> void:
 			record.development_player = false
 			record.registered_roster = "支配下"
 	GameDb.rebuild_player_indices()
-	_pending_shienka = {}
+	_pending_controlled = {}
 
 
 # ============================================================ row builders / helpers
@@ -1021,7 +1021,7 @@ func _compute_stats() -> Dictionary:
 		"foreigners": int(summary.get("foreigners", 0)),
 		"foreign_pitchers": int(summary.get("foreign_pitchers", 0)),
 		"foreign_fielders": int(summary.get("foreign_fielders", 0)),
-		"shienka": _effective_shienka_count(),
+		"controlled": _effective_controlled_count(),
 		"development": _development_players.size(),
 	}
 

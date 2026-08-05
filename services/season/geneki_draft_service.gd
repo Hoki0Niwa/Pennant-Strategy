@@ -680,8 +680,8 @@ static func _cpu_round2_mode(state: Dictionary, players: Array, team_id: int) ->
 	var best_score: float = _entry_score_for_team(state, team_id, best)
 	if best_score < ROUND2_PICK_MIN_SCORE:
 		return ROUND2_MODE_OFFER_ONLY
-	var count: int = TeamFinance.shienka_count(players, team_id)
-	if count + 1 > TeamFinance.SHIENKA_LIMIT:
+	var count: int = TeamFinance.controlled_count(players, team_id)
+	if count + 1 > TeamFinance.CONTROLLED_LIMIT:
 		return ROUND2_MODE_OFFER_ONLY
 	return ROUND2_MODE_PICK
 
@@ -750,7 +750,7 @@ static func _cpu_pick_round2(state: Dictionary, players: Array, teams: Array, pi
 	var net_gain: int = 1
 	if (state.get("lost_round2", {}) as Dictionary).has(str(picker_id)):
 		net_gain = 0
-	if TeamFinance.shienka_count(players, picker_id) + net_gain > TeamFinance.SHIENKA_LIMIT:
+	if TeamFinance.controlled_count(players, picker_id) + net_gain > TeamFinance.CONTROLLED_LIMIT:
 		_log(state, teams, "2巡目: %s は支配下枠が埋まっているため見送り" % _team_name(teams, picker_id))
 		return
 	_apply_pick(state, teams, picker_id, best)

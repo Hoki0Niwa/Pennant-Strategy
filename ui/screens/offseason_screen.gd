@@ -424,7 +424,7 @@ func _compute_roster_summary() -> void:
 	var team: PSTeam = GameDb.get_team(team_id)
 	var payroll: int = TeamFinance.team_payroll(GameDb.players, team_id)
 	_roster_summary = {
-		"shienka": TeamFinance.shienka_count(GameDb.players, team_id),
+		"controlled": TeamFinance.controlled_count(GameDb.players, team_id),
 		"development": TeamFinance.development_count(GameDb.players, team_id),
 		"foreign": _active_foreign_count(team_id),
 		"positions": positions,
@@ -492,7 +492,10 @@ func _build_buttons() -> void:
 				_build_draft_history_mode_chips()
 		AppState.OFFSEASON_PANEL_RELEASED_MARKET:
 			_action_row([
-				{"id": "rm_submit", "label": "獲得する", "cb": _on_released_submit_pressed, "kind": "primary", "w": 110, "disabled": not _released_can_submit},
+				# 支配下/育成は枠の消費も契約年数も違うので、手動獲得ではユーザーが選ぶ
+				# (自動判断は候補ごとの既定 track を使う)。
+				{"id": "rm_sign_controlled", "label": "支配下で獲得", "cb": _on_released_sign_controlled_pressed, "kind": "primary", "w": 140, "disabled": not _released_can_submit},
+				{"id": "rm_sign_development", "label": "育成で獲得", "cb": _on_released_sign_development_pressed, "kind": "action", "w": 130, "disabled": not _released_can_submit},
 				{"id": "rm_skip", "label": "見送る", "cb": _on_released_skip_pressed, "kind": "action", "w": 100, "disabled": not _released_can_submit},
 				{"id": "rm_auto", "label": "この判断を自動", "cb": _on_released_auto_pressed, "kind": "action", "w": 150, "disabled": not _released_can_auto},
 				{"id": "rm_auto_all", "label": "残りを自動進行", "cb": _on_released_auto_all_pressed, "kind": "action", "w": 150},
@@ -1199,7 +1202,7 @@ func _step_name(step: String) -> String:
 func _draw_summary_panel() -> void:
 	# 全幅フラットパネル (枠なし)。_stat_strip も同色 PANEL の角丸を内側に重ねるだけなので継ぎ目は出ない。
 	_round(SUMMARY, PANEL, Color.TRANSPARENT, 8, 0)
-	var shienka: int = int(_roster_summary.get("shienka", 0))
+	var controlled: int = int(_roster_summary.get("controlled", 0))
 	var dev: int = int(_roster_summary.get("development", 0))
 	var foreign: int = int(_roster_summary.get("foreign", 0))
 	var room: int = int(_roster_summary.get("room", 0))
@@ -1209,7 +1212,7 @@ func _draw_summary_panel() -> void:
 	# その分ポジション別の枠を狭める (SUMMARY.end.x までを分割するため div_x が右へ寄る)。
 	var strip_w: float = 560.0
 	var cells: Array = [
-		{"label": "支配下", "value": "%d/%d" % [shienka, TeamFinance.SHIENKA_LIMIT], "color": AMBER if shienka >= TeamFinance.SHIENKA_LIMIT else TEXT},
+		{"label": "支配下", "value": "%d/%d" % [controlled, TeamFinance.CONTROLLED_LIMIT], "color": AMBER if controlled >= TeamFinance.CONTROLLED_LIMIT else TEXT},
 		{"label": "育成", "value": "%d" % dev},
 		{"label": "外国人", "value": "%d/%d" % [foreign, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM], "color": AMBER if foreign >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM else TEXT},
 		{"label": "予算残", "value": ("-" + _format_money_exact(-room)) if room < 0 else _format_money_exact(room), "color": AMBER if room < 0 else TEXT},
@@ -1882,12 +1885,23 @@ func _draw_rookies_result(rect: Rect2, result: Dictionary) -> void:
 
 
 func _draw_released_result(rect: Rect2, result: Dictionary) -> void:
-	var heading: String = "戦力外獲得: 候補 %d人 / 獲得 %d人 / 未獲得 %d人" % [
-		int(result.get("candidates_count", 0)), int(result.get("signed_count", 0)), int(result.get("remaining_count", 0)),
+	# 支配下と育成では枠の扱いも契約年数も違うので、どちらで獲得したかを結果表に明示する
+	# (team_mode "released_result" が WHIP/OAA 枠を「区分」へ差し替える)。
+	var heading: String = "戦力外獲得: 候補 %d人 / 獲得 %d人 (支配下 %d / 育成 %d) / 未獲得 %d人" % [
+		int(result.get("candidates_count", 0)), int(result.get("signed_count", 0)),
+		int(result.get("signed_controlled_count", 0)), int(result.get("signed_development_count", 0)),
+		int(result.get("remaining_count", 0)),
 	]
-	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("signings", []) as Array),
+	var rows: Array = _result_signing_player_rows(result.get("signings", []) as Array)
+	for row_value in rows:
+		var entry: Dictionary = (row_value as Dictionary).get("entry", {}) as Dictionary
+		# 支配下だけ色を付け、育成は既定色にする (守備/役割バッジも支配下=塗りつぶし / 育成=枠線のみ)。
+		var development: bool = bool(entry.get("development_player", false))
+		entry["outcome_label"] = ReleasedMarketService.TRACK_DEVELOPMENT if development else ReleasedMarketService.TRACK_CONTROLLED
+		entry["outcome_color"] = TEXT if development else BLUE
+	_draw_player_record_table(rect, heading, rows,
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "released_result_%s" % _result_people_tab, "", 0,
-		"今オフは戦力外からの獲得がありませんでした。", true, false, "move", true)
+		"今オフは戦力外からの獲得がありませんでした。", true, false, "released_result", true)
 
 
 func _draw_geneki_result(rect: Rect2, result: Dictionary) -> void:
@@ -2286,7 +2300,7 @@ func _draw_people_player_table(rect: Rect2, title: String, people: Array, tab_id
 func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career_stats: bool, show_salary: bool, show_offer_years: bool = false) -> void:
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
+	if _is_move_team_column_mode(team_mode):
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
 		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
@@ -2327,7 +2341,7 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool, show_salary: bool, show_offer_years: bool = false) -> void:
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
+	if _is_move_team_column_mode(team_mode):
 		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
 		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
@@ -2375,12 +2389,12 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	var player: PSPlayer = row.get("player", null) as PSPlayer
 	var entry: Dictionary = row.get("entry", {}) as Dictionary
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
-	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
+	if _is_move_team_column_mode(team_mode):
 		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
-	_role_badge(Rect2(float(xs["role_x"]), y - 16.0, 52.0, 22.0), record)
+	_role_badge(Rect2(float(xs["role_x"]), y - 16.0, 52.0, 22.0), record, _entry_development_flag(entry, record))
 	_draw_identity_cells(record, player, entry, xs, y, team_mode)
 
 	var value: int = PlayerValueEvaluator.overall_score(record)
@@ -2406,7 +2420,7 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 		_text_cell(str(entry.get("offer_text", "-")), float(xs["fip_r"]), y, 13, entry.get("offer_color", FAINT) as Color, 54.0)
 	else:
 		_text_cell(_fip_text(record, career_stats), float(xs["fip_r"]), y, 13, MUTED, 54.0)
-	if team_mode == "fgc_result" or team_mode == "fa_declaration":
+	if _is_outcome_slot_mode(team_mode):
 		_text_cell(str(entry.get("outcome_label", "")), float(xs["whip_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, 58.0)
 	elif _is_contract_offer_mode(team_mode):
 		_text_cell(str(entry.get("fgc_current_salary_text", "-")), float(xs["whip_r"]), y, 13, MUTED, 58.0)
@@ -2421,12 +2435,12 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	var player: PSPlayer = row.get("player", null) as PSPlayer
 	var entry: Dictionary = row.get("entry", {}) as Dictionary
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
-	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
+	if _is_move_team_column_mode(team_mode):
 		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
 		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
-	_position_badge(Rect2(float(xs["role_x"]), y - 16.0, 40.0, 22.0), record.position, record.development_player)
+	_position_badge(Rect2(float(xs["role_x"]), y - 16.0, 40.0, 22.0), record.position, _entry_development_flag(entry, record))
 	_draw_identity_cells(record, player, entry, xs, y, team_mode)
 
 	var value: int = PlayerValueEvaluator.overall_score(record)
@@ -2460,7 +2474,7 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	else:
 		_text_cell(_rate_short(ad.woba()) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
 		_text_cell(str(int(round(ad.wrc_plus()))) if played else "-", float(xs["wrc_r"]), y, 13, MUTED, 56.0)
-	if team_mode == "fgc_result" or team_mode == "fa_declaration":
+	if _is_outcome_slot_mode(team_mode):
 		_text_cell(str(entry.get("outcome_label", "")), float(xs["oaa_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, 54.0)
 	elif _is_contract_offer_mode(team_mode):
 		_text_cell(str(entry.get("fgc_current_salary_text", "-")), float(xs["oaa_r"]), y, 13, MUTED, 54.0)
@@ -2548,9 +2562,23 @@ func _outcome_slot_label(team_mode: String, default_label: String) -> String:
 	match team_mode:
 		"fgc_result", "fa_declaration":
 			return "去就"
+		"released_result":
+			return "区分"
 		"fgc_market", "fgc_market_away", "contract_years":
 			return "現年俸"
 	return default_label
+
+
+# 移籍元/移籍先の2列 (旧球団→新球団) を出す team_mode。
+func _is_move_team_column_mode(team_mode: String) -> bool:
+	return team_mode == "move" or team_mode == "fa_result" \
+		or team_mode == "fgc_result" or team_mode == "released_result"
+
+
+# WHIP (投手) / OAA (野手) 枠へ、成績ではなく entry のラベル (去就・契約区分) を描く team_mode。
+func _is_outcome_slot_mode(team_mode: String) -> bool:
+	return team_mode == "fgc_result" or team_mode == "fa_declaration" \
+		or team_mode == "released_result"
 
 
 # 前方2列目 (offer_years_r 枠) の見出し。契約提示系だけ金額を出すのでモードごとに呼び分ける。
@@ -2618,7 +2646,7 @@ func _player_table_x(rect: Rect2, team_mode: String, show_salary: bool = false, 
 			"oaa_r": cright - 28.0,
 		}
 	var team_shift: float = 0.0
-	if team_mode == "move" or team_mode == "fa_result" or team_mode == "fgc_result":
+	if _is_move_team_column_mode(team_mode):
 		team_shift = 120.0
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		team_shift = 68.0
@@ -3501,11 +3529,19 @@ func _populate_released() -> void:
 	_released_can_auto = not candidates.is_empty()
 
 
-func _on_released_submit_pressed() -> void:
+func _on_released_sign_controlled_pressed() -> void:
+	_submit_released_sign(ReleasedMarketService.TRACK_CONTROLLED)
+
+
+func _on_released_sign_development_pressed() -> void:
+	_submit_released_sign(ReleasedMarketService.TRACK_DEVELOPMENT)
+
+
+func _submit_released_sign(track: String) -> void:
 	if selected_released_candidate_id <= 0:
 		_set_status("自由契約候補を選択してください。", RED)
 		return
-	var result: Dictionary = AppState.submit_released_candidate(selected_released_candidate_id)
+	var result: Dictionary = AppState.submit_released_candidate(selected_released_candidate_id, track)
 	if not bool(result.get("ok", false)):
 		_set_status(str(result.get("message", "戦力外獲得に失敗しました。")), RED)
 		return
@@ -5175,9 +5211,18 @@ func _release_state(player_id: int) -> String:
 
 
 # 支配下=塗り / 育成=アウトライン (枠のみ) で描き分ける。バッジ列を持つ全テーブルで共通。
-func _role_badge(rect: Rect2, record: PSPlayerSeasonRecord) -> void:
+# development を省略すると成績レコードの登録区分を使う。**移籍/獲得の結果表では
+# レコードは移籍前 (=前所属での区分) を指す**ので、呼び出し側が新しい契約の区分を渡すこと
+# (_entry_development_flag)。バッジは支配下=塗りつぶし / 育成=枠線のみ。
+func _role_badge(rect: Rect2, record: PSPlayerSeasonRecord, development: bool = false) -> void:
 	var role: String = _resolved_pitcher_role(record.role, {"starts": record.pitcher_stats.starts, "relief_appearances": record.pitcher_stats.relief_appearances})
-	_chip(rect, _role_label(role), _role_color(role), not record.development_player)
+	_chip(rect, _role_label(role), _role_color(role), not development)
+
+
+# 行に描く登録区分 (支配下 false / 育成 true)。entry が新しい契約の区分を持っていればそれを優先し、
+# 無ければ成績レコードの区分にフォールバックする。
+func _entry_development_flag(entry: Dictionary, record: PSPlayerSeasonRecord) -> bool:
+	return bool(entry.get("development_player", record.development_player))
 
 
 func _position_badge(rect: Rect2, pos: int, development: bool = false) -> void:

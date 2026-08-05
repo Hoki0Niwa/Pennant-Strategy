@@ -32,17 +32,23 @@ func load_initial_data() -> void:
 
 	# CSV は現在の正準シード形式。存在しない環境だけ SQLite/JSON へフォールバックする。
 	if _load_initial_data_from_csv():
-		data_loaded_ok = true
-		data_loaded.emit()
+		_finish_initial_load()
 		return
 
 	if _load_initial_data_from_sqlite():
 		_overlay_phase1_fields_from_json()
-		data_loaded_ok = true
-		data_loaded.emit()
+		_finish_initial_load()
 		return
 
 	_load_initial_data_from_json()
+	_finish_initial_load()
+
+
+# シードの出所 (CSV / SQLite / JSON) によらず共通で行う後処理。
+# 予算はシードの funds 列ではなく TeamFinance.FIXED_BUDGET が単一ソース — シード CSV は
+# 進化後ワールドを書き出すと球団ごとにバラバラな funds が入るため、ここで必ず揃える。
+func _finish_initial_load() -> void:
+	TeamFinance.apply_fixed_budget(teams)
 	data_loaded_ok = true
 	data_loaded.emit()
 

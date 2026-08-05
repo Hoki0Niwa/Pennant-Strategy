@@ -181,7 +181,7 @@ func test_evaluate_user_proposal_rejects_when_capacity_exceeded() -> void:
 	var season: PSSeason = _season(10)
 	var teams: Array = [_team(1), _team(2)]
 	var players: Array = []
-	for i in range(TeamFinance.SHIENKA_LIMIT - 1):
+	for i in range(TeamFinance.CONTROLLED_LIMIT - 1):
 		players.append(_player({"id": 100 + i, "team_id": 1}))
 	var give: PSPlayer = _player_with_z(11, 1, 3, false, -1.0)
 	var receive_a: PSPlayer = _player_with_z(21, 2, 6, false, 1.0)
@@ -189,7 +189,7 @@ func test_evaluate_user_proposal_rejects_when_capacity_exceeded() -> void:
 	players.append(give)
 	players.append(receive_a)
 	players.append(receive_b)
-	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(TeamFinance.SHIENKA_LIMIT)
+	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(TeamFinance.CONTROLLED_LIMIT)
 
 	var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21, 22])
 	assert_bool(bool(result.get("ok", false))).is_false()

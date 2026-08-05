@@ -232,13 +232,17 @@ static func has_future_opening(slot: Dictionary) -> bool:
 # 候補選手を自軍チャートに照らして評価する。
 # 戻り値: {slot, slot_need, is_weakness, first_team_line, value, projected_ceiling, immediate, future, fit}
 #  - is_weakness: そのスロットがリーグ平均を下回る = **自軍の弱点**
-#  - immediate  : そのスロットの一軍当落線を上回る = **今すぐ一軍で使える**
+#  - immediate  : そのスロットの一軍当落線を `upgrade_margin` 以上上回る = **今すぐ一軍で使える**
 #  - future     : 素材年齢で、成長の楽観側なら当落線に届き、かつ後継の若手が居ない
 #  - fit        : **弱点スロット** かつ (immediate or future) = 獲得を検討してよい選手
 # 「弱点であること」を必須にしているのが要点 — 埋まっているスロットに上積みするだけの獲得はしない。
-# これで「今年は獲得0人」という球団が普通に出る (旧基準は自軍最弱を超えれば獲得で、
-# 全球団が毎年上限まで埋めていた)。
-static func evaluate_candidate(chart: Dictionary, candidate: PSPlayer) -> Dictionary:
+#
+# `upgrade_margin` は「当落線をどれだけ明確に上回れば一軍戦力とみなすか」の余裕幅 (value 単位、
+# 既定 0 = 1点でも上回れば可)。**is_weakness (need > 0) はリーグ平均との比較なので構造的に
+# 全球団の約半数・約半分のスロットが該当する**ゆるいゲートで、これ単独では獲得数を絞れない
+# (毎年12球団すべてが上限まで獲る)。margin は投打で同じ value 尺度なので、旧 MIN_NEED_TO_SIGN の
+# ようにリーグ相対 need へ閾値を置いたとき投手側だけ need が立たず野手偏重になる問題も起きない。
+static func evaluate_candidate(chart: Dictionary, candidate: PSPlayer, upgrade_margin: float = 0.0) -> Dictionary:
 	if chart.is_empty() or candidate == null:
 		return {"immediate": false, "future": false, "fit": false}
 	var slot: Dictionary = slot_for_player(chart, candidate)
@@ -247,9 +251,9 @@ static func evaluate_candidate(chart: Dictionary, candidate: PSPlayer) -> Dictio
 	var line: float = float(slot.get("first_team_line", 0.0))
 	var need: float = float(slot.get("need", 0.0))
 	var is_weakness: bool = need > 0.0
-	var immediate: bool = value > line
+	var immediate: bool = value >= line + upgrade_margin
 	var future: bool = candidate.age <= PROSPECT_MAX_AGE \
-		and ceiling > line \
+		and ceiling >= line + upgrade_margin \
 		and has_future_opening(slot)
 	return {
 		"slot": str(slot.get("slot", "")),

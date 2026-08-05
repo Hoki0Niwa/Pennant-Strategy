@@ -893,15 +893,17 @@ func _filter_development_rookies(rookies: Array) -> Array:
 	return filtered
 
 
-func submit_released_candidate(candidate_id: int) -> Dictionary:
-	return _submit_released_decision(candidate_id, "sign")
+# track は ReleasedMarketService.TRACK_CONTROLLED / TRACK_DEVELOPMENT。
+# 手動獲得では支配下契約か育成契約かをユーザーが選ぶ (空文字なら候補の既定 track)。
+func submit_released_candidate(candidate_id: int, track: String = "") -> Dictionary:
+	return _submit_released_decision(candidate_id, "sign", track)
 
 
 func skip_released_candidate(candidate_id: int) -> Dictionary:
 	return _submit_released_decision(candidate_id, "skip")
 
 
-func _submit_released_decision(candidate_id: int, action: String) -> Dictionary:
+func _submit_released_decision(candidate_id: int, action: String, track: String = "") -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_RELEASED_MARKET:
 		return {"ok": false, "message": "戦力外獲得市場は現在有効ではありません"}
 	if released_market_state.is_empty():
@@ -912,7 +914,8 @@ func _submit_released_decision(candidate_id: int, action: String) -> Dictionary:
 		GameDb.teams,
 		current_season,
 		candidate_id,
-		action
+		action,
+		track
 	)
 	released_market_state = result.get("state", released_market_state) as Dictionary
 	if not bool(result.get("ok", false)):
@@ -1839,13 +1842,10 @@ func restore_from_save(data: Dictionary) -> bool:
 	if not player_rows.is_empty():
 		GameDb.replace_players_from_rows(player_rows)
 
-	# R4 Step1: チーム予算 (funds) を復元。teams 本体は初期シードから再ロードされるため、
-	# funds だけ id 一致で上書きする。
-	var saved_funds: Dictionary = data.get("team_funds", {}) as Dictionary
-	for funds_key in saved_funds.keys():
-		var team: PSTeam = GameDb.get_team(int(funds_key))
-		if team != null:
-			team.funds = int(saved_funds[funds_key])
+	# 予算は全球団一律の固定額 (TeamFinance.FIXED_BUDGET) なので、セーブに残っている
+	# team_funds は復元しない (2026-08-04)。変動予算制だった頃のセーブは球団ごとに違う額を
+	# 持っており、そのまま復元すると固定予算制が黙って崩れる。保存側は互換のため書き続ける。
+	TeamFinance.apply_fixed_budget(GameDb.teams)
 
 	# 年次予算キャップ導入 (2026-07-12): previous_rank も毎オフ更新されるため funds と同様に復元する。
 	var saved_ranks: Dictionary = data.get("team_previous_ranks", {}) as Dictionary

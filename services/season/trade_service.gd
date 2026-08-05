@@ -586,8 +586,8 @@ static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, 
 # team_id が out_ids を放出し in_ids を受け取った後の支配下人数が70枠に収まるか。
 # トレード対象は is_tradeable (育成除外) 済みなので、入出とも支配下枠を1人ずつ増減させる。
 static func _capacity_ok_after_trade(players: Array, team_id: int, out_ids: Array, in_ids: Array) -> bool:
-	var projected: int = TeamFinance.shienka_count(players, team_id) - out_ids.size() + in_ids.size()
-	return projected <= TeamFinance.SHIENKA_LIMIT
+	var projected: int = TeamFinance.controlled_count(players, team_id) - out_ids.size() + in_ids.size()
+	return projected <= TeamFinance.CONTROLLED_LIMIT
 
 
 static func _salary_total(players: Array, ids: Array) -> int:

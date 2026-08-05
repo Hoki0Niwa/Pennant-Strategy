@@ -8,17 +8,17 @@ class_name TeamFinance
 # (契約更改・ドラフト・育成昇格・キャンプは対象外、常に実行する)。
 
 # 育成選手制度を含むロスター計数の単一ソース。
-#  - 支配下 (development_player == false) のみが SHIENKA_LIMIT(70) 枠を消費する。
+#  - 支配下 (development_player == false) のみが CONTROLLED_LIMIT(70) 枠を消費する。
 #  - 育成選手 (development_player == true) は NPB 同様に**人数上限なし** (2026-08-02、
 #    旧 DEVELOPMENT_ROSTER_LIMIT=10 を撤廃)。抱え込みは枠でも目標人数でもなく
 #    **育成契約の年数上限** (OffseasonService.DEV_CONTRACT_MAX_SEASONS) で止める:
 #    保有数 ≒ 年間の育成指名数 × 契約年数 で自然に頭打ちになる。
 # FA/ドラフト/外国人/戦力外/昇降格/UI はここを参照し、枠判定を一元化する。
-const SHIENKA_LIMIT: int = 70
+const CONTROLLED_LIMIT: int = 70
 # 育成昇格などの自動内部補充はこのソフト目標で止め、
-# SHIENKA_LIMIT(70) との差をシーズン中の育成昇格/再昇格・故障補充用に空けておく。
+# CONTROLLED_LIMIT(70) との差をシーズン中の育成昇格/再昇格・故障補充用に空けておく。
 # ドラフト後の戦力外獲得/FA/外国人補強は draft_service が予約した hard 枠を使う。
-const SHIENKA_SOFT_TARGET: int = 67
+const CONTROLLED_SOFT_TARGET: int = 67
 # 来季開幕時の支配下目標。オフの編成は「この人数へ寄せる」計画ベースで動く (2026-07-03):
 #  - 戦力外数 = 現在籍 + 見込み補強 (ドラフト/外国人/補強予約/育成昇格) − この目標 (offseason_service)
 #  - ドラフト指名数 = この目標 − 戦力外後の在籍 − 補強予約 (draft_service)
@@ -31,7 +31,25 @@ const OPENING_ROSTER_TARGET: int = 68
 # 年を追うごとに予算が変わり続ける挙動になっていたため廃止した。全球団同額・毎年不変。
 # 単位: 万円。値は廃止時点のアクティブセーブで最も年俸総額が高かった球団 (約42.09億) を
 # 上回る 43億に設定 (この球団が導入直後から超過扱いにならないよう切り上げ)。
+# **この定数が予算の単一ソース**。team.funds は初期シード CSV / セーブ / SQLite のどこから来ても
+# `apply_fixed_budget` で必ずこの値へ揃える (2026-08-04)。シード CSV の funds 列は進化後ワールドを
+# 書き出すと球団ごとにバラバラな値が入るため、そのまま使うと固定予算制が黙って崩れる。
 const FIXED_BUDGET: int = 430000
+
+
+# 全球団の funds を FIXED_BUDGET へ揃える。**予算が確定するすべての経路から呼ぶ**:
+# 初期シードのロード (GameDb.load_initial_data) とセーブのロード (AppState)。
+# 戻り値は実際に書き換えた球団数 (0 なら既に全球団が固定額)。
+static func apply_fixed_budget(team_rows: Array) -> int:
+	var changed: int = 0
+	for team_row in team_rows:
+		var team: PSTeam = team_row as PSTeam
+		if team == null or team.funds == FIXED_BUDGET:
+			continue
+		team.funds = FIXED_BUDGET
+		changed += 1
+	return changed
+
 
 # AI の補強評価。年俸 AI_SALARY_COST_PER_SCORE 万円につき評価を1点下げる。
 # 小さくすると安さを重視し、大きくすると能力を優先する。
@@ -44,7 +62,7 @@ const AI_FOREIGN_BUDGET_RESERVE_PER_SLOT: int = 6000
 
 
 # 支配下選手数 (team_id 一致 ∧ 非引退 ∧ 非マネージャー ∧ 非育成)。70 枠の母数。
-static func shienka_count(players: Array, team_id: int) -> int:
+static func controlled_count(players: Array, team_id: int) -> int:
 	var count: int = 0
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -73,13 +91,13 @@ static func development_count(players: Array, team_id: int) -> int:
 
 
 # 支配下登録 (昇格) の空きがあるか (hard 上限 70)。手動の支配下登録/復帰はこちらを使う。
-static func has_shienka_room(players: Array, team_id: int) -> bool:
-	return shienka_count(players, team_id) < SHIENKA_LIMIT
+static func has_controlled_room(players: Array, team_id: int) -> bool:
+	return controlled_count(players, team_id) < CONTROLLED_LIMIT
 
 
 # オフシーズンの自動補強用の空きがあるか (soft 目標 67)。70 との差をシーズン中用に空ける。
-static func has_shienka_soft_room(players: Array, team_id: int) -> bool:
-	return shienka_count(players, team_id) < SHIENKA_SOFT_TARGET
+static func has_controlled_soft_room(players: Array, team_id: int) -> bool:
+	return controlled_count(players, team_id) < CONTROLLED_SOFT_TARGET
 
 
 # チーム所属 (team_id 一致) のアクティブ選手 (引退/マネージャー候補を除く) の年俸合計。

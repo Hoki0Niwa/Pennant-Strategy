@@ -92,7 +92,7 @@ func _run_multi_seed(reporter: Object, options: Dictionary) -> Dictionary:
 			"released_fielders_per_pitcher": ["window_summaries", "last_10_years", "released_fielders_per_pitcher"],
 			"released_average_age": ["window_summaries", "last_10_years", "released_average_age"],
 			"noshow_thirties_survivors_per_year": ["window_summaries", "last_10_years", "noshow_thirties_survivors_per_year"],
-			"team_shienka_max": ["distributions", "roster", "team_shienka_max", "max"],
+			"team_controlled_max": ["distributions", "roster", "team_controlled_max", "max"],
 			"team_development_max": ["distributions", "roster", "team_development_max", "max"],
 			"team_foreign_max": ["distributions", "roster", "team_foreign_max", "max"],
 		}),
@@ -101,7 +101,7 @@ func _run_multi_seed(reporter: Object, options: Dictionary) -> Dictionary:
 
 
 func _multi_seed_csv_text(report: Dictionary) -> String:
-	var lines: Array = ["seed,status,fail_count,warn_count,seasons_completed,last10_ops,last10_era,last10_average_age,released_per_year,released_fielders_per_pitcher,released_average_age,noshow_thirties_survivors_per_year,final_active,final_shienka,final_development,team_shienka_max,team_development_max,team_foreign_max"]
+	var lines: Array = ["seed,status,fail_count,warn_count,seasons_completed,last10_ops,last10_era,last10_average_age,released_per_year,released_fielders_per_pitcher,released_average_age,noshow_thirties_survivors_per_year,final_active,final_controlled,final_development,team_controlled_max,team_development_max,team_foreign_max"]
 	for run_value in report.get("seed_runs", []) as Array:
 		var run: Dictionary = run_value as Dictionary
 		var health: Dictionary = run.get("health", {}) as Dictionary
@@ -121,9 +121,9 @@ func _multi_seed_csv_text(report: Dictionary) -> String:
 			float(last_10.get("released_average_age", 0.0)),
 			float(last_10.get("noshow_thirties_survivors_per_year", 0.0)),
 			int(final_roster.get("active_players", 0)),
-			int(final_roster.get("shienka_players", 0)),
+			int(final_roster.get("controlled_players", 0)),
 			int(final_roster.get("development_players", 0)),
-			int(final_roster.get("team_shienka_max", 0)),
+			int(final_roster.get("team_controlled_max", 0)),
 			int(final_roster.get("team_development_max", 0)),
 			int(final_roster.get("team_foreign_max", 0)),
 		])

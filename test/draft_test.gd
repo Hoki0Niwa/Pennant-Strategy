@@ -578,7 +578,7 @@ const DEV_Z_KEYS: Array = [
 
 func _add_dev(players: Array, team_id: int, count: int) -> void:
 	var base: int = team_id * 10000 + 9000
-	# 昇格水準 (value>=PROMOTE_TO_SHIENKA_MIN_VALUE) に届く z で育成選手を作る。
+	# 昇格水準 (value>=PROMOTE_TO_CONTROLLED_MIN_VALUE) に届く z で育成選手を作る。
 	var z: Dictionary = {}
 	for key in DEV_Z_KEYS:
 		z[key] = 1.2

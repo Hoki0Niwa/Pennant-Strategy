@@ -40,6 +40,10 @@ const INJURY_EXCUSE_FULL_DAYS: int = 90
 # は 1点=1000万 (AI_SALARY_COST_PER_SCORE) の線形なので 0.4〜0.5 に減衰して使う。
 # 上げると高年俸ほど放出側へ寄る (1.0 だと3.9億の主力が -39 点でフリンジ以下に落ちる)。
 const SALARY_COST_WEIGHT: float = 0.4
+# 「当季その役割を実際に務めた」とみなす usage_saturation の下限 (野手80試合/先発13先発/救援30登板
+# を 1.0 とする比率なので、0.75 は 60試合 / 10先発 / 23登板 相当)。役割スロットの第1パス資格に使う。
+# 下げるとベンチ層までレギュラー扱いになり、上げると準レギュラーが将来価値順のパスへ落ちる。
+const REGULAR_USAGE_SATURATION: float = 0.75
 
 
 # {"current","growth","usage_evidence","injury_penalty","salary_penalty","total"} を返す。
@@ -78,6 +82,37 @@ static func projected_value_components(player: PSPlayer, record: PSPlayerSeasonR
 
 static func projected_value(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
 	return float(projected_value_components(player, record).get("total", 0.0))
+
+
+# 「現時点の実力」= current に出場割引だけを効かせた値 (成長期待と年俸負担は含めない)。
+# projected_value と役割が違う:
+#   - `current_strength` … **来季その役割を誰が務めるか** の順位付け (デプスチャートのスロット占有)
+#   - `projected_value`  … **保有し続ける価値があるか** の判定 (自チーム同役割の代替水準との比較)
+# growth 項は ±40 点動くので projected_value での並べ替えは事実上「年齢順」になり、22歳の控えが
+# 34歳のレギュラーより上位に来てレギュラーがスロット外 (=余剰) に落ちる。スロット占有を現在の実力で
+# 決めることで、「役割を担えている選手は余剰にならない」という当たり前の性質を取り戻す。
+static func current_strength(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:
+	var components: Dictionary = projected_value_components(player, record)
+	return float(components.get("current", 0.0)) + float(components.get("usage_evidence", 0.0))
+
+
+# 当季その役割を実際に務めたか (= 一軍のレギュラー/ローテ/ブルペンとして稼働した)。
+# 怪我による欠場の免除は**適用しない** — 出ていない選手を「務めた」とは数えないが、
+# 長期離脱者は usage 割引が免除されて projected_value が高く保たれるので第2パスで拾われる。
+static func is_regular_usage(record: PSPlayerSeasonRecord) -> bool:
+	return record != null and usage_saturation(record) >= REGULAR_USAGE_SATURATION
+
+
+# 出場実績による**放出保護**。当季その役割を務めた選手に加え、シーズンの過半を怪我で欠場した
+# 選手も守る (出ていないのは能力の問題ではないため。長期離脱者の整理は育成降格の別経路が担う)。
+# 放出判定が球団相対 (代替水準) になったことで「最下位というだけで切られる」ようになったので、
+# 実力ではなく稼働で説明できるケースをここで除外する。
+static func is_usage_protected(record: PSPlayerSeasonRecord) -> bool:
+	if record == null:
+		return false
+	if is_regular_usage(record):
+		return true
+	return record.season_injury_days >= INJURY_EXCUSE_FULL_DAYS
 
 
 # 出場実績を 0..1 の連続値へ正規化し、崖ではなく緩やかな坂として出場割引へ効かせる。

@@ -39,6 +39,14 @@ func test_camp_training_count_varies_by_need() -> void:
 
 # 表示評価値 (overall_score) は 野手 / 先発 / 中継 で同スケールであること。
 # 先発は係数圧縮で野手スケールへ、中継は relief 強調式で先発スケールへ較正済み。
+#
+# **母集団は支配下のみ** (2026-08-04)。育成を混ぜると、比較しているのが「評価式のスケール」ではなく
+# 「育成をどれだけ抱えているか」になってしまう。実測: 同一シードで支配下のみなら 投手68.92 /
+# 野手68.98 (差 0.06) だが、育成込みだと 投手66.7 / 野手65.4 (差 1.29) へ跳ねる。育成は
+# 野手平均48.9 / 投手平均52.3 と低評価かつ野手側の裾が長いため、保有数が増えるほど野手平均だけが
+# 下がるためで、投打の評価スケール自体は動いていない。実際、育成保有数を増やす変更
+# ([[project_released_market]] の育成無制限化) を入れただけでこのテストが落ちるようになった。
+# 編成AI (デプスチャート等) も支配下だけを見るので、母集団を揃えるほうが本来の意図に合う。
 func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
@@ -53,7 +61,7 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	var relievers: Array = []
 	for player_row in GameDb.players:
 		var player: PSPlayer = player_row as PSPlayer
-		if player == null:
+		if player == null or player.development_player:
 			continue
 		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
 		if record.is_pitcher():

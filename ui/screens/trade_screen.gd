@@ -138,7 +138,7 @@ func _draw() -> void:
 func _draw_stat_strip(rect: Rect2, season: PSSeason, team: PSTeam, window_open: bool) -> void:
 	var days_left: int = _days_left(season)
 	var trades_count: int = TradeService.trades_count_for_team(season, team.id)
-	var shienka: int = TeamFinance.shienka_count(GameDb.players, team.id)
+	var controlled: int = TeamFinance.controlled_count(GameDb.players, team.id)
 	var payroll: int = TeamFinance.team_payroll(GameDb.players, team.id)
 	var room: int = TeamFinance.budget_room(team.funds, payroll)
 	var cells: Array = [
@@ -146,8 +146,8 @@ func _draw_stat_strip(rect: Rect2, season: PSSeason, team: PSTeam, window_open: 
 			"color": TEXT if window_open else AMBER, "note": "7/31まで" if window_open else ""},
 		{"label": "自軍の今季成立数", "value": "%d/%d" % [trades_count, TradeService.MAX_TRADES_PER_TEAM],
 			"color": RED if trades_count >= TradeService.MAX_TRADES_PER_TEAM else TEXT},
-		{"label": "支配下枠", "value": "%d/%d" % [shienka, TeamFinance.SHIENKA_LIMIT],
-			"color": RED if shienka >= TeamFinance.SHIENKA_LIMIT else (AMBER if shienka >= TeamFinance.SHIENKA_LIMIT - 2 else TEXT)},
+		{"label": "支配下枠", "value": "%d/%d" % [controlled, TeamFinance.CONTROLLED_LIMIT],
+			"color": RED if controlled >= TeamFinance.CONTROLLED_LIMIT else (AMBER if controlled >= TeamFinance.CONTROLLED_LIMIT - 2 else TEXT)},
 		{"label": "予算残", "value": "%s%s" % ["-" if room < 0 else "", _format_money_compact(absi(room))],
 			"color": GREEN if room >= 0 else RED},
 	]

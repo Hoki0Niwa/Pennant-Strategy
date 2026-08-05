@@ -5,10 +5,19 @@ class_name ReleasedMarketService
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-const MAX_SIGNINGS_PER_TEAM: int = 2
-# 0.5 だと大半の球団がどこかのポジションで僅かでも need を持ち毎年上限の2人まで埋まってしまうため、
-# 「明確な穴」だけが対象になる水準まで上げる (=球団によって0人の年もあれば2人埋める年もある)。
-const MIN_NEED_TO_SIGN: float = 4.0
+# 1球団が1オフに獲得できる上限。**支配下契約だけを数える** (2026-08-04、ユーザー方針
+# 「育成は戦力外にするのも戦力外から獲得するのも無制限。枠の制限は支配下のみ」)。
+# 育成契約は CONTROLLED_LIMIT(70) も消費しないので、育成 track の獲得は人数上限を一切持たない
+# (質のゲートは _team_fit_evaluation / MIN_AI_SIGNING_SCORE / 予算のみ)。
+const MAX_CONTROLLED_SIGNINGS_PER_TEAM: int = 2
+# 一軍当落線をこれだけ上回る候補だけをAIが「今すぐ使える戦力」とみなす (value 単位)。
+# ※ 旧 `MIN_NEED_TO_SIGN`(=4.0、リーグ相対 need への閾値) は 2026-08-03 のデプスチャート統合で
+#   参照されなくなり (`evaluate_candidate` の is_weakness = need>0 に置き換わった) 実質的に消えていた。
+#   need>0 は「リーグ平均未満」= 全球団の約半数×約半分のスロットが常に該当するゆるいゲートなので、
+#   これだけでは 12球団×2人=24 の上限に毎年張り付く。need へ閾値を戻すと投手は need が構造的に
+#   立たず野手偏重に逆戻りするため ([[project_released_market]] の 2026-07-21 節)、投打で同尺度の
+#   **当落線からの上積み幅**で絞る。0 にすると 1点でも上回れば獲得する旧挙動へ戻る。
+const MIN_UPGRADE_MARGIN: float = 1.0
 # 能力・実績・需要から年俸負担を引いた後も、この水準を満たす候補だけをAIが獲得する。
 const MIN_AI_SIGNING_SCORE: float = 35.0
 # 野手が systematically 高 value な分を相殺する投手 score parity (NPB実績の投打バランス較正用ノブ)。
@@ -22,11 +31,11 @@ const SALARY_EXCESS_RATE: float = 0.20
 # 支配下/育成は「誰を獲得するか決めてから振り分ける」のではなく、候補ごとに別判定する。
 # 年齢が上がるほど「今すぐ支配下で通用するか」を疑われ育成寄りになり、能力(value)が高い
 # 選手は年齢が高くても支配下に残りやすい(実績組は年齢だけで即戦力性を疑われない)。
-# 育成判定は支配下枠(SHIENKA_LIMIT)を消費しない。
+# 育成判定は支配下枠(CONTROLLED_LIMIT)を消費しない。
 # 基準(30歳・value50=典型的な戦力外候補)で五分五分になるよう調整。Web調査した実績
 # (2023-24年16支配下/12育成、2024-25年9支配下/13育成)の支配下/育成比率(概ね半々)に
 # 揃えている。
-const TRACK_SHIENKA: String = "支配下"
+const TRACK_CONTROLLED: String = "支配下"
 const TRACK_DEVELOPMENT: String = "育成"
 const DEV_TRACK_BASE_CHANCE: float = 0.45
 const DEV_TRACK_AGE_PIVOT: int = 30
@@ -35,6 +44,39 @@ const DEV_TRACK_VALUE_PIVOT: int = 50
 const DEV_TRACK_VALUE_OFFSET: float = 0.012
 const DEV_TRACK_CHANCE_MIN: float = 0.05
 const DEV_TRACK_CHANCE_MAX: float = 0.90
+# **育成契約になる理由は2つあり、年齢に対して単調ではない** (2026-08-04):
+#   ① 高齢 = 「今すぐ支配下で通用するか怪しい」→ 上の年齢項が拾う
+#   ② 素材年齢 = 「今はまだ足りないが伸びしろに賭ける」→ この項が拾う
+# 年齢項だけの単調式だと ② の経路がほぼ閉じ (22歳の育成率が5〜10%)、育成契約が高齢者だけに
+# なっていた (実測: 育成獲得の平均年齢 30.4歳)。素材年齢から1歳若いごとに育成寄りへ振る。
+const DEV_TRACK_PROSPECT_MAX_AGE: int = TeamDepthChart.PROSPECT_MAX_AGE
+const DEV_TRACK_PROSPECT_CHANCE_PER_YEAR: float = 0.10
+
+# --- 育成契約での獲得基準 ---
+# 育成契約は「今の実力を買う」のではなく「伸びしろに賭ける」もの。基準は
+# `development_projected_ceiling >= その球団の一軍下位水準 (first_team_ready_threshold)` を土台に、
+# 年齢で要求水準を動かす:
+#   - `DEV_SIGN_AGE_PIVOT` を超えた1歳ごとに `DEV_SIGN_AGE_PENALTY_PER_YEAR` だけ要求を上げる。
+#     ceiling は30代だと成長期待がゼロ clamp されて現在能力そのものになるため、これが無いと
+#     「そこそこ使えるベテラン」が無条件で通り、育成枠が高齢者で埋まる。
+#   - 逆に素材年齢 (`TeamDepthChart.PROSPECT_MAX_AGE` 以下) は若いほど要求を下げ、
+#     **今は一軍水準に届かない若手を将来性で拾う**経路を明示的に残す。
+# 結果として要求水準は年齢に対して V 字 (若い/高齢の両端で緩急が付く) になる。
+# 上げ下げの単位は value (overall スケール) と同じ。
+# 較正 (2026-08-04): 初版 (pivot 27 / 1.5点/歳 / 割引 一律4.0) では傾斜が緩すぎ、育成獲得の平均年齢が
+# 30.57歳と**放出全体の平均 30.0歳より高い**ままだった (=高齢ペナルティが実質効いていない)。
+# 20代後半の「そこそこ使える選手」が +1.5〜4.5点程度の加算で素通りしていたのが原因。
+# 監視値は long_autoplay の `released_signed_development_avg_age` で、**放出全体の
+# `released_average_age` より低いこと**が合否の目安。
+# 若手割引を一律から年齢比例へ変えたのは形を素直にするため。**総数を動かす主ノブは
+# `DEV_SIGN_AGE_PENALTY_PER_YEAR` の側**で、割引を一律6.0→年齢比例2.5にした変更は
+# seed=20260528 では1件も判定が変わらなかった (育成候補の大半が26〜33歳に居るため、
+# 24歳以下の割引をいじっても動く母数がほぼ無い)。
+const DEV_SIGN_AGE_PIVOT: int = 26
+# 2.5 は若返り (育成27.5歳 < 放出全体29.8歳) を達成したが育成獲得が 19.0→7.5人/年 まで落ちた。
+# 2.0 は候補の主たる帯 (26〜30歳) の要求を1歳あたり0.5点ぶん緩めて総数を戻すための中間値。
+const DEV_SIGN_AGE_PENALTY_PER_YEAR: float = 2.0
+const DEV_SIGN_PROSPECT_DISCOUNT_PER_YEAR: float = 2.5
 
 
 static func process_released_market(players: Array, teams: Array, season: PSSeason, release_result: Dictionary, user_team_id: int = 0) -> Dictionary:
@@ -87,7 +129,11 @@ static func create_released_market_state(players: Array, _teams: Array, season: 
 	}
 
 
-static func submit_user_released_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
+# `track` に TRACK_CONTROLLED / TRACK_DEVELOPMENT を渡すと、その候補を**どちらの契約で獲るかを
+# ユーザーが選べる**。空文字なら候補生成時に決まった track (CPU/おまかせ用の既定) をそのまま使う。
+# 支配下と育成では枠の消費 (CONTROLLED_LIMIT / MAX_CONTROLLED_SIGNINGS_PER_TEAM) が違うので、
+# 上限チェックより前に確定させる必要がある。
+static func submit_user_released_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String, track: String = "") -> Dictionary:
 	if bool(state.get("complete", false)):
 		return {"ok": false, "message": "戦力外獲得市場は既に完了しています。", "state": state}
 	_sync_available_contract_salaries(state, players)
@@ -109,8 +155,12 @@ static func submit_user_released_decision(state: Dictionary, players: Array, tea
 		return {"ok": true, "state": state}
 	if action != "sign":
 		return {"ok": false, "message": "不正な戦力外獲得操作です。", "state": state}
-	if _signings_for_team(state, user_team_id) >= MAX_SIGNINGS_PER_TEAM:
-		return {"ok": false, "message": "今オフの戦力外獲得上限に達しています。", "state": state}
+	if track == TRACK_CONTROLLED or track == TRACK_DEVELOPMENT:
+		entry["track"] = track
+	elif not track.is_empty():
+		return {"ok": false, "message": "不正な契約区分です。", "state": state}
+	if _controlled_track_limit_reached(state, user_team_id, entry):
+		return {"ok": false, "message": "今オフの支配下での戦力外獲得上限に達しています。", "state": state}
 	if not _can_team_accept_candidate(players, user_team_id, entry):
 		return {"ok": false, "message": "支配下枠または外国人枠が不足しています。", "state": state}
 	if not _can_team_afford_release(players, teams, user_team_id, entry):
@@ -127,8 +177,9 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 	if user_team_id <= 0:
 		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
 	var candidates: Array = available_user_candidates(state, players, teams)
-	# デプスチャートは1度だけ作って使い回す (候補ごとに作り直すと O(n^2) になる)。
+	# デプスチャートと即戦力基準は1度だけ作って使い回す (候補ごとに作り直すと O(n^2) になる)。
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
+	var ready_thresholds: Dictionary = _build_ready_thresholds(players, teams)
 	var best_id: int = 0
 	var best_score: float = -INF
 	for row in candidates:
@@ -136,7 +187,7 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 		if not _can_ai_afford_release(players, teams, user_team_id, entry):
 			continue
 		var team_need: float = float(entry.get("need", 0.0))
-		if not _team_wants_candidate(players, charts, user_team_id, entry):
+		if _team_fit_evaluation(players, charts, ready_thresholds, user_team_id, entry).is_empty():
 			continue
 		var score: float = _signing_score(entry, team_need, players, teams, user_team_id)
 		if score < MIN_AI_SIGNING_SCORE:
@@ -152,9 +203,11 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 
 static func complete_released_market_automatically(state: Dictionary, players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
 	_sync_available_contract_salaries(state, players)
-	# 需要とデプスチャートは1パスにつき1度だけ構築する (候補×球団で作り直すと O(n^2))。
+	# 需要とデプスチャートは候補×球団のループの外で構築する (中で作り直すと O(n^2))。
+	# 作り直すのはループ末尾の1箇所だけ (成立のたび = 候補数を超えない)。
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	var need: Dictionary = TeamDepthChart.position_need_view(charts)
+	var ready_thresholds: Dictionary = _build_ready_thresholds(players, teams)
 	var candidates: Array = state.get("candidates", []) as Array
 	candidates.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
@@ -173,7 +226,7 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 			entry["available"] = false
 			continue
 		var best_team_id: int = 0
-		var best_score: float = -999999.0
+		var best_preference: float = -999999.0
 		for team_row in teams:
 			var team: PSTeam = team_row as PSTeam
 			if team == null:
@@ -182,23 +235,30 @@ static func complete_released_market_automatically(state: Dictionary, players: A
 				continue
 			if team.id == user_team_id and bool(entry.get("user_skipped", false)):
 				continue
-			if _signings_for_team(state, team.id) >= MAX_SIGNINGS_PER_TEAM:
+			if _controlled_track_limit_reached(state, team.id, entry):
 				continue
 			if not _can_team_accept_candidate(players, team.id, entry):
 				continue
 			if not _can_ai_afford_release(players, teams, team.id, entry):
 				continue
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
-			if not _team_wants_candidate(players, charts, team.id, entry):
+			var evaluation: Dictionary = _team_fit_evaluation(players, charts, ready_thresholds, team.id, entry)
+			if evaluation.is_empty():
 				continue
-			var score: float = _signing_score(entry, team_need, players, teams, team.id)
-			if score < MIN_AI_SIGNING_SCORE:
+			if _signing_score(entry, team_need, players, teams, team.id) < MIN_AI_SIGNING_SCORE:
 				continue
-			if score > best_score:
-				best_score = score
+			# 獲得先は「その候補を最も必要としている球団」。_signing_score は候補側の属性だけで
+			# 決まり球団間で同値になるため、これで比べると常に teams 配列の先頭球団が勝ってしまう。
+			var preference: float = _team_preference(evaluation)
+			if preference > best_preference:
+				best_preference = preference
 				best_team_id = team.id
 		if best_team_id > 0:
 			_apply_signing(state, players, season, entry, best_team_id, "cpu")
+			# 獲得でその球団のスロットは埋まる。作り直さないと同じ弱点を根拠に2人目を獲ってしまう。
+			charts = TeamDepthChart.build_league(players, teams)
+			need = TeamDepthChart.position_need_view(charts)
+			ready_thresholds = _build_ready_thresholds(players, teams)
 	state["complete"] = true
 	return {"ok": true, "state": state}
 
@@ -210,6 +270,17 @@ static func finalize_released_market(state: Dictionary) -> Dictionary:
 	signings.sort_custom(func(a, b) -> bool:
 		return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
 	)
+	var development_signed: int = 0
+	var development_age_total: int = 0
+	var controlled_age_total: int = 0
+	for row in signings:
+		var signing: Dictionary = row as Dictionary
+		if bool(signing.get("development_player", false)):
+			development_signed += 1
+			development_age_total += int(signing.get("age", 0))
+		else:
+			controlled_age_total += int(signing.get("age", 0))
+	var controlled_signed: int = signings.size() - development_signed
 	var candidates_summary: Array = []
 	var remaining_count: int = 0
 	for row in state.get("candidates", []) as Array:
@@ -225,13 +296,19 @@ static func finalize_released_market(state: Dictionary) -> Dictionary:
 			"from_team": int(entry.get("from_team", 0)),
 			"value": int(entry.get("value", 0)),
 			"war": float(entry.get("war", 0.0)),
-			"track": str(entry.get("track", TRACK_SHIENKA)),
+			"track": str(entry.get("track", TRACK_CONTROLLED)),
 		})
 	var result: Dictionary = {
 		"candidates": candidates_summary,
 		"candidates_count": candidates_summary.size(),
 		"signings": signings,
 		"signed_count": signings.size(),
+		# 人数上限が効くのは支配下だけなので、内訳を分けて出す (育成は上限なし)。
+		"signed_development_count": development_signed,
+		"signed_controlled_count": controlled_signed,
+		# 育成獲得の年齢ペナルティ / 若手枠が効いているかの監視用 (0 = 該当者なし)。
+		"signed_development_avg_age": snapped(float(development_age_total) / float(maxi(1, development_signed)), 0.01),
+		"signed_controlled_avg_age": snapped(float(controlled_age_total) / float(maxi(1, controlled_signed)), 0.01),
 		"remaining_count": remaining_count,
 	}
 	state["finalized"] = true
@@ -333,11 +410,13 @@ static func _sync_available_contract_salaries(state: Dictionary, players: Array)
 static func _development_track_chance(age: int, value: int) -> float:
 	var chance: float = DEV_TRACK_BASE_CHANCE + float(age - DEV_TRACK_AGE_PIVOT) * DEV_TRACK_AGE_CHANCE_PER_YEAR
 	chance -= float(value - DEV_TRACK_VALUE_PIVOT) * DEV_TRACK_VALUE_OFFSET
+	# 素材年齢は「伸びしろに賭ける育成契約」の側へ振り戻す (年齢に対して U 字になる)。
+	chance += float(maxi(0, DEV_TRACK_PROSPECT_MAX_AGE - age)) * DEV_TRACK_PROSPECT_CHANCE_PER_YEAR
 	return clampf(chance, DEV_TRACK_CHANCE_MIN, DEV_TRACK_CHANCE_MAX)
 
 
 static func _determine_track(age: int, value: int) -> String:
-	return TRACK_DEVELOPMENT if Rng.roll_float() <= _development_track_chance(age, value) else TRACK_SHIENKA
+	return TRACK_DEVELOPMENT if Rng.roll_float() <= _development_track_chance(age, value) else TRACK_CONTROLLED
 
 
 static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, entry: Dictionary, to_team_id: int, method: String) -> void:
@@ -345,7 +424,7 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 	if not _is_released_market_player(player):
 		return
 	var year: int = season.year if season != null else int(state.get("year", 0))
-	var track: String = str(entry.get("track", TRACK_SHIENKA))
+	var track: String = str(entry.get("track", TRACK_CONTROLLED))
 	player.team_id = to_team_id
 	player.source_data.erase("released")
 	player.source_data.erase("retired")
@@ -354,7 +433,7 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 	player.source_data["released_from_team"] = int(entry.get("from_team", 0))
 	# 戦力外になった時点で支配下だったか (= 育成契約を結ぶなら「支配下経験者」扱いで契約1年)。
 	# development_player を track で上書きする前に読む必要がある。
-	var was_shienka: bool = not player.development_player
+	var was_controlled: bool = not player.development_player
 	player.development_player = track == TRACK_DEVELOPMENT
 	player.registered_roster = track
 	player.salary = int(entry.get(
@@ -371,13 +450,13 @@ static func _apply_signing(state: Dictionary, players: Array, season: PSSeason, 
 		# 育成契約の年数カウンタもここから数え直す (新しい育成契約なので)。
 		player.source_data["development_since_year"] = year
 		# 支配下から戦力外になった選手の育成契約は1年 (元から育成だった選手は新規と同じ3年)。
-		if was_shienka:
-			player.source_data["dev_from_shienka"] = true
+		if was_controlled:
+			player.source_data["dev_from_controlled"] = true
 		else:
-			player.source_data.erase("dev_from_shienka")
+			player.source_data.erase("dev_from_controlled")
 	else:
 		player.source_data.erase("development_since_year")
-		player.source_data.erase("dev_from_shienka")
+		player.source_data.erase("dev_from_controlled")
 	entry["available"] = false
 	entry["signed"] = true
 	entry["to_team"] = to_team_id
@@ -417,24 +496,36 @@ static func _state_entry_by_player_id(state: Dictionary, player_id: int) -> Dict
 	return {}
 
 
-static func _signings_for_team(state: Dictionary, team_id: int) -> int:
+# その球団が今オフに成立させた**支配下契約**の数 (育成契約は数えない)。
+static func _controlled_signings_for_team(state: Dictionary, team_id: int) -> int:
 	var count: int = 0
 	for row in state.get("signings", []) as Array:
-		if int((row as Dictionary).get("to_team", 0)) == team_id:
-			count += 1
+		var signing: Dictionary = row as Dictionary
+		if int(signing.get("to_team", 0)) != team_id:
+			continue
+		if str(signing.get("track", TRACK_CONTROLLED)) == TRACK_DEVELOPMENT:
+			continue
+		count += 1
 	return count
+
+
+# 人数上限に当たるのは支配下 track の候補だけ。育成 track は何人でも獲得できる。
+static func _controlled_track_limit_reached(state: Dictionary, team_id: int, entry: Dictionary) -> bool:
+	if str(entry.get("track", TRACK_CONTROLLED)) == TRACK_DEVELOPMENT:
+		return false
+	return _controlled_signings_for_team(state, team_id) >= MAX_CONTROLLED_SIGNINGS_PER_TEAM
 
 
 static func _can_team_accept_candidate(players: Array, team_id: int, entry: Dictionary = {}) -> bool:
 	if bool(entry.get("foreign_player", false)):
 		if _foreign_count_for_team(players, team_id) >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM:
 			return false
-	# 育成track は支配下枠(SHIENKA_LIMIT)を消費せず、育成側にも人数上限は無い (2026-08-02)。
-	# 獲得数は MAX_SIGNINGS_PER_TEAM と獲得スコアの側で抑える。
-	if str(entry.get("track", TRACK_SHIENKA)) == TRACK_DEVELOPMENT:
+	# 育成track は支配下枠(CONTROLLED_LIMIT)も獲得人数上限も消費しない (2026-08-02 / 2026-08-04)。
+	# 質のゲート (_team_fit_evaluation / MIN_AI_SIGNING_SCORE / 予算) だけが効く。
+	if str(entry.get("track", TRACK_CONTROLLED)) == TRACK_DEVELOPMENT:
 		return true
 	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
-	return _active_count_for_team(players, team_id) < TeamFinance.SHIENKA_LIMIT
+	return _active_count_for_team(players, team_id) < TeamFinance.CONTROLLED_LIMIT
 
 
 static func _can_sign_entry(players: Array, entry: Dictionary) -> bool:
@@ -473,17 +564,63 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 # 野手が systematically 高 value な分は `_signing_score` の投手 parity で相殺する。
 # 獲得基準 (2026-08-03 厳格化、ユーザー方針「戦力外はとりあえず取る枠ではない」)。
 # **自軍のデプスチャート ([[TeamDepthChart]]) に照らして、即戦力 or 将来に賭ける価値がある選手だけ**を獲る:
-#   - 即戦力 = その役割スロットの**一軍当落線** (先発6番手/救援8番手/そのポジションのレギュラー) を上回る
-#   - 将来性 = 24歳以下で、成長の楽観側なら当落線に届き、かつそのスロットが将来空く
+#   - 即戦力 = その役割スロットの**一軍当落線** (先発5番手/救援6番手/そのポジションのレギュラー) を
+#     MIN_UPGRADE_MARGIN 以上上回る
+#   - 将来性 = 24歳以下で、成長の楽観側なら当落線 + margin に届き、かつそのスロットが将来空く
 # どちらでもなければ獲らない = **0人で終わるオフが普通に起きる**。
 # 旧基準は「自軍の同役割**最弱**選手を上回れば獲得」で、68人ロスターの最下位を超えれば通るため
 # 事実上ほぼ全候補が該当し、全球団が毎年上限2人まで獲っていた (実測 1.95人/球団/年)。
-static func _team_wants_candidate(players: Array, charts: Dictionary, team_id: int, entry: Dictionary) -> bool:
+# 該当しなければ **空** を返す (呼び出し元は獲得先の優先順位付けに評価結果をそのまま使う)。
+static func _team_fit_evaluation(
+	players: Array, charts: Dictionary, ready_thresholds: Dictionary, team_id: int, entry: Dictionary
+) -> Dictionary:
 	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 	if player == null:
-		return false
-	var evaluation: Dictionary = TeamDepthChart.evaluate_candidate(charts.get(team_id, {}) as Dictionary, player)
-	return bool(evaluation.get("fit", false))
+		return {}
+	var chart: Dictionary = charts.get(team_id, {}) as Dictionary
+	if str(entry.get("track", TRACK_CONTROLLED)) == TRACK_DEVELOPMENT:
+		# 育成契約は支配下枠も獲得人数上限も消費しないので、「一軍当落線を上回るか」を要求しない。
+		# 代わりに **その球団が育成選手を保持し続ける基準と同じ物差し** を使う:
+		# 成長の楽観側 (development_projected_ceiling) がその球団の一軍下位水準に届くか
+		# (= 翌オフの育成整理で即放出されない選手か)。昇格・育成整理と同一基準。
+		var ceiling: float = OffseasonService.development_projected_ceiling(player)
+		if ceiling < development_signing_threshold(float(ready_thresholds.get(team_id, INF)), player.age):
+			return {}
+		var dev_evaluation: Dictionary = TeamDepthChart.evaluate_candidate(chart, player)
+		dev_evaluation["fit"] = true
+		return dev_evaluation
+	var evaluation: Dictionary = TeamDepthChart.evaluate_candidate(chart, player, MIN_UPGRADE_MARGIN)
+	return evaluation if bool(evaluation.get("fit", false)) else {}
+
+
+# 育成契約で獲得するために ceiling が超えるべき水準。球団の一軍下位水準を土台に、
+# 年齢で要求を上下させる (高齢ほど厳しく、素材年齢は緩く)。ready_threshold が INF (球団不明) の
+# ときはそのまま INF を返して不成立にする。
+static func development_signing_threshold(ready_threshold: float, age: int) -> float:
+	if not is_finite(ready_threshold):
+		return ready_threshold
+	var threshold: float = ready_threshold
+	threshold += float(maxi(0, age - DEV_SIGN_AGE_PIVOT)) * DEV_SIGN_AGE_PENALTY_PER_YEAR
+	# 素材年齢は若いほど大きく割り引く (24歳 −2.5 / 22歳 −7.5 / 20歳 −12.5)。
+	threshold -= float(maxi(0, TeamDepthChart.PROSPECT_MAX_AGE - age + 1)) * DEV_SIGN_PROSPECT_DISCOUNT_PER_YEAR
+	return threshold
+
+
+# 球団ごとの即戦力基準 (育成 track の獲得判定用)。選手ごとに引くと O(n^2) になるので1パス1回。
+static func _build_ready_thresholds(players: Array, teams: Array) -> Dictionary:
+	var thresholds: Dictionary = {}
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		thresholds[team.id] = OffseasonService.first_team_ready_threshold(players, team.id)
+	return thresholds
+
+
+# 同じ候補を複数球団が獲得できるときの優先順位。当落線からの上積み幅 + スロットの弱さ。
+static func _team_preference(evaluation: Dictionary) -> float:
+	var upgrade: float = float(evaluation.get("value", 0.0)) - float(evaluation.get("first_team_line", 0.0))
+	return upgrade + float(evaluation.get("slot_need", 0.0))
 
 
 # 獲得スコア = 能力 value + WAR + 投手 parity − 年俸負担。旧実装のポジション need 乗算は撤去
@@ -512,7 +649,7 @@ static func _record_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) ->
 
 # roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
-	return TeamFinance.shienka_count(players, team_id)
+	return TeamFinance.controlled_count(players, team_id)
 
 
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:

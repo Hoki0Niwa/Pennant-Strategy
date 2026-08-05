@@ -594,6 +594,9 @@ func _active_player_dicts() -> Array:
 
 
 func _team_dicts() -> Array:
+	# 予算はシードに焼き込まず常に固定額で書き出す (進化後の funds をそのまま出すと球団ごとに
+	# バラバラな値がシードへ入り、新規ペナントで固定予算制が崩れる)。
+	TeamFinance.apply_fixed_budget(GameDb.teams)
 	var rows: Array = []
 	for team_row in GameDb.teams:
 		var team: PSTeam = team_row as PSTeam

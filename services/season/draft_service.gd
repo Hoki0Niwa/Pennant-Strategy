@@ -958,8 +958,8 @@ static func _compute_main_draft_targets(_players: Array, profiles: Dictionary) -
 	return targets
 
 
-static func _main_draft_capacity(current_shienka: int, profile: Dictionary) -> int:
-	var hard_capacity: int = max(0, ROSTER_LIMIT - current_shienka)
+static func _main_draft_capacity(current_controlled: int, profile: Dictionary) -> int:
+	var hard_capacity: int = max(0, ROSTER_LIMIT - current_controlled)
 	var reserve: int = _main_draft_signing_reserve(profile)
 	var reserved_capacity: int = max(0, hard_capacity - reserve)
 	if hard_capacity <= MAIN_DRAFT_MIN_PICKS:

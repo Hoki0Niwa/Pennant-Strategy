@@ -16,7 +16,7 @@ const CARD_TOP: float = 172.0
 const COLS: int = 2
 const GAP: float = 18.0
 
-# 各リーグの {team, bat, pitch, shienka, dev} を _ready でキャッシュ (毎フレーム再計算しない)。
+# 各リーグの {team, bat, pitch, controlled, dev} を _ready でキャッシュ (毎フレーム再計算しない)。
 var _league1: Array = []
 var _league2: Array = []
 var _selected_team_id: int = 0
@@ -40,7 +40,7 @@ func _build_infos() -> void:
 			"team": team,
 			"bat": _team_batting_rating(team.id),
 			"pitch": _team_pitching_rating(team.id),
-			"shienka": TeamFinance.shienka_count(GameDb.players, team.id),
+			"controlled": TeamFinance.controlled_count(GameDb.players, team.id),
 			"dev": TeamFinance.development_count(GameDb.players, team.id),
 		}
 		if team.league == "league1":
@@ -104,7 +104,7 @@ func _draw_card(rect: Rect2, info: Dictionary) -> void:
 	_draw_bar(rect.position.x + 18.0, rect.position.y + 112.0, rect.size.x - 36.0, "打撃", int(info["bat"]), BLUE)
 	_draw_bar(rect.position.x + 18.0, rect.position.y + 146.0, rect.size.x - 36.0, "投手", int(info["pitch"]), RED)
 
-	_text("支配下 %d名 ・ 育成 %d名" % [int(info["shienka"]), int(info["dev"])],
+	_text("支配下 %d名 ・ 育成 %d名" % [int(info["controlled"]), int(info["dev"])],
 		Vector2(rect.position.x + 18.0, rect.position.y + 194.0), 12, MUTED, rect.size.x - 36.0)
 
 

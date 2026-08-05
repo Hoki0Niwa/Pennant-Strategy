@@ -262,8 +262,8 @@ func is_new_fa_holder(offseason_year: int) -> bool:
 # 支配下経験のある育成選手か。NPB の規約は「支配下選手登録されたことのある者が育成選手として
 # 契約した次年度に支配下契約されなければ自由契約」で、新規の育成選手 (3年) より契約が短い。
 # 育成降格と、戦力外からの育成track再契約 (元支配下) で立つ。
-func is_development_from_shienka() -> bool:
-	return development_player and bool(source_data.get("dev_from_shienka", false))
+func is_development_from_controlled() -> bool:
+	return development_player and bool(source_data.get("dev_from_controlled", false))
 
 
 # 育成契約のまま消化したシーズン数 (育成でなければ 0)。`development_since_year` は

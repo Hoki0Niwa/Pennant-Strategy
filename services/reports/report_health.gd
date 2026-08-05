@@ -175,18 +175,18 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 		},
 		"roster": {
 			"active_players": _distribution(_nested_values(rows, ["roster_before_season", "active_players"]), 0),
-			"shienka_players": _distribution(_nested_values(rows, ["roster_before_season", "shienka_players"]), 0),
+			"controlled_players": _distribution(_nested_values(rows, ["roster_before_season", "controlled_players"]), 0),
 			"development_players": _distribution(_nested_values(rows, ["roster_before_season", "development_players"]), 0),
 			"average_age": _distribution(_nested_values(rows, ["roster_before_season", "average_age"]), 2),
 			"average_overall": _distribution(_nested_values(rows, ["roster_before_season", "average_overall"]), 2),
 			"team_roster_max": _distribution(_nested_values(rows, ["roster_before_season", "team_roster_max"]), 0),
-			"team_shienka_max": _distribution(_nested_values(rows, ["roster_before_season", "team_shienka_max"]), 0),
+			"team_controlled_max": _distribution(_nested_values(rows, ["roster_before_season", "team_controlled_max"]), 0),
 			"team_development_max": _distribution(_nested_values(rows, ["roster_before_season", "team_development_max"]), 0),
 			"team_foreign_max": _distribution(_nested_values(rows, ["roster_before_season", "team_foreign_max"]), 0),
 		},
 		"post_roster": {
-			"team_shienka_min": _distribution(_nested_values(rows, ["roster_after_offseason_next_year", "team_shienka_min"]), 0),
-			"team_shienka_max": _distribution(_nested_values(rows, ["roster_after_offseason_next_year", "team_shienka_max"]), 0),
+			"team_controlled_min": _distribution(_nested_values(rows, ["roster_after_offseason_next_year", "team_controlled_min"]), 0),
+			"team_controlled_max": _distribution(_nested_values(rows, ["roster_after_offseason_next_year", "team_controlled_max"]), 0),
 		},
 		"leaders": {
 			"ops": _distribution(leader_ops, 3),
@@ -255,7 +255,7 @@ static func long_health(report: Dictionary) -> Dictionary:
 
 	_add_equal_check(checks, "completed_seasons", completed, requested, "all requested seasons completed")
 	_add_max_check(checks, "simulation_errors", errors.size(), 0.0, 0.0, "simulation errors should be absent")
-	_add_max_check(checks, "team_shienka_max", _max_nested(roster_dist, "team_shienka_max", final_roster.get("team_shienka_max", 0)), 70.0, 70.0, "hard 70-man shienka cap")
+	_add_max_check(checks, "team_controlled_max", _max_nested(roster_dist, "team_controlled_max", final_roster.get("team_controlled_max", 0)), 70.0, 70.0, "hard 70-man controlled cap")
 	_add_max_check(checks, "team_roster_max", _max_nested(roster_dist, "team_roster_max", final_roster.get("team_roster_max", 0)), 90.0, 110.0, "total roster including development")
 	_add_max_check(checks, "team_development_max", _max_nested(roster_dist, "team_development_max", final_roster.get("team_development_max", 0)), 20.0, 35.0, "development roster growth")
 	_add_max_check(checks, "team_foreign_max", _max_nested(roster_dist, "team_foreign_max", final_roster.get("team_foreign_max", 0)), 4.0, 4.0, "foreign player held cap")
@@ -271,8 +271,8 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "released_fielders_per_pitcher", float(last_10.get("released_fielders_per_pitcher", 0.0)), 0.8, 1.3, 0.5, 1.8, "released pitcher-to-fielder composition (fielder count per pitcher)")
 	_add_range_check(checks, "released_average_age", float(last_10.get("released_average_age", 0.0)), 26.0, 31.0, 23.0, 35.0, "weighted average age of domestic releases")
 	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 1.0, 4.0, "zero-appearance 30+ players surviving the release phase")
-	_add_min_check(checks, "post_team_shienka_min", _dist_value(post_roster_dist, "team_shienka_min", "min"), 66.0, 64.0, "every team should finish the offseason with at least 66 shienka players")
-	_add_max_check(checks, "post_team_shienka_max", _dist_value(post_roster_dist, "team_shienka_max", "max"), 68.0, 70.0, "every team should finish the offseason with at most 68 shienka players")
+	_add_min_check(checks, "post_team_controlled_min", _dist_value(post_roster_dist, "team_controlled_min", "min"), 66.0, 64.0, "every team should finish the offseason with at least 66 controlled players")
+	_add_max_check(checks, "post_team_controlled_max", _dist_value(post_roster_dist, "team_controlled_max", "max"), 68.0, 70.0, "every team should finish the offseason with at most 68 controlled players")
 	# 選手流動の沈黙/過熱検知。2026-07-06 の「FA宣言が15年間全ゼロでも health pass」の盲点を受けて追加。
 	# 平均0 (完全停止) は warn 側に倒して可視化する (初期データのFA日数過少による立ち上がり遅れは許容)。
 	_add_range_check(checks, "trades_per_year", _dist_value(flow_dist, "trades", "mean"), 1.0, 8.0, 0.0, 15.0, "in-season trades per year")

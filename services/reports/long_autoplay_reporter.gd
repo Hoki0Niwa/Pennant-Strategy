@@ -363,7 +363,7 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 
 func csv_text(report: Dictionary) -> String:
 	var lines: Array = []
-	lines.append("season_index,year,active_players,shienka_players,development_players,foreign_players,team_shienka_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,geneki_moved,geneki_round2,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_shienka_players,post_development_players,post_team_shienka_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio,foreign_retained,foreign_poached,foreign_multi_year_signed,contract_years_total,contract_years_multi,multi_year_active")
+	lines.append("season_index,year,active_players,controlled_players,development_players,foreign_players,team_controlled_max,team_development_max,team_foreign_max,free_agent_orphans,released_orphans,teamless_active_players,draft_generated_active,draft_generated_ratio,non_draft_active,seed_cohort_active,seed_cohort_ratio,in_run_added_active,age_23_under,age_24_29,age_30_34,age_35_plus,veteran_regular_30s,veteran_bench_35_plus,avg_age,avg_overall,batter_overall,pitcher_overall,overall_p10,overall_p50,overall_p90,roster_min,roster_avg,roster_max,runs_per_team_game,runs_per_game_total,avg,obp,slg,ops,hr_per_game,bb_per_game,so_per_game,era,whip,k_per_9,bb_per_9,hr_per_9,avg_bat_kavoid_z,avg_bat_bbcreate_z,avg_bat_impact_z,avg_bat_loft_z,avg_bat_barrel_z,avg_pit_kcreate_z,avg_pit_bbprevent_z,avg_pit_impactlimit_z,avg_pit_barreldeny_z,avg_pit_stamina_z,hr_leader,hr_leader_name,avg_leader,avg_leader_name,ops_leader,ops_leader_name,era_leader,era_leader_name,k_leader,k_leader_name,trades,retired,released,released_pitchers,released_fielders,released_avg_age,demoted,promoted,dev_released,fa_declared,fa_moved,geneki_moved,geneki_round2,released_signed,foreign_signed,foreign_released,draft_picks,rookies,growers,decayers,camp_actions,camp_pitch_learning,post_active_players,post_controlled_players,post_development_players,post_team_controlled_max,post_team_development_max,post_team_foreign_max,post_draft_generated_ratio,post_seed_cohort_ratio,foreign_retained,foreign_poached,foreign_multi_year_signed,contract_years_total,contract_years_multi,multi_year_active")
 	for row_value in report.get("yearly", []) as Array:
 		var row: Dictionary = row_value as Dictionary
 		var roster: Dictionary = row.get("roster_before_season", {}) as Dictionary
@@ -378,10 +378,10 @@ func csv_text(report: Dictionary) -> String:
 			int(row.get("season_index", 0)),
 			int(row.get("year", 0)),
 			int(roster.get("active_players", 0)),
-			int(roster.get("shienka_players", 0)),
+			int(roster.get("controlled_players", 0)),
 			int(roster.get("development_players", 0)),
 			int(roster.get("foreign_players", 0)),
-			int(roster.get("team_shienka_max", 0)),
+			int(roster.get("team_controlled_max", 0)),
 			int(roster.get("team_development_max", 0)),
 			int(roster.get("team_foreign_max", 0)),
 			int(roster.get("free_agent_orphans", 0)),
@@ -466,9 +466,9 @@ func csv_text(report: Dictionary) -> String:
 			int(offseason.get("camp_actions_count", 0)),
 			int(offseason.get("camp_pitch_learning_count", 0)),
 			int(post_roster.get("active_players", 0)),
-			int(post_roster.get("shienka_players", 0)),
+			int(post_roster.get("controlled_players", 0)),
 			int(post_roster.get("development_players", 0)),
-			int(post_roster.get("team_shienka_max", 0)),
+			int(post_roster.get("team_controlled_max", 0)),
 			int(post_roster.get("team_development_max", 0)),
 			int(post_roster.get("team_foreign_max", 0)),
 			float(post_roster.get("draft_generated_ratio", 0.0)),
@@ -509,11 +509,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# 戦力外フェーズ直後に残った「30歳以上・今季出場ゼロ・入団3年目以降」の支配下選手数。
 	# 本職保護が実績ゼロのベテランを生き残らせる再発バグ (2026-07-02 修正) の監視用で、期待値はほぼ 0。
 	var noshow_thirties_survivor_rows: Array = _noshow_thirties_survivor_rows(season)
-	var noshow_thirties_survivors: int = noshow_thirties_survivor_rows.size()
+	var noshow_thirties_survivors: int = _noshow_thirties_unblocked_count(noshow_thirties_survivor_rows)
 	# 戦力外通告 (+当落線上の若手の育成降格) 直後の支配下人数。ここからドラフト・戦力外獲得・
 	# FA・外国人・育成昇格で開幕目標 (OPENING_ROSTER_TARGET) まで積み直す。
 	# 放出計画が過不足なく効いているかは「この人数 + 見込み流入 ≒ 68」で確認する。
-	var post_release_shienka: Dictionary = _shienka_count_stats()
+	var post_release_controlled: Dictionary = _controlled_count_stats()
 	var merged_release_result: Dictionary = release_result.duplicate(true)
 
 	# ドラフト (日本人 66 枠まで 6〜7 人補充)。
@@ -672,9 +672,9 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"released_age_min": released_age_min,
 		"released_age_max": released_age_max,
 		"noshow_thirties_survivors": noshow_thirties_survivors,
-		"post_release_shienka_avg": float(post_release_shienka.get("avg", 0.0)),
-		"post_release_shienka_min": int(post_release_shienka.get("min", 0)),
-		"post_release_shienka_max": int(post_release_shienka.get("max", 0)),
+		"post_release_controlled_avg": float(post_release_controlled.get("avg", 0.0)),
+		"post_release_controlled_min": int(post_release_controlled.get("min", 0)),
+		"post_release_controlled_max": int(post_release_controlled.get("max", 0)),
 		"noshow_thirties_survivor_rows": noshow_thirties_survivor_rows,
 		"demoted_count": int(release_result.get("demoted_count", 0)),
 		"promoted_count": int(promotion_result.get("promoted_count", 0)),
@@ -699,6 +699,12 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"geneki_moved_count": int(geneki_result.get("moved_count", 0)),
 		"geneki_round2_count": int(geneki_result.get("round2_count", 0)),
 		"released_signed_count": int(released_market_result.get("signed_count", 0)),
+		# 上限 (MAX_CONTROLLED_SIGNINGS_PER_TEAM) が効くのは支配下だけなので内訳も見る (育成は無制限)。
+		"released_signed_controlled_count": int(released_market_result.get("signed_controlled_count", 0)),
+		"released_signed_development_count": int(released_market_result.get("signed_development_count", 0)),
+		# 育成獲得の年齢ペナルティ (高齢を弾く) と若手枠 (将来性で拾う) が効いているかの監視。
+		"released_signed_development_avg_age": float(released_market_result.get("signed_development_avg_age", 0.0)),
+		"released_signed_controlled_avg_age": float(released_market_result.get("signed_controlled_avg_age", 0.0)),
 		# 戦力外獲得を1人も行わなかった球団数。「とりあえず2人獲る」になっていないかの監視用
 		# (2026-08-03、獲得基準を TeamDepthChart の弱点+即戦力/将来性へ厳格化したときに追加)。
 		"released_signed_zero_teams": _teams_without_released_signing(released_market_result),
@@ -722,13 +728,13 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 # シーズンの過半を怪我で欠場して出場割引を全免除された選手は、意図的な残留として数えない。
 # 現時点の支配下人数の球団別統計 {avg, min, max}。オフの各段階でロースターがどこまで
 # 削れ / 積み直されたかを見るのに使う。
-func _shienka_count_stats() -> Dictionary:
+func _controlled_count_stats() -> Dictionary:
 	var counts: Array = []
 	for team_row in GameDb.teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue
-		counts.append(TeamFinance.shienka_count(GameDb.players, team.id))
+		counts.append(TeamFinance.controlled_count(GameDb.players, team.id))
 	if counts.is_empty():
 		return {"avg": 0.0, "min": 0, "max": 0}
 	var total: int = 0
@@ -759,6 +765,11 @@ func _teams_without_released_signing(released_market_result: Dictionary) -> int:
 	return zero_teams
 
 
+# 「30歳以上・当季出場ゼロ・入団3年目以降」で支配下に残った日本人選手の一覧。
+# 各行に `block_reason` (複数年契約中/FA宣言済み等、契約上そもそも通告できない理由) を持たせ、
+# 集計 (`noshow_thirties_survivors`) は **block_reason が無い = 切れたのに切らなかった選手だけ**を
+# 数える。契約で守られている選手を混ぜると「放出AIの取りこぼし」を測る指標として意味を失う
+# (2026-08-04: 複数年契約の高年俸選手が出場ゼロで残るのは仕様どおりの挙動)。
 func _noshow_thirties_survivor_rows(season: PSSeason) -> Array:
 	var rows: Array = []
 	for player_row in GameDb.players:
@@ -785,8 +796,18 @@ func _noshow_thirties_survivor_rows(season: PSSeason) -> Array:
 			"role": player.role,
 			"overall": OffseasonService.player_value_score(player),
 			"projected_value": _round_float(ReleaseValueProjector.projected_value(player, record), 2),
+			"block_reason": OffseasonService.release_block_reason(player, season.year),
 		})
 	return rows
+
+
+# 契約上そもそも通告できない選手を除いた「取りこぼし」件数。health の監視対象はこちら。
+func _noshow_thirties_unblocked_count(rows: Array) -> int:
+	var count: int = 0
+	for row in rows:
+		if str((row as Dictionary).get("block_reason", "")).is_empty():
+			count += 1
+	return count
 
 
 func _leaderboards_for_season(season: PSSeason) -> Dictionary:
@@ -1083,7 +1104,7 @@ func _format_leader_value(metric: String, value: float, is_pitcher: bool) -> Str
 
 func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary = {}) -> Dictionary:
 	var active_players: int = 0
-	var shienka_players: int = 0
+	var controlled_players: int = 0
 	var development_players: int = 0
 	var foreign_players: int = 0
 	var draft_generated_players: int = 0
@@ -1113,7 +1134,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	var veteran_regular_30s: int = 0
 	var veteran_bench_35_plus: int = 0
 	var by_team: Dictionary = {}
-	var by_team_shienka: Dictionary = {}
+	var by_team_controlled: Dictionary = {}
 	var by_team_development: Dictionary = {}
 	var by_team_foreign: Dictionary = {}
 	var free_agent_orphans: int = 0
@@ -1125,7 +1146,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		by_team[str(team.id)] = 0
-		by_team_shienka[str(team.id)] = 0
+		by_team_controlled[str(team.id)] = 0
 		by_team_development[str(team.id)] = 0
 		by_team_foreign[str(team.id)] = 0
 
@@ -1149,8 +1170,8 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 			development_players += 1
 			by_team_development[str(player.team_id)] = int(by_team_development.get(str(player.team_id), 0)) + 1
 		else:
-			shienka_players += 1
-			by_team_shienka[str(player.team_id)] = int(by_team_shienka.get(str(player.team_id), 0)) + 1
+			controlled_players += 1
+			by_team_controlled[str(player.team_id)] = int(by_team_controlled.get(str(player.team_id), 0)) + 1
 		if player.foreign_player:
 			foreign_players += 1
 			by_team_foreign[str(player.team_id)] = int(by_team_foreign.get(str(player.team_id), 0)) + 1
@@ -1195,20 +1216,20 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 			source_counts[source_type] = int(source_counts.get(source_type, 0)) + 1
 
 	var team_counts: Array = []
-	var team_shienka_counts: Array = []
+	var team_controlled_counts: Array = []
 	var team_development_counts: Array = []
 	var team_foreign_counts: Array = []
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		team_counts.append(int(by_team.get(str(team.id), 0)))
-		team_shienka_counts.append(int(by_team_shienka.get(str(team.id), 0)))
+		team_controlled_counts.append(int(by_team_controlled.get(str(team.id), 0)))
 		team_development_counts.append(int(by_team_development.get(str(team.id), 0)))
 		team_foreign_counts.append(int(by_team_foreign.get(str(team.id), 0)))
 
 	return {
 		"player_rows_total": players.size(),
 		"active_players": active_players,
-		"shienka_players": shienka_players,
+		"controlled_players": controlled_players,
 		"development_players": development_players,
 		"foreign_players": foreign_players,
 		"draft_generated_active_players": draft_generated_players,
@@ -1233,15 +1254,15 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		"team_roster_min": int(_min_value(team_counts)),
 		"team_roster_average": _round_float(_mean(team_counts), 2),
 		"team_roster_max": int(_max_value(team_counts)),
-		"team_shienka_min": int(_min_value(team_shienka_counts)),
-		"team_shienka_average": _round_float(_mean(team_shienka_counts), 2),
-		"team_shienka_max": int(_max_value(team_shienka_counts)),
+		"team_controlled_min": int(_min_value(team_controlled_counts)),
+		"team_controlled_average": _round_float(_mean(team_controlled_counts), 2),
+		"team_controlled_max": int(_max_value(team_controlled_counts)),
 		"team_development_min": int(_min_value(team_development_counts)),
 		"team_development_average": _round_float(_mean(team_development_counts), 2),
 		"team_development_max": int(_max_value(team_development_counts)),
 		"team_foreign_max": int(_max_value(team_foreign_counts)),
 		"team_rosters": by_team,
-		"team_shienka_rosters": by_team_shienka,
+		"team_controlled_rosters": by_team_controlled,
 		"team_development_rosters": by_team_development,
 		"team_foreign_rosters": by_team_foreign,
 		"free_agent_orphans": free_agent_orphans,
@@ -1348,9 +1369,9 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"start_year": int((rows[0] as Dictionary).get("year", 0)),
 		"end_year": int((rows[rows.size() - 1] as Dictionary).get("year", 0)),
 		"active_players": _round_float(_mean_nested(rows, ["roster_before_season", "active_players"]), 2),
-		"shienka_players": _round_float(_mean_nested(rows, ["roster_before_season", "shienka_players"]), 2),
+		"controlled_players": _round_float(_mean_nested(rows, ["roster_before_season", "controlled_players"]), 2),
 		"development_players": _round_float(_mean_nested(rows, ["roster_before_season", "development_players"]), 2),
-		"team_shienka_max": _round_float(_mean_nested(rows, ["roster_before_season", "team_shienka_max"]), 2),
+		"team_controlled_max": _round_float(_mean_nested(rows, ["roster_before_season", "team_controlled_max"]), 2),
 		"team_development_max": _round_float(_mean_nested(rows, ["roster_before_season", "team_development_max"]), 2),
 		"draft_generated_ratio": _round_float(_mean_nested(rows, ["roster_before_season", "draft_generated_ratio"]), 4),
 		"seed_cohort_ratio": _round_float(_mean_nested(rows, ["roster_before_season", "seed_cohort_ratio"]), 4),

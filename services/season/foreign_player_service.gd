@@ -760,7 +760,7 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 	if not is_home:
 		if _foreign_count_for_team(players, user_team_id) >= MAX_FOREIGN_HELD_PER_TEAM:
 			return {"ok": false, "message": "外国人保有枠が不足しています。", "state": state}
-		if _active_count_for_team(players, user_team_id) >= TeamFinance.SHIENKA_LIMIT:
+		if _active_count_for_team(players, user_team_id) >= TeamFinance.CONTROLLED_LIMIT:
 			return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
 	var max_years: int = int(entry.get("max_years", 1))
 	var clamped_years: int = clampi(years, 1, maxi(1, max_years))
@@ -792,7 +792,7 @@ static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: 
 		return false
 	var active: int = _active_count_for_team(players, team_id)
 	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
-	if active >= TeamFinance.SHIENKA_LIMIT:
+	if active >= TeamFinance.CONTROLLED_LIMIT:
 		return false
 	var foreign_total: int = _foreign_count_for_team(players, team_id)
 	return foreign_total < MAX_FOREIGN_HELD_PER_TEAM
@@ -1225,7 +1225,7 @@ static func _state_candidate_by_id(state: Dictionary, candidate_id: int) -> Dict
 
 # roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
-	return TeamFinance.shienka_count(players, team_id)
+	return TeamFinance.controlled_count(players, team_id)
 
 
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:

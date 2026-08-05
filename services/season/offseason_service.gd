@@ -26,14 +26,20 @@ const RELEASE_PLAN_PROMO_CAP: int = 2
 # 1球団が1オフに放出できる上限 (計画暴走の安全弁)。
 const RELEASE_PLAN_MAX_PER_TEAM: int = 15
 # 編成計画に対して許容する上振れ。下限は設けず、該当者が少なければその人数で止める。
-# 2026-08-03 に 2→1: FA/戦力外獲得の見込み枠を撤廃して補強が入らない年が普通になったため、
-# 計画+2 まで切ると開幕支配下が目標 (68) を大きく割る球団が出た (実測 post_team_shienka_min 63)。
-const RECONCILE_UPPER_SLACK: int = 1
+# 2026-08-03 に 2→1、2026-08-04 に 1→0。どちらも同じ症状 (開幕支配下が目標 68 を大きく割る球団が
+# 出る = post_team_controlled_min 63) への対処。判定が球団相対になって「代替水準を下回る候補」が
+# 常に計画数以上そろうようになったため、上振れ枠は素通しで消費され、実質「毎年 計画+N まで切る」
+# として働いていた。0 = 計画ちょうどで止める。
+const RECONCILE_UPPER_SLACK: int = 0
 # 入団1年目のみ rookie 保護する。
 const CPU_RELEASE_ROOKIE_PROTECTION_YEARS: int = 1
-# 同一CSV・seed=20260714 の比較レポートで、日本人 years<=2 の projected_value 中央値は60.34。
-# 長期較正で新人中央値より約8点低い52に置き、上げるほど戦力外候補が増える。
-const RELEASE_REPLACEMENT_VALUE: float = 52.0
+# 代替水準 = **その球団が来季抱える選手 (役割スロット確保者) の平均 projected_value × この比率**。
+# 放出はこの水準を下回る選手だけが対象。下げるほど放出が減る (0.9 = 平均より1割以上劣る選手を切る)。
+# ※ 旧 `RELEASE_REPLACEMENT_VALUE` (絶対値 52.0) は 2026-08-04 に廃止した。能力の絶対値で切ると
+#   リーグ全体の水準が動くだけで放出数が跳ね (52→56 の4点で 75.5→83.75人/年)、強い球団は誰も
+#   切れず弱い球団は切りすぎる非対称も生む。出場実績は projected_value の出場割引と
+#   `usage_protected` の2経路で複合的に効く。
+const RELEASE_REPLACEMENT_RATIO: float = 0.9
 
 # 少出場引退に使う役割別上限。戦力外選定には使わない。
 const RETIREMENT_LOW_STARTER_MAX: int = 3
@@ -68,7 +74,7 @@ const INJURY_PENALTY_CAP: float = 6.0
 #    (injury_days≥DEMOTE_INJURY_DAYS_LONG) で future_value が残る選手。**戦力外候補かどうかと独立**
 #    (怪我人は候補に上がらないよう保護されるため。2026-08-02 修正)。年齢は問わない。
 #
-# どちらも育成契約は「支配下経験者」= 1年 (DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA)。
+# どちらも育成契約は「支配下経験者」= 1年 (DEV_CONTRACT_MAX_SEASONS_FROM_CONTROLLED)。
 # 旧・類型3 ベテラン確率降格 (`VETERAN_DEMOTE_*`) は撤廃済み。
 const DEMOTE_PROSPECT_MAX_AGE: int = 26
 const DEMOTE_INJURY_DAYS_LONG: int = 120
@@ -81,8 +87,8 @@ const DEMOTE_JITTER: float = 0.07
 # 昇格は将来性ではなく「支配下で通用する準備度」= 現在能力で判断する。
 # 即戦力水準は **絶対値ではなく球団ごとの相対値** (first_team_ready_threshold): 自軍の一軍相当
 # (支配下を value 降順で並べた FIRST_TEAM_SIZE 番目=一軍下位レベル) と比較し、強豪は基準↑/再建は基準↓。
-# PROMOTE_TO_SHIENKA_MIN_VALUE は支配下が居ない時のフォールバック基準値。
-const PROMOTE_TO_SHIENKA_MIN_VALUE: int = 48
+# PROMOTE_TO_CONTROLLED_MIN_VALUE は支配下が居ない時のフォールバック基準値。
+const PROMOTE_TO_CONTROLLED_MIN_VALUE: int = 48
 const FIRST_TEAM_SIZE: int = 31   # 一軍登録上限 (active_roster_screen ROSTER_MAX と一致)
 # 相対基準のクランプ (極端化防止)。再建球団でも最低限の質を要求し、強豪でも青天井にしない。
 const PROMOTE_READY_FLOOR: float = 42.0
@@ -105,14 +111,14 @@ const PROMOTE_READY_CEILING: float = 56.0
 #   - 新規の育成選手 (育成ドラフト入団): 契約期間は3年。3年間同一球団と育成契約した選手が翌年度に
 #     支配下契約されない場合は自由契約 (実際は11月30日付、本ゲームはオフの育成整理で処理)。
 #   - **支配下経験者が育成契約した場合は「次年度に支配下契約されなければ自由契約」= 1年**
-#     (育成降格・戦力外からの育成track再契約が該当。`dev_from_shienka` フラグで判別する)。
+#     (育成降格・戦力外からの育成track再契約が該当。`dev_from_controlled` フラグで判別する)。
 # `PSPlayer.development_seasons_completed` がこの値に達したら、即戦力水準・成長予測・年齢を問わず
 # 無条件に自由契約とする。**これが育成人数の発散を止める構造的な歯止め** — これが無いと
 # 「支配下70が埋まっていて昇格できない即戦力の育成」が満枠待ちのまま無期限に滞留し、
 # 実測で育成年数 最大8年・球団あたり27人まで膨らんだ (2026-08-02、目標人数を外した状態での計測)。
 # 保有数 ≒ 年間の育成指名数 × この年数 で自然に頭打ちになるので、目標人数は持たせない。
 const DEV_CONTRACT_MAX_SEASONS: int = 3
-const DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA: int = 1
+const DEV_CONTRACT_MAX_SEASONS_FROM_CONTROLLED: int = 1
 # 育成契約のうち、成長予測を問わず無条件に保持するシーズン数 (最初の N シーズン)。
 # 上限までの残り期間が「将来性 (projected_ceiling) で判断される区間」になるので、
 # DEV_CONTRACT_MAX_SEASONS より小さくしないと将来性判定が一度も効かない。
@@ -347,6 +353,11 @@ static func release_depth_chart_evaluations(players: Array, team_id: int, season
 			"player": player,
 			"record": record,
 			"projected_value": ReleaseValueProjector.projected_value(player, record),
+			# スロット占有の順位付けは将来価値ではなく現在の実力で行う (下記 sort_custom のコメント)。
+			"current_strength": ReleaseValueProjector.current_strength(player, record),
+			"regular": ReleaseValueProjector.is_regular_usage(record),
+			# 稼働で説明できる選手 (レギュラー / 長期離脱) は相対比較の下位でも放出しない。
+			"usage_protected": ReleaseValueProjector.is_usage_protected(record),
 		})
 	if roster_records_all.is_empty():
 		return {}
@@ -362,15 +373,30 @@ static func release_depth_chart_evaluations(players: Array, team_id: int, season
 
 	var slot_budgets: Dictionary = _release_slot_budgets(players, team_id)
 	var surplus_ids: Dictionary = {}
+	# 代替水準の母数 = 役割スロットを確保した選手 (= その球団が来季も抱える面々) の projected_value。
+	var claimed_value_total: float = 0.0
+	var claimed_count: int = 0
 	for role_key_v in grouped_rows.keys():
 		var role_key: String = str(role_key_v)
 		var role_rows: Array = grouped_rows[role_key] as Array
+		# スロットは2パスで埋める。
+		#   第1パス: **当季その役割を実際に務めた選手** (regular) が現在の実力 (current_strength) 順に取る。
+		#   第2パス: 残り (控え・故障者・成績なし) が将来価値 (projected_value) 順に空き枠を取る。
+		# 全員を projected_value 順に並べると growth 項 (±40点) が能力差を圧倒して事実上「年齢順」になり、
+		# 22歳の控えが34歳のレギュラーより上位に来てレギュラーが枠外=余剰に落ちる。「役割を担えている
+		# 選手は余剰にならない」を先に保証し、当落線上の椅子取りだけを将来価値で決める。
 		role_rows.sort_custom(func(a, b) -> bool:
-			var value_a: float = float((a as Dictionary)["projected_value"])
-			var value_b: float = float((b as Dictionary)["projected_value"])
+			var da: Dictionary = a as Dictionary
+			var db: Dictionary = b as Dictionary
+			var regular_a: bool = bool(da["regular"])
+			if regular_a != bool(db["regular"]):
+				return regular_a
+			var rank_key: String = "current_strength" if regular_a else "projected_value"
+			var value_a: float = float(da[rank_key])
+			var value_b: float = float(db[rank_key])
 			if not is_equal_approx(value_a, value_b):
 				return value_a > value_b
-			return int(((a as Dictionary)["player"] as PSPlayer).id) < int(((b as Dictionary)["player"] as PSPlayer).id)
+			return int((da["player"] as PSPlayer).id) < int((db["player"] as PSPlayer).id)
 		)
 		var budget: int = int(slot_budgets.get(role_key, 1))
 		var claimed_slots: int = 0
@@ -380,16 +406,44 @@ static func release_depth_chart_evaluations(players: Array, team_id: int, season
 			if _can_claim_release_slot(role_player, role_data.get("record", null) as PSPlayerSeasonRecord) \
 					and claimed_slots < budget:
 				claimed_slots += 1
+				claimed_value_total += float(role_data["projected_value"])
+				claimed_count += 1
 			else:
 				surplus_ids[role_player.id] = true
+
+	# **代替水準は球団相対** — 「その球団が来季抱える面々の平均水準を RATIO 倍下回るか」で測る。
+	# 母数を役割ごとの下限にすると、衰えたレギュラーが1人居るだけでその役割の水準が床まで落ちて
+	# 誰も切れなくなるため、球団全体の平均を使う (役割ごとの人数過不足は surplus 側が担当する)。
+	# 枠を確保した選手が1人も居ない球団 (全員が30代ゼロ出場など) は INF = 全員放出可能。
+	var replacement_line: float = INF
+	if claimed_count > 0:
+		replacement_line = (claimed_value_total / float(claimed_count)) * RELEASE_REPLACEMENT_RATIO
 
 	var evaluations: Dictionary = {}
 	for row in roster_records_all:
 		var data: Dictionary = row as Dictionary
 		var player: PSPlayer = data["player"] as PSPlayer
 		data["surplus"] = surplus_ids.has(player.id)
+		data["replacement_line"] = replacement_line
 		evaluations[player.id] = data
 	return evaluations
+
+
+# 放出判定の単一ソース。国内戦力外・外国人契約市場・新規スカウトが共有する。
+#   ① 役割スロット外 (surplus)
+#   ② 出場実績で説明がつかない (当季その役割を務めた選手・長期離脱者は切らない)
+#   ③ **自チームが抱える選手の平均水準 (replacement_line) を下回る**
+# ③ が絶対値ではなく球団相対なのが要点 — 絶対値だとリーグ全体の能力水準が動くだけで放出数が
+# 跳ね、強い球団は誰も切れず弱い球団は切りすぎる (2026-08-04 にユーザー指摘で相対化)。
+# ② は相対化とセットで必要 — 相対比較だけだと「最下位というだけ」で誰かが必ず切られる。
+static func is_release_candidate_evaluation(data: Dictionary) -> bool:
+	if data.is_empty():
+		return false
+	if not bool(data.get("surplus", false)):
+		return false
+	if bool(data.get("usage_protected", false)):
+		return false
+	return float(data.get("projected_value", 0.0)) < float(data.get("replacement_line", -INF))
 
 
 # 仮に candidate が team_id に在籍した場合の depth-chart 評価 (surplus/projected_value)。
@@ -414,8 +468,7 @@ static func would_release_player_for_team(players: Array, team_id: int, candidat
 	var evaluation: Dictionary = candidate_depth_evaluation_for_team(players, team_id, candidate, season)
 	if evaluation.is_empty():
 		return true
-	return bool(evaluation.get("surplus", false)) \
-		and float(evaluation.get("projected_value", 0.0)) < RELEASE_REPLACEMENT_VALUE
+	return is_release_candidate_evaluation(evaluation)
 
 
 static func compute_release_candidates_for_team(players: Array, team_id: int, season: PSSeason) -> Array:
@@ -440,9 +493,7 @@ static func compute_release_candidates_for_team(players: Array, team_id: int, se
 		# しか降格判定を行わないため)。
 		if not release_block_reason(player, offseason_year).is_empty():
 			continue
-		if not bool(data.get("surplus", false)):
-			continue
-		if float(data["projected_value"]) >= RELEASE_REPLACEMENT_VALUE:
+		if not is_release_candidate_evaluation(data):
 			continue
 		domestic_candidates.append(data)
 
@@ -543,7 +594,7 @@ static func _domestic_roster_count(players: Array, team_id: int) -> int:
 # 「支配下の放出後見込み (DOMESTIC_ROSTER_TARGET 基準、外国人非依存)」に**現在の外国人保有数**を
 # 足し戻した総人数にする — ここを外国人抜きのままにすると、外国人を多く抱える球団ほど
 # バケツ内の実際の枠消費 (外国人ぶん) を budget が見込まなくなり、支配下選手が余分に
-# 「余剰」判定されて過剰放出される (2026-08-03、実測で post_team_shienka_min が悪化して発覚)。
+# 「余剰」判定されて過剰放出される (2026-08-03、実測で post_team_controlled_min が悪化して発覚)。
 static func _release_slot_budgets(players: Array, team_id: int) -> Dictionary:
 	var domestic_post_target: int = DOMESTIC_ROSTER_TARGET - _release_expected_inflow(players, team_id)
 	var post_target: int = maxi(1, domestic_post_target + TeamFinance.foreign_player_count(players, team_id))
@@ -618,8 +669,8 @@ static func _apply_demotion_to_development(player: PSPlayer, year: int = 0) -> v
 	player.source_data["dev_demote_hold"] = true
 	# 育成契約の年数カウンタの起点 (PSPlayer.development_seasons_completed)。昇格でリセットされる。
 	player.source_data["development_since_year"] = year
-	# 降格は定義上「支配下経験者の育成契約」= 契約は1年 (DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA)。
-	player.source_data["dev_from_shienka"] = true
+	# 降格は定義上「支配下経験者の育成契約」= 契約は1年 (DEV_CONTRACT_MAX_SEASONS_FROM_CONTROLLED)。
+	player.source_data["dev_from_controlled"] = true
 
 
 # CPU 自動: 戦力外候補のうち、release ではなく育成降格 (org 残留) に回すべきか判定する。
@@ -653,7 +704,7 @@ static func compute_long_injury_demotion_candidates_for_team(players: Array, tea
 # 当落線上の若手の育成降格候補 (非破壊)。**戦力外を免れて支配下に残った**選手が対象で、
 # 戦力外候補は exclude_ids で除く (CPU は放出後に呼ぶので自然に外れる。自軍推奨は推奨放出リストを渡す)。
 # **判定は絶対値を使わず、既存の相対評価2つの組み合わせだけで決める**:
-#   1. `surplus` かつ `projected_value < RELEASE_REPLACEMENT_VALUE` — `would_release_player_for_team`
+#   1. `is_release_candidate_evaluation` — `would_release_player_for_team`
 #      (=「その球団なら戦力外相当」) と同じ AND 条件で、戦力外通告・外国人スカウト・戦力外市場と
 #      同じデプスチャート判定を共有する。ここを満たすのに放出されなかった選手 = 放出枠 (計画数) や
 #      保護 (23歳以下/rookie) で生き残った、まさに当落線上の選手。
@@ -683,9 +734,7 @@ static func compute_prospect_demotion_candidates_for_team(
 			continue
 		if not release_block_reason(player, offseason_year).is_empty():
 			continue
-		if not bool(data.get("surplus", false)):
-			continue
-		if float(data.get("projected_value", 0.0)) >= RELEASE_REPLACEMENT_VALUE:
+		if not is_release_candidate_evaluation(data):
 			continue
 		# 全球団が同一評価にならないよう比較閾値を ±DEMOTE_JITTER 揺らす (marginal 層のみに効く)。
 		var jitter: float = 1.0 + (Rng.roll_float() - 0.5) * 2.0 * DEMOTE_JITTER
@@ -706,14 +755,14 @@ static func _should_demote_to_development(player: PSPlayer) -> bool:
 
 
 # roadmap #3: 支配下登録 (昇格)。育成選手を支配下に戻す。一軍登録可・70枠を消費する。
-static func _apply_promotion_to_shienka(player: PSPlayer, year: int = 0) -> void:
+static func _apply_promotion_to_controlled(player: PSPlayer, year: int = 0) -> void:
 	PSCareerLog.log_dev_promote(player, year, player.team_id)
 	player.development_player = false
 	player.registered_roster = "支配下"
 	player.salary = maxi(player.salary, SALARY_MIN)
 	# 育成年数のカウンタは支配下登録でリセットする (再降格したらそこから数え直し)。
 	player.source_data.erase("development_since_year")
-	player.source_data.erase("dev_from_shienka")
+	player.source_data.erase("dev_from_controlled")
 
 
 # CPU 自動: 育成選手のうち value が閾値以上の者を、支配下に空きがある範囲で昇格する。
@@ -745,7 +794,7 @@ static func process_registration_deadline_promotions(players: Array, teams: Arra
 	return result
 
 
-# use_hard_limit=false → SHIENKA_SOFT_TARGET(67) で止める / true → SHIENKA_LIMIT(70) まで埋める。
+# use_hard_limit=false → CONTROLLED_SOFT_TARGET(67) で止める / true → CONTROLLED_LIMIT(70) まで埋める。
 static func _promote_ready_development(players: Array, teams: Array, excluded_team_id: int, year: int, use_hard_limit: bool) -> Dictionary:
 	var promoted: Array = []
 	for team_row in teams:
@@ -770,12 +819,12 @@ static func _promote_ready_development(players: Array, teams: Array, excluded_te
 		for dev_row in devs:
 			var dev: PSPlayer = dev_row as PSPlayer
 			var has_room: bool = (
-				TeamFinance.has_shienka_room(players, team.id) if use_hard_limit
-				else TeamFinance.has_shienka_soft_room(players, team.id)
+				TeamFinance.has_controlled_room(players, team.id) if use_hard_limit
+				else TeamFinance.has_controlled_soft_room(players, team.id)
 			)
 			if not has_room:
 				break
-			_apply_promotion_to_shienka(dev, year)
+			_apply_promotion_to_controlled(dev, year)
 			promoted.append({
 				"player_id": dev.id,
 				"name": dev.name,
@@ -796,7 +845,7 @@ static func _promote_ready_development(players: Array, teams: Array, excluded_te
 # 育成整理の保持/放出判定 (非破壊)。true なら放出対象。offseason_year は育成契約の年数判定に使う。
 # 判定順:
 #  1. **育成契約の年数上限**: 新規=DEV_CONTRACT_MAX_SEASONS(3) / 支配下経験者=
-#     DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA(1)。達したら他の保持理由を問わず放出。
+#     DEV_CONTRACT_MAX_SEASONS_FROM_CONTROLLED(1)。達したら他の保持理由を問わず放出。
 #     即戦力の満枠待ち保持を打ち切る唯一の経路で、育成人数が発散しないのはこれのおかげ。
 #  2. 常時保持: 1年目 (years<=1) / 降格・育成track獲得の同オフ (dev_demote_hold、ここでは
 #     見るだけで消費しない) / 故障リハビリ中。
@@ -804,7 +853,7 @@ static func _promote_ready_development(players: Array, teams: Array, excluded_te
 #     projected_ceiling (成長予測) で保持。中堅以上は「育成での再調整は1年」で無条件放出
 #     (ベテランの育成降格・戦力外獲得の育成track を含む。2026-07-02 ユーザー要望)。
 static func _should_release_development_player(dev: PSPlayer, ready_threshold: float, offseason_year: int) -> bool:
-	var max_seasons: int = DEV_CONTRACT_MAX_SEASONS_FROM_SHIENKA if dev.is_development_from_shienka() else DEV_CONTRACT_MAX_SEASONS
+	var max_seasons: int = DEV_CONTRACT_MAX_SEASONS_FROM_CONTROLLED if dev.is_development_from_controlled() else DEV_CONTRACT_MAX_SEASONS
 	if dev.development_seasons_completed(offseason_year) >= max_seasons:
 		return true
 	if dev.years <= 1:
@@ -1068,7 +1117,7 @@ static func first_team_ready_threshold(players: Array, team_id: int) -> float:
 			continue
 		values.append(player_value_score(p))
 	if values.is_empty():
-		return float(PROMOTE_TO_SHIENKA_MIN_VALUE)
+		return float(PROMOTE_TO_CONTROLLED_MIN_VALUE)
 	values.sort()  # 昇順
 	# 上位 FIRST_TEAM_SIZE の最下位 = 昇順 index (size - FIRST_TEAM_SIZE)。
 	var idx: int = max(0, values.size() - FIRST_TEAM_SIZE)

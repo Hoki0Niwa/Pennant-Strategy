@@ -810,7 +810,7 @@ static func _can_team_accept_candidate(players: Array, state: Dictionary, team_i
 		if int(entry.get("from_team", 0)) == team_id and int(entry.get("player_id", 0)) != int(candidate.get("player_id", 0)):
 			reserved += 1
 	# ドラフトが後段補強用に残した hard 枠を使う。FA残留/獲得予約も含めて70枠を超えない。
-	return _active_count_for_team(players, team_id) + reserved < TeamFinance.SHIENKA_LIMIT
+	return _active_count_for_team(players, team_id) + reserved < TeamFinance.CONTROLLED_LIMIT
 
 
 # FA獲得コスト = 提示年俸 + 移籍元へ支払う金銭補償 (A/Bランクのみ、獲得側の負担)。
@@ -881,7 +881,7 @@ static func _on_cooldown(player: PSPlayer, year: int) -> bool:
 
 # roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
-	return TeamFinance.shienka_count(players, team_id)
+	return TeamFinance.controlled_count(players, team_id)
 
 
 static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:

@@ -18,27 +18,27 @@ const ALL_Z_KEYS: Array = [
 
 # --- 計数 -------------------------------------------------------------------
 
-func test_shienka_count_excludes_development() -> void:
+func test_controlled_count_excludes_development() -> void:
 	var players: Array = [
 		_player({"id": 1, "team_id": 1}),
 		_player({"id": 2, "team_id": 1}),
 		_player({"id": 3, "team_id": 1, "development_player": true}),
 		_player({"id": 4, "team_id": 2}),
 	]
-	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(2)
+	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(2)
 	assert_int(TeamFinance.development_count(players, 1)).is_equal(1)
-	assert_int(TeamFinance.shienka_count(players, 2)).is_equal(1)
+	assert_int(TeamFinance.controlled_count(players, 2)).is_equal(1)
 
 
 func test_room_helpers_track_limits() -> void:
-	var players: Array = _support_players(1, TeamFinance.SHIENKA_LIMIT)
-	assert_bool(TeamFinance.has_shienka_room(players, 1)).is_false()
-	assert_bool(TeamFinance.has_shienka_soft_room(players, 1)).is_false()
+	var players: Array = _support_players(1, TeamFinance.CONTROLLED_LIMIT)
+	assert_bool(TeamFinance.has_controlled_room(players, 1)).is_false()
+	assert_bool(TeamFinance.has_controlled_soft_room(players, 1)).is_false()
 	# 育成を何人足しても支配下枠には影響しない (育成側に人数上限は無い)。
 	for i in range(20):
 		players.append(_player({"id": 990 + i, "team_id": 1, "development_player": true}))
-	assert_bool(TeamFinance.has_shienka_room(players, 1)).is_false()
-	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(TeamFinance.SHIENKA_LIMIT)
+	assert_bool(TeamFinance.has_controlled_room(players, 1)).is_false()
+	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(TeamFinance.CONTROLLED_LIMIT)
 	assert_int(TeamFinance.development_count(players, 1)).is_equal(20)
 
 
@@ -486,11 +486,15 @@ func test_released_market_development_track_chance_rises_with_age_and_falls_with
 	assert_float(prime).is_less(old)
 	var old_high_value: float = ReleasedMarket._development_track_chance(38, 90)
 	assert_float(old_high_value).is_less(old)
+	# 育成契約になる理由は「高齢」だけではない。素材年齢は「伸びしろに賭ける」側で育成寄りに戻る
+	# (年齢に対して単調ではなく U 字)。
+	var prospect: float = ReleasedMarket._development_track_chance(20, 55)
+	assert_float(prospect).is_greater(young)
 
 
-func test_released_market_development_track_bypasses_shienka_limit() -> void:
+func test_released_market_development_track_bypasses_controlled_limit() -> void:
 	# 育成track の候補は支配下枠(70)が埋まっていても獲得でき、支配下枠を消費しない。
-	var players: Array = _support_players(1, TeamFinance.SHIENKA_LIMIT)
+	var players: Array = _support_players(1, TeamFinance.CONTROLLED_LIMIT)
 	var released: PSPlayer = _player({"id": 9300, "team_id": 0, "age": 40, "source_data": {"released": true}})
 	players.append(released)
 	var entry: Dictionary = {
@@ -499,8 +503,46 @@ func test_released_market_development_track_bypasses_shienka_limit() -> void:
 		"track": ReleasedMarket.TRACK_DEVELOPMENT,
 	}
 	assert_bool(ReleasedMarket._can_team_accept_candidate(players, 1, entry)).is_true()
-	entry["track"] = ReleasedMarket.TRACK_SHIENKA
+	entry["track"] = ReleasedMarket.TRACK_CONTROLLED
 	assert_bool(ReleasedMarket._can_team_accept_candidate(players, 1, entry)).is_false()
+
+
+# 手動獲得は候補の既定 track を無視して、ユーザーが選んだ契約区分で成立する。
+# (支配下枠が満杯でも「育成で獲得」なら通り、逆に育成寄りの候補でも支配下で獲れる)
+func test_released_market_user_can_choose_contract_track() -> void:
+	for chosen in [ReleasedMarket.TRACK_CONTROLLED, ReleasedMarket.TRACK_DEVELOPMENT]:
+		var players: Array = _support_players(2, 10)
+		var released: PSPlayer = _player({"id": 9310, "team_id": 0, "age": 33, "source_data": {"released": true}})
+		players.append(released)
+		var teams: Array = [_team(1), _team(2)]
+		var state: Dictionary = ReleasedMarket.create_released_market_state(
+			players, teams, null, {"released": [{"player_id": 9310, "team_id": 1}]}, 2
+		)
+		# 既定 track がどちらであっても、選んだ区分が優先される。
+		(state["candidates"][0] as Dictionary)["track"] = ReleasedMarket.TRACK_DEVELOPMENT \
+			if chosen == ReleasedMarket.TRACK_CONTROLLED else ReleasedMarket.TRACK_CONTROLLED
+		var result: Dictionary = ReleasedMarket.submit_user_released_decision(
+			state, players, teams, null, 9310, "sign", str(chosen)
+		)
+		assert_bool(bool(result.get("acquired", false))).is_true()
+		assert_int(released.team_id).is_equal(2)
+		assert_bool(released.development_player).is_equal(chosen == ReleasedMarket.TRACK_DEVELOPMENT)
+		assert_str(released.registered_roster).is_equal(str(chosen))
+
+
+# 育成契約は「伸びしろに賭ける」もの。高齢ほど要求水準が上がり、素材年齢は下がる。
+func test_released_market_development_signing_threshold_penalizes_age_and_favors_prospects() -> void:
+	var base: float = 60.0
+	var prospect: float = ReleasedMarket.development_signing_threshold(base, TeamDepthChart.PROSPECT_MAX_AGE)
+	var prime: float = ReleasedMarket.development_signing_threshold(base, ReleasedMarket.DEV_SIGN_AGE_PIVOT)
+	var veteran: float = ReleasedMarket.development_signing_threshold(base, 35)
+	# 素材年齢は基準より緩く、ピボット年齢は基準どおり、高齢は年ごとに厳しくなる。
+	assert_float(prospect).is_less(prime)
+	assert_float(prime).is_equal(base)
+	assert_float(veteran).is_greater(prime)
+	assert_float(veteran - prime).is_equal(
+		float(35 - ReleasedMarket.DEV_SIGN_AGE_PIVOT) * ReleasedMarket.DEV_SIGN_AGE_PENALTY_PER_YEAR
+	)
 
 
 func test_released_market_apply_signing_sets_development_flags_from_track() -> void:
@@ -533,7 +575,7 @@ func test_released_market_available_candidates_refresh_new_contract_salary() -> 
 		"from_team": 1,
 		"position": released.position,
 		"foreign_player": false,
-		"track": ReleasedMarket.TRACK_SHIENKA,
+		"track": ReleasedMarket.TRACK_CONTROLLED,
 		"salary": released.salary,
 		"available": true,
 	}
@@ -550,7 +592,7 @@ func test_released_market_signing_salary_is_locked_until_next_offseason() -> voi
 	var entry: Dictionary = {
 		"player_id": signed.id,
 		"from_team": 1,
-		"track": ReleasedMarket.TRACK_SHIENKA,
+		"track": ReleasedMarket.TRACK_CONTROLLED,
 		"salary": ReleasedMarket._released_contract_salary(signed.salary),
 		"value": 60,
 	}
@@ -831,10 +873,12 @@ func test_foreign_contract_cpu_replaces_shared_release_candidate_through_scoutin
 		RecordStore.set_player_record(previous_record as PSPlayerSeasonRecord, record_key)
 
 
+# 放出判定 (= スカウト候補の足切り) は**その球団の同役割の代替水準との相対**なので、
+# 在籍陣より明確に強い候補だけが「切らない = 獲る価値がある」側に入る。
 func test_foreign_cpu_scout_uses_shared_release_decision_for_candidates() -> void:
 	var players: Array = []
 	for i in range(4):
-		var depth_player: PSPlayer = _player_with_z(3060 + i, 1, 3, false, 2.0)
+		var depth_player: PSPlayer = _player_with_z(3060 + i, 1, 3, false, 0.0)
 		depth_player.age = 28
 		players.append(depth_player)
 	var season: PSSeason = PSSeason.new()
@@ -909,9 +953,9 @@ func test_foreign_contract_poach_blocked_by_foreign_slot_cap() -> void:
 	assert_int(player.team_id).is_equal(0)
 
 
-func test_foreign_contract_poach_blocked_by_shienka_limit() -> void:
+func test_foreign_contract_poach_blocked_by_controlled_limit() -> void:
 	var player: PSPlayer = _player({"id": 3004, "team_id": 1, "salary": 5000, "age": 28, "foreign_player": true})
-	var players: Array = _support_players(2, TeamFinance.SHIENKA_LIMIT)
+	var players: Array = _support_players(2, TeamFinance.CONTROLLED_LIMIT)
 	players.append(player)
 	var teams: Array = [_team(1), _team(2)]
 	var entry: Dictionary = {"player_id": 3004, "from_team_id": 1, "value": 70, "market_salary": 8000, "max_years": 3}
@@ -1451,7 +1495,9 @@ func test_release_plan_is_independent_of_foreign_headcount() -> void:
 
 
 func test_release_cuts_surplus_noshow_thirties_fielder() -> void:
-	var players: Array = []
+	# 放出計画 (在籍 + 見込み流入 − 開幕目標) が立つ規模のロスターにする。
+	# 目標人数を割っている球団は RECONCILE_UPPER_SLACK=0 で1人も切らないため。
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
 	var noshow: PSPlayer = _player_with_z(9220, 1, 6, false, 0.0)
 	noshow.age = 33
 	players.append(noshow)
@@ -1474,31 +1520,99 @@ func test_release_keeps_low_value_catcher_within_slot_budget() -> void:
 
 
 func test_release_slot_rejects_unexcused_noshow_thirties_player() -> void:
+	# 放出計画が立つ規模のロスターに1人だけ「30歳以上・当季出場ゼロ・怪我の免除なし」を混ぜる。
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
+	var records: Array = []
+	for row in players:
+		records.append(PSPlayerSeasonRecord.from_player(row as PSPlayer, 2099, 1))
 	var player: PSPlayer = _player_with_z(9776, 1, 7, false, -2.0)
 	player.age = 33
-	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2099, 1)
-	assert_float(ReleaseValueProjector.projected_value(player, record)).is_less(Offseason.RELEASE_REPLACEMENT_VALUE)
-	assert_array(_release_candidates_with_records([player], [record])).contains(player.id)
+	players.append(player)
+	records.append(PSPlayerSeasonRecord.from_player(player, 2099, 1))
+	# スロット資格が無く (30代ゼロ出場)、稼働による保護も受けないので放出候補になる。
+	assert_array(_release_candidates_with_records(players, records)).contains(player.id)
 
 
 func test_release_keeps_active_regular_that_ranks_inside_slot() -> void:
-	var players: Array = []
+	# 放出計画が立つ規模の土台 (position 3) の上に、検証対象の三塁 (position 5) を6人乗せる。
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
 	var records: Array = []
-	var regular: PSPlayer = _player_with_z(9780, 1, 3, false, 0.0)
+	for row in players:
+		records.append(PSPlayerSeasonRecord.from_player(row as PSPlayer, 2099, 1))
+	var regular: PSPlayer = _player_with_z(9780, 1, 5, false, 0.0)
 	regular.age = 35
 	players.append(regular)
 	var regular_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(regular, 2099, 1)
 	regular_record.batter_stats.games = 100
 	records.append(regular_record)
 	for i in range(5):
-		var reserve: PSPlayer = _player_with_z(9781 + i, 1, 3, false, -3.0)
+		var reserve: PSPlayer = _player_with_z(9781 + i, 1, 5, false, -3.0)
 		reserve.age = 35
 		players.append(reserve)
 		records.append(PSPlayerSeasonRecord.from_player(reserve, 2099, 1))
-	assert_float(ReleaseValueProjector.projected_value(regular, regular_record)).is_less(Offseason.RELEASE_REPLACEMENT_VALUE)
 	var cut_ids: Array = _release_candidates_with_records(players, records)
 	assert_array(cut_ids).not_contains(regular.id)
 	assert_int(cut_ids.size()).is_greater(0)
+
+
+# 役割スロットの占有は「将来価値」ではなく「当季その役割を務めたか + 現在の実力」で決まる。
+# projected_value の成長期待は ±40 点動くので、それだけで並べると若手の控えがレギュラーを
+# 押し出してレギュラーが余剰=戦力外になっていた。
+func test_release_keeps_regular_pushed_out_by_higher_projection_youngsters() -> void:
+	# 放出計画が立つ規模の土台 (position 3) の上に、検証対象の遊撃 (position 6) を乗せる。
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
+	var records: Array = []
+	for row in players:
+		records.append(PSPlayerSeasonRecord.from_player(row as PSPlayer, 2099, 1))
+	var regular: PSPlayer = _player_with_z(9820, 1, 6, false, 0.5)
+	regular.age = 34
+	players.append(regular)
+	var regular_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(regular, 2099, 1)
+	regular_record.batter_stats.games = 130
+	records.append(regular_record)
+	for i in range(5):
+		var prospect: PSPlayer = _player_with_z(9821 + i, 1, 6, false, -0.5)
+		prospect.age = 21
+		players.append(prospect)
+		records.append(PSPlayerSeasonRecord.from_player(prospect, 2099, 1))
+	# 代替水準を確実に下回る選手を1人混ぜ、「誰も切れないから残った」ではないことを示す。
+	var fringe: PSPlayer = _player_with_z(9830, 1, 6, false, -3.0)
+	fringe.age = 21
+	players.append(fringe)
+	records.append(PSPlayerSeasonRecord.from_player(fringe, 2099, 1))
+	# 前提: 将来価値では若手のほうが上位に来る (= 旧実装ならレギュラーがスロット外に落ちる)。
+	assert_float(ReleaseValueProjector.projected_value(regular, regular_record)).is_less(
+		ReleaseValueProjector.projected_value(players[1] as PSPlayer, records[1] as PSPlayerSeasonRecord)
+	)
+	var cut_ids: Array = _release_candidates_with_records(players, records)
+	assert_array(cut_ids).not_contains(regular.id)
+	assert_array(cut_ids).contains(fringe.id)
+
+
+# 代替水準は絶対値ではなく**自チームの同役割で抱え続ける最低ライン**。同じ能力の選手でも、
+# 周りが強い球団では放出され、周りが弱い球団では残る (リーグ全体の能力水準に依存しない)。
+func test_release_replacement_line_is_relative_to_own_team() -> void:
+	# 周りが強い球団では代替水準を下回って放出候補になる。
+	assert_array(_relative_line_cut_ids(2.0)).contains(9860)
+	# **同じスペックの選手**でも周りが弱ければ代替水準を上回るので残る。
+	assert_array(_relative_line_cut_ids(-0.5)).not_contains(9860)
+
+
+# 「周りの水準」だけを surrounding_z で振り替えて、当落選手 (id 9860, z=-1.0) の去就を返す。
+# 当落選手は同ポジションに常に3人の先着が居るので、どちらの球団でもスロット外 (余剰) になる。
+func _relative_line_cut_ids(surrounding_z: float) -> Array:
+	var players: Array = _plan_team(1, 60, 9300, surrounding_z)
+	var marginal: PSPlayer = _player_with_z(9860, 1, 6, false, -1.0)
+	marginal.age = 27
+	players.append(marginal)
+	for i in range(3):
+		var blocker: PSPlayer = _player_with_z(9861 + i, 1, 6, false, surrounding_z)
+		blocker.age = 27
+		players.append(blocker)
+	var records: Array = []
+	for row in players:
+		records.append(PSPlayerSeasonRecord.from_player(row as PSPlayer, 2099, 1))
+	return _release_candidates_with_records(players, records)
 
 
 func test_release_keeps_long_injured_high_ability_surplus_player() -> void:
@@ -1515,7 +1629,8 @@ func test_release_keeps_long_injured_high_ability_surplus_player() -> void:
 		stronger.age = 28
 		players.append(stronger)
 		records.append(PSPlayerSeasonRecord.from_player(stronger, 2099, 1))
-	assert_float(ReleaseValueProjector.projected_value(injured, injured_record)).is_greater_equal(Offseason.RELEASE_REPLACEMENT_VALUE)
+	# 同ポジションの上位5人に押し出されて余剰にはなるが、欠場が長期離脱で説明できるので放出しない。
+	assert_bool(ReleaseValueProjector.is_usage_protected(injured_record)).is_true()
 	assert_array(_release_candidates_with_records(players, records)).not_contains(injured.id)
 
 
@@ -1541,7 +1656,7 @@ func test_process_demotion_marks_development_and_frees_slot() -> void:
 		_player({"id": 10, "team_id": 1}),
 		_player({"id": 11, "team_id": 1}),
 	]
-	var before: int = TeamFinance.shienka_count(players, 1)
+	var before: int = TeamFinance.controlled_count(players, 1)
 	var result: Dictionary = Offseason.process_demotion(players, 1, [10])
 	assert_int(int(result.get("demoted_count", 0))).is_equal(1)
 	var demoted: PSPlayer = players[0] as PSPlayer
@@ -1549,7 +1664,7 @@ func test_process_demotion_marks_development_and_frees_slot() -> void:
 	assert_str(demoted.registered_roster).is_equal("育成")
 	assert_bool(demoted.is_retired()).is_false()  # release と違い org に残る
 	assert_int(demoted.team_id).is_equal(1)
-	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(before - 1)
+	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(before - 1)
 
 
 func test_demotion_not_blocked_by_development_count() -> void:
@@ -1565,7 +1680,7 @@ func test_demotion_not_blocked_by_development_count() -> void:
 
 # --- 昇格 (育成 → 支配下) ----------------------------------------------------
 
-func test_promotion_moves_strong_dev_to_shienka() -> void:
+func test_promotion_moves_strong_dev_to_controlled() -> void:
 	var strong_dev: PSPlayer = _player_with_z(20, 1, 3, true, 2.5)
 	var players: Array = [strong_dev, _player({"id": 21, "team_id": 1})]
 	var result: Dictionary = Offseason.process_development_promotions(players, [_team(1)], 0)
@@ -1582,8 +1697,8 @@ func test_promotion_skips_weak_dev() -> void:
 	assert_bool(weak_dev.development_player).is_true()
 
 
-func test_promotion_blocked_when_no_shienka_room() -> void:
-	var players: Array = _support_players(1, TeamFinance.SHIENKA_LIMIT)
+func test_promotion_blocked_when_no_controlled_room() -> void:
+	var players: Array = _support_players(1, TeamFinance.CONTROLLED_LIMIT)
 	var strong_dev: PSPlayer = _player_with_z(40, 1, 3, true, 2.5)
 	players.append(strong_dev)
 	var result: Dictionary = Offseason.process_development_promotions(players, [_team(1)], 0)
@@ -1702,7 +1817,7 @@ func test_long_injury_demotion_respects_release_block_reason() -> void:
 # オフの自動昇格は soft 目標 (67) で止まり、残り3枠は期限昇格が使い切る。期限を過ぎると
 # FA/外国人/トレードが無いので、ここで埋めないと翌オフまで死に枠になる。
 func test_registration_deadline_promotion_fills_up_to_hard_limit() -> void:
-	var players: Array = _support_players(1, TeamFinance.SHIENKA_SOFT_TARGET)
+	var players: Array = _support_players(1, TeamFinance.CONTROLLED_SOFT_TARGET)
 	var ready_devs: Array = []
 	for i in range(5):
 		var dev: PSPlayer = _player_with_z(9700 + i, 1, 3, true, 2.5)
@@ -1716,9 +1831,9 @@ func test_registration_deadline_promotion_fills_up_to_hard_limit() -> void:
 	# 期限昇格は hard 上限 (70) まで = 残り3枠ぶんだけ昇格する。
 	var deadline_result: Dictionary = Offseason.process_registration_deadline_promotions(players, [_team(1)], 0, null)
 	assert_int(int(deadline_result.get("promoted_count", 0))).is_equal(
-		TeamFinance.SHIENKA_LIMIT - TeamFinance.SHIENKA_SOFT_TARGET
+		TeamFinance.CONTROLLED_LIMIT - TeamFinance.CONTROLLED_SOFT_TARGET
 	)
-	assert_int(TeamFinance.shienka_count(players, 1)).is_equal(TeamFinance.SHIENKA_LIMIT)
+	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(TeamFinance.CONTROLLED_LIMIT)
 
 
 # 枠が空いていても即戦力基準に届かない育成は上げない (枠を埋めること自体は目的にしない)。
@@ -1913,12 +2028,12 @@ func test_development_contract_expires_after_max_seasons() -> void:
 
 # NPB 規約: 支配下経験者の育成契約は「次年度に支配下契約されなければ自由契約」= 1年で、
 # 新規の育成選手 (3年) より短い。育成降格と戦力外からの育成track再契約が該当する。
-func test_development_contract_from_shienka_expires_after_one_season() -> void:
+func test_development_contract_from_controlled_expires_after_one_season() -> void:
 	var since_year: int = 2026
 	var demoted: PSPlayer = _player_with_z(2200, 1, 3, true, 1.5)
 	demoted.age = 22
 	demoted.source_data["development_since_year"] = since_year - 1
-	demoted.source_data["dev_from_shienka"] = true
+	demoted.source_data["dev_from_controlled"] = true
 	var drafted: PSPlayer = _player_with_z(2201, 1, 3, true, 1.5)
 	drafted.age = 22
 	drafted.source_data["development_since_year"] = since_year - 1
@@ -1936,7 +2051,7 @@ func test_demotion_starts_one_season_clock() -> void:
 	demoted.age = 22
 	Offseason.process_demotion([demoted], 1, [demoted.id], 2026)
 	assert_bool(demoted.development_player).is_true()
-	assert_bool(demoted.is_development_from_shienka()).is_true()
+	assert_bool(demoted.is_development_from_controlled()).is_true()
 	assert_int(demoted.development_seasons_completed(2026)).is_equal(0)
 	assert_int(demoted.development_seasons_completed(2027)).is_equal(1)
 
@@ -2436,7 +2551,7 @@ func test_development_contract_salary_uses_separate_scale() -> void:
 	assert_int(demoted.salary).is_equal(Offseason.DEVELOPMENT_CONTRACT_SALARY)
 
 	# 昇格時に支配下最低年俸を保証し、以降は従来の支配下スケールへ戻る。
-	Offseason._apply_promotion_to_shienka(demoted)
+	Offseason._apply_promotion_to_controlled(demoted)
 	assert_int(demoted.salary).is_equal(Offseason.SALARY_MIN)
 	assert_int(Offseason._compute_new_salary(demoted, null, 0.0)).is_greater_equal(Offseason.SALARY_MIN)
 
@@ -2574,6 +2689,22 @@ func test_released_market_ai_signs_pitchers_via_depth_fit() -> void:
 	assert_int(signed_pitchers).override_failure_message(
 		"戦力外獲得で投手が1人も獲得されていません (depth-fit ゲートの回帰)"
 	).is_greater(0)
+
+
+# 弱点スロットでも「当落線を僅かに上回るだけ」の候補は upgrade_margin で弾かれる。
+# is_weakness (need > 0 = リーグ平均未満) は全球団の約半数が常に該当するゆるいゲートなので、
+# 獲得数を絞っているのは margin のほう。margin=0 なら旧挙動どおり通る。
+func test_depth_chart_upgrade_margin_gates_marginal_candidate() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	var players: Array = [
+		_player_with_z(9840, 1, 3, false, 2.0),
+		_player_with_z(9841, 2, 3, false, -1.0),
+	]
+	var chart: Dictionary = TeamDepthChart.build_league(players, teams)[2] as Dictionary
+	var candidate: PSPlayer = _player_with_z(9842, 0, 3, false, -0.9)
+	candidate.age = 30  # 将来性ルートを閉じ、即戦力判定だけを見る
+	assert_bool(bool(TeamDepthChart.evaluate_candidate(chart, candidate, 0.0).get("fit", false))).is_true()
+	assert_bool(bool(TeamDepthChart.evaluate_candidate(chart, candidate, 100.0).get("fit", false))).is_false()
 
 
 # --- helpers -----------------------------------------------------------------

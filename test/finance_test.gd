@@ -27,10 +27,28 @@ func test_update_previous_ranks_does_not_touch_funds() -> void:
 	var t1: PSTeam = teams[0] as PSTeam
 	var t2: PSTeam = teams[1] as PSTeam
 	# 予算は固定 (FIXED_BUDGET) のため順位更新では funds は一切変わらない。
+	# シード/セーブ由来のバラバラな funds は apply_fixed_budget が揃える (下のテスト)。
 	assert_int(t1.funds).is_equal(999999)
 	assert_int(t1.previous_rank).is_equal(1)
 	assert_int(t2.funds).is_equal(999999)
 	assert_int(t2.previous_rank).is_equal(2)
+
+
+# 予算の単一ソースは FIXED_BUDGET。シード CSV / 旧セーブがどんな funds を持っていても、
+# ロード時に apply_fixed_budget が全球団を固定額へ揃える (変動予算制の名残が復活しない保証)。
+func test_apply_fixed_budget_levels_every_team() -> void:
+	var teams: Array = [_team(1, "league1", 416500), _team(2, "league1", 467600), _team(3, "league2", TeamFinance.FIXED_BUDGET)]
+	# 既に固定額の球団は書き換え対象に数えない。
+	assert_int(TeamFinance.apply_fixed_budget(teams)).is_equal(2)
+	for team_row in teams:
+		assert_int((team_row as PSTeam).funds).is_equal(TeamFinance.FIXED_BUDGET)
+	assert_int(TeamFinance.apply_fixed_budget(teams)).is_equal(0)
+
+
+# シード CSV の funds 列も固定額で揃っていること (進化後ワールドを書き出すとバラバラな値が入る)。
+func test_initial_teams_csv_funds_are_all_fixed_budget() -> void:
+	for row in PSPlayerCsvIo.read_teams("res://data/initial_teams.csv"):
+		assert_int(int((row as Dictionary).get("funds", 0))).is_equal(TeamFinance.FIXED_BUDGET)
 
 
 func test_budget_summary_reports_over_budget() -> void:
