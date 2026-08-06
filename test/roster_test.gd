@@ -665,12 +665,18 @@ func test_is_multi_year_locked_in_season_covers_final_contract_year() -> void:
 	assert_int(player.contract_years_remaining(2030)).is_equal(0)
 
 
+# 複数年契約中は放出候補から外れる。**同スペックの契約フリーな双子と比較する**ことで、
+# 「そもそも誰も切られない状況だから候補に入っていないだけ」を排除する
+# (放出計画は支配下58人以上でしか立たない → _plan_team で土台を敷く)。
 func test_compute_release_candidates_excludes_multi_year_locked_player() -> void:
-	var players: Array = []
-	var locked: PSPlayer = _player_with_z(9430, 1, 6, false, 0.0)
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
+	var locked: PSPlayer = _player_with_z(9430, 1, 6, false, -2.0)
 	locked.age = 33
 	locked.source_data["contract_end_year"] = 2027
 	players.append(locked)
+	var unlocked_twin: PSPlayer = _player_with_z(9431, 1, 6, false, -2.0)
+	unlocked_twin.age = 33
+	players.append(unlocked_twin)
 	for i in range(5):
 		var stronger: PSPlayer = _player_with_z(9440 + i, 1, 6, false, 1.0)
 		stronger.age = 28
@@ -679,6 +685,8 @@ func test_compute_release_candidates_excludes_multi_year_locked_player() -> void
 	season.year = 2026
 	season.season_number = 1
 	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, season)
+	# 契約フリーな双子は切られる = この状況なら本来ロック側も候補になっていた。
+	assert_array(cut_ids).contains(unlocked_twin.id)
 	assert_array(cut_ids).not_contains(locked.id)
 
 
@@ -1204,6 +1212,9 @@ func test_contract_years_pool_auto_resolves_age_capped_player_to_single_year() -
 	assert_array(pool).is_empty()
 	assert_bool(old_player.source_data.has("contract_end_year")).is_false()
 	assert_bool(old_player.source_data.has("contract_total_years")).is_false()
+	# 「単年契約に解決された」= 複数年キーが消えて残年数0の状態 (この表現が単一ソース)。
+	assert_int(old_player.contract_years_remaining(2026)).is_equal(0)
+	assert_bool(old_player.is_multi_year_locked_offseason(2026)).is_false()
 	var pool_next_year: Array = Offseason._build_contract_years_pool([old_player], 2027)
 	assert_array(pool_next_year).is_empty()
 
@@ -1398,6 +1409,103 @@ func test_fa_pass_count_not_incremented_for_multi_year_locked_player() -> void:
 	assert_int(int(locked.source_data.get("fa_pass_count", -1))).is_equal(1)
 
 
+# --- FA宣言の抽選 (件数の蓋と対象の足切り) -----------------------------------
+# 宣言者は「宣言確率の抽選 → declare_score 降順 → 球団別上限 → リーグ全体上限」の順で決まる。
+# 上限2つは長期の流動量を決める蓋で、外れても long_autoplay の平均でしか気付けないためここで固定する。
+
+# eligible な FA 権保持者を作る (fa_nissuu を満たし、複数年契約もクールダウンも無い状態)。
+# **fa_eligible_year を当年にするのが要点** — これが無いと権利取得からの経過年数が pass_count
+# として効き、宣言確率が MIN_DECLARE_CHANCE(2%) まで減衰して抽選をほぼ誰も通らなくなる。
+# 当年取得 (pass_count=0) は BASE + NEW_FA ボーナスで最も宣言しやすい層。
+func _fa_eligible_player(id: int, team_id: int, z_value: float, eligible_year: int = 2026) -> PSPlayer:
+	var player: PSPlayer = _player_with_z(id, team_id, 3, false, z_value)
+	player.age = 30
+	player.years = 10
+	player.salary = 20000
+	player.source_data["fa_nissuu"] = PSPlayer.FA_SERVICE_DAYS_PER_YEAR * 10
+	player.source_data["fa_eligible_year"] = eligible_year
+	return player
+
+
+func _declared_count_by_team(declared: Array) -> Dictionary:
+	var counts: Dictionary = {}
+	for row in declared:
+		var team_id: int = int((row as Dictionary).get("from_team", 0))
+		counts[team_id] = int(counts.get(team_id, 0)) + 1
+	return counts
+
+
+# 1球団から宣言できるのは MAX_DECLARE_PER_TEAM 人まで。
+# **候補を1球団に集中させる**ことで、球団別上限が無ければリーグ上限 (10人) まで通ってしまう
+# 状況を作る。抽選を通る人数 (60人 × 22%) は上限を十分上回るので、seed に依存しない。
+func test_fa_declaration_is_capped_per_team() -> void:
+	Rng.set_seed_value(20260806)
+	var players: Array = []
+	for i in range(60):
+		players.append(_fa_eligible_player(9600 + i, 1, 3.0))
+	# 前提: 全員が「レギュラー級」の足切りを通る評価値であること。
+	assert_int(OffseasonService.player_value_score(players[0] as PSPlayer)).is_greater_equal(FaMarketService.REGULAR_OVERALL)
+
+	var declared: Array = FaMarketService._select_declarers(players, [], null, 2026)
+	var by_team: Dictionary = _declared_count_by_team(declared)
+	assert_int(declared.size()).is_equal(FaMarketService.MAX_DECLARE_PER_TEAM)
+	assert_int(int(by_team.get(1, 0))).is_equal(FaMarketService.MAX_DECLARE_PER_TEAM)
+
+
+# リーグ全体の宣言数は TARGET_DECLARATIONS で頭打ちになる。
+func test_fa_declaration_is_capped_league_wide() -> void:
+	Rng.set_seed_value(20260807)
+	var players: Array = []
+	for team_id in range(1, 13):
+		for i in range(30):
+			players.append(_fa_eligible_player(9000 + team_id * 100 + i, team_id, 2.0))
+
+	var declared: Array = FaMarketService._select_declarers(players, [], null, 2026)
+	# 候補は360人・宣言確率は最低でも MIN_DECLARE_CHANCE なので、抽選を通る人数は上限を必ず超える。
+	assert_int(declared.size()).is_equal(FaMarketService.TARGET_DECLARATIONS)
+
+
+# 宣言は「レギュラー級」に限定する。控え (低評価・出場実績なし) は抽選対象にすら入らない。
+# 抽選が絡むので複数 seed で回し、**レギュラーは宣言されるのに控えは1度も出てこない**ことを見る。
+func test_fa_declaration_excludes_non_regular_class() -> void:
+	var regular_declared: int = 0
+	for seed_value in range(10):
+		Rng.set_seed_value(20260810 + seed_value)
+		var players: Array = []
+		for i in range(20):
+			players.append(_fa_eligible_player(9800 + i, 1, 3.0))
+		var bench: PSPlayer = _fa_eligible_player(9899, 2, -2.0)
+		players.append(bench)
+		# 前提: 控えは足切り (REGULAR_OVERALL) を下回り、当季成績も無い。
+		assert_int(OffseasonService.player_value_score(bench)).is_less(FaMarketService.REGULAR_OVERALL)
+
+		for row in FaMarketService._select_declarers(players, [], null, 2026):
+			var entry: Dictionary = row as Dictionary
+			assert_int(int(entry.get("player_id", 0))).is_not_equal(bench.id)
+			regular_declared += 1
+	# レギュラー側は実際に宣言されている (誰も宣言しない状態で素通りしていない)。
+	assert_int(regular_declared).is_greater(0)
+
+
+# FA移籍後 FA_RESIGN_COOLDOWN_YEARS 年はクールダウンで再宣言できない。
+func test_fa_declaration_respects_resign_cooldown() -> void:
+	Rng.set_seed_value(20260811)
+	var players: Array = []
+	for i in range(30):
+		# クールダウン明けの年 (2028) でも新規取得扱いになるよう eligible_year を合わせる。
+		var player: PSPlayer = _fa_eligible_player(9900 + i, 1 + i % 12, 3.0, 2028)
+		# 全員を「2025年にFAで移籍した」状態にする (2026 - 2025 = 1 年 < 3)。
+		player.source_data["fa_signed_year"] = 2025
+		players.append(player)
+	assert_bool(FaMarketService._on_cooldown(players[0] as PSPlayer, 2026)).is_true()
+	assert_array(FaMarketService._select_declarers(players, [], null, 2026)).is_empty()
+
+	# クールダウン明け (2025 + 3 = 2028) なら同じ母集団から宣言者が出る。
+	Rng.set_seed_value(20260811)
+	assert_bool(FaMarketService._on_cooldown(players[0] as PSPlayer, 2028)).is_false()
+	assert_array(FaMarketService._select_declarers(players, [], null, 2028)).is_not_empty()
+
+
 # --- 戦力外選定 (projection × デプスチャート) -------------------------------
 # 外国人0・育成0では見込み流入13人、放出後目標55人として役割予算を比例配分する。
 
@@ -1509,14 +1617,33 @@ func test_release_cuts_surplus_noshow_thirties_fielder() -> void:
 	assert_array(cut_ids).contains(noshow.id)
 
 
+# 捕手枠 (comfort C=5 → 放出後目標へ比例縮小して4) に収まっている捕手は、ロスター最弱でも
+# 切られない。放出計画が立つ規模の土台を敷き、**実際に他の余剰選手が切られている**ことも
+# 同時に確認する (計画0で誰も切れないだけの状態を通さない)。
 func test_release_keeps_low_value_catcher_within_slot_budget() -> void:
-	var players: Array = []
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
+	var catchers: Array = []
 	for i in range(4):
 		var catcher: PSPlayer = _player_with_z(9770 + i, 1, 2, false, -3.0)
 		catcher.age = 35
 		players.append(catcher)
+		catchers.append(catcher)
+	# 比較対象: 同じ低能力でも、枠が埋まっている一塁 (土台60人と同じ position) は余剰になる。
+	var surplus_twins: Array = []
+	for i in range(3):
+		var twin: PSPlayer = _player_with_z(9774 + i, 1, 3, false, -3.0)
+		twin.age = 35
+		players.append(twin)
+		surplus_twins.append(twin)
+	# スロット予算は在籍人数ではなく「放出後目標 − 見込み流入 + 外国人保有数」で決まるので、
+	# 土台を足しても4のまま。
 	assert_int(int(Offseason._release_slot_budgets(players, 1)["fielder:2"])).is_equal(4)
-	assert_array(Offseason.compute_release_candidates_for_team(players, 1, null)).is_empty()
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, null)
+	# 同スペックの余剰選手は切られる = 捕手が残るのは「誰も切れない状況だから」ではない。
+	for twin_row in surplus_twins:
+		assert_array(cut_ids).contains((twin_row as PSPlayer).id)
+	for catcher_row in catchers:
+		assert_array(cut_ids).not_contains((catcher_row as PSPlayer).id)
 
 
 func test_release_slot_rejects_unexcused_noshow_thirties_player() -> void:
@@ -1615,23 +1742,72 @@ func _relative_line_cut_ids(surrounding_z: float) -> Array:
 	return _release_candidates_with_records(players, records)
 
 
+# 長期離脱者は余剰でも放出しない。**同スペックで怪我していない双子と比較**して、
+# 「放出計画が立たないから残っているだけ」でないことを担保する。
 func test_release_keeps_long_injured_high_ability_surplus_player() -> void:
-	var players: Array = []
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
 	var records: Array = []
+	for row in players:
+		records.append(PSPlayerSeasonRecord.from_player(row as PSPlayer, 2099, 1))
 	var injured: PSPlayer = _player_with_z(9790, 1, 3, false, 1.0)
 	injured.age = 30
 	players.append(injured)
 	var injured_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(injured, 2099, 1)
 	injured_record.season_injury_days = ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS
 	records.append(injured_record)
+	var healthy_twin: PSPlayer = _player_with_z(9797, 1, 3, false, 1.0)
+	healthy_twin.age = 30
+	players.append(healthy_twin)
+	records.append(PSPlayerSeasonRecord.from_player(healthy_twin, 2099, 1))
 	for i in range(5):
 		var stronger: PSPlayer = _player_with_z(9791 + i, 1, 3, false, 2.0)
 		stronger.age = 28
 		players.append(stronger)
 		records.append(PSPlayerSeasonRecord.from_player(stronger, 2099, 1))
-	# 同ポジションの上位5人に押し出されて余剰にはなるが、欠場が長期離脱で説明できるので放出しない。
+	# 同ポジションの上位に押し出されて余剰にはなるが、欠場が長期離脱で説明できるので放出しない。
+	# (ここで効いているのは projection 側の怪我 excuse = 出場割引の免除。
+	#  is_usage_protected による放出保護そのものは
+	#  test_release_protects_regular_usage_player_below_replacement_line が固定する。)
 	assert_bool(ReleaseValueProjector.is_usage_protected(injured_record)).is_true()
-	assert_array(_release_candidates_with_records(players, records)).not_contains(injured.id)
+	var cut_ids: Array = _release_candidates_with_records(players, records)
+	assert_array(cut_ids).contains(healthy_twin.id)
+	assert_array(cut_ids).not_contains(injured.id)
+
+
+# 出場実績による放出保護 (is_usage_protected)。**代替水準を下回る余剰のレギュラー**でも、
+# 当季その役割を務めていれば切らない (球団相対の判定だけだと「最下位というだけ」で誰かが必ず
+# 切られてしまうため 2026-08-04 に導入)。同スペックの控え (出場ゼロ) が切られることで、
+# 保護が効いていることを差分で示す。
+func test_release_protects_regular_usage_player_below_replacement_line() -> void:
+	var players: Array = _plan_team(1, 60, 9300, 2.0)
+	var records: Array = []
+	for row in players:
+		records.append(PSPlayerSeasonRecord.from_player(row as PSPlayer, 2099, 1))
+	# 外野枠 (comfort OF=3 → 予算3) を、当季レギュラーの強打者3人で埋める。
+	for i in range(3):
+		var starter: PSPlayer = _player_with_z(9840 + i, 1, 7, false, 2.0)
+		starter.age = 27
+		players.append(starter)
+		var starter_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(starter, 2099, 1)
+		starter_record.batter_stats.games = 140
+		records.append(starter_record)
+	# 4人目の外野手 = 枠から溢れる (surplus) が、当季レギュラーとして稼働している。
+	var weak_regular: PSPlayer = _player_with_z(9850, 1, 7, false, -2.0)
+	weak_regular.age = 34
+	players.append(weak_regular)
+	var weak_regular_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(weak_regular, 2099, 1)
+	weak_regular_record.batter_stats.games = 140
+	records.append(weak_regular_record)
+	# 同スペックの控え (出場ゼロ) は保護されない。
+	var weak_bench: PSPlayer = _player_with_z(9851, 1, 7, false, -2.0)
+	weak_bench.age = 34
+	players.append(weak_bench)
+	records.append(PSPlayerSeasonRecord.from_player(weak_bench, 2099, 1))
+
+	assert_bool(ReleaseValueProjector.is_usage_protected(weak_regular_record)).is_true()
+	var cut_ids: Array = _release_candidates_with_records(players, records)
+	assert_array(cut_ids).contains(weak_bench.id)
+	assert_array(cut_ids).not_contains(weak_regular.id)
 
 
 func test_compute_release_candidates_returns_empty_when_all_protected() -> void:
@@ -1780,19 +1956,30 @@ func test_long_injury_demotion_runs_independently_of_release_candidates() -> voi
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
-	# 戦力外候補が出ない健全なロスター (若く能力のある支配下) に、長期故障者を1人置く。
+	# **放出計画が立つ規模** (支配下58人以上) にして、長期故障者を1人置く。
+	# 計画が0だと戦力外候補は常に空になり、下の not_contains が素通りしてしまう。
 	var players: Array = []
-	for i in range(30):
+	for i in range(60):
 		var healthy: PSPlayer = _player_with_z(9730 + i, 1, 3, false, 1.5)
 		healthy.age = 26
 		players.append(healthy)
+	# 怪我人は将来価値のある若手にする (_should_demote_to_development が
+	# future_value_score >= DEMOTE_INJURY_MIN_FUTURE_VALUE を要求するため、弱いベテランでは
+	# 育成降格ではなく戦力外側の話になる)。
 	var injured: PSPlayer = _player_with_z(9790, 1, 3, false, 1.5)
 	injured.age = 25
 	injured.injury_days = Offseason.DEMOTE_INJURY_DAYS_LONG + 60
 	players.append(injured)
+	# 放出候補が実際に出る状況を作るための当て馬 (低能力・高齢の余剰)。
+	for i in range(3):
+		var fodder: PSPlayer = _player_with_z(9791 + i, 1, 3, false, -2.0)
+		fodder.age = 33
+		players.append(fodder)
 
-	# 戦力外候補には入らない (怪我の有無に関わらずロスターに余剰が無い)。
-	assert_array(Offseason.compute_release_candidates_for_team(players, 1, season)).not_contains([injured.id])
+	# 放出候補が出ている状況でも、怪我人はそちらには入らない。
+	var cut_ids: Array = Offseason.compute_release_candidates_for_team(players, 1, season)
+	assert_int(cut_ids.size()).is_greater(0)
+	assert_array(cut_ids).not_contains([injured.id])
 	# それでも独立経路が拾う。
 	assert_array(Offseason.compute_long_injury_demotion_candidates_for_team(players, 1, season.year)).contains([injured.id])
 

@@ -61,9 +61,8 @@ const TABS: Array = [
 const USAGE_POSITIONS: Array = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const ORDER_SLOTS: Array = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-# 能力バーは上から一定間隔で詰める (守備適性は最大7つ想定)。
+# 能力バーは上から一定間隔で詰める。
 const ABILITY_BAR_H: float = 36.0
-const ABILITY_BAR_ROWS: int = 7
 const LOWER_TABLE_ROW_H: float = 30.0
 const SEASON_CARD_H: float = 58.0
 const SEASON_SCROLL_STEP: float = 30.0

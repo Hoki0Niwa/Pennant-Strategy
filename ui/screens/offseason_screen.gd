@@ -4890,23 +4890,6 @@ func _fill_camp_aptitude_cells(row: Dictionary, action: Dictionary) -> void:
 			_set_growth_cell(row, "apt_%d" % pos, {"after": after, "delta": delta, "suffix": ""})
 
 
-func _people_rows(people: Array) -> Array:
-	var rows: Array = []
-	for entry_row in people:
-		var entry: Dictionary = entry_row as Dictionary
-		var badge: Dictionary = _pick_pos_badge(entry)
-		rows.append({
-			"team": _team_short(int(entry.get("team_id", 0))),
-			"name": str(entry.get("name", "")),
-			"age": int(entry.get("age", 0)),
-			"pos": str(badge.get("text", "")),
-			"pos_color": badge.get("color", MUTED) as Color,
-			"years": int(entry.get("years", 0)),
-			"overall": int(entry.get("overall", 0)),
-		})
-	return rows
-
-
 func _growth_rows(entries: Array) -> Array:
 	var rows: Array = []
 	for entry_row in entries:

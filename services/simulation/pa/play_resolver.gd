@@ -865,66 +865,6 @@ static func _apply_double_play_context(outcome: Dictionary, opportunity: bool, p
 	outcome["double_play_probability"] = clamp(probability, 0.0, 1.0)
 
 
-static func smoke_test_infield_throw_beat_probability() -> Dictionary:
-	var fast_batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
-	fast_batter.player_id = -930001
-	fast_batter.z_abilities_snapshot = {"Run_Speed": 2.2}
-	var slow_batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
-	slow_batter.player_id = -930002
-	slow_batter.z_abilities_snapshot = {"Run_Speed": -1.4}
-	var fast_probability: float = _batter_beats_grounder_throw_probability(
-		fast_batter,
-		6,
-		72.0,
-		-23.0,
-		34.0,
-		0.4,
-		0.4
-	)
-	var slow_probability: float = _batter_beats_grounder_throw_probability(
-		slow_batter,
-		3,
-		96.0,
-		27.0,
-		18.0,
-		2.1,
-		1.6
-	)
-	return {
-		"ok": fast_probability > slow_probability and fast_probability > 0.12 and slow_probability < 0.06,
-		"fast_probability": _round_float(fast_probability, 3),
-		"slow_probability": _round_float(slow_probability, 3),
-	}
-
-
-static func smoke_test_groundout_runner_advancement_probabilities() -> Dictionary:
-	var fast_runner: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
-	fast_runner.player_id = -940001
-	fast_runner.z_abilities_snapshot = {"Run_Speed": 2.0, "Run_Judgment": 1.6}
-	var slow_runner: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
-	slow_runner.player_id = -940002
-	slow_runner.z_abilities_snapshot = {"Run_Speed": -1.5, "Run_Judgment": -1.2}
-	var third_score_fast: float = _groundout_third_score_probability(fast_runner, 4, 74.0, 12.0, 34.0, 0.4)
-	var third_score_slow: float = _groundout_third_score_probability(slow_runner, 1, 104.0, 2.0, 12.0, 2.1)
-	var second_right_side: float = _groundout_second_to_third_probability(fast_runner, 4, 78.0, 13.0, 32.0)
-	var second_left_side: float = _groundout_second_to_third_probability(slow_runner, 5, 98.0, -27.0, 20.0)
-	var first_advance: float = _groundout_first_to_second_probability(fast_runner, 6, 86.0, -12.0, 28.0)
-	return {
-		"ok": (
-			third_score_fast > third_score_slow
-			and third_score_fast > 0.22
-			and third_score_slow < 0.08
-			and second_right_side > second_left_side
-			and first_advance > 0.58
-		),
-		"third_score_fast": _round_float(third_score_fast, 3),
-		"third_score_slow": _round_float(third_score_slow, 3),
-		"second_right_side": _round_float(second_right_side, 3),
-		"second_left_side": _round_float(second_left_side, 3),
-		"first_advance": _round_float(first_advance, 3),
-	}
-
-
 static func _maybe_batter_beats_grounder_throw(
 	batter: PSPlayerSeasonRecord,
 	bases: Array,

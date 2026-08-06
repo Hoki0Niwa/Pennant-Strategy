@@ -101,7 +101,7 @@ static func make_theme() -> Theme:
 	t.set_color("font_color", "Label", TEXT)
 	t.set_color("default_color", "RichTextLabel", TEXT)
 
-	# 一覧表 (Tree ベースの sortable_table)
+	# 一覧表 (Tree ノードを使う画面)
 	t.set_color("font_color", "Tree", TEXT)
 	t.set_color("font_hovered_color", "Tree", Color.WHITE)
 	t.set_color("font_selected_color", "Tree", Color.WHITE)

@@ -69,21 +69,6 @@ static func starts_by_position(rows: Array) -> Dictionary:
 	return _finalize_counts(counts)
 
 
-# 打順別のスタメン数。{slot:int(1..9) -> [{"player_id": int, "starts": int}]} 同上の並び。
-static func starts_by_order(rows: Array) -> Dictionary:
-	var counts: Dictionary = {}  # slot:int -> {player_id:int -> starts:int}
-	for row_value in rows:
-		var row: Dictionary = row_value as Dictionary
-		for slot_value in (row.get("slots", []) as Array):
-			var slot: Dictionary = slot_value as Dictionary
-			var slot_num: int = int(slot.get("slot", 0))
-			var player_id: int = int(slot.get("pid", 0))
-			if slot_num <= 0 or player_id <= 0:
-				continue
-			_bump(counts, slot_num, player_id)
-	return _finalize_counts(counts)
-
-
 # 単一選手の起用集計。トレードを跨ぐので全球団を走査する。
 # {"by_position": {pos:int -> starts:int}, "by_order": {slot:int -> starts:int}, "total_starts": int}
 static func player_summary(player_id: int, year: int, season_number: int) -> Dictionary:

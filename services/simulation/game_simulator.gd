@@ -6,7 +6,6 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 const REGULATION_INNINGS: int = 9
 const MAX_INNINGS: int = 12
-const STARTER_EXTEND_START_INNING: int = 7   # 続投判定を始める回 (= 6回終了後)
 const FIELDER_START_FATIGUE_GAIN: int = 6
 const DH_START_FATIGUE_GAIN: int = 3
 const PINCH_HITTER_FATIGUE_GAIN: int = 2
@@ -704,44 +703,6 @@ static func simulate_until_team_game_async(
 
 # end_day (season day, inclusive) 以前の未消化試合をすべて消化する。
 # 翌月送りなど「特定日まで」の消化に使う。day はカレンダー日offsetと1:1なので境界判定に使える。
-static func simulate_until_day(season: PSSeason, end_day: int, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
-	var start_day: int = season.current_day
-	var simulated_games: int = 0
-	var last_result: Dictionary = {}
-	var guard: int = season.schedule.size() + 1
-	while guard > 0:
-		guard -= 1
-		var idx: int = _next_unplayed_game_index(season)
-		if idx < 0:
-			break
-		if int((season.schedule[idx] as Dictionary).get("day", 0)) > end_day:
-			break
-		var prev_day: int = season.current_day
-		var day_result: Dictionary = simulate_current_day(season, false, auto_swap_ctx)
-		if not bool(day_result.get("ok", false)):
-			if simulated_games > 0 and persist:
-				_persist_simulation_outputs(season)
-			return day_result
-		last_result = day_result
-		simulated_games += (day_result.get("results", []) as Array).size()
-		if season.current_day == prev_day:
-			break
-	if persist:
-		_persist_simulation_outputs(season)
-	if simulated_games == 0:
-		return {"ok": false, "message": "消化できる試合がありません"}
-	return {
-		"ok": true,
-		"simulated_count": simulated_games,
-		"message": "%d試合を消化しました。%s から %s。%s" % [
-			simulated_games,
-			SeasonCalendar.day_status_label(season, start_day),
-			SeasonCalendar.day_status_label(season, season.current_day),
-			str(last_result.get("message", "")),
-		],
-	}
-
-
 static func simulate_until_day_async(
 	season: PSSeason,
 	end_day: int,

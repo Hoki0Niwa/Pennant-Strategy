@@ -102,11 +102,12 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	assert_int(_max(starters)).is_less_equal(_max(fielders) + 2)
 
 
-func test_overall_score_ignores_fatigue_with_explicit_fatigue_variant() -> void:
+# 表示・査定に使う overall_score と batting_score_without_fatigue は疲労を無視し、
+# 起用判断に使う batting_score だけが疲労で下がる。
+func test_display_scores_ignore_fatigue_while_usage_score_applies_it() -> void:
 	var record: PSPlayerSeasonRecord = _fielder(901, "Everyday", 1.0)
 	record.fatigue = 0
 	var base_overall: int = PSPlayerValueEvaluator.overall_score(record)
-	var fresh_with_fatigue: int = PSPlayerValueEvaluator.overall_score_with_fatigue(record)
 	var base_display_bat: int = PSPlayerValueEvaluator.batting_score_without_fatigue(record)
 	var fresh_batting: int = PSPlayerValueEvaluator.batting_score(record)
 
@@ -114,7 +115,6 @@ func test_overall_score_ignores_fatigue_with_explicit_fatigue_variant() -> void:
 
 	assert_int(PSPlayerValueEvaluator.overall_score(record)).is_equal(base_overall)
 	assert_int(PSPlayerValueEvaluator.batting_score_without_fatigue(record)).is_equal(base_display_bat)
-	assert_int(PSPlayerValueEvaluator.overall_score_with_fatigue(record)).is_less(fresh_with_fatigue)
 	assert_int(PSPlayerValueEvaluator.batting_score(record)).is_less(fresh_batting)
 
 

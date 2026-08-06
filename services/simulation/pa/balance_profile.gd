@@ -28,29 +28,3 @@ static func logit(probability: float) -> float:
 	return log(p / (1.0 - p))
 
 
-static func weighted_softmax_pick(rows: Array) -> Dictionary:
-	if rows.is_empty():
-		return {}
-	var max_logit: float = -INF
-	for row_value in rows:
-		var row: Dictionary = row_value as Dictionary
-		max_logit = max(max_logit, float(row.get("logit", 0.0)))
-
-	var total: float = 0.0
-	var weights: Array = []
-	for row_value in rows:
-		var row: Dictionary = row_value as Dictionary
-		var weight: float = exp(clamp(float(row.get("logit", 0.0)) - max_logit, -30.0, 30.0))
-		weights.append(weight)
-		total += weight
-
-	if total <= 0.0:
-		return rows[0] as Dictionary
-
-	var roll: float = Rng.roll_float() * total
-	var running: float = 0.0
-	for index in range(rows.size()):
-		running += float(weights[index])
-		if roll <= running:
-			return rows[index] as Dictionary
-	return rows[rows.size() - 1] as Dictionary

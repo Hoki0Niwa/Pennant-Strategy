@@ -1809,6 +1809,69 @@ func test_postseason_pending_game_log_persists_through_save_and_reload() -> void
 		SaveContext.activate_save_id(old_save_id)
 
 
+# 個別テストの無かった画面の起動 smoke。_ready で落ちる/何も描かない退行を拾う。
+# (2026-08-06 追加。dev/レポート系の balance_report / player_probe / draft_simulator は
+#  実行にレポート生成が伴うのでここでは扱わない。)
+func test_remaining_season_screens_build_with_active_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	for path in [
+		"res://ui/screens/active_roster_screen.gd",
+		"res://ui/screens/lineup_editor_screen.gd",
+		"res://ui/screens/rankings_screen.gd",
+	]:
+		var screen_script: GDScript = load(str(path)) as GDScript
+		assert_object(screen_script).is_not_null()
+		var screen: Control = screen_script.new()
+		add_child(screen)
+		await get_tree().process_frame
+		assert_int(screen.get_child_count()).is_greater(0)
+		screen.queue_free()
+		await get_tree().process_frame
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+# シーズン開始前の入口画面 (セーブもシーズンも無い状態で開かれる)。
+func test_entry_screens_build_without_active_season() -> void:
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+
+	for path in [
+		"res://ui/screens/start_screen.gd",
+		"res://ui/screens/team_select_screen.gd",
+	]:
+		var screen_script: GDScript = load(str(path)) as GDScript
+		assert_object(screen_script).is_not_null()
+		var screen: Control = screen_script.new()
+		add_child(screen)
+		await get_tree().process_frame
+		assert_int(screen.get_child_count()).is_greater(0)
+		screen.queue_free()
+		await get_tree().process_frame
+
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+
+
 func _first_record_not_in_cs1(post: PSPostseasonResult, season: PSSeason) -> PSPlayerSeasonRecord:
 	var playing: Dictionary = {}
 	for key in ["cs1_league1", "cs1_league2"]:

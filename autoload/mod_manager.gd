@@ -145,33 +145,6 @@ func rule_int(path: String, fallback: int) -> int:
 	return int(value) if _is_number_like(value) else fallback
 
 
-func rule_bool(path: String, fallback: bool) -> bool:
-	var value: Variant = rule_value(path, fallback)
-	if value is bool:
-		return bool(value)
-	if value is String:
-		var text: String = str(value).strip_edges().to_lower()
-		if text == "true" or text == "1" or text == "yes" or text == "on":
-			return true
-		if text == "false" or text == "0" or text == "no" or text == "off":
-			return false
-	return fallback
-
-
-func rule_array(path: String, fallback: Array = []) -> Array:
-	var value: Variant = rule_value(path, fallback)
-	if value is Array:
-		return (value as Array).duplicate(true)
-	return fallback.duplicate(true)
-
-
-func rule_dict(path: String, fallback: Dictionary = {}) -> Dictionary:
-	var value: Variant = rule_value(path, fallback)
-	if value is Dictionary:
-		return (value as Dictionary).duplicate(true)
-	return fallback.duplicate(true)
-
-
 func active_mods_snapshot() -> Array:
 	return _active_mods.duplicate(true)
 

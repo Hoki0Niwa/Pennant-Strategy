@@ -89,9 +89,7 @@ func test_calendar_display_helpers_are_stable() -> void:
 
 	assert_str(SeasonCalendar.current_date(season)).is_equal(season.calendar_start_date)
 	assert_str(SeasonCalendar.compact_label_for_game(first_game, season)).is_equal("3/27(金)")
-	assert_str(SeasonCalendar.relative_label(1, 1)).is_equal("本日")
-	assert_str(SeasonCalendar.relative_label(1, 2)).is_equal("明日")
-	assert_str(SeasonCalendar.relative_label(1, 4)).is_equal("3日後")
+	assert_str(SeasonCalendar.day_status_label(season, 1)).contains("Day 1")
 
 
 func test_no_non_holiday_monday_games() -> void:

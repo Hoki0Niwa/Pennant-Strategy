@@ -96,15 +96,9 @@ static func _starter_factor(start: float, limit: float, outing_pitches: int) -> 
 	return clamp(1.0 - drop_amount, 0.0, 1.0)
 
 
-# 疲労を反映した pitcher_z のコピーを返す（破壊的でない）。
+# 疲労を反映して pitcher_z を書き換える。
 # (1 - fatigue_factor) * FATIGUE_*_DROP を該当 z-key から減算する。
-static func apply_drops(pitcher_z: Dictionary, fatigue_factor: float) -> Dictionary:
-	var adjusted: Dictionary = pitcher_z.duplicate()
-	apply_drops_in_place(adjusted, fatigue_factor)
-	return adjusted
-
-
-# 呼び出し側が打席専用のコピーを所有している場合に、追加の Dictionary 複製をせず疲労を反映する。
+# 呼び出し側が打席専用のコピーを所有しているので、追加の Dictionary 複製はしない。
 static func apply_drops_in_place(adjusted: Dictionary, fatigue_factor: float) -> void:
 	var drop_amount: float = 1.0 - clamp(fatigue_factor, 0.0, 1.0)
 	if drop_amount <= 0.0:

@@ -987,12 +987,6 @@ func submit_geneki_list(player_ids: Array) -> Dictionary:
 	)
 
 
-func auto_geneki_list() -> Dictionary:
-	return _geneki_action(func() -> Dictionary:
-		return GenekiDraftService.auto_submit_user_list(geneki_draft_state, GameDb.players, GameDb.teams, current_season)
-	)
-
-
 func submit_geneki_pick(player_id: int) -> Dictionary:
 	return _geneki_action(func() -> Dictionary:
 		return GenekiDraftService.submit_user_pick(geneki_draft_state, GameDb.players, GameDb.teams, current_season, player_id)
@@ -1246,22 +1240,6 @@ func _submit_foreign_decision(candidate_id: int, action: String) -> Dictionary:
 	return {"ok": true, "state": foreign_state}
 
 
-func auto_foreign_user_pick() -> Dictionary:
-	if not offseason_active or offseason_step != OFFSEASON_STEP_FOREIGN_MARKET:
-		return {"ok": false, "message": "外国人補強は現在有効ではありません"}
-	if foreign_state.is_empty():
-		return {"ok": false, "message": "外国人補強が初期化されていません"}
-	var result: Dictionary = ForeignPlayerService.auto_pick_for_user(foreign_state, GameDb.players, GameDb.teams, current_season)
-	foreign_state = result.get("state", foreign_state) as Dictionary
-	if not bool(result.get("ok", false)):
-		return result
-	if _is_foreign_complete():
-		_finalize_foreign_if_complete()
-	GameDb.rebuild_player_indices()
-	_save_if_enabled()
-	return {"ok": true, "state": foreign_state}
-
-
 # 「補強を終了」: 自軍の残り候補は打ち切り、他球団だけCPUが自動補強する。show_result=true なので
 # 即完了はせず phase="scout_result" の結果パネル ("次へ" は advance_foreign_scout_result) を挟む。
 func complete_foreign_automatically() -> Dictionary:
@@ -1311,14 +1289,6 @@ func _finalize_foreign_if_complete() -> Dictionary:
 	return result
 
 
-func submit_camp_candidate(candidate_id: int) -> Dictionary:
-	return _submit_camp_decision(candidate_id, "train")
-
-
-func skip_camp_candidate(candidate_id: int) -> Dictionary:
-	return _submit_camp_decision(candidate_id, "skip")
-
-
 func submit_camp_player_training(player_id: int, training_type: String, target_position: int = 0) -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_CAMP:
 		return {"ok": false, "message": "キャンプは現在有効ではありません"}
@@ -1333,21 +1303,6 @@ func submit_camp_player_training(player_id: int, training_type: String, target_p
 		training_type,
 		target_position
 	)
-	camp_state = result.get("state", camp_state) as Dictionary
-	if not bool(result.get("ok", false)):
-		return result
-	if _is_camp_complete():
-		_finalize_camp_if_complete()
-	_save_if_enabled()
-	return {"ok": true, "state": camp_state}
-
-
-func _submit_camp_decision(candidate_id: int, action: String) -> Dictionary:
-	if not offseason_active or offseason_step != OFFSEASON_STEP_CAMP:
-		return {"ok": false, "message": "キャンプは現在有効ではありません"}
-	if camp_state.is_empty():
-		return {"ok": false, "message": "キャンプが初期化されていません"}
-	var result: Dictionary = _camp_service().submit_user_camp_action(camp_state, GameDb.players, GameDb.teams, current_season, candidate_id, action)
 	camp_state = result.get("state", camp_state) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
@@ -1492,20 +1447,6 @@ func _normalize_saved_offseason_step(raw_step: Variant) -> String:
 	if raw_step is String and OFFSEASON_STEP_ORDER.has(raw_step):
 		return raw_step
 	return OFFSEASON_STEP_ORDER[0]
-
-
-func simulate_next_game(during_skip: bool = false) -> Dictionary:
-	if current_season == null:
-		return {"ok": false, "message": "シーズンが開始されていません"}
-
-	var persist_progress: bool = auto_save_enabled
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
-	var result: Dictionary = GameSimulator.simulate_next_unplayed_game(current_season, persist_progress, _build_auto_swap_ctx(during_skip))
-	last_status_message = str(result.get("message", ""))
-	if bool(result.get("ok", false)):
-		_save_if_enabled()
-	request_screen("home")
-	return result
 
 
 func simulate_current_day(during_skip: bool = false) -> Dictionary:

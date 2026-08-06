@@ -89,23 +89,6 @@ static func overall_score(record: PSPlayerSeasonRecord) -> int:
 	return _fielder_starter_score(record, false)
 
 
-static func overall_score_with_fatigue(record: PSPlayerSeasonRecord) -> int:
-	if record == null:
-		return 0
-	if record.is_pitcher():
-		return _pitcher_eval_score(record, true)
-	return _fielder_starter_score(record, true)
-
-
-# 旧呼び名との互換 alias。新規コードでは overall_score を使う。
-static func overall_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
-	return overall_score(record)
-
-
-static func fielder_starter_score(record: PSPlayerSeasonRecord) -> int:
-	return _fielder_starter_score(record, true)
-
-
 static func _fielder_starter_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: bool) -> int:
 	if record == null:
 		return 0
@@ -157,10 +140,6 @@ static func _batting_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: 
 	return _visible_score(score)
 
 
-static func pitching_score(record: PSPlayerSeasonRecord) -> int:
-	return _pitching_score(record, true)
-
-
 static func pitching_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
 	return _pitching_score(record, false)
 
@@ -197,8 +176,8 @@ static func _pitching_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty:
 	return _visible_score(score)
 
 
-# 投手評価値は役割別に算出する。pitching_score (継投選抜用の素の投手力) は変えない。
-# 先発: pitching_score と同じ要素だが係数を圧縮し、野手 (fielder_starter_score) と同スケールにする。
+# 投手評価値は役割別に算出する。pitching_score_without_fatigue (継投選抜用の素の投手力) は変えない。
+# 先発: それと同じ要素だが係数を圧縮し、野手の打撃+守備評価 (_fielder_starter_score) と同スケールにする。
 # 中継: 持久を外し、奪三振 (stuff) / 球速 / 際どさ (edge) を強調。先発=野手と同スケールに較正。
 # 初期選手母集団で投手・野手の平均評価が同じ尺度になる基準点。
 const PITCHER_EVAL_BASE: float = 49.0
@@ -210,14 +189,6 @@ const RELIEVER_EVAL_WEIGHTS: Dictionary = {
 	"control": 8.4, "stuff": 12.6, "movement": 8.4,
 	"velocity": 6.0, "breaking": 7.2, "stamina": 0.0, "edge": 6.0,
 }
-
-
-static func starter_eval_score(record: PSPlayerSeasonRecord) -> int:
-	return _pitcher_eval_score(record, true, STARTER_EVAL_WEIGHTS)
-
-
-static func reliever_eval_score(record: PSPlayerSeasonRecord) -> int:
-	return _pitcher_eval_score(record, true, RELIEVER_EVAL_WEIGHTS)
 
 
 # 役割で重みを切り替える表示評価値。weights 省略時は保存 role から先発/中継を判定する。

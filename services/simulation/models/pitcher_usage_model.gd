@@ -237,16 +237,6 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 	}
 
 
-static func in_game_usage_penalty(record: PSPlayerSeasonRecord, usage: Dictionary) -> int:
-	if record == null or usage.is_empty():
-		return 0
-	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
-	var ratio: float = outing_ratio(record, usage)
-	var trouble: float = float(usage.get("trouble_score", 0.0))
-	var fatigue_load: float = outing_fatigue_load(record, usage)
-	return _in_game_usage_penalty(role, ratio, trouble, fatigue_load)
-
-
 static func _in_game_usage_penalty(
 	role: String,
 	ratio: float,
@@ -529,15 +519,6 @@ static func starter_expected_next_inning_pitches(usage: Dictionary) -> float:
 	expected += max(0.0, trouble - 2.0) * 1.6
 	expected += max(0.0, float(reached - 1)) * 1.8
 	return clamp(expected, 12.0, 30.0)
-
-
-static func outing_fatigue_load(record: PSPlayerSeasonRecord, usage: Dictionary) -> float:
-	if record == null or usage.is_empty():
-		return 0.0
-	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
-	if role != ROLE_STARTER:
-		return max(0.0, outing_ratio(record, usage) - 0.82)
-	return 1.0 - PSFatigueCalculator.factor_for_outing(record, usage)
 
 
 static func _starter_stamina_is_spent(record: PSPlayerSeasonRecord, usage: Dictionary) -> bool:

@@ -216,7 +216,8 @@ func test_user_interactive_flow_completes() -> void:
 	assert_bool(bool(short_result.get("ok", true))).is_false()
 
 	# 推奨リストで提出 → 進行はユーザー手番か完了まで進む。
-	var submit_result: Dictionary = GenekiDraftService.auto_submit_user_list(state, players, GameDb.teams, season)
+	var recommended_ids: Array = state.get("user_recommended_ids", []) as Array
+	var submit_result: Dictionary = GenekiDraftService.submit_user_list(state, players, GameDb.teams, season, recommended_ids)
 	assert_bool(bool(submit_result.get("ok", false))).is_true()
 	state = submit_result.get("state", state) as Dictionary
 

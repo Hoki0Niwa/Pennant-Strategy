@@ -108,17 +108,6 @@ static func compact_label_for_game(game: Dictionary, season: PSSeason = null) ->
 	return label_for_date(date_text)
 
 
-static func relative_label(current_day: int, target_day: int) -> String:
-	var gap: int = target_day - current_day
-	if gap == 0:
-		return "本日"
-	if gap == 1:
-		return "明日"
-	if gap > 1:
-		return "%d日後" % gap
-	return "%d日前" % abs(gap)
-
-
 static func day_status_label(season: PSSeason, day: int) -> String:
 	if season == null:
 		return "Day %d" % day

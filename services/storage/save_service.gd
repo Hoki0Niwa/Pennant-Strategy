@@ -40,12 +40,10 @@ static func save_state(app_state) -> bool:
 	if app_state.current_postseason != null:
 		GameLogService.write_pending_postseason_game_logs(app_state.current_postseason, app_state.current_season)
 
+	# mod 状態 (active_mods / rules_profile_id / 各 schema version) は ModManager.save_metadata()
+	# が単一ソース。ここで同じ4項目を組み直すと、片方だけ変わって整合が崩れる。
 	var payload: Dictionary = {
 		"save_id": SaveContext.active_save_id(),
-		"active_mods": ModManager.active_mods_snapshot(),
-		"rules_profile_id": ModManager.rules_profile_id(),
-		"rules_schema_version": ModManager.rules_schema_version(),
-		"data_schema_version": ModManager.data_schema_version(),
 		"selected_team_id": app_state.selected_team_id,
 		"current_screen": app_state.current_screen,
 		"season": season_data,
@@ -77,6 +75,7 @@ static func save_state(app_state) -> bool:
 		"auto_save_enabled": app_state.auto_save_enabled,
 		"league_dh_enabled": app_state.dh_settings_for_schedule(),
 	}
+	payload.merge(ModManager.save_metadata())
 
 	if SQLiteStoreService.save_game_state(payload):
 		_write_save_meta(app_state)

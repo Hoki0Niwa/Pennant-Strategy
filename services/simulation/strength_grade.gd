@@ -51,12 +51,6 @@ static func z_in_sample(value: float, sample: Array) -> float:
 	return (value - mean) / stddev
 
 
-# GRADES 内の位置 (S=0 … E=5)。未知の文字列は中央扱い。色分けや並べ替えに使う。
-static func index_of(grade: String) -> int:
-	var index: int = GRADES.find(grade)
-	return index if index >= 0 else 3
-
-
 # バーの伸び (0〜1)。**最大値との比ではなく sample 内の min-max 正規化**にしてある —
 # 生値は12球団が数点差に収まるため最大値比だと全球団のバーがほぼ同じ長さになり、
 # 添えたグレードと見た目が矛盾する。最下位のバーが消えないよう BAR_FLOOR を底上げする。

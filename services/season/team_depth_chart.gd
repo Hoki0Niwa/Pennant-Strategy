@@ -101,12 +101,6 @@ static func build_league(players: Array, teams: Array) -> Dictionary:
 	return charts
 
 
-# 単一球団ぶんのチャート。need をリーグ相対で出すため teams も要る。
-static func build_for_team(players: Array, teams: Array, team_id: int) -> Dictionary:
-	var charts: Dictionary = build_league(players, teams)
-	return charts.get(team_id, {}) as Dictionary
-
-
 static func _build_team_slots(players: Array, team_id: int) -> Dictionary:
 	var holders_by_slot: Dictionary = {}
 	var future_by_slot: Dictionary = {}

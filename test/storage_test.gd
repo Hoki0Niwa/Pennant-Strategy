@@ -513,10 +513,12 @@ func test_unsaved_simulation_does_not_persist_records_or_logs() -> void:
 	assert_int(_played_game_count(AppState.current_season)).is_equal(0)
 	assert_int(_recorded_team_games(AppState.current_season)).is_equal(0)
 
-	var result: Dictionary = AppState.simulate_next_game()
+	# 進行は本番と同じ「1日ぶん」の経路で行う (UI に1試合単位の進行は存在しない)。
+	var result: Dictionary = AppState.simulate_current_day()
 	assert_bool(bool(result.get("ok", false))).is_true()
-	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
-	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
+	var played: int = _played_game_count(AppState.current_season)
+	assert_int(played).is_greater(0)
+	assert_int(_recorded_team_games(AppState.current_season)).is_equal(played * 2)
 	var unsaved_game: Dictionary = AppState.current_season.schedule[first_game_index] as Dictionary
 	var compact_result: Dictionary = unsaved_game.get("result", {}) as Dictionary
 	assert_bool(compact_result.has("play_events")).is_false()
@@ -547,7 +549,7 @@ func test_manual_save_flushes_pending_game_logs() -> void:
 	assert_bool(SaveService.save_state(AppState)).is_true()
 
 	first_game_index = _first_unplayed_game_index(AppState.current_season)
-	var result: Dictionary = AppState.simulate_next_game()
+	var result: Dictionary = AppState.simulate_current_day()
 	assert_bool(bool(result.get("ok", false))).is_true()
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_true()
 	assert_bool(GameLogService.read_available_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
@@ -560,8 +562,9 @@ func test_manual_save_flushes_pending_game_logs() -> void:
 
 	var reloaded: Dictionary = SaveService.load_state()
 	assert_bool(AppState.restore_from_save(reloaded)).is_true()
-	assert_int(_played_game_count(AppState.current_season)).is_equal(1)
-	assert_int(_recorded_team_games(AppState.current_season)).is_equal(2)
+	var restored_played: int = _played_game_count(AppState.current_season)
+	assert_int(restored_played).is_greater(0)
+	assert_int(_recorded_team_games(AppState.current_season)).is_equal(restored_played * 2)
 	assert_bool(GameLogService.read_game_log(AppState.current_season, first_game_index).is_empty()).is_false()
 
 	_restore_app_state(old_state, test_save_id)
@@ -577,7 +580,7 @@ func test_auto_save_flushes_compact_game_log_and_clears_pending() -> void:
 	test_save_id = SaveContext.active_save_id()
 
 	var first_game_index: int = _first_unplayed_game_index(AppState.current_season)
-	var result: Dictionary = AppState.simulate_next_game()
+	var result: Dictionary = AppState.simulate_current_day()
 	assert_bool(bool(result.get("ok", false))).is_true()
 
 	var game: Dictionary = AppState.current_season.schedule[first_game_index] as Dictionary
@@ -610,10 +613,11 @@ func test_unsaved_next_season_progress_does_not_persist_records() -> void:
 	assert_int(unsaved_season.season_number).is_equal(saved_season_number + 1)
 	assert_int(_record_count_for_season(unsaved_season.year, unsaved_season.season_number)).is_greater(0)
 
-	var result: Dictionary = AppState.simulate_next_game()
+	var result: Dictionary = AppState.simulate_current_day()
 	assert_bool(bool(result.get("ok", false))).is_true()
-	assert_int(_played_game_count(unsaved_season)).is_equal(1)
-	assert_int(_recorded_team_games(unsaved_season)).is_equal(2)
+	var played: int = _played_game_count(unsaved_season)
+	assert_int(played).is_greater(0)
+	assert_int(_recorded_team_games(unsaved_season)).is_equal(played * 2)
 
 	var reloaded: Dictionary = SaveService.load_state()
 	assert_bool(AppState.restore_from_save(reloaded)).is_true()

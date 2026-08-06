@@ -278,7 +278,7 @@ static func select_relievers_for_innings(
 		if pitcher.player_id == exclude_pitcher_id or pitcher.injury_days > 0:
 			continue
 		eligible.append(pitcher)
-	# ブルペン編成と役割割り当ては疲労を含まない素の能力で並べる。fatigue 込みの pitching_score を使うと、
+	# ブルペン編成と役割割り当ては疲労を含まない素の能力で並べる。fatigue 込みの評価値で並べると、
 	# エース救援が疲れた日に評価が下がってクローザーの座が日替わりで入れ替わり、現実離れした「日替わり抑え」と
 	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
 	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。

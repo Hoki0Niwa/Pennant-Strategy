@@ -5,7 +5,6 @@ extends GdUnitTestSuite
 # 高速かつ決定論的に検証する。
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
-const AdvancedStatsRecord = preload("res://services/simulation/reducers/advanced_stats_record.gd")
 
 const TEST_YEAR: int = 9000
 const TEST_SEASON: int = 0

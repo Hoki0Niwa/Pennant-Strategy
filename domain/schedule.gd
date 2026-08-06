@@ -1133,10 +1133,3 @@ static func _make_game(
 		"series_game_no": series_game_no,
 		"cycle_number": cycle_number,
 	}
-
-
-static func _rotated_round_robin(team_ids: Array) -> Array:
-	var rotated: Array = [team_ids[0], team_ids[team_ids.size() - 1]]
-	for index in range(1, team_ids.size() - 1):
-		rotated.append(team_ids[index])
-	return rotated

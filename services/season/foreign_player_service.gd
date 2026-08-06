@@ -96,7 +96,7 @@ static func create_foreign_market_state(players: Array, teams: Array, season: PS
 	}
 
 
-# スカウト操作 (configure_user_scout_request / submit_user_foreign_decision / auto_pick_for_user) の
+# スカウト操作 (configure_user_scout_request / submit_user_foreign_decision) の
 # 共通フェーズガード。phase が "scout" 以外 (契約市場が未確定/結果表示中、またはスカウト結果表示中) なら
 # 空でない {ok:false, message, state} を返す。呼び出し元はこれが空なら処理を継続してよい。
 static func _scout_phase_guard(state: Dictionary) -> Dictionary:
@@ -171,36 +171,6 @@ static func submit_user_foreign_decision(state: Dictionary, players: Array, team
 	if not _can_team_sign_foreign(players, state, user_team_id):
 		complete_foreign_market_automatically(state, players, teams, season, user_team_id)
 	return {"ok": true, "state": state}
-
-
-static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	var user_team_id: int = int(state.get("user_team_id", 0))
-	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
-	var phase_block: Dictionary = _scout_phase_guard(state)
-	if not phase_block.is_empty():
-		return phase_block
-	var best_id: int = 0
-	var best_score: float = -999999.0
-	var need: Dictionary = FaMarketService._build_position_need(players, teams)
-	for row in available_user_candidates(state, players, teams):
-		var candidate: Dictionary = row as Dictionary
-		if not bool(candidate.get("available", true)):
-			continue
-		if not _can_team_sign_foreign(players, state, user_team_id):
-			break
-		if not _cpu_scout_candidate_viable(candidate, players, user_team_id, season):
-			continue
-		if not _can_team_afford_foreign(players, teams, user_team_id, candidate):
-			continue
-		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(candidate.get("position", 0)), 0.0))
-		var score: float = _signing_score(candidate, team_need, players, teams, user_team_id)
-		if score > best_score:
-			best_score = score
-			best_id = int(candidate.get("candidate_id", 0))
-	if best_id <= 0:
-		return {"ok": false, "message": "現在のスカウト候補に契約可能な選手がいません。", "state": state}
-	return submit_user_foreign_decision(state, players, teams, season, best_id, "sign")
 
 
 # show_result=true (「補強を終了」button) は自軍スカウトを打ち切った後 phase を "scout_result" に

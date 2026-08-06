@@ -23,11 +23,6 @@ extends "res://ui/components/dashboard_screen.gd"
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-const STAGE_LABELS: Dictionary = {
-	"cs1_league1": "CS1 第1", "cs1_league2": "CS1 第2",
-	"cs2_league1": "CS2 第1", "cs2_league2": "CS2 第2",
-	"japan_series": "日本シリーズ",
-}
 const BATTING_TITLE_LABELS: Dictionary = {
 	"average": "首位打者", "home_runs": "本塁打王", "rbi": "打点王",
 	"stolen_bases": "盗塁王", "hits": "最多安打",

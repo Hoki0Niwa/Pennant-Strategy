@@ -167,12 +167,14 @@ func test_evaluate_user_proposal_rejects_invalid_sides() -> void:
 	var foreign: PSPlayer = _player({"id": 22, "team_id": 2, "foreign_player": true})
 	var players: Array = [mine, theirs_a, theirs_b, foreign]
 
-	# 相手側が複数球団にまたがる提案は不可。
+	# 相手側が複数球団にまたがる提案は不可。理由まで固定する (ok=false は別の理由でも立つため)。
 	var mixed: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21, 31])
 	assert_bool(bool(mixed.get("ok", false))).is_false()
+	assert_str(str(mixed.get("message", ""))).contains("同一の他球団")
 	# トレード対象外 (外国人) を含む提案は不可。
 	var with_foreign: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [22])
 	assert_bool(bool(with_foreign.get("ok", false))).is_false()
+	assert_str(str(with_foreign.get("message", ""))).contains("トレード対象にできません")
 
 
 # 人数不均等な提案 (2対1) で受け側の支配下が70枠を超える場合は不可 (2026-07-10 修正)。
@@ -193,6 +195,9 @@ func test_evaluate_user_proposal_rejects_when_capacity_exceeded() -> void:
 
 	var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21, 22])
 	assert_bool(bool(result.get("ok", false))).is_false()
+	# **理由まで固定する**。ok=false だけだと、枠チェックを外しても予算チェックが同じ提案を
+	# 弾いてテストが通ってしまい、70枠の検証になっていなかった (2026-08-06)。
+	assert_str(str(result.get("message", ""))).contains("支配下枠")
 
 
 # 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象であること

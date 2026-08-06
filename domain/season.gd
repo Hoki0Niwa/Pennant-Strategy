@@ -203,13 +203,6 @@ func set_active_roster(team_id: int, roster: Dictionary) -> void:
 	_mutex.unlock()
 
 
-func clear_active_roster(team_id: int) -> void:
-	_mutex.lock()
-	_accrue_active_roster_days_locked(team_id, current_day)
-	team_active_rosters.erase(str(team_id))
-	_mutex.unlock()
-
-
 func accrue_active_roster_days(team_id: int, to_day: int) -> void:
 	_mutex.lock()
 	_accrue_active_roster_days_locked(team_id, to_day)
@@ -217,7 +210,7 @@ func accrue_active_roster_days(team_id: int, to_day: int) -> void:
 
 
 # _mutex を既にロックした状態でのみ呼ぶ内部実装 (Mutexは再入可能だが、ロック区間を
-# 最小化するため set_active_roster/clear_active_roster からは直接この版を呼ぶ)。
+# 最小化するため set_active_roster からは直接この版を呼ぶ)。
 func _accrue_active_roster_days_locked(team_id: int, to_day: int) -> void:
 	var key: String = str(team_id)
 	var roster: Dictionary = team_active_rosters.get(key, {}) as Dictionary

@@ -5,7 +5,6 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
 const MAX_SPECIAL_TRAININGS_PER_TEAM: int = 3
-const MAX_SPECIAL_TRAININGS_PER_PLAYER: int = 1
 const MAX_PITCH_TYPES: int = 6
 const NORMAL_CAMP_NEW_PITCH_CHANCE: float = 0.02
 const NORMAL_CAMP_YOUNG_BONUS: float = 0.01

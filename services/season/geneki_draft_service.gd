@@ -352,10 +352,6 @@ static func submit_user_list(state: Dictionary, players: Array, teams: Array, se
 	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
 
 
-static func auto_submit_user_list(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	return submit_user_list(state, players, teams, season, state.get("user_recommended_ids", []) as Array)
-
-
 # ユーザーの手番での指名 (1巡目・2巡目共通)。
 static func submit_user_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_id: int) -> Dictionary:
 	var user_team_id: int = int(state.get("user_team_id", 0))

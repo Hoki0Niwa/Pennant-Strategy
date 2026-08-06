@@ -37,10 +37,6 @@ static func is_starter_player(player) -> bool:
 	return is_starter_record(record)
 
 
-static func role_for_record(record) -> String:
-	return ROLE_STARTER if is_starter_record(record) else ROLE_RELIEVER
-
-
 static func role_for_player(player) -> String:
 	return ROLE_STARTER if is_starter_player(player) else ROLE_RELIEVER
 

@@ -54,21 +54,6 @@ const PASSED_BALL_PER_PITCH_MIN: float = 0.00015
 const PASSED_BALL_PER_PITCH_MAX: float = 0.008
 
 
-# 後方互換の薄いラッパー。events のみを返す(繰延べ企図は捨てられる)。呼び出し側は
-# pre_plate_runner_plan を使うこと(deferred_steal_intents を打席結果まで持ち越すため)。
-static func pre_plate_runner_events(
-	event_index: int,
-	batter: PSPlayerSeasonRecord,
-	pitcher: PSPlayerSeasonRecord,
-	defense: Dictionary,
-	bases: Array,
-	outs: int,
-	context: Dictionary = {}
-) -> Array:
-	var plan: Dictionary = pre_plate_runner_plan(event_index, batter, pitcher, defense, bases, outs, context)
-	return plan.get("events", []) as Array
-
-
 # 投球前フェーズの走者イベント計画。events は即時適用する投球前イベント(牽制/ボーク/途中決行の盗塁)、
 # deferred_steal_intents は最終球扱いで打席結果まで繰延べる盗塁企図。
 static func pre_plate_runner_plan(
@@ -93,7 +78,7 @@ static func pre_plate_runner_plan(
 
 
 # 表示用(play_event_builder が試合ログ生成に呼ぶ)。hit_and_run を含む企図一覧を返すが、
-# 実際の盗塁企図の解決(成功/失敗の抽選)は pre_plate_runner_events / _pre_plate_steal_events 側で行う。
+# 実際の盗塁企図の解決(成功/失敗の抽選)は pre_plate_runner_plan / _pre_plate_steal_events 側で行う。
 static func runner_intents_for_play(
 	event_index: int,
 	batter: PSPlayerSeasonRecord,

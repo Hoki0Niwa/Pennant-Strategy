@@ -231,7 +231,7 @@ static func long_distributions(report: Dictionary) -> Dictionary:
 		"flows": {
 			"trades": _distribution(_nested_values(rows, ["trades", "count"]), 1),
 			"fa_declared": _distribution(_nested_values(rows, ["offseason", "fa_declared_count"]), 1),
-			"released": _distribution(_nested_values(rows, ["offseason", "released_count"]), 1),
+			"released": _distribution(_nested_values(rows, ["offseason", "controlled_removed_count"]), 1),
 		},
 	}
 
@@ -262,14 +262,23 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "teamless_active_players", int(final_roster.get("teamless_active_players", 0)), 0.0, 0.0, "teamless active players")
 	_add_max_check(checks, "free_agent_orphans", int(final_roster.get("free_agent_orphans", 0)), 0.0, 0.0, "unresolved FA pool players")
 	_add_max_check(checks, "released_orphans", int(final_roster.get("released_orphans", 0)), 0.0, 0.0, "unresolved released players outside retirement")
-	# 戦力外刷新の受入指標。総数は年度別レンジも見て、平均だけ合って末期に減衰する状態を通さない。
+	# 戦力外刷新の受入指標。測るのは「戦力外フェーズで支配下枠から外れた人数」(戦力外通告 + 育成降格)で、
+	# 戦力外通告だけを数えると育成降格の分だけ実際の枠の空き方より過少に見えるため合算で持つ。
+	# 帯の根拠 (NPB 実測): 12月頭に一括公示される支配下選手の自由契約 (= 戦力外通告 + 支配下→育成再契約 +
+	# 外国人退団) から外国人を除いた日本人の人数は
+	#   2021年 126-22=104 / 2022年 141-33=108 / 2023年 171-42=129 / 2024年 143-31=112 (平均 113.3)。
+	# NPB はこの中に引退者も含む (任意引退公示は年2名程度で、引退選手もほぼ自由契約公示に載る) 一方、
+	# ゲームは引退ステップが先に数名抜くので、戦力外フェーズの担当分はこれよりやや少なくてよい。
+	# → 平均 100〜125 を目標帯、単年は 95〜135 を目標帯とする。
+	# 総数は年度別レンジも見て、平均だけ合って末期に減衰する状態を通さない。
 	var flow_dist: Dictionary = distributions.get("flows", {}) as Dictionary
 	var released_dist: Dictionary = flow_dist.get("released", {}) as Dictionary
-	_add_range_check(checks, "released_per_year", float(last_10.get("released_per_year", 0.0)), 90.0, 115.0, 70.0, 135.0, "domestic releases per year")
-	_add_min_check(checks, "released_yearly_min", float(released_dist.get("min", 0.0)), 90.0, 70.0, "domestic releases should not decay below the target band")
-	_add_max_check(checks, "released_yearly_max", float(released_dist.get("max", 0.0)), 115.0, 135.0, "domestic releases should not spike above the target band")
-	_add_range_check(checks, "released_fielders_per_pitcher", float(last_10.get("released_fielders_per_pitcher", 0.0)), 0.8, 1.3, 0.5, 1.8, "released pitcher-to-fielder composition (fielder count per pitcher)")
-	_add_range_check(checks, "released_average_age", float(last_10.get("released_average_age", 0.0)), 26.0, 31.0, 23.0, 35.0, "weighted average age of domestic releases")
+	_add_range_check(checks, "released_per_year", float(last_10.get("released_per_year", 0.0)), 100.0, 125.0, 88.0, 140.0, "controlled-roster removals in the release phase per year (release notices + demotions; NPB Japanese-player equivalent 104-129)")
+	_add_min_check(checks, "released_yearly_min", float(released_dist.get("min", 0.0)), 95.0, 80.0, "controlled-roster removals should not decay below the target band")
+	_add_max_check(checks, "released_yearly_max", float(released_dist.get("max", 0.0)), 135.0, 150.0, "controlled-roster removals should not spike above the target band")
+	# 以下2つの母集団は内訳の取れる戦力外通告のみ (育成降格を含まない)。released_per_year とは母数が違う。
+	_add_range_check(checks, "released_fielders_per_pitcher", float(last_10.get("released_fielders_per_pitcher", 0.0)), 0.8, 1.3, 0.5, 1.8, "release-notice pitcher-to-fielder composition (fielder count per pitcher)")
+	_add_range_check(checks, "released_average_age", float(last_10.get("released_average_age", 0.0)), 26.0, 31.0, 23.0, 35.0, "weighted average age of domestic release notices")
 	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 1.0, 4.0, "zero-appearance 30+ players surviving the release phase")
 	_add_min_check(checks, "post_team_controlled_min", _dist_value(post_roster_dist, "team_controlled_min", "min"), 66.0, 64.0, "every team should finish the offseason with at least 66 controlled players")
 	_add_max_check(checks, "post_team_controlled_max", _dist_value(post_roster_dist, "team_controlled_max", "max"), 68.0, 70.0, "every team should finish the offseason with at most 68 controlled players")

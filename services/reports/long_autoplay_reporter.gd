@@ -664,6 +664,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"injury_carried_count": int(injury_carryover.get("carried", 0)),
 		"retired_count": int(retirement_result.get("retired_count", 0)),
 		"released_count": int(release_result.get("released_count", 0)),
+		# 戦力外フェーズで支配下枠から取り除かれた総数 = 戦力外通告 + 育成降格 (長期故障 + 当落線上の若手)。
+		# NPB の「12月頭に一括公示される支配下選手の自由契約」(= 戦力外通告と支配下→育成再契約の合計) と
+		# 同じ母集団で、health の released_per_year / released_yearly_* はこの値を見る。
+		# released_count だけだと育成降格の分を取りこぼし、実際の枠の空き方より過少に見える。
+		"controlled_removed_count": int(release_result.get("released_count", 0)) + int(release_result.get("demoted_count", 0)),
 		"released_pitcher_count": released_pitcher_count,
 		"released_fielder_count": int(release_result.get("released_count", 0)) - released_pitcher_count,
 		"released_age_count": released_age_count,
@@ -1406,7 +1411,10 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"strikeouts_per_nine": _round_float(_mean_nested(rows, ["season", "pitching", "strikeouts_per_nine"]), 2),
 		"walks_per_nine": _round_float(_mean_nested(rows, ["season", "pitching", "walks_per_nine"]), 2),
 		"home_runs_per_nine": _round_float(_mean_nested(rows, ["season", "pitching", "home_runs_per_nine"]), 2),
-		"released_per_year": _round_float(_mean_nested(rows, ["offseason", "released_count"]), 2),
+		# 戦力外フェーズが支配下枠から外した人数 (戦力外通告 + 育成降格)。以下の投野比・平均年齢は
+		# 内訳の取れる戦力外通告のみが母集団なので、released_per_year とは母数が違う。
+		"released_per_year": _round_float(_mean_nested(rows, ["offseason", "controlled_removed_count"]), 2),
+		"released_notified_per_year": _round_float(_mean_nested(rows, ["offseason", "released_count"]), 2),
 		"released_pitchers_per_year": _round_float(_mean_nested(rows, ["offseason", "released_pitcher_count"]), 2),
 		"released_fielders_per_year": _round_float(_mean_nested(rows, ["offseason", "released_fielder_count"]), 2),
 		"released_fielders_per_pitcher": _round_float(_safe_div(
