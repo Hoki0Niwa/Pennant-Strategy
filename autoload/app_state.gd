@@ -5,6 +5,8 @@ signal selected_team_changed(team_id: int)
 signal season_started(season: PSSeason)
 signal season_skip_progress(done: int, total: int, label: String)
 signal season_skip_finished(result: Dictionary)
+signal postseason_skip_progress(days: int, games: int, label: String)
+signal postseason_skip_finished(result: Dictionary)
 
 const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
@@ -45,6 +47,9 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	OFFSEASON_STEP_CAMP,
 	OFFSEASON_STEP_GROWTH,
 ]
+
+# ポストシーズンのスキップが引き分け連続などで止まらなくなるのを防ぐ保険 (日数上限)。
+const POSTSEASON_SKIP_MAX_DAYS: int = 200
 
 const OFFSEASON_PANEL_NONE: String = "none"
 const OFFSEASON_PANEL_RESULTS: String = "results"
@@ -102,6 +107,18 @@ var contract_years_state: Dictionary = {}
 var offseason_active: bool = false
 var postseason_active: bool = false
 var current_postseason: PSPostseasonResult = null
+# ポストシーズンのスキップは、レギュラーの月末/残り全試合スキップと同じくダッシュボード
+# (ポストシーズン用ホーム) を表示したまま 1 日ずつ進める。coroutine は破棄され得る画面ノード
+# ではなく Autoload 側に置き、進捗はシグナルで通知して画面をその都度更新させる。
+var postseason_skip_active: bool = false
+var postseason_skip_cancel_pending: bool = false
+var postseason_skip_days: int = 0
+var postseason_skip_games: int = 0
+var postseason_skip_label: String = ""
+# 消化を止めるステージグループ index (PSPostseasonResult.STAGE_GROUPS の添字。
+# size() = 最後まで)。画面のステータス表示にも使う。
+var postseason_skip_target_group: int = 0
+var _postseason_skip_cancel_token: Dictionary = {}
 var current_awards: PSAwards = null
 # 通常プレイ中に自軍も成績ベースの自動入替を行うか。active_roster_screenから操作。
 var auto_roster_swap_for_user_team: bool = false
@@ -171,7 +188,7 @@ func _navigate_history(pop_stack: Array, push_stack: Array) -> bool:
 
 # マウスの戻るボタンなどから呼ぶ。直前に開いていた画面へ戻る。戻れたら true。
 func go_back() -> bool:
-	if season_skip_active or short_skip_active:
+	if season_skip_active or short_skip_active or postseason_skip_active:
 		return false
 	if _navigate_history(_screen_history, _forward_history):
 		return true
@@ -185,7 +202,7 @@ func go_back() -> bool:
 
 # マウスの進むボタンなどから呼ぶ。go_back で戻る前の画面へ進む。進めたら true。
 func go_forward() -> bool:
-	if season_skip_active or short_skip_active:
+	if season_skip_active or short_skip_active or postseason_skip_active:
 		return false
 	return _navigate_history(_forward_history, _screen_history)
 
@@ -193,7 +210,7 @@ func go_forward() -> bool:
 func request_screen(screen_name: String, record_history: bool = true) -> void:
 	if season_skip_active and screen_name != "standings":
 		return
-	if short_skip_active and screen_name != current_screen:
+	if (short_skip_active or postseason_skip_active) and screen_name != current_screen:
 		return
 	if record_history:
 		_record_history_snapshot(screen_name)
@@ -443,6 +460,69 @@ func advance_postseason_day() -> Dictionary:
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
+
+
+# target_group 未満のグループが完了するまで 1 日ずつ進める
+# (target_group = PSPostseasonResult.STAGE_GROUPS.size() で最後まで)。
+# レギュラーのスキップと同じく、1 日消化するごとに進捗を通知して画面を更新させる
+# (ポストシーズン用ホームを表示したまま、対戦票・結果がリアルタイムに埋まっていく)。
+func start_postseason_skip(tree: SceneTree, target_group: int) -> void:
+	if postseason_skip_active or current_season == null or current_postseason == null:
+		return
+	if PostseasonService.is_complete(current_postseason):
+		return
+	postseason_skip_active = true
+	postseason_skip_cancel_pending = false
+	postseason_skip_days = 0
+	postseason_skip_games = 0
+	postseason_skip_label = ""
+	postseason_skip_target_group = target_group
+	_postseason_skip_cancel_token = {"cancelled": false}
+	postseason_skip_progress.emit(postseason_skip_days, postseason_skip_games, postseason_skip_label)
+
+	var last_result: Dictionary = {}
+	var guard: int = POSTSEASON_SKIP_MAX_DAYS
+	while guard > 0:
+		guard -= 1
+		if bool(_postseason_skip_cancel_token.get("cancelled", false)):
+			break
+		if current_postseason == null or PostseasonService.is_complete(current_postseason):
+			break
+		if PostseasonService.active_group_index(current_postseason) >= target_group:
+			break
+		var result: Dictionary = advance_postseason_day()
+		last_result = result
+		if not bool(result.get("ok", false)):
+			break
+		postseason_skip_days += 1
+		postseason_skip_games += (result.get("played", []) as Array).size()
+		postseason_skip_label = _postseason_day_label(result)
+		postseason_skip_progress.emit(postseason_skip_days, postseason_skip_games, postseason_skip_label)
+		# 1 日ごとにフレームを返し、画面が最新の対戦票・結果を描けるようにする。
+		if tree != null:
+			await tree.process_frame
+
+	postseason_skip_active = false
+	postseason_skip_cancel_pending = false
+	_postseason_skip_cancel_token = {}
+	last_result["completed"] = PostseasonService.is_complete(current_postseason)
+	postseason_skip_finished.emit(last_result)
+
+
+func cancel_postseason_skip() -> void:
+	if not postseason_skip_active or postseason_skip_cancel_pending:
+		return
+	postseason_skip_cancel_pending = true
+	_postseason_skip_cancel_token["cancelled"] = true
+	postseason_skip_progress.emit(postseason_skip_days, postseason_skip_games, postseason_skip_label)
+
+
+func _postseason_day_label(result: Dictionary) -> String:
+	var day: int = int(result.get("day", 0))
+	var date_text: String = str(result.get("date", ""))
+	if date_text.is_empty():
+		return "第%d日" % day
+	return "%s / 第%d日" % [SeasonCalendar.label_for_date(date_text), day]
 
 
 func advance_postseason_stage(stage_key: String) -> Dictionary:
@@ -1774,6 +1854,13 @@ func restore_from_save(data: Dictionary) -> bool:
 	season_skip_kind = "season"
 	_season_skip_cancel_token = {}
 	short_skip_active = false
+	postseason_skip_active = false
+	postseason_skip_cancel_pending = false
+	postseason_skip_days = 0
+	postseason_skip_games = 0
+	postseason_skip_label = ""
+	postseason_skip_target_group = 0
+	_postseason_skip_cancel_token = {}
 
 	var mod_warnings: Array[String] = ModManager.check_save_compatibility(data.get("active_mods", []) as Array)
 	for warning in mod_warnings:

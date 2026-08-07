@@ -26,10 +26,24 @@ const STAGE_SHORT: Dictionary = {
 	"japan_series": "日本シリーズ",
 }
 
+# スキップ先 (ステージグループ index) の表示名。index は PSPostseasonResult.STAGE_GROUPS に対応。
+const SKIP_TARGET_LABELS: Dictionary = {
+	1: "CSファイナル開幕",
+	2: "日本シリーズ開幕",
+	3: "ポストシーズン終了",
+}
+
+var _ps_skip_ui_active: bool = false
+var _ps_skip_ui_cancel_pending: bool = false
+
 
 func _ready() -> void:
 	_init_chrome()
-	_status_text = AppState.last_status_message
+	AppState.postseason_skip_progress.connect(_on_ps_skip_progress)
+	AppState.postseason_skip_finished.connect(_on_ps_skip_finished)
+	_ps_skip_ui_active = AppState.postseason_skip_active
+	_ps_skip_ui_cancel_pending = AppState.postseason_skip_cancel_pending
+	_status_text = _ps_skip_status() if AppState.postseason_skip_active else AppState.last_status_message
 	_build_buttons()
 	queue_redraw()
 
@@ -373,6 +387,19 @@ func _build_buttons() -> void:
 		_layout_buttons()
 		return
 
+	# スキップ中は順位表のシーズンスキップと同じく操作を停止ボタンだけに絞り、
+	# 画面はそのまま (対戦票・結果が 1 日ごとに更新される)。
+	if AppState.postseason_skip_active:
+		_add_button(
+			"cancel_ps_skip",
+			"停止処理中…" if AppState.postseason_skip_cancel_pending else "スキップ停止",
+			Rect2(1730, 22, 150, 42),
+			AppState.cancel_postseason_skip,
+			"action"
+		).disabled = AppState.postseason_skip_cancel_pending
+		_layout_buttons()
+		return
+
 	var complete: bool = PostseasonService.is_complete(post)
 	var today_button: Button = _add_button("ps_today", "本日を終了", Rect2(1384, 22, 128, 42), _advance_day, "primary")
 	today_button.disabled = complete
@@ -425,34 +452,48 @@ func _on_ps_skip_pressed() -> void:
 	menu.popup()
 
 
+# 消化本体は AppState 側の coroutine が持ち、この画面は進捗シグナルを受けて描き直すだけ
+# (レギュラーの月末/残り全試合スキップと同じ形。違いは表示する画面が順位表ではなくこのダッシュボード)。
 func _on_ps_skip_selected(target_group: int) -> void:
-	await _skip_to_group(target_group)
-
-
-# target_group 未満のグループが完了するまで 1 日ずつ進める (3 = 全消化)。
-func _skip_to_group(target_group: int) -> void:
-	var ov: Dictionary = _show_progress_overlay("ポストシーズンを消化中…")
-	var cancel_token: Dictionary = ov.get("cancel_token", {}) as Dictionary
-	var guard: int = 200
-	while guard > 0:
-		guard -= 1
-		if bool(cancel_token.get("cancelled", false)):
-			break
-		var post: PSPostseasonResult = AppState.current_postseason
-		if post == null:
-			break
-		if PostseasonService.is_complete(post):
-			break
-		if PostseasonService.active_group_index(post) >= target_group:
-			break
-		var result: Dictionary = AppState.advance_postseason_day()
-		if not bool(result.get("ok", false)):
-			break
-		await get_tree().process_frame
-	_hide_progress_overlay(ov)
-	_status_text = _day_status_message({"completed": PostseasonService.is_complete(AppState.current_postseason)})
+	AppState.start_postseason_skip(get_tree(), target_group)
+	_ps_skip_ui_active = AppState.postseason_skip_active
+	_ps_skip_ui_cancel_pending = AppState.postseason_skip_cancel_pending
+	_status_text = _ps_skip_status()
 	_build_buttons()
 	queue_redraw()
+
+
+func _on_ps_skip_progress(_days: int, _games: int, _label: String) -> void:
+	var controls_changed: bool = (
+		_ps_skip_ui_active != AppState.postseason_skip_active
+		or _ps_skip_ui_cancel_pending != AppState.postseason_skip_cancel_pending
+	)
+	_ps_skip_ui_active = AppState.postseason_skip_active
+	_ps_skip_ui_cancel_pending = AppState.postseason_skip_cancel_pending
+	if controls_changed:
+		_build_buttons()
+	_status_text = _ps_skip_status()
+	# 対戦票・本日のカード・直近結果はすべて _draw が現在の状態から描き直すので、再描画だけで足りる。
+	queue_redraw()
+
+
+func _on_ps_skip_finished(result: Dictionary) -> void:
+	_ps_skip_ui_active = AppState.postseason_skip_active
+	_ps_skip_ui_cancel_pending = AppState.postseason_skip_cancel_pending
+	# _day_status_message は手掛かりが無いとき現在の _status_text を返すため、先にスキップ全体の
+	# 要約を入れておく (最終日の結果や日本一メッセージがあればそちらで上書きされる)。
+	_status_text = "%d日 / %d試合を消化しました。" % [AppState.postseason_skip_days, AppState.postseason_skip_games]
+	_status_text = _day_status_message(result)
+	_build_buttons()
+	queue_redraw()
+
+
+func _ps_skip_status() -> String:
+	var target: String = str(SKIP_TARGET_LABELS.get(AppState.postseason_skip_target_group, "ポストシーズン終了"))
+	var state: String = "スキップ停止処理中" if AppState.postseason_skip_cancel_pending else "%sまでスキップ中" % target
+	return "%s  %d日 / %d試合消化  %s" % [
+		state, AppState.postseason_skip_days, AppState.postseason_skip_games, AppState.postseason_skip_label,
+	]
 
 
 func _on_awards_pressed() -> void:

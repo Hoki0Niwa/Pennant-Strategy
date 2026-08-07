@@ -1731,6 +1731,79 @@ func test_postseason_day_advance_and_dashboard() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+# ポストシーズンのスキップ: レギュラーの順位表スキップと同じく消化本体は AppState が持ち、
+# ポストシーズン用ダッシュボードを表示したまま 1 日ごとに進捗が届いて画面が更新される。
+# 併せて、スキップ中は他画面へ遷移できない (request_screen が弾かれる) ことも見る。
+func test_postseason_skip_updates_dashboard_in_realtime() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_post: PSPostseasonResult = AppState.current_postseason
+	var old_post_active: bool = AppState.postseason_active
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	AppState.current_postseason = PostseasonService.build_initial_state(AppState.current_season, GameDb.teams)
+	AppState.postseason_active = true
+	AppState.current_screen = "home"
+	PostseasonService.sync_to_next_postseason_day(AppState.current_postseason, AppState.current_season)
+
+	var screen: Control = (load("res://ui/screens/postseason_screen.gd") as GDScript).new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var progress_days: Array = []
+	var mid_status: Array = []
+	var mid_screens: Array = []
+	var probe: Callable = func(days: int, _games: int, _label: String) -> void:
+		progress_days.append(days)
+		if days <= 0:
+			return
+		mid_status.append(str(screen.get("_status_text")))
+		if days == 1:
+			# スキップ中の画面遷移はブロックされ、ポストシーズン用ホームに留まる。
+			AppState.request_screen("standings")
+			mid_screens.append(AppState.current_screen)
+	AppState.postseason_skip_progress.connect(probe)
+
+	# CS ファースト (グループ 0) が終わるまで = CSファイナル開幕まで進める。
+	await AppState.start_postseason_skip(get_tree(), 1)
+	AppState.postseason_skip_progress.disconnect(probe)
+
+	assert_bool(AppState.postseason_skip_active).is_false()
+	assert_int(PostseasonService.active_group_index(AppState.current_postseason)).is_equal(1)
+	assert_int(AppState.postseason_skip_days).is_greater(0)
+	assert_int(AppState.postseason_skip_games).is_greater(0)
+	# 開始時 (0日) + 各日で複数回通知されている = 1日ごとに画面が更新される。
+	assert_int(progress_days.size()).is_greater(1)
+	assert_str(str(mid_status[0])).contains("スキップ中")
+	assert_str(str(mid_screens[0])).is_equal("home")
+	assert_int((AppState.current_postseason.cs1_league1.get("games", []) as Array).size()).is_greater(0)
+	assert_int((AppState.current_postseason.cs1_league2.get("games", []) as Array).size()).is_greater(0)
+	# 終了後は通常操作 (本日を終了 / スキップ / 表彰へ …) に戻る。
+	assert_bool(bool(screen.get("_ps_skip_ui_active"))).is_false()
+	assert_int((screen.get("_buttons") as Array).size()).is_greater(1)
+	screen.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.current_postseason = old_post
+	AppState.postseason_active = old_post_active
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 # ポストシーズンの詳細結果 (box score / play-by-play) 永続化の回帰。
 # auto_save_enabled=false で PS 試合を消化すると PostseasonService.advance_one_day(persist=false) は
 # ログファイルを書かない (docs/agent_memory/project_save_folder_layout.md の「暗黙保存」方針: 通常
