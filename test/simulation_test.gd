@@ -118,6 +118,369 @@ func test_display_scores_ignore_fatigue_while_usage_score_applies_it() -> void:
 	assert_int(PSPlayerValueEvaluator.batting_score(record)).is_less(fresh_batting)
 
 
+# 基本打順は打者像へのマッチングで組まれる: 4番=最強の長打者、3番=総合力最上位、
+# 1番=出塁と機動力、そして捕手は打力が上位打順向きでも 1・2 番へは入らない。
+func test_base_batting_order_matches_roles_and_keeps_catcher_lower() -> void:
+	var mk: Callable = func(pid: int, pos: int, z: Dictionary) -> PSPlayerSeasonRecord:
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		r.player_id = pid
+		r.position = pos
+		r.name = "B%d" % pid
+		r.z_abilities_snapshot = z
+		return r
+
+	var leadoff: PSPlayerSeasonRecord = mk.call(601, 8, {
+		"Bat_BBCreate": 2.2, "Bat_KAvoid": 2.0, "Bat_Barrel": 1.0, "Bat_Impact": -0.7,
+		"Bat_Loft": -0.7, "Run_Speed": 2.3, "Run_Steal": 2.0, "Run_Judgment": 1.8,
+	})
+	var slugger: PSPlayerSeasonRecord = mk.call(602, 3, {
+		"Bat_Impact": 3.0, "Bat_Loft": 2.5, "Bat_Barrel": 0.8, "Bat_Aggression": 1.0,
+		"Bat_BBCreate": 0.3, "Bat_KAvoid": -0.8, "Run_Speed": -1.0,
+	})
+	var all_round: PSPlayerSeasonRecord = mk.call(603, 9, {
+		"Bat_Barrel": 2.2, "Bat_Impact": 1.8, "Bat_Loft": 1.2, "Bat_BBCreate": 1.4,
+		"Bat_KAvoid": 1.4, "Bat_Spray": 1.0, "Run_Speed": 0.8,
+	})
+	var second_slugger: PSPlayerSeasonRecord = mk.call(604, 5, {
+		"Bat_Impact": 2.2, "Bat_Loft": 1.8, "Bat_Barrel": 0.6, "Bat_BBCreate": 0.2,
+		"Bat_KAvoid": -0.5, "Run_Speed": -0.3,
+	})
+	# 出塁も走力もチーム最良の捕手 = 減点が無ければ 1 番に入る打力。
+	var catcher: PSPlayerSeasonRecord = mk.call(605, 2, {
+		"Bat_BBCreate": 2.4, "Bat_KAvoid": 2.2, "Bat_Barrel": 0.7, "Bat_Spray": 0.4,
+		"Bat_Impact": -0.6, "Bat_Loft": -0.6, "Run_Speed": 2.3, "Run_Steal": 2.1,
+		"Run_Judgment": 1.9,
+	})
+	var contact_hitter: PSPlayerSeasonRecord = mk.call(606, 4, {
+		"Bat_BBCreate": 1.8, "Bat_KAvoid": 2.0, "Bat_Barrel": 1.6, "Bat_Spray": 1.2,
+		"Bat_Impact": -0.5, "Bat_Loft": -0.5, "Run_Speed": 1.8, "Run_Steal": 1.5,
+		"Run_Judgment": 1.3,
+	})
+	var records: Array = [leadoff, slugger, all_round, second_slugger, catcher, contact_hitter]
+	for filler_pid in [607, 608, 609]:
+		records.append(mk.call(filler_pid, 6, {
+			"Bat_Barrel": -0.8, "Bat_KAvoid": -0.8, "Bat_BBCreate": -0.8,
+			"Bat_Impact": -0.8, "Bat_Loft": -0.8, "Run_Speed": -0.8,
+		}))
+
+	var ids_of: Callable = func(ordered: Array) -> Array:
+		var ids: Array = []
+		for record_row in ordered:
+			ids.append((record_row as PSPlayerSeasonRecord).player_id)
+		return ids
+
+	var strict: PSBattingOrderProfile = PSBattingOrderProfile.build_default(0, true)
+	var order_ids: Array = ids_of.call(PSBattingOrderService.build_base_order(records, strict))
+	print("BASEORDER strict=%s" % str(order_ids))
+
+	assert_int(int(order_ids[3])).is_equal(slugger.player_id)
+	assert_int(int(order_ids[2])).is_equal(all_round.player_id)
+	assert_int(int(order_ids[4])).is_equal(second_slugger.player_id)
+	assert_int(int(order_ids[0])).is_equal(leadoff.player_id)
+	# 捕手は上位打順 (1・2番) に入らない。
+	assert_int(int(order_ids.find(catcher.player_id))).is_greater_equal(2)
+
+	# keep_catcher_lower を切ると同じ打者陣でこの捕手は上位打順へ来る
+	# (= 上の結果は「そもそも打力が足りない」ではなく捕手減点が効いている)。
+	var lenient: PSBattingOrderProfile = PSBattingOrderProfile.build_default(0, true)
+	lenient.keep_catcher_lower = false
+	var lenient_ids: Array = ids_of.call(PSBattingOrderService.build_base_order(records, lenient))
+	print("BASEORDER lenient=%s" % str(lenient_ids))
+	assert_int(int(lenient_ids.find(catcher.player_id))).is_less(2)
+
+	# 投手を混ぜると必ず最終打順。
+	var pitcher: PSPlayerSeasonRecord = mk.call(610, 1, {"Bat_Barrel": -1.5, "Bat_Impact": -1.5})
+	var with_pitcher: Array = records.duplicate()
+	with_pitcher.insert(0, pitcher)
+	var ordered_with_pitcher: Array = PSBattingOrderService.build_base_order(with_pitcher)
+	var last: PSPlayerSeasonRecord = ordered_with_pitcher[ordered_with_pitcher.size() - 1] as PSPlayerSeasonRecord
+	assert_int(last.player_id).is_equal(pitcher.player_id)
+
+
+# 打順評価の基準分布は固定値ではなく母集団の実測。能力側はそのシーズンの支配下野手から測り、
+# 成績側はリーグ環境が動けば追随する (= バランス較正や長期セーブのドリフトで基準が古びない)。
+func test_batting_reference_is_measured_from_population() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	# 1) 能力の基準は当該シーズンの支配下野手から実測されていること。
+	var measured_sum: float = 0.0
+	var measured_count: int = 0
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		for record_value in RecordStore.get_team_player_records(team.id, season.year, season.season_number, true):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record == null or record.is_pitcher() or record.development_player:
+				continue
+			measured_sum += float(PSPlayerVisibleRatings.fielder_contact(record))
+			measured_count += 1
+	var population_mean: float = measured_sum / float(maxi(measured_count, 1))
+
+	var reference: Dictionary = PSBattingReference.for_season(season.year, season.season_number)
+	var contact_reference: Dictionary = (reference["ratings"] as Dictionary)["contact"] as Dictionary
+	assert_int(measured_count).is_greater(PSBattingReference.MIN_RATING_SAMPLE)
+	assert_float(float(contact_reference["mean"])).is_equal_approx(population_mean, 0.001)
+
+	# 2) 成績の基準は「直近の完了シーズン」を見る。打高な過去シーズンを差し込むと基準も上がること。
+	#    (進行中のシーズンは規定到達打者が居ないので既定値ではなくここへフォールバックする)
+	var probe_year: int = season.year + 50
+	var probe_season_number: int = season.season_number + 50
+	var inserted: Array = []
+	var sample_size: int = PSBattingReference.MIN_STAT_SAMPLE + 5
+	for i in range(sample_size):
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		record.player_id = 900000 + i
+		record.team_id = (GameDb.teams[0] as PSTeam).id
+		record.position = 7
+		record.name = "REF%d" % i
+		record.year = probe_year
+		record.season_number = probe_season_number
+		var stats: PSBatterStats = record.batter_stats
+		stats.games = 140
+		stats.plate_appearances = 600
+		stats.at_bats = 540
+		# 打率 .300 前後・長打も多い「打高シーズン」を作る。i で少しばらつかせて spread を持たせる。
+		stats.hits = 162 + (i % 9) - 4
+		stats.doubles = 30
+		stats.home_runs = 25
+		stats.walks = 60
+		RecordStore.set_player_record(record)
+		inserted.append(record)
+
+	PSBattingReference.reset_cache()
+	var probe_reference: Dictionary = PSBattingReference.for_season(probe_year + 1, probe_season_number + 1)
+	var ops_reference: Dictionary = (probe_reference["stats"] as Dictionary)["ops"] as Dictionary
+	var default_ops: Dictionary = PSBattingReference.DEFAULT_STAT_REFERENCE["ops"] as Dictionary
+
+	for record_row in inserted:
+		var inserted_record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		RecordStore.erase_player_record(inserted_record.player_id, probe_year, probe_season_number)
+	PSBattingReference.reset_cache()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	print("REFERENCE contact_mean=%.2f (population %.2f, default %.2f) | probe_ops_mean=%.3f (default %.3f)" % [
+		float(contact_reference["mean"]), population_mean,
+		float((PSBattingReference.DEFAULT_RATING_REFERENCE["contact"] as Dictionary)["mean"]),
+		float(ops_reference["mean"]), float(default_ops["mean"]),
+	])
+	# 打高シーズンを挟んだので、既定値より明確に高い OPS 基準になる。
+	assert_float(float(ops_reference["mean"])).is_greater(float(default_ops["mean"]) + 0.05)
+
+
+# 打者指標は表示能力と成績のブレンド。同一能力なら成績で差が付き、今季成績の重みは打席数とともに
+# 増し、過去シーズンは古いほど軽くなる。
+func test_batting_order_metrics_blend_ability_and_recent_performance() -> void:
+	const PROBE_YEAR: int = 3000
+	const PROBE_SEASON: int = 10
+
+	var fill_stats: Callable = func(
+		stats: PSBatterStats, plate_appearances: int, average: float, walk_rate: float, isolated_power: float
+	) -> void:
+		var walks: int = int(round(float(plate_appearances) * walk_rate))
+		var at_bats: int = plate_appearances - walks
+		var hits: int = int(round(float(at_bats) * average))
+		var home_runs: int = int(round(float(at_bats) * isolated_power * 0.5))
+		stats.games = maxi(1, plate_appearances / 4)
+		stats.plate_appearances = plate_appearances
+		stats.at_bats = at_bats
+		stats.hits = hits
+		stats.doubles = 0
+		stats.triples = 0
+		stats.home_runs = mini(home_runs, hits)
+		stats.walks = walks
+		stats.strikeouts = int(round(float(plate_appearances) * 0.20))
+
+	var mk: Callable = func(pid: int, year: int, season_number: int) -> PSPlayerSeasonRecord:
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		r.player_id = pid
+		r.position = 7
+		r.name = "M%d" % pid
+		r.year = year
+		r.season_number = season_number
+		# 全員同一能力にして、指標の差が成績だけから来るようにする。
+		r.z_abilities_snapshot = {
+			"Bat_Barrel": 0.5, "Bat_KAvoid": 0.5, "Bat_BBCreate": 0.5,
+			"Bat_Impact": 0.5, "Bat_Loft": 0.5, "Run_Speed": 0.5,
+		}
+		return r
+
+	var total_of: Callable = func(records: Array, pid: int) -> float:
+		var evaluation: Dictionary = PSBattingOrderService.build_evaluation(records, null, {})
+		var metrics: Dictionary = (evaluation["metrics"] as Dictionary)[pid] as Dictionary
+		return float(metrics["total"])
+
+	# 1) 今季の成績で差が付く: 好調 > 不振。
+	var hot: PSPlayerSeasonRecord = mk.call(701, PROBE_YEAR, PROBE_SEASON)
+	fill_stats.call(hot.batter_stats, 500, 0.330, 0.11, 0.230)
+	var cold: PSPlayerSeasonRecord = mk.call(702, PROBE_YEAR, PROBE_SEASON)
+	fill_stats.call(cold.batter_stats, 500, 0.205, 0.05, 0.060)
+	var neutral: PSPlayerSeasonRecord = mk.call(703, PROBE_YEAR, PROBE_SEASON)
+	var pair: Array = [hot, cold, neutral]
+	var hot_total: float = total_of.call(pair, hot.player_id)
+	var cold_total: float = total_of.call(pair, cold.player_id)
+	var neutral_total: float = total_of.call(pair, neutral.player_id)
+	assert_float(hot_total).is_greater(neutral_total)
+	assert_float(neutral_total).is_greater(cold_total)
+
+	# 2) 今季の重みは打席数とともに増す: 同じ好成績でも 40 打席なら、
+	#    平凡な成績を 500 打席続けた選手を上回らない。500 打席なら上回る。
+	var steady: PSPlayerSeasonRecord = mk.call(704, PROBE_YEAR, PROBE_SEASON)
+	fill_stats.call(steady.batter_stats, 500, 0.290, 0.09, 0.150)
+	var early: PSPlayerSeasonRecord = mk.call(705, PROBE_YEAR, PROBE_SEASON)
+	fill_stats.call(early.batter_stats, 40, 0.330, 0.11, 0.230)
+	var steady_total: float = total_of.call([steady, early], steady.player_id)
+	var early_total: float = total_of.call([steady, early], early.player_id)
+	assert_float(early_total).is_less(steady_total)
+
+	var late: PSPlayerSeasonRecord = mk.call(705, PROBE_YEAR, PROBE_SEASON)
+	fill_stats.call(late.batter_stats, 500, 0.330, 0.11, 0.230)
+	var late_total: float = total_of.call([steady, late], late.player_id)
+	assert_float(late_total).is_greater(steady_total)
+
+	# 3) 過去シーズンは古いほど軽い: 同じ好成績でも 1 年前 > 3 年前。
+	var recent_star: PSPlayerSeasonRecord = mk.call(706, PROBE_YEAR, PROBE_SEASON)
+	var old_star: PSPlayerSeasonRecord = mk.call(707, PROBE_YEAR, PROBE_SEASON)
+	var recent_past: PSPlayerSeasonRecord = mk.call(706, PROBE_YEAR - 1, PROBE_SEASON - 1)
+	fill_stats.call(recent_past.batter_stats, 500, 0.330, 0.11, 0.230)
+	var old_past: PSPlayerSeasonRecord = mk.call(707, PROBE_YEAR - 3, PROBE_SEASON - 3)
+	fill_stats.call(old_past.batter_stats, 500, 0.330, 0.11, 0.230)
+	RecordStore.set_player_record(recent_past)
+	RecordStore.set_player_record(old_past)
+
+	var star_pair: Array = [recent_star, old_star]
+	var recent_total: float = total_of.call(star_pair, recent_star.player_id)
+	var old_total: float = total_of.call(star_pair, old_star.player_id)
+
+	RecordStore.erase_player_record(706, PROBE_YEAR - 1, PROBE_SEASON - 1)
+	RecordStore.erase_player_record(707, PROBE_YEAR - 3, PROBE_SEASON - 3)
+
+	print("BLEND hot=%.3f neutral=%.3f cold=%.3f | early=%.3f steady=%.3f late=%.3f | recent=%.3f old=%.3f" % [
+		hot_total, neutral_total, cold_total, early_total, steady_total, late_total, recent_total, old_total
+	])
+	assert_float(recent_total).is_greater(old_total)
+	# どちらも能力より上振れした成績なので、能力だけの選手 (成績なし) は下回る。
+	assert_float(old_total).is_greater(neutral_total)
+
+
+# 実データでの自動編成: 上位打順 (1-5番) の平均打力が下位 (6-9番) を上回り、
+# 捕手が 1・2 番に置かれるチームがほとんど無いこと。
+func test_auto_lineup_puts_better_hitters_higher_in_order() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var top_total: int = 0
+	var top_count: int = 0
+	var bottom_total: int = 0
+	var bottom_count: int = 0
+	var catcher_in_top_teams: int = 0
+	var teams_checked: int = 0
+
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		var records_by_id: Dictionary = {}
+		for record_value in RecordStore.get_team_player_records(team.id, season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record != null:
+				records_by_id[record.player_id] = record
+
+		var preview: Dictionary = GameSimulator.preview_lineup(season, team.id, true)
+		assert_bool(bool(preview.get("ok", false))).is_true()
+		teams_checked += 1
+		for entry_row in preview.get("batting_order", []) as Array:
+			var entry: Dictionary = entry_row as Dictionary
+			var slot: int = int(entry.get("slot", 0))
+			var batter: PSPlayerSeasonRecord = records_by_id.get(int(entry.get("player_id", 0)), null) as PSPlayerSeasonRecord
+			if batter == null or batter.is_pitcher():
+				continue
+			if int(entry.get("position", 0)) == 2 and slot <= 2:
+				catcher_in_top_teams += 1
+			var score: int = PSPlayerValueEvaluator.batting_score_without_fatigue(batter)
+			if slot <= 5:
+				top_total += score
+				top_count += 1
+			else:
+				bottom_total += score
+				bottom_count += 1
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	assert_int(teams_checked).is_greater(0)
+	assert_int(top_count).is_greater(0)
+	assert_int(bottom_count).is_greater(0)
+	var top_avg: float = float(top_total) / float(top_count)
+	var bottom_avg: float = float(bottom_total) / float(bottom_count)
+	print("LINEUPORDER top_avg=%.2f bottom_avg=%.2f catcher_in_top=%d/%d" % [
+		top_avg, bottom_avg, catcher_in_top_teams, teams_checked
+	])
+	assert_float(top_avg).is_greater(bottom_avg + 2.0)
+	# 捕手の上位打順は「例外的に打てる捕手だけ」。減点そのものの検証は
+	# test_base_batting_order_matches_roles_and_keeps_catcher_lower 側 (母集団に依存しない) が担う。
+	assert_int(catcher_in_top_teams).is_less_equal(2)
+
+
+# 基本打順は BASE_REBUILD_INTERVAL_GAMES ごとに組み直され、今季成績が溜まるほど打順へ反映される。
+# 開幕直後の基本打順と、間隔を跨いだ後の基本打順が同じままではないこと。
+func test_auto_batting_order_base_refreshes_during_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	Rng.set_seed_value(20260808)
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var interval: int = PSBattingOrderService.BASE_REBUILD_INTERVAL_GAMES
+	GameSimulator.simulate_current_day(season, false)
+	var opening_bases: Dictionary = {}
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		for dh in [true, false]:
+			var base: Array = season.get_auto_batting_order(team.id, dh)
+			if not base.is_empty():
+				opening_bases["%d_%s" % [team.id, str(dh)]] = base.duplicate()
+
+	for _day in range(interval + 2):
+		GameSimulator.simulate_current_day(season, false)
+
+	var changed_teams: int = 0
+	for key in opening_bases.keys():
+		var parts: PackedStringArray = str(key).split("_")
+		var team_id: int = int(parts[0])
+		var dh_enabled: bool = str(parts[1]) == "true"
+		if season.get_auto_batting_order(team_id, dh_enabled) != (opening_bases[key] as Array):
+			changed_teams += 1
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	print("BASEREFRESH tracked=%d changed=%d" % [opening_bases.size(), changed_teams])
+	assert_int(opening_bases.size()).is_greater(0)
+	assert_int(changed_teams).is_greater(0)
+
+
 # 控え (打順設定の補充優先リスト) は usage.position_slots[pos].backup_ids として保存され、
 # 守備配置で profile.backup_priority より優先される。スタメンが故障で抜けた枠を埋める。
 func test_usage_backup_ids_take_priority_over_profile() -> void:

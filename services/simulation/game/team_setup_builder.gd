@@ -516,6 +516,7 @@ static func build_setup_from_auto(
 	var rested_fielder_ids: Dictionary = rested_starter_ids_for_game(usage_settings, team_games_played_before + 1)
 
 	var batting_order: Array = records_from_fielding_slots(fielding_slots)
+	var position_by_player_id: Dictionary = position_map_from_fielding_slots(fielding_slots)
 	if dh_enabled:
 		var designated_hitter: PSPlayerSeasonRecord = select_designated_hitter(available_fielders, fielding_slots, rested_fielder_ids)
 		if designated_hitter == null and not rested_fielder_ids.is_empty():
@@ -523,8 +524,9 @@ static func build_setup_from_auto(
 		if designated_hitter == null:
 			return {"ok": false, "message": "%sにDH候補がいません" % GameSimulator._team_name(team_id)}
 		batting_order.append(designated_hitter)
+		position_by_player_id[designated_hitter.player_id] = BattingOrderService.DH_POSITION
 
-	# Phase 3: team.auto_lineup ON なら軽量日替わり打順サービス、OFF なら従来 sort。
+	# auto_lineup ON なら日替わり打順サービス、OFF なら基本打順のみ。
 	var team: PSTeam = GameDb.get_team(team_id)
 	if team != null and team.auto_lineup:
 		if not dh_enabled:
@@ -540,12 +542,14 @@ static func build_setup_from_auto(
 			"team_id": team_id,
 			"dh_enabled": dh_enabled,
 			"opp_pitcher_hand": "",
+			"position_by_player_id": position_by_player_id,
+			"team_games_played": team_games_played_before,
 		}
 		batting_order = BattingOrderService.build_daily_batting_order(batting_order, ctx, profile)
-		if season.get_auto_batting_order(team_id, dh_enabled).is_empty():
-			season.set_auto_batting_order(team_id, dh_enabled, profile.base_order_player_ids)
+		# 基本打順は初回と定期リフレッシュで profile 側が差し替わる。セーブへはそれをそのまま写す。
+		season.set_auto_batting_order(team_id, dh_enabled, profile.base_order_player_ids)
 	else:
-		sort_batting_order(batting_order)
+		sort_batting_order(batting_order, position_by_player_id)
 		if not dh_enabled:
 			batting_order.append(rotation_pitcher)
 	var bench: Array = bench_fielders(available_fielders, batting_order)
@@ -1011,6 +1015,17 @@ static func position_aptitude(record: PSPlayerSeasonRecord, position: int) -> in
 	return int(record.position_aptitudes_snapshot.get(key, 0))
 
 
+# 守備スロットから player_id → 守備位置の対応表を作る。打順評価の捕手判定に使う。
+static func position_map_from_fielding_slots(fielding_slots: Array) -> Dictionary:
+	var position_by_player_id: Dictionary = {}
+	for slot_row in fielding_slots:
+		var slot: Dictionary = slot_row as Dictionary
+		var record: PSPlayerSeasonRecord = slot.get("record", null) as PSPlayerSeasonRecord
+		if record != null:
+			position_by_player_id[record.player_id] = int(slot.get("position", record.position))
+	return position_by_player_id
+
+
 static func records_from_fielding_slots(fielding_slots: Array) -> Array:
 	var records: Array = []
 	for slot_row in fielding_slots:
@@ -1042,12 +1057,10 @@ static func select_designated_hitter(candidates: Array, fielding_slots: Array, e
 	return best
 
 
-static func sort_batting_order(batting_order: Array) -> void:
-	batting_order.sort_custom(func(a, b) -> bool:
-		var batter_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
-		var batter_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return PSScoringHelpers.batter_order_score(batter_a) > PSScoringHelpers.batter_order_score(batter_b)
-	)
+# 打順を役割マッチング (1-2番=出塁と機動力、3-5番=中軸、6番以降=打力順、捕手は上位を避ける) で
+# 並べ替える。position_by_player_id はその日の守備位置で、捕手判定に使う (省略時は登録ポジション)。
+static func sort_batting_order(batting_order: Array, position_by_player_id: Dictionary = {}) -> void:
+	batting_order.assign(BattingOrderService.build_base_order(batting_order, null, position_by_player_id))
 
 
 static func starter_pitcher_candidates(pitchers: Array) -> Array:

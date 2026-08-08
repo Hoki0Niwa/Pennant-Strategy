@@ -360,7 +360,7 @@ func start_new_season() -> bool:
 	# 新シーズンは現在のロースター/能力でスタメン・打順を選び直すため、テンプレキャッシュをリセット。
 	PSDefenseAlignmentProfile.reset_cache()
 	PSBattingOrderProfile.reset_cache()
-	_prewarm_lineup_profiles()
+	_prewarm_lineup_caches()
 	last_status_message = ""
 	offseason_step = OFFSEASON_STEP_RETIREMENT
 	offseason_results = {}
@@ -394,7 +394,7 @@ func start_next_season() -> bool:
 	# 新シーズンは現在のロースター/能力でスタメン・打順を選び直すため、テンプレキャッシュをリセット。
 	PSDefenseAlignmentProfile.reset_cache()
 	PSBattingOrderProfile.reset_cache()
-	_prewarm_lineup_profiles()
+	_prewarm_lineup_caches()
 	last_status_message = ""
 	offseason_step = OFFSEASON_STEP_RETIREMENT
 	offseason_results = {}
@@ -416,11 +416,13 @@ func start_next_season() -> bool:
 	return true
 
 
-# BattingOrderProfile/DefenseAlignmentProfile のチーム別キャッシュを事前に埋める。
+# 打順・守備配置が使うキャッシュを事前に埋める。
 # 試合シミュレーションを並列実行する際、初回アクセス時の遅延書き込み(static var _cache)が
 # 複数スレッドから同時に発生するとDictionary構造変更のレースになるため、メインスレッドの
-# シーズン開始時点で全チーム分を読み切っておき、以後は読み取り専用アクセスにする。
-func _prewarm_lineup_profiles() -> void:
+# シーズン開始時点で読み切っておき、以後は読み取り専用アクセスにする。
+# 対象: BattingOrderProfile/DefenseAlignmentProfile のチーム別テンプレと、
+# BattingReference の年度別基準分布 (打順評価が今季+過去数年ぶんを参照する)。
+func _prewarm_lineup_caches() -> void:
 	for team_value in GameDb.teams:
 		var team: PSTeam = team_value as PSTeam
 		if team == null:
@@ -428,6 +430,9 @@ func _prewarm_lineup_profiles() -> void:
 		PSBattingOrderProfile.load_for_team(team.id, true)
 		PSBattingOrderProfile.load_for_team(team.id, false)
 		PSDefenseAlignmentProfile.load_for_team(team.id)
+	PSBattingReference.reset_cache()
+	if current_season != null:
+		PSBattingReference.prewarm(current_season.year, current_season.season_number)
 
 
 func start_postseason() -> Dictionary:
@@ -1926,7 +1931,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	RecordStore.load_records()
 	if current_season != null:
 		RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, false)
-		_prewarm_lineup_profiles()
+		_prewarm_lineup_caches()
 		# 破損検知: シーズンが進んでいるのに当該シーズンの選手成績が全て0なら、過去に成績
 		# レコードが空白上書きで失われたセーブの可能性が高い (2026-07-03 実発生)。ロスターは
 		# 無事なので続行は可能だが、出場実績ベースの判定の質が落ちるため痕跡を警告する。
