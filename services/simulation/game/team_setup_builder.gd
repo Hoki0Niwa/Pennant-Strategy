@@ -1050,7 +1050,8 @@ static func select_designated_hitter(candidates: Array, fielding_slots: Array, e
 		var candidate: PSPlayerSeasonRecord = candidate_row as PSPlayerSeasonRecord
 		if used_ids.has(candidate.player_id) or excluded_ids.has(candidate.player_id):
 			continue
-		var score: int = PlayerValueEvaluator.batting_score(candidate)
+		# DH は守備が要らないぶん打撃だけで決まる。好不調 (成績の上振れ/下振れ) も込みで見る。
+		var score: int = PlayerValueEvaluator.batting_score_with_form(candidate)
 		if best == null or score > best_score:
 			best = candidate
 			best_score = score

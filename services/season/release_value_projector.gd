@@ -66,18 +66,32 @@ static func projected_value_components(player: PSPlayer, record: PSPlayerSeasonR
 		var injury_excuse: float = clampf(float(record.season_injury_days) / float(INJURY_EXCUSE_FULL_DAYS), 0.0, 1.0)
 		usage = maxf(usage, injury_excuse)
 	var usage_evidence: float = -current * USAGE_ZERO_DISCOUNT * (1.0 - usage)
+	var form_evidence: float = form_evidence_for(effective_record)
 	var injury_penalty: float = offseason_service.injury_value_penalty(player)
 	var salary: int = player.salary if player != null else 0
 	var salary_penalty: float = TeamFinance.ai_acquisition_cost_penalty(salary) * SALARY_COST_WEIGHT
-	var total: float = current + usage_evidence + growth - injury_penalty - salary_penalty
+	var total: float = current + usage_evidence + form_evidence + growth - injury_penalty - salary_penalty
 	return {
 		"current": current,
 		"growth": growth,
 		"usage_evidence": usage_evidence,
+		"form_evidence": form_evidence,
 		"injury_penalty": injury_penalty,
 		"salary_penalty": salary_penalty,
 		"total": total,
 	}
+
+
+# 出場の「質」による加減点。usage_evidence が出場“量”を能力主張の裏付けとして見るのに対し、
+# こちらは残した成績が能力どおりだったかを見る (PSBatterForm の編成判断ノブ = 長い記憶・弱い追随)。
+# 成績が無ければ 0 なので、新人や出場ゼロの選手は usage_evidence だけで評価される。
+#
+# 投手は打撃版に相当する成績評価 (PSBatterForm) が無いため現状 0。投手の放出判断は従来どおり
+# 能力 + 登板量 + 年齢 + 年俸で決まる。投手版を作るならここへ対称に足す。
+static func form_evidence_for(record: PSPlayerSeasonRecord) -> float:
+	if record == null or record.is_pitcher():
+		return 0.0
+	return PSBatterForm.roster_rating_delta(record)
 
 
 static func projected_value(player: PSPlayer, record: PSPlayerSeasonRecord) -> float:

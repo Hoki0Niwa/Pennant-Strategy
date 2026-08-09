@@ -43,11 +43,12 @@ static func assign_defensive_starters(
 		return []
 
 	# 打撃スコアは候補×守備位置の評価で何度も読むため、先に1回だけ計算して使い回す。
+	# 成績の上振れ/下振れ込み (batting_score_with_form) で、好調な控えがスタメンを奪える。
 	var batting_cache: Dictionary = {}
 	for rec_row in healthy:
 		var rec: PSPlayerSeasonRecord = rec_row as PSPlayerSeasonRecord
 		if rec != null:
-			batting_cache[rec.player_id] = PlayerValueEvaluator.batting_score(rec)
+			batting_cache[rec.player_id] = PlayerValueEvaluator.batting_score_with_form(rec)
 
 	# 保存テンプレートがまだ無いチームは、現在の健康野手から初期テンプレートを自動生成する。
 	var template: Dictionary = profile.starting_positions.duplicate()

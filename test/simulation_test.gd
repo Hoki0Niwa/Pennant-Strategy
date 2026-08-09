@@ -275,6 +275,11 @@ func test_batting_reference_is_measured_from_population() -> void:
 	])
 	# 打高シーズンを挟んだので、既定値より明確に高い OPS 基準になる。
 	assert_float(float(ops_reference["mean"])).is_greater(float(default_ops["mean"]) + 0.05)
+	# 成績スケールは alignment で能力スケールへ平行移動されている。成績母集団 (規定到達打者/
+	# 能力上位) は支配下野手平均より上なので、正の値でなければゼロ点が揃っていない。
+	var current_stats: Dictionary = (reference["stats"] as Dictionary)["ops"] as Dictionary
+	print("ALIGNMENT ops=%.3f" % float(current_stats.get("alignment", 0.0)))
+	assert_float(float(current_stats.get("alignment", 0.0))).is_greater(0.2)
 
 
 # 打者指標は表示能力と成績のブレンド。同一能力なら成績で差が付き、今季成績の重みは打席数とともに
@@ -437,6 +442,77 @@ func test_auto_lineup_puts_better_hitters_higher_in_order() -> void:
 	assert_int(catcher_in_top_teams).is_less_equal(2)
 
 
+# 出場判断 (スタメン/DH/代打) は成績の上振れ/下振れを rating 点として加える。
+# 能力が同じなら好調な選手がスタメンを取り、成績が無ければ能力どおり (デルタ 0) に戻る。
+func test_batting_form_moves_starter_selection() -> void:
+	const PROBE_YEAR: int = 3100
+	const PROBE_SEASON: int = 20
+	var apt_keys: Dictionary = PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS
+
+	var mk: Callable = func(pid: int, position: int) -> PSPlayerSeasonRecord:
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		r.player_id = pid
+		r.position = position
+		r.name = "F%d" % pid
+		r.year = PROBE_YEAR
+		r.season_number = PROBE_SEASON
+		r.z_abilities_snapshot = {
+			"Bat_Barrel": 0.6, "Bat_KAvoid": 0.6, "Bat_BBCreate": 0.6,
+			"Bat_Impact": 0.6, "Bat_Loft": 0.6, "Run_Speed": 0.6,
+		}
+		var aptitudes: Dictionary = {}
+		aptitudes[str(apt_keys.get(position, "left_field"))] = 85
+		r.position_aptitudes_snapshot = aptitudes
+		return r
+
+	var fill_stats: Callable = func(
+		stats: PSBatterStats, plate_appearances: int, average: float, isolated_power: float
+	) -> void:
+		var walks: int = int(round(float(plate_appearances) * 0.09))
+		var at_bats: int = plate_appearances - walks
+		stats.games = maxi(1, plate_appearances / 4)
+		stats.plate_appearances = plate_appearances
+		stats.at_bats = at_bats
+		stats.hits = int(round(float(at_bats) * average))
+		stats.home_runs = mini(int(round(float(at_bats) * isolated_power * 0.5)), stats.hits)
+		stats.walks = walks
+		stats.strikeouts = int(round(float(plate_appearances) * 0.20))
+
+	# 成績が無ければデルタは 0 = 能力どおり。
+	var fresh: PSPlayerSeasonRecord = mk.call(801, 7)
+	assert_float(PSBatterForm.rating_delta(fresh)).is_equal_approx(0.0, 0.0001)
+
+	var cold_regular: PSPlayerSeasonRecord = mk.call(802, 7)
+	fill_stats.call(cold_regular.batter_stats, 500, 0.205, 0.060)
+	var hot_reserve: PSPlayerSeasonRecord = mk.call(803, 7)
+	fill_stats.call(hot_reserve.batter_stats, 500, 0.330, 0.230)
+	var hot_but_early: PSPlayerSeasonRecord = mk.call(804, 7)
+	fill_stats.call(hot_but_early.batter_stats, 40, 0.330, 0.230)
+
+	var cold_delta: float = PSBatterForm.rating_delta(cold_regular)
+	var hot_delta: float = PSBatterForm.rating_delta(hot_reserve)
+	var early_delta: float = PSBatterForm.rating_delta(hot_but_early)
+	print("FORMDELTA cold=%.2f hot=%.2f early=%.2f" % [cold_delta, hot_delta, early_delta])
+
+	assert_float(cold_delta).is_less(0.0)
+	assert_float(hot_delta).is_greater(0.0)
+	# 打席が少ないうちは同じ好成績でも効きが小さい。
+	assert_float(early_delta).is_greater(0.0)
+	assert_float(early_delta).is_less(hot_delta)
+	# クリップの範囲に収まる。
+	assert_float(hot_delta).is_less_equal(PSBatterForm.FORM_RATING_MAX)
+	assert_float(cold_delta).is_greater_equal(PSBatterForm.FORM_RATING_MIN)
+
+	# 能力・適性が同一でも、好調な控えが不振のレギュラーより高いスタメン評価になる。
+	var cold_score: int = PSPlayerValueEvaluator.starter_assignment_score(cold_regular, 7)
+	var hot_score: int = PSPlayerValueEvaluator.starter_assignment_score(hot_reserve, 7)
+	assert_int(hot_score).is_greater(cold_score)
+	# 能力ベースの batting_score は成績で動かない (表示・査定用は据え置き)。
+	assert_int(PSPlayerValueEvaluator.batting_score(hot_reserve)).is_equal(
+		PSPlayerValueEvaluator.batting_score(cold_regular)
+	)
+
+
 # 基本打順は BASE_REBUILD_INTERVAL_GAMES ごとに組み直され、今季成績が溜まるほど打順へ反映される。
 # 開幕直後の基本打順と、間隔を跨いだ後の基本打順が同じままではないこと。
 func test_auto_batting_order_base_refreshes_during_season() -> void:
@@ -471,14 +547,33 @@ func test_auto_batting_order_base_refreshes_during_season() -> void:
 		if season.get_auto_batting_order(team_id, dh_enabled) != (opening_bases[key] as Array):
 			changed_teams += 1
 
+	# 能力スケールと成績スケールのゼロ点が揃っていること (PSBattingReference の alignment)。
+	# 揃っていないと「出場するほど下振れ扱い」になり、レギュラーだけが系統的に減点されて
+	# スタメン選定が壊れる。実測では平均 -2.4 点まで偏っていた。
+	var form_sum: float = 0.0
+	var form_count: int = 0
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		for record_value in RecordStore.get_team_player_records(team.id, season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record == null or record.is_pitcher() or record.batter_stats.plate_appearances < 30:
+				continue
+			form_sum += PSBatterForm.rating_delta(record)
+			form_count += 1
+	var form_mean: float = form_sum / float(maxi(form_count, 1))
+
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season
 	if not test_save_id.is_empty() and test_save_id != old_save_id:
 		SaveContext.delete_current_save_data()
 
-	print("BASEREFRESH tracked=%d changed=%d" % [opening_bases.size(), changed_teams])
+	print("BASEREFRESH tracked=%d changed=%d | form_mean=%.2f (n=%d)" % [
+		opening_bases.size(), changed_teams, form_mean, form_count
+	])
 	assert_int(opening_bases.size()).is_greater(0)
 	assert_int(changed_teams).is_greater(0)
+	assert_int(form_count).is_greater(50)
+	assert_float(absf(form_mean)).is_less(0.5)
 
 
 # 控え (打順設定の補充優先リスト) は usage.position_slots[pos].backup_ids として保存され、

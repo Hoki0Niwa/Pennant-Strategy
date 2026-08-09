@@ -4,8 +4,10 @@ class_name PSScoringHelpers
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 
 
+# 「この場面で誰に打たせるか」(代打・保存打順の欠員補充) の比較値。
+# 能力だけでなく成績の上振れ/下振れ込みで見る (表示・査定用の batting_score とは別)。
 static func batter_order_score(record: PSPlayerSeasonRecord) -> int:
-	return PlayerValueEvaluator.batting_score(record)
+	return PlayerValueEvaluator.batting_score_with_form(record)
 
 
 static func pitcher_order_score(record: PSPlayerSeasonRecord) -> int:

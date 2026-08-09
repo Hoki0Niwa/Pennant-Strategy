@@ -105,6 +105,16 @@ static func batting_score(record: PSPlayerSeasonRecord) -> int:
 	return _batting_score(record, true)
 
 
+# 出場判断 (スタメン/DH/代打) 用の打撃評価。能力ベースの batting_score に、今季+過去成績が
+# 能力からどれだけ上振れ/下振れしているか (PSBatterForm.rating_delta) を加える。
+# 守備側の realized_fielding_rating_delta と対称で、能力ブレンド比率は掛けない。
+# 表示・査定用の batting_score / overall_score は能力のみのまま (成績は画面に別途出るため)。
+static func batting_score_with_form(record: PSPlayerSeasonRecord) -> int:
+	if record == null:
+		return 0
+	return _visible_score(float(_batting_score(record, true)) + PSBatterForm.rating_delta(record))
+
+
 static func batting_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
 	return _batting_score(record, false)
 
@@ -269,9 +279,10 @@ static func defensive_assignment_score(record: PSPlayerSeasonRecord, position: i
 # defensive_assignment_score は純守備指標として残してあるので、将来「守備固め」など
 # 純守備で選びたいケースは引き続きそちらを使える。
 #
-# batting_score_override: 0 以上を渡すと batting_score(record) の再計算を省略する。
+# batting_score_override: 0 以上を渡すと batting_score_with_form(record) の再計算を省略する。
 # 同じ候補が 8 ポジション × N 候補のループ中で何度も評価されるため、呼び出し側で
-# 1 度だけ batting_score を計算してキャッシュしてから渡すことで重複計算を避けられる。
+# 1 度だけ計算してキャッシュしてから渡すことで重複計算を避けられる
+# (渡す値も batting_score_with_form であること — 成績分が二重に乗らないよう form 込みで揃える)。
 static func starter_assignment_score(
 	record: PSPlayerSeasonRecord,
 	position: int,
@@ -287,7 +298,7 @@ static func starter_assignment_score(
 	# (defensive_score_for_position = 適性ペナルティ込み) と打撃を position 別比率で
 	# ブレンドした「その守備位置での総合力」をコアにする。これにより適性の低いポジに
 	# 置かれた選手は守備ペナルティ分だけ選出スコアが下がり、単純な総合値だけで決まらない。
-	var offense: int = batting_score_override if batting_score_override >= 0 else batting_score(record)
+	var offense: int = batting_score_override if batting_score_override >= 0 else batting_score_with_form(record)
 	var position_defense: int = defensive_score_for_position(record, position)
 	var offense_weight: float = starter_offense_weight_for_position(position)
 	var defense_weight: float = starter_defense_weight_for_position(position)

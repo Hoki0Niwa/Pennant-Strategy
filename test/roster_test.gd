@@ -2806,6 +2806,55 @@ func test_release_projection_excuses_usage_lost_to_long_injury() -> void:
 	assert_float(float(components["usage_evidence"])).is_equal_approx(0.0, 0.001)
 
 
+# 戦力外は出場「量」(usage_evidence) だけでなく「質」(form_evidence) も見る。
+# 同じ能力・同じ出場数なら、残した成績が良いほど放出されにくい。
+# ただし編成判断は長期なので、同じ成績でも出場判断 (rating_delta) より効きを弱くする。
+func test_release_projection_weighs_batting_performance_quality() -> void:
+	var fill_stats: Callable = func(
+		stats: PSBatterStats, plate_appearances: int, average: float, isolated_power: float
+	) -> void:
+		var walks: int = int(round(float(plate_appearances) * 0.09))
+		var at_bats: int = plate_appearances - walks
+		stats.games = 130
+		stats.plate_appearances = plate_appearances
+		stats.at_bats = at_bats
+		stats.hits = int(round(float(at_bats) * average))
+		stats.home_runs = mini(int(round(float(at_bats) * isolated_power * 0.5)), stats.hits)
+		stats.walks = walks
+
+	var good: PSPlayer = _player_with_z(9610, 1, 7, false, 0.5)
+	good.age = 28
+	var bad: PSPlayer = _player_with_z(9611, 1, 7, false, 0.5)
+	bad.age = 28
+	var good_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(good, 0, 0)
+	fill_stats.call(good_record.batter_stats, 550, 0.315, 0.200)
+	var bad_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(bad, 0, 0)
+	fill_stats.call(bad_record.batter_stats, 550, 0.210, 0.070)
+
+	var good_components: Dictionary = ReleaseValueProjector.projected_value_components(good, good_record)
+	var bad_components: Dictionary = ReleaseValueProjector.projected_value_components(bad, bad_record)
+	# 能力も出場量も同じ = current と usage_evidence は一致する。
+	assert_float(float(good_components["current"])).is_equal_approx(float(bad_components["current"]), 0.001)
+	assert_float(float(good_components["usage_evidence"])).is_equal_approx(
+		float(bad_components["usage_evidence"]), 0.001
+	)
+	# 差が付くのは form_evidence だけ。
+	assert_float(float(good_components["form_evidence"])).is_greater(float(bad_components["form_evidence"]))
+	assert_float(float(good_components["total"])).is_greater(float(bad_components["total"]))
+
+	# 編成判断のノブは出場判断より弱い追随 (同じ成績なら効きが小さい)。
+	assert_float(absf(PSBatterForm.roster_rating_delta(bad_record))).is_less(
+		absf(PSBatterForm.rating_delta(bad_record))
+	)
+	# 投手は打撃版の成績評価が無いので 0 のまま (従来どおり能力+登板量+年齢+年俸)。
+	var pitcher: PSPlayer = _player_with_z(9612, 1, 1, false, 0.5)
+	pitcher.age = 28
+	pitcher.role = "starter"
+	var pitcher_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(pitcher, 0, 0)
+	pitcher_record.pitcher_stats.starts = 25
+	assert_float(ReleaseValueProjector.form_evidence_for(pitcher_record)).is_equal_approx(0.0, 0.001)
+
+
 func test_release_projection_components_sum() -> void:
 	var player: PSPlayer = _player_with_z(9604, 1, 1, false, 0.1)
 	player.age = 29
@@ -2815,7 +2864,8 @@ func test_release_projection_components_sum() -> void:
 	record.pitcher_stats.starts = 10
 	var components: Dictionary = ReleaseValueProjector.projected_value_components(player, record)
 	var expected_total: float = float(components["current"]) + float(components["growth"]) \
-		+ float(components["usage_evidence"]) - float(components["injury_penalty"]) - float(components["salary_penalty"])
+		+ float(components["usage_evidence"]) + float(components["form_evidence"]) \
+		- float(components["injury_penalty"]) - float(components["salary_penalty"])
 	assert_float(float(components["total"])).is_equal_approx(expected_total, 0.001)
 	assert_float(ReleaseValueProjector.projected_value(player, record)).is_equal_approx(float(components["total"]), 0.001)
 
