@@ -146,11 +146,11 @@ func _new_short_season() -> PSSeason:
 	RecordStore.clear_records()
 	PSBattingOrderProfile.reset_cache()
 	PSDefenseAlignmentProfile.reset_cache()
-	PSBattingReference.reset_cache()
+	PSPerformanceReference.reset_cache()
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 	# 並列日次実行では基準分布を遅延生成させない (メインスレッドで凍結してから走らせる)。
-	PSBattingReference.prewarm(season.year, season.season_number)
+	PSPerformanceReference.prewarm(season.year, season.season_number)
 	_keep_first_schedule_days(season, REMAINING_TEST_DAY_COUNT)
 	return season
 

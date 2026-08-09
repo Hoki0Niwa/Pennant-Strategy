@@ -430,9 +430,9 @@ func _prewarm_lineup_caches() -> void:
 		PSBattingOrderProfile.load_for_team(team.id, true)
 		PSBattingOrderProfile.load_for_team(team.id, false)
 		PSDefenseAlignmentProfile.load_for_team(team.id)
-	PSBattingReference.reset_cache()
+	PSPerformanceReference.reset_cache()
 	if current_season != null:
-		PSBattingReference.prewarm(current_season.year, current_season.season_number)
+		PSPerformanceReference.prewarm(current_season.year, current_season.season_number)
 
 
 func start_postseason() -> Dictionary:

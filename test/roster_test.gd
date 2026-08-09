@@ -2507,13 +2507,85 @@ func test_high_fatigue_record_is_not_auto_demotion_candidate() -> void:
 	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 1.0, 100, 70.0, 70.0, 70.0)).is_true()
 
 
+# perf_score は overall_prior と同じ rating スケールに乗る (投手/野手で桁が揃う)。
+# 旧実装は stat_score_batter/pitcher が counting stats 込みの独自スケールで、野手レギュラー ≒171 /
+# 救援 最大735 と発散し、絶対閾値 (INJURY_*_STASH_SCORE_MIN) も平均比 (旧 UNDERPERFORM_RATIO) も
+# 意味を失っていた。成績は率のみをリーグ実測分布で σ 化して能力へ加算する形に統一した。
+func test_perf_score_stays_on_overall_rating_scale() -> void:
+	var fielder: PSPlayer = _player_with_z(9620, 1, 7, false, 0.5)
+	var fielder_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 0, 0)
+	fielder_record.batter_stats.games = 130
+	fielder_record.batter_stats.plate_appearances = 550
+	fielder_record.batter_stats.at_bats = 500
+	fielder_record.batter_stats.hits = 150
+	fielder_record.batter_stats.home_runs = 20
+	fielder_record.batter_stats.walks = 50
+
+	var pitcher: PSPlayer = _player_with_z(9621, 1, 1, false, 0.5)
+	pitcher.role = "starter"
+	var pitcher_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(pitcher, 0, 0)
+	pitcher_record.pitcher_stats.games = 25
+	pitcher_record.pitcher_stats.starts = 25
+	pitcher_record.pitcher_stats.outs_pitched = 450
+	pitcher_record.pitcher_stats.batters_faced = 620
+	pitcher_record.pitcher_stats.earned_runs = 55
+
+	var fielder_prior: float = TeamAutoAIRef.overall_prior(fielder_record)
+	var pitcher_prior: float = TeamAutoAIRef.overall_prior(pitcher_record)
+	var fielder_perf: float = TeamAutoAIRef.perf_score(fielder_record)
+	var pitcher_perf: float = TeamAutoAIRef.perf_score(pitcher_record)
+
+	# 能力からの乖離は form のクリップ幅に収まる = 出場量でスコアが膨らまない。
+	assert_float(absf(fielder_perf - fielder_prior)).is_less_equal(PSBatterForm.FORM_RATING_MAX + 0.001)
+	assert_float(absf(pitcher_perf - pitcher_prior)).is_less_equal(PSPitcherForm.FORM_RATING_MAX + 0.001)
+	# 投手と野手が同じ桁に乗る (旧実装は救援が 700 超まで伸びた)。
+	assert_float(absf(fielder_perf - pitcher_perf)).is_less(40.0)
+
+	# 出場ゼロなら能力そのもの (成績が無ければ form=0)。
+	var fresh: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 0, 0)
+	assert_float(TeamAutoAIRef.perf_score(fresh)).is_equal_approx(
+		TeamAutoAIRef.overall_prior(fresh), 0.001
+	)
+
+
+# 投手の成績評価も打者と対称: 同能力・同投球回なら失点を抑えたほうが高く評価される。
+func test_pitcher_form_rewards_run_prevention() -> void:
+	var build: Callable = func(pid: int, earned_runs: int) -> PSPlayerSeasonRecord:
+		var p: PSPlayer = _player_with_z(pid, 1, 1, false, 0.5)
+		p.role = "starter"
+		var r: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(p, 0, 0)
+		r.pitcher_stats.games = 25
+		r.pitcher_stats.starts = 25
+		r.pitcher_stats.outs_pitched = 450
+		r.pitcher_stats.batters_faced = 620
+		r.pitcher_stats.earned_runs = earned_runs
+		return r
+
+	var good: PSPlayerSeasonRecord = build.call(9622, 40)   # ERA 2.40
+	var bad: PSPlayerSeasonRecord = build.call(9623, 85)    # ERA 5.10
+	var good_delta: float = PSPitcherForm.rating_delta(good)
+	var bad_delta: float = PSPitcherForm.rating_delta(bad)
+	assert_float(good_delta).is_greater(bad_delta)
+	assert_float(TeamAutoAIRef.perf_score(good)).is_greater(TeamAutoAIRef.perf_score(bad))
+	# 編成判断ノブは出場判断より弱い追随。
+	assert_float(absf(PSPitcherForm.roster_rating_delta(bad))).is_less(absf(bad_delta))
+	# 戦力外の form_evidence も投手に効く (以前は 0 固定だった)。
+	assert_float(ReleaseValueProjector.form_evidence_for(good)).is_greater(
+		ReleaseValueProjector.form_evidence_for(bad)
+	)
+
+
+# 降格判定 (B) は 1軍同バケット平均からの**絶対差**で見る (perf_score が overall スケール =
+# 任意のゼロ点を持つため、比率だと閾値が分布の外へ出て発火しなくなる)。
+# 平均 70.0・UNDERPERFORM_GAP_BATTER=8.0 なら境界は 62.0。
 func test_underperforming_regular_batter_becomes_auto_demotion_candidate() -> void:
 	var player: PSPlayer = _player_with_z(63, 1, 3, false, 0.4)
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 2026, 1)
 	record.batter_stats.plate_appearances = 100
 
-	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 54.0, 100, 70.0, 70.0, 70.0)).is_true()
-	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, 55.0, 100, 70.0, 70.0, 70.0)).is_false()
+	var line: float = 70.0 - TeamAutoAIRef.UNDERPERFORM_GAP_BATTER
+	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, line - 1.0, 100, 70.0, 70.0, 70.0)).is_true()
+	assert_bool(TeamAutoAIRef._is_demotion_candidate(record, line + 1.0, 100, 70.0, 70.0, 70.0)).is_false()
 
 
 # FA日数台帳: 入替時に get_active_roster の複製 (古い台帳入り) を渡しても、set_active_roster 内で

@@ -51,6 +51,9 @@ func ensure_loaded() -> void:
 	load_records()
 
 
+# シーズンのレコードを確定させたら、基準分布をメインスレッドで作り直して凍結する。
+# 試合日は WorkerThreadPool で並列実行されるため、遅延生成させると Dictionary 構造変更の
+# レースになる (AppState 経由でない reporter 系の経路もここで確実に温まる)。
 func ensure_season_records(season: PSSeason, teams: Array, players: Array, persist: bool = true) -> void:
 	ensure_loaded()
 	var changed: bool = false
@@ -98,6 +101,8 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 			save_records()
 		records_changed.emit()
 
+	PSPerformanceReference.reset_cache()
+	PSPerformanceReference.prewarm(season.year, season.season_number)
 	_warn_missing_z_abilities(season)
 
 
@@ -252,6 +257,8 @@ func get_current_player_records_for_team(team_id: int, include_retired: bool = f
 
 func clear_records() -> void:
 	SQLiteStoreService.reset_record_fingerprints()
+	# 母集団が入れ替わるので、そこから実測した基準分布 (打順/起用/編成の判定ラインの元) は無効。
+	PSPerformanceReference.reset_cache()
 	_player_records.clear()
 	_clear_team_player_record_index()
 	_team_records.clear()
@@ -299,8 +306,9 @@ func to_dict() -> Dictionary:
 
 func load_from_dict(payload: Dictionary) -> void:
 	# メモリ側を丸ごと入れ替えるため「前回永続化した内容」のキャッシュは無効。
-	# 空キャッシュ = 次回 save は全行書き込み。
+	# 空キャッシュ = 次回 save は全行書き込み。母集団から実測した基準分布も同時に無効化する。
 	SQLiteStoreService.reset_record_fingerprints()
+	PSPerformanceReference.reset_cache()
 	_player_records.clear()
 	_clear_team_player_record_index()
 	_team_records.clear()

@@ -14,6 +14,12 @@ const FATIGUE_MAX: int = 200
 const DEFENSIVE_ASSIGNMENT_ORDER: Array[int] = [2, 6, 8, 4, 5, 3, 7, 9]
 const PINCH_HIT_START_INNING: int = 7
 const DEFENSIVE_REPLACEMENT_START_INNING: int = 8
+# 代打/守備固めの打力ライン。**母集団相対** — その年の支配下野手の打撃スコア分布から
+# mean + sigma*spread を引く (絶対値だとリーグ水準が動いただけで代打の出方が変わる)。
+# 実測 (1シーズン): 打撃スコア mean 71.95 / spread 12.21 で、旧・絶対値 44 は -2.29σ、
+# 62 は -0.82σ に相当した。絶対値は母集団が取れないときのフォールバックとして残す。
+const LOW_BATTER_SIGMA: float = -2.29
+const SOLID_BATTER_SIGMA: float = -0.82
 const LOW_BATTER_SCORE: int = 44
 const SOLID_BATTER_SCORE: int = 62
 const IMPORTANT_PINCH_HIT_CHANCE_SCORE: int = 8

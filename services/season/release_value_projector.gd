@@ -83,14 +83,14 @@ static func projected_value_components(player: PSPlayer, record: PSPlayerSeasonR
 
 
 # 出場の「質」による加減点。usage_evidence が出場“量”を能力主張の裏付けとして見るのに対し、
-# こちらは残した成績が能力どおりだったかを見る (PSBatterForm の編成判断ノブ = 長い記憶・弱い追随)。
+# こちらは残した成績が能力どおりだったかを見る (編成判断ノブ = 長い記憶・弱い追随)。
 # 成績が無ければ 0 なので、新人や出場ゼロの選手は usage_evidence だけで評価される。
-#
-# 投手は打撃版に相当する成績評価 (PSBatterForm) が無いため現状 0。投手の放出判断は従来どおり
-# 能力 + 登板量 + 年齢 + 年俸で決まる。投手版を作るならここへ対称に足す。
+# 野手は打撃成績 (PSBatterForm)、投手は失点抑止 (PSPitcherForm) で対称に評価する。
 static func form_evidence_for(record: PSPlayerSeasonRecord) -> float:
-	if record == null or record.is_pitcher():
+	if record == null:
 		return 0.0
+	if record.is_pitcher():
+		return PSPitcherForm.roster_rating_delta(record)
 	return PSBatterForm.roster_rating_delta(record)
 
 

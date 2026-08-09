@@ -232,7 +232,9 @@ static func position_player_pinch_hit_option(
 	if deficit < -1 or deficit > 5:
 		return {}
 	var batter_score: int = pinch_hit_batting_score(batter)
-	var low_score_limit: int = GameSimulator.LOW_BATTER_SCORE
+	var low_score_limit: int = batting_score_line(
+		batter, GameSimulator.LOW_BATTER_SIGMA, GameSimulator.LOW_BATTER_SCORE
+	)
 	if inning >= 8:
 		low_score_limit += GameSimulator.PINCH_HIT_LATE_SCORE_MARGIN
 	if important_chance:
@@ -456,7 +458,9 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		if outgoing.age < 30 and outgoing.years < 8:
 			continue
 		var batting_score: int = pinch_hit_batting_score(outgoing)
-		if batting_score < GameSimulator.SOLID_BATTER_SCORE:
+		if batting_score < batting_score_line(
+			outgoing, GameSimulator.SOLID_BATTER_SIGMA, GameSimulator.SOLID_BATTER_SCORE
+		):
 			continue
 		var lineup_slot: int = lineup_slot_for_player(setup, outgoing.player_id)
 		if lineup_slot < 0:
@@ -582,6 +586,18 @@ static func base_opportunity_score(bases: Array) -> int:
 	if on_first:
 		return 1
 	return 0
+
+
+# 打撃スコアの判定ラインを、その選手のシーズンの母集団分布から引く。
+# 母集団が無い (year 未設定の合成レコード等) 場合は fallback の絶対値へ落ちる。
+# 基準分布は PSPerformanceReference のキャッシュ (シーズン開始時にプリウォーム済み) を読むだけなので、
+# 試合日の並列実行から呼んでも書き込みは発生しない。
+static func batting_score_line(record: PSPlayerSeasonRecord, sigma: float, fallback: int) -> int:
+	if record == null or record.year <= 0:
+		return fallback
+	return int(round(PSPerformanceReference.score_threshold(
+		record.year, record.season_number, "batting", sigma
+	)))
 
 
 static func pinch_hit_batting_score(record: PSPlayerSeasonRecord) -> int:

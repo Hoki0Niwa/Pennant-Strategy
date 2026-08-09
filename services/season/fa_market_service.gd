@@ -60,6 +60,12 @@ const REGULAR_PITCHER_STARTS: int = 12
 const REGULAR_RELIEF_APPEARANCES: int = 35
 const REGULAR_PITCHER_OUTS: int = 150
 const REGULAR_WAR: float = 1.0
+# 「レギュラー級の能力か」は**母集団相対**で見る。その年の支配下選手の overall 分布から
+# mean + sigma*spread を引く。絶対値で置くとリーグ全体の水準が動いただけで FA 宣言者数が動く。
+# 実測 (1シーズン): 野手 mean 68.96/spread 9.91、投手 mean 68.92/spread 7.70。
+# -0.1σ は旧・絶対値 68 とほぼ一致 = 「ほぼリーグ平均以上」。
+const REGULAR_OVERALL_SIGMA: float = -0.1
+# 母集団が取れないとき (合成データのテスト等) のフォールバック。
 const REGULAR_OVERALL: int = 68
 
 
@@ -542,7 +548,7 @@ static func _declaration_entry(
 
 
 static func _is_regular_class(_player: PSPlayer, record: PSPlayerSeasonRecord, value: int, war: float) -> bool:
-	if value >= REGULAR_OVERALL and war >= 0.0:
+	if float(value) >= _regular_overall_line(record) and war >= 0.0:
 		return true
 	if war >= REGULAR_WAR:
 		return true
@@ -555,6 +561,16 @@ static func _is_regular_class(_player: PSPlayer, record: PSPlayerSeasonRecord, v
 			return true
 		return record.pitcher_stats.outs_pitched >= REGULAR_PITCHER_OUTS
 	return record.batter_stats.plate_appearances >= REGULAR_BATTER_PA or record.batter_stats.games >= REGULAR_BATTER_GAMES
+
+
+# レギュラー級とみなす overall のライン。母集団が無ければ絶対値のフォールバックへ落ちる。
+static func _regular_overall_line(record: PSPlayerSeasonRecord) -> float:
+	if record == null or record.year <= 0:
+		return float(REGULAR_OVERALL)
+	var key: String = "overall_pitcher" if record.is_pitcher() else "overall_batter"
+	return PSPerformanceReference.score_threshold(
+		record.year, record.season_number, key, REGULAR_OVERALL_SIGMA
+	)
 
 
 static func _record_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) -> float:

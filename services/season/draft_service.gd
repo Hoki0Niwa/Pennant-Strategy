@@ -27,7 +27,16 @@ const FUTURE_NEED_WEIGHT: float = 0.6
 const POSITION_DEPTH_TARGET: int = 4
 const POSITION_APT_NEED_WEIGHT_ROUND1: float = 1.0
 const POSITION_APT_NEED_WEIGHT_LATER: float = 4.0
+# 「その位置に健在の主力がいるか」は**母集団相対**で見る。ドラフト対象の母集団 (= 全球団の
+# 支配下野手) の overall 分布から mean + sigma*spread を引く。絶対値で置くとリーグ全体の
+# 水準が動いただけで「主力がいる」判定が一斉にズレる。
+# 実測 (1シーズン): 野手 mean 68.96/spread 9.91 で、旧・絶対値 60 は -0.90σ に相当した
+# (= 「主力」の基準はかなり低く、平均をやや下回る水準)。
+const STRONG_STARTER_OVERALL_SIGMA: float = -0.9
+# 母集団が取れないとき (合成データのテスト等) のフォールバック。
 const STRONG_STARTER_OVERALL: int = 60
+const STRONG_STARTER_MIN_SAMPLE: int = 60
+const STRONG_STARTER_MIN_SPREAD: float = 3.0
 const STRONG_STARTER_DAMPEN: float = 0.3
 
 # 本職 (primary position) の最低確保数。球団全体で各守備位置に本職 2 人以上、捕手は 6 人以上を
@@ -906,7 +915,7 @@ static func _position_aptitude_need_bonus(profile: Dictionary, candidate: Dictio
 	var weight: float = POSITION_APT_NEED_WEIGHT_ROUND1 if round_no == 1 else POSITION_APT_NEED_WEIGHT_LATER
 	var bonus: float = float(shortage) * weight
 	var top_overall_map: Dictionary = profile.get("position_top_overall", {}) as Dictionary
-	if int(top_overall_map.get(position, 0)) >= STRONG_STARTER_OVERALL:
+	if float(top_overall_map.get(position, 0)) >= float(profile.get("strong_starter_line", STRONG_STARTER_OVERALL)):
 		bonus *= STRONG_STARTER_DAMPEN
 	return bonus
 
@@ -1008,7 +1017,10 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 			"position_top_overall": {2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0},
 			# 本職 (primary position) 別の人数。本職 2 人以上 / 捕手 6 人以上の確保に使う。
 			"position_primary_count": {2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0},
+			# 「主力健在」の判定ライン。下の走査で全球団の支配下野手から実測して埋める。
+			"strong_starter_line": float(STRONG_STARTER_OVERALL),
 		}
+	var overall_samples: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired():
@@ -1043,7 +1055,27 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 					holders[position] = int(holders.get(position, 0)) + 1
 					if overall > int(top_overall.get(position, 0)):
 						top_overall[position] = overall
+			overall_samples.append(float(overall))
+
+	var strong_starter_line: float = _population_line(overall_samples, STRONG_STARTER_OVERALL_SIGMA)
+	for profile_row in profiles.values():
+		(profile_row as Dictionary)["strong_starter_line"] = strong_starter_line
 	return profiles
+
+
+# 母集団の mean + sigma*spread。標本が足りなければ 0.0 未満を返さず fallback を使わせる。
+static func _population_line(samples: Array, sigma: float) -> float:
+	if samples.size() < STRONG_STARTER_MIN_SAMPLE:
+		return float(STRONG_STARTER_OVERALL)
+	var mean: float = 0.0
+	for value in samples:
+		mean += float(value)
+	mean /= float(samples.size())
+	var variance: float = 0.0
+	for value in samples:
+		variance += pow(float(value) - mean, 2.0)
+	variance /= float(samples.size())
+	return mean + sigma * maxf(sqrt(variance), STRONG_STARTER_MIN_SPREAD)
 
 
 # 既存選手の守備位置 position(2-9) の適性値。PlayerValueEvaluator.position_aptitude と同じ規約:

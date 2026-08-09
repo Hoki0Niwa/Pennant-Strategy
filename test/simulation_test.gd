@@ -222,9 +222,9 @@ func test_batting_reference_is_measured_from_population() -> void:
 			measured_count += 1
 	var population_mean: float = measured_sum / float(maxi(measured_count, 1))
 
-	var reference: Dictionary = PSBattingReference.for_season(season.year, season.season_number)
+	var reference: Dictionary = PSPerformanceReference.for_season(season.year, season.season_number)
 	var contact_reference: Dictionary = (reference["ratings"] as Dictionary)["contact"] as Dictionary
-	assert_int(measured_count).is_greater(PSBattingReference.MIN_RATING_SAMPLE)
+	assert_int(measured_count).is_greater(PSPerformanceReference.MIN_RATING_SAMPLE)
 	assert_float(float(contact_reference["mean"])).is_equal_approx(population_mean, 0.001)
 
 	# 2) 成績の基準は「直近の完了シーズン」を見る。打高な過去シーズンを差し込むと基準も上がること。
@@ -232,7 +232,7 @@ func test_batting_reference_is_measured_from_population() -> void:
 	var probe_year: int = season.year + 50
 	var probe_season_number: int = season.season_number + 50
 	var inserted: Array = []
-	var sample_size: int = PSBattingReference.MIN_STAT_SAMPLE + 5
+	var sample_size: int = PSPerformanceReference.MIN_STAT_SAMPLE + 5
 	for i in range(sample_size):
 		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
 		record.player_id = 900000 + i
@@ -253,15 +253,15 @@ func test_batting_reference_is_measured_from_population() -> void:
 		RecordStore.set_player_record(record)
 		inserted.append(record)
 
-	PSBattingReference.reset_cache()
-	var probe_reference: Dictionary = PSBattingReference.for_season(probe_year + 1, probe_season_number + 1)
+	PSPerformanceReference.reset_cache()
+	var probe_reference: Dictionary = PSPerformanceReference.for_season(probe_year + 1, probe_season_number + 1)
 	var ops_reference: Dictionary = (probe_reference["stats"] as Dictionary)["ops"] as Dictionary
-	var default_ops: Dictionary = PSBattingReference.DEFAULT_STAT_REFERENCE["ops"] as Dictionary
+	var default_ops: Dictionary = PSPerformanceReference.DEFAULT_STAT_REFERENCE["ops"] as Dictionary
 
 	for record_row in inserted:
 		var inserted_record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		RecordStore.erase_player_record(inserted_record.player_id, probe_year, probe_season_number)
-	PSBattingReference.reset_cache()
+	PSPerformanceReference.reset_cache()
 
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season
@@ -270,7 +270,7 @@ func test_batting_reference_is_measured_from_population() -> void:
 
 	print("REFERENCE contact_mean=%.2f (population %.2f, default %.2f) | probe_ops_mean=%.3f (default %.3f)" % [
 		float(contact_reference["mean"]), population_mean,
-		float((PSBattingReference.DEFAULT_RATING_REFERENCE["contact"] as Dictionary)["mean"]),
+		float((PSPerformanceReference.DEFAULT_RATING_REFERENCE["contact"] as Dictionary)["mean"]),
 		float(ops_reference["mean"]), float(default_ops["mean"]),
 	])
 	# 打高シーズンを挟んだので、既定値より明確に高い OPS 基準になる。
@@ -280,6 +280,81 @@ func test_batting_reference_is_measured_from_population() -> void:
 	var current_stats: Dictionary = (reference["stats"] as Dictionary)["ops"] as Dictionary
 	print("ALIGNMENT ops=%.3f" % float(current_stats.get("alignment", 0.0)))
 	assert_float(float(current_stats.get("alignment", 0.0))).is_greater(0.2)
+
+
+# 「他の選択肢より良いか」を問う判定ラインは絶対値ではなく母集団相対 (mean + sigma*spread)。
+# 絶対値だとリーグ全体の水準が動いただけで判定が一斉にズレる
+# (前例: 旧 RELEASE_REPLACEMENT_VALUE を 4 点動かすだけで放出が 75.5→83.75 人/年)。
+# ここでは (1) ラインが実測母集団に一致すること (2) sigma 定数が現行ワールドで
+# 旧・絶対値を再現すること (= 相対化が挙動保存であること) を固定する。
+func test_decision_lines_track_population_not_absolute_constants() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	# (1) overall_batter のラインが、支配下野手の実測 mean/spread と一致する。
+	var samples: Array = []
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		for record_value in RecordStore.get_team_player_records(team.id, season.year, season.season_number, true):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record == null or record.is_pitcher() or record.development_player:
+				continue
+			samples.append(float(PSPlayerValueEvaluator.overall_score(record)))
+	var mean: float = 0.0
+	for value in samples:
+		mean += float(value)
+	mean /= float(maxi(samples.size(), 1))
+	var variance: float = 0.0
+	for value in samples:
+		variance += pow(float(value) - mean, 2.0)
+	variance /= float(maxi(samples.size(), 1))
+	var spread: float = sqrt(variance)
+
+	var distribution: Dictionary = PSPerformanceReference.score_distribution(
+		season.year, season.season_number, "overall_batter"
+	)
+	assert_int(samples.size()).is_greater(PSPerformanceReference.MIN_SCORE_SAMPLE)
+	assert_float(float(distribution["mean"])).is_equal_approx(mean, 0.001)
+	assert_float(float(distribution["spread"])).is_equal_approx(spread, 0.001)
+	assert_float(
+		PSPerformanceReference.score_threshold(season.year, season.season_number, "overall_batter", 1.5)
+	).is_equal_approx(mean + 1.5 * spread, 0.001)
+
+	# (2) 各 sigma が現行ワールドで旧・絶対値を再現する (相対化で挙動が飛んでいない)。
+	var line_of: Callable = func(key: String, sigma: float) -> float:
+		return PSPerformanceReference.score_threshold(season.year, season.season_number, key, sigma)
+	var lines: Dictionary = {
+		"REGULAR_OVERALL": [line_of.call("overall_batter", FaMarketService.REGULAR_OVERALL_SIGMA),
+			float(FaMarketService.REGULAR_OVERALL), 2.0],
+		"INJURY_MAINSTAY": [line_of.call("overall_batter", TeamAutoAI.INJURY_MAINSTAY_STASH_SIGMA),
+			TeamAutoAI.INJURY_MAINSTAY_STASH_SCORE_MIN, 2.0],
+		"INJURY_CORE": [line_of.call("overall_batter", TeamAutoAI.INJURY_CORE_STASH_SIGMA),
+			TeamAutoAI.INJURY_CORE_STASH_SCORE_MIN, 3.0],
+		"LOW_BATTER": [line_of.call("batting", GameSimulator.LOW_BATTER_SIGMA),
+			float(GameSimulator.LOW_BATTER_SCORE), 2.0],
+		"SOLID_BATTER": [line_of.call("batting", GameSimulator.SOLID_BATTER_SIGMA),
+			float(GameSimulator.SOLID_BATTER_SCORE), 2.0],
+	}
+	var report: Array = []
+	for key in lines.keys():
+		var row: Array = lines[key] as Array
+		report.append("%s=%.1f(旧%.0f)" % [str(key), float(row[0]), float(row[1])])
+	print("DECISIONLINE %s" % " ".join(PackedStringArray(report)))
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	for key in lines.keys():
+		var row: Array = lines[key] as Array
+		assert_float(absf(float(row[0]) - float(row[1]))).is_less(float(row[2]))
 
 
 # 打者指標は表示能力と成績のブレンド。同一能力なら成績で差が付き、今季成績の重みは打席数とともに
@@ -547,7 +622,7 @@ func test_auto_batting_order_base_refreshes_during_season() -> void:
 		if season.get_auto_batting_order(team_id, dh_enabled) != (opening_bases[key] as Array):
 			changed_teams += 1
 
-	# 能力スケールと成績スケールのゼロ点が揃っていること (PSBattingReference の alignment)。
+	# 能力スケールと成績スケールのゼロ点が揃っていること (PSPerformanceReference の alignment)。
 	# 揃っていないと「出場するほど下振れ扱い」になり、レギュラーだけが系統的に減点されて
 	# スタメン選定が壊れる。実測では平均 -2.4 点まで偏っていた。
 	var form_sum: float = 0.0

@@ -11,26 +11,34 @@ const SWAP_INTERVAL_DAYS: int = 7
 const DEMOTION_COOLDOWN_DAYS: int = 10
 const INJURY_SHORT_ABSENCE_STASH_DAYS: int = 3
 const INJURY_MAINSTAY_STASH_MAX_DAYS: int = 5
+# 怪我人を1軍に留め置く日数の判定ライン。**母集団相対** (perf_score は overall スケールなので、
+# その年の支配下選手の overall 分布から mean + sigma*spread を引く)。絶対値で置くと
+# リーグ全体の水準が動いただけで「主力」の範囲が一斉にズレる。
+# 実測 (1シーズン): 野手 mean 68.96/spread 9.91、投手 mean 68.92/spread 7.70。
+# MAINSTAY=+0.12σ は旧・絶対値 70.0 とほぼ一致。CORE=+1.4σ は旧 82.0 が野手 +1.32σ /
+# 投手 +1.70σ と**side で厳しさがズレていた**のを、どちらも上位 8% 相当へ揃えた値。
+const INJURY_MAINSTAY_STASH_SIGMA: float = 0.12
+const INJURY_CORE_STASH_SIGMA: float = 1.4
+# 母集団が取れないとき (合成データのテスト等) のフォールバック。
 const INJURY_MAINSTAY_STASH_SCORE_MIN: float = 70.0
 const INJURY_CORE_STASH_SCORE_MIN: float = 82.0
 const MAX_SWAPS_PER_RUN: int = 4
-const QUALIFIER_PA: int = 200
-const QUALIFIER_OUTS: int = 180
-const QUALIFIER_MONTHLY_PA: int = 40      # 月別評価用 (regular starter ≒ 40-50 PA/month)
-const QUALIFIER_MONTHLY_OUTS: int = 30    # 月別評価用
-const STAT_WEIGHT_MAX: float = 0.6        # perf_score の alpha 上限 (= 成績60% / 能力40% 下限保証)
-const UNDERPERFORM_RATIO: float = 0.6
-const UNDERPERFORM_RATIO_BATTER: float = 0.78
-const UNDERPERFORM_RATIO_STARTER: float = 0.4    # 先発は登板間隔が長いので閾値を緩める
+# 降格判定 (B): 1軍の同バケット平均から何点下回ったら「働けていない」とみなすか。
+# perf_score は overall (rating) スケール = 任意のゼロ点を持つので、**比率ではなく絶対差**で見る
+# (比率にすると平均 ~70・幅 ~10 のスケールでは閾値が分布の外へ出て発火しなくなる)。
+# 実測 (1シーズン): 1軍相当の分布は 野手 mean 78 / p10 72、先発 mean 70 / p10 59、
+# 救援 mean 69 / p10 58。下位 1 割前後を拾う幅に設定してある。下げるほど降格が増える。
+# 出場「量」の判定は (A) の MIN_APPEARANCE_RATIO_* が別に担当する。
+const UNDERPERFORM_GAP: float = 10.0
+const UNDERPERFORM_GAP_BATTER: float = 8.0
+const UNDERPERFORM_GAP_STARTER: float = 14.0    # 先発は登板間隔が長いので閾値を緩める
 const MIN_APPEARANCE_RATIO_BATTER: float = 0.3
 const MIN_APPEARANCE_RATIO_PITCHER: float = 0.9
 const MIN_APPEARANCE_RATIO_STARTER: float = 0.5  # 先発は中6日登板なので出場率は低くて当然
 const DEMOTION_FATIGUE_PROTECT_THRESHOLD: int = 80
 
-# スタメン/一二軍入替時の WAR ボーナス係数。perf_score の成績パートに
-# war_value × WAR_PERF_WEIGHT を加算する。WAR +5 で +30、WAR -3 で -18 程度。
-# stat_score_batter (OPS×200 ~ 140 基準) と stat_score_pitcher (~ 100-200 基準)
-# に対する補正として小さめに開始する。
+# スタメン/一二軍入替時の WAR ボーナス係数。perf_score へ war_value × この係数 × 信頼度 を加える。
+# perf_score は overall (rating) スケールなので、WAR +2 で +6 点前後 = 主力とフリンジの差に相当する。
 # **重要: cut_score (戦力外) では war_value=0.0 のまま呼ぶことで、WAR が低い
 # レギュラー (試合に出続けた証拠でもある) を誤って切る挙動を防ぐ。**
 const WAR_PERF_WEIGHT: float = 6.0
@@ -48,11 +56,17 @@ const DEFENSIVE_POSITIONS: Array[int] = [2, 6, 8, 4, 5, 3, 7, 9]
 
 # ---- 評価関数 ---------------------------------------------------------------
 
-# 成績と能力値を総合した perf score。
-# monthly_batter / monthly_pitcher が渡されると月別 stats で評価 (alpha qualifier も月別用)、
-# 渡されなければシーズン累積で評価 (オフシーズン release 等で使用)。
-# alpha は STAT_WEIGHT_MAX (0.6) で上限を切るので、能力値は常に 40% 以上の寄与を持つ。
-# war_value: シーズン累積 WAR (正なら成績パートにボーナス、負ならペナルティ)。
+# 成績と能力値を総合した perf score。**overall_prior と同じ rating スケール**で返す。
+#   perf = 能力 (overall_prior) + 成績の上振れ/下振れ (PSBatterForm / PSPitcherForm) + WAR 項
+# monthly_batter / monthly_pitcher が渡されるとその月別 stats で今季ぶんを評価し、
+# 渡されなければシーズン累積で評価する (オフシーズン release 等で使用)。
+#
+# 成績パートは率成績のみをリーグ実測分布で σ 化し、能力スケールへ揃えてから加算する
+# (PSPerformanceReference の alignment)。出場「量」は成績側に持たせない — 出場量の判定は
+# _is_underperforming の出場率ゲート (MIN_APPEARANCE_RATIO_*) が担当する。
+#
+# war_value: シーズン累積 WAR。守備・走塁を含む総合貢献なので率成績と別に加える。
+#   打席/対戦打者数に応じた信頼度を掛けるので、出場が少ないうちは効かない。
 #   cut_score (戦力外) は war_value=0.0 のまま呼び、低 WAR レギュラーの誤切断を防ぐ。
 #   _swap_one_team (スタメン/一二軍入替) のみ実際の WAR を渡す。
 static func perf_score(
@@ -64,18 +78,28 @@ static func perf_score(
 	if record == null:
 		return 0.0
 	var prior: float = overall_prior(record)
-	var war_bonus: float = war_value * WAR_PERF_WEIGHT
 	if record.is_pitcher():
 		var stats: PSPitcherStats = monthly_pitcher if monthly_pitcher != null else record.pitcher_stats
-		var qualifier: int = QUALIFIER_MONTHLY_OUTS if monthly_pitcher != null else QUALIFIER_OUTS
-		var alpha: float = clamp(float(stats.outs_pitched) / float(qualifier), 0.0, STAT_WEIGHT_MAX)
-		var stats_value: float = stat_score_pitcher(stats, _pitcher_roster_role(record)) + war_bonus
-		return alpha * stats_value + (1.0 - alpha) * prior
+		var form: float = PSPitcherForm.rating_delta(record, monthly_pitcher)
+		return prior + form + war_value * WAR_PERF_WEIGHT * _pitcher_reliability(stats)
 	var stats_b: PSBatterStats = monthly_batter if monthly_batter != null else record.batter_stats
-	var qualifier_b: int = QUALIFIER_MONTHLY_PA if monthly_batter != null else QUALIFIER_PA
-	var alpha_b: float = clamp(float(stats_b.plate_appearances) / float(qualifier_b), 0.0, STAT_WEIGHT_MAX)
-	var stats_value_b: float = stat_score_batter(stats_b) + war_bonus
-	return alpha_b * stats_value_b + (1.0 - alpha_b) * prior
+	var form_b: float = PSBatterForm.rating_delta(record, monthly_batter)
+	return prior + form_b + war_value * WAR_PERF_WEIGHT * _batter_reliability(stats_b)
+
+
+# WAR 項に掛ける信頼度 (0..1)。form 側と同じ縮約を使い、少ない出場で WAR が暴れるのを抑える。
+static func _batter_reliability(stats: PSBatterStats) -> float:
+	if stats == null or stats.plate_appearances <= 0:
+		return 0.0
+	var plate_appearances: float = float(stats.plate_appearances)
+	return plate_appearances / (plate_appearances + PSBatterForm.PA_RELIABILITY_ANCHOR)
+
+
+static func _pitcher_reliability(stats: PSPitcherStats) -> float:
+	if stats == null or stats.batters_faced <= 0:
+		return 0.0
+	var batters_faced: float = float(stats.batters_faced)
+	return batters_faced / (batters_faced + PSPitcherForm.BATTERS_FACED_RELIABILITY_ANCHOR)
 
 
 # 一二軍入替の方針として疲労ペナルティは査定に含めない (apply_fatigue_penalty=false を明示)。
@@ -85,42 +109,6 @@ static func overall_prior(record: PSPlayerSeasonRecord) -> float:
 
 static func _is_starting_pitcher(record: PSPlayerSeasonRecord) -> bool:
 	return record != null and record.is_starter_pitcher()
-
-
-static func _pitcher_roster_role(record: PSPlayerSeasonRecord) -> String:
-	return PITCHER_ROLE_STARTER if _is_starting_pitcher(record) else PITCHER_ROLE_RELIEVER
-
-
-static func stat_score_batter(stats: PSBatterStats) -> float:
-	var score: float = 0.0
-	score += stats.ops() * 200.0
-	score += float(stats.home_runs) * 4.0
-	score += float(stats.runs_batted_in) * 1.0
-	score += float(stats.hits) * 0.5
-	score += float(stats.stolen_bases) * 0.5
-	return score
-
-
-static func stat_score_pitcher(stats: PSPitcherStats, pitcher_role: String = "") -> float:
-	var score: float = 0.0
-	if stats.outs_pitched > 0:
-		var era_clamped: float = clamp(stats.era(), 1.0, 8.0)
-		score += (6.0 - era_clamped) * 50.0
-		var whip_clamped: float = clamp(stats.whip(), 0.0, 2.0)
-		score -= whip_clamped * 30.0
-		score += stats.strikeouts_per_nine() * 4.0
-	if pitcher_role == PITCHER_ROLE_RELIEVER:
-		score += float(stats.saves) * 24.0
-		score += float(stats.holds) * 14.0
-		score += float(stats.relief_appearances) * 2.0
-		score += float(stats.wins) * 8.0
-		score += float(stats.outs_pitched) * 0.08
-	else:
-		score += float(stats.wins) * 25.0
-		score += float(stats.quality_starts) * 18.0
-		score += float(stats.complete_games) * 10.0
-		score += float(stats.outs_pitched) * 0.06
-	return score
 
 
 # 戦力外用: 能力(総合評価) + 出場数 - 年齢ペナルティ。低いほど切られやすい。
@@ -380,11 +368,20 @@ static func _active_injury_stash_limit(record: PSPlayerSeasonRecord) -> int:
 	if record == null:
 		return 0
 	var mainstay_score: float = perf_score(record)
-	if mainstay_score >= INJURY_CORE_STASH_SCORE_MIN:
+	if mainstay_score >= _stash_line(record, INJURY_CORE_STASH_SIGMA, INJURY_CORE_STASH_SCORE_MIN):
 		return INJURY_MAINSTAY_STASH_MAX_DAYS
-	if mainstay_score >= INJURY_MAINSTAY_STASH_SCORE_MIN:
+	if mainstay_score >= _stash_line(record, INJURY_MAINSTAY_STASH_SIGMA, INJURY_MAINSTAY_STASH_SCORE_MIN):
 		return INJURY_SHORT_ABSENCE_STASH_DAYS + 1
 	return INJURY_SHORT_ABSENCE_STASH_DAYS
+
+
+# その選手のシーズン・side の overall 分布から判定ラインを引く。
+# 母集団が無い (year 未設定の合成レコード等) 場合は fallback の絶対値へ落ちる。
+static func _stash_line(record: PSPlayerSeasonRecord, sigma: float, fallback: float) -> float:
+	if record.year <= 0:
+		return fallback
+	var key: String = "overall_pitcher" if record.is_pitcher() else "overall_batter"
+	return PSPerformanceReference.score_threshold(record.year, record.season_number, key, sigma)
 
 
 static func _is_healthy_active_roster_candidate(record: PSPlayerSeasonRecord) -> bool:
@@ -708,7 +705,7 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 # 1球団分の入替処理。
 # 1. 月別 stats を事前計算して score_by_id を構築
 # 2. 1軍取得(無ければ初期化) → 平均perf_scoreを算出
-# 3. 降格候補プール(未出場 OR 平均比 UNDERPERFORM_RATIO 未満)
+# 3. 降格候補プール(出場率不足 OR 1軍同バケット平均から UNDERPERFORM_GAP_* 以上下)
 # 4. 昇格候補プール(クールダウン明け、2軍内のperf_score上位)
 # 5. ペアリング(先発↔先発、リリーフ↔リリーフ、野手↔野手)で最大MAX_SWAPS_PER_RUN
 # 6. demotion_dayに記録、active_rosterを書き換え
@@ -1000,9 +997,9 @@ static func _is_demotion_candidate(
 		mean = starter_mean if is_starter else reliever_mean
 	if mean <= 0.0:
 		return false
-	var under_ratio: float = UNDERPERFORM_RATIO
+	var under_gap: float = UNDERPERFORM_GAP
 	if is_starter:
-		under_ratio = UNDERPERFORM_RATIO_STARTER
+		under_gap = UNDERPERFORM_GAP_STARTER
 	elif not record.is_pitcher():
-		under_ratio = UNDERPERFORM_RATIO_BATTER
-	return perf < mean * under_ratio
+		under_gap = UNDERPERFORM_GAP_BATTER
+	return perf < mean - under_gap

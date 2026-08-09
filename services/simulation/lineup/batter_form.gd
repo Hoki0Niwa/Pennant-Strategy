@@ -13,7 +13,7 @@ class_name PSBatterForm
 # 今季成績の比重が徐々に増し、過去シーズンは古いほど PAST_SEASON_DECAY で軽くなる。
 # 走力 (speed) だけは成績に素直に現れないため表示能力のみ。
 #
-# σ スケールを与える基準分布と、能力指標そのもの (ability_indexes) は `PSBattingReference` 側。
+# σ スケールを与える基準分布と、能力指標そのもの (ability_indexes) は `PSPerformanceReference` 側。
 # 成績側の分布は alignment を持ち、能力スケールとゼロ点が揃っている (詳細は同ファイル冒頭)。
 
 # --- 出場判断 (打順/スタメン/DH/代打) のノブ ---
@@ -52,8 +52,8 @@ const FORM_RATING_MAX: float = 6.0
 # 表示能力と成績をブレンドした打者指標 5 種 (すべて σ 単位)。打順が使う (= 出場判断のノブ)。
 # 基準分布は選手が属するシーズンのものを使うので、リーグ環境が動いても位置付けがズレない。
 static func indexes(record: PSPlayerSeasonRecord) -> Dictionary:
-	var season_reference: Dictionary = PSBattingReference.for_season(record.year, record.season_number)
-	var ability: Dictionary = PSBattingReference.ability_indexes(record, season_reference["ratings"] as Dictionary)
+	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
+	var ability: Dictionary = PSPerformanceReference.ability_indexes(record, season_reference["ratings"] as Dictionary)
 	var samples: Array = _stat_samples(
 		record, season_reference["stats"] as Dictionary, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY
 	)
@@ -67,9 +67,12 @@ static func indexes(record: PSPlayerSeasonRecord) -> Dictionary:
 
 
 # 出場判断用: 成績が能力からどれだけ上振れ/下振れしているかを rating 点で返す。成績が無ければ 0。
-static func rating_delta(record: PSPlayerSeasonRecord) -> float:
+# current_stats を渡すと今季ぶんをその成績で評価する (一二軍入替の月別評価に使う)。
+static func rating_delta(
+	record: PSPlayerSeasonRecord, current_stats: PSBatterStats = null
+) -> float:
 	return _rating_delta(
-		record, ABILITY_PRIOR_WEIGHT, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY,
+		record, current_stats, ABILITY_PRIOR_WEIGHT, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY,
 		FORM_RATING_SCALE, FORM_RATING_MIN, FORM_RATING_MAX
 	)
 
@@ -77,13 +80,14 @@ static func rating_delta(record: PSPlayerSeasonRecord) -> float:
 # 編成判断用: 同じ差分を、より長い記憶と弱い追随で見る。
 static func roster_rating_delta(record: PSPlayerSeasonRecord) -> float:
 	return _rating_delta(
-		record, ROSTER_ABILITY_PRIOR_WEIGHT, ROSTER_PAST_SEASON_LOOKBACK, ROSTER_PAST_SEASON_DECAY,
+		record, null, ROSTER_ABILITY_PRIOR_WEIGHT, ROSTER_PAST_SEASON_LOOKBACK, ROSTER_PAST_SEASON_DECAY,
 		ROSTER_FORM_RATING_SCALE, ROSTER_FORM_RATING_MIN, ROSTER_FORM_RATING_MAX
 	)
 
 
 static func _rating_delta(
 	record: PSPlayerSeasonRecord,
+	current_stats: PSBatterStats,
 	ability_prior: float,
 	lookback: int,
 	decay: float,
@@ -93,9 +97,11 @@ static func _rating_delta(
 ) -> float:
 	if record == null:
 		return 0.0
-	var season_reference: Dictionary = PSBattingReference.for_season(record.year, record.season_number)
-	var ability: Dictionary = PSBattingReference.ability_indexes(record, season_reference["ratings"] as Dictionary)
-	var samples: Array = _stat_samples(record, season_reference["stats"] as Dictionary, lookback, decay)
+	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
+	var ability: Dictionary = PSPerformanceReference.ability_indexes(record, season_reference["ratings"] as Dictionary)
+	var samples: Array = _stat_samples(
+		record, season_reference["stats"] as Dictionary, lookback, decay, current_stats
+	)
 	if samples.is_empty():
 		return 0.0
 	var ability_total: float = float(ability["total"])
@@ -107,10 +113,15 @@ static func _rating_delta(
 # 過去シーズンは (year-k, season_number-k) で 1 件ずつ引き、**そのシーズンの基準分布**で正規化する
 # (シーズンは年と同時に繰り上がる)。年ごとにリーグ環境が動いても成績の位置付けが保たれる。
 static func _stat_samples(
-	record: PSPlayerSeasonRecord, stat_reference: Dictionary, lookback: int, decay: float
+	record: PSPlayerSeasonRecord,
+	stat_reference: Dictionary,
+	lookback: int,
+	decay: float,
+	current_stats: PSBatterStats = null
 ) -> Array:
 	var samples: Array = []
-	_append_stat_sample(samples, record.batter_stats, 1.0, stat_reference)
+	var stats: PSBatterStats = current_stats if current_stats != null else record.batter_stats
+	_append_stat_sample(samples, stats, 1.0, stat_reference)
 	if record.year <= 0:
 		return samples
 	for k in range(1, lookback + 1):
@@ -121,7 +132,7 @@ static func _stat_samples(
 		)
 		if past == null:
 			continue
-		var past_reference: Dictionary = PSBattingReference.for_season(past_year, past_season_number)
+		var past_reference: Dictionary = PSPerformanceReference.for_season(past_year, past_season_number)
 		_append_stat_sample(
 			samples,
 			past.batter_stats,
@@ -143,12 +154,12 @@ static func _append_stat_sample(
 	var average: float = stats.batting_average()
 	samples.append({
 		"weight": weight,
-		"average": PSBattingReference.normalized(average, distributions, "average"),
-		"on_base": PSBattingReference.normalized(stats.on_base_percentage(), distributions, "on_base"),
-		"isolated_power": PSBattingReference.normalized(
+		"average": PSPerformanceReference.normalized(average, distributions, "average"),
+		"on_base": PSPerformanceReference.normalized(stats.on_base_percentage(), distributions, "on_base"),
+		"isolated_power": PSPerformanceReference.normalized(
 			stats.slugging_percentage() - average, distributions, "isolated_power"
 		),
-		"ops": PSBattingReference.normalized(stats.ops(), distributions, "ops"),
+		"ops": PSPerformanceReference.normalized(stats.ops(), distributions, "ops"),
 	})
 
 

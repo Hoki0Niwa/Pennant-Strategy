@@ -1,7 +1,7 @@
 extends RefCounted
-class_name PSBattingReference
+class_name PSPerformanceReference
 
-# 打者評価 (PSBatterForm) が表示能力と成績を同じ σ スケールに載せるための基準分布を、
+# 選手評価 (PSBatterForm / PSPitcherForm) が表示能力と成績を同じ σ スケールに載せるための基準分布を、
 # **その時点の母集団から実測**して返す。固定値を持たないので、バランス較正や長期セーブでの
 # リーグ環境ドリフトが起きても打者の位置付けが古い基準のままにならない。
 #
@@ -53,6 +53,45 @@ const TOTAL_ABILITY_WEIGHTS: Dictionary = {
 	"speed": 0.10,
 }
 
+# --- 投手側 ---
+# 先発と救援は防御率の分布が別物なので、成績基準は役割ごとに測る。
+const PITCHER_ROLE_STARTER: String = "starter"
+const PITCHER_ROLE_RELIEVER: String = "reliever"
+
+const DEFAULT_PITCHER_RATING_REFERENCE: Dictionary = {
+	"stuff": {"mean": 60.0, "spread": 8.0},
+	"control": {"mean": 60.0, "spread": 8.0},
+	"stamina": {"mean": 60.0, "spread": 9.0},
+}
+# run_prevention は「防御率の符号反転」(高いほど良い)。既定値は現行バランスの実測レンジ。
+const DEFAULT_PITCHER_STAT_REFERENCE: Dictionary = {
+	"run_prevention": {"mean": -3.70, "spread": 1.10, "alignment": 0.0},
+}
+const PITCHER_STAT_ABILITY_PAIRS: Dictionary = {"run_prevention": "total"}
+const PITCHER_TOTAL_ABILITY_WEIGHTS: Dictionary = {
+	"stuff": 0.45,
+	"control": 0.35,
+	"stamina": 0.20,
+}
+# 成績基準の母集団に入る最低対戦打者数 (先発 ≒ 年750 / 救援 ≒ 年280 なので規定相当の下限)。
+const MIN_REFERENCE_BATTERS_FACED: int = 200
+const MIN_PITCHER_STAT_SAMPLE: int = 20
+const MIN_PITCHER_RATING_SAMPLE: int = 60
+const MIN_PITCHER_STAT_SPREAD: float = 0.30
+
+# --- 評価スコアの母集団分布 ---
+# 「他の選択肢より良いか」を問う閾値 (主力か/レギュラー級か/代打を送る弱さか) を、
+# 絶対値ではなく母集団の mean + sigma*spread で表すための基準。
+# 絶対値で置くとリーグ全体の水準が動いただけで判定が一斉にズレる
+# (前例: 旧 RELEASE_REPLACEMENT_VALUE を 52→56 と 4 点動かすだけで放出が 75.5→83.75 人/年)。
+const DEFAULT_SCORE_REFERENCE: Dictionary = {
+	"overall_batter": {"mean": 67.0, "spread": 9.0},
+	"overall_pitcher": {"mean": 67.0, "spread": 9.0},
+	"batting": {"mean": 70.0, "spread": 11.0},
+}
+const MIN_SCORE_SAMPLE: int = 60
+const MIN_SCORE_SPREAD: float = 3.0
+
 # 実測を採用する最小条件。これを下回る母集団では既定値へフォールバックする。
 const MIN_RATING_SAMPLE: int = 60
 const MIN_STAT_SAMPLE: int = 40
@@ -76,9 +115,20 @@ static func for_season(year: int, season_number: int) -> Dictionary:
 		return _cache[key] as Dictionary
 	var records: Array = _season_records(year, season_number)
 	var ratings: Dictionary = _measure_ratings(records)
+	var pitcher_ratings: Dictionary = _measure_pitcher_ratings(records)
 	var measured: Dictionary = {
 		"ratings": ratings,
 		"stats": _resolve_stats(year, season_number, ratings, records),
+		"scores": _measure_scores(records),
+		"pitcher_ratings": pitcher_ratings,
+		"pitcher_stats": {
+			PITCHER_ROLE_STARTER: _resolve_pitcher_stats(
+				year, season_number, pitcher_ratings, records, PITCHER_ROLE_STARTER
+			),
+			PITCHER_ROLE_RELIEVER: _resolve_pitcher_stats(
+				year, season_number, pitcher_ratings, records, PITCHER_ROLE_RELIEVER
+			),
+		},
 	}
 	_cache[key] = measured
 	return measured
@@ -211,22 +261,166 @@ static func _default_stats_with_alignment(records: Array, ratings_reference: Dic
 
 # distributions の各成績キーに、対応する能力指標の母集団平均を alignment として書き込む。
 static func _with_alignment(
-	distributions: Dictionary, population: Array, ratings_reference: Dictionary
+	distributions: Dictionary,
+	population: Array,
+	ratings_reference: Dictionary,
+	pairs: Dictionary = STAT_ABILITY_PAIRS,
+	pitcher_side: bool = false
 ) -> Dictionary:
 	if population.is_empty():
 		return distributions
 	var totals: Dictionary = {}
-	for stat_key in STAT_ABILITY_PAIRS.keys():
+	for stat_key in pairs.keys():
 		totals[stat_key] = 0.0
 	for record_row in population:
-		var index: Dictionary = ability_indexes(record_row as PSPlayerSeasonRecord, ratings_reference)
-		for stat_key in STAT_ABILITY_PAIRS.keys():
-			totals[stat_key] = float(totals[stat_key]) + float(index[STAT_ABILITY_PAIRS[stat_key]])
-	for stat_key in STAT_ABILITY_PAIRS.keys():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		var index: Dictionary = pitcher_ability_indexes(record, ratings_reference) if pitcher_side \
+			else ability_indexes(record, ratings_reference)
+		for stat_key in pairs.keys():
+			totals[stat_key] = float(totals[stat_key]) + float(index[pairs[stat_key]])
+	for stat_key in pairs.keys():
 		var distribution: Dictionary = (distributions[stat_key] as Dictionary).duplicate()
 		distribution["alignment"] = float(totals[stat_key]) / float(population.size())
 		distributions[stat_key] = distribution
 	return distributions
+
+
+# --- 評価スコアの母集団分布 ---
+
+# 「母集団の mean から sigma 個ぶん上」を返す。絶対値の代わりに使う判定ライン。
+# sigma を上げるほど「その水準」が厳しくなる。母集団不足時は DEFAULT_SCORE_REFERENCE を使う。
+static func score_threshold(year: int, season_number: int, key: String, sigma: float) -> float:
+	var distribution: Dictionary = score_distribution(year, season_number, key)
+	return float(distribution["mean"]) + sigma * float(distribution["spread"])
+
+
+static func score_distribution(year: int, season_number: int, key: String) -> Dictionary:
+	var scores: Dictionary = for_season(year, season_number)["scores"] as Dictionary
+	return scores.get(key, DEFAULT_SCORE_REFERENCE[key]) as Dictionary
+
+
+static func _measure_scores(records: Array) -> Dictionary:
+	var samples: Dictionary = {"overall_batter": [], "overall_pitcher": [], "batting": []}
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.development_player:
+			continue
+		var overall: float = float(PSPlayerValueEvaluator.overall_score(record))
+		if record.is_pitcher():
+			(samples["overall_pitcher"] as Array).append(overall)
+			continue
+		(samples["overall_batter"] as Array).append(overall)
+		(samples["batting"] as Array).append(
+			float(PSPlayerValueEvaluator.batting_score_without_fatigue(record))
+		)
+	return _distributions_or_default(
+		samples, DEFAULT_SCORE_REFERENCE, MIN_SCORE_SAMPLE, MIN_SCORE_SPREAD
+	)
+
+
+# --- 投手側の実測 (打者側と同じ機構: 実測分布 + alignment でゼロ点合わせ) ---
+
+# 投手の表示能力 (球威/制球/スタミナ) を σ 単位の指標へ。total は 3 指標の重み付き和。
+static func pitcher_ability_indexes(
+	record: PSPlayerSeasonRecord, ratings_reference: Dictionary
+) -> Dictionary:
+	var index: Dictionary = {
+		"stuff": normalized(float(PSPlayerVisibleRatings.pitcher_stuff(record)), ratings_reference, "stuff"),
+		"control": normalized(
+			float(PSPlayerVisibleRatings.pitcher_control(record)), ratings_reference, "control"
+		),
+		"stamina": normalized(
+			float(PSPlayerVisibleRatings.pitcher_stamina(record)), ratings_reference, "stamina"
+		),
+	}
+	var total: float = 0.0
+	for key in PITCHER_TOTAL_ABILITY_WEIGHTS.keys():
+		total += float(PITCHER_TOTAL_ABILITY_WEIGHTS[key]) * float(index[key])
+	index["total"] = total
+	return index
+
+
+# 失点抑止の指標。防御率は低いほど良いので符号を反転して「高いほど良い」に揃える。
+static func run_prevention_value(stats: PSPitcherStats) -> float:
+	return -clampf(stats.era(), 0.0, 12.0)
+
+
+static func pitcher_role_of(record: PSPlayerSeasonRecord) -> String:
+	return PITCHER_ROLE_STARTER if record.is_starter_pitcher() else PITCHER_ROLE_RELIEVER
+
+
+static func _measure_pitcher_ratings(records: Array) -> Dictionary:
+	var samples: Dictionary = {"stuff": [], "control": [], "stamina": []}
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not record.is_pitcher() or record.development_player:
+			continue
+		(samples["stuff"] as Array).append(float(PSPlayerVisibleRatings.pitcher_stuff(record)))
+		(samples["control"] as Array).append(float(PSPlayerVisibleRatings.pitcher_control(record)))
+		(samples["stamina"] as Array).append(float(PSPlayerVisibleRatings.pitcher_stamina(record)))
+	return _distributions_or_default(
+		samples, DEFAULT_PITCHER_RATING_REFERENCE, MIN_PITCHER_RATING_SAMPLE, MIN_RATING_SPREAD
+	)
+
+
+static func _resolve_pitcher_stats(
+	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, role: String
+) -> Dictionary:
+	for k in range(STAT_REFERENCE_LOOKBACK + 1):
+		if season_number - k <= 0:
+			break
+		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k)
+		var measured: Dictionary = _measure_pitcher_stats(source, ratings_reference, role)
+		if not measured.is_empty():
+			return measured
+	return _default_pitcher_stats_with_alignment(own_records, ratings_reference, role)
+
+
+static func _measure_pitcher_stats(
+	records: Array, ratings_reference: Dictionary, role: String
+) -> Dictionary:
+	var samples: Dictionary = {"run_prevention": []}
+	var qualified: Array = []
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not record.is_pitcher() or pitcher_role_of(record) != role:
+			continue
+		var stats: PSPitcherStats = record.pitcher_stats
+		if stats == null or stats.batters_faced < MIN_REFERENCE_BATTERS_FACED:
+			continue
+		(samples["run_prevention"] as Array).append(run_prevention_value(stats))
+		qualified.append(record)
+	if qualified.size() < MIN_PITCHER_STAT_SAMPLE:
+		return {}
+	var distributions: Dictionary = _distributions_or_default(
+		samples, DEFAULT_PITCHER_STAT_REFERENCE, MIN_PITCHER_STAT_SAMPLE, MIN_PITCHER_STAT_SPREAD
+	)
+	return _with_alignment(distributions, qualified, ratings_reference, PITCHER_STAT_ABILITY_PAIRS, true)
+
+
+static func _default_pitcher_stats_with_alignment(
+	records: Array, ratings_reference: Dictionary, role: String
+) -> Dictionary:
+	var pitchers: Array = []
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not record.is_pitcher() or record.development_player or pitcher_role_of(record) != role:
+			continue
+		pitchers.append(record)
+	if pitchers.is_empty():
+		return DEFAULT_PITCHER_STAT_REFERENCE.duplicate(true)
+	pitchers.sort_custom(func(a, b) -> bool:
+		var index_a: Dictionary = pitcher_ability_indexes(a as PSPlayerSeasonRecord, ratings_reference)
+		var index_b: Dictionary = pitcher_ability_indexes(b as PSPlayerSeasonRecord, ratings_reference)
+		return float(index_a["total"]) > float(index_b["total"])
+	)
+	# 「実際に投げる面々」= 1 球団あたり先発 6 / 救援 8 相当を基準にする。
+	var per_team: int = 6 if role == PITCHER_ROLE_STARTER else 8
+	var count: int = mini(pitchers.size(), maxi(GameDb.teams.size(), 1) * per_team)
+	return _with_alignment(
+		DEFAULT_PITCHER_STAT_REFERENCE.duplicate(true), pitchers.slice(0, count),
+		ratings_reference, PITCHER_STAT_ABILITY_PAIRS, true
+	)
 
 
 static func _season_records(year: int, season_number: int) -> Array:
