@@ -44,7 +44,9 @@ const DEMOTION_FATIGUE_PROTECT_THRESHOLD: int = 80
 const WAR_PERF_WEIGHT: float = 6.0
 
 const TARGET_TOTAL: int = 31
-const TARGET_STARTERS: int = 6
+# ローテ6人 + 7人目の先発 (連戦の谷間・1回飛ばし・故障の穴埋め用)。
+# PSTeamSetupBuilder.preview_active_roster と同じ値にしておくこと。
+const TARGET_STARTERS: int = 7
 const TARGET_PITCHERS: int = 15
 const MIN_ACTIVE_CATCHERS: int = 2
 const PITCHER_ROLE_STARTER: String = "starter"
@@ -109,6 +111,16 @@ static func overall_prior(record: PSPlayerSeasonRecord) -> float:
 
 static func _is_starting_pitcher(record: PSPlayerSeasonRecord) -> bool:
 	return record != null and record.is_starter_pitcher()
+
+
+# 1軍の先発 role だけを抜き出す (ローテ序列の組み替え候補)。故障中は除く。
+static func _active_starter_records(active_records: Array) -> Array:
+	var starters: Array = []
+	for record_row in active_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if _is_starting_pitcher(record) and record.injury_days <= 0:
+			starters.append(record)
+	return starters
 
 
 # 戦力外用: 能力(総合評価) + 出場数 - 年齢ペナルティ。低いほど切られやすい。
@@ -759,6 +771,12 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 	if active_records.is_empty():
 		_append_snapshots(season, all_records, current_day)
 		return summary
+
+	# 自動生成ローテの序列を最新の成績評価で組み替える (入替の有無に関わらず毎回)。
+	# 不振の先発が下位へ落ちて登板数が減り、好調な投手が上位の登板日を取る。
+	PSRotationPlanner.reorder_auto_rotation(
+		season, team_id, _active_starter_records(active_records), score_by_id
+	)
 
 	# (2) 1軍平均 perf を計算 (先発/リリーフ/野手 別、事前計算スコア使用)
 	var starter_active: Array = []

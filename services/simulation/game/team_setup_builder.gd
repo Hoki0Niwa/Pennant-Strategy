@@ -15,7 +15,7 @@ const MIN_ACTIVE_CATCHERS: int = 2
 const STARTER_POOL_MIN: int = 5
 
 
-static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
+static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool, postseason: bool = false) -> Dictionary:
 	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled)
 	if not bool(prepared.get("ok", false)):
 		return prepared
@@ -24,7 +24,9 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool) -
 	var available_fielders: Array = prepared["available_fielders"] as Array
 	var reliever_pool: Array = prepared.get("reliever_pool", []) as Array
 	var team_record: PSTeamSeasonRecord = prepared.get("team_record", null) as PSTeamSeasonRecord
-	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, starter_pitchers, team_record)
+	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(
+		season, team_id, starter_pitchers, reliever_pool, postseason
+	)
 	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
 	if rotation_pitcher == null:
 		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
@@ -71,7 +73,7 @@ static func preview_lineup(season: PSSeason, team_id: int, dh_enabled: bool) -> 
 	var starter_pitchers: Array = prepared["starter_pitchers"] as Array
 	var available_fielders: Array = prepared["available_fielders"] as Array
 	var team_record: PSTeamSeasonRecord = prepared.get("team_record", null) as PSTeamSeasonRecord
-	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, starter_pitchers, team_record)
+	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, starter_pitchers)
 	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
 	if rotation_pitcher == null:
 		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
@@ -94,7 +96,7 @@ static func preview_rotation(season: PSSeason, team_id: int) -> Dictionary:
 
 	var starter_pitchers: Array = prepared["starter_pitchers"] as Array
 	var team_record: PSTeamSeasonRecord = prepared.get("team_record", null) as PSTeamSeasonRecord
-	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, starter_pitchers, team_record)
+	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, starter_pitchers)
 	var pitcher_ids: Array = rotation_decision.get("order_ids", []) as Array
 	var games_played: int = 0 if team_record == null else team_record.stats.games
 	var next_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
@@ -105,7 +107,6 @@ static func preview_rotation(season: PSSeason, team_id: int) -> Dictionary:
 		"pitcher_ids": pitcher_ids,
 		"next_pitcher_id": next_pitcher_id,
 		"games_played": games_played,
-		"next_rotation_index": int(rotation_decision.get("next_rotation_index", 0)),
 		"rotation_selected_index": int(rotation_decision.get("selected_index", -1)),
 		"rotation_reason": str(rotation_decision.get("reason", "")),
 	}
@@ -125,7 +126,9 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 		return {"ok": false, "message": "%sの選手データがありません" % GameSimulator._team_name(team_id)}
 
 	const TARGET_TOTAL: int = 31
-	const TARGET_STARTERS: int = 6
+	# ローテは6人だが一軍には7人目の先発を置く。連戦の谷間・不振/疲労での1回飛ばし・故障の穴を
+	# 二軍からの再登録なしで埋められるようにするため (NPB も6人ローテで7〜8人を帯同する)。
+	const TARGET_STARTERS: int = 7
 	const TARGET_PITCHERS: int = 15
 	var starters: Array = []
 	var relievers: Array = []

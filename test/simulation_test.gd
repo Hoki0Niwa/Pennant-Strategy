@@ -1939,27 +1939,192 @@ func test_few_starters_do_not_pull_reliever_or_closer_into_rotation() -> void:
 	assert_array(ids).not_contains(470)
 
 
-func test_auto_rotation_periodically_skips_sixth_slot_for_rested_ace() -> void:
-	var season: PSSeason = PSSeason.new()
-	season.current_day = 30
+# --- 先発ローテ (月曜始まりの週で序列順に回す) -------------------------------
+# カレンダーは day 1 = 2026-03-31 (火) 固定。day 6 が日曜、day 7 が翌週の月曜になる。
+
+func _rotation_pitchers(count: int) -> Array:
 	var pitchers: Array = []
-	for i in range(6):
+	for i in range(count):
 		var starter: PSPlayerSeasonRecord = _pitcher(480 + i, "Starter %d" % i, 1.2 - float(i) * 0.1)
 		starter.role = "starter"
 		pitchers.append(starter)
-	season.set_rotation(1, {
-		"pitcher_ids": [480, 481, 482, 483, 484, 485],
-		"next_rotation_index": 5,
-		"auto_generated": true,
-		"last_start_day_by_pitcher": {"480": 23, "481": 24, "482": 25, "483": 26, "484": 27, "485": 22},
-	})
-	var team_record: PSTeamSeasonRecord = PSTeamSeasonRecord.new()
-	team_record.stats.games = 23
+	return pitchers
 
-	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers, team_record)
+
+func _rotation_season(day: int, last_starts: Dictionary, team_id: int = 1) -> PSSeason:
+	var season: PSSeason = PSSeason.new()
+	season.calendar_start_date = "2026-03-31"
+	season.current_day = day
+	season.set_rotation(team_id, {
+		"pitcher_ids": [480, 481, 482, 483, 484, 485],
+		"auto_generated": true,
+		"last_start_day_by_pitcher": last_starts,
+	})
+	return season
+
+
+func _relievers(count: int) -> Array:
+	var relievers: Array = []
+	for i in range(count):
+		var reliever: PSPlayerSeasonRecord = _pitcher(560 + i, "Relief %d" % i, 0.9 - float(i) * 0.1)
+		reliever.role = "reliever"
+		relievers.append(reliever)
+	return relievers
+
+
+func test_rotation_follows_order_within_the_week() -> void:
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(3, {"480": 1, "481": 2})
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+
+	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(482)
+	assert_str(str(decision.get("reason", ""))).is_equal("rotation")
+
+
+func test_short_week_skips_lowest_ranked_and_next_week_restarts_from_ace() -> void:
+	# 週5試合 (木が休み) の週は序列1〜5だけが投げ、6番手は登板しないまま週が終わる。
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(8, {"480": 1, "481": 2, "482": 3, "483": 5, "484": 6})
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+
+	# 翌週の火曜はまた序列1番手から。6番手を待って全体がずれない = エースの曜日が固定される。
+	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(480)
+	assert_str(str(decision.get("reason", ""))).is_equal("rotation")
+
+
+func test_skipped_starter_returns_on_the_day_freed_by_the_short_week() -> void:
+	# 前週が5試合 (木が休み) で6番手 (485) が飛んだ状態。今週は火水を1・2番手が投げ、
+	# 木曜は中6日が空いていないので、飛ばされていた6番手がその枠に戻る。
+	# = 他の投手の登板曜日を崩さずに埋まる。
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(
+		10, {"480": 8, "481": 9, "482": 4, "483": 5, "484": 6}
+	)
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+
+	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(485)
+	assert_str(str(decision.get("reason", ""))).is_equal("rotation")
+
+
+func test_seventh_game_of_week_uses_recovered_ace_on_short_rest() -> void:
+	# 祝日月曜を含む週7試合: 6人を使い切った日曜は、疲労が抜けたエースを中5日で立てる。
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(
+		13, {"480": 7, "481": 8, "482": 9, "483": 10, "484": 11, "485": 12}
+	)
+	(pitchers[0] as PSPlayerSeasonRecord).fatigue = 20
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
 
 	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(480)
-	assert_str(str(decision.get("reason", ""))).is_equal("ace_skip")
+	assert_str(str(decision.get("reason", ""))).is_equal("short_rest")
+
+	# 疲労が残っていれば中5日は通常運用では選ばれず、他に立てる者がいない緩和パス送りになる。
+	(pitchers[0] as PSPlayerSeasonRecord).fatigue = 100
+	var tired: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+	assert_str(str(tired.get("reason", ""))).is_equal("min_rest")
+
+
+func test_opening_rotation_phase_differs_by_team() -> void:
+	# 全球団が開幕から一斉に序列順で回すと、エースの登板曜日が全球団で揃って
+	# 「毎週その曜日は全カードがエース対決」になる。球団ごとの phase でこれをずらす。
+	var first_by_phase: Dictionary = {}
+	for team_id in [1, 2, 3, 4]:
+		var pitchers: Array = _rotation_pitchers(6)
+		var season: PSSeason = _rotation_season(1, {}, team_id)
+		var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, pitchers)
+		first_by_phase[team_id] = (decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id
+	# ROTATION_PHASE_SPREAD=4 なので開幕投手は序列1〜4番手の4通りに分かれる。
+	var distinct: Dictionary = {}
+	for value in first_by_phase.values():
+		distinct[value] = true
+	assert_int(distinct.size()).is_equal(PSRotationPlanner.ROTATION_PHASE_SPREAD)
+
+
+func test_spot_relief_starter_covers_a_day_the_rotation_cannot() -> void:
+	# 週7試合で6人を使い切った日。ローテを中5日で使い回す前に、ブルペンの軸以外から代役を立てる。
+	var pitchers: Array = _rotation_pitchers(6)
+	var relievers: Array = _relievers(6)
+	var season: PSSeason = _rotation_season(
+		20, {"480": 14, "481": 15, "482": 16, "483": 17, "484": 18, "485": 19}
+	)
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers, relievers)
+
+	assert_str(str(decision.get("reason", ""))).is_equal("spot_relief")
+	# 抑え/セットアッパー相当 (能力上位3人) は抜かない。
+	var picked: int = (decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id
+	assert_array([560, 561, 562]).not_contains(picked)
+
+	# 一軍に7人目の先発がいれば、ブルペンより先にそちらを使う。
+	var with_seventh: Array = _rotation_pitchers(7)
+	var seventh: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, with_seventh, relievers)
+	assert_int((seventh.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(486)
+	assert_str(str(seventh.get("reason", ""))).is_equal("spot_starter")
+
+
+func test_stretch_run_advances_the_ace_on_short_rest() -> void:
+	# 9月以降は、疲労が抜けているエースを中5日で前倒しする (day 159 = 2026-09-05)。
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(159, {"480": 153, "481": 152})
+	(pitchers[0] as PSPlayerSeasonRecord).fatigue = 10
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+
+	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(480)
+	assert_str(str(decision.get("reason", ""))).is_equal("stretch_run")
+
+	# 疲労が残っていれば前倒ししない (中6日空けている 481 が通常どおり投げる)。
+	(pitchers[0] as PSPlayerSeasonRecord).fatigue = 60
+	var rested: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+	assert_int((rested.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(481)
+
+
+func test_postseason_keeps_the_short_rotation_on_short_rest() -> void:
+	# 短期決戦は序列上位だけで回す。中4日のエースを、休養十分の6番手より優先する。
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(
+		20, {"480": 15, "481": 16, "482": 17, "483": 18, "484": 19, "485": 5}
+	)
+
+	var postseason: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers, [], true)
+	assert_int((postseason.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(480)
+	assert_str(str(postseason.get("reason", ""))).is_equal("postseason")
+
+	# ペナントでは同じ状況でも休養十分の6番手を立てる。
+	var pennant: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+	assert_int((pennant.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(485)
+
+
+func test_reorder_auto_rotation_follows_performance_but_not_manual_order() -> void:
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(30, {})
+	# 1番手が不振、6番手が好調という評価。
+	var scores: Dictionary = {480: 50.0, 481: 80.0, 482: 78.0, 483: 76.0, 484: 74.0, 485: 82.0}
+
+	assert_bool(PSRotationPlanner.reorder_auto_rotation(season, 1, pitchers, scores)).is_true()
+	assert_array(season.get_rotation(1).get("pitcher_ids", [])).is_equal([485, 481, 482, 483, 484, 480])
+
+	# 手動編成は利用者の意図なので組み替えない。
+	var manual: PSSeason = _rotation_season(30, {})
+	var stored: Dictionary = manual.get_rotation(1).duplicate(true)
+	stored["auto_generated"] = false
+	manual.set_rotation(1, stored)
+	assert_bool(PSRotationPlanner.reorder_auto_rotation(manual, 1, pitchers, scores)).is_false()
+
+
+func test_rotation_is_unaffected_by_a_postponed_game() -> void:
+	# 雨天順延を想定: 週の途中の試合が消えて間が空いても、次の試合日は序列の続きから始まる。
+	# 将来の登板予定を保存しない設計なので、順延時に作り直すべき状態が存在しない。
+	var pitchers: Array = _rotation_pitchers(6)
+	var season: PSSeason = _rotation_season(4, {"480": 1, "481": 2})
+
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, 1, pitchers)
+
+	assert_int((decision.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(482)
 
 
 # 統合: 保存 role 正準 (B) でも実シードの全チームが先発を立て、ブルペンを編成できること。
