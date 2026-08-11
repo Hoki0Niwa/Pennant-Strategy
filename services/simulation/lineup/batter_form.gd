@@ -48,6 +48,12 @@ const FORM_RATING_SCALE: float = 6.0
 const FORM_RATING_MIN: float = -6.0
 const FORM_RATING_MAX: float = 6.0
 
+# 過去シーズンぶんの標本キャッシュ。キーは (選手, 評価対象の季, lookback, decay)。
+# 過去シーズンのレコードとその基準分布は今季の進行では動かないので、選手あたり1回作れば足りる。
+# ノブをキーに含めるのは、出場判断 (3 / 0.5) と編成判断 (5 / 0.7) で減衰重みが違うため。
+# 破棄は PSPerformanceReference.reset_cache() 経由 (レコードを読み直したら過去も変わり得る)。
+static var _past_sample_cache: Dictionary = {}
+
 
 # 表示能力と成績をブレンドした打者指標 5 種 (すべて σ 単位)。打順が使う (= 出場判断のノブ)。
 # 基準分布は選手が属するシーズンのものを使うので、リーグ環境が動いても位置付けがズレない。
@@ -98,13 +104,14 @@ static func _rating_delta(
 	if record == null:
 		return 0.0
 	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
-	var ability: Dictionary = PSPerformanceReference.ability_indexes(record, season_reference["ratings"] as Dictionary)
 	var samples: Array = _stat_samples(
-		record, season_reference["stats"] as Dictionary, lookback, decay, current_stats
+		record, season_reference["stats"] as Dictionary, lookback, decay, current_stats, true
 	)
 	if samples.is_empty():
 		return 0.0
-	var ability_total: float = float(ability["total"])
+	var ability_total: float = PSPerformanceReference.ability_total_index(
+		record, season_reference["ratings"] as Dictionary
+	)
 	var blended_total: float = _blend(ability_total, samples, "ops", ability_prior)
 	return clampf((blended_total - ability_total) * scale, clip_min, clip_max)
 
@@ -117,16 +124,35 @@ static func _stat_samples(
 	stat_reference: Dictionary,
 	lookback: int,
 	decay: float,
-	current_stats: PSBatterStats = null
+	current_stats: PSBatterStats = null,
+	total_only: bool = false
 ) -> Array:
 	var samples: Array = []
 	var stats: PSBatterStats = current_stats if current_stats != null else record.batter_stats
-	_append_stat_sample(samples, stats, 1.0, stat_reference)
+	_append_stat_sample(samples, stats, 1.0, stat_reference, total_only)
 	if record.year <= 0:
 		return samples
+	# 過去ぶんは不変なのでキャッシュから足す。**今季 → k=1 → k=2 … の順序は崩さない**
+	# (_blend は重み付き和で、浮動小数の加算順序が変わると値がビット一致しなくなる)。
+	samples.append_array(_past_stat_samples(record, lookback, decay))
+	return samples
+
+
+# 過去 k=1..lookback 年ぶんの標本。履歴が積まれたセーブでも、同じ選手・評価ノブなら
+# RecordStore 参照と正規化を繰り返さない。
+static func _past_stat_samples(record: PSPlayerSeasonRecord, lookback: int, decay: float) -> Array:
+	var key: String = "%d|%d|%d|%d|%f" % [
+		record.player_id, record.year, record.season_number, lookback, decay
+	]
+	var cached: Variant = _past_sample_cache.get(key)
+	if cached != null:
+		return cached as Array
+	var samples: Array = []
 	for k in range(1, lookback + 1):
 		var past_year: int = record.year - k
 		var past_season_number: int = record.season_number - k
+		if past_year <= 0 or past_season_number <= 0:
+			break
 		var past: PSPlayerSeasonRecord = RecordStore.get_player_record(
 			record.player_id, past_year, past_season_number
 		)
@@ -139,11 +165,32 @@ static func _stat_samples(
 			pow(decay, float(k)),
 			past_reference["stats"] as Dictionary
 		)
+	samples.make_read_only()
+	if not PSPerformanceReference.is_frozen():
+		_past_sample_cache[key] = samples
 	return samples
 
 
+static func reset_sample_cache() -> void:
+	_past_sample_cache.clear()
+
+
+# 試合日の worker 起動前に、当日参照し得る選手の不変な過年度標本を main thread で確定する。
+# 今季成績と能力由来値は試合中に変化し得るため、このキャッシュには含めない。
+static func prewarm_past_samples(records: Array) -> void:
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or record.is_pitcher():
+			continue
+		_past_stat_samples(record, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY)
+
+
 static func _append_stat_sample(
-	samples: Array, stats: PSBatterStats, decay: float, distributions: Dictionary
+	samples: Array,
+	stats: PSBatterStats,
+	decay: float,
+	distributions: Dictionary,
+	total_only: bool = false
 ) -> void:
 	if stats == null or stats.plate_appearances <= 0:
 		return
@@ -151,15 +198,24 @@ static func _append_stat_sample(
 	var weight: float = decay * plate_appearances / (plate_appearances + PA_RELIABILITY_ANCHOR)
 	if weight <= 0.0:
 		return
+	var on_base: float = stats.on_base_percentage()
+	var slugging: float = stats.slugging_percentage()
+	var ops: float = on_base + slugging
+	if total_only:
+		samples.append({
+			"weight": weight,
+			"ops": PSPerformanceReference.normalized(ops, distributions, "ops"),
+		})
+		return
 	var average: float = stats.batting_average()
 	samples.append({
 		"weight": weight,
 		"average": PSPerformanceReference.normalized(average, distributions, "average"),
-		"on_base": PSPerformanceReference.normalized(stats.on_base_percentage(), distributions, "on_base"),
+		"on_base": PSPerformanceReference.normalized(on_base, distributions, "on_base"),
 		"isolated_power": PSPerformanceReference.normalized(
-			stats.slugging_percentage() - average, distributions, "isolated_power"
+			slugging - average, distributions, "isolated_power"
 		),
-		"ops": PSPerformanceReference.normalized(stats.ops(), distributions, "ops"),
+		"ops": PSPerformanceReference.normalized(ops, distributions, "ops"),
 	})
 
 

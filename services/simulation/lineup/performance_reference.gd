@@ -106,6 +106,19 @@ const MIN_RATING_SPREAD: float = 2.0
 const MIN_STAT_SPREAD: float = 0.010
 
 static var _cache: Dictionary = {}
+# 試合日の並列計算フェーズの間だけ true。この間はキャッシュミスを**書き込まずに**その場で計算する
+# (worker から静的 Dictionary を書くと冒頭のレースになる)。通常はプリウォーム済みなので
+# ここへ落ちてこない — 落ちても遅いだけで結果は同じ、という安全弁。
+static var _frozen: bool = false
+
+
+# 並列計算フェーズの開始/終了でメインスレッドから呼ぶ。
+static func set_frozen(value: bool) -> void:
+	_frozen = value
+
+
+static func is_frozen() -> bool:
+	return _frozen
 
 
 # {ratings: {trait: {mean, spread}}, stats: {key: {mean, spread, alignment}}} を返す。
@@ -130,21 +143,39 @@ static func for_season(year: int, season_number: int) -> Dictionary:
 			),
 		},
 	}
-	_cache[key] = measured
+	if not _frozen:
+		_cache[key] = measured
 	return measured
 
 
-# シーズン開始時・セーブロード時にメインスレッドで呼ぶ。過去シーズンぶんも含めて凍結する
-# (打者評価は直近数年の成績を参照するため)。
-static func prewarm(year: int, season_number: int, lookback: int = 4) -> void:
-	for k in range(lookback + 1):
+# シーズン開始時・セーブロード時・試合日の worker 起動前にメインスレッドで呼ぶ。
+# 過去シーズンぶんも含めて凍結する (選手評価は直近数年の成績を参照するため)。
+#
+# lookback の既定は **評価側が実際に遡る最大年数から導出する**。ここが実際の参照より浅いと、
+# 未キャッシュの季を worker が for_season() で埋めにかかり、冒頭に書いたレースがそのまま起きる。
+# 評価側より浅い固定値にはせず、ノブの変更にも追随させる。
+static func prewarm(year: int, season_number: int, lookback: int = -1) -> void:
+	var depth: int = lookback if lookback >= 0 else max_past_season_lookback()
+	for k in range(depth + 1):
 		if season_number - k <= 0:
 			break
 		for_season(year - k, season_number - k)
 
 
+# 打者/投手それぞれの出場判断・編成判断ノブのうち、最も長く遡るもの。
+static func max_past_season_lookback() -> int:
+	return maxi(
+		maxi(PSBatterForm.PAST_SEASON_LOOKBACK, PSBatterForm.ROSTER_PAST_SEASON_LOOKBACK),
+		maxi(PSPitcherForm.PAST_SEASON_LOOKBACK, PSPitcherForm.ROSTER_PAST_SEASON_LOOKBACK)
+	)
+
+
+# 基準分布と、それに紐づく過去シーズン標本をまとめて破棄する。レコードを読み直した/消した後は
+# 過去シーズンぶんも変わり得るので、必ず両方落とす (片方だけ残すと stale な評価値が生き残る)。
 static func reset_cache() -> void:
 	_cache.clear()
+	PSBatterForm.reset_sample_cache()
+	PSPitcherForm.reset_sample_cache()
 
 
 # --- 能力指標 (成績側と共通のスケール定義) ---
@@ -170,6 +201,24 @@ static func ability_indexes(record: PSPlayerSeasonRecord, ratings_reference: Dic
 		total += float(TOTAL_ABILITY_WEIGHTS[key]) * float(index[key])
 	index["total"] = total
 	return index
+
+
+# total だけを使う出場判断向け。能力別 Dictionary を作らず、ability_indexes と同じ順序で加算する。
+static func ability_total_index(record: PSPlayerSeasonRecord, ratings_reference: Dictionary) -> float:
+	var total: float = 0.0
+	total += float(TOTAL_ABILITY_WEIGHTS["contact"]) * normalized(
+		float(PSPlayerVisibleRatings.fielder_contact(record)), ratings_reference, "contact"
+	)
+	total += float(TOTAL_ABILITY_WEIGHTS["power"]) * normalized(
+		float(PSPlayerVisibleRatings.fielder_power(record)), ratings_reference, "power"
+	)
+	total += float(TOTAL_ABILITY_WEIGHTS["on_base"]) * normalized(
+		float(PSPlayerVisibleRatings.fielder_discipline(record)), ratings_reference, "discipline"
+	)
+	total += float(TOTAL_ABILITY_WEIGHTS["speed"]) * normalized(
+		float(PSPlayerVisibleRatings.fielder_speed(record)), ratings_reference, "speed"
+	)
+	return total
 
 
 # (value - mean) / spread。stats 側の分布は alignment を持ち、能力スケールへ平行移動される。
@@ -338,6 +387,23 @@ static func pitcher_ability_indexes(
 		total += float(PITCHER_TOTAL_ABILITY_WEIGHTS[key]) * float(index[key])
 	index["total"] = total
 	return index
+
+
+# 投手の total だけを使う判断向け。pitcher_ability_indexes と同じ順序で加算する。
+static func pitcher_ability_total_index(
+	record: PSPlayerSeasonRecord, ratings_reference: Dictionary
+) -> float:
+	var total: float = 0.0
+	total += float(PITCHER_TOTAL_ABILITY_WEIGHTS["stuff"]) * normalized(
+		float(PSPlayerVisibleRatings.pitcher_stuff(record)), ratings_reference, "stuff"
+	)
+	total += float(PITCHER_TOTAL_ABILITY_WEIGHTS["control"]) * normalized(
+		float(PSPlayerVisibleRatings.pitcher_control(record)), ratings_reference, "control"
+	)
+	total += float(PITCHER_TOTAL_ABILITY_WEIGHTS["stamina"]) * normalized(
+		float(PSPlayerVisibleRatings.pitcher_stamina(record)), ratings_reference, "stamina"
+	)
+	return total
 
 
 # 失点抑止の指標。防御率は低いほど良いので符号を反転して「高いほど良い」に揃える。

@@ -16,6 +16,7 @@ var _player_records_view: Dictionary = {}
 # year -> season_number -> team_id -> player record primary keys。
 # 完成済みindexを一括差し替えし、日次並列workerは読み取りだけを行う。
 var _team_player_record_keys_by_year: Dictionary = {}
+var _player_record_keys_by_year: Dictionary = {}
 var _indexed_player_record_count: int = 0
 var _team_records: Dictionary = {}
 var _season_archives: Array = []
@@ -190,6 +191,20 @@ func get_team_player_records(team_id: int, year: int, season_number: int, includ
 				and record.year == year and record.season_number == season_number:
 			if not include_retired and _record_marks_retired_at_season_end(record):
 				continue
+			records.append(record)
+	return records
+
+
+func get_player_records_for_season(year: int, season_number: int) -> Array:
+	ensure_loaded()
+	if _indexed_player_record_count != _player_records.size():
+		_rebuild_team_player_record_index()
+	var seasons_by_number: Dictionary = _player_record_keys_by_year.get(year, {}) as Dictionary
+	var record_keys: Array = seasons_by_number.get(season_number, []) as Array
+	var records: Array = []
+	for record_key_value in record_keys:
+		var record: PSPlayerSeasonRecord = _player_records.get(record_key_value) as PSPlayerSeasonRecord
+		if record != null and record.year == year and record.season_number == season_number:
 			records.append(record)
 	return records
 
@@ -458,16 +473,25 @@ func _season_key(entity_id: int, year: int, season_number: int) -> String:
 
 func _clear_team_player_record_index() -> void:
 	_team_player_record_keys_by_year = {}
+	_player_record_keys_by_year = {}
 	_indexed_player_record_count = 0
 	_refresh_player_records_view()
 
 
 func _rebuild_team_player_record_index() -> void:
 	var rebuilt: Dictionary = {}
+	var rebuilt_by_season: Dictionary = {}
 	for record_key_value in _player_records.keys():
 		var record: PSPlayerSeasonRecord = _player_records[record_key_value] as PSPlayerSeasonRecord
 		if record == null:
 			continue
+		var season_keys_by_number: Dictionary = rebuilt_by_season.get(record.year, {}) as Dictionary
+		if not rebuilt_by_season.has(record.year):
+			rebuilt_by_season[record.year] = season_keys_by_number
+		var season_record_keys: Array = season_keys_by_number.get(record.season_number, []) as Array
+		if not season_keys_by_number.has(record.season_number):
+			season_keys_by_number[record.season_number] = season_record_keys
+		season_record_keys.append(record_key_value)
 		var seasons_by_number: Dictionary = rebuilt.get(record.year, {}) as Dictionary
 		if not rebuilt.has(record.year):
 			rebuilt[record.year] = seasons_by_number
@@ -488,7 +512,14 @@ func _rebuild_team_player_record_index() -> void:
 			teams_by_id.make_read_only()
 		seasons_by_number.make_read_only()
 	rebuilt.make_read_only()
+	for seasons_value in rebuilt_by_season.values():
+		var seasons_by_number: Dictionary = seasons_value as Dictionary
+		for record_keys_value in seasons_by_number.values():
+			(record_keys_value as Array).make_read_only()
+		seasons_by_number.make_read_only()
+	rebuilt_by_season.make_read_only()
 	_team_player_record_keys_by_year = rebuilt
+	_player_record_keys_by_year = rebuilt_by_season
 	_indexed_player_record_count = _player_records.size()
 	_refresh_player_records_view()
 

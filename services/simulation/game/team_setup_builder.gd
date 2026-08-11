@@ -16,7 +16,12 @@ const STARTER_POOL_MIN: int = 5
 
 
 static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool, postseason: bool = false) -> Dictionary:
-	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled)
+	# 1試合1チームぶんの打撃スコア memo。ロスター検証 → AI既定配置の生成 → 本番配置で
+	# PSDefenseAlignmentService を最大3回通すため、共有しないと同じ選手の
+	# batting_score_with_form (= 能力 + 今季/過去成績ブレンド) を毎回作り直すことになる。
+	# 試合が始まる前なので成績も疲労もまだ動かず、共有しても値は変わらない。
+	var batting_memo: Dictionary = {}
+	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled, batting_memo)
 	if not bool(prepared.get("ok", false)):
 		return prepared
 
@@ -43,12 +48,17 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool, p
 	if use_saved:
 		var saved: Dictionary = season.get_lineup(team_id, dh_enabled)
 		if not saved.is_empty():
-			var saved_setup: Dictionary = build_setup_from_saved(season, team_id, dh_enabled, available_fielders, rotation_pitcher, saved)
+			var saved_setup: Dictionary = build_setup_from_saved(
+				season, team_id, dh_enabled, available_fielders, rotation_pitcher, saved, batting_memo
+			)
 			if bool(saved_setup.get("ok", false)):
 				setup = saved_setup
 
 	if setup.is_empty():
-		setup = build_setup_from_auto(season, team_id, dh_enabled, available_fielders, rotation_pitcher, team_games_played_before)
+		setup = build_setup_from_auto(
+			season, team_id, dh_enabled, available_fielders, rotation_pitcher,
+			team_games_played_before, batting_memo
+		)
 
 	if bool(setup.get("ok", false)):
 		setup["starter_pitcher"] = rotation_pitcher
@@ -146,8 +156,20 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 		else:
 			fielders.append(record)
 
+	# 選出スコアは overall_score (野手なら 8 ポジションぶんの守備評価を含む) なので、
+	# comparator の中で引くと 1 回の sort で O(n log n) 回計算することになる。
+	# 先に選手ごと 1 回だけ引いてから比較する (比較結果は同じなので並び順も変わらない)。
+	var score_by_id: Dictionary = {}
+	for pool in [starters, relievers, fielders]:
+		for record_row in pool:
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			if record != null and not score_by_id.has(record.player_id):
+				score_by_id[record.player_id] = _active_roster_selection_score(record)
+	# 既定値は _active_roster_selection_score(null) と同じ値にしておく (並びを元と一致させる)。
 	var by_overall: Callable = func(a, b) -> bool:
-		return _active_roster_selection_score(a as PSPlayerSeasonRecord) > _active_roster_selection_score(b as PSPlayerSeasonRecord)
+		return (
+			_cached_selection_score(a, score_by_id) > _cached_selection_score(b, score_by_id)
+		)
 	starters.sort_custom(by_overall)
 	relievers.sort_custom(by_overall)
 	fielders.sort_custom(by_overall)
@@ -395,7 +417,9 @@ static func _minimum_fielders_for_game(dh_enabled: bool) -> int:
 	return GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size() + (1 if dh_enabled else 0)
 
 
-static func _records_can_field_game(season: PSSeason, team_id: int, records: Array, dh_enabled: bool = true) -> bool:
+static func _records_can_field_game(
+	season: PSSeason, team_id: int, records: Array, dh_enabled: bool = true, batting_memo: Dictionary = {}
+) -> bool:
 	var pitchers: Array = []
 	var fielders: Array = []
 	for record_row in records:
@@ -415,14 +439,20 @@ static func _records_can_field_game(season: PSSeason, team_id: int, records: Arr
 		return false
 	var profile: PSDefenseAlignmentProfile = DefenseAlignmentProfile.load_for_team(team_id)
 	var usage_settings: Dictionary = season.get_fielder_usage(team_id) if season != null else {}
-	var slots: Array = DefenseAlignmentService.assign_defensive_starters(available_fielders, profile, usage_settings, 1)
+	var slots: Array = DefenseAlignmentService.assign_defensive_starters(
+		available_fielders, profile, usage_settings, 1, batting_memo
+	)
 	if slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 		return true
-	slots = DefenseAlignmentService.assign_defensive_starters(available_fielders, profile, {}, 1)
+	slots = DefenseAlignmentService.assign_defensive_starters(
+		available_fielders, profile, {}, 1, batting_memo
+	)
 	return slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size()
 
 
-static func prepare_team_setup(season: PSSeason, team_id: int, dh_enabled: bool = true) -> Dictionary:
+static func prepare_team_setup(
+	season: PSSeason, team_id: int, dh_enabled: bool = true, batting_memo: Dictionary = {}
+) -> Dictionary:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	var active_records: Array = filter_by_active_roster(season, team_id, all_records)
 	var active_needs_repair: bool = active_records.is_empty()
@@ -434,12 +464,12 @@ static func prepare_team_setup(season: PSSeason, team_id: int, dh_enabled: bool 
 		var required_catchers: int = _required_active_catcher_count(all_records)
 		active_needs_repair = _healthy_catcher_count_in_records(active_records) < required_catchers
 	if not active_needs_repair:
-		active_needs_repair = not _records_can_field_game(season, team_id, active_records, dh_enabled)
+		active_needs_repair = not _records_can_field_game(season, team_id, active_records, dh_enabled, batting_memo)
 	if active_needs_repair:
 		var preview: Dictionary = preview_active_roster(season, team_id, dh_enabled)
 		if bool(preview.get("ok", false)):
 			var preview_records: Array = _records_for_ids(all_records, preview.get("player_ids", []) as Array)
-			if not preview_records.is_empty() and _records_can_field_game(season, team_id, preview_records, dh_enabled):
+			if not preview_records.is_empty() and _records_can_field_game(season, team_id, preview_records, dh_enabled, batting_memo):
 				active_records = preview_records
 				season.set_active_roster(team_id, {"player_ids": _record_ids(active_records)})
 			else:
@@ -478,11 +508,7 @@ static func prepare_team_setup(season: PSSeason, team_id: int, dh_enabled: bool 
 	if available_fielders.size() < required_fielders:
 		return {"ok": false, "message": "%sの野手が%d人未満です" % [GameSimulator._team_name(team_id), required_fielders]}
 
-	starter_pitchers.sort_custom(func(a, b) -> bool:
-		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
-		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return PSPitcherRoleModel.starter_order_score(pitcher_a) > PSPitcherRoleModel.starter_order_score(pitcher_b)
-	)
+	_sort_by_starter_order(starter_pitchers)
 
 	var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(team_id, season.year, season.season_number)
 	var reliever_pool: Array = reliever_pool_candidates(pitchers)
@@ -502,18 +528,23 @@ static func build_setup_from_auto(
 	dh_enabled: bool,
 	available_fielders: Array,
 	rotation_pitcher: PSPlayerSeasonRecord,
-	team_games_played_before: int = -1
+	team_games_played_before: int = -1,
+	batting_memo: Dictionary = {}
 ) -> Dictionary:
 	if team_games_played_before < 0:
 		var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(team_id, season.year, season.season_number)
 		team_games_played_before = 0 if team_record == null else int(team_record.stats.games)
 	var usage_settings: Dictionary = season.get_fielder_usage(team_id)
 	if _usage_needs_ai_defaults(usage_settings, available_fielders):
-		var base_slots: Array = select_defensive_starters_with_usage(team_id, available_fielders, usage_settings, 1)
+		var base_slots: Array = select_defensive_starters_with_usage(
+			team_id, available_fielders, usage_settings, 1, batting_memo
+		)
 		if base_slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 			usage_settings = build_ai_fielder_usage(available_fielders, base_slots, usage_settings)
 			season.set_fielder_usage(team_id, usage_settings)
-	var fielding_slots: Array = select_defensive_starters(season, team_id, available_fielders, team_games_played_before + 1)
+	var fielding_slots: Array = select_defensive_starters(
+		season, team_id, available_fielders, team_games_played_before + 1, batting_memo
+	)
 	if fielding_slots.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 		return {"ok": false, "message": "%sの守備位置を埋められません" % GameSimulator._team_name(team_id)}
 	var rested_fielder_ids: Dictionary = rested_starter_ids_for_game(usage_settings, team_games_played_before + 1)
@@ -521,9 +552,11 @@ static func build_setup_from_auto(
 	var batting_order: Array = records_from_fielding_slots(fielding_slots)
 	var position_by_player_id: Dictionary = position_map_from_fielding_slots(fielding_slots)
 	if dh_enabled:
-		var designated_hitter: PSPlayerSeasonRecord = select_designated_hitter(available_fielders, fielding_slots, rested_fielder_ids)
+		var designated_hitter: PSPlayerSeasonRecord = select_designated_hitter(
+			available_fielders, fielding_slots, rested_fielder_ids, batting_memo
+		)
 		if designated_hitter == null and not rested_fielder_ids.is_empty():
-			designated_hitter = select_designated_hitter(available_fielders, fielding_slots)
+			designated_hitter = select_designated_hitter(available_fielders, fielding_slots, {}, batting_memo)
 		if designated_hitter == null:
 			return {"ok": false, "message": "%sにDH候補がいません" % GameSimulator._team_name(team_id)}
 		batting_order.append(designated_hitter)
@@ -575,7 +608,15 @@ static func build_setup_from_auto(
 	}
 
 
-static func build_setup_from_saved(_season: PSSeason, team_id: int, dh_enabled: bool, available_fielders: Array, rotation_pitcher: PSPlayerSeasonRecord, saved: Dictionary) -> Dictionary:
+static func build_setup_from_saved(
+	_season: PSSeason,
+	team_id: int,
+	dh_enabled: bool,
+	available_fielders: Array,
+	rotation_pitcher: PSPlayerSeasonRecord,
+	saved: Dictionary,
+	batting_memo: Dictionary = {}
+) -> Dictionary:
 	var saved_orders: Array = (saved.get("batting_order", []) as Array)
 	if saved_orders.is_empty():
 		return {}
@@ -685,9 +726,11 @@ static func build_setup_from_saved(_season: PSSeason, team_id: int, dh_enabled: 
 			target_slot = find_unfilled_slot(batting_records, slot_positions, [0])
 		if target_slot < 0:
 			return {}
-		var fielder: PSPlayerSeasonRecord = best_fielder_for_position(remaining, position, true)
+		var fielder: PSPlayerSeasonRecord = best_fielder_for_position(
+			remaining, position, true, batting_memo
+		)
 		if fielder == null:
-			fielder = best_fielder_for_position(remaining, position, false)
+			fielder = best_fielder_for_position(remaining, position, false, batting_memo)
 		if fielder == null:
 			return {}
 		batting_records[target_slot] = fielder
@@ -699,7 +742,9 @@ static func build_setup_from_saved(_season: PSSeason, team_id: int, dh_enabled: 
 	if dh_enabled:
 		for i in range(9):
 			if slot_positions[i] == 10 and batting_records[i] == null:
-				var dh: PSPlayerSeasonRecord = select_designated_hitter(remaining, fielding_assignments)
+				var dh: PSPlayerSeasonRecord = select_designated_hitter(
+					remaining, fielding_assignments, {}, batting_memo
+				)
 				if dh == null:
 					if remaining.is_empty():
 						return {}
@@ -804,15 +849,31 @@ static func setup_to_lineup_dict(setup: Dictionary, dh_enabled: bool, rotation_p
 # greedy_defensive_starters, starter_candidate_pool, initial_starter_selection 等 14 関数) を
 # PSDefenseAlignmentService に置換。lazy default で初回は greedy template を算出してキャッシュし、
 # 以後の試合は不在選手のみ backup_priority 経由で補充する。
-static func select_defensive_starters(season: PSSeason, team_id: int, candidates: Array, next_game_number: int = 1) -> Array:
+static func select_defensive_starters(
+	season: PSSeason,
+	team_id: int,
+	candidates: Array,
+	next_game_number: int = 1,
+	batting_memo: Dictionary = {}
+) -> Array:
 	var profile: PSDefenseAlignmentProfile = DefenseAlignmentProfile.load_for_team(team_id)
 	var usage_settings: Dictionary = season.get_fielder_usage(team_id) if season != null else {}
-	return DefenseAlignmentService.assign_defensive_starters(candidates, profile, usage_settings, next_game_number)
+	return DefenseAlignmentService.assign_defensive_starters(
+		candidates, profile, usage_settings, next_game_number, batting_memo
+	)
 
 
-static func select_defensive_starters_with_usage(team_id: int, candidates: Array, usage_settings: Dictionary, next_game_number: int = 1) -> Array:
+static func select_defensive_starters_with_usage(
+	team_id: int,
+	candidates: Array,
+	usage_settings: Dictionary,
+	next_game_number: int = 1,
+	batting_memo: Dictionary = {}
+) -> Array:
 	var profile: PSDefenseAlignmentProfile = DefenseAlignmentProfile.load_for_team(team_id)
-	return DefenseAlignmentService.assign_defensive_starters(candidates, profile, usage_settings, next_game_number)
+	return DefenseAlignmentService.assign_defensive_starters(
+		candidates, profile, usage_settings, next_game_number, batting_memo
+	)
 
 
 static func _usage_needs_ai_defaults(usage_settings: Dictionary, available_fielders: Array = []) -> bool:
@@ -986,7 +1047,12 @@ static func rested_starter_ids_for_game(usage_settings: Dictionary, next_game_nu
 	return rested
 
 
-static func best_fielder_for_position(candidates: Array, position: int, require_aptitude: bool) -> PSPlayerSeasonRecord:
+static func best_fielder_for_position(
+	candidates: Array,
+	position: int,
+	require_aptitude: bool,
+	batting_memo: Dictionary = {}
+) -> PSPlayerSeasonRecord:
 	var best: PSPlayerSeasonRecord = null
 	var best_score: int = -999999
 	for candidate_row in candidates:
@@ -994,7 +1060,7 @@ static func best_fielder_for_position(candidates: Array, position: int, require_
 		var aptitude: int = position_aptitude(candidate, position)
 		if require_aptitude and aptitude <= 0:
 			continue
-		var score: int = defensive_position_score(candidate, position)
+		var score: int = defensive_position_score(candidate, position, batting_memo)
 		if score <= PlayerValueEvaluator.ZERO_APTITUDE_SCORE:
 			continue
 		if best == null or score > best_score:
@@ -1003,10 +1069,16 @@ static func best_fielder_for_position(candidates: Array, position: int, require_
 	return best
 
 
-static func defensive_position_score(record: PSPlayerSeasonRecord, position: int) -> int:
+static func defensive_position_score(
+	record: PSPlayerSeasonRecord,
+	position: int,
+	batting_memo: Dictionary = {}
+) -> int:
 	# スタメン候補スコア (打撃/守備の position 別ブレンド)。saved-lineup fallback で使う。
 	# 純守備版が必要な場合は PlayerValueEvaluator.defensive_assignment_score を直接呼ぶ。
-	return PlayerValueEvaluator.starter_assignment_score(record, position, false)
+	return PlayerValueEvaluator.starter_assignment_score(
+		record, position, false, _cached_batting_score(record, batting_memo)
+	)
 
 
 static func position_aptitude(record: PSPlayerSeasonRecord, position: int) -> int:
@@ -1039,7 +1111,23 @@ static func records_from_fielding_slots(fielding_slots: Array) -> Array:
 	return records
 
 
-static func select_designated_hitter(candidates: Array, fielding_slots: Array, excluded_ids: Dictionary = {}) -> PSPlayerSeasonRecord:
+static func _cached_batting_score(
+	record: PSPlayerSeasonRecord,
+	batting_memo: Dictionary
+) -> int:
+	if record == null:
+		return 0
+	if not batting_memo.has(record.player_id):
+		batting_memo[record.player_id] = PlayerValueEvaluator.batting_score_with_form(record)
+	return int(batting_memo[record.player_id])
+
+
+static func select_designated_hitter(
+	candidates: Array,
+	fielding_slots: Array,
+	excluded_ids: Dictionary = {},
+	batting_memo: Dictionary = {}
+) -> PSPlayerSeasonRecord:
 	var used_ids: Dictionary = {}
 	for slot_row in fielding_slots:
 		var slot: Dictionary = slot_row as Dictionary
@@ -1054,7 +1142,7 @@ static func select_designated_hitter(candidates: Array, fielding_slots: Array, e
 		if used_ids.has(candidate.player_id) or excluded_ids.has(candidate.player_id):
 			continue
 		# DH は守備が要らないぶん打撃だけで決まる。好不調 (成績の上振れ/下振れ) も込みで見る。
-		var score: int = PlayerValueEvaluator.batting_score_with_form(candidate)
+		var score: int = _cached_batting_score(candidate, batting_memo)
 		if best == null or score > best_score:
 			best = candidate
 			best_score = score
@@ -1065,6 +1153,20 @@ static func select_designated_hitter(candidates: Array, fielding_slots: Array, e
 # 並べ替える。position_by_player_id はその日の守備位置で、捕手判定に使う (省略時は登録ポジション)。
 static func sort_batting_order(batting_order: Array, position_by_player_id: Dictionary = {}) -> void:
 	batting_order.assign(BattingOrderService.build_base_order(batting_order, null, position_by_player_id))
+
+
+static func _sort_by_starter_order(pitchers: Array) -> void:
+	var score_by_id: Dictionary = {}
+	for pitcher_row in pitchers:
+		var pitcher: PSPlayerSeasonRecord = pitcher_row as PSPlayerSeasonRecord
+		if pitcher != null:
+			score_by_id[pitcher.player_id] = PSPitcherRoleModel.starter_order_score(pitcher)
+	pitchers.sort_custom(func(a, b) -> bool:
+		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+		return float(score_by_id.get(pitcher_a.player_id, 0.0)) \
+			> float(score_by_id.get(pitcher_b.player_id, 0.0))
+	)
 
 
 static func starter_pitcher_candidates(pitchers: Array) -> Array:
@@ -1081,9 +1183,7 @@ static func starter_pitcher_candidates(pitchers: Array) -> Array:
 	# stored-starter が1人でもいればそのまま使う = リリーフ (クローザー含む) は先発ローテに混入しない。
 	# stored-starter がゼロのチーム (ドリフト/小ロスター) のときだけ緊急的に先発適性順で補う。
 	if candidates.is_empty() and not rest.is_empty():
-		rest.sort_custom(func(a, b) -> bool:
-			return PSPitcherRoleModel.starter_order_score(a) > PSPitcherRoleModel.starter_order_score(b)
-		)
+		_sort_by_starter_order(rest)
 		for pitcher_row in rest:
 			if candidates.size() >= STARTER_POOL_MIN:
 				break
@@ -1104,6 +1204,14 @@ static func _is_starter_role(record: PSPlayerSeasonRecord) -> bool:
 	if record == null:
 		return false
 	return record.is_starter_pitcher()
+
+
+# 事前計算済みスコアの参照。null は _active_roster_selection_score(null) と同値に揃える。
+static func _cached_selection_score(row: Variant, scores: Dictionary) -> int:
+	var record: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+	if record == null:
+		return -2147483647
+	return int(scores.get(record.player_id, -2147483647))
 
 
 static func _active_roster_selection_score(record: PSPlayerSeasonRecord) -> int:

@@ -271,9 +271,7 @@ static func _bullpen_core_ids(reliever_pool: Array, saved: Dictionary) -> Dictio
 			core[int(role_ids[index])] = true
 		return core
 	var ordered: Array = reliever_pool.duplicate()
-	ordered.sort_custom(func(a, b) -> bool:
-		return PlayerValueEvaluator.pitching_score_without_fatigue(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score_without_fatigue(b as PSPlayerSeasonRecord)
-	)
+	ordered.sort_custom(_by_pitching_score(_pitching_scores_by_id(ordered)))
 	for index in range(mini(BULLPEN_CORE_SIZE, ordered.size())):
 		var pitcher: PSPlayerSeasonRecord = ordered[index] as PSPlayerSeasonRecord
 		if pitcher != null:
@@ -463,9 +461,7 @@ static func resolve_rotation_order_from_saved(saved: Dictionary, starter_pitcher
 		if used.has(pitcher.player_id):
 			continue
 		rest.append(pitcher)
-	rest.sort_custom(func(a, b) -> bool:
-		return PlayerValueEvaluator.pitching_score_without_fatigue(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score_without_fatigue(b as PSPlayerSeasonRecord)
-	)
+	rest.sort_custom(_by_pitching_score(_pitching_scores_by_id(rest)))
 	for pitcher_row in rest:
 		if rotation.size() >= ROTATION_SIZE_MAX:
 			break
@@ -569,9 +565,7 @@ static func select_relievers_for_innings(
 	# エース救援が疲れた日に評価が下がってクローザーの座が日替わりで入れ替わり、現実離れした「日替わり抑え」と
 	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
 	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。
-	eligible.sort_custom(func(a, b) -> bool:
-		return PlayerValueEvaluator.pitching_score_without_fatigue(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score_without_fatigue(b as PSPlayerSeasonRecord)
-	)
+	eligible.sort_custom(_by_pitching_score(_pitching_scores_by_id(eligible)))
 	var top6: Array = []
 	var used_ids: Dictionary = {}
 	var eligible_by_id: Dictionary = _records_by_id(eligible)
@@ -599,9 +593,7 @@ static func select_relievers_for_innings(
 			if used_ids.has(pitcher.player_id) or pitcher.injury_days > 0:
 				continue
 			fallback.append(pitcher)
-		fallback.sort_custom(func(a, b) -> bool:
-			return PlayerValueEvaluator.pitching_score_without_fatigue(a as PSPlayerSeasonRecord) > PlayerValueEvaluator.pitching_score_without_fatigue(b as PSPlayerSeasonRecord)
-		)
+		fallback.sort_custom(_by_pitching_score(_pitching_scores_by_id(fallback)))
 		for p in fallback:
 			if top6.size() >= RELIEF_ROLE_SIZE_MAX:
 				break
@@ -677,6 +669,33 @@ static func _records_by_id(records: Array) -> Dictionary:
 		if record != null:
 			by_id[record.player_id] = record
 	return by_id
+
+
+# 疲労抜きの投手評価を player_id → score で先に引いておく。comparator の中で計算すると
+# 1 回の sort で O(n log n) 回走るため (評価は球速・変化球・能力カーブを含む)。
+# 比較結果は同じなので並び順は変わらない。
+static func _pitching_scores_by_id(records: Array) -> Dictionary:
+	var scores: Dictionary = {}
+	for record_value in records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record != null and not scores.has(record.player_id):
+			scores[record.player_id] = PlayerValueEvaluator.pitching_score_without_fatigue(record)
+	return scores
+
+
+# _pitching_scores_by_id の結果で降順に並べる comparator。
+static func _by_pitching_score(scores: Dictionary) -> Callable:
+	return func(a, b) -> bool:
+		return _cached_pitching_score(a, scores) > _cached_pitching_score(b, scores)
+
+
+# null は元の comparator と同じ 0 として扱う (reliever_pool_candidates は null を落とさないため
+# プールに混じり得る)。非 null は必ず scores に入っているので既定値は null 用。
+static func _cached_pitching_score(row: Variant, scores: Dictionary) -> int:
+	var record: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+	if record == null:
+		return 0
+	return int(scores.get(record.player_id, 0))
 
 
 static func _add_role_id(roles: Dictionary, player_id: int, role: String, allowed: Dictionary, restrict: bool) -> void:

@@ -3219,3 +3219,152 @@ func _team(team_id: int) -> PSTeam:
 		# 主眼なので、年俸で誤ブロックしないよう十分大きな既定予算を持たせる。
 		"funds": 400000,
 	})
+
+
+# --- 過去シーズン標本キャッシュ --------------------------------------------
+#
+# PSBatterForm / PSPitcherForm は過去 lookback 年ぶんの標本をキャッシュする。
+# balance report は1年目なので過去レコードが無く、SHA 一致ゲートではこの経路を通らない。
+# ここで「キャッシュありの値 == 毎回計算した値」と「ノブ違いでキーが衝突しない」を直接押さえる。
+
+func test_past_season_form_cache_matches_uncached_value() -> void:
+	var pid: int = 87401
+	var year: int = 2030
+	var season_number: int = 5
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()
+
+	var player: PSPlayer = _player_with_z(pid, 1, 3, false, 0.5)
+	var current: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, year, season_number)
+	current.batter_stats.plate_appearances = 300
+	current.batter_stats.at_bats = 270
+	current.batter_stats.hits = 60
+	current.batter_stats.doubles = 10
+	current.batter_stats.home_runs = 5
+	current.batter_stats.walks = 30
+	RecordStore.set_player_record(current)
+
+	# 過去5年ぶん。年ごとに成績を変えて「どの年が効いたか」が値に出るようにする。
+	for k in range(1, 6):
+		var past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			player, year - k, season_number - k
+		)
+		past.batter_stats.plate_appearances = 600
+		past.batter_stats.at_bats = 540
+		past.batter_stats.hits = 150 + k * 8
+		past.batter_stats.doubles = 25
+		past.batter_stats.home_runs = 18
+		past.batter_stats.walks = 55
+		RecordStore.set_player_record(past)
+
+	# 1回目 (キャッシュを埋める) と2回目 (キャッシュ命中) が完全一致すること。
+	var first: float = PSBatterForm.rating_delta(current)
+	var cached: float = PSBatterForm.rating_delta(current)
+	assert_float(cached).is_equal(first)
+
+	# キャッシュを捨てて計算し直しても同じ値であること (= キャッシュが値を歪めていない)。
+	PSPerformanceReference.reset_cache()
+	var recomputed: float = PSBatterForm.rating_delta(current)
+	assert_float(recomputed).is_equal(first)
+
+	# 過去成績が実際に効いていること (効いていなければ上の一致は無意味な検証になる)。
+	var no_history: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_player_with_z(pid + 1, 1, 3, false, 0.5), year, season_number
+	)
+	no_history.batter_stats.plate_appearances = current.batter_stats.plate_appearances
+	no_history.batter_stats.at_bats = current.batter_stats.at_bats
+	no_history.batter_stats.hits = current.batter_stats.hits
+	no_history.batter_stats.doubles = current.batter_stats.doubles
+	no_history.batter_stats.home_runs = current.batter_stats.home_runs
+	no_history.batter_stats.walks = current.batter_stats.walks
+	RecordStore.set_player_record(no_history)
+	assert_float(PSBatterForm.rating_delta(no_history)).is_not_equal(first)
+
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()
+
+
+# 出場判断 (lookback 3 / decay 0.5) と編成判断 (5 / 0.7) は別エントリでなければならない。
+# キーにノブを含め忘れると、先に呼ばれた側の標本が両方に使われて静かに壊れる。
+func test_past_season_form_cache_separates_knobs() -> void:
+	var pid: int = 87411
+	var year: int = 2030
+	var season_number: int = 5
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()
+
+	var player: PSPlayer = _player_with_z(pid, 1, 3, false, 0.5)
+	var current: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, year, season_number)
+	current.batter_stats.plate_appearances = 250
+	current.batter_stats.at_bats = 225
+	current.batter_stats.hits = 45
+	current.batter_stats.walks = 25
+	RecordStore.set_player_record(current)
+
+	# 4-5 年前だけ突出させる。lookback 3 では届かず、lookback 5 では効く年に置く。
+	for k in range(1, 6):
+		var past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			player, year - k, season_number - k
+		)
+		past.batter_stats.plate_appearances = 600
+		past.batter_stats.at_bats = 540
+		past.batter_stats.hits = 200 if k >= 4 else 120
+		past.batter_stats.doubles = 30
+		past.batter_stats.home_runs = 25 if k >= 4 else 8
+		past.batter_stats.walks = 55
+		RecordStore.set_player_record(past)
+
+	# 出場判断を先に呼んでキャッシュを埋めてから編成判断を呼ぶ (キー衝突があれば同値になる)。
+	var play_delta: float = PSBatterForm.rating_delta(current)
+	var roster_delta: float = PSBatterForm.roster_rating_delta(current)
+	assert_float(roster_delta).is_not_equal(play_delta)
+
+	# 逆順で呼んでも同じ値になること (呼び出し順にキャッシュが依存していない)。
+	PSPerformanceReference.reset_cache()
+	assert_float(PSBatterForm.roster_rating_delta(current)).is_equal(roster_delta)
+	assert_float(PSBatterForm.rating_delta(current)).is_equal(play_delta)
+
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()
+
+
+# 投手側も同じ機構なので同じ性質を持つこと。
+func test_past_season_pitcher_form_cache_matches_uncached_value() -> void:
+	var pid: int = 87421
+	var year: int = 2030
+	var season_number: int = 5
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()
+
+	var player: PSPlayer = _player_with_z(pid, 1, 1, false, 0.5)
+	player.role = "starter"
+	player.z_abilities["Pit_KCreate"] = 0.6
+	player.z_abilities["Pit_BBPrevent"] = 0.4
+	player.z_abilities["Pit_Stamina"] = 0.5
+	var current: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, year, season_number)
+	current.pitcher_stats.games = 12
+	current.pitcher_stats.starts = 12
+	current.pitcher_stats.outs_pitched = 220
+	current.pitcher_stats.batters_faced = 300
+	current.pitcher_stats.earned_runs = 25
+	RecordStore.set_player_record(current)
+
+	for k in range(1, 6):
+		var past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			player, year - k, season_number - k
+		)
+		past.pitcher_stats.games = 25
+		past.pitcher_stats.starts = 25
+		past.pitcher_stats.outs_pitched = 450
+		past.pitcher_stats.batters_faced = 620
+		past.pitcher_stats.earned_runs = 40 + k * 5
+		RecordStore.set_player_record(past)
+
+	var first: float = PSPitcherForm.rating_delta(current)
+	assert_float(PSPitcherForm.rating_delta(current)).is_equal(first)
+	PSPerformanceReference.reset_cache()
+	assert_float(PSPitcherForm.rating_delta(current)).is_equal(first)
+	assert_float(PSPitcherForm.roster_rating_delta(current)).is_not_equal(first)
+
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()

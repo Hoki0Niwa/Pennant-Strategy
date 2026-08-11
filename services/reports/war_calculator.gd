@@ -57,11 +57,9 @@ static func build_league_context(year: int, season_number: int, meta: Dictionary
 	var lg_dpr_by_pos: Dictionary = {}
 	var lg_chances_by_pos: Dictionary = {}
 	var player_team_ids: Dictionary = {}
-	for record_value in RecordStore.player_records.values():
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
-			continue
-		if record.year != year or record.season_number != season_number:
 			continue
 		if record.team_id > 0:
 			player_team_ids[record.team_id] = true
@@ -249,11 +247,9 @@ static func _season_meta(year: int, season_number: int, player_team_ids: Diction
 static func _batter_league_adjustment_per_pa(year: int, season_number: int, league_ctx: Dictionary) -> float:
 	var total_runs: float = 0.0
 	var total_pa: int = 0
-	for record_value in RecordStore.player_records.values():
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
-			continue
-		if record.year != year or record.season_number != season_number:
 			continue
 		var pitcher: PSPitcherStats = record.pitcher_stats
 		var is_pitcher_war: bool = record.is_pitcher() and pitcher != null and pitcher.outs_pitched > 0
@@ -371,11 +367,9 @@ static func _pitcher_war_ip_correction(year: int, season_number: int, league_ctx
 	var target_pool: float = float(league_ctx.get("pitcher_war_pool", 0.0))
 	var raw_war: float = 0.0
 	var total_ip: float = 0.0
-	for record_value in RecordStore.player_records.values():
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
-			continue
-		if record.year != year or record.season_number != season_number:
 			continue
 		if not record.is_pitcher() or record.pitcher_stats == null or record.pitcher_stats.outs_pitched <= 0:
 			continue
@@ -552,11 +546,9 @@ static func calculate_pitcher_war(record: PSPlayerSeasonRecord, league_ctx: Dict
 static func season_war_table(year: int, season_number: int, league_ctx: Dictionary = {}) -> Array:
 	var ctx: Dictionary = league_ctx if not league_ctx.is_empty() else build_league_context(year, season_number)
 	var rows: Array = []
-	for record_value in RecordStore.player_records.values():
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
-			continue
-		if record.year != year or record.season_number != season_number:
 			continue
 		var war_row: Dictionary = season_war(record, ctx)
 		if war_row.is_empty():
@@ -583,11 +575,9 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 	var batting_pa_total: int = 0
 	var pitching_ip_total: float = 0.0
 	var team_ids: Dictionary = {}
-	for record_value in RecordStore.player_records.values():
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
-			continue
-		if record.year != year or record.season_number != season_number:
 			continue
 		var war_row: Dictionary = season_war(record, ctx)
 		if war_row.is_empty():
@@ -681,11 +671,9 @@ static func team_position_war(team_id: int, year: int, season_number: int, leagu
 	var ctx: Dictionary = league_ctx if not league_ctx.is_empty() else build_league_context(year, season_number)
 	var by_position: Dictionary = {}
 	var team_war: float = 0.0
-	for record_value in RecordStore.player_records.values():
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
-			continue
-		if record.year != year or record.season_number != season_number:
 			continue
 		if record.team_id != team_id:
 			continue

@@ -6,6 +6,7 @@ extends GdUnitTestSuite
 # 複数回繰り返して間欠的なレースを検出する。
 
 const TRIAL_COUNT: int = 20
+const ASYNC_TRIAL_COUNT: int = 5
 const FIXED_SEED: int = 424242
 const REMAINING_TEST_DAY_COUNT: int = 2
 const GameLogService = preload("res://services/storage/game_log_service.gd")
@@ -23,8 +24,10 @@ func test_parallel_day_matches_sequential_day_deterministically() -> void:
 # 呼ばれることを確認する。
 func test_async_day_matches_parallel_day_deterministically() -> void:
 	var sync_signature: String = _run_one_day(false)
-	var async_signature: String = await _run_one_day_async()
-	assert_bool(async_signature == sync_signature).is_true()
+	for _trial in range(ASYNC_TRIAL_COUNT):
+		var async_signature: String = await _run_one_day_async()
+		assert_bool(async_signature == sync_signature).is_true()
+		assert_bool(PSPerformanceReference.is_frozen()).is_false()
 
 
 func test_remaining_season_paths_complete_and_match_sequential_days() -> void:

@@ -19,11 +19,15 @@ const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
 const FIELDER_FATIGUE_SUB_THRESHOLD: int = 80
 
 
+# batting_memo: 呼び出し元が同じ試合内で複数回この関数を通すとき (検証 → AI既定生成 → 本番) に
+# 打撃スコアを共有するための memo。同一試合中は成績も疲労も動かないので、渡しても値は変わらない。
+# 空を渡す/省略すると従来どおり関数内で作る (UI プレビュー等の単発呼び出し)。
 static func assign_defensive_starters(
 	available_fielders: Array,
 	profile: PSDefenseAlignmentProfile,
 	usage_settings: Dictionary = {},
-	next_game_number: int = 1
+	next_game_number: int = 1,
+	batting_memo: Dictionary = {}
 ) -> Array:
 	if available_fielders.is_empty() or profile == null:
 		return []
@@ -42,13 +46,7 @@ static func assign_defensive_starters(
 	if healthy.size() < POSITIONS.size():
 		return []
 
-	# 打撃スコアは候補×守備位置の評価で何度も読むため、先に1回だけ計算して使い回す。
-	# 成績の上振れ/下振れ込み (batting_score_with_form) で、好調な控えがスタメンを奪える。
-	var batting_cache: Dictionary = {}
-	for rec_row in healthy:
-		var rec: PSPlayerSeasonRecord = rec_row as PSPlayerSeasonRecord
-		if rec != null:
-			batting_cache[rec.player_id] = PlayerValueEvaluator.batting_score_with_form(rec)
+	var batting_cache: Dictionary = batting_memo
 
 	# 保存テンプレートがまだ無いチームは、現在の健康野手から初期テンプレートを自動生成する。
 	var template: Dictionary = profile.starting_positions.duplicate()
@@ -147,7 +145,7 @@ static func _best_unused_healthy(healthy: Array, used_ids: Dictionary, batting_c
 		var rec: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
 		if rec == null or used_ids.has(rec.player_id):
 			continue
-		var bat: int = int(batting_cache.get(rec.player_id, 0))
+		var bat: int = _cached_batting_score(rec, batting_cache)
 		if best == null or bat > best_bat:
 			best = rec
 			best_bat = bat
@@ -205,7 +203,7 @@ static func _best_remaining_for_position(
 			continue
 		if block_collapsed and PlayerValueEvaluator.fielding_collapsed_at_position(rec, position):
 			continue
-		var bat_override: int = int(batting_cache.get(rec.player_id, -1))
+		var bat_override: int = _cached_batting_score(rec, batting_cache)
 		var score: int = PlayerValueEvaluator.starter_assignment_score(rec, position, require_aptitude, bat_override)
 		if score <= PlayerValueEvaluator.ZERO_APTITUDE_SCORE:
 			continue
@@ -213,6 +211,17 @@ static func _best_remaining_for_position(
 			best = rec
 			best_score = score
 	return best
+
+
+static func _cached_batting_score(
+	record: PSPlayerSeasonRecord,
+	batting_cache: Dictionary
+) -> int:
+	if record == null:
+		return 0
+	if not batting_cache.has(record.player_id):
+		batting_cache[record.player_id] = PlayerValueEvaluator.batting_score_with_form(record)
+	return int(batting_cache[record.player_id])
 
 
 static func _position_slot_settings(profile: PSDefenseAlignmentProfile, usage_settings: Dictionary, position: int) -> Dictionary:

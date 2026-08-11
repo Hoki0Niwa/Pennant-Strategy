@@ -38,7 +38,9 @@ func _run_mode(
 ) -> Dictionary:
 	Rng.set_seed_value(SEED)
 	RecordStore.clear_records()
-	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	var season: PSSeason = SeasonService.create_new_season(
+		GameDb.teams, history_years + 1, 2026
+	)
 	_seed_history_records(season, history_years)
 	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 	if lookup_repeats > 0:
@@ -91,8 +93,45 @@ func _seed_history_records(current_season: PSSeason, history_years: int) -> void
 	for year_offset in range(history_years, 0, -1):
 		var historical_season: PSSeason = PSSeason.new()
 		historical_season.year = current_season.year - year_offset
-		historical_season.season_number = current_season.season_number
+		historical_season.season_number = current_season.season_number - year_offset
 		RecordStore.ensure_season_records(historical_season, GameDb.teams, GameDb.players, false)
+		for team_row in GameDb.teams:
+			var team: PSTeam = team_row as PSTeam
+			for record_row in RecordStore.get_team_player_records(
+				team.id, historical_season.year, historical_season.season_number
+			):
+				_seed_history_stats(record_row as PSPlayerSeasonRecord, year_offset)
+
+
+func _seed_history_stats(record: PSPlayerSeasonRecord, year_offset: int) -> void:
+	if record == null:
+		return
+	var variation: int = (record.player_id + year_offset * 7) % 17
+	if record.is_pitcher():
+		var starter: bool = record.is_starter_pitcher()
+		record.pitcher_stats.games = 24 if starter else 48
+		record.pitcher_stats.starts = 24 if starter else 0
+		record.pitcher_stats.relief_appearances = 0 if starter else 48
+		record.pitcher_stats.outs_pitched = (450 if starter else 165) + variation
+		record.pitcher_stats.batters_faced = (620 if starter else 235) + variation * 2
+		record.pitcher_stats.earned_runs = (58 if starter else 22) + variation / 3
+		record.pitcher_stats.runs_allowed = record.pitcher_stats.earned_runs + 4
+		record.pitcher_stats.hits_allowed = (135 if starter else 48) + variation
+		record.pitcher_stats.home_runs_allowed = (16 if starter else 6) + variation / 5
+		record.pitcher_stats.walks = (42 if starter else 17) + variation / 4
+		record.pitcher_stats.hit_batters = 3
+		record.pitcher_stats.strikeouts = (140 if starter else 55) + variation * 2
+		return
+	record.batter_stats.games = 120
+	record.batter_stats.plate_appearances = 480 + variation
+	record.batter_stats.at_bats = 420 + variation
+	record.batter_stats.hits = 105 + variation
+	record.batter_stats.doubles = 20 + variation / 3
+	record.batter_stats.triples = variation % 4
+	record.batter_stats.home_runs = 8 + variation / 2
+	record.batter_stats.walks = 42
+	record.batter_stats.hit_by_pitches = 5
+	record.batter_stats.sacrifice_flies = 4
 
 
 func _benchmark_team_record_lookups(

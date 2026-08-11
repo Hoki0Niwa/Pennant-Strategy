@@ -174,13 +174,14 @@ static func select_best_pinch_hitter(setup: Dictionary, minimum_score: int = -99
 
 
 static func select_preserve_top_pinch_hitter(setup: Dictionary, minimum_score: int = -999999) -> PSPlayerSeasonRecord:
-	var ranked: Array = sorted_pinch_hit_candidates(setup)
+	var score_by_id: Dictionary = {}
+	var ranked: Array = sorted_pinch_hit_candidates(setup, -999999, score_by_id)
 	if ranked.size() < 3:
 		return null
 	var pool: Array = []
 	for candidate_row in ranked.slice(2):
 		var candidate: PSPlayerSeasonRecord = candidate_row as PSPlayerSeasonRecord
-		if pinch_hit_batting_score(candidate) > minimum_score:
+		if int(score_by_id.get(candidate.player_id, -999999)) > minimum_score:
 			pool.append(candidate)
 	if pool.is_empty():
 		return null
@@ -189,7 +190,11 @@ static func select_preserve_top_pinch_hitter(setup: Dictionary, minimum_score: i
 	return selected
 
 
-static func sorted_pinch_hit_candidates(setup: Dictionary, minimum_score: int = -999999) -> Array:
+static func sorted_pinch_hit_candidates(
+	setup: Dictionary,
+	minimum_score: int = -999999,
+	score_by_id: Dictionary = {}
+) -> Array:
 	var bench: Array = setup.get("bench", []) as Array
 	var eligible: Array = []
 	for bench_row in bench:
@@ -200,11 +205,16 @@ static func sorted_pinch_hit_candidates(setup: Dictionary, minimum_score: int = 
 			continue
 		if is_reserved_fielder(setup, candidate):
 			continue
-		if pinch_hit_batting_score(candidate) <= minimum_score:
+		var score: int = _bench_pinch_hit_score(setup, candidate)
+		score_by_id[candidate.player_id] = score
+		if score <= minimum_score:
 			continue
 		eligible.append(candidate)
 	eligible.sort_custom(func(a, b) -> bool:
-		return PSInGameSubstitutions.pinch_hit_batting_score(a as PSPlayerSeasonRecord) > PSInGameSubstitutions.pinch_hit_batting_score(b as PSPlayerSeasonRecord)
+		return (
+			int(score_by_id.get((a as PSPlayerSeasonRecord).player_id, -999999))
+			> int(score_by_id.get((b as PSPlayerSeasonRecord).player_id, -999999))
+		)
 	)
 	return eligible
 
@@ -482,7 +492,9 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 			if defense_gain < GameSimulator.DEFENSIVE_REPLACEMENT_MIN_GAIN:
 				continue
 			@warning_ignore("integer_division")
-			var candidate_value: float = float(defense_gain * 3 + batting_score - pinch_hit_batting_score(candidate) / 2)
+			var candidate_value: float = float(
+				defense_gain * 3 + batting_score - _bench_pinch_hit_score(setup, candidate) / 2
+			)
 			if best_option.is_empty() or candidate_value > best_value:
 				best_value = candidate_value
 				best_option = {
@@ -607,6 +619,19 @@ static func pinch_hit_batting_score(record: PSPlayerSeasonRecord) -> int:
 	if record.is_pitcher():
 		return int(round(float(score) * 0.58))
 	return score
+
+
+static func _bench_pinch_hit_score(
+	setup: Dictionary,
+	record: PSPlayerSeasonRecord
+) -> int:
+	if record == null:
+		return -999999
+	var score_by_id: Dictionary = setup.get("pinch_hit_score_by_id", {}) as Dictionary
+	if not score_by_id.has(record.player_id):
+		score_by_id[record.player_id] = pinch_hit_batting_score(record)
+		setup["pinch_hit_score_by_id"] = score_by_id
+	return int(score_by_id[record.player_id])
 
 
 static func is_important_pinch_hit_chance(

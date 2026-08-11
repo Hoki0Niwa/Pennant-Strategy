@@ -233,6 +233,44 @@ func test_team_player_index_partitions_history_and_returns_fresh_arrays() -> voi
 	assert_str(payload_after).is_equal(payload_before)
 
 
+func test_season_player_index_preserves_global_order_and_unassigned_records() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var players: Array = GameDb.players.slice(0, 4)
+	var rows: Array = []
+	for spec_value in [
+		[players[0], 2, 2026, 1],
+		[players[1], 0, 2026, 1],
+		[players[2], 1, 2025, 1],
+		[players[3], 1, 2026, 1],
+	]:
+		var spec: Array = spec_value as Array
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+			spec[0] as PSPlayer, int(spec[2]), int(spec[3])
+		)
+		record.team_id = int(spec[1])
+		rows.append(record.to_dict())
+	RecordStore.load_from_dict({
+		"player_records": rows,
+		"team_records": [],
+		"season_archives": [],
+	})
+
+	var first_query: Array = RecordStore.get_player_records_for_season(2026, 1)
+	var first_ids: Array = _player_record_ids(first_query)
+	first_query.clear()
+	var second_ids: Array = _player_record_ids(
+		RecordStore.get_player_records_for_season(2026, 1)
+	)
+	RecordStore.load_from_dict(original_records)
+
+	assert_array(first_ids).is_equal([
+		(players[0] as PSPlayer).id,
+		(players[1] as PSPlayer).id,
+		(players[3] as PSPlayer).id,
+	])
+	assert_array(second_ids).is_equal(first_ids)
+
+
 func test_ensure_season_records_rebuilds_team_index_without_losing_history() -> void:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var target_team_id: int = (GameDb.players[0] as PSPlayer).team_id

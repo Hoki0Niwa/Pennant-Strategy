@@ -174,10 +174,24 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 			return closer
 		return _highest_ability_reliever(eligible, inning, close_game, game_day, team_games_played_before)
 
+	# 選抜スコアは登板可否・役割ボーナス・疲労を含む合成値で、1試合の継投判断ごとに引かれる。
+	# comparator の中で計算すると 1 回の sort で O(n log n) 回走るので先に 1 人 1 回だけ引く
+	# (並びは同じ — 同点時の解決順も sort に任せたままにしてある)。
+	var score_by_id: Dictionary = {}
+	for reliever_row in eligible:
+		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
+		if reliever != null and not score_by_id.has(reliever.player_id):
+			score_by_id[reliever.player_id] = reliever_selection_score_for_setup(
+				setup, reliever, prefer_long, inning, close_game, score_margin,
+				game_day, team_games_played_before
+			)
 	eligible.sort_custom(func(a, b) -> bool:
 		var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 		var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		return reliever_selection_score_for_setup(setup, pitcher_a, prefer_long, inning, close_game, score_margin, game_day, team_games_played_before) > reliever_selection_score_for_setup(setup, pitcher_b, prefer_long, inning, close_game, score_margin, game_day, team_games_played_before)
+		return (
+			float(score_by_id.get(pitcher_a.player_id, 0.0))
+			> float(score_by_id.get(pitcher_b.player_id, 0.0))
+		)
 	)
 	return eligible[0] as PSPlayerSeasonRecord
 
@@ -226,8 +240,18 @@ static func _pick_bridge_reliever(candidates: Array, inning: int, close_game: bo
 	if candidates.is_empty():
 		return null
 	var ordered: Array = candidates.duplicate()
+	var ability_by_id: Dictionary = {}
+	for reliever_row in ordered:
+		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
+		if reliever != null and not ability_by_id.has(reliever.player_id):
+			ability_by_id[reliever.player_id] = _reliever_ability_score(
+				reliever, inning, close_game, game_day, team_games_played_before
+			)
 	ordered.sort_custom(func(a, b) -> bool:
-		return _reliever_ability_score(a as PSPlayerSeasonRecord, inning, close_game, game_day, team_games_played_before) > _reliever_ability_score(b as PSPlayerSeasonRecord, inning, close_game, game_day, team_games_played_before)
+		return (
+			float(ability_by_id.get((a as PSPlayerSeasonRecord).player_id, 0.0))
+			> float(ability_by_id.get((b as PSPlayerSeasonRecord).player_id, 0.0))
+		)
 	)
 	var index: int = clampi(GameSimulator.MAX_INNINGS - 1 - inning, 0, ordered.size() - 1)
 	return ordered[index] as PSPlayerSeasonRecord

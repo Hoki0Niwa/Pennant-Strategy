@@ -184,8 +184,12 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 		else:
 			fielders.append(record)
 
+	# 選出スコアは perf_score (= overall_prior + form) で、1 人あたり守備 8 ポジション評価と
+	# 過去数季ぶんの成績ブレンドを含む。comparator の中で引くと 1 回の sort で O(n log n) 回
+	# 走るので、先に選手ごと 1 回だけ引く (比較結果は同じなので並び順も変わらない)。
+	var score_by_id: Dictionary = _selection_scores_by_id([starters, relievers, fielders])
 	var by_perf: Callable = func(a, b) -> bool:
-		return _active_roster_selection_score(a as PSPlayerSeasonRecord) > _active_roster_selection_score(b as PSPlayerSeasonRecord)
+		return _cached_selection_score(a, score_by_id) > _cached_selection_score(b, score_by_id)
 	starters.sort_custom(by_perf)
 	relievers.sort_custom(by_perf)
 	fielders.sort_custom(by_perf)
@@ -341,8 +345,13 @@ static func repair_active_roster_injuries(season: PSSeason, team_id: int, curren
 		healthy_roster_records.append(record)
 		if not active_set.has(record.player_id):
 			promote_pool.append(record)
+	# 昇格候補は支配下から一軍を除いた ~40 人規模。comparator 内で perf_score を引くと
+	# 1 回の修復で数百回走るため、先に 1 人 1 回だけ引く。
+	var promote_scores: Dictionary = _selection_scores_by_id([promote_pool])
 	promote_pool.sort_custom(func(a, b) -> bool:
-		return _active_roster_selection_score(a as PSPlayerSeasonRecord) > _active_roster_selection_score(b as PSPlayerSeasonRecord)
+		return (
+			_cached_selection_score(a, promote_scores) > _cached_selection_score(b, promote_scores)
+		)
 	)
 
 	var target_size: int = mini(TARGET_TOTAL, healthy_roster_records.size())
@@ -373,7 +382,11 @@ static func repair_active_roster_injuries(season: PSSeason, team_id: int, curren
 
 
 static func _should_demote_active_injury(record: PSPlayerSeasonRecord) -> bool:
-	return record != null and record.injury_days > _active_injury_stash_limit(record)
+	if record == null or record.injury_days <= INJURY_SHORT_ABSENCE_STASH_DAYS:
+		return false
+	if record.injury_days > INJURY_MAINSTAY_STASH_MAX_DAYS:
+		return true
+	return record.injury_days > _active_injury_stash_limit(record)
 
 
 static func _active_injury_stash_limit(record: PSPlayerSeasonRecord) -> int:
@@ -653,6 +666,26 @@ static func _active_roster_selection_score(record: PSPlayerSeasonRecord) -> floa
 	return score
 
 
+# 複数プールぶんの選出スコアを player_id → score でまとめて引く。sort の comparator へ渡して
+# 「比較のたびに再計算」を防ぐためのもの。同じ選手が複数プールに居ても 1 回しか計算しない。
+static func _selection_scores_by_id(pools: Array) -> Dictionary:
+	var scores: Dictionary = {}
+	for pool_row in pools:
+		for record_row in (pool_row as Array):
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			if record != null and not scores.has(record.player_id):
+				scores[record.player_id] = _active_roster_selection_score(record)
+	return scores
+
+
+# 事前計算済みスコアの参照。null は _active_roster_selection_score(null) と同値に揃える。
+static func _cached_selection_score(row: Variant, scores: Dictionary) -> float:
+	var record: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+	if record == null:
+		return -999999.0
+	return float(scores.get(record.player_id, -999999.0))
+
+
 static func _is_catcher(record: PSPlayerSeasonRecord) -> bool:
 	return _position_aptitude(record, 2) > 0
 
@@ -683,9 +716,8 @@ static func _position_aptitude(record: PSPlayerSeasonRecord, position: int) -> i
 # 各CPU球団 + (include_user_team_id > 0 ならその自軍) に対し、
 # 最終入替から SWAP_INTERVAL_DAYS 以上経過していれば入替判定を実行。
 static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_day: int, user_team_id: int, include_user_team: bool) -> Dictionary:
-	# 全チームに共通の WAR league context を 1 度だけ構築して使い回す
-	# (12 チーム × 全選手の集計は重いので 1 ループ分の使い回しが必須)。
-	var war_ctx: Dictionary = WarCalculator.build_league_context(season.year, season.season_number)
+	# 入替対象がある日にだけリーグ集計を作り、対象チーム間では同じ結果を使い回す。
+	var war_ctx: Dictionary = {}
 	var executed: Array = []
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
@@ -702,6 +734,8 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 			_append_snapshots(season, RecordStore.get_team_player_records(team.id, season.year, season.season_number), current_day)
 			season.set_last_auto_swap_day(team.id, current_day)
 			continue
+		if war_ctx.is_empty():
+			war_ctx = WarCalculator.build_league_context(season.year, season.season_number)
 		var summary: Dictionary = _swap_one_team(season, team.id, current_day, war_ctx)
 		season.set_last_auto_swap_day(team.id, current_day)
 		season.clear_stale_demotions(team.id, current_day)
@@ -727,21 +761,6 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	if all_records.is_empty():
 		return summary
-
-	# 単体呼び出しの後方互換: war_ctx 未指定なら ここで一度だけ作る。
-	var ctx: Dictionary = war_ctx if not war_ctx.is_empty() else WarCalculator.build_league_context(season.year, season.season_number)
-
-	# (1) 月別 stats 取得 + score 事前計算 (score_by_id にキャッシュ)
-	# WAR は当該シーズン累積を使う (月別 advanced_stats の差分は持っていない)。
-	var score_by_id: Dictionary = {}
-	for record_row in all_records:
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		var monthly: Dictionary = season.get_monthly_stats(record.player_id, record.batter_stats, record.pitcher_stats)
-		var monthly_batter: PSBatterStats = monthly.get("batter") as PSBatterStats
-		var monthly_pitcher: PSPitcherStats = monthly.get("pitcher") as PSPitcherStats
-		var war_row: Dictionary = WarCalculator.season_war(record, ctx)
-		var war_value: float = float(war_row.get("war", 0.0))
-		score_by_id[record.player_id] = perf_score(record, monthly_batter, monthly_pitcher, war_value)
 
 	# 1軍ID集合を取得 (無ければ成績ベースで初期生成)
 	var roster: Dictionary = season.get_active_roster(team_id)
@@ -771,6 +790,14 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 	if active_records.is_empty():
 		_append_snapshots(season, all_records, current_day)
 		return summary
+
+	# WAR は当該シーズン累積を使う。まず一軍だけ評価し、降格候補が生じたときだけ
+	# 昇格可能な二軍候補を追加評価する。
+	var ctx: Dictionary = war_ctx if not war_ctx.is_empty() else WarCalculator.build_league_context(
+		season.year, season.season_number
+	)
+	var score_by_id: Dictionary = {}
+	_populate_swap_scores(season, active_records, ctx, score_by_id)
 
 	# 自動生成ローテの序列を最新の成績評価で組み替える (入替の有無に関わらず毎回)。
 	# 不振の先発が下位へ落ちて登板数が減り、好調な投手が上位の登板日を取る。
@@ -824,6 +851,7 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 	if promote_pool.is_empty():
 		_append_snapshots(season, all_records, current_day)
 		return summary
+	_populate_swap_scores(season, promote_pool, ctx, score_by_id)
 
 	# 降格を低 perf 順、昇格を高 perf 順にソート (事前計算スコア)
 	demote_candidates.sort_custom(func(a, b) -> bool:
@@ -966,6 +994,31 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 
 	summary["swapped_pairs"] = applied_pairs
 	return summary
+
+
+static func _populate_swap_scores(
+	season: PSSeason,
+	records: Array,
+	war_ctx: Dictionary,
+	score_by_id: Dictionary
+) -> void:
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or score_by_id.has(record.player_id):
+			continue
+		var monthly: Dictionary = season.get_monthly_stats(
+			record.player_id, record.batter_stats, record.pitcher_stats
+		)
+		var monthly_batter: PSBatterStats = monthly.get("batter") as PSBatterStats
+		var monthly_pitcher: PSPitcherStats = monthly.get("pitcher") as PSPitcherStats
+		var war_row: Dictionary = WarCalculator.season_war(record, war_ctx)
+		var war_value: float = float(war_row.get("war", 0.0))
+		score_by_id[record.player_id] = perf_score(
+			record,
+			monthly_batter,
+			monthly_pitcher,
+			war_value
+		)
 
 
 # 全 record の current_day snapshot を保存する。月別 stats の差分計算で次回以降使う。

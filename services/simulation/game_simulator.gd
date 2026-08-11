@@ -170,9 +170,13 @@ static func _simulate_day_games(season: PSSeason, today_indices: Array, persist:
 				rule_groups
 			)
 	else:
+		# 並列中は選手評価キャッシュを凍結し、worker からの遅延書き込みを封じる
+		# (プリウォーム漏れがあっても結果は変わらず、その回だけ計算し直しになる)。
+		PSPerformanceReference.set_frozen(true)
 		var task: Callable = _calc_task_body.bind(season, today_indices, calc_results, rule_groups)
 		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size())
 		WorkerThreadPool.wait_for_group_task_completion(group_id)
+		PSPerformanceReference.set_frozen(false)
 
 	var applied_results: Array = []
 	for local_index in range(today_indices.size()):
@@ -206,12 +210,24 @@ static func _prewarm_day_profiles(season: PSSeason, game_indices: Array) -> bool
 	# team別RecordStore indexの再構築が必要なら、worker起動前のmain threadで完了させる。
 	if not RecordStore.prepare_team_player_index():
 		return false
+	# 選手評価の基準分布も同様。worker から初回参照されると複数スレッドが同じ静的 Dictionary を
+	# 同時に埋めにかかる (PSPerformanceReference 冒頭のレース制約)。キャッシュ済みなら
+	# シーズンぶんの Dictionary 参照だけで済むので毎日呼んで良い。
+	PSPerformanceReference.prewarm(season.year, season.season_number)
 	var loaded_batting_profiles: Dictionary = {}
 	var loaded_defense_profiles: Dictionary = {}
+	var loaded_form_teams: Dictionary = {}
 	for index_value in game_indices:
 		var game: Dictionary = season.schedule[int(index_value)] as Dictionary
 		var dh_enabled: bool = bool(game.get("dh_enabled", false))
 		for team_id in [int(game.get("away_team_id", 0)), int(game.get("home_team_id", 0))]:
+			if team_id > 0 and not loaded_form_teams.has(team_id):
+				var records: Array = RecordStore.get_team_player_records(
+					team_id, season.year, season.season_number
+				)
+				PSBatterForm.prewarm_past_samples(records)
+				PSPitcherForm.prewarm_past_samples(records)
+				loaded_form_teams[team_id] = true
 			var batting_key: String = "%d_%d" % [team_id, 1 if dh_enabled else 0]
 			if not loaded_batting_profiles.has(batting_key):
 				PSBattingOrderProfile.load_for_team(team_id, dh_enabled)
@@ -469,12 +485,14 @@ static func simulate_current_day_async(
 		var calc_results: Array = []
 		calc_results.resize(today_indices.size())
 		var task: Callable = _calc_task_body.bind(season, today_indices, calc_results, rule_groups)
+		PSPerformanceReference.set_frozen(true)
 		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size())
 		while not WorkerThreadPool.is_group_task_completed(group_id):
 			if tree == null:
 				break
 			await tree.process_frame
 		WorkerThreadPool.wait_for_group_task_completion(group_id)
+		PSPerformanceReference.set_frozen(false)
 
 		for local_index in range(today_indices.size()):
 			var calc: Dictionary = calc_results[local_index] as Dictionary

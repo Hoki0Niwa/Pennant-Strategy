@@ -29,6 +29,9 @@ const FORM_RATING_SCALE: float = 6.0
 const FORM_RATING_MIN: float = -6.0
 const FORM_RATING_MAX: float = 6.0
 
+# 打者側 (PSBatterForm) と同じ、過去シーズンぶんの標本キャッシュ。
+static var _past_sample_cache: Dictionary = {}
+
 
 # 出場判断用。current_stats を渡すと今季ぶんをその成績で評価する (月別評価に使う)。
 static func rating_delta(
@@ -62,12 +65,13 @@ static func _rating_delta(
 		return 0.0
 	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
 	var ratings_reference: Dictionary = season_reference["pitcher_ratings"] as Dictionary
-	var ability: Dictionary = PSPerformanceReference.pitcher_ability_indexes(record, ratings_reference)
 	var role: String = PSPerformanceReference.pitcher_role_of(record)
 	var samples: Array = _stat_samples(record, current_stats, season_reference, role, lookback, decay)
 	if samples.is_empty():
 		return 0.0
-	var ability_total: float = float(ability["total"])
+	var ability_total: float = PSPerformanceReference.pitcher_ability_total_index(
+		record, ratings_reference
+	)
 	var blended: float = _blend(ability_total, samples, ability_prior)
 	return clampf((blended - ability_total) * scale, clip_min, clip_max)
 
@@ -85,9 +89,24 @@ static func _stat_samples(
 	_append_stat_sample(samples, stats, 1.0, _stat_distributions(season_reference, role))
 	if record.year <= 0:
 		return samples
+	# 打者側と同じ: 過去ぶんはキャッシュから足し、今季 → k=1 → k=2 … の加算順序を保つ。
+	samples.append_array(_past_stat_samples(record, lookback, decay))
+	return samples
+
+
+static func _past_stat_samples(record: PSPlayerSeasonRecord, lookback: int, decay: float) -> Array:
+	var key: String = "%d|%d|%d|%d|%f" % [
+		record.player_id, record.year, record.season_number, lookback, decay
+	]
+	var cached: Variant = _past_sample_cache.get(key)
+	if cached != null:
+		return cached as Array
+	var samples: Array = []
 	for k in range(1, lookback + 1):
 		var past_year: int = record.year - k
 		var past_season_number: int = record.season_number - k
+		if past_year <= 0 or past_season_number <= 0:
+			break
 		var past: PSPlayerSeasonRecord = RecordStore.get_player_record(
 			record.player_id, past_year, past_season_number
 		)
@@ -100,7 +119,23 @@ static func _stat_samples(
 			pow(decay, float(k)),
 			_stat_distributions(past_reference, PSPerformanceReference.pitcher_role_of(past))
 		)
+	samples.make_read_only()
+	if not PSPerformanceReference.is_frozen():
+		_past_sample_cache[key] = samples
 	return samples
+
+
+static func reset_sample_cache() -> void:
+	_past_sample_cache.clear()
+
+
+# 試合日の worker 起動前に、不変な過年度標本を main thread で確定する。
+static func prewarm_past_samples(records: Array) -> void:
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or not record.is_pitcher():
+			continue
+		_past_stat_samples(record, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY)
 
 
 static func _stat_distributions(season_reference: Dictionary, role: String) -> Dictionary:
