@@ -1,0 +1,1064 @@
+extends GdUnitTestSuite
+
+# 二軍 (ファーム) のドメイン suite。地区構成・専用球団の隔離・二軍日程・成績の器・永続化を
+# まとめて見る。新機能はこの suite に test_* を足す (1テスト1ファイルにしない)。
+
+const SaveContext = preload("res://services/storage/save_context.gd")
+
+
+func before() -> void:
+	if GameDb.teams.is_empty():
+		GameDb.load_initial_data()
+
+
+func _first_team_ids() -> Array:
+	var ids: Array = []
+	for team_row in GameDb.teams:
+		ids.append((team_row as PSTeam).id)
+	return ids
+
+
+func _farm_team_ids() -> Array:
+	return PSFarmLeague.all_team_ids(_first_team_ids())
+
+
+func _generate_schedule() -> Dictionary:
+	var first_schedule: Array = PSSchedule.generate_pennant_schedule(
+		GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, 2026, 1
+	)
+	var farm_team_ids: Array = _farm_team_ids()
+	return {
+		"first": first_schedule,
+		"team_ids": farm_team_ids,
+		"farm": PSFarmSchedule.generate(first_schedule, farm_team_ids),
+	}
+
+
+# ---- 地区構成 --------------------------------------------------------------
+
+func test_farm_league_is_fourteen_teams_in_three_districts() -> void:
+	var farm_team_ids: Array = _farm_team_ids()
+	assert_int(farm_team_ids.size()).is_equal(14)
+
+	var by_district: Dictionary = PSFarmLeague.team_ids_by_district(farm_team_ids)
+	# 実 NPB の 2026 年構成に合わせた 東5 / 中5 / 西4。
+	assert_int((by_district[PSFarmLeague.DISTRICT_EAST] as Array).size()).is_equal(5)
+	assert_int((by_district[PSFarmLeague.DISTRICT_CENTRAL] as Array).size()).is_equal(5)
+	assert_int((by_district[PSFarmLeague.DISTRICT_WEST] as Array).size()).is_equal(4)
+
+
+func test_every_farm_team_belongs_to_exactly_one_district() -> void:
+	var seen: Dictionary = {}
+	for team_id in _farm_team_ids():
+		var district: String = PSFarmLeague.district_for_team(int(team_id))
+		assert_bool(PSFarmLeague.DISTRICT_ORDER.has(district)).is_true()
+		assert_bool(seen.has(int(team_id))).is_false()
+		seen[int(team_id)] = district
+	assert_int(seen.size()).is_equal(14)
+
+
+# ---- 専用球団の隔離 --------------------------------------------------------
+
+func test_farm_clubs_stay_out_of_the_first_team_list() -> void:
+	# ここが二軍実装の最重要の不変条件。GameDb.teams の参照は300箇所以上あり、
+	# すべて12球団前提なので専用球団が紛れ込むと一軍系が静かに壊れる。
+	assert_int(GameDb.teams.size()).is_equal(12)
+	assert_int(GameDb.farm_clubs.size()).is_equal(2)
+	for club_row in GameDb.farm_clubs:
+		var club: PSTeam = club_row as PSTeam
+		assert_bool(club.farm_only).is_true()
+		# teams / teams_by_id のどちらからも見えない。
+		assert_object(GameDb.get_team(club.id)).is_null()
+		assert_bool(GameDb.is_farm_club(club.id)).is_true()
+		# 専用の参照経路からだけ引ける。
+		assert_object(GameDb.get_any_team(club.id)).is_not_null()
+
+
+func test_farm_club_ids_do_not_collide_with_first_team_ids() -> void:
+	var first_ids: Array = _first_team_ids()
+	for club_id in PSFarmLeague.farm_club_ids():
+		assert_bool(first_ids.has(int(club_id))).is_false()
+
+
+func test_first_team_entries_are_not_marked_farm_only() -> void:
+	for team_row in GameDb.teams:
+		assert_bool((team_row as PSTeam).farm_only).is_false()
+	assert_int(GameDb.farm_participating_teams().size()).is_equal(14)
+
+
+# ---- 二軍日程 --------------------------------------------------------------
+
+func test_farm_schedule_gives_every_team_the_target_game_count() -> void:
+	var generated: Dictionary = _generate_schedule()
+	var validation: Dictionary = PSFarmSchedule.validate(
+		generated["farm"] as Array, generated["team_ids"] as Array
+	)
+
+	assert_bool(bool(validation.get("ok", false))).override_failure_message(
+		"farm schedule invalid: %s" % str(validation.get("errors", []))
+	).is_true()
+	# 14球団 × 124試合 / 2 = 868試合。全球団が同数。
+	assert_int(int(validation.get("min_games_per_team", 0))).is_equal(PSFarmSchedule.GAMES_PER_TEAM)
+	assert_int(int(validation.get("max_games_per_team", 0))).is_equal(PSFarmSchedule.GAMES_PER_TEAM)
+	assert_int((generated["farm"] as Array).size()).is_equal(PSFarmSchedule.GAMES_PER_TEAM * 14 / 2)
+
+
+func test_farm_games_only_fall_on_first_team_game_days() -> void:
+	# 二軍を一軍の試合日の部分集合に閉じ込めることで、advance_current_day を含む
+	# 既存の日進行に一切手を入れずに済む。ここが崩れると二軍戦が飛ばされる。
+	var generated: Dictionary = _generate_schedule()
+	var first_days: Dictionary = {}
+	for game_row in generated["first"] as Array:
+		first_days[int((game_row as Dictionary).get("day", 0))] = true
+
+	var farm_days: Dictionary = {}
+	for game_row in generated["farm"] as Array:
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		assert_bool(first_days.has(day)).override_failure_message(
+			"farm game on day %d has no first-team game day" % day
+		).is_true()
+		farm_days[day] = true
+
+	# 一軍の試合日 (約150) より少ない日数へ均等に散らす = ファームの休養日が混ざる。
+	assert_int(farm_days.size()).is_less(first_days.size())
+
+
+func test_farm_schedule_fills_every_team_on_each_farm_day() -> void:
+	# 1ラウンド = 14球団の完全マッチング = 7試合。全球団が必ず出場する。
+	var generated: Dictionary = _generate_schedule()
+	var teams_by_day: Dictionary = {}
+	for game_row in generated["farm"] as Array:
+		var game: Dictionary = game_row as Dictionary
+		var day: int = int(game.get("day", 0))
+		if not teams_by_day.has(day):
+			teams_by_day[day] = {}
+		(teams_by_day[day] as Dictionary)[int(game.get("away_team_id", 0))] = true
+		(teams_by_day[day] as Dictionary)[int(game.get("home_team_id", 0))] = true
+
+	for day in teams_by_day.keys():
+		assert_int((teams_by_day[day] as Dictionary).size()).override_failure_message(
+			"day %d does not field all 14 farm teams" % int(day)
+		).is_equal(14)
+
+
+func test_west_district_plays_the_highest_share_of_intra_district_games() -> void:
+	# 西は4球団しかないので地区内比率が最も高くなる (実 NPB も西の地区内が突出して多い)。
+	# 地区割りの重み付けが効いているかの検査。
+	var generated: Dictionary = _generate_schedule()
+	var intra_by_district: Dictionary = {}
+	var total_by_district: Dictionary = {}
+	for district in PSFarmLeague.DISTRICT_ORDER:
+		intra_by_district[district] = 0
+		total_by_district[district] = 0
+
+	for game_row in generated["farm"] as Array:
+		var game: Dictionary = game_row as Dictionary
+		var away_district: String = str(game.get("away_district", ""))
+		var home_district: String = str(game.get("home_district", ""))
+		var is_intra: bool = not bool(game.get("is_interdistrict", true))
+		for district in [away_district, home_district]:
+			total_by_district[district] = int(total_by_district[district]) + 1
+			if is_intra:
+				intra_by_district[district] = int(intra_by_district[district]) + 1
+
+	var west_ratio: float = float(intra_by_district[PSFarmLeague.DISTRICT_WEST]) / float(total_by_district[PSFarmLeague.DISTRICT_WEST])
+	var east_ratio: float = float(intra_by_district[PSFarmLeague.DISTRICT_EAST]) / float(total_by_district[PSFarmLeague.DISTRICT_EAST])
+	var central_ratio: float = float(intra_by_district[PSFarmLeague.DISTRICT_CENTRAL]) / float(total_by_district[PSFarmLeague.DISTRICT_CENTRAL])
+	assert_float(west_ratio).is_greater(east_ratio)
+	assert_float(west_ratio).is_greater(central_ratio)
+
+
+func test_farm_schedule_generation_is_deterministic() -> void:
+	var first: Dictionary = _generate_schedule()
+	var second: Dictionary = _generate_schedule()
+	assert_str(JSON.stringify(first["farm"])).is_equal(JSON.stringify(second["farm"]))
+
+
+# ---- シーズンへの組み込みと永続化 ------------------------------------------
+
+func test_new_season_builds_farm_schedule_and_standings() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	assert_int(season.farm_standings.size()).is_equal(14)
+	assert_int(season.farm_schedule.size()).is_equal(PSFarmSchedule.GAMES_PER_TEAM * 14 / 2)
+	assert_int(season.farm_games_remaining()).is_equal(season.farm_schedule.size())
+	# 一軍の日程・順位は従来どおり12球団のまま。
+	assert_int(season.standings.size()).is_equal(12)
+	assert_int(season.schedule.size()).is_equal(PSSchedule.EXPECTED_TOTAL_GAMES)
+
+
+func test_farm_game_indices_on_day_matches_the_schedule() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	var first_farm_day: int = int((season.farm_schedule[0] as Dictionary).get("day", 0))
+	var indices: Array = season.farm_game_indices_on_day(first_farm_day)
+	assert_int(indices.size()).is_equal(7)
+	for index in indices:
+		assert_int(int((season.farm_schedule[int(index)] as Dictionary).get("day", 0))).is_equal(first_farm_day)
+
+	# 二軍の試合が無い日は空を返す (一軍だけが試合をする日)。
+	var farm_days: Dictionary = {}
+	for game_row in season.farm_schedule:
+		farm_days[int((game_row as Dictionary).get("day", 0))] = true
+	var idle_day: int = -1
+	for game_row in season.schedule:
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		if not farm_days.has(day):
+			idle_day = day
+			break
+	assert_int(idle_day).is_greater(0)
+	assert_array(season.farm_game_indices_on_day(idle_day)).is_empty()
+
+
+# ---- 専用球団の選手供給 ----------------------------------------------------
+
+func _reload_world() -> void:
+	GameDb.load_initial_data()
+
+
+func test_farm_clubs_start_with_a_full_roster() -> void:
+	_reload_world()
+	for club_id in PSFarmLeague.farm_club_ids():
+		assert_int(FarmClubService.roster_count(GameDb.players, int(club_id))).is_equal(
+			FarmClubService.ROSTER_TARGET
+		)
+
+
+func test_generated_roster_can_field_a_game() -> void:
+	# 守備位置を quota で明示的に埋めているので、二軍戦を組むのに必要な頭数が必ず揃う。
+	_reload_world()
+	for club_id in PSFarmLeague.farm_club_ids():
+		var by_position: Dictionary = {}
+		var pitchers: int = 0
+		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
+			var player: PSPlayer = player_row as PSPlayer
+			by_position[player.position] = int(by_position.get(player.position, 0)) + 1
+			if player.position == 1:
+				pitchers += 1
+		assert_int(pitchers).is_greater_equal(15)
+		# 捕手2人以上 + 内外野の全ポジションに本職が居る。
+		assert_int(int(by_position.get(2, 0))).is_greater_equal(2)
+		for position in [3, 4, 5, 6, 7, 8, 9]:
+			assert_int(int(by_position.get(position, 0))).override_failure_message(
+				"club %d has no player at position %d" % [int(club_id), position]
+			).is_greater(0)
+
+
+func test_generated_players_are_marked_as_npb_inexperienced() -> void:
+	# 供給元が Phase 6 のドラフト指名資格を決める。生成組は NPB 未経験 = 指名対象。
+	_reload_world()
+	for club_id in PSFarmLeague.farm_club_ids():
+		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
+			var player: PSPlayer = player_row as PSPlayer
+			assert_bool(FarmClubService.is_farm_club_player(player)).is_true()
+			assert_bool(FarmClubService.has_npb_experience(player)).is_false()
+			# NPB の支配下/育成の枠組みには乗らない。
+			assert_bool(player.development_player).is_false()
+			assert_str(player.registered_roster).is_equal(FarmClubService.REGISTERED_ROSTER)
+
+
+func test_farm_club_players_never_enter_npb_controlled_accounting() -> void:
+	# 支配下枠 (70) は NPB 球団にだけ適用される概念。専用球団の選手が NPB 球団のロスターへ
+	# 紛れ込まないこと、専用球団を足しても各球団の支配下人数が上限内に収まることを見る。
+	# (`controlled_count` は team_id で数えるだけなので、専用球団 id を渡せば当然その人数を返す。
+	#  production では NPB 球団 id 以外を渡さないので、そこは検査対象にしない。)
+	_reload_world()
+	var farm_player_ids: Dictionary = {}
+	for club_id in PSFarmLeague.farm_club_ids():
+		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
+			farm_player_ids[(player_row as PSPlayer).id] = true
+	assert_int(farm_player_ids.size()).is_equal(FarmClubService.ROSTER_TARGET * 2)
+
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		assert_int(TeamFinance.controlled_count(GameDb.players, team.id)).is_less_equal(TeamFinance.CONTROLLED_LIMIT)
+		for player_row in GameDb.get_players_for_team(team.id):
+			assert_bool(farm_player_ids.has((player_row as PSPlayer).id)).override_failure_message(
+				"farm club player appears on an NPB roster"
+			).is_false()
+
+
+func test_offseason_supply_signs_released_players_up_to_the_cap() -> void:
+	# 上限 const が効いていないと、専用球団には枠制約が無いのでロスターが元NPB選手で埋まる。
+	_reload_world()
+	var club_ids: Array = PSFarmLeague.farm_club_ids()
+	# 空きを作ったうえで、上限を大きく超える数の戦力外選手を用意する。
+	var freed: int = 0
+	for club_id in club_ids:
+		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
+			if freed >= 40:
+				break
+			(player_row as PSPlayer).team_id = 0
+			(player_row as PSPlayer).source_data["retired"] = true
+			freed += 1
+
+	var released_pool: int = 0
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.is_retired() or player.team_id == 0 or PSFarmLeague.is_farm_club_id(player.team_id):
+			continue
+		if released_pool >= 30:
+			break
+		player.team_id = 0
+		player.source_data["released"] = true
+		player.age = 27
+		released_pool += 1
+	assert_int(released_pool).is_equal(30)
+
+	var result: Dictionary = FarmClubService.process_offseason(GameDb.players, 2026)
+	var signings: Array = result.get("signings", []) as Array
+	var signed_by_club: Dictionary = {}
+	for signing_row in signings:
+		var club_id: int = int((signing_row as Dictionary).get("club_id", 0))
+		signed_by_club[club_id] = int(signed_by_club.get(club_id, 0)) + 1
+	for club_id in club_ids:
+		assert_int(int(signed_by_club.get(int(club_id), 0))).is_less_equal(
+			FarmClubService.MAX_RELEASED_SIGNINGS_PER_CLUB
+		)
+	assert_int(signings.size()).is_greater(0)
+
+	# 獲得した選手は NPB 経験ありとして記録され、戦力外市場からは外れる。
+	for signing_row in signings:
+		var player: PSPlayer = GameDb.get_player(int((signing_row as Dictionary).get("player_id", 0)))
+		assert_bool(FarmClubService.has_npb_experience(player)).is_true()
+		assert_bool(bool(player.source_data.get("released", false))).is_false()
+
+	# 不足分は生成で埋まり、ロスターは目標人数へ戻る。
+	for club_id in club_ids:
+		assert_int(FarmClubService.roster_count(GameDb.players, int(club_id))).is_equal(
+			FarmClubService.ROSTER_TARGET
+		)
+	_reload_world()
+
+
+func test_offseason_supply_releases_aged_players_and_refills() -> void:
+	_reload_world()
+	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
+	for player_row in FarmClubService.roster_players(GameDb.players, club_id):
+		(player_row as PSPlayer).age = FarmClubService.ATTRITION_CERTAIN_AGE
+
+	var result: Dictionary = FarmClubService.process_offseason(GameDb.players, 2026)
+	# 全員が確実整理の年齢なので、その球団のロスターは一度空になってから生成で埋め直される。
+	assert_int(int(result.get("attrition_count", 0))).is_greater_equal(FarmClubService.ROSTER_TARGET)
+	assert_int(FarmClubService.roster_count(GameDb.players, club_id)).is_equal(FarmClubService.ROSTER_TARGET)
+	_reload_world()
+
+
+func test_farm_club_players_are_excluded_from_npb_retirement() -> void:
+	# NPB の引退判定は一軍成績を見るので、専用球団の選手は全員「低出場」に見えてしまう。
+	# 除外していないとここで大量引退する。
+	_reload_world()
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	RecordStore.clear_records()
+	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			player.age = OffseasonService.FORCED_RETIREMENT_CERTAIN_AGE
+
+	OffseasonService.process_retirement(GameDb.players, season)
+	for club_id in PSFarmLeague.farm_club_ids():
+		assert_int(FarmClubService.roster_count(GameDb.players, int(club_id))).is_equal(
+			FarmClubService.ROSTER_TARGET
+		)
+	_reload_world()
+
+
+func test_farm_club_players_get_season_records_without_polluting_league_reference() -> void:
+	# 専用球団の選手にも当季レコードは作られる (二軍戦で成績を付けるため) が、
+	# リーグ基準の母集団は GameDb.teams を舐めるので専用球団は構造的に混ざらない。
+	_reload_world()
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	RecordStore.clear_records()
+	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+
+	for club_id in PSFarmLeague.farm_club_ids():
+		var records: Array = RecordStore.get_team_player_records(int(club_id), season.year, season.season_number)
+		assert_int(records.size()).is_equal(FarmClubService.ROSTER_TARGET)
+
+	var reference_ids: Dictionary = {}
+	for team_row in GameDb.teams:
+		for record_row in RecordStore.get_team_player_records((team_row as PSTeam).id, season.year, season.season_number, true):
+			reference_ids[(record_row as PSPlayerSeasonRecord).player_id] = true
+	for club_id in PSFarmLeague.farm_club_ids():
+		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
+			assert_bool(reference_ids.has((player_row as PSPlayer).id)).override_failure_message(
+				"farm club player leaked into the first-team reference population"
+			).is_false()
+
+
+# ---- 二軍戦の実行 ----------------------------------------------------------
+
+# 二軍戦を実際に動かすためのシーズンを用意する (レコードは persist しない)。
+func _fresh_season_with_records() -> PSSeason:
+	GameDb.load_initial_data()
+	Rng.set_seed_value(20260811)
+	RecordStore.clear_records()
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+	return season
+
+
+func _first_farm_day(season: PSSeason) -> int:
+	return int((season.farm_schedule[0] as Dictionary).get("day", 0))
+
+
+func test_farm_day_plays_every_scheduled_game() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var day: int = _first_farm_day(season)
+	var rule_groups: Array[Dictionary] = ModManager.hot_rule_groups_snapshot()
+
+	var outcome: Dictionary = PSFarmGameRunner.simulate_day(season, day, rule_groups, true)
+	assert_bool(bool(outcome.get("ok", false))).is_true()
+	# 1ラウンド = 7試合。人数不足での中止は起きない想定 (専用球団も48人揃っている)。
+	assert_int(int(outcome.get("played_count", 0))).is_equal(7)
+	assert_int(int(outcome.get("cancelled_count", 0))).is_equal(0)
+	assert_array(season.farm_game_indices_on_day(day)).is_empty()
+
+
+func test_farm_games_write_farm_stats_and_leave_first_team_stats_untouched() -> void:
+	# 二軍実装の最重要の不変条件。一軍成績へ1つでも漏れると
+	# タイトル・WAR・年俸・引退判定が全部汚染される。
+	var season: PSSeason = _fresh_season_with_records()
+	var before_first_team: Dictionary = {}
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		before_first_team[record.player_id] = [
+			record.batter_stats.plate_appearances, record.pitcher_stats.batters_faced
+		]
+
+	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
+
+	var farm_pa_total: int = 0
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		var before: Array = before_first_team[record.player_id] as Array
+		assert_int(record.batter_stats.plate_appearances).override_failure_message(
+			"player %d の一軍打席数が二軍戦で動いた" % record.player_id
+		).is_equal(int(before[0]))
+		assert_int(record.pitcher_stats.batters_faced).override_failure_message(
+			"player %d の一軍対戦打者数が二軍戦で動いた" % record.player_id
+		).is_equal(int(before[1]))
+		farm_pa_total += record.farm_batter_stats.plate_appearances
+	# 7試合ぶんの打席が二軍側へ積まれている。
+	assert_int(farm_pa_total).is_greater(300)
+
+
+func test_farm_games_record_standings_and_decisions() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
+
+	var total_games: int = 0
+	for team_id in season.farm_standings.keys():
+		total_games += (season.farm_standings[team_id] as PSStats).games
+	# 7試合 × 2球団。
+	assert_int(total_games).is_equal(14)
+	# 一軍の順位表は動かない。
+	for team_id in season.standings.keys():
+		assert_int((season.standings[team_id] as PSStats).games).is_equal(0)
+
+	# 勝敗投手が二軍成績側へ付いている。
+	var farm_decisions: int = 0
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		farm_decisions += record.farm_pitcher_stats.wins + record.farm_pitcher_stats.losses
+		assert_int(record.pitcher_stats.wins).is_equal(0)
+		assert_int(record.pitcher_stats.losses).is_equal(0)
+	assert_int(farm_decisions).is_greater(0)
+
+
+func test_development_players_appear_in_farm_games() -> void:
+	# 育成選手はこれまで年間0試合だった。二軍戦の追加で初めて出場できるようになる
+	# = 育成制度が機能し始める、という Phase 1-2 の主目的の一つ。
+	var season: PSSeason = _fresh_season_with_records()
+	var development_ids: Dictionary = {}
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.development_player:
+			development_ids[record.player_id] = true
+	assert_int(development_ids.size()).is_greater(0)
+
+	# 育成選手が出場するまで数日消化する (1日で全球団の育成が出るとは限らない)。
+	var played_days: int = 0
+	var appeared: int = 0
+	for game_row in season.farm_schedule:
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		if played_days >= 6:
+			break
+		if season.farm_game_indices_on_day(day).is_empty():
+			continue
+		PSFarmGameRunner.simulate_day(season, day, ModManager.hot_rule_groups_snapshot(), true)
+		played_days += 1
+		appeared = 0
+		for player_id in development_ids.keys():
+			var record: PSPlayerSeasonRecord = RecordStore.get_player_record(int(player_id), season.year, season.season_number)
+			if record != null and (record.farm_batter_stats.plate_appearances > 0 or record.farm_pitcher_stats.batters_faced > 0):
+				appeared += 1
+		if appeared > 0:
+			break
+	assert_int(appeared).override_failure_message(
+		"育成選手が二軍戦に一人も出場していない"
+	).is_greater(0)
+
+
+func test_farm_pool_excludes_the_active_roster_even_before_the_first_team_plays() -> void:
+	# 二軍は一軍より先に回すため、`season.get_active_roster` がまだ空の状態で
+	# 二軍のロスターを決めることになる。裏返しが効いていないと**一軍の主力が二軍戦に出る**
+	# (実際にこのバグを踏んだ)。preview からの導出で常に除外されること。
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	assert_array(season.get_active_roster(team_id).get("player_ids", []) as Array).is_empty()
+
+	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+	var farm_pool: Array = PSTeamSetupBuilder.farm_eligible_records(season, team_id, all_records)
+	assert_int(farm_pool.size()).is_less(all_records.size())
+
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	var active_ids: Dictionary = {}
+	for id_value in (preview.get("player_ids", []) as Array):
+		active_ids[int(id_value)] = true
+	assert_int(active_ids.size()).is_greater(0)
+	for record_row in farm_pool:
+		assert_bool(active_ids.has((record_row as PSPlayerSeasonRecord).player_id)).override_failure_message(
+			"一軍登録の選手が二軍のロスターに残っている"
+		).is_false()
+	# 導出に使っただけで保存はしない (保存すると一軍側の編成を変えてしまう)。
+	assert_array(season.get_active_roster(team_id).get("player_ids", []) as Array).is_empty()
+
+
+func test_farm_games_do_not_touch_first_team_lineup_settings() -> void:
+	# 守備起用設定・自動打順はチーム単位の共有保存状態。二軍が踏むと一軍の編成が壊れる。
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var usage_before: Dictionary = season.get_fielder_usage(team_id).duplicate(true)
+	var order_before: Array = (season.get_auto_batting_order(team_id, true) as Array).duplicate()
+
+	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
+
+	assert_int(season.get_fielder_usage(team_id).size()).override_failure_message(
+		"二軍戦が一軍の守備起用設定を書き換えた"
+	).is_equal(usage_before.size())
+	assert_array(season.get_auto_batting_order(team_id, true) as Array).override_failure_message(
+		"二軍戦が一軍の自動打順を書き換えた"
+	).is_equal(order_before)
+
+
+func test_farm_club_players_actually_play() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
+	for club_id in PSFarmLeague.farm_club_ids():
+		var appearances: int = 0
+		for record_row in RecordStore.get_team_player_records(int(club_id), season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			appearances += record.farm_batter_stats.plate_appearances + record.farm_pitcher_stats.batters_faced
+		assert_int(appearances).override_failure_message(
+			"farm club %d が二軍戦に出場していない" % int(club_id)
+		).is_greater(0)
+
+
+func test_farm_games_use_the_shorter_extra_inning_limit() -> void:
+	# ファーム公式戦は延長が制限され引き分けが多い (実測でウエスタンは10%超)。
+	# 一軍の12回のままだと引き分けがほぼ出ない。
+	var season: PSSeason = _fresh_season_with_records()
+	var max_innings_seen: int = 0
+	var played_days: int = 0
+	for game_row in season.farm_schedule:
+		if played_days >= 12:
+			break
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		if season.farm_game_indices_on_day(day).is_empty():
+			continue
+		PSFarmGameRunner.simulate_day(season, day, ModManager.hot_rule_groups_snapshot(), true)
+		played_days += 1
+	for game_row in season.farm_schedule:
+		var game: Dictionary = game_row as Dictionary
+		if not bool(game.get("played", false)) or bool(game.get("cancelled", false)):
+			continue
+		var innings: int = int((game.get("result", {}) as Dictionary).get("innings_played", 0))
+		max_innings_seen = max(max_innings_seen, innings)
+	assert_int(max_innings_seen).is_less_equal(PSFarmSchedule.MAX_INNINGS)
+
+
+func test_farm_rotation_shares_the_rest_ledger_with_the_first_team() -> void:
+	# 二軍で投げた投手の登板日が共有台帳へ入ること = 翌日昇格しても中0日で先発しない。
+	# 序列 (pitcher_ids) は分離されていること = 二軍のローテが一軍のローテを壊さない。
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var before: Dictionary = season.get_rotation(team_id).duplicate(true)
+	var first_team_order: Array = (before.get("pitcher_ids", []) as Array).duplicate()
+
+	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
+
+	var after: Dictionary = season.get_rotation(team_id)
+	assert_array(after.get("pitcher_ids", []) as Array).override_failure_message(
+		"二軍戦が一軍のローテ序列を書き換えた"
+	).is_equal(first_team_order)
+	assert_bool(after.has(PSRotationPlanner.FARM_PITCHER_IDS_KEY)).is_true()
+	# 台帳は共有 = 二軍の先発が登録されている。
+	var last_starts: Dictionary = after.get("last_start_day_by_pitcher", {}) as Dictionary
+	assert_int(last_starts.size()).is_greater((before.get("last_start_day_by_pitcher", {}) as Dictionary).size())
+
+
+func test_farm_defensive_innings_accumulate_for_aptitude_growth() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
+	var total_farm_innings: float = 0.0
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		for position in [2, 3, 4, 5, 6, 7, 8, 9]:
+			total_farm_innings += record.farm_defensive_innings_at(position)
+			# 一軍の守備イニングは動かない。
+			assert_float(record.defensive_innings_at(position)).is_equal_approx(0.0, 0.001)
+	assert_float(total_farm_innings).override_failure_message(
+		"二軍の守備イニングが記録されていない (守備適性成長の入力が空になる)"
+	).is_greater(0.0)
+
+
+func test_farm_league_produces_a_plausible_stat_line() -> void:
+	# 二軍成績は「一軍と同じ PA シムを素通しで使えば、投打の質差から自然に一軍より低く出る」
+	# という前提で作っている。別式を持たない代わりに、その前提が崩れていないかを見る。
+	var season: PSSeason = _fresh_season_with_records()
+	var played_days: int = 0
+	for game_row in season.farm_schedule:
+		if played_days >= 10:
+			break
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		if season.farm_game_indices_on_day(day).is_empty():
+			continue
+		PSFarmGameRunner.simulate_day(season, day, ModManager.hot_rule_groups_snapshot(), true)
+		played_days += 1
+
+	var at_bats: int = 0
+	var hits: int = 0
+	var walks: int = 0
+	var plate_appearances: int = 0
+	var strikeouts: int = 0
+	for record_row in RecordStore.player_records.values():
+		var stats: PSBatterStats = (record_row as PSPlayerSeasonRecord).farm_batter_stats
+		at_bats += stats.at_bats
+		hits += stats.hits
+		walks += stats.walks
+		plate_appearances += stats.plate_appearances
+		strikeouts += stats.strikeouts
+	assert_int(at_bats).is_greater(1500)
+	var average: float = float(hits) / float(at_bats)
+	var walk_rate: float = float(walks) / float(plate_appearances)
+	var strikeout_rate: float = float(strikeouts) / float(plate_appearances)
+	# 較正フェーズの入力用に実測値を出す (simulation_test の EVALSCALE と同じ運用)。
+	print("FARMLINE AVG=%.3f BB%%=%.3f K%%=%.3f PA=%d" % [average, walk_rate, strikeout_rate, plate_appearances])
+	# ここは**較正のゲートではなく「野球として成立しているか」の回帰ガード**なので帯は広く取る。
+	# 数値較正は [[feedback_working_conventions]] のとおり後でまとめて行う。
+	assert_float(average).override_failure_message("farm AVG=%f" % average).is_between(0.180, 0.310)
+	assert_float(walk_rate).override_failure_message("farm BB%%=%f" % walk_rate).is_between(0.02, 0.20)
+	assert_float(strikeout_rate).override_failure_message("farm K%%=%f" % strikeout_rate).is_between(0.10, 0.35)
+
+
+func test_farm_games_produce_draws_from_the_shorter_extra_inning_limit() -> void:
+	# 延長10回打ち切りの効果。一軍の12回のままだと引き分けはほとんど出ない。
+	var season: PSSeason = _fresh_season_with_records()
+	var played_days: int = 0
+	for game_row in season.farm_schedule:
+		if played_days >= 20:
+			break
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		if season.farm_game_indices_on_day(day).is_empty():
+			continue
+		PSFarmGameRunner.simulate_day(season, day, ModManager.hot_rule_groups_snapshot(), true)
+		played_days += 1
+
+	var draws: int = 0
+	for team_id in season.farm_standings.keys():
+		draws += (season.farm_standings[team_id] as PSStats).draws
+	assert_int(draws).override_failure_message(
+		"140試合で引き分けが1つも出ていない (延長制限が効いていない可能性)"
+	).is_greater(0)
+
+
+func test_farm_can_be_disabled_for_calibration_runs() -> void:
+	# 較正ツール用のスイッチ。切ると二軍戦が一切消化されない。
+	var season: PSSeason = _fresh_season_with_records()
+	var day: int = _first_farm_day(season)
+	PSFarmGameRunner.enabled = false
+	var outcome: Dictionary = PSFarmGameRunner.simulate_day(season, day, ModManager.hot_rule_groups_snapshot(), true)
+	PSFarmGameRunner.enabled = true
+
+	assert_int(int(outcome.get("played_count", 0))).is_equal(0)
+	assert_int(season.farm_game_indices_on_day(day).size()).is_equal(7)
+
+
+# ---- 起用への接続 (二軍成績の評価) ------------------------------------------
+
+func _play_farm_days(season: PSSeason, count: int) -> int:
+	var played: int = 0
+	for game_row in season.farm_schedule:
+		if played >= count:
+			break
+		var day: int = int((game_row as Dictionary).get("day", 0))
+		if season.farm_game_indices_on_day(day).is_empty():
+			continue
+		PSFarmGameRunner.simulate_day(season, day, ModManager.hot_rule_groups_snapshot(), true)
+		played += 1
+	return played
+
+
+func test_farm_reference_measures_farm_stats_not_first_team_stats() -> void:
+	# 二軍の成績分布は二軍の母集団 (専用球団を含む14球団) から測る。
+	# 能力分布 (ratings) は一軍のまま共有する = 一軍選手と二軍選手を同じ物差しで比べられる。
+	var season: PSSeason = _fresh_season_with_records()
+	_play_farm_days(season, 12)
+
+	var first: Dictionary = PSPerformanceReference.for_season(season.year, season.season_number)
+	var farm: Dictionary = PSPerformanceReference.for_season(
+		season.year, season.season_number, PSPerformanceReference.LEVEL_FARM
+	)
+	# 能力スケールは共通。
+	assert_str(JSON.stringify(first["ratings"])).is_equal(JSON.stringify(farm["ratings"]))
+	# 成績分布は別物 (別のキャッシュキーで別に測られている)。
+	assert_bool(first.has("stats")).is_true()
+	assert_bool(farm.has("stats")).is_true()
+
+
+func test_farm_form_moves_perf_score_only_with_enough_playing_time() -> void:
+	# 二軍成績が perf_score に効くこと、少ない標本では効かないこと。
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = 9001
+	record.year = 2026
+	record.season_number = 1
+	record.team_id = (GameDb.teams[0] as PSTeam).id
+	record.name = "二軍好調"
+	record.position = 8
+	record.z_abilities_snapshot = {"Bat_Barrel": 0.0, "Bat_Impact": 0.0, "Bat_Loft": 0.0, "Bat_KAvoid": 0.0, "Bat_BBCreate": 0.0, "Run_Speed": 0.0}
+
+	var baseline: float = TeamAutoAI.perf_score(record)
+
+	# 足切り未満: 効かない。
+	record.farm_batter_stats.plate_appearances = TeamAutoAI.FARM_FORM_MIN_PLATE_APPEARANCES - 1
+	record.farm_batter_stats.at_bats = record.farm_batter_stats.plate_appearances
+	record.farm_batter_stats.hits = record.farm_batter_stats.at_bats
+	record.farm_batter_stats.home_runs = 15
+	assert_float(TeamAutoAI.perf_score(record)).is_equal_approx(baseline, 0.001)
+
+	# 足切り以上で猛打: perf_score が上がる。
+	record.farm_batter_stats.plate_appearances = 300
+	record.farm_batter_stats.at_bats = 280
+	record.farm_batter_stats.hits = 120
+	record.farm_batter_stats.doubles = 30
+	record.farm_batter_stats.home_runs = 25
+	record.farm_batter_stats.walks = 20
+	var hot: float = TeamAutoAI.perf_score(record)
+	assert_float(hot).override_failure_message(
+		"二軍で猛打しても perf_score が動かない (昇格判断の材料にならない)"
+	).is_greater(baseline)
+
+	# 二軍で全く打てない場合は下がる。
+	record.farm_batter_stats.hits = 40
+	record.farm_batter_stats.doubles = 4
+	record.farm_batter_stats.home_runs = 0
+	record.farm_batter_stats.walks = 5
+	assert_float(TeamAutoAI.perf_score(record)).is_less(hot)
+
+
+func test_farm_form_is_discounted_relative_to_first_team_form() -> void:
+	# 二軍の +1 と一軍の +1 を等価に扱わない。FARM_FORM_WEIGHT が較正ノブ。
+	assert_float(TeamAutoAI.FARM_FORM_WEIGHT).is_less(1.0)
+	assert_float(TeamAutoAI.FARM_FORM_WEIGHT).is_greater(0.0)
+
+
+func test_first_team_and_farm_form_are_both_counted() -> void:
+	# 一軍で不振 → 降格 → 二軍で好調、という選手は両方の form を持つのが正しい。
+	# 片方で上書きしていないことを、二軍成績を足したときの差分が一軍成績の有無に依らないことで見る。
+	var base: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	base.player_id = 9002
+	base.year = 2026
+	base.season_number = 1
+	base.team_id = (GameDb.teams[0] as PSTeam).id
+	base.position = 8
+	base.z_abilities_snapshot = {"Bat_Barrel": 0.0, "Bat_Impact": 0.0, "Bat_Loft": 0.0, "Bat_KAvoid": 0.0, "Bat_BBCreate": 0.0, "Run_Speed": 0.0}
+	base.batter_stats.plate_appearances = 200
+	base.batter_stats.at_bats = 190
+	base.batter_stats.hits = 30
+	base.batter_stats.strikeouts = 70
+
+	var slumping_only: float = TeamAutoAI.perf_score(base)
+	base.farm_batter_stats.plate_appearances = 200
+	base.farm_batter_stats.at_bats = 180
+	base.farm_batter_stats.hits = 70
+	base.farm_batter_stats.doubles = 18
+	base.farm_batter_stats.home_runs = 12
+	base.farm_batter_stats.walks = 18
+	var with_farm: float = TeamAutoAI.perf_score(base)
+	assert_float(with_farm).override_failure_message(
+		"一軍成績を持つ選手の二軍成績が評価に乗っていない"
+	).is_greater(slumping_only)
+
+
+# ---- 谷間の先発 (スポット昇格) ----------------------------------------------
+
+func test_active_roster_target_matches_between_both_definitions() -> void:
+	# TARGET_STARTERS は team_auto_ai と team_setup_builder の2箇所にあり、
+	# ずれると「一軍の先発人数」と「入替が目指す人数」が食い違って谷間の発生頻度が変わる。
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(
+		SeasonService.create_new_season(GameDb.teams, 1, 2026), (GameDb.teams[0] as PSTeam).id
+	)
+	assert_bool(bool(preview.get("ok", false))).is_true()
+	assert_int(TeamAutoAI.TARGET_STARTERS).is_equal(6)
+
+
+# 一軍の先発全員が「昨日投げた」状態を作って谷間を強制する。
+# ⚠️ 開幕15日間は `PSRotationPlanner._seeded_last_starts` が仮の最終登板日を配るので、
+#    それを抜けた日を使う。また last_start=0 は「未登板」扱いなので day は2以上が必要。
+func _force_rotation_gap(season: PSSeason, team_id: int, active_ids: Dictionary) -> int:
+	var day: int = 0
+	for game_row in season.schedule:
+		var game: Dictionary = game_row as Dictionary
+		var game_day: int = int(game.get("day", 0))
+		if game_day <= 20:
+			continue
+		if int(game.get("away_team_id", 0)) == team_id or int(game.get("home_team_id", 0)) == team_id:
+			day = game_day
+			break
+	season.current_day = day
+	var rotation: Dictionary = season.get_rotation(team_id).duplicate(true)
+	var last_starts: Dictionary = {}
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if active_ids.has(record.player_id) and record.is_starter_pitcher():
+			last_starts[str(record.player_id)] = day - 1
+	rotation["last_start_day_by_pitcher"] = last_starts
+	season.set_rotation(team_id, rotation)
+	return day
+
+
+func test_spot_callup_promotes_a_rested_farm_starter_and_returns_him_next_day() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	season.set_active_roster(team_id, {"player_ids": preview.get("player_ids", [])})
+	var active_ids: Dictionary = {}
+	for id_value in (preview.get("player_ids", []) as Array):
+		active_ids[int(id_value)] = true
+	var day: int = _force_rotation_gap(season, team_id, active_ids)
+	assert_int(day).is_greater(20)
+
+	var result: Dictionary = TeamAutoAI.run_spot_starter_callups(season, GameDb.teams, day, 0, true)
+	var callups: Array = result.get("callups", []) as Array
+	var mine: Dictionary = {}
+	for row in callups:
+		if int((row as Dictionary).get("team_id", 0)) == team_id:
+			mine = row as Dictionary
+			break
+	assert_bool(mine.is_empty()).override_failure_message(
+		"谷間なのに二軍から先発が上がってこない"
+	).is_false()
+
+	var promoted_id: int = int(mine.get("player_id", 0))
+	assert_bool((season.get_active_roster(team_id).get("player_ids", []) as Array).has(promoted_id)).is_true()
+	assert_bool(season.get_spot_callups(team_id).has(str(promoted_id))).is_true()
+	# 枠を空けた相手は救援 (先発を落とすとローテが崩れる)。
+	var replaced: PSPlayerSeasonRecord = RecordStore.get_player_record(
+		int(mine.get("replaced_player_id", 0)), season.year, season.season_number
+	)
+	assert_bool(replaced.is_starter_pitcher()).override_failure_message(
+		"スポット昇格の枠を空けるために先発を落としている"
+	).is_false()
+
+	# 翌日に抹消され、10日ルールのクールダウンが付く。
+	TeamAutoAI.run_spot_starter_callups(season, GameDb.teams, day + 1, 0, true)
+	assert_bool((season.get_active_roster(team_id).get("player_ids", []) as Array).has(promoted_id)).override_failure_message(
+		"登板を終えたスポット昇格が翌日に抹消されていない"
+	).is_false()
+	assert_bool(season.get_spot_callups(team_id).has(str(promoted_id))).is_false()
+	assert_int(int(season.get_demotion_days(team_id).get(str(promoted_id), 0))).is_equal(day + 1)
+
+
+func test_spot_callup_does_not_fire_when_the_rotation_is_rested() -> void:
+	# 通常運用 (中6日・中5日) で埋まる日は谷間ではない。ここを緩めると年489先発が
+	# スポット昇格になり、枠繰りでロスターが荒れて中0〜3日の先発まで出る (実測)。
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	season.set_active_roster(team_id, {"player_ids": preview.get("player_ids", [])})
+
+	# 開幕直後 = 全員が十分に休んでいる。
+	var result: Dictionary = TeamAutoAI.run_spot_starter_callups(season, GameDb.teams, season.current_day, 0, true)
+	for row in (result.get("callups", []) as Array):
+		assert_int(int((row as Dictionary).get("team_id", 0))).is_not_equal(team_id)
+
+
+func test_spot_callup_respects_the_ten_day_cooldown() -> void:
+	# 抹消から10日未満の投手は再登録できない。これが「次の谷間は別の投手になる」=
+	# 先発の顔ぶれが増える仕掛けの本体。
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	var active_ids: Dictionary = {}
+	for id_value in (preview.get("player_ids", []) as Array):
+		active_ids[int(id_value)] = true
+	season.set_active_roster(team_id, {"player_ids": preview.get("player_ids", [])})
+
+	# 二軍の先発を全員クールダウン中にする。
+	var farm_starter_ids: Array = []
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not active_ids.has(record.player_id) and record.is_starter_pitcher() and not record.development_player:
+			farm_starter_ids.append(record.player_id)
+	assert_int(farm_starter_ids.size()).is_greater(0)
+	var day: int = _force_rotation_gap(season, team_id, active_ids)
+	season.record_demotions(team_id, farm_starter_ids, day)
+
+	var result: Dictionary = TeamAutoAI.run_spot_starter_callups(season, GameDb.teams, day, 0, true)
+	for row in (result.get("callups", []) as Array):
+		var callup: Dictionary = row as Dictionary
+		if int(callup.get("team_id", 0)) == team_id:
+			assert_bool(farm_starter_ids.has(int(callup.get("player_id", 0)))).override_failure_message(
+				"10日ルールのクールダウン中の投手が再登録された"
+			).is_false()
+
+
+# ---- 成績の器 --------------------------------------------------------------
+
+func _record_with_farm_stats() -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = 4242
+	record.year = 2026
+	record.season_number = 1
+	record.team_id = 1
+	record.name = "テスト太郎"
+	record.position = 8
+	record.batter_stats.games = 100
+	record.batter_stats.hits = 130
+	record.batter_stats.home_runs = 20
+	record.farm_batter_stats.games = 20
+	record.farm_batter_stats.hits = 25
+	record.farm_batter_stats.home_runs = 4
+	record.pitcher_stats.strikeouts = 90
+	record.farm_pitcher_stats.strikeouts = 15
+	record.farm_defensive_outs_by_position = {"8": 270, "9": 90}
+	return record
+
+
+func test_farm_stats_are_a_separate_container_from_first_team_stats() -> void:
+	var record: PSPlayerSeasonRecord = _record_with_farm_stats()
+	# 同じ器を別インスタンスで持つ = 片方を足しても他方は動かない。
+	assert_int(record.batter_stats.hits).is_equal(130)
+	assert_int(record.farm_batter_stats.hits).is_equal(25)
+	record.farm_batter_stats.hits += 10
+	assert_int(record.batter_stats.hits).is_equal(130)
+	assert_int(record.pitcher_stats.strikeouts).is_equal(90)
+	assert_int(record.farm_pitcher_stats.strikeouts).is_equal(15)
+
+
+func test_defensive_innings_default_stays_first_team_only() -> void:
+	# 既定を一軍のみに保つのが要 — ゴールデングラブ等「一軍の表彰」が二軍の
+	# 守備イニングを数えてしまう事故を防ぐ。成長だけが合算版を使う。
+	var record: PSPlayerSeasonRecord = _record_with_farm_stats()
+	record.advanced_stats.defensive_outs_by_position = {"8": 900}
+
+	assert_float(record.defensive_innings_at(8)).is_equal_approx(300.0, 0.001)
+	assert_float(record.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
+	assert_float(record.total_defensive_innings_at(8)).is_equal_approx(390.0, 0.001)
+	# 一軍で守っていないポジションでも二軍の分は合算に出る (コンバート練習の反映)。
+	assert_float(record.defensive_innings_at(9)).is_equal_approx(0.0, 0.001)
+	assert_float(record.total_defensive_innings_at(9)).is_equal_approx(30.0, 0.001)
+
+
+func test_position_aptitude_growth_counts_farm_innings() -> void:
+	# 二軍でコンバートを試した分が適性に乗ること (ブロック2 を入れた主目的の一つ)。
+	var player: PSPlayer = PSPlayer.from_dict({
+		"id": 4242, "name": "テスト太郎", "age": 22, "position": 8,
+		"position_aptitudes": {"center": 80, "right": 0},
+	})
+	var record: PSPlayerSeasonRecord = _record_with_farm_stats()
+	record.advanced_stats.defensive_outs_by_position = {}
+	record.farm_defensive_outs_by_position = {"9": 900}
+
+	OffseasonService.apply_position_aptitude_growth(player, record)
+	assert_int(int(player.position_aptitudes.get("right", 0))).override_failure_message(
+		"farm defensive innings did not feed position aptitude growth"
+	).is_greater(0)
+
+
+func test_player_record_round_trip_keeps_farm_stats() -> void:
+	var record: PSPlayerSeasonRecord = _record_with_farm_stats()
+	var restored: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(record.to_dict())
+
+	assert_int(restored.batter_stats.hits).is_equal(130)
+	assert_int(restored.farm_batter_stats.hits).is_equal(25)
+	assert_int(restored.farm_batter_stats.home_runs).is_equal(4)
+	assert_int(restored.farm_pitcher_stats.strikeouts).is_equal(15)
+	assert_float(restored.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
+
+
+func test_team_record_round_trip_keeps_farm_standings() -> void:
+	var team_record: PSTeamSeasonRecord = PSTeamSeasonRecord.from_team(GameDb.teams[0] as PSTeam, 2026, 1)
+	team_record.stats.wins = 80
+	team_record.stats.losses = 60
+	team_record.farm_stats.wins = 70
+	team_record.farm_stats.losses = 50
+	team_record.farm_stats.draws = 4
+
+	var restored: PSTeamSeasonRecord = PSTeamSeasonRecord.from_dict(team_record.to_dict())
+	assert_int(restored.stats.wins).is_equal(80)
+	assert_int(restored.farm_stats.wins).is_equal(70)
+	assert_int(restored.farm_stats.losses).is_equal(50)
+	assert_int(restored.farm_stats.draws).is_equal(4)
+
+
+func test_farm_stats_survive_a_sqlite_round_trip() -> void:
+	if not SQLiteStore.is_available():
+		return
+	# SQLite はセーブフォルダごとの DB なので、テスト専用のセーブを作ってから書き込む。
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var record: PSPlayerSeasonRecord = _record_with_farm_stats()
+	var payload: Dictionary = {
+		"version": 2,
+		"player_records": [record.to_dict()],
+		"team_records": [],
+		"season_archives": [],
+	}
+	SQLiteStore.reset_record_fingerprints()
+	var saved: bool = SQLiteStore.save_record_store_and_normalized(payload)
+
+	var found: PSPlayerSeasonRecord = null
+	if saved:
+		for row_value in SQLiteStore.load_all_player_season_record_dicts():
+			var row: Dictionary = row_value as Dictionary
+			if int(row.get("player_id", 0)) == record.player_id:
+				found = PSPlayerSeasonRecord.from_dict(row)
+				break
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	SQLiteStore.reset_record_fingerprints()
+
+	assert_bool(saved).is_true()
+	assert_object(found).is_not_null()
+	# 一軍成績と二軍成績が別テーブルへ往復し、混ざっていない。
+	assert_int(found.batter_stats.hits).is_equal(130)
+	assert_int(found.farm_batter_stats.hits).is_equal(25)
+	assert_int(found.farm_batter_stats.home_runs).is_equal(4)
+	assert_int(found.farm_pitcher_stats.strikeouts).is_equal(15)
+	assert_int(found.pitcher_stats.strikeouts).is_equal(90)
+	assert_float(found.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
+
+
+func test_season_round_trip_keeps_farm_schedule_and_standings() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	(season.farm_standings[13] as PSStats).wins = 7
+	(season.farm_standings[13] as PSStats).losses = 3
+
+	var restored: PSSeason = PSSeason.from_dict(season.to_dict())
+	assert_int(restored.farm_schedule.size()).is_equal(season.farm_schedule.size())
+	assert_int(restored.farm_standings.size()).is_equal(14)
+	assert_int((restored.farm_standings[13] as PSStats).wins).is_equal(7)
+	assert_int((restored.farm_standings[13] as PSStats).losses).is_equal(3)
+	# 専用球団も順位表に載る。
+	for club_id in PSFarmLeague.farm_club_ids():
+		assert_bool(restored.farm_standings.has(int(club_id))).is_true()

@@ -995,6 +995,12 @@ static func process_retirement(players: Array, season: PSSeason) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired():
 			continue
+		# ファーム専用球団の選手は NPB の引退判定を通さない。判定が見る出場数は**一軍成績**で、
+		# 専用球団の選手は構造的に常にゼロ = 全員が「低出場」に見えてしまうため。
+		# 専用球団の流出は FarmClubService の高齢整理が担当する ([[project_farm_system_design]])。
+		# ドラフトで NPB へ移った選手は team_id が変わるので、その時点から通常の判定に戻る。
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			continue
 		# 直前のFA宣言ステップで宣言した選手は今オフ引退しない (宣言した本人が数日後に
 		# 引退するのは不自然で、FA市場の候補が消える事故も防げる)。
 		if player.is_fa_declared(year):
@@ -1475,7 +1481,9 @@ static func apply_position_aptitude_growth(player: PSPlayer, record: PSPlayerSea
 	if record == null:
 		return
 	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
-		var innings: float = record.defensive_innings_at(position)
+		# 一軍 + 二軍の守備イニング。二軍はコンバートを試す場なので、そこで守った分を
+		# 数えないと「二軍で新ポジションを練習しても適性が伸びない」ことになる。
+		var innings: float = record.total_defensive_innings_at(position)
 		if innings <= 0.0:
 			continue
 		var key: String = str(POSITION_NAME_BY_ID.get(position, ""))

@@ -127,6 +127,14 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 			"message": str(single_result.get("message", "")),
 		}
 
+	# 順序が重要: スポット昇格 → 二軍戦 → 一軍戦。
+	# 昇格を先にしないと、その日一軍で先発する投手が二軍戦にも出てしまう (同日二重出場)。
+	# 二軍戦を一軍より先にするのは、一軍の `_apply_game_result` が `advance_current_day` を
+	# 呼ぶため — 後に回すと season.current_day が翌日へ進んだ状態で二軍のローテを解決してしまう。
+	# 一軍のグループ自体には手を触れないので、一軍側の決定性は自明に保たれる。
+	_run_spot_starter_callups(season, day, auto_swap_ctx)
+	_simulate_farm_day(season, day, force_sequential)
+
 	var day_result: Dictionary = _simulate_day_games(season, today_indices, persist, force_sequential or today_indices.size() <= 1)
 	if not bool(day_result.get("ok", false)):
 		return day_result
@@ -145,6 +153,27 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 			SeasonCalendar.day_status_label(season, day), results.size(), str(last_result.get("message", ""))
 		],
 	}
+
+
+# 谷間の先発 (二軍から1試合限定の昇格) と、登板を終えたスポット昇格の抹消。
+# 試合の計算より前にメインスレッドで行う (ロスターが確定していないと setup が組めない)。
+# auto_swap_ctx が空 (ツール/ベンチ/テスト) のときは全球団へ適用する。
+static func _run_spot_starter_callups(season: PSSeason, day: int, auto_swap_ctx: Dictionary) -> void:
+	if season.farm_schedule.is_empty():
+		return
+	var user_team_id: int = int(auto_swap_ctx.get("user_team_id", 0))
+	var include_user: bool = auto_swap_ctx.is_empty() or bool(auto_swap_ctx.get("include_user_team", false))
+	TeamAutoAI.run_spot_starter_callups(season, GameDb.teams, day, user_team_id, include_user)
+
+
+# 当日の二軍戦を消化する。一軍とは別の WorkerThreadPool グループで回す。
+# Phase 0 の実測では「一軍と同一グループにまとめる」案との速度差は3%しかなく、別グループの
+# 方が実装がはるかに単純 (一軍のレーンID割当も seed 空間も一切変えずに済む)。
+static func _simulate_farm_day(season: PSSeason, day: int, force_sequential: bool) -> void:
+	if season.farm_schedule.is_empty():
+		return
+	var rule_groups: Array[Dictionary] = ModManager.hot_rule_groups_snapshot()
+	PSFarmGameRunner.simulate_day(season, day, rule_groups, force_sequential)
 
 
 # today_indices の試合を計算する。sequential=true でも各試合には並列時と同じレーンID
@@ -481,6 +510,10 @@ static func simulate_current_day_async(
 	if not today_indices.is_empty():
 		if not _prewarm_day_profiles(season, today_indices):
 			return {"ok": false, "message": "成績データを読み込めませんでした"}
+		# 同期版と同じ順序 (スポット昇格 → 二軍戦 → 一軍戦)。同期/非同期で結果が一致する
+		# 必要があるので **両方の経路に必ず入れる** — 片方だけだと決定性テストが落ちる。
+		_run_spot_starter_callups(season, day, auto_swap_ctx)
+		_simulate_farm_day(season, day, false)
 		var rule_groups: Array[Dictionary] = ModManager.hot_rule_groups_snapshot()
 		var calc_results: Array = []
 		calc_results.resize(today_indices.size())
@@ -969,8 +1002,10 @@ static func _result_summary(away_team_id: int, home_team_id: int, result: Dictio
 	return "%s %d - %d %s" % [away_name, int(result.get("away_score", 0)), int(result.get("home_score", 0)), home_name]
 
 
+# 表示・エラーメッセージ用の球団名。ファーム専用球団も引けるよう get_any_team を使う
+# (判定ロジックではなく表示なので、二軍の文脈を混ぜても一軍系の集計には影響しない)。
 static func _team_name(team_id: int) -> String:
-	var team: PSTeam = GameDb.get_team(team_id)
+	var team: PSTeam = GameDb.get_any_team(team_id)
 	if team == null:
 		return "Team %d" % team_id
 	return team.short_name

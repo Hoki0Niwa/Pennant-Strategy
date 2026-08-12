@@ -19,6 +19,12 @@ var schedule_template_id: String = ""
 var schedule_bucket_seed: int = 0
 var schedule: Array = []
 var standings: Dictionary = {}
+# 二軍 (ファーム) の日程と順位。一軍とは**別配列**で持つ — `schedule` に混ぜると
+# advance_current_day / games_remaining / 順位表 / マジックナンバー / カレンダーUI /
+# validate_schedule (同日同チーム2試合を弾く) が全て「一軍のみ」前提のまま静かに壊れる。
+# 参加は14球団 (一軍12 + ファーム専用2)。順位は試合数が揃わない前提で勝率順に見る。
+var farm_schedule: Array = []
+var farm_standings: Dictionary = {}
 var team_lineups: Dictionary = {}
 var team_auto_batting_orders: Dictionary = {}
 var team_fielder_usages: Dictionary = {}
@@ -76,6 +82,35 @@ func setup(team_ids: Array) -> void:
 	standings.clear()
 	for team_id in team_ids:
 		standings[int(team_id)] = PSStats.new()
+
+
+# 二軍の参加球団 (一軍12 + ファーム専用2) ぶんの順位表を初期化する。
+func setup_farm(team_ids: Array) -> void:
+	farm_standings.clear()
+	for team_id in team_ids:
+		farm_standings[int(team_id)] = PSStats.new()
+
+
+func farm_games_remaining() -> int:
+	var remaining: int = 0
+	for game_row in farm_schedule:
+		if not bool((game_row as Dictionary).get("played", false)):
+			remaining += 1
+	return remaining
+
+
+# 指定日の未消化の二軍試合 index。二軍は一軍の試合日の部分集合なので、
+# 一軍の試合が無い日にはここが空になる。
+func farm_game_indices_on_day(day: int) -> Array:
+	var indices: Array = []
+	for index in range(farm_schedule.size()):
+		var game: Dictionary = farm_schedule[index] as Dictionary
+		if bool(game.get("played", false)):
+			continue
+		if int(game.get("day", 0)) != day:
+			continue
+		indices.append(index)
+	return indices
 
 
 func games_remaining() -> int:
@@ -198,6 +233,10 @@ func set_active_roster(team_id: int, roster: Dictionary) -> void:
 	# FA日数台帳はシーズン側の保持分 (直前の accrue 済み) が常に正。呼び出し側が
 	# get_active_roster の複製 (古い台帳入り) を渡しても積算が巻き戻らないよう必ず上書きする。
 	stored["fa_active_days"] = (previous.get("fa_active_days", {}) as Dictionary).duplicate(true)
+	# スポット昇格の台帳もシーズン側の保持分が正。週次入替など他のロスター書き換えが
+	# この印を持たない dict を渡しても、「翌日抹消する予定の選手」を見失わないようにする。
+	if not stored.has("spot_callup"):
+		stored["spot_callup"] = (previous.get("spot_callup", {}) as Dictionary).duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_active_rosters[str(team_id)] = stored
 	_mutex.unlock()
@@ -271,6 +310,36 @@ func transfer_active_roster_days(from_team_id: int, to_team_id: int, player_id: 
 
 
 # --- 一二軍 自動入替 用ヘルパ ------------------------------------------------
+
+# 「谷間の先発」でその日限り昇格させた選手の台帳 (player_id → 登板予定日)。
+# 登板を終えた翌日に抹消するために保持する ([[project_farm_system_design]])。
+func get_spot_callups(team_id: int) -> Dictionary:
+	_mutex.lock()
+	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	var out: Dictionary = (roster.get("spot_callup", {}) as Dictionary).duplicate(true)
+	_mutex.unlock()
+	return out
+
+
+func record_spot_callup(team_id: int, player_id: int, day: int) -> void:
+	_mutex.lock()
+	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	var callups: Dictionary = (roster.get("spot_callup", {}) as Dictionary).duplicate(true)
+	callups[str(player_id)] = day
+	roster["spot_callup"] = callups
+	team_active_rosters[str(team_id)] = roster
+	_mutex.unlock()
+
+
+func clear_spot_callup(team_id: int, player_id: int) -> void:
+	_mutex.lock()
+	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	var callups: Dictionary = (roster.get("spot_callup", {}) as Dictionary).duplicate(true)
+	callups.erase(str(player_id))
+	roster["spot_callup"] = callups
+	team_active_rosters[str(team_id)] = roster
+	_mutex.unlock()
+
 
 func get_demotion_days(team_id: int) -> Dictionary:
 	_mutex.lock()
@@ -586,6 +655,11 @@ func to_dict(include_history: bool = true) -> Dictionary:
 		var stats: PSStats = standings[team_id] as PSStats
 		standings_data[str(team_id)] = stats.to_dict()
 
+	var farm_standings_data: Dictionary = {}
+	for team_id in farm_standings.keys():
+		var farm_stats: PSStats = farm_standings[team_id] as PSStats
+		farm_standings_data[str(team_id)] = farm_stats.to_dict()
+
 	var out: Dictionary = {
 		"year": year,
 		"season_number": season_number,
@@ -596,6 +670,8 @@ func to_dict(include_history: bool = true) -> Dictionary:
 		"schedule_bucket_seed": schedule_bucket_seed,
 		"schedule": _schedule_for_save(),
 		"standings": standings_data,
+		"farm_schedule": _games_for_save(farm_schedule),
+		"farm_standings": farm_standings_data,
 		"team_lineups": team_lineups,
 		"team_auto_batting_orders": team_auto_batting_orders,
 		"team_fielder_usages": team_fielder_usages,
@@ -616,8 +692,12 @@ func to_dict(include_history: bool = true) -> Dictionary:
 # schedule をセーブ用に複製し、消化済み試合の result を正規の軽量サマリへ揃える。
 # 未保存詳細用の transient log は必ず除外する。
 func _schedule_for_save() -> Array:
+	return _games_for_save(schedule)
+
+
+func _games_for_save(games: Array) -> Array:
 	var out: Array = []
-	for game_row in schedule:
+	for game_row in games:
 		var game: Dictionary = game_row as Dictionary
 		if not bool(game.get("played", false)) or not game.has("result"):
 			out.append(game)
@@ -657,6 +737,12 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	var standings_data: Dictionary = data.get("standings", {}) as Dictionary
 	for key in standings_data.keys():
 		season.standings[int(key)] = PSStats.from_dict(standings_data[key] as Dictionary)
+
+	season.farm_schedule = data.get("farm_schedule", []) as Array
+	PSSchedule.sort_by_day(season.farm_schedule)
+	var farm_standings_data: Dictionary = data.get("farm_standings", {}) as Dictionary
+	for key in farm_standings_data.keys():
+		season.farm_standings[int(key)] = PSStats.from_dict(farm_standings_data[key] as Dictionary)
 
 	season.team_lineups = (data.get("team_lineups", {}) as Dictionary).duplicate(true)
 	season.team_auto_batting_orders = (data.get("team_auto_batting_orders", {}) as Dictionary).duplicate(true)

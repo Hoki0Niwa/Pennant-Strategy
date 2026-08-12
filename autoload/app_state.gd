@@ -799,6 +799,14 @@ func advance_offseason() -> Dictionary:
 			# 続けて CPU 球団の育成を整理 (失敗プロスペクト/枠超過を放出し pipeline を循環)。
 			var dev_rel: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, selected_team_id, current_season.year if current_season != null else 0)
 			step_result["dev_released_count"] = int(dev_rel.get("released_count", 0))
+			# ファーム専用球団の補充。戦力外の獲得フェーズ (released_market) より後である必要が
+			# あるので、オフの最終ステップであるここで回す ([[project_farm_system_design]])。
+			var farm_supply: Dictionary = FarmClubService.process_offseason(
+				GameDb.players, current_season.year if current_season != null else 0
+			)
+			step_result["farm_club_signed_count"] = int(farm_supply.get("signed_count", 0))
+			step_result["farm_club_generated_count"] = int(farm_supply.get("generated_count", 0))
+			step_result["farm_club_attrition_count"] = int(farm_supply.get("attrition_count", 0))
 			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_CONTRACT_YEARS:
 			contract_years_state = OffseasonService.create_contract_years_state(GameDb.players, GameDb.teams, current_season, selected_team_id)

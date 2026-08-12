@@ -121,25 +121,49 @@ static func is_frozen() -> bool:
 	return _frozen
 
 
+const LEVEL_FIRST: int = 0
+const LEVEL_FARM: int = 1
+
+
+static func batter_stats_for_level(record: PSPlayerSeasonRecord, level: int) -> PSBatterStats:
+	if record == null:
+		return null
+	return record.farm_batter_stats if level == LEVEL_FARM else record.batter_stats
+
+
+static func pitcher_stats_for_level(record: PSPlayerSeasonRecord, level: int) -> PSPitcherStats:
+	if record == null:
+		return null
+	return record.farm_pitcher_stats if level == LEVEL_FARM else record.pitcher_stats
+
+
 # {ratings: {trait: {mean, spread}}, stats: {key: {mean, spread, alignment}}} を返す。
-static func for_season(year: int, season_number: int) -> Dictionary:
-	var key: String = "%d_%d" % [year, season_number]
+#
+# level=LEVEL_FARM では **能力分布 (ratings) は一軍のまま、成績分布 (stats) だけ二軍で測る**。
+# 能力スケールは所属レベルに依らない共通の物差しであるべきで、変えると一軍選手と二軍選手を
+# 同じ土俵で比べられなくなるため。リーグ難度の差は `_with_alignment` が吸収する — 二軍の
+# 成績分布のゼロ点を「二軍のレギュラーが共通能力スケールのどこに居るか」へ合わせるので、
+# 「二軍で能力なりに打っている」が delta 0 になる。
+static func for_season(year: int, season_number: int, level: int = LEVEL_FIRST) -> Dictionary:
+	var key: String = "%d_%d_%d" % [year, season_number, level]
 	if _cache.has(key):
 		return _cache[key] as Dictionary
+	# 能力分布は常に一軍母集団から測る (共通の物差し)。
 	var records: Array = _season_records(year, season_number)
 	var ratings: Dictionary = _measure_ratings(records)
 	var pitcher_ratings: Dictionary = _measure_pitcher_ratings(records)
+	var stat_records: Array = records if level == LEVEL_FIRST else _season_records(year, season_number, level)
 	var measured: Dictionary = {
 		"ratings": ratings,
-		"stats": _resolve_stats(year, season_number, ratings, records),
+		"stats": _resolve_stats(year, season_number, ratings, stat_records, level),
 		"scores": _measure_scores(records),
 		"pitcher_ratings": pitcher_ratings,
 		"pitcher_stats": {
 			PITCHER_ROLE_STARTER: _resolve_pitcher_stats(
-				year, season_number, pitcher_ratings, records, PITCHER_ROLE_STARTER
+				year, season_number, pitcher_ratings, stat_records, PITCHER_ROLE_STARTER, level
 			),
 			PITCHER_ROLE_RELIEVER: _resolve_pitcher_stats(
-				year, season_number, pitcher_ratings, records, PITCHER_ROLE_RELIEVER
+				year, season_number, pitcher_ratings, stat_records, PITCHER_ROLE_RELIEVER, level
 			),
 		},
 	}
@@ -160,6 +184,9 @@ static func prewarm(year: int, season_number: int, lookback: int = -1) -> void:
 		if season_number - k <= 0:
 			break
 		for_season(year - k, season_number - k)
+		# 二軍基準も同時に温める。一二軍入替の評価が worker 中に未キャッシュの二軍基準へ
+		# 落ちると、静的 Dictionary への遅延書き込みでレースになる (一軍と同じ制約)。
+		for_season(year - k, season_number - k, LEVEL_FARM)
 
 
 # 打者/投手それぞれの出場判断・編成判断ノブのうち、最も長く遡るもの。
@@ -249,27 +276,27 @@ static func _measure_ratings(records: Array) -> Dictionary:
 # alignment は **参照元シーズンの母集団**を、**呼び出し側が使う ratings_reference** で測る
 # (ゼロ点を揃える相手は、これから評価される選手の能力指標なので)。
 static func _resolve_stats(
-	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array
+	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, level: int = LEVEL_FIRST
 ) -> Dictionary:
 	for k in range(STAT_REFERENCE_LOOKBACK + 1):
 		if season_number - k <= 0:
 			break
-		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k)
-		var measured: Dictionary = _measure_stats(source, ratings_reference)
+		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k, level)
+		var measured: Dictionary = _measure_stats(source, ratings_reference, level)
 		if not measured.is_empty():
 			return measured
 	return _default_stats_with_alignment(own_records, ratings_reference)
 
 
 # 標本が足りなければ空 Dictionary を返す (呼び出し側がさらに遡る)。
-static func _measure_stats(records: Array, ratings_reference: Dictionary) -> Dictionary:
+static func _measure_stats(records: Array, ratings_reference: Dictionary, level: int = LEVEL_FIRST) -> Dictionary:
 	var samples: Dictionary = {"average": [], "on_base": [], "isolated_power": [], "ops": []}
 	var regulars: Array = []
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.is_pitcher():
 			continue
-		var stats: PSBatterStats = record.batter_stats
+		var stats: PSBatterStats = batter_stats_for_level(record, level)
 		if stats == null or stats.plate_appearances < MIN_REFERENCE_PLATE_APPEARANCES:
 			continue
 		var average: float = stats.batting_average()
@@ -430,20 +457,21 @@ static func _measure_pitcher_ratings(records: Array) -> Dictionary:
 
 
 static func _resolve_pitcher_stats(
-	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, role: String
+	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, role: String,
+	level: int = LEVEL_FIRST
 ) -> Dictionary:
 	for k in range(STAT_REFERENCE_LOOKBACK + 1):
 		if season_number - k <= 0:
 			break
-		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k)
-		var measured: Dictionary = _measure_pitcher_stats(source, ratings_reference, role)
+		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k, level)
+		var measured: Dictionary = _measure_pitcher_stats(source, ratings_reference, role, level)
 		if not measured.is_empty():
 			return measured
 	return _default_pitcher_stats_with_alignment(own_records, ratings_reference, role)
 
 
 static func _measure_pitcher_stats(
-	records: Array, ratings_reference: Dictionary, role: String
+	records: Array, ratings_reference: Dictionary, role: String, level: int = LEVEL_FIRST
 ) -> Dictionary:
 	var samples: Dictionary = {"run_prevention": []}
 	var qualified: Array = []
@@ -451,7 +479,7 @@ static func _measure_pitcher_stats(
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if not record.is_pitcher() or pitcher_role_of(record) != role:
 			continue
-		var stats: PSPitcherStats = record.pitcher_stats
+		var stats: PSPitcherStats = pitcher_stats_for_level(record, level)
 		if stats == null or stats.batters_faced < MIN_REFERENCE_BATTERS_FACED:
 			continue
 		(samples["run_prevention"] as Array).append(run_prevention_value(stats))
@@ -489,9 +517,13 @@ static func _default_pitcher_stats_with_alignment(
 	)
 
 
-static func _season_records(year: int, season_number: int) -> Array:
+# level=LEVEL_FARM ではファーム専用球団を含む14球団から集める (二軍リーグの母集団)。
+# 既定 (一軍) が `GameDb.teams` の12球団なのは変えない — ここが一軍のリーグ基準の単一ソースで、
+# 専用球団が混ざると一軍の基準が汚染される。
+static func _season_records(year: int, season_number: int, level: int = LEVEL_FIRST) -> Array:
 	var records: Array = []
-	for team_row in GameDb.teams:
+	var source_teams: Array = GameDb.teams if level == LEVEL_FIRST else GameDb.farm_participating_teams()
+	for team_row in source_teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue

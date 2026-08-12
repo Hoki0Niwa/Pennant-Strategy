@@ -20,6 +20,11 @@ static func pool_snapshot(players: Array) -> Dictionary:
 		var player: PSPlayer = player_value as PSPlayer
 		if player == null or player.is_retired():
 			continue
+		# ファーム専用球団の選手は NPB のプールではないので母集団から外す。PA モデル定数を
+		# 「まとめて较正」するときの観測基準がこれなので、意図的に低能力で生成される
+		# 専用球団の選手が混ざると平均が下がって較正を誤らせる ([[project_farm_system_design]])。
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			continue
 		if player.is_pitcher():
 			pitchers.append(player)
 		else:

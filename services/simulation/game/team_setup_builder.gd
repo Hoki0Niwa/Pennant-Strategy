@@ -15,13 +15,19 @@ const MIN_ACTIVE_CATCHERS: int = 2
 const STARTER_POOL_MIN: int = 5
 
 
-static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool, postseason: bool = false) -> Dictionary:
+static func build_team_setup(
+	season: PSSeason,
+	team_id: int,
+	dh_enabled: bool,
+	postseason: bool = false,
+	level: int = LEVEL_FIRST
+) -> Dictionary:
 	# 1試合1チームぶんの打撃スコア memo。ロスター検証 → AI既定配置の生成 → 本番配置で
 	# PSDefenseAlignmentService を最大3回通すため、共有しないと同じ選手の
 	# batting_score_with_form (= 能力 + 今季/過去成績ブレンド) を毎回作り直すことになる。
 	# 試合が始まる前なので成績も疲労もまだ動かず、共有しても値は変わらない。
 	var batting_memo: Dictionary = {}
-	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled, batting_memo)
+	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled, batting_memo, level)
 	if not bool(prepared.get("ok", false)):
 		return prepared
 
@@ -29,22 +35,31 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool, p
 	var available_fielders: Array = prepared["available_fielders"] as Array
 	var reliever_pool: Array = prepared.get("reliever_pool", []) as Array
 	var team_record: PSTeamSeasonRecord = prepared.get("team_record", null) as PSTeamSeasonRecord
+	# 二軍は序列 (pitcher_ids) だけ別キーで持ち、**登板間隔の台帳 (last_start_day_by_pitcher) は
+	# 一軍と共有する**。これで「二軍で投げた翌日に昇格して中0日で先発」を構造的に防げる。
+	var saved_rotation: Dictionary = PSRotationPlanner.rotation_state_for_level(season, team_id, level)
 	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(
-		season, team_id, starter_pitchers, reliever_pool, postseason
+		season, team_id, starter_pitchers, reliever_pool, postseason, saved_rotation
 	)
 	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
 	if rotation_pitcher == null:
 		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
-	var saved_rotation: Dictionary = season.get_rotation(team_id)
 	var relievers: Array = PSRotationPlanner.select_relievers_for_innings(reliever_pool, starter_pitchers, rotation_pitcher.player_id, saved_rotation)
 	var relief_role_by_pitcher: Dictionary = PSRotationPlanner.relief_role_by_pitcher(saved_rotation, relievers)
-	var team_games_played_before: int = 0 if team_record == null else int(team_record.stats.games)
+	# 消化試合数はレベルごとに数える。守備の交代間隔 (`rested_starter_ids_for_game`) と
+	# 日替わり打順がこの値を使うので、二軍で一軍の試合数を渡すと休養サイクルがずれる。
+	var team_games_played_before: int = 0
+	if team_record != null:
+		team_games_played_before = int(
+			team_record.farm_stats.games if level == LEVEL_FARM else team_record.stats.games
+		)
 
 	# auto_lineup ON は保存済み打順を使わず、その日のロスターから打順と守備配置を毎試合作る。
 	# OFF のチームは保存設定を優先し、欠員などで組めない場合だけ自動生成へフォールバックする。
 	var setup: Dictionary = {}
 	var team: PSTeam = GameDb.get_team(team_id)
-	var use_saved: bool = team == null or not team.auto_lineup
+	# 二軍の打順・守備配置は保存設定を使わず必ず自動生成する (二軍用の打順エディタは持たない)。
+	var use_saved: bool = level == LEVEL_FIRST and (team == null or not team.auto_lineup)
 	if use_saved:
 		var saved: Dictionary = season.get_lineup(team_id, dh_enabled)
 		if not saved.is_empty():
@@ -57,7 +72,7 @@ static func build_team_setup(season: PSSeason, team_id: int, dh_enabled: bool, p
 	if setup.is_empty():
 		setup = build_setup_from_auto(
 			season, team_id, dh_enabled, available_fielders, rotation_pitcher,
-			team_games_played_before, batting_memo
+			team_games_played_before, batting_memo, level
 		)
 
 	if bool(setup.get("ok", false)):
@@ -138,7 +153,13 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	const TARGET_TOTAL: int = 31
 	# ローテは6人だが一軍には7人目の先発を置く。連戦の谷間・不振/疲労での1回飛ばし・故障の穴を
 	# 二軍からの再登録なしで埋められるようにするため (NPB も6人ローテで7〜8人を帯同する)。
-	const TARGET_STARTERS: int = 7
+	# ローテは6人。**7人目を一軍に置かない**のが要点で、連戦の谷間は
+	# `TeamAutoAI.run_spot_starter_callups` が二軍から1試合限定で上げて埋める
+	# (登板翌日に抹消 → 10日ルールで次の谷間は別の投手になる = 先発の顔ぶれが増える)。
+	# ⚠️ team_auto_ai と team_setup_builder の両方を必ず揃えること。
+	# 経緯: 2026-08-10 に「谷間を埋める手段が無い」ため 6→7 にしたが、二軍からの
+	# スポット昇格 (2026-08-11) がその役目を持ったので 7→6 へ戻した。
+	const TARGET_STARTERS: int = 6
 	const TARGET_PITCHERS: int = 15
 	var starters: Array = []
 	var relievers: Array = []
@@ -450,10 +471,85 @@ static func _records_can_field_game(
 	return slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size()
 
 
+const LEVEL_FIRST: int = 0
+const LEVEL_FARM: int = 1
+
+# 二軍のスタメン選考は**能力順そのままではない**。二軍の目的は勝つことではなく育てることなので、
+# 育成選手と若手を優先し、ベテランは控えめにする。
+# ⚠️ これが無いと二軍は「一軍に上がれなかった上位から順に9人」を毎日並べ、
+#    **育成選手の出場率が5% (125人中6人) にしかならない** — 二軍戦を作った目的の一つが
+#    満たされない (実測で判明。`tools/run_farm_report` の development_appearance_rate)。
+# 単位は表示能力スケール (batting_score_with_form と同じ)。較正ノブ。
+const FARM_DEVELOPMENT_PRIORITY_BONUS: float = 10.0
+const FARM_YOUTH_PRIORITY_AGE: int = 24
+const FARM_YOUTH_PRIORITY_BONUS: float = 6.0
+const FARM_VETERAN_PRIORITY_AGE: int = 30
+const FARM_VETERAN_PRIORITY_PENALTY: float = 6.0
+
+
+# 二軍用の打撃評価を memo へ**先に**入れておく。以降の選考 (守備配置・DH・控え) は
+# `_batting_memo_score` が memo にある値をそのまま使うので、選考ロジック側は無改修で済む。
+static func _prime_farm_batting_memo(batting_memo: Dictionary, candidates: Array) -> void:
+	for record_row in candidates:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or batting_memo.has(record.player_id):
+			continue
+		var score: float = float(PlayerValueEvaluator.batting_score_with_form(record))
+		batting_memo[record.player_id] = int(round(score + farm_development_priority(record)))
+
+
+# 二軍での起用優先度の加点。育成 > 若手 > 中堅 > ベテラン。
+static func farm_development_priority(record: PSPlayerSeasonRecord) -> float:
+	if record == null:
+		return 0.0
+	var bonus: float = 0.0
+	if record.development_player:
+		bonus += FARM_DEVELOPMENT_PRIORITY_BONUS
+	if record.age <= FARM_YOUTH_PRIORITY_AGE:
+		bonus += FARM_YOUTH_PRIORITY_BONUS
+	elif record.age >= FARM_VETERAN_PRIORITY_AGE:
+		bonus -= FARM_VETERAN_PRIORITY_PENALTY
+	return bonus
+
+
+# 二軍戦に出られる選手。**一軍登録 (active_roster) の裏返し + 育成選手**。
+# ファーム専用球団は一軍を持たないので在籍者全員が対象。
+# 故障者の除外は後段の eligible_or_fallback が行う。
+#
+# ⚠️ `season.get_active_roster` は**一軍の試合準備で初めて作られる**ため、二軍を先に回す
+# 日次順序では開幕日に空になる。空のまま裏返すと全員 (= 一軍の主力を含む) が二軍戦に出てしまうので、
+# その場合は `preview_active_roster` で一軍登録を導出して除外に使う。
+# **保存はしない** — dh 条件が一軍の試合と異なり得るため、保存すると一軍の編成を変えてしまう。
+static func farm_eligible_records(season: PSSeason, team_id: int, all_records: Array) -> Array:
+	if PSFarmLeague.is_farm_club_id(team_id):
+		return all_records.duplicate()
+	var active_id_list: Array = season.get_active_roster(team_id).get("player_ids", []) as Array
+	if active_id_list.is_empty():
+		var preview: Dictionary = preview_active_roster(season, team_id)
+		if bool(preview.get("ok", false)):
+			active_id_list = preview.get("player_ids", []) as Array
+	var active_ids: Dictionary = {}
+	for id_value in active_id_list:
+		active_ids[int(id_value)] = true
+	var farm_records: Array = []
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or active_ids.has(record.player_id):
+			continue
+		farm_records.append(record)
+	return farm_records
+
+
 static func prepare_team_setup(
-	season: PSSeason, team_id: int, dh_enabled: bool = true, batting_memo: Dictionary = {}
+	season: PSSeason,
+	team_id: int,
+	dh_enabled: bool = true,
+	batting_memo: Dictionary = {},
+	level: int = LEVEL_FIRST
 ) -> Dictionary:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+	if level == LEVEL_FARM:
+		return _prepare_farm_setup(season, team_id, dh_enabled, batting_memo, all_records)
 	var active_records: Array = filter_by_active_roster(season, team_id, all_records)
 	var active_needs_repair: bool = active_records.is_empty()
 	if not active_needs_repair:
@@ -522,6 +618,49 @@ static func prepare_team_setup(
 	}
 
 
+# 二軍用のロスター準備。一軍のような active_roster の修復機構は持たない
+# (二軍は「一軍に上がらなかった全員」なので、選ぶ余地がそもそも無い)。
+# 育成選手を出場可能として扱うのがここの要点。
+static func _prepare_farm_setup(
+	season: PSSeason,
+	team_id: int,
+	dh_enabled: bool,
+	_batting_memo: Dictionary,
+	all_records: Array
+) -> Dictionary:
+	var records: Array = farm_eligible_records(season, team_id, all_records)
+	var pitchers: Array = []
+	var fielders: Array = []
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		if record.is_pitcher():
+			pitchers.append(record)
+		else:
+			fielders.append(record)
+
+	var starter_pitchers: Array = eligible_or_fallback(starter_pitcher_candidates(pitchers), 1, true)
+	var required_fielders: int = _minimum_fielders_for_game(dh_enabled)
+	var available_fielders: Array = eligible_or_fallback(fielders, required_fielders, true)
+
+	# 一軍が上位を抜いた残りなので、故障が重なると人数が足りないことが実際に起こり得る。
+	# その場合はエラーを返し、呼び出し側 (PSFarmGameRunner) が試合を中止扱いにする。
+	if starter_pitchers.is_empty():
+		return {"ok": false, "message": "%sの二軍に先発できる投手がいません" % GameSimulator._team_name(team_id)}
+	if available_fielders.size() < required_fielders:
+		return {"ok": false, "message": "%sの二軍の野手が%d人未満です" % [GameSimulator._team_name(team_id), required_fielders]}
+
+	_sort_by_starter_order(starter_pitchers)
+	return {
+		"ok": true,
+		"starter_pitchers": starter_pitchers,
+		"available_fielders": available_fielders,
+		"reliever_pool": eligible_or_fallback(reliever_pool_candidates(pitchers), 1, true),
+		"team_record": RecordStore.get_team_record(team_id, season.year, season.season_number),
+	}
+
+
 static func build_setup_from_auto(
 	season: PSSeason,
 	team_id: int,
@@ -529,21 +668,30 @@ static func build_setup_from_auto(
 	available_fielders: Array,
 	rotation_pitcher: PSPlayerSeasonRecord,
 	team_games_played_before: int = -1,
-	batting_memo: Dictionary = {}
+	batting_memo: Dictionary = {},
+	level: int = LEVEL_FIRST
 ) -> Dictionary:
 	if team_games_played_before < 0:
 		var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(team_id, season.year, season.season_number)
 		team_games_played_before = 0 if team_record == null else int(team_record.stats.games)
-	var usage_settings: Dictionary = season.get_fielder_usage(team_id)
-	if _usage_needs_ai_defaults(usage_settings, available_fielders):
+	# ⚠️ 守備起用設定 (fielder_usage) と自動打順は**一軍専用の保存状態**。二軍がこれを読むと
+	# 一軍のスタメン計画で二軍の配置が決まり、書き戻すと一軍側が二軍の顔ぶれで上書きされる。
+	# 二軍は保存設定を一切参照せず、その日のロスターから毎試合作る。
+	var is_farm: bool = level == LEVEL_FARM
+	if is_farm:
+		_prime_farm_batting_memo(batting_memo, available_fielders)
+	var usage_settings: Dictionary = {} if is_farm else season.get_fielder_usage(team_id)
+	if not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders):
 		var base_slots: Array = select_defensive_starters_with_usage(
 			team_id, available_fielders, usage_settings, 1, batting_memo
 		)
 		if base_slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 			usage_settings = build_ai_fielder_usage(available_fielders, base_slots, usage_settings)
 			season.set_fielder_usage(team_id, usage_settings)
-	var fielding_slots: Array = select_defensive_starters(
-		season, team_id, available_fielders, team_games_played_before + 1, batting_memo
+	var fielding_slots: Array = (
+		select_defensive_starters_with_usage(team_id, available_fielders, {}, team_games_played_before + 1, batting_memo)
+		if is_farm
+		else select_defensive_starters(season, team_id, available_fielders, team_games_played_before + 1, batting_memo)
 	)
 	if fielding_slots.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 		return {"ok": false, "message": "%sの守備位置を埋められません" % GameSimulator._team_name(team_id)}
@@ -564,7 +712,10 @@ static func build_setup_from_auto(
 
 	# auto_lineup ON なら日替わり打順サービス、OFF なら基本打順のみ。
 	var team: PSTeam = GameDb.get_team(team_id)
-	if team != null and team.auto_lineup:
+	# 二軍は日替わり打順サービスを使わない。`PSBattingOrderProfile` はチーム単位の静的キャッシュで、
+	# `season.set_auto_batting_order` と合わせて**一軍の基本打順を保持する共有状態**なので、
+	# 二軍の顔ぶれで踏むと一軍の打順が壊れる。二軍は能力順の単純な打順で組む。
+	if not is_farm and team != null and team.auto_lineup:
 		if not dh_enabled:
 			batting_order.append(rotation_pitcher)
 		var profile: PSBattingOrderProfile = BattingOrderProfile.load_for_team(team_id, dh_enabled)
@@ -1223,10 +1374,15 @@ static func _active_roster_selection_score(record: PSPlayerSeasonRecord) -> int:
 	return score
 
 
-static func eligible_or_fallback(records: Array, _min_size: int) -> Array:
+# 出場可能な選手だけに絞る。**育成選手は一軍では除外、二軍では出場可**
+# (NPB の育成制度は「二軍で出場して支配下を狙う」制度なので、二軍戦こそが育成の主戦場)。
+static func eligible_or_fallback(records: Array, _min_size: int, allow_development: bool = false) -> Array:
 	var eligible: Array = []
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record != null and record.injury_days <= 0 and not record.development_player:
-			eligible.append(record)
+		if record == null or record.injury_days > 0:
+			continue
+		if record.development_player and not allow_development:
+			continue
+		eligible.append(record)
 	return eligible

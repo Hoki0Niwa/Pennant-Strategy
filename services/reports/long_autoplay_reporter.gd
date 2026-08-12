@@ -575,6 +575,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	var dev_release_result: Dictionary = OffseasonService.process_development_releases(GameDb.players, GameDb.teams, 0, season.year)
 	GameDb.rebuild_player_indices()
 
+	# ファーム専用球団の補充 (高齢整理 → 戦力外からの獲得 → 生成)。戦力外の獲得フェーズより
+	# 後に回す必要があるため、対話プレイの成長ステップと同じ位置で実行する。
+	var farm_supply_result: Dictionary = FarmClubService.process_offseason(GameDb.players, season.year)
+	GameDb.rebuild_player_indices()
+
 	# 育成契約の消化シーズン数の分布 (オフ完了時点)。「育成のまま N年で自由契約」ルールの較正用で、
 	# max が伸び続けるなら育成が滞留している (= 人数が発散する) サイン。
 	var dev_tenure_max: int = 0
@@ -684,6 +689,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"demoted_count": int(release_result.get("demoted_count", 0)),
 		"promoted_count": int(promotion_result.get("promoted_count", 0)),
 		"dev_released_count": int(dev_release_result.get("released_count", 0)),
+		# ファーム専用球団の流出入。ロスターが目標人数付近で bounded かの監視用。
+		"farm_club_attrition_count": int(farm_supply_result.get("attrition_count", 0)),
+		"farm_club_signed_count": int(farm_supply_result.get("signed_count", 0)),
+		"farm_club_generated_count": int(farm_supply_result.get("generated_count", 0)),
+		"farm_club_roster_sizes": farm_supply_result.get("clubs", {}),
 		"development_tenure_max": dev_tenure_max,
 		"development_tenure_avg": _round_float(_safe_div(float(dev_tenure_sum), float(dev_tenure_count)), 2),
 		"draft_complete": bool(draft_state.get("complete", false)),

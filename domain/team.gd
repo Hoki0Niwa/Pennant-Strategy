@@ -11,6 +11,11 @@ var funds: int
 var ratings: Dictionary = {}
 # true なら保存打順を使わず、試合ごとに自動打順と守備テンプレートからチーム編成を作る。
 var auto_lineup: bool = true
+# ファーム専用球団 (一軍を持たない = NPB 球団ではない) なら true。
+# 一軍日程・順位・ポストシーズン・FA・予算・戦力外・トレード・表彰・WAR・支配下枠の
+# いずれの対象にもならず、二軍戦にだけ参加する。`GameDb.teams` には載らず
+# `GameDb.farm_clubs` 側に持つ ([[project_farm_system_design]])。
+var farm_only: bool = false
 
 
 static func from_dict(data: Dictionary) -> PSTeam:
@@ -29,6 +34,7 @@ func apply_dict(data: Dictionary) -> void:
 	funds = int(data.get("funds", 0))
 	ratings = (data.get("ratings", {}) as Dictionary).duplicate(true)
 	auto_lineup = bool(data.get("auto_lineup", true))
+	farm_only = bool(data.get("farm_only", false))
 
 
 func overall() -> int:
@@ -56,4 +62,5 @@ func to_dict() -> Dictionary:
 		"funds": funds,
 		"ratings": ratings,
 		"auto_lineup": auto_lineup,
+		"farm_only": farm_only,
 	}

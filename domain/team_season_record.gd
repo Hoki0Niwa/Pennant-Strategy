@@ -9,6 +9,11 @@ var season_number: int
 var name: String
 var league: String
 var stats: PSStats = PSStats.new()
+# 二軍 (ファーム) の勝敗。一軍とは別インスタンスで持ち、順位表・優勝判定も別系統。
+# `season.farm_standings` が当季の正で、こちらはアーカイブ (年度履歴) へ乗せるための控え
+# — 一軍が `season.standings` と `stats` の両方を更新するのと同じ二重書き。
+# ファーム専用球団 (id 13/14) の team record も RecordStore に作られる。
+var farm_stats: PSStats = PSStats.new()
 
 
 # 新シーズン開始時に PSTeam から空の年度記録を作る。
@@ -30,6 +35,7 @@ static func from_dict(data: Dictionary) -> PSTeamSeasonRecord:
 	record.name = str(data.get("name", ""))
 	record.league = str(data.get("league", ""))
 	record.stats = PSStats.from_dict(data.get("stats", {}) as Dictionary)
+	record.farm_stats = PSStats.from_dict(data.get("farm_stats", {}) as Dictionary)
 	return record
 
 
@@ -41,4 +47,5 @@ func to_dict() -> Dictionary:
 		"name": name,
 		"league": league,
 		"stats": stats.to_dict(),
+		"farm_stats": farm_stats.to_dict(),
 	}

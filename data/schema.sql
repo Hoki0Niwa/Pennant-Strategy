@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS player_season_records (
   pitching_abilities_json TEXT NOT NULL DEFAULT '{}',
   fielding_abilities_json TEXT NOT NULL DEFAULT '{}',
   legacy_abilities_json TEXT NOT NULL DEFAULT '{}',
+  farm_defensive_outs_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY(player_id, year, season_number),
   FOREIGN KEY(player_id) REFERENCES players(id),
   CHECK(team_id >= 0),
@@ -143,6 +144,71 @@ CREATE TABLE IF NOT EXISTS pitcher_stats (
   walks INTEGER NOT NULL DEFAULT 0,
   hit_batters INTEGER NOT NULL DEFAULT 0,
   strikeouts INTEGER NOT NULL DEFAULT 0,
+  runs_allowed INTEGER NOT NULL DEFAULT 0,
+  earned_runs INTEGER NOT NULL DEFAULT 0,
+  complete_games INTEGER NOT NULL DEFAULT 0,
+  shutouts INTEGER NOT NULL DEFAULT 0,
+  quality_starts INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(player_id, year, season_number),
+  FOREIGN KEY(player_id, year, season_number)
+    REFERENCES player_season_records(player_id, year, season_number)
+);
+
+-- 二軍 (ファーム) 成績。一軍と同じ列構成だが専用テーブルにする。
+-- batter_stats / pitcher_stats に level 列を足す案は、リーダーボード系の SELECT が複数あり
+-- そのすべてに WHERE level = 0 を書き忘れる余地が残るため採らない。テーブルを分ければ
+-- 既存クエリは構造的に二軍成績を見られない。
+CREATE TABLE IF NOT EXISTS farm_batter_stats (
+  player_id INTEGER NOT NULL,
+  year INTEGER NOT NULL,
+  season_number INTEGER NOT NULL,
+  games INTEGER NOT NULL DEFAULT 0,
+  plate_appearances INTEGER NOT NULL DEFAULT 0,
+  at_bats INTEGER NOT NULL DEFAULT 0,
+  hits INTEGER NOT NULL DEFAULT 0,
+  doubles INTEGER NOT NULL DEFAULT 0,
+  triples INTEGER NOT NULL DEFAULT 0,
+  home_runs INTEGER NOT NULL DEFAULT 0,
+  runs_batted_in INTEGER NOT NULL DEFAULT 0,
+  runs INTEGER NOT NULL DEFAULT 0,
+  walks INTEGER NOT NULL DEFAULT 0,
+  hit_by_pitches INTEGER NOT NULL DEFAULT 0,
+  strikeouts INTEGER NOT NULL DEFAULT 0,
+  pitches_seen INTEGER NOT NULL DEFAULT 0,
+  stolen_base_attempts INTEGER NOT NULL DEFAULT 0,
+  stolen_bases INTEGER NOT NULL DEFAULT 0,
+  sacrifices INTEGER NOT NULL DEFAULT 0,
+  sacrifice_flies INTEGER NOT NULL DEFAULT 0,
+  double_plays INTEGER NOT NULL DEFAULT 0,
+  errors INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(player_id, year, season_number),
+  FOREIGN KEY(player_id, year, season_number)
+    REFERENCES player_season_records(player_id, year, season_number)
+);
+
+CREATE TABLE IF NOT EXISTS farm_pitcher_stats (
+  player_id INTEGER NOT NULL,
+  year INTEGER NOT NULL,
+  season_number INTEGER NOT NULL,
+  games INTEGER NOT NULL DEFAULT 0,
+  starts INTEGER NOT NULL DEFAULT 0,
+  relief_appearances INTEGER NOT NULL DEFAULT 0,
+  wins INTEGER NOT NULL DEFAULT 0,
+  losses INTEGER NOT NULL DEFAULT 0,
+  holds INTEGER NOT NULL DEFAULT 0,
+  saves INTEGER NOT NULL DEFAULT 0,
+  outs_pitched INTEGER NOT NULL DEFAULT 0,
+  batters_faced INTEGER NOT NULL DEFAULT 0,
+  pitches_thrown INTEGER NOT NULL DEFAULT 0,
+  hits_allowed INTEGER NOT NULL DEFAULT 0,
+  home_runs_allowed INTEGER NOT NULL DEFAULT 0,
+  walks INTEGER NOT NULL DEFAULT 0,
+  hit_batters INTEGER NOT NULL DEFAULT 0,
+  strikeouts INTEGER NOT NULL DEFAULT 0,
+  ground_balls_allowed INTEGER NOT NULL DEFAULT 0,
+  line_drives_allowed INTEGER NOT NULL DEFAULT 0,
+  infield_flies_allowed INTEGER NOT NULL DEFAULT 0,
+  outfield_flies_allowed INTEGER NOT NULL DEFAULT 0,
   runs_allowed INTEGER NOT NULL DEFAULT 0,
   earned_runs INTEGER NOT NULL DEFAULT 0,
   complete_games INTEGER NOT NULL DEFAULT 0,

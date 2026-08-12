@@ -26,7 +26,16 @@ static func create_new_season(teams: Array, selected_team_id: int, year: int = D
 	season.setup(team_ids)
 
 	season.schedule = PSSchedule.generate_pennant_schedule(teams, PSSchedule.PENNANT_GAMES_PER_TEAM, dh_by_league, season.year, season.season_number)
+	setup_farm_schedule(season, team_ids)
 	return season
+
+
+# 二軍日程 (14球団3地区) を組み、二軍順位表を初期化する。一軍日程が確定した後に呼ぶこと —
+# 二軍の試合日は一軍の試合日の部分集合として割り当てるため。
+static func setup_farm_schedule(season: PSSeason, first_team_ids: Array) -> void:
+	var farm_team_ids: Array = PSFarmLeague.all_team_ids(first_team_ids)
+	season.setup_farm(farm_team_ids)
+	season.farm_schedule = PSFarmSchedule.generate(season.schedule, farm_team_ids)
 
 
 # 前年の操作チームと season_number を引き継いで翌年シーズンを作る。
@@ -48,4 +57,5 @@ static func create_next_season(previous_season: PSSeason, teams: Array, dh_by_le
 	season.setup(team_ids)
 
 	season.schedule = PSSchedule.generate_pennant_schedule(teams, PSSchedule.PENNANT_GAMES_PER_TEAM, dh_by_league, season.year, season.season_number)
+	setup_farm_schedule(season, team_ids)
 	return season

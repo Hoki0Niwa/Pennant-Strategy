@@ -2,10 +2,13 @@ extends RefCounted
 class_name PSGameLoop
 
 
+# max_innings は延長の上限。既定は一軍の 12 回で、二軍 (ファーム) だけ 10 回で打ち切る
+# (実 NPB のファーム公式戦は延長が制限され引き分けが10%超になる → PSFarmSchedule.MAX_INNINGS)。
 static func simulate_game(
 	away_setup: Dictionary,
 	home_setup: Dictionary,
-	rule_groups: Array[Dictionary] = []
+	rule_groups: Array[Dictionary] = [],
+	max_innings: int = GameSimulator.MAX_INNINGS
 ) -> Dictionary:
 	var away_pitcher: PSPlayerSeasonRecord = away_setup["pitcher"] as PSPlayerSeasonRecord
 	var home_pitcher: PSPlayerSeasonRecord = home_setup["pitcher"] as PSPlayerSeasonRecord
@@ -38,7 +41,7 @@ static func simulate_game(
 	}
 
 	var inning: int = 1
-	while inning <= GameSimulator.MAX_INNINGS:
+	while inning <= max_innings:
 		var home_team_id: int = int(home_setup.get("team_id", 0))
 		_log_defensive_subs(result, PSInGameSubstitutions.apply_pending_defensive_subs(home_setup), inning, "top", home_team_id)
 		_log_defensive_subs(result, PSInGameSubstitutions.maybe_apply_defensive_replacements(home_setup, inning, "top", result), inning, "top", home_team_id)

@@ -47,6 +47,11 @@ func _parse_args() -> Dictionary:
 		if arg == "--help" or arg == "-h":
 			options["help"] = true
 			continue
+		if arg == "--no-farm":
+			# 二軍戦を止めて回す。二軍を足すと1試合日のコストが約2倍になるので、
+			# PA モデルの较正など二軍が無関係な作業ではこれで現行速度を維持する。
+			PSFarmGameRunner.enabled = false
+			continue
 		if arg.begins_with("--seasons="):
 			options["seasons"] = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--selected-team="):
@@ -296,6 +301,7 @@ func _print_usage() -> void:
 	print("  --seed=N")
 	print("  --seeds=1,2,3  (multi-seed JSON aggregation)")
 	print("  --output=res://reports/balance_report_latest.json")
+	print("  --no-farm  (二軍戦を止めて回す。約2倍速。二軍が無関係な较正向け)")
 
 
 # OAA ゾーンを内部表現 "infield" / "outfield" から表示用 "IF" / "OF" に変換。

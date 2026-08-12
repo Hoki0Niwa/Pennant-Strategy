@@ -83,6 +83,16 @@ static func rating_delta(
 	)
 
 
+# 二軍成績版。**二軍の成績分布で σ 化する**ので「二軍で能力なりに打っている」が 0 になり、
+# 二軍で能力以上に打っている選手だけが正の値を得る ([[project_farm_system_design]])。
+# 一軍の delta と直接足すのではなく、呼び出し側 (TeamAutoAI) が割引率を掛けて使う。
+static func farm_rating_delta(record: PSPlayerSeasonRecord) -> float:
+	return _rating_delta(
+		record, null, ABILITY_PRIOR_WEIGHT, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY,
+		FORM_RATING_SCALE, FORM_RATING_MIN, FORM_RATING_MAX, PSPerformanceReference.LEVEL_FARM
+	)
+
+
 # 編成判断用: 同じ差分を、より長い記憶と弱い追随で見る。
 static func roster_rating_delta(record: PSPlayerSeasonRecord) -> float:
 	return _rating_delta(
@@ -99,13 +109,14 @@ static func _rating_delta(
 	decay: float,
 	scale: float,
 	clip_min: float,
-	clip_max: float
+	clip_max: float,
+	level: int = PSPerformanceReference.LEVEL_FIRST
 ) -> float:
 	if record == null:
 		return 0.0
-	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
+	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number, level)
 	var samples: Array = _stat_samples(
-		record, season_reference["stats"] as Dictionary, lookback, decay, current_stats, true
+		record, season_reference["stats"] as Dictionary, lookback, decay, current_stats, true, level
 	)
 	if samples.is_empty():
 		return 0.0
@@ -125,24 +136,30 @@ static func _stat_samples(
 	lookback: int,
 	decay: float,
 	current_stats: PSBatterStats = null,
-	total_only: bool = false
+	total_only: bool = false,
+	level: int = PSPerformanceReference.LEVEL_FIRST
 ) -> Array:
 	var samples: Array = []
-	var stats: PSBatterStats = current_stats if current_stats != null else record.batter_stats
+	var stats: PSBatterStats = current_stats
+	if stats == null:
+		stats = PSPerformanceReference.batter_stats_for_level(record, level)
 	_append_stat_sample(samples, stats, 1.0, stat_reference, total_only)
 	if record.year <= 0:
 		return samples
 	# 過去ぶんは不変なのでキャッシュから足す。**今季 → k=1 → k=2 … の順序は崩さない**
 	# (_blend は重み付き和で、浮動小数の加算順序が変わると値がビット一致しなくなる)。
-	samples.append_array(_past_stat_samples(record, lookback, decay))
+	samples.append_array(_past_stat_samples(record, lookback, decay, level))
 	return samples
 
 
 # 過去 k=1..lookback 年ぶんの標本。履歴が積まれたセーブでも、同じ選手・評価ノブなら
 # RecordStore 参照と正規化を繰り返さない。
-static func _past_stat_samples(record: PSPlayerSeasonRecord, lookback: int, decay: float) -> Array:
-	var key: String = "%d|%d|%d|%d|%f" % [
-		record.player_id, record.year, record.season_number, lookback, decay
+static func _past_stat_samples(
+	record: PSPlayerSeasonRecord, lookback: int, decay: float,
+	level: int = PSPerformanceReference.LEVEL_FIRST
+) -> Array:
+	var key: String = "%d|%d|%d|%d|%f|%d" % [
+		record.player_id, record.year, record.season_number, lookback, decay, level
 	]
 	var cached: Variant = _past_sample_cache.get(key)
 	if cached != null:
@@ -158,10 +175,10 @@ static func _past_stat_samples(record: PSPlayerSeasonRecord, lookback: int, deca
 		)
 		if past == null:
 			continue
-		var past_reference: Dictionary = PSPerformanceReference.for_season(past_year, past_season_number)
+		var past_reference: Dictionary = PSPerformanceReference.for_season(past_year, past_season_number, level)
 		_append_stat_sample(
 			samples,
-			past.batter_stats,
+			PSPerformanceReference.batter_stats_for_level(past, level),
 			pow(decay, float(k)),
 			past_reference["stats"] as Dictionary
 		)

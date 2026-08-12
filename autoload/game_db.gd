@@ -14,6 +14,13 @@ var data_loaded_ok: bool = false
 var data_source: String = "json"
 var teams: Array = []
 var teams_by_id: Dictionary = {}
+# ファーム専用球団 (一軍を持たない2球団)。**`teams` には絶対に混ぜない** — `teams` の参照は
+# 300 箇所以上あり全て「12球団=一軍」前提で書かれているため、混ぜると一軍日程・順位・
+# ポストシーズン・FA・予算・戦力外・トレード・表彰が静かに壊れる。
+# 共有するのは team_id の空間だけで、RecordStore / PSPlayer.team_id は team_id キーの
+# 汎用実装なので専用球団の選手レコードは無改修で通る ([[project_farm_system_design]])。
+var farm_clubs: Array = []
+var farm_clubs_by_id: Dictionary = {}
 var players: Array = []
 var players_by_id: Dictionary = {}
 var players_by_team: Dictionary = {}
@@ -26,6 +33,8 @@ func _ready() -> void:
 func load_initial_data() -> void:
 	teams.clear()
 	teams_by_id.clear()
+	farm_clubs.clear()
+	farm_clubs_by_id.clear()
 	players.clear()
 	players_by_id.clear()
 	players_by_team.clear()
@@ -49,8 +58,29 @@ func load_initial_data() -> void:
 # 進化後ワールドを書き出すと球団ごとにバラバラな funds が入るため、ここで必ず揃える。
 func _finish_initial_load() -> void:
 	TeamFinance.apply_fixed_budget(teams)
+	_build_farm_clubs()
+	# 専用球団のロスターはシード CSV に持たず、ここで生成する。世界を作る全経路
+	# (UI / テスト / tools / レポート) がこの関数を通るので、取りこぼしが起きない。
+	# 生成は共有 Rng の乱数列を消費しない専用ストリームで行うため、既存の seed ベースラインは動かない。
+	FarmClubService.ensure_initial_rosters(players, PSSchedule.DEFAULT_YEAR_FOR_SCHEDULE)
+	rebuild_player_indices()
 	data_loaded_ok = true
 	data_loaded.emit()
+
+
+# ファーム専用球団は定義がコード側の単一ソース (PSFarmLeague.FARM_CLUB_DEFS)。
+# 一軍のシード CSV とは別に組み立てるので、`initial_teams.csv` は12球団のままで変わらない。
+# 予算 (TeamFinance) は通さない — 専用球団に支配下枠も予算も無いため。
+func _build_farm_clubs() -> void:
+	farm_clubs.clear()
+	farm_clubs_by_id.clear()
+	for def_row in PSFarmLeague.FARM_CLUB_DEFS:
+		var data: Dictionary = (def_row as Dictionary).duplicate(true)
+		data["farm_only"] = true
+		data["auto_lineup"] = true
+		var club: PSTeam = PSTeam.from_dict(data)
+		farm_clubs.append(club)
+		farm_clubs_by_id[club.id] = club
 
 
 # SQLite シードを使う環境では、SQLite に無い追加フィールドを JSON から id 一致で重ねる。
@@ -266,6 +296,26 @@ func _json_dict(text: String) -> Dictionary:
 
 func get_team(team_id: int) -> PSTeam:
 	return teams_by_id.get(team_id) as PSTeam
+
+
+# 一軍12球団 + ファーム専用球団のどちらでも引ける参照。**二軍の文脈でだけ使う** —
+# 一軍系のコードは従来どおり `get_team` を使い、専用球団を見えないままにしておく。
+func get_any_team(team_id: int) -> PSTeam:
+	var team: PSTeam = teams_by_id.get(team_id) as PSTeam
+	if team != null:
+		return team
+	return farm_clubs_by_id.get(team_id) as PSTeam
+
+
+func is_farm_club(team_id: int) -> bool:
+	return farm_clubs_by_id.has(team_id)
+
+
+# 二軍戦に参加する全球団 (一軍12 + 専用2 = 14)。二軍サブシステム専用。
+func farm_participating_teams() -> Array:
+	var participants: Array = teams.duplicate()
+	participants.append_array(farm_clubs)
+	return participants
 
 
 func get_players_for_team(team_id: int) -> Array:

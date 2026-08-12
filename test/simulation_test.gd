@@ -64,6 +64,10 @@ func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.development_player:
 			continue
+		# ファーム専用球団の選手も母集団から外す。育成と同じ理由 — NPB 支配下ではない低評価層が
+		# 混ざると、投打の評価スケールではなく「その層をどれだけ抱えているか」を測ってしまう。
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			continue
 		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
 		if record.is_pitcher():
 			if PSPitcherRoleModel.is_starter_record(record):

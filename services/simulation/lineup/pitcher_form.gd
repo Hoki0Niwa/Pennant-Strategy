@@ -44,6 +44,14 @@ static func rating_delta(
 
 
 # 編成判断用: より長い記憶と弱い追随。
+# 二軍成績版 (打者側 farm_rating_delta と同じ趣旨)。
+static func farm_rating_delta(record: PSPlayerSeasonRecord) -> float:
+	return _rating_delta(
+		record, null, ABILITY_PRIOR_WEIGHT, PAST_SEASON_LOOKBACK, PAST_SEASON_DECAY,
+		FORM_RATING_SCALE, FORM_RATING_MIN, FORM_RATING_MAX, PSPerformanceReference.LEVEL_FARM
+	)
+
+
 static func roster_rating_delta(record: PSPlayerSeasonRecord) -> float:
 	return _rating_delta(
 		record, null, ROSTER_ABILITY_PRIOR_WEIGHT, ROSTER_PAST_SEASON_LOOKBACK,
@@ -59,14 +67,15 @@ static func _rating_delta(
 	decay: float,
 	scale: float,
 	clip_min: float,
-	clip_max: float
+	clip_max: float,
+	level: int = PSPerformanceReference.LEVEL_FIRST
 ) -> float:
 	if record == null or not record.is_pitcher():
 		return 0.0
-	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
+	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number, level)
 	var ratings_reference: Dictionary = season_reference["pitcher_ratings"] as Dictionary
 	var role: String = PSPerformanceReference.pitcher_role_of(record)
-	var samples: Array = _stat_samples(record, current_stats, season_reference, role, lookback, decay)
+	var samples: Array = _stat_samples(record, current_stats, season_reference, role, lookback, decay, level)
 	if samples.is_empty():
 		return 0.0
 	var ability_total: float = PSPerformanceReference.pitcher_ability_total_index(
@@ -82,21 +91,27 @@ static func _stat_samples(
 	season_reference: Dictionary,
 	role: String,
 	lookback: int,
-	decay: float
+	decay: float,
+	level: int = PSPerformanceReference.LEVEL_FIRST
 ) -> Array:
 	var samples: Array = []
-	var stats: PSPitcherStats = current_stats if current_stats != null else record.pitcher_stats
+	var stats: PSPitcherStats = current_stats
+	if stats == null:
+		stats = PSPerformanceReference.pitcher_stats_for_level(record, level)
 	_append_stat_sample(samples, stats, 1.0, _stat_distributions(season_reference, role))
 	if record.year <= 0:
 		return samples
 	# 打者側と同じ: 過去ぶんはキャッシュから足し、今季 → k=1 → k=2 … の加算順序を保つ。
-	samples.append_array(_past_stat_samples(record, lookback, decay))
+	samples.append_array(_past_stat_samples(record, lookback, decay, level))
 	return samples
 
 
-static func _past_stat_samples(record: PSPlayerSeasonRecord, lookback: int, decay: float) -> Array:
-	var key: String = "%d|%d|%d|%d|%f" % [
-		record.player_id, record.year, record.season_number, lookback, decay
+static func _past_stat_samples(
+	record: PSPlayerSeasonRecord, lookback: int, decay: float,
+	level: int = PSPerformanceReference.LEVEL_FIRST
+) -> Array:
+	var key: String = "%d|%d|%d|%d|%f|%d" % [
+		record.player_id, record.year, record.season_number, lookback, decay, level
 	]
 	var cached: Variant = _past_sample_cache.get(key)
 	if cached != null:
@@ -112,10 +127,10 @@ static func _past_stat_samples(record: PSPlayerSeasonRecord, lookback: int, deca
 		)
 		if past == null:
 			continue
-		var past_reference: Dictionary = PSPerformanceReference.for_season(past_year, past_season_number)
+		var past_reference: Dictionary = PSPerformanceReference.for_season(past_year, past_season_number, level)
 		_append_stat_sample(
 			samples,
-			past.pitcher_stats,
+			PSPerformanceReference.pitcher_stats_for_level(past, level),
 			pow(decay, float(k)),
 			_stat_distributions(past_reference, PSPerformanceReference.pitcher_role_of(past))
 		)

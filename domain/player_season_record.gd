@@ -58,6 +58,22 @@ var pitcher_stats: PSPitcherStats = PSPitcherStats.new()
 # WAR / FIP / OAA / wRAA / BSR の算出元。
 var advanced_stats: PSAdvancedStats = PSAdvancedStats.new()
 
+# ---- 二軍 (ファーム) 成績 --------------------------------------------------
+# **一軍成績と同じ器を別インスタンスで持つ。** 1選手1シーズン = 1レコードのまま
+# (疲労・怪我・能力スナップショットは選手につき1個でなければならないため、
+# レベルごとにレコードを分けてはいけない)。
+#
+# ⚠️ **二軍成績は一軍成績と混ぜてはいけない。** タイトル・表彰・WAR・年俸査定・引退判定・
+# 規定到達・通算記録はすべて一軍のみ。既存コードがこのフィールドを読まないことで
+# 構造的に保証される ([[project_farm_system_design]])。
+var farm_batter_stats: PSBatterStats = PSBatterStats.new()
+var farm_pitcher_stats: PSPitcherStats = PSPitcherStats.new()
+# 二軍の advanced stats は**守備イニングだけ**保持する (WAR/OAA/wRAA は二軍では算出しない)。
+# オフの守備適性成長が守備イニングを入力に使うため、ここを捨てると
+# 「二軍でコンバートを試している選手の適性が伸びない」という実害が出る。
+# 形は advanced_stats.defensive_outs_by_position と同じ { "<position_id>": outs }。
+var farm_defensive_outs_by_position: Dictionary = {}
+
 
 static func from_player(player: PSPlayer, p_year: int, p_season_number: int) -> PSPlayerSeasonRecord:
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
@@ -144,6 +160,9 @@ static func from_dict(data: Dictionary) -> PSPlayerSeasonRecord:
 	record.arsenal_snapshot = (data.get("arsenal_snapshot", []) as Array).duplicate(true)
 	record.batter_stats = PSBatterStats.from_dict(data.get("batter_stats", {}) as Dictionary)
 	record.pitcher_stats = PSPitcherStats.from_dict(data.get("pitcher_stats", {}) as Dictionary)
+	record.farm_batter_stats = PSBatterStats.from_dict(data.get("farm_batter_stats", {}) as Dictionary)
+	record.farm_pitcher_stats = PSPitcherStats.from_dict(data.get("farm_pitcher_stats", {}) as Dictionary)
+	record.farm_defensive_outs_by_position = (data.get("farm_defensive_outs_by_position", {}) as Dictionary).duplicate(true)
 	var advanced_payload: Dictionary = data.get("advanced_stats", {}) as Dictionary
 	record.advanced_stats = AdvancedStatsRecord.new()
 	if not advanced_payload.is_empty():
@@ -172,6 +191,18 @@ func defensive_innings_at(position_id: int) -> float:
 		return 0.0
 	var outs: int = int(advanced_stats.defensive_outs_by_position.get(str(position_id), 0))
 	return float(outs) / 3.0
+
+
+# 二軍で position_id を守った守備イニング数。
+func farm_defensive_innings_at(position_id: int) -> float:
+	return float(int(farm_defensive_outs_by_position.get(str(position_id), 0))) / 3.0
+
+
+# 一軍 + 二軍の守備イニング。**守備適性の成長だけがこれを使う** — 二軍でコンバートを試した
+# 分も適性に反映させたいため。既定 (`defensive_innings_at`) を一軍のみに保つのは、
+# ゴールデングラブなど「一軍の表彰」が二軍のイニングを数えてしまう事故を防ぐため。
+func total_defensive_innings_at(position_id: int) -> float:
+	return defensive_innings_at(position_id) + farm_defensive_innings_at(position_id)
 
 
 func fielding_ability_category() -> String:
@@ -258,6 +289,9 @@ func to_dict() -> Dictionary:
 		"batter_stats": batter_stats.to_dict(),
 		"pitcher_stats": pitcher_stats.to_dict(),
 		"advanced_stats": advanced_stats.to_dict() if advanced_stats != null else {},
+		"farm_batter_stats": farm_batter_stats.to_dict(),
+		"farm_pitcher_stats": farm_pitcher_stats.to_dict(),
+		"farm_defensive_outs_by_position": farm_defensive_outs_by_position.duplicate(true),
 	}
 
 

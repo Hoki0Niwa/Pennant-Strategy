@@ -6,7 +6,7 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
 # セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
 # 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
-const SCHEMA_VERSION: int = 7
+const SCHEMA_VERSION: int = 8
 
 # スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
 # 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -108,6 +108,7 @@ const PLAYER_SEASON_COLUMNS: Array = [
 	"position_aptitudes_snapshot_json", "position_experience_snapshot_json",
 	"source_data_json", "z_abilities_snapshot_json", "raw_abilities_snapshot_json",
 	"arsenal_snapshot_json", "advanced_stats_json",
+	"farm_defensive_outs_json",
 ]
 
 const BATTER_STATS_COLUMNS: Array = [
@@ -195,7 +196,7 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 			var del_bindings: Array = [year, season_number]
 			for pid in ids:
 				del_bindings.append(int(pid))
-			for table_name in ["player_season_records", "batter_stats", "pitcher_stats"]:
+			for table_name in ["player_season_records", "batter_stats", "pitcher_stats", "farm_batter_stats", "farm_pitcher_stats"]:
 				var del_sql: String = "DELETE FROM %s WHERE year = ? AND season_number = ? AND player_id NOT IN (%s)" % [table_name, placeholders]
 				if not _query_with_bindings(db, del_sql, del_bindings):
 					_execute(db, "ROLLBACK")
@@ -222,6 +223,14 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 		if not _upsert_pitcher_stats(db, player_id, year, season_number, pitcher_stats):
 			_execute(db, "ROLLBACK")
 			return false
+		var farm_batter_stats: Dictionary = record.get("farm_batter_stats", {}) as Dictionary
+		if not _upsert_batter_stats(db, player_id, year, season_number, farm_batter_stats, "farm_batter_stats"):
+			_execute(db, "ROLLBACK")
+			return false
+		var farm_pitcher_stats: Dictionary = record.get("farm_pitcher_stats", {}) as Dictionary
+		if not _upsert_pitcher_stats(db, player_id, year, season_number, farm_pitcher_stats, "farm_pitcher_stats"):
+			_execute(db, "ROLLBACK")
+			return false
 		pending_fingerprints[record_key] = fingerprint
 
 	# キャッシュ有効時の削除反映: メモリから消えたレコード (前回キャッシュに居るが今回不在) を
@@ -233,7 +242,7 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 				continue
 			var parts: PackedStringArray = cached_key.split(":")
 			var del_bindings: Array = [int(parts[0]), int(parts[1]), int(parts[2])]
-			for table_name in ["player_season_records", "batter_stats", "pitcher_stats"]:
+			for table_name in ["player_season_records", "batter_stats", "pitcher_stats", "farm_batter_stats", "farm_pitcher_stats"]:
 				var del_sql: String = "DELETE FROM %s WHERE player_id = ? AND year = ? AND season_number = ?" % table_name
 				if not _query_with_bindings(db, del_sql, del_bindings):
 					_execute(db, "ROLLBACK")
@@ -291,8 +300,10 @@ static func load_all_player_season_record_dicts() -> Array:
 	var psr_rows: Array = _select_with_bindings(db, "SELECT * FROM player_season_records", [])
 	var bs_rows: Array = _select_with_bindings(db, "SELECT * FROM batter_stats", [])
 	var ps_rows: Array = _select_with_bindings(db, "SELECT * FROM pitcher_stats", [])
+	var fbs_rows: Array = _select_with_bindings(db, "SELECT * FROM farm_batter_stats", [])
+	var fps_rows: Array = _select_with_bindings(db, "SELECT * FROM farm_pitcher_stats", [])
 	_close(db)
-	return _merge_normalized_rows(psr_rows, bs_rows, ps_rows)
+	return _merge_normalized_rows(psr_rows, bs_rows, ps_rows, fbs_rows, fps_rows)
 
 
 # -----------------------------------------------------------------------------
@@ -680,28 +691,44 @@ static func _upsert_player_season_record(db: Object, record: Dictionary) -> bool
 	return _query_with_bindings(db, sql, bindings)
 
 
-static func _upsert_batter_stats(db: Object, player_id: int, year: int, season_number: int, stats: Dictionary) -> bool:
-	var sql: String = "INSERT OR REPLACE INTO batter_stats (%s) VALUES (%s)" % [
-		",".join(BATTER_STATS_COLUMNS),
-		_build_placeholders(BATTER_STATS_COLUMNS.size()),
+static func _upsert_batter_stats(db: Object, player_id: int, year: int, season_number: int, stats: Dictionary, table_name: String = "batter_stats") -> bool:
+	return _upsert_stats(db, table_name, BATTER_STATS_COLUMNS, player_id, year, season_number, stats)
+
+
+static func _upsert_pitcher_stats(db: Object, player_id: int, year: int, season_number: int, stats: Dictionary, table_name: String = "pitcher_stats") -> bool:
+	return _upsert_stats(db, table_name, PITCHER_STATS_COLUMNS, player_id, year, season_number, stats)
+
+
+# 一軍と二軍 (farm_*) の成績テーブルは列構成が同一なので、テーブル名だけ差し替えて共有する。
+static func _upsert_stats(
+	db: Object,
+	table_name: String,
+	columns: Array,
+	player_id: int,
+	year: int,
+	season_number: int,
+	stats: Dictionary
+) -> bool:
+	var sql: String = "INSERT OR REPLACE INTO %s (%s) VALUES (%s)" % [
+		table_name,
+		",".join(columns),
+		_build_placeholders(columns.size()),
 	]
 	var bindings: Array = [player_id, year, season_number]
-	for i in range(3, BATTER_STATS_COLUMNS.size()):
-		var col: String = str(BATTER_STATS_COLUMNS[i])
-		bindings.append(int(stats.get(col, 0)))
+	for i in range(3, columns.size()):
+		bindings.append(int(stats.get(str(columns[i]), 0)))
 	return _query_with_bindings(db, sql, bindings)
 
 
-static func _upsert_pitcher_stats(db: Object, player_id: int, year: int, season_number: int, stats: Dictionary) -> bool:
-	var sql: String = "INSERT OR REPLACE INTO pitcher_stats (%s) VALUES (%s)" % [
-		",".join(PITCHER_STATS_COLUMNS),
-		_build_placeholders(PITCHER_STATS_COLUMNS.size()),
+# 成績テーブルの DDL を列定義から組み立てる。全列 INTEGER なので COLUMNS 定数から機械的に作れ、
+# 一軍テーブルの手書き DDL と二軍テーブルの列がずれる余地を無くせる。
+static func _stats_table_ddl(table_name: String, columns: Array) -> String:
+	var defs: Array = []
+	for column in columns:
+		defs.append("%s INTEGER NOT NULL DEFAULT 0" % str(column))
+	return "CREATE TABLE IF NOT EXISTS %s (%s, PRIMARY KEY (player_id, year, season_number))" % [
+		table_name, ", ".join(defs)
 	]
-	var bindings: Array = [player_id, year, season_number]
-	for i in range(3, PITCHER_STATS_COLUMNS.size()):
-		var col: String = str(PITCHER_STATS_COLUMNS[i])
-		bindings.append(int(stats.get(col, 0)))
-	return _query_with_bindings(db, sql, bindings)
 
 
 static func _player_season_value(record: Dictionary, column: String) -> Variant:
@@ -724,6 +751,8 @@ static func _player_season_value(record: Dictionary, column: String) -> Variant:
 			return JSON.stringify(record.get("arsenal_snapshot", []))
 		"advanced_stats_json":
 			return JSON.stringify(record.get("advanced_stats", {}))
+		"farm_defensive_outs_json":
+			return JSON.stringify(record.get("farm_defensive_outs_by_position", {}))
 		"name", "role", "throwing_hand", "batting_side", "hometown", "registered_roster", "contract_status", "injury_type":
 			return str(record.get(column, ""))
 		_:
@@ -732,17 +761,17 @@ static func _player_season_value(record: Dictionary, column: String) -> Variant:
 
 # psr / batter_stats / pitcher_stats を player_id+year+season_number で merge し、
 # PSPlayerSeasonRecord.from_dict() がそのまま読める Dictionary 配列を返す。
-static func _merge_normalized_rows(psr_rows: Array, bs_rows: Array, ps_rows: Array) -> Array:
-	var bs_by_key: Dictionary = {}
-	for row_value in bs_rows:
-		var row: Dictionary = row_value as Dictionary
-		var key: String = "%d:%d:%d" % [int(row.get("player_id", 0)), int(row.get("year", 0)), int(row.get("season_number", 0))]
-		bs_by_key[key] = _normalized_stats_dict(row, BATTER_STATS_COLUMNS)
-	var ps_by_key: Dictionary = {}
-	for row_value in ps_rows:
-		var row: Dictionary = row_value as Dictionary
-		var key: String = "%d:%d:%d" % [int(row.get("player_id", 0)), int(row.get("year", 0)), int(row.get("season_number", 0))]
-		ps_by_key[key] = _normalized_stats_dict(row, PITCHER_STATS_COLUMNS)
+static func _merge_normalized_rows(
+	psr_rows: Array,
+	bs_rows: Array,
+	ps_rows: Array,
+	farm_bs_rows: Array = [],
+	farm_ps_rows: Array = []
+) -> Array:
+	var bs_by_key: Dictionary = _stats_rows_by_key(bs_rows, BATTER_STATS_COLUMNS)
+	var ps_by_key: Dictionary = _stats_rows_by_key(ps_rows, PITCHER_STATS_COLUMNS)
+	var farm_bs_by_key: Dictionary = _stats_rows_by_key(farm_bs_rows, BATTER_STATS_COLUMNS)
+	var farm_ps_by_key: Dictionary = _stats_rows_by_key(farm_ps_rows, PITCHER_STATS_COLUMNS)
 
 	var out: Array = []
 	for row_value in psr_rows:
@@ -751,8 +780,19 @@ static func _merge_normalized_rows(psr_rows: Array, bs_rows: Array, ps_rows: Arr
 		var record: Dictionary = _normalized_player_season_dict(row)
 		record["batter_stats"] = bs_by_key.get(key, _empty_batter_stats_dict())
 		record["pitcher_stats"] = ps_by_key.get(key, _empty_pitcher_stats_dict())
+		record["farm_batter_stats"] = farm_bs_by_key.get(key, _empty_batter_stats_dict())
+		record["farm_pitcher_stats"] = farm_ps_by_key.get(key, _empty_pitcher_stats_dict())
 		out.append(record)
 	return out
+
+
+static func _stats_rows_by_key(rows: Array, columns: Array) -> Dictionary:
+	var by_key: Dictionary = {}
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		var key: String = "%d:%d:%d" % [int(row.get("player_id", 0)), int(row.get("year", 0)), int(row.get("season_number", 0))]
+		by_key[key] = _normalized_stats_dict(row, columns)
+	return by_key
 
 
 static func _normalized_player_season_dict(row: Dictionary) -> Dictionary:
@@ -795,6 +835,7 @@ static func _normalized_player_season_dict(row: Dictionary) -> Dictionary:
 		"raw_abilities_snapshot": _parse_json_dict(str(row.get("raw_abilities_snapshot_json", "{}"))),
 		"arsenal_snapshot": _parse_json_array(str(row.get("arsenal_snapshot_json", "[]"))),
 		"advanced_stats": _parse_json_dict(str(row.get("advanced_stats_json", "{}"))),
+		"farm_defensive_outs_by_position": _parse_json_dict(str(row.get("farm_defensive_outs_json", "{}"))),
 	}
 
 
@@ -972,6 +1013,7 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			raw_abilities_snapshot_json TEXT NOT NULL DEFAULT '{}',
 			arsenal_snapshot_json TEXT NOT NULL DEFAULT '[]',
 			advanced_stats_json TEXT NOT NULL DEFAULT '{}',
+			farm_defensive_outs_json TEXT NOT NULL DEFAULT '{}',
 			PRIMARY KEY (player_id, year, season_number)
 		)""",
 		"CREATE INDEX IF NOT EXISTS idx_psr_year_season ON player_season_records(year, season_number)",
@@ -1073,6 +1115,15 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			PRIMARY KEY (year, season_number, team_id, game_index)
 		)""",
 		"CREATE INDEX IF NOT EXISTS idx_tlh_team ON team_lineup_history(year, season_number, team_id, day)",
+		# --- 永続化スキーマ v8: 二軍 (ファーム) 成績 ---
+		# 一軍と同じ列構成だが **専用テーブル**にする。`batter_stats` / `pitcher_stats` に
+		# level 列を足す案は、リーダーボード系の SELECT が5箇所あり、そのすべてに
+		# `WHERE level = 0` を書き忘れる余地が残るため採らない。テーブルを分ければ
+		# 既存クエリは構造的に二軍成績を見られない ([[project_farm_system_design]])。
+		_stats_table_ddl("farm_batter_stats", BATTER_STATS_COLUMNS),
+		_stats_table_ddl("farm_pitcher_stats", PITCHER_STATS_COLUMNS),
+		"CREATE INDEX IF NOT EXISTS idx_fbs_year_season ON farm_batter_stats(year, season_number)",
+		"CREATE INDEX IF NOT EXISTS idx_fps_year_season ON farm_pitcher_stats(year, season_number)",
 	]
 	for statement_row in statements:
 		var statement: String = str(statement_row)

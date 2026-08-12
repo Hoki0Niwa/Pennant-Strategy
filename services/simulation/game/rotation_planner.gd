@@ -73,14 +73,36 @@ const RELIEF_ROLE_SETUP: String = "setup"
 const RELIEF_ROLE_CLOSER: String = "closer"
 
 
+# 二軍のローテ序列は `farm_pitcher_ids` に分けて持つ。**`last_start_day_by_pitcher`
+# (登板間隔の台帳) と `manual_skip_pitcher_ids` は一軍と共有する** — 台帳を分けると
+# 「二軍で投げた翌日に昇格して中0日で先発」が起きるため。疲労 (`record.fatigue`) も同様に共有。
+const FARM_PITCHER_IDS_KEY: String = "farm_pitcher_ids"
+
+
+# 指定レベルから見たローテ状態。序列キーだけ差し替えた view を返す
+# (呼び出し側は `pitcher_ids` を読むだけでよく、レベルを意識しなくて済む)。
+static func rotation_state_for_level(season: PSSeason, team_id: int, level: int) -> Dictionary:
+	var saved: Dictionary = season.get_rotation(team_id) if season != null else {}
+	if level == PSTeamSetupBuilder.LEVEL_FIRST:
+		return saved
+	var view: Dictionary = saved.duplicate()
+	view["pitcher_ids"] = (saved.get(FARM_PITCHER_IDS_KEY, []) as Array).duplicate()
+	# 二軍の序列は自動生成のみ (二軍用のローテ編集画面は持たない)。
+	view["auto_generated"] = true
+	return view
+
+
 static func resolve_rotation_decision(
 	season: PSSeason,
 	team_id: int,
 	starter_pitchers: Array,
 	reliever_pool: Array = [],
-	postseason: bool = false
+	postseason: bool = false,
+	saved_override: Dictionary = {}
 ) -> Dictionary:
-	var saved: Dictionary = season.get_rotation(team_id) if season != null else {}
+	var saved: Dictionary = saved_override
+	if saved.is_empty():
+		saved = season.get_rotation(team_id) if season != null else {}
 	var rotation: Array = resolve_rotation_order_from_saved(saved, starter_pitchers)
 	if rotation.is_empty():
 		return {
@@ -357,19 +379,24 @@ static func _projected_fatigue(pitcher: PSPlayerSeasonRecord, days_from_now: int
 	return int(max(0, pitcher.fatigue - recovery))
 
 
-static func record_rotation_start(season: PSSeason, team_id: int, setup: Dictionary, day: int) -> void:
+static func record_rotation_start(
+	season: PSSeason, team_id: int, setup: Dictionary, day: int, level: int = PSTeamSetupBuilder.LEVEL_FIRST
+) -> void:
 	if season == null or team_id <= 0:
 		return
 	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", setup.get("pitcher", null)) as PSPlayerSeasonRecord
 	if starter == null:
 		return
 	var stored: Dictionary = season.get_rotation(team_id).duplicate(true)
+	# 序列はレベルごとのキーへ書く。台帳 (last_start_day_by_pitcher) は下で共有のまま更新する。
+	var order_key: String = "pitcher_ids" if level == PSTeamSetupBuilder.LEVEL_FIRST else FARM_PITCHER_IDS_KEY
 	var order_ids: Array = (setup.get("rotation_order_ids", []) as Array).duplicate()
 	if order_ids.is_empty():
-		order_ids = (stored.get("pitcher_ids", []) as Array).duplicate()
-	if (stored.get("pitcher_ids", []) as Array).is_empty() and not order_ids.is_empty():
-		stored["pitcher_ids"] = order_ids
-		stored["auto_generated"] = true
+		order_ids = (stored.get(order_key, []) as Array).duplicate()
+	if (stored.get(order_key, []) as Array).is_empty() and not order_ids.is_empty():
+		stored[order_key] = order_ids
+		if level == PSTeamSetupBuilder.LEVEL_FIRST:
+			stored["auto_generated"] = true
 
 	# 次に誰が投げるかは保存せず、毎回 last_start_day_by_pitcher から導出する
 	# (順延で日程が動いても作り直す状態が無いのが狙い)。

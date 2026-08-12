@@ -46,7 +46,13 @@ const WAR_PERF_WEIGHT: float = 6.0
 const TARGET_TOTAL: int = 31
 # ローテ6人 + 7人目の先発 (連戦の谷間・1回飛ばし・故障の穴埋め用)。
 # PSTeamSetupBuilder.preview_active_roster と同じ値にしておくこと。
-const TARGET_STARTERS: int = 7
+# ローテは6人。**7人目を一軍に置かない**のが要点で、連戦の谷間は
+# `TeamAutoAI.run_spot_starter_callups` が二軍から1試合限定で上げて埋める
+# (登板翌日に抹消 → 10日ルールで次の谷間は別の投手になる = 先発の顔ぶれが増える)。
+# ⚠️ team_auto_ai と team_setup_builder の両方を必ず揃えること。
+# 経緯: 2026-08-10 に「谷間を埋める手段が無い」ため 6→7 にしたが、二軍からの
+# スポット昇格 (2026-08-11) がその役目を持ったので 7→6 へ戻した。
+const TARGET_STARTERS: int = 6
 const TARGET_PITCHERS: int = 15
 const MIN_ACTIVE_CATCHERS: int = 2
 const PITCHER_ROLE_STARTER: String = "starter"
@@ -83,10 +89,42 @@ static func perf_score(
 	if record.is_pitcher():
 		var stats: PSPitcherStats = monthly_pitcher if monthly_pitcher != null else record.pitcher_stats
 		var form: float = PSPitcherForm.rating_delta(record, monthly_pitcher)
-		return prior + form + war_value * WAR_PERF_WEIGHT * _pitcher_reliability(stats)
+		return prior + form + _farm_form_bonus(record) \
+			+ war_value * WAR_PERF_WEIGHT * _pitcher_reliability(stats)
 	var stats_b: PSBatterStats = monthly_batter if monthly_batter != null else record.batter_stats
 	var form_b: float = PSBatterForm.rating_delta(record, monthly_batter)
-	return prior + form_b + war_value * WAR_PERF_WEIGHT * _batter_reliability(stats_b)
+	return prior + form_b + _farm_form_bonus(record) \
+		+ war_value * WAR_PERF_WEIGHT * _batter_reliability(stats_b)
+
+
+# 二軍成績が能力からどれだけ上振れ/下振れしているか。**一軍の form と同じ rating 点だが、
+# 割引して足す。**
+#
+# なぜ割引が要るか: `PSBatterForm.farm_rating_delta` は二軍の成績分布で σ 化してあるので
+# 「二軍で能力なりの成績」は 0 になる (リーグ難度差は alignment が吸収済み)。それでも
+# 二軍の +1 と一軍の +1 を等価に扱うべきではない — 二軍は対戦相手の質のばらつきが大きく、
+# 一軍で同じ成績を出せる保証にならないため。**FARM_FORM_WEIGHT は較正ノブ**で、
+# 上げると二軍の好調が昇格へ強く効き、下げると能力評価 (prior) 主導に戻る。
+#
+# ⚠️ 一軍成績と二軍成績は**両方足す**。一軍で不振 → 降格 → 二軍で好調、という選手は
+# 一軍の負の form と二軍の正の form を両方持つのが正しい (どちらかで上書きしない)。
+const FARM_FORM_WEIGHT: float = 0.5
+# 二軍成績を評価に使い始める最低出場量。少ない標本で昇格判断が暴れるのを防ぐ
+# (一軍側の reliability 縮約と同じ趣旨だが、こちらは単純な足切り)。
+const FARM_FORM_MIN_PLATE_APPEARANCES: int = 40
+const FARM_FORM_MIN_BATTERS_FACED: int = 40
+
+
+static func _farm_form_bonus(record: PSPlayerSeasonRecord) -> float:
+	if record == null:
+		return 0.0
+	if record.is_pitcher():
+		if record.farm_pitcher_stats.batters_faced < FARM_FORM_MIN_BATTERS_FACED:
+			return 0.0
+		return PSPitcherForm.farm_rating_delta(record) * FARM_FORM_WEIGHT
+	if record.farm_batter_stats.plate_appearances < FARM_FORM_MIN_PLATE_APPEARANCES:
+		return 0.0
+	return PSBatterForm.farm_rating_delta(record) * FARM_FORM_WEIGHT
 
 
 # WAR 項に掛ける信頼度 (0..1)。form 側と同じ縮約を使い、少ない出場で WAR が暴れるのを抑える。
@@ -715,6 +753,215 @@ static func _position_aptitude(record: PSPlayerSeasonRecord, position: int) -> i
 
 # 各CPU球団 + (include_user_team_id > 0 ならその自軍) に対し、
 # 最終入替から SWAP_INTERVAL_DAYS 以上経過していれば入替判定を実行。
+# ---- 谷間の先発 (スポット昇格) ---------------------------------------------
+#
+# NPB で1球団が1シーズンに使う先発が12〜16人になるのは、**登録抹消 → 10日 → 再登録**の
+# 往復が生む数字であって、スコア比較の週次入替からは構造的に出ない
+# (実測: 二軍成績を評価へ繋いでも distinct starters は 7.8 → 8.0 までしか動かなかった)。
+#
+# そこでローテに中6日の空きが作れない日 (= 谷間) には、二軍から**その試合限りで**先発を上げ、
+# 登板翌日に抹消する。抹消は既存の `DEMOTION_COOLDOWN_DAYS`(10日ルール) に乗るので、
+# **次の谷間は別の投手を上げるしかなくなる** — これが顔ぶれを増やす仕掛け。
+#
+# 実行は試合日の計算より前 (メインスレッド)。ロスターが確定していないと setup が組めないため。
+
+# 昇格させる二軍投手に要求する休養日数。中6日で投げられる投手だけを呼ぶ
+# (谷間を埋めるのが目的なのに、上げた投手が短い休みでは意味がない)。
+const SPOT_CALLUP_MIN_REST_DAYS: int = 6
+# 一軍先発の平均からこれ以上落ちる投手は上げない。谷間を埋めるためだけに極端な格下を
+# 使わないための品質ゲート (緩め — ここを厳しくすると機構そのものが発火しなくなる)。
+const SPOT_CALLUP_MAX_QUALITY_GAP: float = 22.0
+# **この理由で埋まる日は谷間ではない。** 中6日 (`rotation`) はもちろん、中5日 (`short_rest`) や
+# 終盤の前倒し (`stretch_run`) は NPB でも通常運用なので二軍から上げない。
+# 二軍を呼ぶのは中4日以下 (`min_rest`) / ブルペンデー (`spot_relief`) / 非常時 (`emergency`) だけ。
+# ⚠️ ここを「rotation 以外すべて」にすると年489先発 (全体の28%) がスポット昇格になり、
+#    枠繰りでロースターが荒れて中0〜3日の先発まで発生した。実測で判明。
+const ROTATION_REASONS_NO_GAP: Array[String] = ["rotation", "short_rest", "stretch_run", "postseason"]
+
+
+static func run_spot_starter_callups(
+	season: PSSeason, teams: Array, current_day: int, user_team_id: int, include_user_team: bool
+) -> Dictionary:
+	var callups: Array = []
+	var returns: Array = []
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team == null:
+			continue
+		if team.id == user_team_id and not include_user_team:
+			continue
+		# 1) 登板を終えたスポット昇格を先に戻す (今日の枠を空けるため順序が重要)。
+		returns.append_array(_return_finished_spot_callups(season, team.id, current_day))
+		# 2) 今日試合が無い球団は何もしない。
+		if not _team_has_unplayed_game_on_day(season, team.id, current_day):
+			continue
+		var callup: Dictionary = _try_spot_callup(season, team.id, current_day)
+		if not callup.is_empty():
+			callups.append(callup)
+	return {"callups": callups, "callup_count": callups.size(), "returns": returns, "return_count": returns.size()}
+
+
+static func _team_has_unplayed_game_on_day(season: PSSeason, team_id: int, day: int) -> bool:
+	for game_row in season.schedule:
+		var game: Dictionary = game_row as Dictionary
+		if int(game.get("day", 0)) != day or bool(game.get("played", false)):
+			continue
+		if int(game.get("away_team_id", 0)) == team_id or int(game.get("home_team_id", 0)) == team_id:
+			return true
+	return false
+
+
+# 前日までに登板を終えたスポット昇格を二軍へ戻す。`record_demotions` を通すので
+# 10日ルールのクールダウンが付き、同じ投手が次の谷間で連続起用されない。
+static func _return_finished_spot_callups(season: PSSeason, team_id: int, current_day: int) -> Array:
+	var callups: Dictionary = season.get_spot_callups(team_id)
+	if callups.is_empty():
+		return []
+	var roster: Dictionary = season.get_active_roster(team_id).duplicate(true)
+	var active_ids: Array = (roster.get("player_ids", []) as Array).duplicate()
+	var returned: Array = []
+	for key_value in callups.keys():
+		var player_id: int = int(str(key_value))
+		if int(callups[key_value]) >= current_day:
+			continue
+		active_ids.erase(player_id)
+		season.clear_spot_callup(team_id, player_id)
+		returned.append({"team_id": team_id, "player_id": player_id})
+	if returned.is_empty():
+		return []
+	roster["player_ids"] = active_ids
+	roster["spot_callup"] = season.get_spot_callups(team_id)
+	season.set_active_roster(team_id, roster)
+	var demoted_ids: Array = []
+	for row in returned:
+		demoted_ids.append(int((row as Dictionary).get("player_id", 0)))
+	season.record_demotions(team_id, demoted_ids, current_day)
+	return returned
+
+
+static func _try_spot_callup(season: PSSeason, team_id: int, current_day: int) -> Dictionary:
+	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+	if all_records.is_empty():
+		return {}
+	var active_ids: Dictionary = {}
+	for id_value in (season.get_active_roster(team_id).get("player_ids", []) as Array):
+		active_ids[int(id_value)] = true
+	if active_ids.is_empty():
+		return {}
+
+	var active_starters: Array = []
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not active_ids.has(record.player_id) or record.injury_days > 0:
+			continue
+		if _is_starting_pitcher(record):
+			active_starters.append(record)
+	if active_starters.is_empty():
+		return {}
+
+	# 通常運用で埋まる日は谷間ではない。
+	var decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, active_starters)
+	if ROTATION_REASONS_NO_GAP.has(str(decision.get("reason", ""))):
+		return {}
+
+	var candidate: PSPlayerSeasonRecord = _best_farm_spot_starter(
+		season, team_id, all_records, active_ids, current_day, _records_mean_perf(active_starters)
+	)
+	if candidate == null:
+		return {}
+	var released: PSPlayerSeasonRecord = _spot_callup_roster_slot(
+		all_records, active_ids, decision.get("pitcher", null) as PSPlayerSeasonRecord
+	)
+	if released == null:
+		return {}
+
+	var roster: Dictionary = season.get_active_roster(team_id).duplicate(true)
+	var ids: Array = (roster.get("player_ids", []) as Array).duplicate()
+	ids.erase(released.player_id)
+	if not ids.has(candidate.player_id):
+		ids.append(candidate.player_id)
+	roster["player_ids"] = ids
+	season.set_active_roster(team_id, roster)
+	# 枠を空けた側にも10日ルールを適用する (NPB の抹消と同じ扱い)。
+	season.record_demotions(team_id, [released.player_id], current_day)
+	season.record_spot_callup(team_id, candidate.player_id, current_day)
+	return {
+		"team_id": team_id,
+		"player_id": candidate.player_id,
+		"name": candidate.name,
+		"replaced_player_id": released.player_id,
+		"day": current_day,
+	}
+
+
+# 中6日以上空いていて、クールダウン中でない二軍の先発から最良を選ぶ。
+static func _best_farm_spot_starter(
+	season: PSSeason,
+	team_id: int,
+	all_records: Array,
+	active_ids: Dictionary,
+	current_day: int,
+	active_starter_mean: float
+) -> PSPlayerSeasonRecord:
+	var demotion_days: Dictionary = season.get_demotion_days(team_id)
+	var last_starts: Dictionary = (season.get_rotation(team_id).get("last_start_day_by_pitcher", {}) as Dictionary)
+	var best: PSPlayerSeasonRecord = null
+	var best_score: float = -INF
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if active_ids.has(record.player_id) or record.injury_days > 0:
+			continue
+		# 育成選手は一軍登録不可 (支配下枠の外)。
+		if record.development_player or not _is_starting_pitcher(record):
+			continue
+		# 10日ルール: 抹消から DEMOTION_COOLDOWN_DAYS 未満は再登録できない。
+		var demoted_day: int = int(demotion_days.get(str(record.player_id), 0))
+		if demoted_day > 0 and current_day - demoted_day < DEMOTION_COOLDOWN_DAYS:
+			continue
+		var last_start: int = int(last_starts.get(str(record.player_id), 0))
+		if last_start > 0 and current_day - last_start < SPOT_CALLUP_MIN_REST_DAYS + 1:
+			continue
+		var score: float = perf_score(record)
+		if active_starter_mean > 0.0 and score < active_starter_mean - SPOT_CALLUP_MAX_QUALITY_GAP:
+			continue
+		if score > best_score:
+			best_score = score
+			best = record
+	return best
+
+
+# 昇格ぶんの枠を空ける相手。**救援投手からしか選ばない。**
+# ⚠️ 先発を落とすとローテの頭数が減り、`resolve_rotation_decision` が中4日→非常時フォールバックへ
+#    落ちて**中0〜3日の先発が発生した** (実測: 1人の最多先発が27→40へ膨張)。
+#    谷間を埋めるための昇格が、別の谷間を作ってしまう自己矛盾になる。
+# 疲労の溜まった救援を落として二軍の先発を上げる、というのは NPB の実際の運用そのもの。
+static func _spot_callup_roster_slot(
+	all_records: Array, active_ids: Dictionary, _todays_starter: PSPlayerSeasonRecord
+) -> PSPlayerSeasonRecord:
+	var worst: PSPlayerSeasonRecord = null
+	var worst_score: float = INF
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if not active_ids.has(record.player_id) or not record.is_pitcher():
+			continue
+		if _is_starting_pitcher(record):
+			continue
+		var score: float = _active_roster_selection_score(record)
+		if score < worst_score:
+			worst_score = score
+			worst = record
+	return worst
+
+
+static func _records_mean_perf(records: Array) -> float:
+	if records.is_empty():
+		return 0.0
+	var total: float = 0.0
+	for record_row in records:
+		total += perf_score(record_row as PSPlayerSeasonRecord)
+	return total / float(records.size())
+
+
 static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_day: int, user_team_id: int, include_user_team: bool) -> Dictionary:
 	# 入替対象がある日にだけリーグ集計を作り、対象チーム間では同じ結果を使い回す。
 	var war_ctx: Dictionary = {}
