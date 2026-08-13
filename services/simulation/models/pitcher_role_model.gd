@@ -10,10 +10,33 @@ const ROLE_RELIEVER: String = "reliever"
 const STARTER_ROLE_BIAS: float = 0.55
 const RELIEVER_ROLE_BIAS: float = 0.55
 const OFF_ROLE_PENALTY: float = -0.25
-# 役割未設定 (role="") の能力判定で「先発 >= 中継 + margin」を要求する閾値。生成時のみ効く
-# (保存 role がある投手は is_starter_record が role を直に見るため無関係)。正の値ほど中継寄りに生成。
+# 役割未設定 (role="") の能力判定で要求する「先発向きさ」の閾値。生成時のみ効く
+# (保存 role がある投手は is_starter_record が role を直に見るため無関係)。大きいほど中継寄りに生成。
 # 実野球は中継ぎの方が多く、二軍の先発過多も避けたいので先発 ~45% 程度に寄せる。
-const STARTER_DECISION_MARGIN: float = 0.3
+# ⚠️ 2026-08-12 に判定を **starter_shape_advantage** (能力水準を打ち消した差) へ変えたため、
+# この値の意味するスケールが変わった。旧 0.3 のままだと全水準で先発 ~28% まで落ちるので
+# 実測 (tools/run_farm_club_diag --roles の分位点) から取り直した値。
+const STARTER_DECISION_MARGIN: float = -0.1
+
+# 役割判定は「その投手がどれだけ強いか」ではなく「先発向きか救援向きかの**形**」で決めなければ
+# ならない。ところが starter_score と reliever_score は z 能力に掛かる重みの合計が違う
+# (先発側 3.15 / 救援側 1.20) ため、差を取ると**能力水準そのものに比例する項が残る**。
+# 結果、一律に弱い投手は全員「救援」、一律に強い投手は全員「先発」に倒れる。
+#
+# 2026-08-12 に実測で発覚: ファーム専用球団の生成投手 (質 z 平均 -0.85) は **22人中0人**が
+# 先発判定になり、二軍戦がブルペンデー連発 (先発した投手 19-20人 / 完投31) になっていた。
+# 一方 12球団の投手 (同 +1.3) は 40人中 15-17人が先発。
+#
+# 対策: 投手自身の総合水準 L (下記の質系キーの平均) に比例する項を差から引き、判定を
+# **水準に対して不変**にする。序列付け (starter_order_score 等) は絶対値が意味を持つので触らない。
+# ⚠️ Pit_EdgeRate は「質」ではなく**スタイル**の軸 (生成時は水準に関係なく中央 50) なので
+#    L には含めず、重み差の計算からも外す。
+const ROLE_QUALITY_KEYS: Array[String] = [
+	"Pit_KCreate", "Pit_BBPrevent", "Pit_Efficiency", "Pit_Stamina", "Pit_FatigueResist",
+]
+# 上記キーに掛かる重みの差 = 先発側 (1.35+0.90+0.65+0.25) − 救援側 (0.75+0.55+0.15−0.25)。
+# 変化球の depth/finish は双方 0.90 で入り水準ぶんは打ち消し合うのでここには含めない。
+const ROLE_LEVEL_WEIGHT_DELTA: float = 1.95
 
 
 static func is_starter_record(record) -> bool:
@@ -27,7 +50,7 @@ static func is_starter_record(record) -> bool:
 			return true
 		ROLE_RELIEVER, "closer":
 			return false
-	return starter_score(record) >= reliever_score(record) + STARTER_DECISION_MARGIN
+	return starter_shape_advantage(record) >= STARTER_DECISION_MARGIN
 
 
 static func is_starter_player(player) -> bool:
@@ -74,6 +97,21 @@ static func reliever_score(record) -> float:
 
 static func starter_advantage(record) -> float:
 	return starter_score(record) - reliever_score(record)
+
+
+# 能力水準の差を打ち消した「先発向きさ」。**役割の初期判定はこれを使う** (上のコメント参照)。
+static func starter_shape_advantage(record) -> float:
+	return starter_advantage(record) - quality_level(record) * ROLE_LEVEL_WEIGHT_DELTA
+
+
+# 投手の総合的な質の水準 (役割の形を見るときに差し引く基準)。
+static func quality_level(record) -> float:
+	if record == null:
+		return 0.0
+	var total: float = 0.0
+	for key in ROLE_QUALITY_KEYS:
+		total += record.z_ability(key, 0.0)
+	return total / float(ROLE_QUALITY_KEYS.size())
 
 
 static func reliever_advantage(record) -> float:

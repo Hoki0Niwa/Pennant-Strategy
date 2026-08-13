@@ -38,21 +38,28 @@ static func build_team_setup(
 	# 二軍は序列 (pitcher_ids) だけ別キーで持ち、**登板間隔の台帳 (last_start_day_by_pitcher) は
 	# 一軍と共有する**。これで「二軍で投げた翌日に昇格して中0日で先発」を構造的に防げる。
 	var saved_rotation: Dictionary = PSRotationPlanner.rotation_state_for_level(season, team_id, level)
-	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(
-		season, team_id, starter_pitchers, reliever_pool, postseason, saved_rotation
-	)
-	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
-	if rotation_pitcher == null:
-		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
-	var relievers: Array = PSRotationPlanner.select_relievers_for_innings(reliever_pool, starter_pitchers, rotation_pitcher.player_id, saved_rotation)
-	var relief_role_by_pitcher: Dictionary = PSRotationPlanner.relief_role_by_pitcher(saved_rotation, relievers)
 	# 消化試合数はレベルごとに数える。守備の交代間隔 (`rested_starter_ids_for_game`) と
 	# 日替わり打順がこの値を使うので、二軍で一軍の試合数を渡すと休養サイクルがずれる。
+	# **二軍の出場輪番 (farm_usage_priority) の分母**でもあるのでローテ決定より前に出す。
 	var team_games_played_before: int = 0
 	if team_record != null:
 		team_games_played_before = int(
 			team_record.farm_stats.games if level == LEVEL_FARM else team_record.stats.games
 		)
+	# 二軍は投手の序列付けも**二軍の出場方針**で行う (打撃側の `_prime_farm_batting_memo` と対)。
+	# これが無いと能力上位のローテ6人+ブルペン6人で固定され、**育成投手が年間ほぼ登板しない**。
+	var farm_priority: bool = level == LEVEL_FARM
+	var farm_games: int = team_games_played_before if farm_priority else 0
+	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(
+		season, team_id, starter_pitchers, reliever_pool, postseason, saved_rotation, farm_priority, farm_games
+	)
+	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
+	if rotation_pitcher == null:
+		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
+	var relievers: Array = PSRotationPlanner.select_relievers_for_innings(
+		reliever_pool, starter_pitchers, rotation_pitcher.player_id, saved_rotation, farm_priority, farm_games
+	)
+	var relief_role_by_pitcher: Dictionary = PSRotationPlanner.relief_role_by_pitcher(saved_rotation, relievers)
 
 	# auto_lineup ON は保存済み打順を使わず、その日のロスターから打順と守備配置を毎試合作る。
 	# OFF のチームは保存設定を優先し、欠員などで組めない場合だけ自動生成へフォールバックする。
@@ -78,6 +85,10 @@ static func build_team_setup(
 	if bool(setup.get("ok", false)):
 		setup["starter_pitcher"] = rotation_pitcher
 		setup["relievers"] = relievers
+		# ブルペンから漏れた残りの投手。**継投先が1人も見つからない非常時にだけ**使う
+		# (PSBullpenManager.pick_reliever_for_context の最終段)。役割 (抑え/セット) は
+		# あくまで上の `relievers` で決まるので、ここに入れても日替わり抑えにはならない。
+		setup["relief_reserve"] = _relief_reserve(reliever_pool, relievers, rotation_pitcher)
 		setup["relief_role_by_pitcher"] = relief_role_by_pitcher
 		setup["starter_outs"] = -1
 		setup["starter_runs"] = -1
@@ -474,31 +485,135 @@ static func _records_can_field_game(
 const LEVEL_FIRST: int = 0
 const LEVEL_FARM: int = 1
 
-# 二軍のスタメン選考は**能力順そのままではない**。二軍の目的は勝つことではなく育てることなので、
-# 育成選手と若手を優先し、ベテランは控えめにする。
-# ⚠️ これが無いと二軍は「一軍に上がれなかった上位から順に9人」を毎日並べ、
-#    **育成選手の出場率が5% (125人中6人) にしかならない** — 二軍戦を作った目的の一つが
-#    満たされない (実測で判明。`tools/run_farm_report` の development_appearance_rate)。
-# 単位は表示能力スケール (batting_score_with_form と同じ)。較正ノブ。
+# ============================================================ 二軍の出場方針
+#
+# **二軍は一軍とは別の基準で出場を決める** (2026-08-13 ユーザー方針)。一軍は「勝つために強い順」だが、
+# 二軍は育てる場なので、出場機会の配り方そのものが違う。3本柱:
+#
+#   1. **トッププロスペクトは優先して出す。** チーム内の若手のうち評価上位 FARM_PROSPECT_SLOTS 人を
+#      プロスペクトとみなし、大きな加点 + 高い目標出場率を与える (ほぼ毎日出る)。
+#   2. **それ以外は能力だけで機会を決めない。** 能力の寄与を FARM_ABILITY_WEIGHT で弱め、
+#      代わりに**出場が少ない選手ほど優先度が上がる輪番**を効かせる。
+#      同程度の控え同士なら、昨日出た選手より出ていない選手が先に出る。
+#   3. 育成・若手を底上げし、ベテランは控えめにする。
+#
+# ⚠️ 単純な能力順だと二軍は「一軍に上がれなかった上位から順に9人」を毎日並べ、
+#    **育成選手の出場率が5% (125人中6人) にしかならなかった** (実測)。
+# 単位は表示能力スケール (batting_score_with_form と同じ)。すべて較正ノブ。
 const FARM_DEVELOPMENT_PRIORITY_BONUS: float = 10.0
 const FARM_YOUTH_PRIORITY_AGE: int = 24
 const FARM_YOUTH_PRIORITY_BONUS: float = 6.0
 const FARM_VETERAN_PRIORITY_AGE: int = 30
 const FARM_VETERAN_PRIORITY_PENALTY: float = 6.0
 
+# 能力の重み。1.0 だと従来どおり能力が支配的になる。下げるほど「誰に経験を積ませるか」で決まる。
+const FARM_ABILITY_WEIGHT: float = 0.55
+# トッププロスペクト = 24歳以下でチーム内評価上位 N 人。**チーム相対**で決めるので、
+# 絶対閾値が母集団の変化で陳腐化しない ([[project_player_form_evaluation]] と同じ考え方)。
+const FARM_PROSPECT_MAX_AGE: int = 24
+const FARM_PROSPECT_SLOTS: int = 5
+const FARM_PROSPECT_BONUS: float = 16.0
+# 輪番の強さ。「その集団の平均出場率」を基準に、少ない選手を持ち上げ多い選手を下げる。
+# プロスペクトだけは平均の FARM_PROSPECT_SHARE_MULT 倍を目標にするので、輪番に沈まない。
+const FARM_OPPORTUNITY_WEIGHT: float = 30.0
+const FARM_PROSPECT_SHARE_MULT: float = 2.0
+
 
 # 二軍用の打撃評価を memo へ**先に**入れておく。以降の選考 (守備配置・DH・控え) は
 # `_batting_memo_score` が memo にある値をそのまま使うので、選考ロジック側は無改修で済む。
-static func _prime_farm_batting_memo(batting_memo: Dictionary, candidates: Array) -> void:
+static func _prime_farm_batting_memo(batting_memo: Dictionary, candidates: Array, team_farm_games: int) -> void:
+	var prospects: Dictionary = farm_prospect_ids(candidates)
+	var mean_share: float = _farm_mean_appearance_share(candidates, team_farm_games, false)
 	for record_row in candidates:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record == null or batting_memo.has(record.player_id):
 			continue
-		var score: float = float(PlayerValueEvaluator.batting_score_with_form(record))
-		batting_memo[record.player_id] = int(round(score + farm_development_priority(record)))
+		var score: float = float(PlayerValueEvaluator.batting_score_with_form(record)) * FARM_ABILITY_WEIGHT
+		score += farm_usage_priority(
+			record, prospects.has(record.player_id),
+			float(record.farm_batter_stats.games), team_farm_games, mean_share
+		)
+		batting_memo[record.player_id] = int(round(score))
 
 
-# 二軍での起用優先度の加点。育成 > 若手 > 中堅 > ベテラン。
+# 二軍での起用優先度の加点。育成/若手/プロスペクトの底上げ + 出場機会の輪番。
+# mean_share は同じ母集団 (その日の候補) の平均出場率。0 未満を渡すと輪番は効かない。
+static func farm_usage_priority(
+	record: PSPlayerSeasonRecord,
+	is_prospect: bool,
+	played_games: float,
+	team_farm_games: int,
+	mean_share: float
+) -> float:
+	if record == null:
+		return 0.0
+	var bonus: float = farm_development_priority(record)
+	if is_prospect:
+		bonus += FARM_PROSPECT_BONUS
+	bonus += _farm_opportunity_bonus(is_prospect, played_games, team_farm_games, mean_share)
+	return bonus
+
+
+# 出場機会の輪番。**能力ではなく「これまでどれだけ出たか」だけで決まる項**。
+# 目標 (プロスペクトは平均の倍、それ以外は平均) との差を評価点へ換算する。
+# 開幕直後 (team_farm_games=0) は実績が無いので効かせない。
+static func _farm_opportunity_bonus(
+	is_prospect: bool, played_games: float, team_farm_games: int, mean_share: float
+) -> float:
+	if team_farm_games <= 0 or mean_share < 0.0:
+		return 0.0
+	var share: float = played_games / float(team_farm_games)
+	var target: float = mean_share * (FARM_PROSPECT_SHARE_MULT if is_prospect else 1.0)
+	return clampf(target - share, -1.0, 1.0) * FARM_OPPORTUNITY_WEIGHT
+
+
+# 候補集団の平均出場率。輪番の基準点。**集団自身から測る**ので、野手 (毎日9枠) と
+# 投手 (数日に1度) で別の定数を持たなくて済む。
+static func _farm_mean_appearance_share(candidates: Array, team_farm_games: int, pitchers: bool) -> float:
+	if team_farm_games <= 0:
+		return -1.0
+	var total: float = 0.0
+	var count: int = 0
+	for record_row in candidates:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		count += 1
+		total += float(record.farm_pitcher_stats.games if pitchers else record.farm_batter_stats.games)
+	if count == 0:
+		return -1.0
+	return total / float(count) / float(team_farm_games)
+
+
+# トッププロスペクト (チーム内の若手で評価上位)。同点は player_id で決めて決定性を保つ。
+static func farm_prospect_ids(candidates: Array) -> Dictionary:
+	var young: Array = []
+	for record_row in candidates:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record != null and record.age <= FARM_PROSPECT_MAX_AGE:
+			young.append(record)
+	if young.is_empty():
+		return {}
+	var scores: Dictionary = {}
+	for record_row in young:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		scores[record.player_id] = PlayerValueEvaluator.overall_score(record)
+	young.sort_custom(func(a, b) -> bool:
+		var ra: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+		var rb: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+		var sa: int = int(scores.get(ra.player_id, 0))
+		var sb: int = int(scores.get(rb.player_id, 0))
+		if sa == sb:
+			return ra.player_id < rb.player_id
+		return sa > sb
+	)
+	var ids: Dictionary = {}
+	for i in range(min(FARM_PROSPECT_SLOTS, young.size())):
+		ids[(young[i] as PSPlayerSeasonRecord).player_id] = true
+	return ids
+
+
+# 育成 > 若手 > 中堅 > ベテラン の素の加点 (出場実績に依らない部分)。
 static func farm_development_priority(record: PSPlayerSeasonRecord) -> float:
 	if record == null:
 		return 0.0
@@ -679,7 +794,7 @@ static func build_setup_from_auto(
 	# 二軍は保存設定を一切参照せず、その日のロスターから毎試合作る。
 	var is_farm: bool = level == LEVEL_FARM
 	if is_farm:
-		_prime_farm_batting_memo(batting_memo, available_fielders)
+		_prime_farm_batting_memo(batting_memo, available_fielders, team_games_played_before)
 	var usage_settings: Dictionary = {} if is_farm else season.get_fielder_usage(team_id)
 	if not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders):
 		var base_slots: Array = select_defensive_starters_with_usage(
@@ -1340,6 +1455,25 @@ static func starter_pitcher_candidates(pitchers: Array) -> Array:
 				break
 			candidates.append(pitcher_row)
 	return candidates
+
+
+# 当日のブルペン (上位6人) に選ばれなかった健康な救援投手。非常時の継投先。
+# 当日の先発とブルペン入りした投手は除く。
+static func _relief_reserve(reliever_pool: Array, nominated: Array, starter: PSPlayerSeasonRecord) -> Array:
+	var excluded: Dictionary = {}
+	if starter != null:
+		excluded[starter.player_id] = true
+	for row in nominated:
+		var pitcher: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+		if pitcher != null:
+			excluded[pitcher.player_id] = true
+	var reserve: Array = []
+	for row in reliever_pool:
+		var pitcher: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+		if pitcher == null or excluded.has(pitcher.player_id) or pitcher.injury_days > 0:
+			continue
+		reserve.append(pitcher)
+	return reserve
 
 
 static func reliever_pool_candidates(pitchers: Array) -> Array:

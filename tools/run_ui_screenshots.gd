@@ -6,6 +6,9 @@ extends Node
 # 画面を絞る: -- --screens=home,standings
 # 撮影前にシーズンを進める: -- --simdays=60 (開幕直後の全ゼロ表を避けて実データで確認する用。
 #   auto_save_enabled を無効化した上で進めるためセーブデータへは書き込まれない)
+# 既存セーブを使わない: -- --newsave (使い捨てセーブを作って撮り、終了時に削除して元のアクティブ
+#   セーブへ戻す。**保存形式を変えた直後は旧セーブが読めない**ので (互換は持たない方針)、
+#   その場合はこれで撮る。ユーザーのセーブに一切触れない点でも安全)
 #
 # 状態別撮影モード: -- --states
 #   通常の画面単位撮影とは別に、選手詳細/能力・成績一覧/チーム詳細のタブ・絞り込み違いや、
@@ -15,6 +18,8 @@ extends Node
 #   STATES_DEFAULT_SIMDAYS 日分を内部で自動進行する (全ゼロ表を避けるため)。
 #   セーブ・user:// への書き込みは行わない不変条件は --states でも維持する
 #   (AppState.auto_save_enabled を明示的に false へ固定してから進める)。
+
+const SaveContext = preload("res://services/storage/save_context.gd")
 
 const OUTPUT_DIR: String = "res://reports/ui_shots"
 const STATES_DIR: String = "res://reports/ui_shots/states"
@@ -26,6 +31,7 @@ const DEFAULT_SCREENS: Array = [
 	"standings",
 	"rankings",
 	"ability_stats",
+	"farm",
 	"history",
 	"team_detail",
 	"player_detail",
@@ -40,12 +46,13 @@ const PLAYER_DETAIL_SCRIPT: String = "res://ui/screens/player_detail_screen.gd"
 const ABILITY_STATS_SCRIPT: String = "res://ui/screens/ability_stats_screen.gd"
 const TEAM_DETAIL_SCRIPT: String = "res://ui/screens/team_detail_screen.gd"
 const HISTORY_SCRIPT: String = "res://ui/screens/history_screen.gd"
+const FARM_SCRIPT: String = "res://ui/screens/farm_screen.gd"
 
 # シーズン履歴: 右上チップで切り替える4ビュー (画面側 VIEW_CHIPS の key と一致させる)。
 const HISTORY_VIEWS: Array = ["year", "career", "titles", "lineup"]
 
 # 選手詳細: 下部タブ全種 (id はそのまま画面側 TABS の id と一致させる)。
-const PD_TABS: Array = ["season", "games", "monthly", "usage", "stats", "advanced", "abilities", "career"]
+const PD_TABS: Array = ["season", "games", "monthly", "usage", "stats", "farm", "advanced", "abilities", "career"]
 # 投手/野手それぞれ「候補が非空になるまで」試す絞り込み id の優先順。
 const PD_PITCHER_FILTER_TRY: Array = ["starter", "reliever"]
 const PD_BATTER_FILTER_TRY: Array = ["pos2", "pos3", "pos4", "pos5", "pos6", "pos7", "pos8", "pos9"]
@@ -54,23 +61,33 @@ const PD_BATTER_FILTER_TRY: Array = ["pos2", "pos3", "pos4", "pos5", "pos6", "po
 const ABILITY_FILTERS: Array = ["b_all", "p_all"]
 const ABILITY_TABS: Array = ["abilities", "stats", "advanced"]
 
+# ファーム情報: 順位ビュー + 成績ビュー(野手/投手)。
+const FARM_STAT_FILTERS: Array = ["b_all", "p_all"]
+
 var _main_node: Node = null
 var _state_manifest: Array = []  # [{name, file}] 撮影順の対応表 (最後にまとめて出力)
+var _throwaway_save_id: String = ""   # --newsave で作った使い捨てセーブ (終了時に削除)
+var _previous_save_id: String = ""
 
 
 func _ready() -> void:
 	if not GameDb.data_loaded_ok:
 		await GameDb.data_loaded
 
-	var save_data: Dictionary = SaveService.load_state()
-	if save_data.is_empty():
-		push_error("セーブデータがありません (アクティブセーブが必要)")
-		get_tree().quit(1)
-		return
-	if not AppState.restore_from_save(save_data):
-		push_error("セーブの復元に失敗しました")
-		get_tree().quit(1)
-		return
+	if _has_flag("--newsave"):
+		if not _start_throwaway_save():
+			get_tree().quit(1)
+			return
+	else:
+		var save_data: Dictionary = SaveService.load_state()
+		if save_data.is_empty():
+			push_error("セーブデータがありません (アクティブセーブが必要)")
+			get_tree().quit(1)
+			return
+		if not AppState.restore_from_save(save_data):
+			push_error("セーブの復元に失敗しました")
+			get_tree().quit(1)
+			return
 
 	var states_mode: bool = _has_flag("--states")
 	var simdays: int = _requested_simdays()
@@ -101,6 +118,7 @@ func _ready() -> void:
 
 	if states_mode:
 		await _run_state_capture()
+		_delete_throwaway_save()
 		get_tree().quit(0)
 		return
 
@@ -115,7 +133,38 @@ func _ready() -> void:
 		var err: int = image.save_png(ProjectSettings.globalize_path(out_path))
 		print("[shot] %s -> %s (%s)" % [screen_name, out_path, "ok" if err == OK else ("err %d" % err)])
 
+	_delete_throwaway_save()
 	get_tree().quit(0)
+
+
+# --newsave: 既存セーブを読まず、その場で新規シーズンを作って撮る。
+# 保存形式を変えたあと (旧セーブは互換を持たない方針) でも撮影ループを回せるようにするための逃げ道。
+# 撮り終わったら _delete_throwaway_save で消し、元のアクティブセーブへ戻す。
+func _start_throwaway_save() -> bool:
+	_previous_save_id = SaveContext.active_save_id()
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	if team == null:
+		push_error("球団データが読み込めていません")
+		return false
+	AppState.select_team(team.id)
+	if not AppState.start_new_season():
+		push_error("新規シーズンの作成に失敗しました")
+		return false
+	_throwaway_save_id = SaveContext.active_save_id()
+	print("[save] --newsave: 使い捨てセーブ %s を作成しました (撮影後に削除します)" % _throwaway_save_id)
+	return true
+
+
+func _delete_throwaway_save() -> void:
+	if _throwaway_save_id.is_empty():
+		return
+	SaveContext.delete_current_save_data()
+	if _previous_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(_previous_save_id)
+	print("[save] --newsave: 使い捨てセーブ %s を削除しました" % _throwaway_save_id)
+	_throwaway_save_id = ""
 
 
 func _requested_screens() -> Array:
@@ -182,6 +231,7 @@ func _run_state_capture() -> void:
 
 	await _capture_player_detail(STATES_DIR)
 	await _capture_ability_stats(STATES_DIR)
+	await _capture_farm_views(STATES_DIR)
 	await _capture_team_detail(STATES_DIR)
 	await _capture_history_views(STATES_DIR)
 	await _capture_season_progression(STATES_DIR)
@@ -245,6 +295,26 @@ func _capture_ability_stats(states_dir: String) -> void:
 			asc.call("_on_tab_pressed", tab_id)
 			await _wait_frames()
 			_shot(states_dir, "ability_stats_%s_%s" % [filter_id, tab_id])
+
+
+# --- 2b. ファーム情報 (順位 / 成績の野手・投手) ---
+
+func _capture_farm_views(states_dir: String) -> void:
+	AppState.request_screen("farm")
+	await _wait_frames()
+	var fs: Node = _find_screen_node(_main_node, FARM_SCRIPT)
+	if fs == null:
+		print("[state] farm 画面ノードが見つかりません。スキップします")
+		return
+	fs.call("_on_view_pressed", fs.get("VIEW_STANDINGS"))
+	await _wait_frames()
+	_shot(states_dir, "farm_standings")
+	fs.call("_on_view_pressed", fs.get("VIEW_STATS"))
+	await _wait_frames()
+	for filter_id in FARM_STAT_FILTERS:
+		fs.call("_on_filter_pressed", filter_id)
+		await _wait_frames()
+		_shot(states_dir, "farm_stats_%s" % filter_id)
 
 
 # --- 3. チーム詳細 (自軍以外を各リーグ1球団ずつ) ---

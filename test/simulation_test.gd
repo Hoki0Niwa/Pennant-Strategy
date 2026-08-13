@@ -48,6 +48,83 @@ func test_camp_training_count_varies_by_need() -> void:
 # 下がるためで、投打の評価スケール自体は動いていない。実際、育成保有数を増やす変更
 # ([[project_released_market]] の育成無制限化) を入れただけでこのテストが落ちるようになった。
 # 編成AI (デプスチャート等) も支配下だけを見るので、母集団を揃えるほうが本来の意図に合う。
+# 役割の初期判定 (role="" の投手を先発/中継へ振る) は「先発向きか救援向きかの**形**」だけで
+# 決まり、**その投手がどれだけ強いかには依らない**こと。
+# 依存していた頃は、一律に弱い集団は全員が中継ぎ判定になり、ファーム専用球団は22人中0人が
+# 先発 = 二軍戦がブルペンデー連発になっていた (2026-08-12 実測)。
+func test_pitcher_role_decision_ignores_overall_ability_level() -> void:
+	for shape in ["starter", "reliever"]:
+		var decisions: Array = []
+		var shape_advantages: Array = []
+		var raw_advantages: Array = []
+		# 水準の幅は ±1.6σ。補正が無いと 1.95 × 3.2σ ぶん判定がずれるので、
+		# 「形は同じなのに役割が反転する」旧挙動をこの幅で捕まえられる。
+		for level in [-1.6, -0.5, 0.5, 1.6]:
+			var record: PSPlayerSeasonRecord = _shaped_pitcher_record(str(shape), float(level))
+			decisions.append(PSPitcherRoleModel.is_starter_record(record))
+			shape_advantages.append(PSPitcherRoleModel.starter_shape_advantage(record))
+			raw_advantages.append(PSPitcherRoleModel.starter_advantage(record))
+		# 判定に使う「先発向きさ」が水準 2.4σ の範囲でほとんど動かないこと。
+		# これが本体の不変条件 — 形が同じなら水準が変わっても同じ役割になる。
+		var shape_span: float = float(shape_advantages.max()) - float(shape_advantages.min())
+		assert_float(shape_span).override_failure_message(
+			"shape=%s: starter_shape_advantage が水準で %.2f も動いた (%s)" % [shape, shape_span, str(shape_advantages)]
+		).is_less(0.35)
+		# 補正前の生の差は水準に強く引きずられる (= 補正が必要だったことの裏取り)。
+		# ここが小さくなったら重み構成が変わったということなので ROLE_LEVEL_WEIGHT_DELTA を見直す。
+		var raw_span: float = float(raw_advantages.max()) - float(raw_advantages.min())
+		assert_float(raw_span).override_failure_message(
+			"starter_advantage が水準で動かない = 補正の前提が崩れている (%s)" % str(raw_advantages)
+		).is_greater(2.0)
+		# 4水準すべてで同じ判定になること。
+		for i in range(1, decisions.size()):
+			assert_bool(bool(decisions[i])).override_failure_message(
+				"shape=%s の判定が水準で変わった: %s" % [shape, str(decisions)]
+			).is_equal(bool(decisions[0]))
+		# 形どおりの役割へ振り分けられていること (判定が常に片方へ倒れていないことの確認)。
+		assert_bool(bool(decisions[0])).override_failure_message(
+			"shape=%s が期待と逆の役割になった" % shape
+		).is_equal(shape == "starter")
+
+
+# 先発向き (スタミナ/回復/効率が自分の水準より上) / 救援向き (奪三振が上・スタミナが下) の
+# 投手を、指定した能力水準 level で作る。
+func _shaped_pitcher_record(shape: String, level: float) -> PSPlayerSeasonRecord:
+	var starter_shaped: bool = shape == "starter"
+	var z: Dictionary = {
+		"Pit_KCreate": level + (-0.6 if starter_shaped else 0.8),
+		"Pit_BBPrevent": level + (0.3 if starter_shaped else -0.2),
+		"Pit_ImpactLimit": level,
+		"Pit_LoftControl": level,
+		"Pit_BarrelDeny": level,
+		"Pit_Efficiency": level + (0.7 if starter_shaped else -0.5),
+		"Pit_Stamina": level + (1.0 if starter_shaped else -1.0),
+		"Pit_FatigueResist": level + (0.8 if starter_shaped else -0.6),
+		"Pit_HoldRunner": level,
+		"Pit_EdgeRate": 0.0,
+	}
+	var player: PSPlayer = PSPlayer.from_dict({
+		"id": 990000 + int(level * 10.0) + (1 if starter_shaped else 0),
+		"name": "shape_probe",
+		"team_id": 0,
+		"age": 24,
+		"position": 1,
+		"role": "",
+		"z_abilities": z,
+		# 球速は判定に効かないので固定 (生成関数を呼ぶと Rng を消費してしまうため)。
+		"raw_abilities": {"max_velocity": 145},
+		# 変化球の完成度は水準から切り離して固定する。ここを level に連動させると
+		# 有効球数の閾値 (EFFECTIVE_PITCH_Z) をまたいで depth/finish が動き、
+		# 「z 能力の水準依存だけ」を見たいこのテストの信号が濁る。
+		"arsenal": [
+			{"type": "four_seam", "mastery": 0.3},
+			{"type": "slider", "mastery": -0.1},
+			{"type": "curve", "mastery": -0.5},
+		],
+	})
+	return PSPlayerSeasonRecord.from_player(player, 0, 0)
+
+
 func test_pitcher_eval_on_same_scale_as_fielders() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
@@ -1185,6 +1262,51 @@ func test_relief_role_assignment_is_stable_under_fatigue() -> void:
 		{}, PSRotationPlanner.select_relievers_for_innings(pool, [], 0, {})
 	)
 	assert_str(str(tired_roles.get(ace.player_id, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_CLOSER)
+
+
+# 当日のブルペンが全員疲労で登板不可でも、**継投先が必ず見つかること**。
+# ここが null を返すと呼び出し側は継投を諦め、先発が投げ続ける。実際に当日ブルペンは
+# 疲労を見ない能力上位6人固定なので、6人が全員 RELIEVER_EMERGENCY_FATIGUE_LIMIT を超えると
+# 「健康な救援がロスターに残っているのに誰も投げられない」状態になり、
+# **1試合370球を投げる先発**が発生していた (2026-08-12、二軍のファーム専用球団で実測)。
+func test_exhausted_bullpen_still_yields_an_emergency_reliever() -> void:
+	var bullpen: Array = []
+	for i in range(6):
+		var tired: PSPlayerSeasonRecord = _pitcher(801 + i, "Tired %d" % i, 1.0)
+		# 緊急上限 (188) 超え = allow_tired でも登板不可。
+		tired.fatigue = PSPitcherUsageModel.RELIEVER_EMERGENCY_FATIGUE_LIMIT + 10
+		bullpen.append(tired)
+	var reserve_fresh: PSPlayerSeasonRecord = _pitcher(820, "ReserveFresh", 0.2)
+	reserve_fresh.fatigue = 20
+	var reserve_hurt: PSPlayerSeasonRecord = _pitcher(821, "ReserveHurt", 0.9)
+	reserve_hurt.injury_days = 12
+
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": bullpen,
+		"relief_reserve": [reserve_hurt, reserve_fresh],
+		"used_pitcher_ids": {},
+		"game_day": 60,
+		"team_games_played_before": 50,
+	}
+	# 控えの健康な投手が上がる (怪我人は選ばない)。
+	var picked: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 6, {})
+	assert_object(picked).override_failure_message("継投先が見つからず null が返った").is_not_null()
+	assert_int(picked.player_id).is_equal(reserve_fresh.player_id)
+
+	# 控えが尽きたら、疲労上限を超えていてもブルペンから最も疲労の少ない投手を上げる
+	# (実野球では誰かが必ず投げる。ここで null を返すのが 370球の原因だった)。
+	setup["relief_reserve"] = []
+	(bullpen[3] as PSPlayerSeasonRecord).fatigue = PSPitcherUsageModel.RELIEVER_EMERGENCY_FATIGUE_LIMIT + 1
+	var fallback: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 6, {})
+	assert_object(fallback).override_failure_message("ブルペン全滅時に null が返った").is_not_null()
+	assert_int(fallback.player_id).is_equal((bullpen[3] as PSPlayerSeasonRecord).player_id)
+
+	# 既に登板済みの投手は再登板させない。
+	setup["used_pitcher_ids"] = {(bullpen[3] as PSPlayerSeasonRecord).player_id: true}
+	var third: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 6, {})
+	assert_object(third).is_not_null()
+	assert_int(third.player_id).is_not_equal((bullpen[3] as PSPlayerSeasonRecord).player_id)
 
 
 # 球数モデルのカテゴリ別平均球数とファールが現実的なレンジに収まること。

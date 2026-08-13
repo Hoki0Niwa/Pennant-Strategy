@@ -10,6 +10,7 @@ extends "res://ui/components/dashboard_screen.gd"
 #   - プロフィール・契約パネル: 登録区分 / 契約(FA) / 年俸 / 出身 / 疲労・怪我 / 評価内訳。
 #   - 下部タブ表: 成績 / 指標 / 高度指標 / 能力の変遷 を切り替え (初期は成績)。隠しパラメータ(z/raw)以外の
 #     ボックススコア項目をすべて網羅。各行=1シーズン、成績・指標は通算行つき。
+#   - 二軍成績タブは farm_* コンテナだけを読む独立した表 (一軍成績と混ぜない。過去成績と同じ列)。
 # 高度指標の WAR リーグ文脈は重いため、該当タブを開いたとき1度だけ計算してキャッシュする。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
@@ -52,6 +53,7 @@ const TABS: Array = [
 	{"id": "monthly", "label": "月間成績"},
 	{"id": "usage", "label": "起用"},
 	{"id": "stats", "label": "過去成績"},
+	{"id": "farm", "label": "二軍成績"},
 	{"id": "advanced", "label": "過去指標"},
 	{"id": "abilities", "label": "能力の変遷"},
 	{"id": "career", "label": "経歴"},
@@ -79,6 +81,7 @@ var _records: Array = []                   # 当該選手の全シーズン記�
 var _ratings: Dictionary = {}              # 現在の表示レーティング (ratings_for_record)
 var _candidates: Array = []                # 絞り込み後の選手候補 (records, overall 降順)
 var _basic_rows: Array = []                # 過去成績タブ
+var _farm_rows: Array = []                 # 二軍成績タブ (farm_* コンテナ、年度別 + 通算)
 var _game_rows: Array = []                 # 試合履歴タブ (今季)
 var _monthly_rows: Array = []              # 月間成績タブ (今季)
 var _ability_rows: Array = []
@@ -804,7 +807,7 @@ func _columns_for_tab() -> Array:
 				cols.append({"title": "守備評価", "key": "def_eval", "w": 58, "align": "r", "fmt": "int"})
 				cols.append({"title": "年俸(万円)", "key": "salary", "w": 82, "align": "r", "fmt": "comma"})
 			return cols
-		_:  # stats (成績 = 基本成績 + 率指標を統合)
+		_:  # stats (成績 = 基本成績 + 率指標を統合) / farm (同じ列を二軍成績で埋める)
 			if pitcher:
 				return [
 					{"title": "年", "key": "year", "w": 52, "align": "l", "fmt": "str"},
@@ -869,6 +872,8 @@ func _rows_for_tab() -> Array:
 			return _ability_rows
 		"career":
 			return _career_rows
+		"farm":
+			return _farm_rows
 		_:  # stats / rates は同じ行データ (列違い)
 			return _basic_rows
 
@@ -1160,6 +1165,7 @@ func _refresh() -> void:
 	_records = []
 	_ratings = {}
 	_basic_rows = []
+	_farm_rows = []
 	_game_rows = []
 	_monthly_rows = []
 	_ability_rows = []
@@ -1184,6 +1190,7 @@ func _refresh() -> void:
 	_ratings = PSPlayerVisibleRatings.ratings_for_record(_record)
 	_compute_arsenal_types()
 	_build_basic_rows()
+	_build_farm_rows()
 	_build_current_season_log_rows(season)
 	_build_ability_rows()
 
@@ -1204,6 +1211,43 @@ func _build_basic_rows() -> void:
 		_basic_rows.append(_pitcher_basic_dict("通算", "", RecordStore.get_player_career_pitcher_stats(_player_id), true))
 	else:
 		_basic_rows.append(_batter_basic_dict("通算", "", RecordStore.get_player_career_batter_stats(_player_id), true))
+
+
+# 二軍成績タブの行。**farm_* コンテナからのみ**積む (一軍成績と混ざってはいけない)。
+# 通算は RecordStore の career API が一軍成績しか合算しないので、ここで年度行から自前に足す。
+# 二軍出場が無かった年も行は残し、FAINT で沈めて年度の連続性を保つ (月間成績タブと同じ流儀)。
+func _build_farm_rows() -> void:
+	var pitcher: bool = _record.is_pitcher()
+	var career_batter: PSBatterStats = PSBatterStats.new()
+	var career_pitcher: PSPitcherStats = PSPitcherStats.new()
+	var any_appearance: bool = false
+	for record_value in _records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		var team: String = _team_short(record.team_id)
+		var row: Dictionary
+		var played: bool
+		if pitcher:
+			var ps: PSPitcherStats = record.farm_pitcher_stats
+			career_pitcher.add_from(ps)
+			row = _pitcher_basic_dict("%d年" % record.year, team, ps, false)
+			played = _pitcher_stats_has_any(ps)
+		else:
+			var bs: PSBatterStats = record.farm_batter_stats
+			career_batter.add_from(bs)
+			row = _batter_basic_dict("%d年" % record.year, team, bs, false)
+			played = _batter_stats_has_any(bs)
+		if not played:
+			row["__color"] = FAINT
+		any_appearance = any_appearance or played
+		_farm_rows.append(row)
+	# 二軍での出場が一度も無い選手は全ゼロの表を出さず、空表 (=「記録がありません」) にする。
+	if not any_appearance:
+		_farm_rows = []
+		return
+	if pitcher:
+		_farm_rows.append(_pitcher_basic_dict("通算", "", career_pitcher, true))
+	else:
+		_farm_rows.append(_batter_basic_dict("通算", "", career_batter, true))
 
 
 func _build_current_season_log_rows(season: PSSeason) -> void:
@@ -1673,8 +1717,10 @@ func _league_ctx_for(year: int, season_number: int) -> Dictionary:
 
 # ============================================================ helpers
 
+# 過去にファーム専用球団へ在籍した年度も表に出るので get_any_team で引く
+# (専用球団は GameDb.teams に居ない = [[project_farm_system_design]])。
 func _team_short(team_id: int) -> String:
-	var team: PSTeam = GameDb.get_team(team_id)
+	var team: PSTeam = GameDb.get_any_team(team_id)
 	return team.short_name if team != null else "-"
 
 

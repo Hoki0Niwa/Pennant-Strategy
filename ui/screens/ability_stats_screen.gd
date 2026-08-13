@@ -181,24 +181,9 @@ func _team_hotspot_rect() -> Rect2:
 	return Rect2(1640.0, CHIP_Y - 2.0, 258.0, 34.0)
 
 
-# ヘッダのクリック可能矩形を _draw_data_table と同じ幾何で再構築する (列キーをソートへ渡す)。
+# ヘッダのクリック可能矩形の構築は基底 _build_table_header_hits に集約 (farm_screen と共用)。
 func _build_header_hits(rect: Rect2, columns: Array, opts: Dictionary) -> void:
-	var inner_pad: float = float(opts.get("inner_pad", 12.0))
-	var inner_x: float = rect.position.x + inner_pad
-	var usable: float = rect.size.x - inner_pad * 2.0
-	var sum_w: float = 0.0
-	for col_value in columns:
-		sum_w += float((col_value as Dictionary).get("w", 72))
-	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
-	var hy: float = rect.position.y + float(opts.get("header_top", 60.0))
-	# ヘッダ帯は header_top-18 〜 +8 の 26px (_draw_data_table v2 の帯幾何と一致させること)。
-	var top: float = hy - 18.0
-	var cx: float = inner_x
-	for col_value in columns:
-		var col: Dictionary = col_value as Dictionary
-		var w: float = float(col.get("w", 72)) * factor
-		_header_hits.append({"rect": Rect2(cx, top, w, 26.0), "key": str(col.get("key", ""))})
-		cx += w
+	_build_table_header_hits(_header_hits, rect, columns, opts)
 
 
 # ============================================================ columns
@@ -905,53 +890,12 @@ func _default_sort_for(tab: String, mode: String) -> Dictionary:
 			return {"key": "overall", "asc": false}
 
 
+# 並べ替え本体は基底 _sort_table_rows に集約 (farm_screen と共用)。
+# 主キーが同値のとき (例: 本塁打0の選手同士) に今季出場なしの選手が挟まらないよう、
+# 出場量 (打者は打席数、投手は投球回) を第2キーにする。
 func _sort_rows() -> void:
-	if _sort_key.is_empty() or _rows.is_empty():
-		return
-	var col: Dictionary = _find_col(_sort_key)
-	var eff_key: String = str(col.get("sort_key", _sort_key)) if not col.is_empty() else _sort_key
-	var fmt: String = str(col.get("fmt", "")) if not col.is_empty() else ""
-	var textual: bool = fmt == "str" or fmt == "string" or fmt == "team"
-	var asc: bool = _sort_asc
-	# 欠損 ("-" 等) は昇順/降順どちらでも末尾へ送る (sentinel を向きに合わせて極大/極小にする)。
-	var sentinel: float = INF if asc else -INF
-	# 主キーが同値のとき (例: 本塁打0の選手同士) に今季出場なしの選手が挟まらないよう、
-	# 出場量 (打者は打席数、投手は投球回) が多い方を向きに関係なく先に出す。
 	var tiebreak_key: String = "ip" if _current_mode() == "pitcher" else "pa"
-	_rows.sort_custom(func(a: Variant, b: Variant) -> bool:
-		var da: Dictionary = a as Dictionary
-		var db: Dictionary = b as Dictionary
-		if textual:
-			var sa: String = str(da.get(eff_key, ""))
-			var sb: String = str(db.get(eff_key, ""))
-			if sa != sb:
-				return sa < sb if asc else sa > sb
-		else:
-			var fa: float = _num_or(da.get(eff_key, sentinel), sentinel)
-			var fb: float = _num_or(db.get(eff_key, sentinel), sentinel)
-			if not is_equal_approx(fa, fb):
-				return fa < fb if asc else fa > fb
-		var ta: float = _num_or(da.get(tiebreak_key, 0.0), 0.0)
-		var tb: float = _num_or(db.get(tiebreak_key, 0.0), 0.0)
-		if not is_equal_approx(ta, tb):
-			return ta > tb
-		return str(da.get("name", "")) < str(db.get("name", ""))
-	)
-
-
-func _find_col(key: String) -> Dictionary:
-	for col_value in _columns_for_current():
-		if str((col_value as Dictionary).get("key", "")) == key:
-			return col_value as Dictionary
-	return {}
-
-
-func _num_or(value: Variant, sentinel: float) -> float:
-	if value is int:
-		return float(value)
-	if value is float:
-		return value
-	return sentinel
+	_sort_table_rows(_rows, _columns_for_current(), _sort_key, _sort_asc, tiebreak_key)
 
 
 # ============================================================ helpers

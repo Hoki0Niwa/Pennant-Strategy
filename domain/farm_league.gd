@@ -30,14 +30,14 @@ const DISTRICT_LABELS: Dictionary = {
 const FARM_CLUB_DEFS: Array[Dictionary] = [
 	{
 		"id": 13,
-		"name": "盛岡ノースアローズ",
+		"name": "ノースメン長野",
 		"short_name": "N",
 		"league": "",
 		"color": "60a0d0",
 	},
 	{
 		"id": 14,
-		"name": "駿河オーシャンズ",
+		"name": "オスプレー大分",
 		"short_name": "O",
 		"league": "",
 		"color": "e08040",
@@ -52,12 +52,12 @@ const DISTRICT_BY_TEAM_ID: Dictionary = {
 	4: DISTRICT_EAST,     # 出羽ダークデビルズ
 	8: DISTRICT_EAST,     # 八王子ホーネッツ
 	9: DISTRICT_EAST,     # 上越ジェスターズ
-	13: DISTRICT_EAST,    # 盛岡ノースアローズ (専用)
+	13: DISTRICT_EAST,    # ノースメン長野 (専用)
 	3: DISTRICT_CENTRAL,  # 茅ヶ崎クルセイダーズ
 	6: DISTRICT_CENTRAL,  # 福井ファルコンズ
 	7: DISTRICT_CENTRAL,  # 岐阜ゲームコックス
 	10: DISTRICT_CENTRAL, # 京都キーストーンズ
-	14: DISTRICT_CENTRAL, # 駿河オーシャンズ (専用)
+	14: DISTRICT_CENTRAL, # オスプレー大分 (専用)
 	2: DISTRICT_WEST,     # 備前ブラスターズ
 	5: DISTRICT_WEST,     # 愛媛エレファンツ
 	11: DISTRICT_WEST,    # 琉球ライトニング

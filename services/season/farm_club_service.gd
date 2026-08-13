@@ -44,13 +44,25 @@ const RELEASED_SIGNING_MAX_AGE: int = 32
 const ATTRITION_START_AGE: int = 27
 const ATTRITION_CERTAIN_AGE: int = 32
 
-# 生成する選手。NPB に指名されなかった層なので、ドラフト候補 (center 42〜68) より低く置く。
+# 生成する選手の能力水準。**この4つが専用球団の強さを決める最重要ノブ。**
+#
+# ⚠️ 2026-08-12 に 33〜50 / max 62 から引き上げた。旧値は「NPB に指名されなかった層だから
+# ドラフト候補 (center 42〜68) より低く」という意図で置いたものだったが、実測すると
+# 専用球団の投手は質 z が平均 **-0.85** (12球団の二軍投手は +1.3) の 2σ 低で、
+# **防御率 20〜25 / BB/9 26〜32 / 3勝31敗** という壊滅状態になっていた。
+# 現行の打席モデルは投手能力の差に対して非常に急峻で、1σ の差が防御率の 5〜6 倍差になる。
+#
+# そのため「指名されなかった層」の建前を額面どおり数値化すると球団が成立しない。
+# 現状はドラフト候補と**同水準やや狭め** (center 50-62 / 候補は 42-68) に置き、
+# 二軍リーグの最下位争いをする実在感のある弱小球団に落とし込んでいる。
+# **打席モデルの水準依存を直す作業 (レベル差が環境によらず妥当に効くようにする) が入ったら、
+# この4つは建前どおりの水準へ下げ直せるはず。そのときに再較正すること。**
 const GENERATED_MIN_AGE: int = 18
 const GENERATED_MAX_AGE: int = 24
-const GENERATED_CENTER_MIN: int = 33
-const GENERATED_CENTER_MAX: int = 50
+const GENERATED_CENTER_MIN: int = 54
+const GENERATED_CENTER_MAX: int = 66
 const GENERATED_ABILITY_VARIANCE: int = 11
-const GENERATED_MAX_DISPLAY: int = 62
+const GENERATED_MAX_DISPLAY: int = 72
 
 # 専用球団の年俸は固定 (NPB の年俸査定・契約更改の外)。
 const SALARY: int = 400

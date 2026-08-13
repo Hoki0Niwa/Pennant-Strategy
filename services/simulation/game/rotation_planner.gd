@@ -98,12 +98,14 @@ static func resolve_rotation_decision(
 	starter_pitchers: Array,
 	reliever_pool: Array = [],
 	postseason: bool = false,
-	saved_override: Dictionary = {}
+	saved_override: Dictionary = {},
+	farm: bool = false,
+	farm_team_games: int = 0
 ) -> Dictionary:
 	var saved: Dictionary = saved_override
 	if saved.is_empty():
 		saved = season.get_rotation(team_id) if season != null else {}
-	var rotation: Array = resolve_rotation_order_from_saved(saved, starter_pitchers)
+	var rotation: Array = resolve_rotation_order_from_saved(saved, starter_pitchers, farm, farm_team_games)
 	if rotation.is_empty():
 		return {
 			"pitcher": null,
@@ -459,7 +461,9 @@ static func reorder_auto_rotation(season: PSSeason, team_id: int, starter_pitche
 	return true
 
 
-static func resolve_rotation_order_from_saved(saved: Dictionary, starter_pitchers: Array) -> Array:
+static func resolve_rotation_order_from_saved(
+	saved: Dictionary, starter_pitchers: Array, farm: bool = false, farm_team_games: int = 0
+) -> Array:
 	if starter_pitchers.is_empty():
 		return []
 	var by_id: Dictionary = {}
@@ -488,7 +492,7 @@ static func resolve_rotation_order_from_saved(saved: Dictionary, starter_pitcher
 		if used.has(pitcher.player_id):
 			continue
 		rest.append(pitcher)
-	rest.sort_custom(_by_pitching_score(_pitching_scores_by_id(rest)))
+	rest.sort_custom(_by_pitching_score(_pitching_scores_by_id(rest, farm, farm_team_games)))
 	for pitcher_row in rest:
 		if rotation.size() >= ROTATION_SIZE_MAX:
 			break
@@ -580,7 +584,9 @@ static func select_relievers_for_innings(
 	reliever_pool: Array,
 	starter_pool_fallback: Array,
 	exclude_pitcher_id: int,
-	saved: Dictionary = {}
+	saved: Dictionary = {},
+	farm: bool = false,
+	farm_team_games: int = 0
 ) -> Array:
 	var eligible: Array = []
 	for r in reliever_pool:
@@ -592,7 +598,7 @@ static func select_relievers_for_innings(
 	# エース救援が疲れた日に評価が下がってクローザーの座が日替わりで入れ替わり、現実離れした「日替わり抑え」と
 	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
 	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。
-	eligible.sort_custom(_by_pitching_score(_pitching_scores_by_id(eligible)))
+	eligible.sort_custom(_by_pitching_score(_pitching_scores_by_id(eligible, farm, farm_team_games)))
 	var top6: Array = []
 	var used_ids: Dictionary = {}
 	var eligible_by_id: Dictionary = _records_by_id(eligible)
@@ -620,7 +626,7 @@ static func select_relievers_for_innings(
 			if used_ids.has(pitcher.player_id) or pitcher.injury_days > 0:
 				continue
 			fallback.append(pitcher)
-		fallback.sort_custom(_by_pitching_score(_pitching_scores_by_id(fallback)))
+		fallback.sort_custom(_by_pitching_score(_pitching_scores_by_id(fallback, farm, farm_team_games)))
 		for p in fallback:
 			if top6.size() >= RELIEF_ROLE_SIZE_MAX:
 				break
@@ -701,12 +707,27 @@ static func _records_by_id(records: Array) -> Dictionary:
 # 疲労抜きの投手評価を player_id → score で先に引いておく。comparator の中で計算すると
 # 1 回の sort で O(n log n) 回走るため (評価は球速・変化球・能力カーブを含む)。
 # 比較結果は同じなので並び順は変わらない。
-static func _pitching_scores_by_id(records: Array) -> Dictionary:
+# farm=true のときは**二軍の出場方針**で並べ替える (打撃側の `_prime_farm_batting_memo` と対)。
+# 能力の重みを落とし、トッププロスペクトを優先し、登板が少ない投手ほど上へ持ち上げる。
+# 単純な能力順だと二軍は「ローテ6人 + ブルペン6人」で固定され、
+# **育成投手が53人中1人 (1.9%) しか登板しない**状態になっていた ([[project_farm_system_design]])。
+static func _pitching_scores_by_id(records: Array, farm: bool = false, farm_team_games: int = 0) -> Dictionary:
 	var scores: Dictionary = {}
+	var prospects: Dictionary = PSTeamSetupBuilder.farm_prospect_ids(records) if farm else {}
+	var mean_share: float = (
+		PSTeamSetupBuilder._farm_mean_appearance_share(records, farm_team_games, true) if farm else -1.0
+	)
 	for record_value in records:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record != null and not scores.has(record.player_id):
-			scores[record.player_id] = PlayerValueEvaluator.pitching_score_without_fatigue(record)
+			var score: float = float(PlayerValueEvaluator.pitching_score_without_fatigue(record))
+			if farm:
+				score *= PSTeamSetupBuilder.FARM_ABILITY_WEIGHT
+				score += PSTeamSetupBuilder.farm_usage_priority(
+					record, prospects.has(record.player_id),
+					float(record.farm_pitcher_stats.games), farm_team_games, mean_share
+				)
+			scores[record.player_id] = int(round(score))
 	return scores
 
 

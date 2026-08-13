@@ -499,6 +499,55 @@ func test_development_players_appear_in_farm_games() -> void:
 	).is_greater(0)
 
 
+func test_farm_playing_time_prioritizes_prospects_and_is_not_decided_by_ability_alone() -> void:
+	# **二軍は一軍とは別の基準で出場を決める** (2026-08-13 ユーザー方針)。
+	#   1. トッププロスペクトは優先して出す
+	#   2. それ以外は能力だけで機会を決めない (出ていない選手ほど優先度が上がる輪番)
+	# 一軍の「強い順に9人」との違いがここに集約されるので、方針が消えたら落ちるようにしておく。
+	var team_games: int = 40
+	var mean_share: float = 0.5
+
+	# --- 1. トッププロスペクトは、能力で上回るベテランより優先される ---
+	var prospect: PSPlayerSeasonRecord = _usage_probe_record(9101, 22, false)
+	var veteran: PSPlayerSeasonRecord = _usage_probe_record(9102, 33, false)
+	# 出場実績は同じ (輪番の効果を排除して、プロスペクト加点だけを見る)。
+	var prospect_score: float = PSTeamSetupBuilder.farm_usage_priority(prospect, true, 20.0, team_games, mean_share)
+	var veteran_score: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 20.0, team_games, mean_share)
+	assert_float(prospect_score).override_failure_message(
+		"プロスペクトの優先度がベテランを上回っていない"
+	).is_greater(veteran_score)
+
+	# --- 2. 同じ選手像なら、出場が少ない方が優先される (能力に依らない輪番) ---
+	var rested: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 4.0, team_games, mean_share)
+	var overused: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 36.0, team_games, mean_share)
+	assert_float(rested).override_failure_message(
+		"出場の少ない選手が優先されていない (輪番が効いていない)"
+	).is_greater(overused)
+
+	# --- 3. 能力差が輪番で覆ること = 「能力で機会をすべて決めない」 ---
+	# 表示能力で 12 点ぶん劣る控えが、ほとんど出ていなければ出ずっぱりの選手を上回る。
+	var ability_gap: float = 12.0 * PSTeamSetupBuilder.FARM_ABILITY_WEIGHT
+	assert_float(rested - overused).override_failure_message(
+		"輪番の効きが弱く、結局は能力順のままになっている"
+	).is_greater(ability_gap)
+
+	# --- 4. 開幕直後 (消化0試合) は実績が無いので輪番を効かせない ---
+	var opening_a: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 0.0, 0, -1.0)
+	var opening_b: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 8.0, 0, -1.0)
+	assert_float(opening_a).is_equal_approx(opening_b, 0.001)
+
+
+# 出場方針の検証用の最小レコード (能力は farm_usage_priority が見ないので設定しない)。
+func _usage_probe_record(player_id: int, age: int, development: bool) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = player_id
+	record.name = "usage_probe_%d" % player_id
+	record.position = 3
+	record.age = age
+	record.development_player = development
+	return record
+
+
 func test_farm_pool_excludes_the_active_roster_even_before_the_first_team_plays() -> void:
 	# 二軍は一軍より先に回すため、`season.get_active_roster` がまだ空の状態で
 	# 二軍のロスターを決めることになる。裏返しが効いていないと**一軍の主力が二軍戦に出る**

@@ -151,7 +151,13 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 		if not candidates.is_empty():
 			break
 	if candidates.is_empty():
-		return null
+		# **最終手段。** ここで null を返すと呼び出し側は継投を諦め、先発が投げ続ける。
+		# 当日のブルペンは疲労を見ずに能力上位6人で固定されるため、その6人が全員
+		# 緊急疲労上限を超えると「健康な救援がロスターに残っているのに誰も投げられない」
+		# 状態になり、実際に **1試合370球を投げる先発** が発生していた (2026-08-12 実測、
+		# 二軍のファーム専用球団)。実野球では誰かが必ず投げるので、疲労上限を無視して
+		# 最も疲労の少ない健康な投手を上げる。
+		return _emergency_reliever(setup, used_ids)
 
 	# 役割別のハードな登板可否で絞り込む。全滅する非常時 (適性役割しか残っていない等) は
 	# 元の候補に戻し、試合が止まらないようにする。
@@ -194,6 +200,27 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 		)
 	)
 	return eligible[0] as PSPlayerSeasonRecord
+
+
+# 疲労上限を無視した非常時の継投先。当日のブルペン + 控え (relief_reserve) から、
+# **この試合でまだ投げていない健康な投手のうち最も疲労が少ない者**を選ぶ。
+# 同疲労は player_id で決める (並列実行でも結果が揺れないように)。
+static func _emergency_reliever(setup: Dictionary, used_ids: Dictionary) -> PSPlayerSeasonRecord:
+	var pool: Array = (setup.get("relievers", []) as Array).duplicate()
+	pool.append_array(setup.get("relief_reserve", []) as Array)
+	var best: PSPlayerSeasonRecord = null
+	for row in pool:
+		var pitcher: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+		if pitcher == null or used_ids.has(pitcher.player_id) or pitcher.injury_days > 0:
+			continue
+		if best == null:
+			best = pitcher
+			continue
+		if pitcher.fatigue < best.fatigue:
+			best = pitcher
+		elif pitcher.fatigue == best.fatigue and pitcher.player_id < best.player_id:
+			best = pitcher
+	return best
 
 
 # setup の守備チームがビジター (away) なら true。同点延長の継投方針 (温存 vs 即投入) を分岐する。

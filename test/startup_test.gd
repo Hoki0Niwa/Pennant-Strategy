@@ -738,6 +738,178 @@ func test_ability_stats_screen_builds_each_tab_and_mode() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_farm_screen_and_player_detail_farm_tab_build() -> void:
+	# 二軍の閲覧 UI (Phase 4)。二軍はファーム情報画面へ集約し、一軍側の画面 (順位表 /
+	# 能力・成績一覧) には混ぜない。張る不変条件は
+	# **二軍成績が farm_* コンテナからしか読まれないこと** と
+	# **ファーム専用球団 (GameDb.teams に居ない2球団) が二軍の文脈でだけ見えること**。
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_player: int = AppState.current_player_id
+	var old_status: String = AppState.last_status_message
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	AppState.current_screen = "farm"
+	var test_save_id: String = SaveContext.active_save_id()
+	var season: PSSeason = AppState.current_season
+	var GameSimulator = load("res://services/simulation/game_simulator.gd")
+	for _i in range(3):
+		GameSimulator.simulate_current_day(season, false)
+
+	# ファーム情報は3箇所 (画面スクリプト / full bleed / サイドバー) に登録されていないと辿れない。
+	var main_script: GDScript = load("res://ui/main.gd") as GDScript
+	assert_bool((main_script.SCREEN_SCRIPT_PATHS as Dictionary).has("farm")).is_true()
+	assert_bool((main_script.FULL_BLEED_SCREENS as Dictionary).has("farm")).is_true()
+	var nav_has_farm: bool = false
+	for group_value in load("res://ui/components/dashboard_screen.gd").NAV_GROUPS:
+		for item_value in (group_value as Dictionary)["items"] as Array:
+			nav_has_farm = nav_has_farm or str((item_value as Dictionary).get("id", "")) == "farm"
+	assert_bool(nav_has_farm).override_failure_message("farm is missing from NAV_GROUPS").is_true()
+
+	var farm_script: GDScript = load("res://ui/screens/farm_screen.gd") as GDScript
+	var farm: Control = farm_script.new()
+	farm.size = Vector2(1920, 1080)
+	add_child(farm)
+	await get_tree().process_frame
+
+	# --- 順位ビュー (3地区・勝率順・専用球団込み) ---
+	assert_str(farm._view).is_equal(farm.VIEW_STANDINGS)
+	var district_team_ids: Array = []
+	for district in PSFarmLeague.DISTRICT_ORDER:
+		var rows: Array = farm._rows_by_district.get(district, []) as Array
+		assert_array(rows).override_failure_message("district %s is empty" % district).is_not_empty()
+		var prev_rate: float = 2.0
+		for row_value in rows:
+			var row: Dictionary = row_value as Dictionary
+			district_team_ids.append(int(row.get("team_id", 0)))
+			# 順位は勝率降順 (試合数が揃わないのでゲーム差では並べられない)。
+			assert_float(float(row.get("pct", 0.0))).is_less_equal(prev_rate)
+			prev_rate = float(row.get("pct", 0.0))
+	assert_int(district_team_ids.size()).is_equal(14)
+	for club_id in PSFarmLeague.farm_club_ids():
+		assert_bool(district_team_ids.has(int(club_id))).override_failure_message(
+			"farm club %d missing from the farm standings" % int(club_id)).is_true()
+	assert_array(farm._summary_cells).is_not_empty()
+	# 「差」「残」は二軍では意味を持たないので列に無い。
+	for col_value in farm._district_columns():
+		var key: String = str((col_value as Dictionary).get("key", ""))
+		assert_bool(key == "gb" or key == "rem").is_false()
+	farm.queue_redraw()
+	await get_tree().process_frame
+
+	# --- 成績ビュー ---
+	farm._on_view_pressed(farm.VIEW_STATS)
+	assert_int(farm._team_ids.size()).is_equal(14)
+	assert_array(farm._rows).is_not_empty()
+
+	# 専用球団の選手が母集団に入る。
+	var has_farm_club_record: bool = false
+	for record_value in farm._filtered:
+		if PSFarmLeague.is_farm_club_id((record_value as PSPlayerSeasonRecord).team_id):
+			has_farm_club_record = true
+			break
+	assert_bool(has_farm_club_record).is_true()
+
+	# 成績セルが farm_* から読まれている。一軍成績と値が違う選手で確かめる
+	# (同値だとコンテナを取り違えても素通りしてしまうため)。
+	var probe_id: int = 0
+	var probe_farm_pa: int = 0
+	var probe_first_pa: int = 0
+	for row_value in farm._rows:
+		var row: Dictionary = row_value as Dictionary
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(
+			int(row.get("__meta", 0)), season.year, season.season_number)
+		if record == null:
+			continue
+		if record.farm_batter_stats.plate_appearances > 0 \
+				and record.farm_batter_stats.plate_appearances != record.batter_stats.plate_appearances:
+			probe_id = record.player_id
+			probe_farm_pa = record.farm_batter_stats.plate_appearances
+			probe_first_pa = record.batter_stats.plate_appearances
+			assert_int(int(row.get("pa", -1))).is_equal(probe_farm_pa)
+			break
+	assert_int(probe_id).override_failure_message("no batter with farm-only plate appearances").is_greater(0)
+
+	# ヘッダクリックのソート (基底 _sort_table_rows) が効く。描画でヘッダ判定が積まれている。
+	farm.queue_redraw()
+	await get_tree().process_frame
+	assert_array(farm._header_hits).is_not_empty()
+	farm._on_header_clicked("hr")
+	assert_str(farm._sort_key).is_equal("hr")
+	assert_bool(farm._sort_asc).is_false()
+	farm._on_header_clicked("hr")
+	assert_bool(farm._sort_asc).is_true()
+
+	# 投手へ切替 → 列セットが投手側になる。
+	farm._on_filter_pressed("p_all")
+	assert_str(farm._current_mode()).is_equal("pitcher")
+	assert_array(farm._rows).is_not_empty()
+	farm.queue_redraw()
+	await get_tree().process_frame
+	farm.queue_free()
+
+	# 一軍側の画面には二軍が混ざらない (能力・成績一覧は一軍12球団のまま)。
+	var stats_script: GDScript = load("res://ui/screens/ability_stats_screen.gd") as GDScript
+	var stats_screen: Control = stats_script.new()
+	stats_screen.size = Vector2(1920, 1080)
+	add_child(stats_screen)
+	await get_tree().process_frame
+	assert_int(stats_screen._team_ids.size()).is_equal(12)
+	stats_screen.queue_free()
+
+	# --- 選手詳細: 二軍成績タブ ---
+	AppState.current_screen = "player_detail"
+	AppState.current_player_id = probe_id
+	var detail_script: GDScript = load("res://ui/screens/player_detail_screen.gd") as GDScript
+	var detail: Control = detail_script.new()
+	detail.size = Vector2(1920, 1080)
+	add_child(detail)
+	await get_tree().process_frame
+
+	detail._player_id = probe_id
+	detail._refresh()
+	detail._active_tab = "farm"
+	var farm_rows: Array = detail._rows_for_tab()
+	assert_array(farm_rows).is_not_empty()
+	var year_label: String = "%d年" % season.year
+	assert_int(_row_stat_by_year(farm_rows, year_label, "pa")).is_equal(probe_farm_pa)
+	var total_row: Dictionary = farm_rows[farm_rows.size() - 1] as Dictionary
+	assert_bool(bool(total_row.get("is_total", false))).is_true()
+	# 通算行は farm_* だけを合算する (RecordStore の career API は一軍成績しか持たないので自前計算)。
+	assert_int(int(total_row.get("pa", -1))).is_equal(probe_farm_pa)
+	# 過去成績タブは一軍成績のまま (混ざっていない)。
+	detail._active_tab = "stats"
+	assert_int(_row_stat_by_year(detail._rows_for_tab(), year_label, "pa")).is_equal(probe_first_pa)
+	detail.queue_redraw()
+	await get_tree().process_frame
+	detail.queue_free()
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.current_player_id = old_player
+	AppState.last_status_message = old_status
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+# 選手詳細の年度別テーブルから「YYYY年」行の指標を引く (行位置に依存しない照合用)。
+func _row_stat_by_year(rows: Array, year_label: String, key: String) -> int:
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		if str(row.get("year", "")) == year_label:
+			return int(row.get(key, -1))
+	return -1
+
+
 func test_ability_stats_screen_sort_tiebreaks_by_playing_time() -> void:
 	# 本塁打などの加算統計が同値 (=0) のとき、今季出場なしの選手が出場ありの選手の
 	# 間に挟まる回帰の防止: 同値時は出場量 (打者は打席数) の多い方を向きに関係なく先に出す。

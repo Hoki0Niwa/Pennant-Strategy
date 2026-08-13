@@ -58,6 +58,7 @@ const NAV_GROUPS: Array = [
 		{"id": "standings", "label": "順位表", "icon": "standings"},
 		{"id": "rankings", "label": "タイトル争い", "icon": "rankings"},
 		{"id": "ability_stats", "label": "能力・成績一覧", "icon": "record"},
+		{"id": "farm", "label": "ファーム情報", "icon": "farm"},
 		{"id": "history", "label": "シーズン履歴", "icon": "history"},
 	]},
 	{"title": "チーム・選手", "items": [
@@ -603,6 +604,12 @@ func _icon(name: String, box: Rect2, color: Color) -> void:
 			seg.call(0.5, 0.4, 0.5, 0.66)
 			seg.call(0.4, 0.5, 0.6, 0.5)
 			seg.call(0.4, 0.58, 0.6, 0.58)
+		"farm":
+			# 育つ芽 (茎 + 左右の葉)。二軍 = 育成の場、という意味づけ。
+			seg.call(0.5, 0.88, 0.5, 0.42)
+			draw_arc(pt.call(0.28, 0.46), 0.22 * r.size.x, deg_to_rad(-70.0), deg_to_rad(70.0), 14, color, w, true)
+			draw_arc(pt.call(0.72, 0.36), 0.22 * r.size.x, deg_to_rad(110.0), deg_to_rad(250.0), 14, color, w, true)
+			seg.call(0.3, 0.86, 0.7, 0.86)
 		"payroll":
 			seg.call(0.18, 0.32, 0.82, 0.32)
 			seg.call(0.18, 0.32, 0.18, 0.78)
@@ -880,6 +887,77 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 		cx += w
 	if selectable:
 		hits.append({"rect": Rect2(rect.position.x + 8.0, ry, rect.size.x - 16.0, row_h), "kind": sel_kind, "meta": meta})
+
+
+# ============================================================ 列ヘッダの対話ソート
+# `_draw_data_table` 自体はソート非対応なので、ヘッダのクリック判定と行の並べ替えを
+# 「テーブルを描いた側が自分の状態で持つ」形で支える2本を基底に置く
+# (ability_stats が最初に自前で持っていたものを、farm が2人目の利用者になった時点で集約した)。
+
+# ヘッダのクリック可能矩形を `_draw_data_table` と**同一の幾何**で再構築し hits へ積む。
+# ⚠️ 帯は header_top-18 から高さ26 (_draw_data_table v2 のヘッダ帯と一致)。ここがずれると
+# 見た目は正しいのにクリック位置だけ外れる、という気付きにくい壊れ方をする。
+func _build_table_header_hits(hits: Array, rect: Rect2, columns: Array, opts: Dictionary) -> void:
+	var inner_pad: float = float(opts.get("inner_pad", 12.0))
+	var inner_x: float = rect.position.x + inner_pad
+	var usable: float = rect.size.x - inner_pad * 2.0
+	var sum_w: float = 0.0
+	for col_value in columns:
+		sum_w += _col_width(col_value as Dictionary)
+	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
+	var top: float = rect.position.y + float(opts.get("header_top", 60.0)) - 18.0
+	var cx: float = inner_x
+	for col_value in columns:
+		var col: Dictionary = col_value as Dictionary
+		var w: float = _col_width(col) * factor
+		hits.append({"rect": Rect2(cx, top, w, 26.0), "key": str(col.get("key", ""))})
+		cx += w
+
+
+# 行を sort_key 列で並べ替える。列の `fmt` が str/team なら文字列比較、それ以外は数値比較。
+# **欠損 ("-" 等) は昇順/降順どちらでも末尾へ送る** (sentinel を向きに合わせて極大/極小にする)。
+# tiebreak_key は主キー同値時の第2キーで、向きに関係なく降順 (出場量の多い選手を先に出す用途)。
+# 表示文字と並べ替えたい値が違う列は `sort_key` を持たせる (守備位置/役割バッジ等)。
+func _sort_table_rows(rows: Array, columns: Array, sort_key: String, asc: bool, tiebreak_key: String) -> void:
+	if sort_key.is_empty() or rows.is_empty():
+		return
+	var col: Dictionary = {}
+	for col_value in columns:
+		if str((col_value as Dictionary).get("key", "")) == sort_key:
+			col = col_value as Dictionary
+			break
+	var eff_key: String = str(col.get("sort_key", sort_key)) if not col.is_empty() else sort_key
+	var fmt: String = str(col.get("fmt", "")) if not col.is_empty() else ""
+	var textual: bool = fmt == "str" or fmt == "string" or fmt == "team"
+	var sentinel: float = INF if asc else -INF
+	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		if textual:
+			var sa: String = str(da.get(eff_key, ""))
+			var sb: String = str(db.get(eff_key, ""))
+			if sa != sb:
+				return sa < sb if asc else sa > sb
+		else:
+			var fa: float = _numeric_or(da.get(eff_key, sentinel), sentinel)
+			var fb: float = _numeric_or(db.get(eff_key, sentinel), sentinel)
+			if not is_equal_approx(fa, fb):
+				return fa < fb if asc else fa > fb
+		if not tiebreak_key.is_empty():
+			var ta: float = _numeric_or(da.get(tiebreak_key, 0.0), 0.0)
+			var tb: float = _numeric_or(db.get(tiebreak_key, 0.0), 0.0)
+			if not is_equal_approx(ta, tb):
+				return ta > tb
+		return str(da.get("name", "")) < str(db.get("name", ""))
+	)
+
+
+func _numeric_or(value: Variant, sentinel: float) -> float:
+	if value is int:
+		return float(value)
+	if value is float:
+		return value
+	return sentinel
 
 
 func _col_width(col: Dictionary) -> float:
