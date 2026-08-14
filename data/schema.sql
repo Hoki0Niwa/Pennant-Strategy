@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS player_season_records (
   pitching_abilities_json TEXT NOT NULL DEFAULT '{}',
   fielding_abilities_json TEXT NOT NULL DEFAULT '{}',
   legacy_abilities_json TEXT NOT NULL DEFAULT '{}',
-  farm_defensive_outs_json TEXT NOT NULL DEFAULT '{}',
+  farm_advanced_stats_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY(player_id, year, season_number),
   FOREIGN KEY(player_id) REFERENCES players(id),
   CHECK(team_id >= 0),

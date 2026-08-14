@@ -661,6 +661,46 @@ func test_farm_defensive_innings_accumulate_for_aptitude_growth() -> void:
 	).is_greater(0.0)
 
 
+func test_farm_game_loop_uses_lightweight_output() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var day: int = _first_farm_day(season)
+	var indices: Array = season.farm_game_indices_on_day(day)
+	assert_bool(indices.is_empty()).is_false()
+	var calc: Dictionary = PSFarmGameRunner.calculate(
+		season, int(indices[0]), -1, ModManager.hot_rule_groups_snapshot()
+	)
+	assert_bool(bool(calc.get("ok", false))).is_true()
+	var result: Dictionary = calc.get("result", {}) as Dictionary
+	assert_bool(result.has("play_events")).override_failure_message(
+		"二軍戦が詳細プレーを生成している"
+	).is_false()
+	assert_bool(result.has("advanced_stats")).override_failure_message(
+		"軽量出力で入替判断に必要な高度指標が失われている"
+	).is_true()
+	var advanced: Dictionary = result.get("advanced_stats", {}) as Dictionary
+	assert_int((advanced.get("players", {}) as Dictionary).size()).override_failure_message(
+		"軽量出力で打撃・走塁・守備指標が集計されていない"
+	).is_greater(0)
+	assert_int((advanced.get("pitchers", {}) as Dictionary).size()).override_failure_message(
+		"軽量出力で投手の被打席指標が集計されていない"
+	).is_greater(0)
+	assert_int(int(result.get("next_play_event_index", 0))).is_greater(0)
+
+	PSFarmGameRunner.apply(season, calc)
+	var total_outs: int = 0
+	var total_advanced_pa: int = 0
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		for outs_value in record.farm_advanced_stats.defensive_outs_by_position.values():
+			total_outs += int(outs_value)
+		total_advanced_pa += record.farm_advanced_stats.plate_appearances
+		assert_int(record.advanced_stats.plate_appearances).override_failure_message(
+			"二軍の高度指標が一軍コンテナへ混入した"
+		).is_equal(0)
+	assert_int(total_outs).is_greater(0)
+	assert_int(total_advanced_pa).is_greater(0)
+
+
 func test_farm_league_produces_a_plausible_stat_line() -> void:
 	# 二軍成績は「一軍と同じ PA シムを素通しで使えば、投打の質差から自然に一軍より低く出る」
 	# という前提で作っている。別式を持たない代わりに、その前提が崩れていないかを見る。
@@ -981,7 +1021,18 @@ func _record_with_farm_stats() -> PSPlayerSeasonRecord:
 	record.farm_batter_stats.home_runs = 4
 	record.pitcher_stats.strikeouts = 90
 	record.farm_pitcher_stats.strikeouts = 15
-	record.farm_defensive_outs_by_position = {"8": 270, "9": 90}
+	record.farm_advanced_stats.player_id = record.player_id
+	record.farm_advanced_stats.plate_appearances = 100
+	record.farm_advanced_stats.woba_denominator = 100
+	record.farm_advanced_stats.xwoba_denominator = 100
+	record.farm_advanced_stats.woba_numerator = 37.2
+	record.farm_advanced_stats.xwoba_numerator = 35.0
+	record.farm_advanced_stats.defensive_outs_by_position = {"8": 270, "9": 90}
+	record.farm_advanced_stats.fielding_chances = 30
+	record.farm_advanced_stats.fielding_chances_by_position = {"8": 24, "9": 6}
+	record.farm_advanced_stats.oaa_by_zone = {"outfield": 2.5}
+	record.farm_advanced_stats.oaa_by_position = {"8": 2.0, "9": 0.5}
+	record.farm_advanced_stats.uzr_by_position = {"8": 1.8, "9": 0.4}
 	return record
 
 
@@ -994,6 +1045,8 @@ func test_farm_stats_are_a_separate_container_from_first_team_stats() -> void:
 	assert_int(record.batter_stats.hits).is_equal(130)
 	assert_int(record.pitcher_stats.strikeouts).is_equal(90)
 	assert_int(record.farm_pitcher_stats.strikeouts).is_equal(15)
+	record.farm_advanced_stats.woba_numerator += 1.0
+	assert_float(record.advanced_stats.woba_numerator).is_equal_approx(0.0, 0.001)
 
 
 func test_defensive_innings_default_stays_first_team_only() -> void:
@@ -1018,7 +1071,7 @@ func test_position_aptitude_growth_counts_farm_innings() -> void:
 	})
 	var record: PSPlayerSeasonRecord = _record_with_farm_stats()
 	record.advanced_stats.defensive_outs_by_position = {}
-	record.farm_defensive_outs_by_position = {"9": 900}
+	record.farm_advanced_stats.defensive_outs_by_position = {"9": 900}
 
 	OffseasonService.apply_position_aptitude_growth(player, record)
 	assert_int(int(player.position_aptitudes.get("right", 0))).override_failure_message(
@@ -1035,6 +1088,9 @@ func test_player_record_round_trip_keeps_farm_stats() -> void:
 	assert_int(restored.farm_batter_stats.home_runs).is_equal(4)
 	assert_int(restored.farm_pitcher_stats.strikeouts).is_equal(15)
 	assert_float(restored.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
+	assert_float(restored.farm_advanced_stats.woba()).is_equal_approx(0.372, 0.001)
+	assert_float(restored.farm_advanced_stats.wraa()).is_equal_approx(4.596, 0.001)
+	assert_float(float(restored.farm_advanced_stats.to_dict().get("oaa_total", 0.0))).is_equal_approx(2.5, 0.001)
 
 
 func test_team_record_round_trip_keeps_farm_standings() -> void:
@@ -1096,6 +1152,9 @@ func test_farm_stats_survive_a_sqlite_round_trip() -> void:
 	assert_int(found.farm_pitcher_stats.strikeouts).is_equal(15)
 	assert_int(found.pitcher_stats.strikeouts).is_equal(90)
 	assert_float(found.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
+	assert_float(found.farm_advanced_stats.woba()).is_equal_approx(0.372, 0.001)
+	assert_float(found.farm_advanced_stats.wraa()).is_equal_approx(4.596, 0.001)
+	assert_float(float(found.farm_advanced_stats.to_dict().get("oaa_total", 0.0))).is_equal_approx(2.5, 0.001)
 
 
 func test_season_round_trip_keeps_farm_schedule_and_standings() -> void:

@@ -68,11 +68,10 @@ var advanced_stats: PSAdvancedStats = PSAdvancedStats.new()
 # 構造的に保証される ([[project_farm_system_design]])。
 var farm_batter_stats: PSBatterStats = PSBatterStats.new()
 var farm_pitcher_stats: PSPitcherStats = PSPitcherStats.new()
-# 二軍の advanced stats は**守備イニングだけ**保持する (WAR/OAA/wRAA は二軍では算出しない)。
-# オフの守備適性成長が守備イニングを入力に使うため、ここを捨てると
-# 「二軍でコンバートを試している選手の適性が伸びない」という実害が出る。
-# 形は advanced_stats.defensive_outs_by_position と同じ { "<position_id>": outs }。
-var farm_defensive_outs_by_position: Dictionary = {}
+# 二軍専用の高度統計。wOBA / xwOBA / wRAA / RE24 / BSR / OAA / UZR 系と
+# 守備イニングを保持する。一軍のタイトル・表彰・WAR・査定系は advanced_stats だけを読むため、
+# farm_advanced_stats を混ぜない。
+var farm_advanced_stats: PSAdvancedStats = PSAdvancedStats.new()
 
 
 static func from_player(player: PSPlayer, p_year: int, p_season_number: int) -> PSPlayerSeasonRecord:
@@ -162,13 +161,18 @@ static func from_dict(data: Dictionary) -> PSPlayerSeasonRecord:
 	record.pitcher_stats = PSPitcherStats.from_dict(data.get("pitcher_stats", {}) as Dictionary)
 	record.farm_batter_stats = PSBatterStats.from_dict(data.get("farm_batter_stats", {}) as Dictionary)
 	record.farm_pitcher_stats = PSPitcherStats.from_dict(data.get("farm_pitcher_stats", {}) as Dictionary)
-	record.farm_defensive_outs_by_position = (data.get("farm_defensive_outs_by_position", {}) as Dictionary).duplicate(true)
 	var advanced_payload: Dictionary = data.get("advanced_stats", {}) as Dictionary
 	record.advanced_stats = AdvancedStatsRecord.new()
 	if not advanced_payload.is_empty():
 		record.advanced_stats.load_from_dict(advanced_payload)
 	if record.advanced_stats.player_id == 0:
 		record.advanced_stats.player_id = record.player_id
+	var farm_advanced_payload: Dictionary = data.get("farm_advanced_stats", {}) as Dictionary
+	record.farm_advanced_stats = AdvancedStatsRecord.new()
+	if not farm_advanced_payload.is_empty():
+		record.farm_advanced_stats.load_from_dict(farm_advanced_payload)
+	if record.farm_advanced_stats.player_id == 0:
+		record.farm_advanced_stats.player_id = record.player_id
 	return record
 
 
@@ -195,7 +199,10 @@ func defensive_innings_at(position_id: int) -> float:
 
 # 二軍で position_id を守った守備イニング数。
 func farm_defensive_innings_at(position_id: int) -> float:
-	return float(int(farm_defensive_outs_by_position.get(str(position_id), 0))) / 3.0
+	if farm_advanced_stats == null:
+		return 0.0
+	var outs: int = int(farm_advanced_stats.defensive_outs_by_position.get(str(position_id), 0))
+	return float(outs) / 3.0
 
 
 # 一軍 + 二軍の守備イニング。**守備適性の成長だけがこれを使う** — 二軍でコンバートを試した
@@ -291,7 +298,7 @@ func to_dict() -> Dictionary:
 		"advanced_stats": advanced_stats.to_dict() if advanced_stats != null else {},
 		"farm_batter_stats": farm_batter_stats.to_dict(),
 		"farm_pitcher_stats": farm_pitcher_stats.to_dict(),
-		"farm_defensive_outs_by_position": farm_defensive_outs_by_position.duplicate(true),
+		"farm_advanced_stats": farm_advanced_stats.to_dict() if farm_advanced_stats != null else {},
 	}
 
 

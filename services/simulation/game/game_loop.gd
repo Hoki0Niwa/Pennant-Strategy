@@ -2,13 +2,16 @@ extends RefCounted
 class_name PSGameLoop
 
 
-# max_innings は延長の上限。既定は一軍の 12 回で、二軍 (ファーム) だけ 10 回で打ち切る
-# (実 NPB のファーム公式戦は延長が制限され引き分けが10%超になる → PSFarmSchedule.MAX_INNINGS)。
+# max_innings は延長の上限。既定は一軍の 12 回で、二軍 (ファーム) だけ 10 回で打ち切る。
+# lightweight は成績・投手責任・怪我・高度指標を維持し、表示用の詳細プレーだけを保持しない。
+# 各 play_event は生成直後に reducer へ流して破棄するため、OAA / wRAA 等を残したまま
+# play_events・lineups・substitutions のメモリ/シリアライズ負荷を避けられる。
 static func simulate_game(
 	away_setup: Dictionary,
 	home_setup: Dictionary,
 	rule_groups: Array[Dictionary] = [],
-	max_innings: int = GameSimulator.MAX_INNINGS
+	max_innings: int = GameSimulator.MAX_INNINGS,
+	lightweight: bool = false
 ) -> Dictionary:
 	var away_pitcher: PSPlayerSeasonRecord = away_setup["pitcher"] as PSPlayerSeasonRecord
 	var home_pitcher: PSPlayerSeasonRecord = home_setup["pitcher"] as PSPlayerSeasonRecord
@@ -24,21 +27,25 @@ static func simulate_game(
 		"losing_team_id": 0,
 		"away_pitcher_id": away_pitcher.player_id,
 		"home_pitcher_id": home_pitcher.player_id,
-		"play_events": [],
 		"pitcher_outings": [],
-		"substitutions": [],
 		"injury_events": [],
 		"next_play_event_index": 0,
-		"advanced_stats": PSAdvancedStatReducer.empty_advanced_stats(),
 		"walkoff": false,
+		"advanced_stats": PSAdvancedStatReducer.empty_advanced_stats(),
 	}
+	if lightweight:
+		result["_lightweight"] = true
+	else:
+		result["play_events"] = []
+		result["substitutions"] = []
 
 	PSBullpenManager.mark_games_started(away_setup)
 	PSBullpenManager.mark_games_started(home_setup)
-	result["lineups"] = {
-		"away": _capture_lineup(away_setup),
-		"home": _capture_lineup(home_setup),
-	}
+	if not lightweight:
+		result["lineups"] = {
+			"away": _capture_lineup(away_setup),
+			"home": _capture_lineup(home_setup),
+		}
 
 	var inning: int = 1
 	while inning <= max_innings:
@@ -113,6 +120,8 @@ static func simulate_game(
 	_collect_injury_events(result, away_setup)
 	_collect_injury_events(result, home_setup)
 	result["advanced_stats"] = PSAdvancedStatReducer.to_dict_container(result.get("advanced_stats", {}) as Dictionary)
+	if lightweight:
+		result.erase("_lightweight")
 	return result
 
 
@@ -140,7 +149,7 @@ static func _collect_injury_events(result: Dictionary, setup: Dictionary) -> voi
 
 # 交代ログ。result["substitutions"] に 1 件追記する (out_id==in_id は無視)。
 static func _record_substitution(result: Dictionary, inning: int, half: String, team_id: int, kind: String, out_id: int, in_id: int, position: int, slot: int) -> void:
-	if out_id == in_id or in_id <= 0:
+	if _is_lightweight_result(result) or out_id == in_id or in_id <= 0:
 		return
 	var subs: Array = result.get("substitutions", []) as Array
 	subs.append({
@@ -669,23 +678,24 @@ static func set_last_play_score_and_lead(
 ) -> void:
 	if game_result.is_empty():
 		return
-	var play_events: Array = game_result.get("play_events", []) as Array
-	if play_events.is_empty():
-		return
 	var before_score: Dictionary = score_pair_for_half(game_result, half, before_half_runs)
 	var after_score: Dictionary = score_pair_for_half(game_result, half, after_half_runs)
-	var last_index: int = play_events.size() - 1
-	var event: Dictionary = play_events[last_index] as Dictionary
-	event["score_before"] = before_score
-	event["score_after"] = after_score
-	play_events[last_index] = event
-	game_result["play_events"] = play_events
+	var lead_event_index: int = max(0, next_play_event_index(game_result) - 1)
+	var play_events: Array = game_result.get("play_events", []) as Array
+	if not play_events.is_empty():
+		var last_index: int = play_events.size() - 1
+		var event: Dictionary = play_events[last_index] as Dictionary
+		event["score_before"] = before_score
+		event["score_after"] = after_score
+		play_events[last_index] = event
+		game_result["play_events"] = play_events
+		lead_event_index = int(event.get("event_index", last_index))
 
 	var before_leader: int = leading_team_id(game_result, before_score)
 	var after_leader: int = leading_team_id(game_result, after_score)
 	if after_leader > 0 and after_leader != before_leader:
 		game_result["last_lead_change"] = {
-			"event_index": int(event.get("event_index", last_index)),
+			"event_index": lead_event_index,
 			"inning": inning,
 			"half": half,
 			"winning_team_id": after_leader,
@@ -1121,7 +1131,7 @@ static func apply_pitcher_outs(pitcher: PSPlayerSeasonRecord, outs_added: int) -
 
 
 static func apply_advanced_stats_for_event_range(game_result: Dictionary, start_index: int) -> void:
-	if game_result.is_empty():
+	if game_result.is_empty() or _is_lightweight_result(game_result):
 		return
 	var play_events: Array = game_result.get("play_events", []) as Array
 	if start_index < 0 or start_index >= play_events.size():
@@ -1153,7 +1163,7 @@ static func runner_event_context(game_result: Dictionary, inning: int, half: Str
 # 盗塁企図は内訳 (対象塁 second/third・戦術 delayed/double・三振ゲッツー) も別キーで数え、
 # NPB実勢 (二盗:三盗比・塁別成功率等) との突き合わせに使う。
 static func tally_runner_events(game_result: Dictionary, runner_events: Array) -> void:
-	if game_result.is_empty() or runner_events.is_empty():
+	if game_result.is_empty() or _is_lightweight_result(game_result) or runner_events.is_empty():
 		return
 	var counts: Dictionary = game_result.get("runner_event_counts", {}) as Dictionary
 	for event_value in runner_events:
@@ -1260,8 +1270,7 @@ static func append_runner_event_play(
 	if runner_events.is_empty():
 		return
 	var event_index: int = consume_play_event_index(game_result)
-	var play_events: Array = game_result.get("play_events", []) as Array
-	play_events.append(PSPlayEventBuilder.build_runner_event_play(
+	var play_event: Dictionary = PSPlayEventBuilder.build_runner_event_play(
 		event_index,
 		inning,
 		half,
@@ -1276,7 +1285,12 @@ static func append_runner_event_play(
 		runs_scored,
 		runner_events,
 		play_phase
-	))
+	)
+	if _is_lightweight_result(game_result):
+		PSAdvancedStatReducer.apply_play_event(game_result["advanced_stats"] as Dictionary, play_event)
+		return
+	var play_events: Array = game_result.get("play_events", []) as Array
+	play_events.append(play_event)
 	game_result["play_events"] = play_events
 
 
@@ -1300,8 +1314,7 @@ static func append_play_event(
 	if game_result.is_empty():
 		return
 	var event_index: int = consume_play_event_index(game_result)
-	var play_events: Array = game_result.get("play_events", []) as Array
-	play_events.append(PSPlayEventBuilder.build_play_event(
+	var play_event: Dictionary = PSPlayEventBuilder.build_play_event(
 		event_index,
 		inning,
 		half,
@@ -1317,8 +1330,17 @@ static func append_play_event(
 		runs_scored,
 		runner_events,
 		pitch_summary
-	))
+	)
+	if _is_lightweight_result(game_result):
+		PSAdvancedStatReducer.apply_play_event(game_result["advanced_stats"] as Dictionary, play_event)
+		return
+	var play_events: Array = game_result.get("play_events", []) as Array
+	play_events.append(play_event)
 	game_result["play_events"] = play_events
+
+
+static func _is_lightweight_result(game_result: Dictionary) -> bool:
+	return bool(game_result.get("_lightweight", false))
 
 
 static func resolve_plate_outcome(

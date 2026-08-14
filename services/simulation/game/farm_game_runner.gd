@@ -7,7 +7,8 @@ class_name PSFarmGameRunner
 # ## 一軍と違うところ
 # - 延長は `PSFarmSchedule.MAX_INNINGS` (10回) で打ち切る。
 # - 出場可能なのは「一軍登録の裏返し + 育成選手」。専用球団は在籍者全員。
-# - **play-by-play ログ / 打順履歴 / ロスター修復 / advanced stats (守備イニング以外) を作らない。**
+# - **play-by-play ログ / 打順履歴 / ロスター修復を作らない。** 高度指標はプレーごとに
+#   reducer へ流して `farm_advanced_stats` に残すため、OAA / wRAA 等は入替判断に使える。
 # - 成績は `record.farm_batter_stats` / `farm_pitcher_stats` へ入れる。
 #   一軍成績は試合前の値へ復元する ([[project_postseason_stats]] と同じ snapshot-diff 方式)。
 #   **疲労・怪我の変化は復元しない** — そこは一軍と共有したい値なので。
@@ -102,7 +103,7 @@ static func calculate(
 
 	var snapshots: Dictionary = _snapshot_setup_records(away_setup, home_setup)
 	var result: Dictionary = PSGameLoop.simulate_game(
-		away_setup, home_setup, rule_groups, PSFarmSchedule.MAX_INNINGS
+		away_setup, home_setup, rule_groups, PSFarmSchedule.MAX_INNINGS, true
 	)
 
 	if lane_id >= 0:
@@ -138,8 +139,8 @@ static func apply(season: PSSeason, calc: Dictionary) -> Dictionary:
 	# 勝敗投手/セーブ/ホールドは record.pitcher_stats へ一旦入れ、下の差分回収で
 	# farm_pitcher_stats へ移す (一軍側には残らない)。
 	_apply_pitching_decisions(season, result, away_team_id, home_team_id)
-	# 守備イニングは advanced stats を丸ごと取り込まず、この1項目だけ抜き出す。
-	_collect_farm_defensive_outs(season, result)
+	# 高度指標も一軍とは分離した二軍専用コンテナへ積む。
+	_collect_farm_advanced_stats(season, result)
 	# 一軍成績との差分 = この試合ぶんの二軍成績。回収後に一軍成績を試合前へ戻す。
 	_collect_farm_stat_deltas(snapshots)
 
@@ -247,30 +248,36 @@ static func _apply_pitching_decisions(
 			PSGameDecisions.apply_pitcher_decision(season, int(pid_value), "hold")
 
 
-# advanced stats のうち **守備イニングだけ**を farm_defensive_outs_by_position へ足す。
-# WAR / OAA / wRAA は二軍では算出しないが、守備イニングだけはオフの守備適性成長が
-# 入力に使うため捨てられない ([[project_farm_system_design]])。
-static func _collect_farm_defensive_outs(season: PSSeason, result: Dictionary) -> void:
+# 二軍の advanced stats を選手の farm_advanced_stats へ累積する。
+# players バケット (打撃・走塁・守備) と pitchers バケット (被打席) の双方を扱う。
+static func _collect_farm_advanced_stats(season: PSSeason, result: Dictionary) -> void:
 	var advanced: Dictionary = result.get("advanced_stats", {}) as Dictionary
-	var players: Dictionary = advanced.get("players", {}) as Dictionary
-	for key_value in players.keys():
-		var entry: Dictionary = players.get(key_value, {}) as Dictionary
-		var outs_by_position: Dictionary = entry.get("defensive_outs_by_position", {}) as Dictionary
-		if outs_by_position.is_empty():
-			continue
-		var player_id: int = int(entry.get("player_id", 0))
-		if player_id == 0 and str(key_value).is_valid_int():
-			player_id = int(str(key_value))
-		if player_id == 0:
-			continue
-		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
-		if record == null:
-			continue
-		for position_key in outs_by_position.keys():
-			var key: String = str(position_key)
-			record.farm_defensive_outs_by_position[key] = (
-				int(record.farm_defensive_outs_by_position.get(key, 0)) + int(outs_by_position[position_key])
+	if advanced.is_empty():
+		return
+	for bucket_name in ["players", "pitchers"]:
+		var bucket: Dictionary = advanced.get(bucket_name, {}) as Dictionary
+		for key_value in bucket.keys():
+			var key: String = str(key_value)
+			var entry: Dictionary = bucket.get(key_value, {}) as Dictionary
+			var player_id: int = int(entry.get("player_id", 0))
+			if player_id == 0 and key.is_valid_int():
+				player_id = int(key)
+			if player_id == 0:
+				continue
+			var record: PSPlayerSeasonRecord = RecordStore.get_player_record(
+				player_id, season.year, season.season_number
 			)
+			if record == null:
+				continue
+			var delta: PSAdvancedStats = PSAdvancedStats.new()
+			delta.load_from_dict(entry)
+			if delta.player_id == 0:
+				delta.player_id = player_id
+			if record.farm_advanced_stats == null:
+				record.farm_advanced_stats = PSAdvancedStats.new()
+			if record.farm_advanced_stats.player_id == 0:
+				record.farm_advanced_stats.player_id = player_id
+			record.farm_advanced_stats.add_from(delta)
 
 
 static func _snapshot_setup_records(away_setup: Dictionary, home_setup: Dictionary) -> Dictionary:

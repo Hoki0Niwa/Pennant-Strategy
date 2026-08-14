@@ -1499,20 +1499,55 @@ func test_pa_game_cache_reuses_static_views_and_keeps_pitcher_adjustment_local()
 	assert_bool(is_same(defense.get("catcher", null), catcher)).is_true()
 
 
-func test_pitcher_stuff_contact_quality_ev_effect_is_saturated() -> void:
+func test_contact_quality_preserves_matchup_balance_when_both_levels_drop() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state
-	var average_ev: float = _contact_quality_average_ev(PSContactQualityModel.PIT_STUFF_CURVE_CENTER)
-	var ace_ev: float = _contact_quality_average_ev(3.0)
-	var diff: float = average_ev - ace_ev
+	var baseline_ev: float = _contact_quality_average_ev(0.0, 0.0)
+	var weak_batter_ev: float = _contact_quality_average_ev(-0.8, 0.0)
+	var weak_pitcher_ev: float = _contact_quality_average_ev(0.0, -0.8)
+	var lower_level_ev: float = _contact_quality_average_ev(-0.8, -0.8)
 	Rng.current_seed = old_seed
 	Rng.generator.seed = old_seed
 	Rng.generator.state = old_state
 
-	print("STUFFEV avg=%.2f ace=%.2f diff=%.2f" % [average_ev, ace_ev, diff])
-	# 球威によるEV低下は小幅に飽和し、極端な投手でも過大にならない。
-	assert_float(diff).is_greater_equal(0.1)
-	assert_float(diff).is_less_equal(1.8)
+	print("LEVEL_EV base=%.2f weak_bat=%.2f weak_pit=%.2f both=%.2f" % [
+		baseline_ev, weak_batter_ev, weak_pitcher_ev, lower_level_ev,
+	])
+	assert_float(weak_batter_ev).is_less(baseline_ev - 2.0)
+	assert_float(weak_pitcher_ev).is_greater(baseline_ev + 2.0)
+	assert_float(absf(lower_level_ev - baseline_ev)).override_failure_message(
+		"投打が同じだけ弱くなったときに打球品質の基準が移動している"
+	).is_less(1.5)
+	assert_float(absf(
+		(baseline_ev - weak_batter_ev) - (weak_pitcher_ev - baseline_ev)
+	)).override_failure_message(
+		"打者低下と投手低下の打球品質への寄与が非対称"
+	).is_less(1.5)
+
+
+func test_contact_quality_caps_elite_matchup_tails() -> void:
+	var old_seed: int = Rng.current_seed
+	var old_state: int = Rng.generator.state
+	var baseline_ev: float = _contact_quality_average_ev(0.0, 0.0)
+	var elite_batter_ev: float = _contact_quality_average_ev(3.0, 0.0)
+	var elite_pitcher_ev: float = _contact_quality_average_ev(0.0, 3.0)
+	Rng.current_seed = old_seed
+	Rng.generator.seed = old_seed
+	Rng.generator.state = old_state
+
+	var batter_gain: float = elite_batter_ev - baseline_ev
+	var pitcher_reduction: float = baseline_ev - elite_pitcher_ev
+	print("ELITE_EV base=%.2f batter=%.2f pitcher=%.2f gain=%.2f reduction=%.2f" % [
+		baseline_ev, elite_batter_ev, elite_pitcher_ev, batter_gain, pitcher_reduction,
+	])
+	assert_float(batter_gain).is_greater(2.0)
+	assert_float(batter_gain).override_failure_message(
+		"最上位打者の打球品質差が飽和せず拡大している"
+	).is_less(7.0)
+	assert_float(pitcher_reduction).is_greater(2.0)
+	assert_float(pitcher_reduction).override_failure_message(
+		"球威にK/BB差が重なるエース帯の打球抑制が過大"
+	).is_less(5.0)
 
 
 func test_tto_penalty_flows_into_pa_weights() -> void:
@@ -1615,7 +1650,7 @@ func test_pitcher_stamina_affects_starter_fatigue_and_long_relief_usage() -> voi
 		PSPitcherUsageModel.long_relief_target_pitches(low_stamina))
 
 
-func _contact_quality_average_ev(pitcher_stuff_z: float) -> float:
+func _contact_quality_average_ev(batter_delta: float, pitcher_delta: float) -> float:
 	Rng.set_seed_value(24680)
 	var total_ev: float = 0.0
 	var n: int = 2400
@@ -1628,11 +1663,11 @@ func _contact_quality_average_ev(pitcher_stuff_z: float) -> float:
 	}
 	for _i in range(n):
 		var quality: Dictionary = PSContactQualityModel.generate(null, null, pitch_outcome, {}, {
-			"batter_contact_z": PSContactQualityModel.BAT_CONTACT_CURVE_CENTER,
-			"batter_gap_z": PSContactQualityModel.BAT_GAP_CURVE_CENTER,
-			"batter_hr_z": PSContactQualityModel.BAT_HR_CURVE_CENTER,
-			"batter_avoid_k_z": PSContactQualityModel.BAT_AVOID_K_CURVE_CENTER,
-			"pitcher_stuff_z": pitcher_stuff_z,
+			"batter_contact_z": PSContactQualityModel.BAT_CONTACT_CURVE_CENTER + batter_delta,
+			"batter_gap_z": PSContactQualityModel.BAT_GAP_CURVE_CENTER + batter_delta,
+			"batter_hr_z": PSContactQualityModel.BAT_HR_CURVE_CENTER + batter_delta,
+			"batter_avoid_k_z": PSContactQualityModel.BAT_AVOID_K_CURVE_CENTER + batter_delta,
+			"pitcher_stuff_z": PSContactQualityModel.PIT_STUFF_CURVE_CENTER + pitcher_delta,
 			"batter_fatigue": 0,
 			"batter_is_pitcher": false,
 			"pitcher_contact_damage": 0.0,

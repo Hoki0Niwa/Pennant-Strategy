@@ -8,8 +8,8 @@ extends "res://ui/components/dashboard_screen.gd"
 #     **地区で試合数が揃わない前提なので順位は勝率で決める** (実 NPB のファームも中止試合の
 #     再試合を行わず勝率で順位を決める)。したがって「差」「残」列は置かない。
 #   - 成績: 二軍成績の選手一覧 (絞り込み / 球団 / 規定到達 / 列ヘッダソート)。
-#     **成績は farm_* コンテナからしか読まない** — 一軍成績と混ぜないのが二軍実装の防波堤
-#     (docs/agent_memory/project_farm_system_design.md)。WAR/OAA/wRAA は二軍では算出しないので出さない。
+#     **成績は farm_* コンテナからしか読まない** — 一軍成績と混ぜないのが二軍実装の防波堤。
+#     入替判断に使う wOBA / xwOBA / wRAA / BSR / OAA / UZR も farm_advanced_stats から表示する。
 #
 # 集計は _refresh で1度だけ行い、_draw は描画専念 (順位ビューは14球団ぶん RecordStore を舐めるため、
 # 開いているビューのぶんだけ集計する)。
@@ -221,7 +221,7 @@ func _district_columns() -> Array:
 	]
 
 
-# 成績ビューの列。高度な指標 (WAR/OAA/wRAA) は二軍では算出しないので持たない。
+# 成績ビューの列。高度指標も必ず farm_advanced_stats から読み、一軍成績とは混ぜない。
 func _stat_columns() -> Array:
 	var cols: Array = [
 		{"title": "球団", "key": "team", "w": 56, "align": "l", "fmt": "team"},
@@ -243,6 +243,9 @@ func _stat_columns() -> Array:
 			{"title": "防御率", "key": "era", "w": 62, "align": "r", "fmt": "f2"},
 			{"title": "WHIP", "key": "whip", "w": 60, "align": "r", "fmt": "f2"},
 			{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2"},
+			{"title": "wOBAA", "key": "wobaa", "w": 64, "align": "r", "fmt": "rate"},
+			{"title": "xwOBAA", "key": "xwobaa", "w": 68, "align": "r", "fmt": "rate"},
+			{"title": "RE24A", "key": "re24a", "w": 62, "align": "r", "fmt": "f1s"},
 			{"title": "奪三振", "key": "so", "w": 58, "align": "r", "fmt": "int", "sep_before": true},
 			{"title": "与四球", "key": "bb", "w": 58, "align": "r", "fmt": "int"},
 			{"title": "与死球", "key": "hbp", "w": 58, "align": "r", "fmt": "int"},
@@ -272,10 +275,12 @@ func _stat_columns() -> Array:
 		{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
 		{"title": "死球", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
 		{"title": "三振", "key": "so", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "犠打", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "犠飛", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "併殺", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "失策", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "wOBA", "key": "woba", "w": 60, "align": "r", "fmt": "rate", "sep_before": true},
+		{"title": "xwOBA", "key": "xwoba", "w": 64, "align": "r", "fmt": "rate"},
+		{"title": "wRAA", "key": "wraa", "w": 60, "align": "r", "fmt": "f1s"},
+		{"title": "BSR", "key": "bsr", "w": 54, "align": "r", "fmt": "f1s"},
+		{"title": "OAA", "key": "oaa", "w": 54, "align": "r", "fmt": "f1s", "sep_before": true},
+		{"title": "UZR", "key": "uzr", "w": 54, "align": "r", "fmt": "f1s"},
 	])
 	return cols
 
@@ -679,9 +684,9 @@ func _build_stat_rows() -> void:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		var row: Dictionary = _identity_fields(record)
 		if record.is_pitcher():
-			row.merge(_pitcher_stat_dict(record.farm_pitcher_stats), true)
+			row.merge(_pitcher_stat_dict(record.farm_pitcher_stats, record.farm_advanced_stats), true)
 		else:
-			row.merge(_batter_stat_dict(record.farm_batter_stats), true)
+			row.merge(_batter_stat_dict(record.farm_batter_stats, record.farm_advanced_stats), true)
 		_rows.append(row)
 
 
@@ -709,18 +714,31 @@ func _identity_fields(record: PSPlayerSeasonRecord) -> Dictionary:
 	return row
 
 
-func _batter_stat_dict(s: PSBatterStats) -> Dictionary:
-	return {
+func _batter_stat_dict(s: PSBatterStats, ad: PSAdvancedStats = null) -> Dictionary:
+	var row: Dictionary = {
 		"g": s.games, "pa": s.plate_appearances, "ab": s.at_bats, "r": s.runs, "h": s.hits,
 		"d": s.doubles, "t": s.triples, "hr": s.home_runs, "rbi": s.runs_batted_in, "sb": s.stolen_bases,
 		"avg": s.batting_average(), "obp": s.on_base_percentage(), "slg": s.slugging_percentage(), "ops": s.ops(),
 		"bb": s.walks, "hbp": s.hit_by_pitches, "so": s.strikeouts,
 		"sac": s.sacrifices, "sf": s.sacrifice_flies, "gdp": s.double_plays, "err": s.errors,
 	}
+	var has_pa: bool = ad != null and ad.plate_appearances > 0
+	var ad_dict: Dictionary = ad.to_dict() if ad != null else {}
+	var has_field: bool = int(ad_dict.get("fielding_chances", 0)) > 0
+	row.merge({
+		"woba": ad.woba() if has_pa else "-",
+		"xwoba": ad.xwoba() if has_pa else "-",
+		"wraa": ad.wraa() if has_pa else "-",
+		"bsr": ad.bsr_sum if has_pa else "-",
+		"oaa": float(ad_dict.get("oaa_total", 0.0)) if has_field else "-",
+		"uzr": float(ad_dict.get("uzr", 0.0)) if has_field else "-",
+	}, true)
+	return row
 
 
-func _pitcher_stat_dict(s: PSPitcherStats) -> Dictionary:
+func _pitcher_stat_dict(s: PSPitcherStats, ad: PSAdvancedStats = null) -> Dictionary:
 	var has_ip: bool = s.outs_pitched > 0
+	var has_bf: bool = ad != null and ad.plate_appearances > 0
 	return {
 		"g": s.games, "gs": s.starts, "cg": s.complete_games,
 		"w": s.wins, "l": s.losses, "hld": s.holds, "sv": s.saves, "qs": s.quality_starts,
@@ -728,6 +746,9 @@ func _pitcher_stat_dict(s: PSPitcherStats) -> Dictionary:
 		"era": s.era() if has_ip else "-",
 		"whip": s.whip() if has_ip else "-",
 		"k9": s.strikeouts_per_nine() if has_ip else "-",
+		"wobaa": ad.woba() if has_bf else "-",
+		"xwobaa": ad.xwoba() if has_bf else "-",
+		"re24a": ad.re24_sum if has_bf else "-",
 		"so": s.strikeouts, "bb": s.walks, "hbp": s.hit_batters, "h": s.hits_allowed,
 		"hra": s.home_runs_allowed, "ra": s.runs_allowed, "er": s.earned_runs,
 	}

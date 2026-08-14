@@ -4,11 +4,13 @@ extends Node
 # 二軍成績の閲覧 UI は v1 対象外なので、**これが二軍を観測する唯一の手段**になる。
 #
 # 見るもの:
-#   - 二軍リーグの成績水準 (一軍との対比。二軍が一軍より低いのが正常)
+#   - 二軍リーグの成績水準 (一軍との対比。実 NPB のファームは一軍より **ERA が高い**)
 #   - 引き分け率 (延長10回打ち切りの効果。実 NPB のファームは約10%)
 #   - 出場分布 (何人が出たか / 育成選手が出ているか = v1 の目的の一つ)
 #   - 守備イニング (オフの守備適性成長の入力になっているか)
-#   - 昇降格 (谷間の先発が何回発火したか / 先発の顔ぶれ)
+#   - 昇降格 (日次の active_roster 差分で実測。谷間の先発が何回発火したか / 先発の顔ぶれ)
+#   - 故障件数 (二軍戦を足すと曝露が増えるので、一軍だけの頃より必ず増える)
+#   - 起用加重の能力水準 (一軍と二軍で打者・投手がそれぞれ何σ違うか = 得点環境のズレの切り分け)
 #   - 専用球団の状態 (ロスターサイズ・出場)
 #   - 地区別の消化と勝率 (試合数が揃わない前提なので順位は勝率)
 #   - 中止試合 (人数不足で組めなかった数。0 であるべき)
@@ -22,6 +24,29 @@ const HEALTH_FARM_STRIKEOUT_RATE: Array = [0.13, 0.30]
 const HEALTH_FARM_DRAW_RATE: Array = [0.03, 0.20]
 const HEALTH_CANCELLED_MAX: int = 0
 const HEALTH_DEVELOPMENT_APPEARANCE_MIN: float = 0.5
+# 実 NPB のファームは一軍より打低・投高 (=ERA が高い)。イースタン/ウエスタンとも
+# リーグ防御率は 3.2〜3.7 で、一軍 (2.9〜3.4) を上回る。二軍の投手・守備が劣るぶんが出る。
+# モデルが逆 (二軍の方が ERA が低い) になっていたら、投打どちらの質差が効きすぎているかを
+# `usage_levels` の σ 差で切り分ける。
+const HEALTH_FARM_ERA: Array = [2.80, 4.60]
+# 一軍で1試合以上出場した選手数/球団。NPB は年間 55〜65人 (登録・抹消の往復で顔ぶれが増える)。
+const HEALTH_FIRST_TEAM_PLAYERS_USED: Array = [40.0, 70.0]
+# 故障者数/球団。曝露が控え・二軍まで広がったので一軍だけの頃より増えるのが正常。
+# MLB の IL 入りは近年 30件/球団前後だが、こちらは軽傷 (3-15日) も1件と数えるので上限は広く取る。
+const HEALTH_INJURED_PLAYERS_PER_TEAM: Array = [8.0, 45.0]
+
+# Phase 5 (2026-08-13) の較正で、現在も届かないと分かっている項目。fail ではなく warn に
+# 落として exit code をゲートとして使える状態に保つ (**帯は本来の値のまま**にしてあるので、
+# 直ったときに数字を作り直さずに known を外すだけで済む)。理由は
+# docs/agent_memory/project_farm_system_design.md の Phase 5 節を参照。
+const HEALTH_KNOWN_OPEN_ISSUES: Dictionary = {
+	"first_team_players_used_per_team": "昇格しても出番が無く、閾値の較正では動かない",
+}
+
+# 起用加重の能力水準を測るキー。**質の軸だけ**を使う (スタイル軸を混ぜると水準がぼやける)。
+# 投手側は `PSPitcherRoleModel.ROLE_QUALITY_KEYS` と同じ考え方 (Pit_EdgeRate は除外)。
+const BATTER_QUALITY_KEYS: Array[String] = ["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Barrel"]
+const PITCHER_QUALITY_KEYS: Array[String] = ["Pit_KCreate", "Pit_BBPrevent", "Pit_Efficiency", "Pit_Stamina"]
 
 
 func _ready() -> void:
@@ -51,6 +76,11 @@ func _ready() -> void:
 		# スポット昇格が発火せず、昇降格の観測が実際と食い違う。
 		var ctx: Dictionary = {"user_team_id": 0, "include_user_team": true}
 		var days_done: int = 0
+		# 昇降格は日次の active_roster 差分で数える。週次入替・谷間の先発・故障修復の
+		# どれが動かしたかに依らず「一軍の顔ぶれが何回変わったか」を測れるのが利点で、
+		# production 側に計測用の戻り値を足さずに済む。
+		var roster_state: Dictionary = {}
+		var moves: Dictionary = {"promotions": 0, "demotions": 0, "promoted_ids": {}}
 		while _has_unplayed_game(season):
 			if day_limit > 0 and days_done >= day_limit:
 				break
@@ -63,8 +93,9 @@ func _ready() -> void:
 					"message": str(day_result.get("message", "day simulation failed")),
 				})
 				break
+			_track_roster_moves(season, roster_state, moves)
 			days_done += 1
-		seasons_out.append(_season_summary(season))
+		seasons_out.append(_season_summary(season, moves))
 
 	RecordStore.load_from_dict(original_records)
 	RecordStore.resume_persistence()
@@ -95,7 +126,7 @@ func _has_unplayed_game(season: PSSeason) -> bool:
 	return false
 
 
-func _season_summary(season: PSSeason) -> Dictionary:
+func _season_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
 	var farm: Dictionary = _level_batting_line(season, PSPerformanceReference.LEVEL_FARM)
 	var first: Dictionary = _level_batting_line(season, PSPerformanceReference.LEVEL_FIRST)
 	return {
@@ -103,12 +134,36 @@ func _season_summary(season: PSSeason) -> Dictionary:
 		"standings": _standings_summary(season),
 		"farm_batting": farm,
 		"first_team_batting": first,
-		"farm_pitching": _farm_pitching_line(season),
+		"farm_pitching": _level_pitching_line(season, PSPerformanceReference.LEVEL_FARM),
+		"first_team_pitching": _level_pitching_line(season, PSPerformanceReference.LEVEL_FIRST),
+		"usage_levels": _usage_level_summary(season),
 		"appearances": _appearance_summary(season),
 		"defense": _defensive_innings_summary(season),
 		"farm_clubs": _farm_club_summary(season),
 		"callups": _callup_summary(season),
+		"roster_moves": _roster_move_summary(season, moves),
+		"injuries": _injury_summary(season),
 	}
+
+
+# 一軍の active_roster を前日と比べ、増えた選手を昇格・消えた選手を降格として数える。
+# season 側には「現在の顔ぶれ」しか残らないので、日ごとに差分を取らないと総量が測れない。
+func _track_roster_moves(season: PSSeason, roster_state: Dictionary, moves: Dictionary) -> void:
+	for team_row in GameDb.teams:
+		var team_id: int = (team_row as PSTeam).id
+		var current: Dictionary = {}
+		for id_value in (season.get_active_roster(team_id).get("player_ids", []) as Array):
+			current[int(id_value)] = true
+		if roster_state.has(team_id):
+			var previous: Dictionary = roster_state[team_id] as Dictionary
+			for player_id in current.keys():
+				if not previous.has(player_id):
+					moves["promotions"] = int(moves["promotions"]) + 1
+					(moves["promoted_ids"] as Dictionary)[player_id] = true
+			for player_id in previous.keys():
+				if not current.has(player_id):
+					moves["demotions"] = int(moves["demotions"]) + 1
+		roster_state[team_id] = current
 
 
 func _schedule_summary(season: PSSeason) -> Dictionary:
@@ -193,13 +248,13 @@ func _level_batting_line(season: PSSeason, level: int) -> Dictionary:
 	}
 
 
-func _farm_pitching_line(season: PSSeason) -> Dictionary:
+func _level_pitching_line(season: PSSeason, level: int) -> Dictionary:
 	var totals: PSPitcherStats = PSPitcherStats.new()
 	for record_row in RecordStore.player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.year != season.year or record.season_number != season.season_number:
 			continue
-		totals.add_from(record.farm_pitcher_stats)
+		totals.add_from(PSPerformanceReference.pitcher_stats_for_level(record, level))
 	return {
 		"innings_pitched": _round1(totals.innings_pitched()),
 		"era": _round2(totals.era()),
@@ -209,6 +264,145 @@ func _farm_pitching_line(season: PSSeason) -> Dictionary:
 		"home_runs_allowed": totals.home_runs_allowed,
 		"complete_games": totals.complete_games,
 	}
+
+
+# 一軍と二軍で「実際に出た選手」の能力水準が何σ違うか。出場機会 (PA / 対戦打者) で加重する。
+# **得点環境のズレを投打どちらのせいか切り分けるための入力。** 二軍の ERA が一軍より低く出る
+# ようなときは、打者側の落差が投手側より大きい (打線だけが薄い) ことを疑う。
+func _usage_level_summary(season: PSSeason) -> Dictionary:
+	var first_batter: Array = [0.0, 0.0]
+	var farm_batter: Array = [0.0, 0.0]
+	var first_pitcher: Array = [0.0, 0.0]
+	var farm_pitcher: Array = [0.0, 0.0]
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.year != season.year or record.season_number != season.season_number:
+			continue
+		# 投手の打席は除く。z_abilities_snapshot に Bat_* を持たない (= 0 と読める) ため、
+		# 混ぜると DH 無しの一軍だけが不当に低く出て、一軍と二軍の差を過小評価する。
+		if not record.is_pitcher():
+			var batter_level: float = _mean_z(record, BATTER_QUALITY_KEYS)
+			_accumulate_level(first_batter, batter_level, float(record.batter_stats.plate_appearances))
+			_accumulate_level(farm_batter, batter_level, float(record.farm_batter_stats.plate_appearances))
+		else:
+			var pitcher_level: float = _mean_z(record, PITCHER_QUALITY_KEYS)
+			_accumulate_level(first_pitcher, pitcher_level, float(record.pitcher_stats.batters_faced))
+			_accumulate_level(farm_pitcher, pitcher_level, float(record.farm_pitcher_stats.batters_faced))
+	var batter_gap: float = _weighted_mean(farm_batter) - _weighted_mean(first_batter)
+	var pitcher_gap: float = _weighted_mean(farm_pitcher) - _weighted_mean(first_pitcher)
+	return {
+		"first_batter_z": _round3(_weighted_mean(first_batter)),
+		"farm_batter_z": _round3(_weighted_mean(farm_batter)),
+		"batter_gap_z": _round3(batter_gap),
+		"first_pitcher_z": _round3(_weighted_mean(first_pitcher)),
+		"farm_pitcher_z": _round3(_weighted_mean(farm_pitcher)),
+		"pitcher_gap_z": _round3(pitcher_gap),
+		# 正なら「打線の方が余計に薄い」= 二軍が投高打低へ寄る。0 付近なら投打が同じだけ落ちている。
+		"gap_asymmetry_z": _round3(pitcher_gap - batter_gap),
+	}
+
+
+func _mean_z(record: PSPlayerSeasonRecord, keys: Array[String]) -> float:
+	var total: float = 0.0
+	for key in keys:
+		total += float(record.z_abilities_snapshot.get(key, 0.0))
+	return total / float(keys.size())
+
+
+func _accumulate_level(accumulator: Array, level: float, weight: float) -> void:
+	if weight <= 0.0:
+		return
+	accumulator[0] = float(accumulator[0]) + level * weight
+	accumulator[1] = float(accumulator[1]) + weight
+
+
+func _weighted_mean(accumulator: Array) -> float:
+	return _safe_div(float(accumulator[0]), float(accumulator[1]))
+
+
+# 一軍の顔ぶれがどれだけ動いたか。NPB は登録・抹消の往復で年間 55〜65人が一軍出場する。
+# 二軍戦を作った当初の動機 (先発の顔ぶれを増やす) の到達度をここで見る。
+func _roster_move_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
+	var teams: float = float(max(1, GameDb.teams.size()))
+	var players_used: int = 0
+	var starters_used: int = 0
+	var both_levels: int = 0
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.year != season.year or record.season_number != season.season_number:
+			continue
+		if PSFarmLeague.is_farm_club_id(record.team_id):
+			continue
+		var first_team: bool = record.batter_stats.plate_appearances > 0 \
+			or record.pitcher_stats.batters_faced > 0
+		var farm: bool = record.farm_batter_stats.plate_appearances > 0 \
+			or record.farm_pitcher_stats.batters_faced > 0
+		if first_team:
+			players_used += 1
+			if record.pitcher_stats.starts > 0:
+				starters_used += 1
+			if farm:
+				both_levels += 1
+	return {
+		"promotions": int(moves.get("promotions", 0)),
+		"demotions": int(moves.get("demotions", 0)),
+		"promotions_per_team": _round1(float(int(moves.get("promotions", 0))) / teams),
+		"demotions_per_team": _round1(float(int(moves.get("demotions", 0))) / teams),
+		"distinct_promoted_players": (moves.get("promoted_ids", {}) as Dictionary).size(),
+		"first_team_players_used": players_used,
+		"first_team_players_used_per_team": _round1(float(players_used) / teams),
+		"first_team_starters_used_per_team": _round1(float(starters_used) / teams),
+		"players_at_both_levels": both_levels,
+	}
+
+
+# 故障件数。二軍戦を足すまで控え・二軍は曝露ゼロだったので、リーグ全体の件数は必ず増える
+# ([[project_injury_system]] の較正監視項目)。専用球団は NPB の仕組みの外なので分けて出す。
+func _injury_summary(season: PSSeason) -> Dictionary:
+	var npb_injured: int = 0
+	var npb_days: int = 0
+	var farm_club_injured: int = 0
+	var development_injured: int = 0
+	var max_days: int = 0
+	var severity: Dictionary = {"minor": 0, "moderate": 0, "major": 0, "severe": 0}
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.year != season.year or record.season_number != season.season_number:
+			continue
+		if record.season_injury_days <= 0:
+			continue
+		if PSFarmLeague.is_farm_club_id(record.team_id):
+			farm_club_injured += 1
+			continue
+		npb_injured += 1
+		npb_days += record.season_injury_days
+		max_days = max(max_days, record.season_injury_days)
+		if record.development_player:
+			development_injured += 1
+		var key: String = _severity_key(record.injury_severity)
+		severity[key] = int(severity.get(key, 0)) + 1
+	var teams: float = float(max(1, GameDb.teams.size()))
+	return {
+		"injured_players": npb_injured,
+		"injured_players_per_team": _round1(float(npb_injured) / teams),
+		"injury_days_total": npb_days,
+		"injury_days_mean": _round1(_safe_div(float(npb_days), float(npb_injured))),
+		"injury_days_max": max_days,
+		"development_injured": development_injured,
+		"farm_club_injured": farm_club_injured,
+		"severity_counts": severity,
+	}
+
+
+func _severity_key(severity: int) -> String:
+	match severity:
+		PSInjuryModel.TIER_MODERATE:
+			return "moderate"
+		PSInjuryModel.TIER_MAJOR:
+			return "major"
+		PSInjuryModel.TIER_SEVERE:
+			return "severe"
+	return "minor"
 
 
 # 誰が二軍戦に出たか。**育成選手の出場率が v1 の目的の一つ** (二軍戦の追加で初めて
@@ -366,6 +560,10 @@ func _health(report: Dictionary) -> Dictionary:
 	var schedule: Dictionary = report.get("schedule", {}) as Dictionary
 	var appearances: Dictionary = report.get("appearances", {}) as Dictionary
 	var defense: Dictionary = report.get("defense", {}) as Dictionary
+	var farm_pitching: Dictionary = report.get("farm_pitching", {}) as Dictionary
+	var first_pitching: Dictionary = report.get("first_team_pitching", {}) as Dictionary
+	var roster_moves: Dictionary = report.get("roster_moves", {}) as Dictionary
+	var injuries: Dictionary = report.get("injuries", {}) as Dictionary
 
 	_add_range_check(checks, "farm_batting_average", float(batting.get("average", 0.0)), HEALTH_FARM_AVG, "二軍リーグの打率")
 	_add_range_check(checks, "farm_walk_rate", float(batting.get("walk_rate", 0.0)), HEALTH_FARM_WALK_RATE, "二軍リーグの BB% (実 NPB ファームは9〜10%)")
@@ -374,6 +572,17 @@ func _health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "farm_cancelled_games", float(schedule.get("cancelled", 0)), float(HEALTH_CANCELLED_MAX), "人数不足で組めなかった二軍戦")
 	_add_min_check(checks, "development_appearance_rate", float(appearances.get("development_rate", 0.0)), HEALTH_DEVELOPMENT_APPEARANCE_MIN, "育成選手の二軍出場率 (二軍戦を作った目的の一つ)")
 	_add_min_check(checks, "farm_defensive_innings", float(defense.get("total_innings", 0.0)), 1.0, "二軍の守備イニング (守備適性成長の入力)")
+
+	_add_range_check(checks, "farm_era", float(farm_pitching.get("era", 0.0)), HEALTH_FARM_ERA, "二軍リーグの防御率 (実 NPB ファームは3.2〜3.7)")
+	# 顔ぶれと故障は**通季でしか意味を持たない累積量**なので、`--days=N` の短縮実行では
+	# 判定せず skipped にする (でないと短い確認実行が必ず fail して exit code が使えなくなる)。
+	var full_season: bool = int(schedule.get("played", 0)) + int(schedule.get("cancelled", 0)) >= int(schedule.get("total", 0))
+	if full_season:
+		_add_range_check(checks, "first_team_players_used_per_team", float(roster_moves.get("first_team_players_used_per_team", 0.0)), HEALTH_FIRST_TEAM_PLAYERS_USED, "一軍で1試合以上出場した選手数/球団 (NPB 55〜65人)")
+		_add_range_check(checks, "injured_players_per_team", float(injuries.get("injured_players_per_team", 0.0)), HEALTH_INJURED_PLAYERS_PER_TEAM, "故障者数/球団 (二軍戦のぶん曝露が増えている)")
+	else:
+		_add_skipped_check(checks, "first_team_players_used_per_team", "一軍で1試合以上出場した選手数/球団")
+		_add_skipped_check(checks, "injured_players_per_team", "故障者数/球団")
 
 	# 二軍の打撃水準は一軍より低いのが正常 (投打の質差が自然に出るのが設計の前提)。
 	var farm_ops: float = float(batting.get("ops", 0.0))
@@ -384,6 +593,18 @@ func _health(report: Dictionary) -> Dictionary:
 		"value": _round3(farm_ops),
 		"reference": _round3(first_ops),
 		"status": "pass" if farm_ops < first_ops else "warn",
+	})
+
+	# 実 NPB のファームは一軍より ERA が **高い** (投手と守備が劣るぶん)。逆転していたら
+	# 「打線だけが薄い」= 投打の質差の効き方が非対称になっているサイン。
+	var farm_era: float = float(farm_pitching.get("era", 0.0))
+	var first_era: float = float(first_pitching.get("era", 0.0))
+	checks.append({
+		"id": "farm_era_above_first_team",
+		"message": "二軍 ERA は一軍 ERA を上回るはず (実 NPB ファームがそうなっている)",
+		"value": _round2(farm_era),
+		"reference": _round2(first_era),
+		"status": "pass" if farm_era > first_era else "warn",
 	})
 
 	var status: String = "pass"
@@ -399,12 +620,31 @@ func _health(report: Dictionary) -> Dictionary:
 func _add_range_check(checks: Array, id: String, value: float, range_values: Array, message: String) -> void:
 	var low: float = float(range_values[0])
 	var high: float = float(range_values[1])
-	checks.append({
+	var check: Dictionary = {
 		"id": id,
 		"message": message,
 		"value": _round3(value),
 		"range": [low, high],
 		"status": "pass" if value >= low and value <= high else "fail",
+	}
+	_mark_known_open_issue(check)
+	checks.append(check)
+
+
+# 既知の未達項目は fail ではなく warn にする。**帯そのものは動かさない** —
+# 帯を緩めて pass にすると「直った」と「元から測っていない」が区別できなくなる。
+func _mark_known_open_issue(check: Dictionary) -> void:
+	var id: String = str(check.get("id", ""))
+	if str(check.get("status", "")) != "fail" or not HEALTH_KNOWN_OPEN_ISSUES.has(id):
+		return
+	check["status"] = "warn"
+	check["known_open_issue"] = str(HEALTH_KNOWN_OPEN_ISSUES[id])
+
+
+func _add_skipped_check(checks: Array, id: String, message: String) -> void:
+	checks.append({
+		"id": id, "message": message, "status": "skipped",
+		"reason": "通季でのみ評価する項目 (--days=N の短縮実行)",
 	})
 
 
@@ -457,6 +697,17 @@ func _print_digest(report: Dictionary) -> void:
 		pitching.get("era", 0.0), pitching.get("whip", 0.0),
 		pitching.get("strikeouts_per_nine", 0.0), pitching.get("innings_pitched", 0.0),
 	])
+	var first_pitching: Dictionary = report.get("first_team_pitching", {}) as Dictionary
+	print("1st  pit : ERA %.2f WHIP %.2f K/9 %.2f  (二軍が上回るのが正常)" % [
+		first_pitching.get("era", 0.0), first_pitching.get("whip", 0.0),
+		first_pitching.get("strikeouts_per_nine", 0.0),
+	])
+	var levels: Dictionary = report.get("usage_levels", {}) as Dictionary
+	print("Level    : 打者 z %+.2f → %+.2f (差 %+.2f) / 投手 z %+.2f → %+.2f (差 %+.2f) / 非対称 %+.2f" % [
+		levels.get("first_batter_z", 0.0), levels.get("farm_batter_z", 0.0), levels.get("batter_gap_z", 0.0),
+		levels.get("first_pitcher_z", 0.0), levels.get("farm_pitcher_z", 0.0), levels.get("pitcher_gap_z", 0.0),
+		levels.get("gap_asymmetry_z", 0.0),
+	])
 	print("Draws    : %d / %d team-games (%.1f%%)" % [
 		int(standings.get("draws", 0)), int(standings.get("team_games", 0)),
 		float(standings.get("draw_rate", 0.0)) * 100.0,
@@ -483,6 +734,26 @@ func _print_digest(report: Dictionary) -> void:
 		int(callups.get("demotion_ledger_entries", 0)), int(callups.get("shuttled_starters", 0)),
 		int(callups.get("pending_spot_callups", 0)),
 	])
+	var moves: Dictionary = report.get("roster_moves", {}) as Dictionary
+	print("Moves    : 昇格 %d (%.1f/球団) / 降格 %d (%.1f/球団) / 一軍出場 %.1f人・先発 %.1f人/球団 / 両リーグ出場 %d人" % [
+		int(moves.get("promotions", 0)), float(moves.get("promotions_per_team", 0.0)),
+		int(moves.get("demotions", 0)), float(moves.get("demotions_per_team", 0.0)),
+		float(moves.get("first_team_players_used_per_team", 0.0)),
+		float(moves.get("first_team_starters_used_per_team", 0.0)),
+		int(moves.get("players_at_both_levels", 0)),
+	])
+	var injuries: Dictionary = report.get("injuries", {}) as Dictionary
+	var severity: Dictionary = injuries.get("severity_counts", {}) as Dictionary
+	print("Injury   : %d人 (%.1f/球団) / 延べ %d日 (平均 %.1f・最長 %d) / 育成 %d人・専用球団 %d人" % [
+		int(injuries.get("injured_players", 0)), float(injuries.get("injured_players_per_team", 0.0)),
+		int(injuries.get("injury_days_total", 0)), float(injuries.get("injury_days_mean", 0.0)),
+		int(injuries.get("injury_days_max", 0)),
+		int(injuries.get("development_injured", 0)), int(injuries.get("farm_club_injured", 0)),
+	])
+	print("  重症度 : 軽傷 %d / 中度 %d / 重傷 %d / 重大手術 %d" % [
+		int(severity.get("minor", 0)), int(severity.get("moderate", 0)),
+		int(severity.get("major", 0)), int(severity.get("severe", 0)),
+	])
 	for club_row in ((report.get("farm_clubs", {}) as Dictionary).get("rows", []) as Array):
 		var club: Dictionary = club_row as Dictionary
 		print("Club %d   : roster %d / appeared %d / NPB経験者 %d" % [
@@ -495,9 +766,11 @@ func _print_digest(report: Dictionary) -> void:
 		var check: Dictionary = check_row as Dictionary
 		if str(check.get("status", "pass")) == "pass":
 			continue
-		print("  [%s] %s = %s (%s)" % [
+		var known: String = str(check.get("known_open_issue", ""))
+		print("  [%s] %s = %s (%s)%s" % [
 			str(check.get("status", "")), str(check.get("id", "")),
 			str(check.get("value", "")), str(check.get("message", "")),
+			"" if known.is_empty() else "  ← 既知: " + known,
 		])
 
 

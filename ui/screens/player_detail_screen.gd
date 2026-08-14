@@ -735,6 +735,59 @@ func _columns_for_tab() -> Array:
 				{"title": "併殺", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
 				{"title": "失策", "key": "err", "w": 44, "align": "r", "fmt": "int"},
 			]
+		"farm":
+			if pitcher:
+				return [
+					{"title": "年", "key": "year", "w": 52, "align": "l", "fmt": "str"},
+					{"title": "チーム", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
+					{"title": "登板", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true},
+					{"title": "先発", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "勝", "key": "w", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "敗", "key": "l", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "投球回", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "sep_before": true},
+					{"title": "防御率", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
+					{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2"},
+					{"title": "BB/9", "key": "bb9", "w": 60, "align": "r", "fmt": "f2"},
+					{"title": "HR/9", "key": "hr9", "w": 60, "align": "r", "fmt": "f2"},
+					{"title": "wOBAA", "key": "wobaa", "w": 64, "align": "r", "fmt": "rate", "sep_before": true},
+					{"title": "xwOBAA", "key": "xwobaa", "w": 68, "align": "r", "fmt": "rate"},
+					{"title": "RE24A", "key": "re24a", "w": 62, "align": "r", "fmt": "f1s"},
+					{"title": "奪三振", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true},
+					{"title": "与四球", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "被本", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
+				]
+			return [
+				{"title": "年", "key": "year", "w": 50, "align": "l", "fmt": "str"},
+				{"title": "チーム", "key": "team", "w": 52, "align": "l", "fmt": "str", "strong": true},
+				{"title": "試合", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
+				{"title": "打席", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
+				{"title": "打数", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "安打", "key": "h", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "本", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
+				{"title": "打点", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "盗塁", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "打率", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true},
+				{"title": "出塁", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "長打", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
+				{"title": "wOBA", "key": "woba", "w": 60, "align": "r", "fmt": "rate", "sep_before": true},
+				{"title": "xwOBA", "key": "xwoba", "w": 64, "align": "r", "fmt": "rate"},
+				{"title": "wRC+", "key": "wrcplus", "w": 58, "align": "r", "fmt": "f1"},
+				{"title": "wRAA", "key": "wraa", "w": 60, "align": "r", "fmt": "f1s"},
+				{"title": "RE24", "key": "re24", "w": 60, "align": "r", "fmt": "f1s"},
+				{"title": "BSR", "key": "bsr", "w": 54, "align": "r", "fmt": "f1s"},
+				{"title": "OAA", "key": "oaa", "w": 54, "align": "r", "fmt": "f1s", "sep_before": true},
+				{"title": "OAA内", "key": "oaa_if", "w": 60, "align": "r", "fmt": "f1s"},
+				{"title": "OAA外", "key": "oaa_of", "w": 60, "align": "r", "fmt": "f1s"},
+				{"title": "RngR", "key": "rngr", "w": 54, "align": "r", "fmt": "f1s"},
+				{"title": "ErrR", "key": "errr", "w": 54, "align": "r", "fmt": "f1s"},
+				{"title": "DPR", "key": "dpr", "w": 50, "align": "r", "fmt": "f1s"},
+				{"title": "UZR", "key": "uzr", "w": 54, "align": "r", "fmt": "f1s"},
+				{"title": "DRS", "key": "drs", "w": 54, "align": "r", "fmt": "f1s"},
+			]
 		"advanced":
 			if pitcher:
 				return [
@@ -1220,6 +1273,7 @@ func _build_farm_rows() -> void:
 	var pitcher: bool = _record.is_pitcher()
 	var career_batter: PSBatterStats = PSBatterStats.new()
 	var career_pitcher: PSPitcherStats = PSPitcherStats.new()
+	var career_advanced: PSAdvancedStats = PSAdvancedStats.new()
 	var any_appearance: bool = false
 	for record_value in _records:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
@@ -1230,12 +1284,16 @@ func _build_farm_rows() -> void:
 			var ps: PSPitcherStats = record.farm_pitcher_stats
 			career_pitcher.add_from(ps)
 			row = _pitcher_basic_dict("%d年" % record.year, team, ps, false)
+			row.merge(_farm_pitcher_advanced_fields(ps, record.farm_advanced_stats), true)
 			played = _pitcher_stats_has_any(ps)
 		else:
 			var bs: PSBatterStats = record.farm_batter_stats
 			career_batter.add_from(bs)
 			row = _batter_basic_dict("%d年" % record.year, team, bs, false)
+			row.merge(_farm_batter_advanced_fields(record.farm_advanced_stats), true)
 			played = _batter_stats_has_any(bs)
+		if record.farm_advanced_stats != null:
+			career_advanced.add_from(record.farm_advanced_stats)
 		if not played:
 			row["__color"] = FAINT
 		any_appearance = any_appearance or played
@@ -1244,10 +1302,50 @@ func _build_farm_rows() -> void:
 	if not any_appearance:
 		_farm_rows = []
 		return
+	var career_row: Dictionary
 	if pitcher:
-		_farm_rows.append(_pitcher_basic_dict("通算", "", career_pitcher, true))
+		career_row = _pitcher_basic_dict("通算", "", career_pitcher, true)
+		career_row.merge(_farm_pitcher_advanced_fields(career_pitcher, career_advanced), true)
 	else:
-		_farm_rows.append(_batter_basic_dict("通算", "", career_batter, true))
+		career_row = _batter_basic_dict("通算", "", career_batter, true)
+		career_row.merge(_farm_batter_advanced_fields(career_advanced), true)
+	_farm_rows.append(career_row)
+
+
+func _farm_batter_advanced_fields(ad: PSAdvancedStats) -> Dictionary:
+	var has_pa: bool = ad != null and ad.plate_appearances > 0
+	var ad_dict: Dictionary = ad.to_dict() if ad != null else {}
+	var has_field: bool = int(ad_dict.get("fielding_chances", 0)) > 0
+	return {
+		"woba": ad.woba() if has_pa else "-",
+		"xwoba": ad.xwoba() if has_pa else "-",
+		"wrcplus": ad.wrc_plus() if has_pa else "-",
+		"wraa": ad.wraa() if has_pa else "-",
+		"re24": ad.re24_sum if has_pa else "-",
+		"bsr": ad.bsr_sum if has_pa else "-",
+		"oaa": float(ad_dict.get("oaa_total", 0.0)) if has_field else "-",
+		"oaa_if": float(ad_dict.get("oaa_infield", 0.0)) if has_field else "-",
+		"oaa_of": float(ad_dict.get("oaa_outfield", 0.0)) if has_field else "-",
+		"rngr": float(ad_dict.get("rngr", 0.0)) if has_field else "-",
+		"errr": float(ad_dict.get("errr", 0.0)) if has_field else "-",
+		"dpr": float(ad_dict.get("dpr", 0.0)) if has_field else "-",
+		"uzr": float(ad_dict.get("uzr", 0.0)) if has_field else "-",
+		"drs": float(ad_dict.get("drs", 0.0)) if has_field else "-",
+	}
+
+
+func _farm_pitcher_advanced_fields(ps: PSPitcherStats, ad: PSAdvancedStats) -> Dictionary:
+	var has_ip: bool = ps != null and ps.outs_pitched > 0
+	var has_bf: bool = ad != null and ad.plate_appearances > 0
+	var ip: float = ps.innings_pitched() if has_ip else 0.0
+	return {
+		"k9": ps.strikeouts_per_nine() if has_ip else "-",
+		"bb9": (float(ps.walks) * 9.0 / ip) if has_ip else "-",
+		"hr9": (float(ps.home_runs_allowed) * 9.0 / ip) if has_ip else "-",
+		"wobaa": ad.woba() if has_bf else "-",
+		"xwobaa": ad.xwoba() if has_bf else "-",
+		"re24a": ad.re24_sum if has_bf else "-",
+	}
 
 
 func _build_current_season_log_rows(season: PSSeason) -> void:

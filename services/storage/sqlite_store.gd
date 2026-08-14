@@ -6,7 +6,7 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
 # セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
 # 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
-const SCHEMA_VERSION: int = 8
+const SCHEMA_VERSION: int = 9
 
 # スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
 # 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -108,7 +108,7 @@ const PLAYER_SEASON_COLUMNS: Array = [
 	"position_aptitudes_snapshot_json", "position_experience_snapshot_json",
 	"source_data_json", "z_abilities_snapshot_json", "raw_abilities_snapshot_json",
 	"arsenal_snapshot_json", "advanced_stats_json",
-	"farm_defensive_outs_json",
+	"farm_advanced_stats_json",
 ]
 
 const BATTER_STATS_COLUMNS: Array = [
@@ -751,8 +751,8 @@ static func _player_season_value(record: Dictionary, column: String) -> Variant:
 			return JSON.stringify(record.get("arsenal_snapshot", []))
 		"advanced_stats_json":
 			return JSON.stringify(record.get("advanced_stats", {}))
-		"farm_defensive_outs_json":
-			return JSON.stringify(record.get("farm_defensive_outs_by_position", {}))
+		"farm_advanced_stats_json":
+			return JSON.stringify(record.get("farm_advanced_stats", {}))
 		"name", "role", "throwing_hand", "batting_side", "hometown", "registered_roster", "contract_status", "injury_type":
 			return str(record.get(column, ""))
 		_:
@@ -835,7 +835,7 @@ static func _normalized_player_season_dict(row: Dictionary) -> Dictionary:
 		"raw_abilities_snapshot": _parse_json_dict(str(row.get("raw_abilities_snapshot_json", "{}"))),
 		"arsenal_snapshot": _parse_json_array(str(row.get("arsenal_snapshot_json", "[]"))),
 		"advanced_stats": _parse_json_dict(str(row.get("advanced_stats_json", "{}"))),
-		"farm_defensive_outs_by_position": _parse_json_dict(str(row.get("farm_defensive_outs_json", "{}"))),
+		"farm_advanced_stats": _parse_json_dict(str(row.get("farm_advanced_stats_json", "{}"))),
 	}
 
 
@@ -1013,7 +1013,7 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			raw_abilities_snapshot_json TEXT NOT NULL DEFAULT '{}',
 			arsenal_snapshot_json TEXT NOT NULL DEFAULT '[]',
 			advanced_stats_json TEXT NOT NULL DEFAULT '{}',
-			farm_defensive_outs_json TEXT NOT NULL DEFAULT '{}',
+			farm_advanced_stats_json TEXT NOT NULL DEFAULT '{}',
 			PRIMARY KEY (player_id, year, season_number)
 		)""",
 		"CREATE INDEX IF NOT EXISTS idx_psr_year_season ON player_season_records(year, season_number)",
