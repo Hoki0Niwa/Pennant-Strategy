@@ -237,6 +237,12 @@ func set_active_roster(team_id: int, roster: Dictionary) -> void:
 	# この印を持たない dict を渡しても、「翌日抹消する予定の選手」を見失わないようにする。
 	if not stored.has("spot_callup"):
 		stored["spot_callup"] = (previous.get("spot_callup", {}) as Dictionary).duplicate(true)
+	# 昇格直後の出場機会もロスター書き換えをまたいで保持する。値は昇格時点の一軍出場数で、
+	# 現在値がこれを上回るまで自動起用側が候補を優先する。
+	if not stored.has("callup_appearance_baseline"):
+		stored["callup_appearance_baseline"] = (
+			previous.get("callup_appearance_baseline", {}) as Dictionary
+		).duplicate(true)
 	stored["updated_at_day"] = current_day
 	team_active_rosters[str(team_id)] = stored
 	_mutex.unlock()
@@ -337,6 +343,30 @@ func clear_spot_callup(team_id: int, player_id: int) -> void:
 	var callups: Dictionary = (roster.get("spot_callup", {}) as Dictionary).duplicate(true)
 	callups.erase(str(player_id))
 	roster["spot_callup"] = callups
+	team_active_rosters[str(team_id)] = roster
+	_mutex.unlock()
+
+
+func get_callup_appearance_baselines(team_id: int) -> Dictionary:
+	_mutex.lock()
+	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	var out: Dictionary = (
+		roster.get("callup_appearance_baseline", {}) as Dictionary
+	).duplicate(true)
+	_mutex.unlock()
+	return out
+
+
+func record_callup_appearance_baseline(
+	team_id: int, player_id: int, appearances: int
+) -> void:
+	_mutex.lock()
+	var roster: Dictionary = team_active_rosters.get(str(team_id), {}) as Dictionary
+	var baselines: Dictionary = (
+		roster.get("callup_appearance_baseline", {}) as Dictionary
+	).duplicate(true)
+	baselines[str(player_id)] = appearances
+	roster["callup_appearance_baseline"] = baselines
 	team_active_rosters[str(team_id)] = roster
 	_mutex.unlock()
 

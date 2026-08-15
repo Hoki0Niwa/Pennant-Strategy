@@ -599,26 +599,30 @@ static func select_relievers_for_innings(
 	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
 	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。
 	eligible.sort_custom(_by_pitching_score(_pitching_scores_by_id(eligible, farm, farm_team_games)))
-	var top6: Array = []
+	# 救援役割の指定枠は6人だが、当日のブルペンは健康な一軍救援を全員使える。
+	# 先発6人+救援9人+野手16人の登録なら、先発当番を含む投手10人と野手16人で
+	# ベンチ入り26人になる。役割枠外の3人を非常時専用にすると、一軍登録中なのに
+	# 通常登板の機会がなくなるため、役割枠を優先して並べた後ろへ残りを加える。
+	var nominated: Array = []
 	var used_ids: Dictionary = {}
 	var eligible_by_id: Dictionary = _records_by_id(eligible)
 	for id_value in relief_role_order_ids(saved):
-		if top6.size() >= RELIEF_ROLE_SIZE_MAX:
+		if nominated.size() >= RELIEF_ROLE_SIZE_MAX:
 			break
 		var pid: int = int(id_value)
 		if pid <= 0 or used_ids.has(pid) or not eligible_by_id.has(pid):
 			continue
-		top6.append(eligible_by_id[pid])
+		nominated.append(eligible_by_id[pid])
 		used_ids[pid] = true
 	for pitcher_value in eligible:
-		if top6.size() >= RELIEF_ROLE_SIZE_MAX:
+		if nominated.size() >= RELIEF_ROLE_SIZE_MAX:
 			break
 		var pitcher: PSPlayerSeasonRecord = pitcher_value as PSPlayerSeasonRecord
 		if used_ids.has(pitcher.player_id):
 			continue
-		top6.append(pitcher)
+		nominated.append(pitcher)
 		used_ids[pitcher.player_id] = true
-	if top6.size() < RELIEF_ROLE_SIZE_MAX:
+	if nominated.size() < RELIEF_ROLE_SIZE_MAX:
 		used_ids[exclude_pitcher_id] = true
 		var fallback: Array = []
 		for p in starter_pool_fallback:
@@ -628,20 +632,29 @@ static func select_relievers_for_innings(
 			fallback.append(pitcher)
 		fallback.sort_custom(_by_pitching_score(_pitching_scores_by_id(fallback, farm, farm_team_games)))
 		for p in fallback:
-			if top6.size() >= RELIEF_ROLE_SIZE_MAX:
+			if nominated.size() >= RELIEF_ROLE_SIZE_MAX:
 				break
-			top6.append(p)
+			nominated.append(p)
 			used_ids[(p as PSPlayerSeasonRecord).player_id] = true
-	# top6 は overall 降順 [最強, 2番手, 3番手, 4番手, 5番手, 6番手]。
+	var remaining: Array = []
+	for pitcher_value in eligible:
+		var pitcher: PSPlayerSeasonRecord = pitcher_value as PSPlayerSeasonRecord
+		if pitcher == null or used_ids.has(pitcher.player_id):
+			continue
+		remaining.append(pitcher)
+		used_ids[pitcher.player_id] = true
+	# nominated は overall 降順 [最強, 2番手, 3番手, 4番手, 5番手, 6番手]。
 	# 出力順: [7回, 8回, 9回, 10回, 11回, 12回] = [3番手, 2番手, 最強, 4番手, 5番手, 6番手]
 	if not relief_role_order_ids(saved).is_empty():
-		return top6
+		nominated.append_array(remaining)
+		return nominated
 	var ordered: Array = []
-	var top3: Array = top6.slice(0, int(min(3, top6.size())))
+	var top3: Array = nominated.slice(0, int(min(3, nominated.size())))
 	top3.reverse()
 	ordered.append_array(top3)
-	if top6.size() > 3:
-		ordered.append_array(top6.slice(3))
+	if nominated.size() > 3:
+		ordered.append_array(nominated.slice(3))
+	ordered.append_array(remaining)
 	return ordered
 
 

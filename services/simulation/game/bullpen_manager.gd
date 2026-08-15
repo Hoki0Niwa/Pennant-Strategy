@@ -14,6 +14,9 @@ const CLOSER_FOUR_RUN_MARGIN: int = 4
 const BLOWOUT_LEAD_MARGIN: int = 5
 # 5回以前の先発降板は長い穴埋めを優先し、6回以降は通常の中継ぎリレーへ渡す。
 const LONG_RELIEF_PREFERRED_BEFORE_INNING: int = 6
+# 昇格した救援は、クローザー/セットの役割優先を崩さない範囲で最初の登板機会を得やすくする。
+# 上げたまま一度も使わず再抹消するロスター運用を防ぐための場面スコア加点。
+const CALLUP_AUDITION_BONUS: float = 75.0
 
 # 試合開始時の先発投手とスタメン野手の出場記録を付ける。
 # DH は守備負荷が軽いので疲労/怪我 exposure を下げ、守備についた野手とは分けて扱う。
@@ -327,6 +330,11 @@ static func reliever_selection_score_for_setup(
 	var score: float = PSPitcherUsageModel.reliever_selection_score(reliever, prefer_long, inning, close_game, game_day, team_games_played_before)
 	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
 	var role: String = str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))
+	var baselines: Dictionary = setup.get("callup_appearance_baseline", {}) as Dictionary
+	var baseline_key: String = str(reliever.player_id)
+	if baselines.has(baseline_key) \
+			and reliever.pitcher_stats.games <= int(baselines[baseline_key]):
+		score += CALLUP_AUDITION_BONUS
 	return score + relief_role_context_bonus(role, prefer_long, inning, close_game, score_margin)
 
 

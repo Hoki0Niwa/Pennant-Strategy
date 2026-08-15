@@ -30,18 +30,13 @@ const HEALTH_DEVELOPMENT_APPEARANCE_MIN: float = 0.5
 # `usage_levels` の σ 差で切り分ける。
 const HEALTH_FARM_ERA: Array = [2.80, 4.60]
 # 一軍で1試合以上出場した選手数/球団。NPB は年間 55〜65人 (登録・抹消の往復で顔ぶれが増える)。
-const HEALTH_FIRST_TEAM_PLAYERS_USED: Array = [40.0, 70.0]
+const HEALTH_FIRST_TEAM_PLAYERS_USED: Array = [55.0, 65.0]
 # 故障者数/球団。曝露が控え・二軍まで広がったので一軍だけの頃より増えるのが正常。
 # MLB の IL 入りは近年 30件/球団前後だが、こちらは軽傷 (3-15日) も1件と数えるので上限は広く取る。
 const HEALTH_INJURED_PLAYERS_PER_TEAM: Array = [8.0, 45.0]
 
-# Phase 5 (2026-08-13) の較正で、現在も届かないと分かっている項目。fail ではなく warn に
-# 落として exit code をゲートとして使える状態に保つ (**帯は本来の値のまま**にしてあるので、
-# 直ったときに数字を作り直さずに known を外すだけで済む)。理由は
-# docs/agent_memory/project_farm_system_design.md の Phase 5 節を参照。
-const HEALTH_KNOWN_OPEN_ISSUES: Dictionary = {
-	"first_team_players_used_per_team": "昇格しても出番が無く、閾値の較正では動かない",
-}
+# 未達が判明していて一時的に warn 扱いにする項目。現在は空。
+const HEALTH_KNOWN_OPEN_ISSUES: Dictionary = {}
 
 # 起用加重の能力水準を測るキー。**質の軸だけ**を使う (スタイル軸を混ぜると水準がぼやける)。
 # 投手側は `PSPitcherRoleModel.ROLE_QUALITY_KEYS` と同じ考え方 (Pit_EdgeRate は除外)。
@@ -326,6 +321,8 @@ func _roster_move_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
 	var teams: float = float(max(1, GameDb.teams.size()))
 	var players_used: int = 0
 	var starters_used: int = 0
+	var pitchers_used: int = 0
+	var fielders_used: int = 0
 	var both_levels: int = 0
 	for record_row in RecordStore.player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
@@ -339,18 +336,47 @@ func _roster_move_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
 			or record.farm_pitcher_stats.batters_faced > 0
 		if first_team:
 			players_used += 1
+			if record.is_pitcher():
+				pitchers_used += 1
+			else:
+				fielders_used += 1
 			if record.pitcher_stats.starts > 0:
 				starters_used += 1
 			if farm:
 				both_levels += 1
+	var promoted_pitchers: int = 0
+	var promoted_fielders: int = 0
+	var promoted_starters: int = 0
+	var promoted_appeared: int = 0
+	for player_id_value in (moves.get("promoted_ids", {}) as Dictionary).keys():
+		var promoted: PSPlayerSeasonRecord = RecordStore.get_player_record(
+			int(player_id_value), season.year, season.season_number
+		)
+		if promoted == null:
+			continue
+		if promoted.is_pitcher():
+			promoted_pitchers += 1
+			if promoted.pitcher_stats.starts > 0:
+				promoted_starters += 1
+		else:
+			promoted_fielders += 1
+		if promoted.batter_stats.plate_appearances > 0 \
+				or promoted.pitcher_stats.batters_faced > 0:
+			promoted_appeared += 1
 	return {
 		"promotions": int(moves.get("promotions", 0)),
 		"demotions": int(moves.get("demotions", 0)),
 		"promotions_per_team": _round1(float(int(moves.get("promotions", 0))) / teams),
 		"demotions_per_team": _round1(float(int(moves.get("demotions", 0))) / teams),
 		"distinct_promoted_players": (moves.get("promoted_ids", {}) as Dictionary).size(),
+		"distinct_promoted_pitchers": promoted_pitchers,
+		"distinct_promoted_fielders": promoted_fielders,
+		"promoted_starters_who_appeared": promoted_starters,
+		"promoted_players_who_appeared": promoted_appeared,
 		"first_team_players_used": players_used,
 		"first_team_players_used_per_team": _round1(float(players_used) / teams),
+		"first_team_pitchers_used_per_team": _round1(float(pitchers_used) / teams),
+		"first_team_fielders_used_per_team": _round1(float(fielders_used) / teams),
 		"first_team_starters_used_per_team": _round1(float(starters_used) / teams),
 		"players_at_both_levels": both_levels,
 	}
@@ -735,10 +761,12 @@ func _print_digest(report: Dictionary) -> void:
 		int(callups.get("pending_spot_callups", 0)),
 	])
 	var moves: Dictionary = report.get("roster_moves", {}) as Dictionary
-	print("Moves    : 昇格 %d (%.1f/球団) / 降格 %d (%.1f/球団) / 一軍出場 %.1f人・先発 %.1f人/球団 / 両リーグ出場 %d人" % [
+	print("Moves    : 昇格 %d (%.1f/球団) / 降格 %d (%.1f/球団) / 一軍出場 %.1f人 (投手 %.1f・野手 %.1f)・先発 %.1f人/球団 / 両リーグ出場 %d人" % [
 		int(moves.get("promotions", 0)), float(moves.get("promotions_per_team", 0.0)),
 		int(moves.get("demotions", 0)), float(moves.get("demotions_per_team", 0.0)),
 		float(moves.get("first_team_players_used_per_team", 0.0)),
+		float(moves.get("first_team_pitchers_used_per_team", 0.0)),
+		float(moves.get("first_team_fielders_used_per_team", 0.0)),
 		float(moves.get("first_team_starters_used_per_team", 0.0)),
 		int(moves.get("players_at_both_levels", 0)),
 	])

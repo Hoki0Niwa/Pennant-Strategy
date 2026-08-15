@@ -2005,6 +2005,21 @@ func test_saved_relief_roles_are_kept_in_reliever_pool() -> void:
 	assert_int(int(ids[0])).is_equal(role_pick.player_id)
 
 
+func test_all_active_relievers_are_available_beyond_six_role_slots() -> void:
+	var pool: Array = []
+	for i in range(9):
+		pool.append(_pitcher(330 + i, "Relief %d" % i, 0.9 - float(i) * 0.1))
+
+	var selected: Array = PSRotationPlanner.select_relievers_for_innings(pool, [], 0, {})
+	var ids: Dictionary = {}
+	for record_value in selected:
+		ids[(record_value as PSPlayerSeasonRecord).player_id] = true
+
+	assert_int(selected.size()).is_equal(9)
+	for pitcher_value in pool:
+		assert_bool(ids.has((pitcher_value as PSPlayerSeasonRecord).player_id)).is_true()
+
+
 func test_default_relief_roles_are_assigned_without_saved_usage() -> void:
 	var relievers: Array = []
 	for i in range(6):
@@ -2018,6 +2033,113 @@ func test_default_relief_roles_are_assigned_without_saved_usage() -> void:
 	assert_str(str(roles.get(363, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_MIDDLE)
 	assert_str(str(roles.get(364, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_LONG)
 	assert_str(str(roles.get(365, ""))).is_equal(PSRotationPlanner.RELIEF_ROLE_LONG)
+
+
+func test_promoted_reliever_gets_first_low_leverage_opportunity() -> void:
+	var established: PSPlayerSeasonRecord = _pitcher(370, "Established", 1.0)
+	var callup: PSPlayerSeasonRecord = _pitcher(371, "Callup", 0.0)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [established, callup],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {},
+		"callup_appearance_baseline": {str(callup.player_id): 0},
+		"game_day": 30,
+		"team_games_played_before": 20,
+	}
+	var game_result: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 1,
+		"home_score": 7,
+	}
+
+	var selected: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(
+		setup, 6, game_result, false
+	)
+	assert_object(selected).is_not_null()
+	assert_int(selected.player_id).is_equal(callup.player_id)
+
+
+func test_promoted_fielder_gets_one_automatic_start_without_rewriting_usage() -> void:
+	var starter: PSPlayerSeasonRecord = _fielder(380, "Starter", 1.0)
+	var callup: PSPlayerSeasonRecord = _fielder(381, "Callup", 0.0)
+	var usage: Dictionary = {"position_slots": {"3": {
+		"starter_id": starter.player_id,
+		"sub_id": 0,
+		"sub_start_interval": 0,
+		"backup_ids": [],
+	}}, "ai_generated": true}
+
+	var game_usage: Dictionary = PSTeamSetupBuilder._usage_with_callup_start(
+		usage, [starter, callup], {str(callup.player_id): 0}
+	)
+	var slot: Dictionary = (game_usage.get("position_slots", {}) as Dictionary).get("3", {}) as Dictionary
+	var saved_slot: Dictionary = (usage.get("position_slots", {}) as Dictionary).get("3", {}) as Dictionary
+
+	assert_int(int(slot.get("sub_id", 0))).is_equal(callup.player_id)
+	assert_int(int(slot.get("sub_start_interval", 0))).is_equal(1)
+	assert_int(int(saved_slot.get("sub_id", 0))).is_equal(0)
+	callup.batter_stats.games = 1
+	var after_appearance: Dictionary = PSTeamSetupBuilder._usage_with_callup_start(
+		usage, [starter, callup], {str(callup.player_id): 0}
+	)
+	assert_bool(after_appearance == usage).is_true()
+
+
+func test_callup_start_override_reaches_the_final_defensive_alignment() -> void:
+	var season: PSSeason = PSSeason.new()
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	var old_auto_lineup: bool = team.auto_lineup
+	team.auto_lineup = true
+	var aptitude_keys: Dictionary = PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS
+	var fielders: Array = []
+	var position_slots: Dictionary = {}
+	var callup: PSPlayerSeasonRecord = null
+	var next_id: int = 390
+	for position_row in [2, 6, 8, 4, 5, 3, 7, 9]:
+		var position: int = int(position_row)
+		var starter: PSPlayerSeasonRecord = _fielder(next_id, "Starter %d" % position, 0.5)
+		next_id += 1
+		starter.position = position
+		starter.position_aptitudes_snapshot = {
+			str(aptitude_keys.get(position, "catcher")): 100,
+		}
+		var sub: PSPlayerSeasonRecord = _fielder(next_id, "Sub %d" % position, 0.0)
+		next_id += 1
+		sub.position = position
+		sub.position_aptitudes_snapshot = {
+			str(aptitude_keys.get(position, "catcher")): 90,
+		}
+		fielders.append(starter)
+		fielders.append(sub)
+		position_slots[str(position)] = {
+			"starter_id": starter.player_id,
+			"sub_id": sub.player_id,
+			"sub_start_interval": 99,
+			"backup_ids": [],
+		}
+		if position == 3:
+			callup = sub
+	season.set_fielder_usage(team.id, {
+		"position_slots": position_slots,
+		"ai_generated": true,
+	})
+	season.record_callup_appearance_baseline(team.id, callup.player_id, 0)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(499, "Starter Pitcher", 0.5)
+	pitcher.role = "starter"
+	var setup: Dictionary = PSTeamSetupBuilder.build_setup_from_auto(
+		season, team.id, true, fielders, pitcher, 0
+	)
+	team.auto_lineup = old_auto_lineup
+
+	assert_bool(bool(setup.get("ok", false))).is_true()
+	var selected_ids: Array = []
+	for slot_row in setup.get("fielders", []) as Array:
+		var selected: PSPlayerSeasonRecord = (slot_row as Dictionary).get("record", null) as PSPlayerSeasonRecord
+		if selected != null:
+			selected_ids.append(selected.player_id)
+	assert_bool(selected_ids.has(callup.player_id)).is_true()
 
 
 func test_is_starter_pitcher_honors_stored_role_over_ability() -> void:

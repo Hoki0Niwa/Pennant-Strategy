@@ -956,6 +956,9 @@ func test_spot_callup_promotes_a_rested_farm_starter_and_returns_him_next_day() 
 	).is_false()
 	assert_bool(season.get_spot_callups(team_id).has(str(promoted_id))).is_false()
 	assert_int(int(season.get_demotion_days(team_id).get(str(promoted_id), 0))).is_equal(day + 1)
+	assert_int((season.get_active_roster(team_id).get("player_ids", []) as Array).size()).is_equal(
+		TeamAutoAI.TARGET_TOTAL
+	)
 
 
 func test_spot_callup_does_not_fire_when_the_rotation_is_rested() -> void:
@@ -1001,6 +1004,125 @@ func test_spot_callup_respects_the_ten_day_cooldown() -> void:
 			assert_bool(farm_starter_ids.has(int(callup.get("player_id", 0)))).override_failure_message(
 				"10日ルールのクールダウン中の投手が再登録された"
 			).is_false()
+
+
+func test_periodic_starter_adjustment_gives_a_farm_starter_the_rotation_slot() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	assert_bool(bool(preview.get("ok", false))).is_true()
+	var active_list: Array = (preview.get("player_ids", []) as Array).duplicate()
+	season.set_active_roster(team_id, {"player_ids": active_list})
+	season.current_day = 40
+
+	var active_set: Dictionary = {}
+	for id_value in active_list:
+		active_set[int(id_value)] = true
+	var active_starters: Array = []
+	var farm_candidate: PSPlayerSeasonRecord = null
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or not record.is_starter_pitcher():
+			continue
+		if active_set.has(record.player_id):
+			record.pitcher_stats.starts = 3
+			active_starters.append(record)
+		elif farm_candidate == null and not record.development_player:
+			farm_candidate = record
+	assert_int(active_starters.size()).is_equal(TeamAutoAI.TARGET_STARTERS)
+	assert_object(farm_candidate).is_not_null()
+	# 品質ゲートだけでテストが母集団依存にならないよう、候補を現ローテと同じ能力へそろえる。
+	var template: PSPlayerSeasonRecord = active_starters[0] as PSPlayerSeasonRecord
+	farm_candidate.z_abilities_snapshot = template.z_abilities_snapshot.duplicate(true)
+	farm_candidate.raw_abilities_snapshot = template.raw_abilities_snapshot.duplicate(true)
+	farm_candidate.arsenal_snapshot = template.arsenal_snapshot.duplicate(true)
+	farm_candidate.role = "starter"
+
+	var rotation_ids: Array = []
+	for record_row in active_starters:
+		rotation_ids.append((record_row as PSPlayerSeasonRecord).player_id)
+	season.set_rotation(team_id, {
+		"pitcher_ids": rotation_ids.duplicate(),
+		"last_start_day_by_pitcher": {},
+		"auto_generated": true,
+	})
+	var result: Dictionary = TeamAutoAI._try_starter_rotation_adjustment(
+		season, team_id, season.current_day, []
+	)
+
+	assert_bool(result.is_empty()).is_false()
+	var down_id: int = int(result.get("down", 0))
+	var up_id: int = int(result.get("up", 0))
+	assert_int(down_id).is_greater(0)
+	assert_int(up_id).is_greater(0)
+	var roster_ids: Array = season.get_active_roster(team_id).get("player_ids", []) as Array
+	assert_int(roster_ids.size()).is_equal(TeamAutoAI.TARGET_TOTAL)
+	assert_bool(roster_ids.has(down_id)).is_false()
+	assert_bool(roster_ids.has(up_id)).is_true()
+	var new_rotation: Array = season.get_rotation(team_id).get("pitcher_ids", []) as Array
+	assert_int(new_rotation.find(up_id)).is_equal(rotation_ids.find(down_id))
+	assert_bool(season.get_demotion_days(team_id).has(str(down_id))).is_true()
+	assert_bool(season.get_callup_appearance_baselines(team_id).has(str(up_id))).is_true()
+
+
+func test_periodic_swap_keeps_new_active_players_until_their_first_appearance() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	var active_list: Array = (preview.get("player_ids", []) as Array).duplicate()
+	season.set_active_roster(team_id, {"player_ids": active_list})
+	for id_value in active_list:
+		season.record_callup_appearance_baseline(team_id, int(id_value), 0)
+
+	var result: Dictionary = TeamAutoAI._swap_one_team(season, team_id, 1)
+
+	assert_array(result.get("swapped_pairs", []) as Array).is_empty()
+	assert_int((season.get_active_roster(team_id).get("player_ids", []) as Array).size()).is_equal(
+		TeamAutoAI.TARGET_TOTAL
+	)
+
+
+func test_periodic_depth_adjustment_cycles_an_appeared_bottom_reliever() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	var active_list: Array = (preview.get("player_ids", []) as Array).duplicate()
+	season.set_active_roster(team_id, {"player_ids": active_list})
+	season.current_day = 40
+	var active_set: Dictionary = {}
+	for id_value in active_list:
+		active_set[int(id_value)] = true
+	var active_reliever: PSPlayerSeasonRecord = null
+	var farm_reliever: PSPlayerSeasonRecord = null
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or not record.is_pitcher() or record.is_starter_pitcher():
+			continue
+		if active_set.has(record.player_id):
+			record.pitcher_stats.games = 1
+			if active_reliever == null:
+				active_reliever = record
+		elif farm_reliever == null and not record.development_player:
+			farm_reliever = record
+	assert_object(active_reliever).is_not_null()
+	assert_object(farm_reliever).is_not_null()
+	farm_reliever.z_abilities_snapshot = active_reliever.z_abilities_snapshot.duplicate(true)
+	farm_reliever.raw_abilities_snapshot = active_reliever.raw_abilities_snapshot.duplicate(true)
+	farm_reliever.arsenal_snapshot = active_reliever.arsenal_snapshot.duplicate(true)
+	farm_reliever.role = "reliever"
+
+	var result: Dictionary = TeamAutoAI._try_depth_roster_adjustment(
+		season, team_id, season.current_day, TeamAutoAI.PITCHER_ROLE_RELIEVER
+	)
+
+	assert_bool(result.is_empty()).is_false()
+	assert_str(str(result.get("reason", ""))).is_equal("reliever_adjustment")
+	var roster_ids: Array = season.get_active_roster(team_id).get("player_ids", []) as Array
+	assert_int(roster_ids.size()).is_equal(TeamAutoAI.TARGET_TOTAL)
+	assert_bool(roster_ids.has(int(result.get("up", 0)))).is_true()
+	assert_bool(season.get_callup_appearance_baselines(team_id).has(
+		str(int(result.get("up", 0)))
+	)).is_true()
 
 
 # ---- 成績の器 --------------------------------------------------------------

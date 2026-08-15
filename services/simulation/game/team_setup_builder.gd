@@ -98,6 +98,7 @@ static func build_team_setup(
 		setup["rotation_order_ids"] = rotation_decision.get("order_ids", [])
 		setup["rotation_selected_index"] = int(rotation_decision.get("selected_index", -1))
 		setup["rotation_reason"] = str(rotation_decision.get("reason", ""))
+		setup["callup_appearance_baseline"] = season.get_callup_appearance_baselines(team_id)
 	return setup
 
 
@@ -162,14 +163,8 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 		return {"ok": false, "message": "%sの選手データがありません" % GameSimulator._team_name(team_id)}
 
 	const TARGET_TOTAL: int = 31
-	# ローテは6人だが一軍には7人目の先発を置く。連戦の谷間・不振/疲労での1回飛ばし・故障の穴を
-	# 二軍からの再登録なしで埋められるようにするため (NPB も6人ローテで7〜8人を帯同する)。
-	# ローテは6人。**7人目を一軍に置かない**のが要点で、連戦の谷間は
-	# `TeamAutoAI.run_spot_starter_callups` が二軍から1試合限定で上げて埋める
-	# (登板翌日に抹消 → 10日ルールで次の谷間は別の投手になる = 先発の顔ぶれが増える)。
-	# ⚠️ team_auto_ai と team_setup_builder の両方を必ず揃えること。
-	# 経緯: 2026-08-10 に「谷間を埋める手段が無い」ため 6→7 にしたが、二軍からの
-	# スポット昇格 (2026-08-11) がその役目を持ったので 7→6 へ戻した。
+	# 通常の一軍先発は6人。谷間は二軍からのスポット昇格、ローテ下位の休養・再調整は
+	# TeamAutoAI の定期入替で補う。同名定数と同じ値に保つ。
 	const TARGET_STARTERS: int = 6
 	const TARGET_PITCHERS: int = 15
 	var starters: Array = []
@@ -683,6 +678,7 @@ static func prepare_team_setup(
 			if not preview_records.is_empty() and _records_can_field_game(season, team_id, preview_records, dh_enabled, batting_memo):
 				active_records = preview_records
 				season.set_active_roster(team_id, {"player_ids": _record_ids(active_records)})
+				_record_initial_active_appearance_baselines(season, team_id, active_records)
 			else:
 				active_records = []
 	var records: Array = active_records if not active_records.is_empty() else all_records
@@ -731,6 +727,19 @@ static func prepare_team_setup(
 		"reliever_pool": reliever_pool,
 		"team_record": team_record,
 	}
+
+
+static func _record_initial_active_appearance_baselines(
+	season: PSSeason, team_id: int, active_records: Array
+) -> void:
+	for record_row in active_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		var appearances: int = (
+			record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
+		)
+		season.record_callup_appearance_baseline(team_id, record.player_id, appearances)
 
 
 # 二軍用のロスター準備。一軍のような active_roster の修復機構は持たない
@@ -796,6 +805,7 @@ static func build_setup_from_auto(
 	if is_farm:
 		_prime_farm_batting_memo(batting_memo, available_fielders, team_games_played_before)
 	var usage_settings: Dictionary = {} if is_farm else season.get_fielder_usage(team_id)
+	var team: PSTeam = GameDb.get_team(team_id)
 	if not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders):
 		var base_slots: Array = select_defensive_starters_with_usage(
 			team_id, available_fielders, usage_settings, 1, batting_memo
@@ -803,10 +813,18 @@ static func build_setup_from_auto(
 		if base_slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 			usage_settings = build_ai_fielder_usage(available_fielders, base_slots, usage_settings)
 			season.set_fielder_usage(team_id, usage_settings)
+	if not is_farm and team != null and team.auto_lineup:
+		usage_settings = _usage_with_callup_start(
+			usage_settings,
+			available_fielders,
+			season.get_callup_appearance_baselines(team_id)
+		)
 	var fielding_slots: Array = (
 		select_defensive_starters_with_usage(team_id, available_fielders, {}, team_games_played_before + 1, batting_memo)
 		if is_farm
-		else select_defensive_starters(season, team_id, available_fielders, team_games_played_before + 1, batting_memo)
+		else select_defensive_starters_with_usage(
+			team_id, available_fielders, usage_settings, team_games_played_before + 1, batting_memo
+		)
 	)
 	if fielding_slots.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 		return {"ok": false, "message": "%sの守備位置を埋められません" % GameSimulator._team_name(team_id)}
@@ -826,7 +844,6 @@ static func build_setup_from_auto(
 		position_by_player_id[designated_hitter.player_id] = BattingOrderService.DH_POSITION
 
 	# auto_lineup ON なら日替わり打順サービス、OFF なら基本打順のみ。
-	var team: PSTeam = GameDb.get_team(team_id)
 	# 二軍は日替わり打順サービスを使わない。`PSBattingOrderProfile` はチーム単位の静的キャッシュで、
 	# `season.set_auto_batting_order` と合わせて**一軍の基本打順を保持する共有状態**なので、
 	# 二軍の顔ぶれで踏むと一軍の打順が壊れる。二軍は能力順の単純な打順で組む。
@@ -1296,6 +1313,71 @@ static func _record_by_id(records: Array, player_id: int) -> PSPlayerSeasonRecor
 		if record != null and record.player_id == player_id:
 			return record
 	return null
+
+
+# 自動管理チームは、昇格させた野手へ少なくとも1試合の先発機会を与える。
+# 保存済みの守備起用設定は変えず、この試合だけ候補1人を定期休養の控え枠へ差し込む。
+# baseline は昇格時点の一軍出場数なので、1試合出れば次戦から通常起用へ戻る。
+static func _usage_with_callup_start(
+	usage_settings: Dictionary,
+	available_fielders: Array,
+	baselines: Dictionary
+) -> Dictionary:
+	var pending_callups: Array = []
+	var pending_debuts: Array = []
+	var starter_ids: Dictionary = {}
+	var position_slots: Dictionary = usage_settings.get("position_slots", {}) as Dictionary
+	for slot_value in position_slots.values():
+		var slot: Dictionary = slot_value as Dictionary
+		starter_ids[int(slot.get("starter_id", 0))] = true
+	for row in available_fielders:
+		var record: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
+		if record == null or record.injury_days > 0 or record.is_pitcher():
+			continue
+		var key: String = str(record.player_id)
+		var awaiting_callup_appearance: bool = (
+			baselines.has(key) and record.batter_stats.games <= int(baselines[key])
+		)
+		if awaiting_callup_appearance:
+			# 既に基本スタメンなら、この試合で自然に機会を得る。
+			if starter_ids.has(record.player_id):
+				return usage_settings
+			pending_callups.append(record)
+			continue
+		# 開幕時の控えも一度は起用する。基本スタメンの未出場者は自然に出るため候補外。
+		if record.batter_stats.games <= 0 and not starter_ids.has(record.player_id):
+			pending_debuts.append(record)
+	var pending: Array = pending_callups if not pending_callups.is_empty() else pending_debuts
+	if pending.is_empty():
+		return usage_settings
+	pending.sort_custom(func(a, b) -> bool:
+		var record_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+		var record_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+		var score_a: int = PlayerValueEvaluator.overall_score(record_a)
+		var score_b: int = PlayerValueEvaluator.overall_score(record_b)
+		if score_a == score_b:
+			return record_a.player_id < record_b.player_id
+		return score_a > score_b
+	)
+	var candidate: PSPlayerSeasonRecord = pending[0] as PSPlayerSeasonRecord
+	var best_position: int = 0
+	var best_aptitude: int = 0
+	for position_row in GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER:
+		var position: int = int(position_row)
+		var aptitude: int = position_aptitude(candidate, position)
+		if aptitude > best_aptitude:
+			best_aptitude = aptitude
+			best_position = position
+	if best_position <= 0:
+		return usage_settings
+	var out: Dictionary = usage_settings.duplicate(true)
+	var out_slots: Dictionary = (out.get("position_slots", {}) as Dictionary).duplicate(true)
+	var callup_slot: Dictionary = _usage_slot_for_position(out_slots, best_position).duplicate(true)
+	callup_slot["sub_id"] = candidate.player_id
+	callup_slot["sub_start_interval"] = 1
+	out_slots[str(best_position)] = callup_slot
+	out["position_slots"] = out_slots
+	return out
 
 
 static func rested_starter_ids_for_game(usage_settings: Dictionary, next_game_number: int) -> Dictionary:
