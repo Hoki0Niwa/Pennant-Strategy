@@ -80,6 +80,41 @@ const CANDIDATE_POOL_SIZE: int = 320
 const ROOKIE_MIN_AGE: int = 18
 const ROOKIE_MAX_AGE: int = 26
 
+# ---- ファーム専用球団からの指名 (6c) --------------------------------------
+# 専用球団 (`PSFarmLeague.FARM_CLUB_DEFS`) の選手は、他の候補と違い **生成物ではなく実在の選手**。
+# ボードに載る唯一の「実際の二軍成績を持つ候補」で、指名 AI もプレイヤーも成績で判断できる。
+# 実ルール準拠で対象は NPB 経験のない日本人のみ (`PSFarmLeague.is_draft_eligible_farm_club_player`)。
+# **専用球団は指名する側にならない** — 指名順は `_draft_reverse_order(teams, ...)` = GameDb.teams
+# (12球団) から作るので、構造的に混ざらない。
+const FARM_CLUB_SOURCE_TYPE: String = "farm_club"
+# ボードに載せる人数の上限 (2球団合計)。専用球団のロスターは 48×2 なので、無制限に載せると
+# 生成候補 (CANDIDATE_POOL_SIZE=320) を押しのけて指名の性格が変わる。評価上位だけを載せ、
+# **実際に指名されるのは年 1〜3 人**という規模 (NPB の実績も 2024 年の2人が初)。
+const FARM_CLUB_CANDIDATE_POOL_SIZE: int = 10
+# 年齢上限。専用球団は ATTRITION_START_AGE(27) から整理が始まるので、それ以上は指名対象にしない。
+const FARM_CLUB_CANDIDATE_MAX_AGE: int = 26
+# ボード評価の割引。**指名数を決める唯一のノブ**で、`draft_grade` に掛けて順位だけを下げる
+# (`overall` / `potential` の表示値は割引かない = 実力は実力として見せる)。
+#
+# 理由は2つ:
+#   ① 実ルール上の位置づけ — 専用球団の選手は NPB に**一度は指名を見送られた層**。実際の指名は
+#      年1〜3人 (2024年の2人が初) で、いずれも育成指名だった。素の能力順に並べると
+#      「毎年ドラフトの目玉が専用球団から出る」ことになり、実態とかけ離れる。
+#   ② **`FarmClubService.GENERATED_CENTER_MIN/MAX` が現在インフレしている** — 2026-08-12 に
+#      専用球団の壊滅を止めるため 33-50 → 54-66 へ引き上げた暫定値で、ドラフト候補の水準
+#      (`_candidate_quality` の center は概ね 42-58) を明確に上回る。割引なしで実測すると
+#      専用球団の候補はボードの **98〜100 パーセンタイル**に並び、10人中10人が指名された。
+#
+# 実測 (5 seed × 1ドラフト、ボード10人): 1.00 → 10人指名 / 0.70 → 5〜8人 / **0.58 → 1〜2人で
+# ほぼ全部が育成指名** = 目標どおり。効きが急なのは、素点が生成候補の 98〜100 パーセンタイルに
+# 固まっていて、そこから下は候補密度が高い帯を一気に通過するため。
+#
+# ⚠️ ②が解消 (= 生成水準を建前どおりへ下げ直す再較正) されたら、この const は取り直すこと。
+# 較正の目安は「ボード10人中1〜3人が指名され、その大半が育成指名」。
+const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.58
+# 候補 ID の名前空間。生成候補は 1..CANDIDATE_POOL_SIZE を使うので衝突しない値から始める。
+const FARM_CLUB_CANDIDATE_ID_BASE: int = 100000
+
 const POSITION_NAME_BY_ID: Dictionary = {
 	1: "pitcher", 2: "catcher", 3: "first", 4: "second", 5: "third",
 	6: "shortstop", 7: "left", 8: "center", 9: "right",
@@ -137,7 +172,7 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		# 1巡目入札の対話フロー用スナップショット (公開/結果段階でのみ中身を持つ)。
 		# {wave, bids(team_id_str->candidate_id), resolved, winners(candidate_id_str->team_id), loser_team_ids}
 		"first_round_reveal": {},
-		"candidate_pool": _generate_candidate_pool(CANDIDATE_POOL_SIZE),
+		"candidate_pool": _generate_candidate_pool(CANDIDATE_POOL_SIZE, players),
 		"picks": [],
 		"logs": [],
 	}
@@ -377,10 +412,17 @@ static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
 		if candidate.is_empty():
 			continue
 		var round_no: int = int(pick.get("round", 0))
-		var player_data: Dictionary = _player_data_from_candidate(candidate, next_id, int(pick.get("team_id", 0)), round_no, pick, int(state.get("year", 0)))
-		next_id += 1
-		var rookie: PSPlayer = PSPlayer.from_dict(player_data)
-		players.append(rookie)
+		var rookie: PSPlayer
+		if int(candidate.get("farm_club_player_id", 0)) > 0:
+			# ファーム専用球団の実在選手 (6c)。新規生成せず team_id を移す。
+			rookie = _promote_farm_club_candidate(players, candidate, pick, int(state.get("year", 0)))
+			if rookie == null:
+				continue
+		else:
+			var player_data: Dictionary = _player_data_from_candidate(candidate, next_id, int(pick.get("team_id", 0)), round_no, pick, int(state.get("year", 0)))
+			next_id += 1
+			rookie = PSPlayer.from_dict(player_data)
+			players.append(rookie)
 		rookies.append({
 			"player_id": rookie.id,
 			"name": rookie.name,
@@ -1157,11 +1199,16 @@ static func _priority_league(year: int) -> String:
 	return "league1" if year % 2 == 1 else "league2"
 
 
-static func _generate_candidate_pool(count: int) -> Array:
+# 候補ボード = 生成候補 + ファーム専用球団の実在選手 (6c)。
+# ⚠️ 専用球団ぶんは**生成候補を全部作り終えた後**に足す。`_farm_club_candidates` は Rng を
+#    一切引かないので、この順序なら生成候補の乱数消費は 6c 実装前と完全に同一のまま
+#    (= 既存の seed ベースラインが動かない)。
+static func _generate_candidate_pool(count: int, players: Array = []) -> Array:
 	var rows: Array = []
 	for i in range(count):
 		var candidate: Dictionary = _generate_candidate(i + 1)
 		rows.append(candidate)
+	rows.append_array(_farm_club_candidates(players))
 	_apply_bucket_grades(rows)
 	rows.sort_custom(func(a, b) -> bool:
 		var ca: Dictionary = a as Dictionary
@@ -1219,6 +1266,73 @@ static func _generate_candidate(candidate_id: int) -> Dictionary:
 		"picked": false,
 		"picked_by_team_id": 0,
 		"player_template": player_data,
+	}
+
+
+# ファーム専用球団の指名候補。**生成せず実在の選手をボードへ載せる唯一の経路**。
+# 評価順の上位 FARM_CLUB_CANDIDATE_POOL_SIZE 人だけを載せる。
+# **Rng を一切引かない** — 引くと生成候補側の乱数列がずれて既存の seed ベースラインが壊れる。
+static func _farm_club_candidates(players: Array) -> Array:
+	var rows: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if not PSFarmLeague.is_draft_eligible_farm_club_player(player):
+			continue
+		if player.age > FARM_CLUB_CANDIDATE_MAX_AGE:
+			continue
+		rows.append(_farm_club_candidate(player))
+	if rows.is_empty():
+		return rows
+
+	# 評価の高い順。同値は player_id で決めて、同じ世界なら常に同じボードになるようにする。
+	rows.sort_custom(func(a, b) -> bool:
+		var ca: Dictionary = a as Dictionary
+		var cb: Dictionary = b as Dictionary
+		var grade_a: float = float(ca.get("draft_grade", 0.0))
+		var grade_b: float = float(cb.get("draft_grade", 0.0))
+		if not is_equal_approx(grade_a, grade_b):
+			return grade_a > grade_b
+		return int(ca.get("farm_club_player_id", 0)) < int(cb.get("farm_club_player_id", 0))
+	)
+	if rows.size() > FARM_CLUB_CANDIDATE_POOL_SIZE:
+		rows = rows.slice(0, FARM_CLUB_CANDIDATE_POOL_SIZE)
+	for i in range(rows.size()):
+		(rows[i] as Dictionary)["candidate_id"] = FARM_CLUB_CANDIDATE_ID_BASE + i + 1
+	return rows
+
+
+# 実在の選手 1 人ぶんの候補行。生成候補 (`_generate_candidate`) と同じキーを持たせて、
+# ボードの並び・CPU の採点・UI の表示がどれも分岐なしで動くようにする。
+# 違いは `farm_club_player_id` を持つことだけで、`finalize_draft` はこれを見て
+# 新規生成ではなく **既存 PSPlayer の移籍**を行う。
+static func _farm_club_candidate(player: PSPlayer) -> Dictionary:
+	var overall: int = Offseason.player_value_score(player)
+	var growth_expectation: float = Offseason.expected_development_score_bonus(player.age, 6, player.position)
+	# 生成候補は potential_bonus と乱数ジッターを足すが、実在の選手には隠れた伸び代の設定が
+	# 無いので現在値 + 成長期待だけで見積もる (Rng を引かない理由でもある)。
+	var future_value: int = int(clamp(round(float(overall) + growth_expectation), 35.0, 99.0))
+	return {
+		"candidate_id": 0,
+		"name": player.name,
+		"age": player.age,
+		"position": player.position,
+		"draft_bucket": _draft_bucket_for_position(player.position),
+		"source_type": FARM_CLUB_SOURCE_TYPE,
+		"foreign_player": false,
+		"overall": overall,
+		"potential": max(overall, future_value),
+		"future_value": future_value,
+		"growth_expectation": growth_expectation,
+		# 素点は生成候補と同じ式で作り、最後にスカウト割引を掛ける (順位だけが下がる)。
+		"draft_grade": (float(overall) * 0.7 + growth_expectation) * FARM_CLUB_DRAFT_GRADE_SCALE,
+		"bucket_grade": 0.0,
+		"bucket_rank": 999,
+		"picked": false,
+		"picked_by_team_id": 0,
+		"farm_club_player_id": player.id,
+		"farm_club_id": player.team_id,
+		# 表示用 (守備/役割バッジ)。指名時の選手データはこれではなく実体から作る。
+		"player_template": player.to_dict(),
 	}
 
 
@@ -1420,6 +1534,52 @@ static func _player_data_from_candidate(candidate: Dictionary, player_id: int, t
 	PSCareerLog.seed_draft_entry(source, draft_year, team_id, round_no, is_dev)
 	data["source_data"] = source
 	return data
+
+
+# ファーム専用球団の選手を NPB 球団へ移す (6c)。**既存 PSPlayer の移籍**なので、
+# 能力・二軍成績・経歴ログはそのまま引き継がれる (RecordStore は player_id キーなので無改修)。
+# NPB 側の年数は 0 から始める = FA 権も専用球団での在籍年数を持ち込まない。
+static func _promote_farm_club_candidate(players: Array, candidate: Dictionary, pick: Dictionary, draft_year: int) -> PSPlayer:
+	var player_id: int = int(candidate.get("farm_club_player_id", 0))
+	var player: PSPlayer = null
+	for player_row in players:
+		var row: PSPlayer = player_row as PSPlayer
+		if row != null and row.id == player_id:
+			player = row
+			break
+	# 既に専用球団を離れている選手は指名を成立させない (指名成立後に世界が変わる経路への保険)。
+	if player == null or not PSFarmLeague.is_draft_eligible_farm_club_player(player):
+		return null
+
+	var round_no: int = int(pick.get("round", 0))
+	var is_dev: bool = bool(pick.get("development", false))
+	player.team_id = int(pick.get("team_id", 0))
+	player.salary = DEV_DRAFT_SALARY if is_dev else _salary_for_round(round_no)
+	player.draft_round = round_no
+	player.development_player = is_dev
+	player.registered_roster = "育成" if is_dev else "支配下"
+	player.years = 0
+
+	var source: Dictionary = player.source_data
+	source["rookie_year"] = true
+	source["draft_year"] = draft_year
+	source["draft_round"] = round_no
+	source["draft_overall_pick"] = int(pick.get("overall_pick", 0))
+	source["draft_candidate_id"] = int(candidate.get("candidate_id", 0))
+	source["draft_method"] = str(pick.get("method", ""))
+	source["draft_lottery"] = bool(pick.get("lottery", false))
+	# 出身種別。`PSPlayer.default_fa_eligible_years` はこれを見るので、専用球団出身は
+	# 高卒扱い (8年) ではなく「その他」(7年) になる。
+	source["draft_source"] = FARM_CLUB_SOURCE_TYPE
+	source["from_farm_club_id"] = int(candidate.get("farm_club_id", 0))
+	# 以後は NPB 経験者。仮に将来また専用球団へ落ちても、二重にドラフト対象にはならない。
+	source[PSFarmLeague.SOURCE_KEY_NPB_EXPERIENCED] = true
+	# 専用球団の在籍年数を NPB の FA 日数へ持ち込まない。
+	source.erase("fa_nissuu")
+	if is_dev:
+		source["development_since_year"] = draft_year
+	PSCareerLog.seed_draft_entry(source, draft_year, player.team_id, round_no, is_dev)
+	return player
 
 
 static func _candidate_quality(_source_type: String, age: int) -> Dictionary:

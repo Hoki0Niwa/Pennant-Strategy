@@ -13,13 +13,17 @@ class_name FarmClubService
 #   流入 ② 自動生成 — NPB に指名されなかった水準の若手を目標人数まで作る。
 #
 #   流出 ① 高齢による整理 (下記 ATTRITION_*)
-#   流出 ② NPB のドラフト指名 (Phase 6。生成組=NPB経験なし日本人のみが対象)
-#   流出 ③ 7/31 までの直接移籍 (Phase 6。戦力外獲得組=ドラフト指名歴ありが対象)
+#   流出 ② NPB のドラフト指名 (実装済。生成組=NPB経験なし日本人のみが対象。
+#          `DraftService._farm_club_candidates` がボードへ載せる)
+#   流出 ③ 7/31 までの直接移籍 (未実装。戦力外獲得組=ドラフト指名歴ありが対象)
 #
 # **供給元が指名資格を決める**のは実ルールがそうなっているため:
 #   戦力外獲得組 = ドラフト指名歴あり → ドラフト不要で移籍できる
 #   自動生成組   = NPB経験なし日本人 → ドラフト指名を受ける必要がある
-# その判別のために `source_data["npb_experienced"]` を立てる (Phase 6 がこれを読む)。
+# その判別のために `PSFarmLeague.SOURCE_KEY_NPB_EXPERIENCED` を立てる (DraftService が読む)。
+#
+# ⚠️ 補充 (`process_offseason`) は**ドラフトより後のステップ (growth) で走る**。指名で抜けた穴は
+#    そのオフのうちに埋まる = 指名が専用球団を痩せさせない。
 #
 # 詳細は docs/agent_memory/project_farm_system_design.md。
 
@@ -103,9 +107,10 @@ static func is_farm_club_player(player: PSPlayer) -> bool:
 	return player != null and PSFarmLeague.is_farm_club_id(player.team_id)
 
 
-# NPB でのプレー経験 (= ドラフト指名歴) があるか。Phase 6 のドラフト対象判定が読む。
+# NPB でのプレー経験 (= ドラフト指名歴) があるか。判定の実体は `PSFarmLeague` 側
+# (`DraftService` が同じ規則を読むため。サービス同士が互いを preload しないよう domain に置く)。
 static func has_npb_experience(player: PSPlayer) -> bool:
-	return player != null and bool(player.source_data.get("npb_experienced", false))
+	return PSFarmLeague.has_npb_experience(player)
 
 
 # 初期ワールド生成の固定シード。
@@ -275,8 +280,8 @@ static func _apply_farm_club_signing(player: PSPlayer, club_id: int, year: int) 
 	player.source_data.erase("dev_demote_hold")
 	player.salary = SALARY
 	player.source_data["farm_club_signed_year"] = year
-	# 戦力外組はドラフト指名歴があるので、Phase 6 ではドラフトを経ずに移籍できる側になる。
-	player.source_data["npb_experienced"] = true
+	# 戦力外組はドラフト指名歴があるので、ドラフトを経ずに移籍できる側になる (= 指名対象外)。
+	player.source_data[PSFarmLeague.SOURCE_KEY_NPB_EXPERIENCED] = true
 
 
 # ---- 流入②: 自動生成 ------------------------------------------------------
@@ -361,8 +366,8 @@ static func _generate_player(player_id: int, position: int, club_id: int, year: 
 		"position_aptitudes": Draft._candidate_position_aptitudes(position),
 		"source_data": {
 			"farm_club_origin_year": year,
-			# 生成組は NPB 未経験 = Phase 6 のドラフト指名対象。
-			"npb_experienced": false,
+			# 生成組は NPB 未経験 = ドラフト指名の対象 (DraftService の 6c)。
+			PSFarmLeague.SOURCE_KEY_NPB_EXPERIENCED: false,
 		},
 		"fatigue": 0,
 		"injury_days": 0,

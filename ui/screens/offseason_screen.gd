@@ -3309,6 +3309,8 @@ func _source_label(source_type: String) -> String:
 			return "独立"
 		"overseas_school":
 			return "海外"
+		DraftService.FARM_CLUB_SOURCE_TYPE:
+			return "ファーム"
 		_:
 			return source_type
 

@@ -46,23 +46,36 @@ const FARM_CLUB_DEFS: Array[Dictionary] = [
 
 # 地区割り。実 NPB と同じく**一軍のリーグとは独立**に、地理で分ける
 # (実 NPB も東地区に楽天・ヤクルト・ロッテ・日本ハムとセ/パが混在する)。
-# 東5 / 中5 / 西4 で、専用球団は東と中に1つずつ入る。
+# 東5 / 中5 / 西4 で、専用球団は東と西に1つずつ入る。
+#
+# ⚠️ 球団数の 5/5/4 と「東・中が奇数、西が偶数」は `PSFarmSchedule._build_rounds` の前提
+#    (奇数地区の余り同士で橋渡し1試合を作り、7試合 = 全14球団出場のラウンドにしている)。
+#    地区を動かすときはこの組み合わせを保つこと。
 const DISTRICT_BY_TEAM_ID: Dictionary = {
 	1: DISTRICT_EAST,     # 旭川アトミックス
 	4: DISTRICT_EAST,     # 出羽ダークデビルズ
 	8: DISTRICT_EAST,     # 八王子ホーネッツ
 	9: DISTRICT_EAST,     # 上越ジェスターズ
 	13: DISTRICT_EAST,    # ノースメン長野 (専用)
+	2: DISTRICT_CENTRAL,  # 備前ブラスターズ
 	3: DISTRICT_CENTRAL,  # 茅ヶ崎クルセイダーズ
 	6: DISTRICT_CENTRAL,  # 福井ファルコンズ
 	7: DISTRICT_CENTRAL,  # 岐阜ゲームコックス
 	10: DISTRICT_CENTRAL, # 京都キーストーンズ
-	14: DISTRICT_CENTRAL, # オスプレー大分 (専用)
-	2: DISTRICT_WEST,     # 備前ブラスターズ
 	5: DISTRICT_WEST,     # 愛媛エレファンツ
 	11: DISTRICT_WEST,    # 琉球ライトニング
 	12: DISTRICT_WEST,    # 宮崎メープルズ
+	14: DISTRICT_WEST,    # オスプレー大分 (専用)
 }
+
+
+# 専用球団の選手が NPB でプレーした経験 (= ドラフト指名歴) を持つかの印。
+# **供給元が指名資格を決める** (実ルールがそうなっている):
+#   戦力外から拾った選手 = 指名歴あり → ドラフトを経ずに NPB へ戻れる
+#   自動生成した選手     = NPB 未経験 → ドラフト指名を受ける必要がある
+# 立てるのは `FarmClubService` (選手を作る/拾う側)、読むのは `DraftService` (指名する側)。
+# 判定をここ (domain) に置くのは、両サービスが互いを preload しないようにするため。
+const SOURCE_KEY_NPB_EXPERIENCED: String = "npb_experienced"
 
 
 static func farm_club_ids() -> Array[int]:
@@ -74,6 +87,22 @@ static func farm_club_ids() -> Array[int]:
 
 static func is_farm_club_id(team_id: int) -> bool:
 	return farm_club_ids().has(team_id)
+
+
+static func has_npb_experience(player: PSPlayer) -> bool:
+	return player != null and bool(player.source_data.get(SOURCE_KEY_NPB_EXPERIENCED, false))
+
+
+# NPB のドラフト指名の対象になる専用球団の選手か。実ルール準拠で **NPB 経験のない日本人選手**
+# のみが対象 (外国人と指名歴ありの選手は 7/31 までの直接移籍で動く別経路)。
+static func is_draft_eligible_farm_club_player(player: PSPlayer) -> bool:
+	if player == null or player.is_retired():
+		return false
+	if not is_farm_club_id(player.team_id):
+		return false
+	if player.foreign_player:
+		return false
+	return not has_npb_experience(player)
 
 
 # 地区。表に無い team_id (Mod でシードを差し替えた等) は id から決定論的に割り当てる。

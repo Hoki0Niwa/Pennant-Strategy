@@ -385,6 +385,173 @@ func test_farm_club_players_get_season_records_without_polluting_league_referenc
 			).is_false()
 
 
+# ---- 専用球団からのドラフト指名 (6c) ---------------------------------------
+
+func _farm_draft_candidates(pool: Array) -> Array:
+	var rows: Array = []
+	for candidate_row in pool:
+		var candidate: Dictionary = candidate_row as Dictionary
+		if str(candidate.get("source_type", "")) == DraftService.FARM_CLUB_SOURCE_TYPE:
+			rows.append(candidate)
+	return rows
+
+
+func test_farm_club_prospects_appear_on_the_draft_board() -> void:
+	# 専用球団の選手は**生成候補ではなく実在の選手**としてボードに載る = 実際の二軍成績で判断できる
+	# 唯一のドラフト候補。上限を超えて載ると生成候補を押しのけて指名の性格が変わる。
+	_reload_world()
+	Rng.set_seed_value(20260815)
+	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 0, false)
+	var farm_candidates: Array = _farm_draft_candidates(state.get("candidate_pool", []) as Array)
+
+	assert_int(farm_candidates.size()).is_greater(0)
+	assert_int(farm_candidates.size()).is_less_equal(DraftService.FARM_CLUB_CANDIDATE_POOL_SIZE)
+
+	var seen_player_ids: Dictionary = {}
+	for candidate_row in farm_candidates:
+		var candidate: Dictionary = candidate_row as Dictionary
+		var player: PSPlayer = GameDb.get_player(int(candidate.get("farm_club_player_id", 0)))
+		assert_object(player).is_not_null()
+		assert_bool(PSFarmLeague.is_draft_eligible_farm_club_player(player)).is_true()
+		assert_int(player.age).is_less_equal(DraftService.FARM_CLUB_CANDIDATE_MAX_AGE)
+		# 同じ選手が2枚ボードに並ばない。候補 ID も生成候補と衝突しない。
+		assert_bool(seen_player_ids.has(player.id)).is_false()
+		seen_player_ids[player.id] = true
+		assert_int(int(candidate.get("candidate_id", 0))).is_greater(DraftService.CANDIDATE_POOL_SIZE)
+
+
+func test_draft_board_only_takes_farm_club_players_without_npb_experience() -> void:
+	# 実ルール: 戦力外から拾った (= 指名歴のある) 選手はドラフトを経ずに移籍できる側なので
+	# 指名対象にならない。外国人も同じ理由で対象外。
+	_reload_world()
+	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
+	var roster: Array = FarmClubService.roster_players(GameDb.players, club_id)
+	var experienced: PSPlayer = roster[0] as PSPlayer
+	var foreign: PSPlayer = roster[1] as PSPlayer
+	var aged: PSPlayer = roster[2] as PSPlayer
+	experienced.source_data[PSFarmLeague.SOURCE_KEY_NPB_EXPERIENCED] = true
+	foreign.foreign_player = true
+	aged.age = DraftService.FARM_CLUB_CANDIDATE_MAX_AGE + 1
+
+	Rng.set_seed_value(20260815)
+	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 0, false)
+	var excluded: Dictionary = {experienced.id: true, foreign.id: true, aged.id: true}
+	for candidate_row in _farm_draft_candidates(state.get("candidate_pool", []) as Array):
+		var pid: int = int((candidate_row as Dictionary).get("farm_club_player_id", 0))
+		assert_bool(excluded.has(pid)).override_failure_message(
+			"ineligible farm club player %d reached the draft board" % pid
+		).is_false()
+	_reload_world()
+
+
+func test_drafting_a_farm_club_player_moves_him_instead_of_creating_a_new_one() -> void:
+	# 6c の中核。指名は **team_id の移動**であって新規生成ではない — 能力・二軍成績・
+	# 選手 ID がそのまま NPB 球団へ引き継がれる。
+	_reload_world()
+	Rng.set_seed_value(20260815)
+	var pool: Array = DraftService._generate_candidate_pool(4, GameDb.players)
+	var farm_candidates: Array = _farm_draft_candidates(pool)
+	assert_int(farm_candidates.size()).is_greater(0)
+
+	var candidate: Dictionary = farm_candidates[0] as Dictionary
+	var player_id: int = int(candidate.get("farm_club_player_id", 0))
+	var club_id: int = int(candidate.get("farm_club_id", 0))
+	var player: PSPlayer = GameDb.get_player(player_id)
+	var z_before: Dictionary = player.z_abilities.duplicate(true)
+	var roster_before: int = FarmClubService.roster_count(GameDb.players, club_id)
+	var players_before: int = GameDb.players.size()
+
+	var state: Dictionary = {
+		"year": 2026,
+		"candidate_pool": pool,
+		"logs": [],
+		"picks": [{
+			"team_id": 1,
+			"candidate_id": int(candidate.get("candidate_id", 0)),
+			"round": 3,
+			"overall_pick": 27,
+			"method": "waiver",
+			"lottery": false,
+			"development": true,
+		}],
+	}
+	var result: Dictionary = DraftService.finalize_draft(state, GameDb.players)
+	var rookies: Array = result.get("rookies", []) as Array
+	assert_int(rookies.size()).is_equal(1)
+	assert_int(int((rookies[0] as Dictionary).get("player_id", 0))).is_equal(player_id)
+
+	# 新規選手は増えず、専用球団のロスターがその1人ぶん減る。
+	assert_int(GameDb.players.size()).is_equal(players_before)
+	assert_int(FarmClubService.roster_count(GameDb.players, club_id)).is_equal(roster_before - 1)
+
+	# 実体はそのまま移った。能力は不変、NPB の枠組みへ乗り換える。
+	assert_int(player.team_id).is_equal(1)
+	assert_dict(player.z_abilities).is_equal(z_before)
+	assert_bool(player.development_player).is_true()
+	assert_str(player.registered_roster).is_equal("育成")
+	assert_int(player.years).is_equal(0)
+	# 以後は NPB 経験者 = 二重に指名対象へ戻らない。
+	assert_bool(FarmClubService.has_npb_experience(player)).is_true()
+	assert_bool(PSFarmLeague.is_draft_eligible_farm_club_player(player)).is_false()
+	# 経歴ログにドラフト入団が残る。
+	assert_int(PSCareerLog.entries(player).size()).is_greater(0)
+	_reload_world()
+
+
+func test_farm_clubs_never_take_part_in_the_draft_as_selectors() -> void:
+	# 実ルールで専用球団はドラフト会議に指名する側として参加できない。指名順は GameDb.teams
+	# (12球団) から作るので構造的に混ざらないが、その不変条件を明示的に張る。
+	_reload_world()
+	Rng.set_seed_value(20260815)
+	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 0)
+	for order_key in ["teams_order_reverse", "teams_order_forward"]:
+		for team_id in state.get(order_key, []) as Array:
+			assert_bool(PSFarmLeague.is_farm_club_id(int(team_id))).is_false()
+
+	DraftService.complete_automatically(state)
+	var result: Dictionary = DraftService.finalize_draft(state, GameDb.players)
+	var farm_rookies: int = 0
+	for rookie_row in result.get("rookies", []) as Array:
+		var rookie: Dictionary = rookie_row as Dictionary
+		assert_bool(PSFarmLeague.is_farm_club_id(int(rookie.get("team_id", 0)))).is_false()
+		if str(rookie.get("source_type", "")) == DraftService.FARM_CLUB_SOURCE_TYPE:
+			farm_rookies += 1
+			# 指名された専用球団の選手は既存 ID のまま NPB 球団へ移っている。
+			var player: PSPlayer = GameDb.get_player(int(rookie.get("player_id", 0)))
+			assert_bool(PSFarmLeague.is_farm_club_id(player.team_id)).is_false()
+			assert_bool(FarmClubService.has_npb_experience(player)).is_true()
+	print("FARMDRAFT picked=%d of %d on board" % [
+		farm_rookies, DraftService.FARM_CLUB_CANDIDATE_POOL_SIZE
+	])
+	_reload_world()
+
+
+func test_farm_club_prospects_are_drafted_at_a_realistic_rate() -> void:
+	# `FARM_CLUB_DRAFT_GRADE_SCALE` の較正ガード。実 NPB の指名は年1〜3人で、大半が育成指名。
+	# 割引が効かなくなると専用球団の候補がボード上位を占め、10人中10人が指名される
+	# (割引 1.00 での実測)。**この帯は「野球として成立するか」ではなく較正の再現性を張っている。**
+	_reload_world()
+	Rng.set_seed_value(20260815)
+	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 0)
+	DraftService.complete_automatically(state)
+	var result: Dictionary = DraftService.finalize_draft(state, GameDb.players)
+
+	var picked: int = 0
+	var development_picked: int = 0
+	for rookie_row in result.get("rookies", []) as Array:
+		var rookie: Dictionary = rookie_row as Dictionary
+		if str(rookie.get("source_type", "")) != DraftService.FARM_CLUB_SOURCE_TYPE:
+			continue
+		picked += 1
+		if bool(rookie.get("development_player", false)):
+			development_picked += 1
+	assert_int(picked).override_failure_message(
+		"farm club picks = %d (expected 1..3; check FARM_CLUB_DRAFT_GRADE_SCALE)" % picked
+	).is_between(1, 3)
+	assert_int(development_picked).is_greater(0)
+	_reload_world()
+
+
 # ---- 二軍戦の実行 ----------------------------------------------------------
 
 # 二軍戦を実際に動かすためのシーズンを用意する (レコードは persist しない)。
