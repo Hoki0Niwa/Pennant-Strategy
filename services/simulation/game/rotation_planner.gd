@@ -735,7 +735,7 @@ static func _pitching_scores_by_id(records: Array, farm: bool = false, farm_team
 		if record != null and not scores.has(record.player_id):
 			var score: float = float(PlayerValueEvaluator.pitching_score_without_fatigue(record))
 			if farm:
-				score *= PSTeamSetupBuilder.FARM_ABILITY_WEIGHT
+				score *= PSTeamSetupBuilder.farm_ability_weight(record)
 				score += PSTeamSetupBuilder.farm_usage_priority(
 					record, prospects.has(record.player_id),
 					float(record.farm_pitcher_stats.games), farm_team_games, mean_share

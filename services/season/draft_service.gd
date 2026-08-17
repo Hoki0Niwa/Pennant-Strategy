@@ -91,27 +91,29 @@ const FARM_CLUB_SOURCE_TYPE: String = "farm_club"
 # 生成候補 (CANDIDATE_POOL_SIZE=320) を押しのけて指名の性格が変わる。評価上位だけを載せ、
 # **実際に指名されるのは年 1〜3 人**という規模 (NPB の実績も 2024 年の2人が初)。
 const FARM_CLUB_CANDIDATE_POOL_SIZE: int = 10
-# 年齢上限。専用球団は ATTRITION_START_AGE(27) から整理が始まるので、それ以上は指名対象にしない。
+# 年齢上限。生成候補の `ROOKIE_MAX_AGE` と同じにして、ボード上の年齢帯を揃える。
+# ⚠️ 専用球団の選手は**指名されなくても在籍し続ける** (2026-08-16 に「未経験者は27歳で消える」
+# 仕様を廃止した) ので、この上限を超えた選手はそのまま専用球団でプレーを続ける。
 const FARM_CLUB_CANDIDATE_MAX_AGE: int = 26
 # ボード評価の割引。**指名数を決める唯一のノブ**で、`draft_grade` に掛けて順位だけを下げる
 # (`overall` / `potential` の表示値は割引かない = 実力は実力として見せる)。
 #
-# 理由は2つ:
-#   ① 実ルール上の位置づけ — 専用球団の選手は NPB に**一度は指名を見送られた層**。実際の指名は
-#      年1〜3人 (2024年の2人が初) で、いずれも育成指名だった。素の能力順に並べると
-#      「毎年ドラフトの目玉が専用球団から出る」ことになり、実態とかけ離れる。
-#   ② **`FarmClubService.GENERATED_CENTER_MIN/MAX` が現在インフレしている** — 2026-08-12 に
-#      専用球団の壊滅を止めるため 33-50 → 54-66 へ引き上げた暫定値で、ドラフト候補の水準
-#      (`_candidate_quality` の center は概ね 42-58) を明確に上回る。割引なしで実測すると
-#      専用球団の候補はボードの **98〜100 パーセンタイル**に並び、10人中10人が指名された。
+# 意味は「**NPB が一度は見送った層**」というスカウト側の割り引き。専用球団の選手は指名対象に
+# なる時点で高校/大学/社会人のルートを通り過ぎているので、同じ実力の新卒候補より低く見られる。
+# 実際の指名は年1〜3人 (2024年の2人が初) で、いずれも育成指名だった。
 #
-# 実測 (5 seed × 1ドラフト、ボード10人): 1.00 → 10人指名 / 0.70 → 5〜8人 / **0.58 → 1〜2人で
-# ほぼ全部が育成指名** = 目標どおり。効きが急なのは、素点が生成候補の 98〜100 パーセンタイルに
-# 固まっていて、そこから下は候補密度が高い帯を一気に通過するため。
+# 2026-08-16 に `FarmClubService` の生成水準を「育成指名レベル・上振れなし」へ直したのに伴い
+# **0.58 → 0.84 へ取り直した**。旧 0.58 は生成水準のインフレ (center 54-66) を吸うための値で、
+# 新水準にそのまま掛けるとボードの最下層へ沈んで**指名ゼロ**になる。
 #
-# ⚠️ ②が解消 (= 生成水準を建前どおりへ下げ直す再較正) されたら、この const は取り直すこと。
-# 較正の目安は「ボード10人中1〜3人が指名され、その大半が育成指名」。
-const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.58
+# ⚠️ 効きは急。CPU の候補スコアが `bucket_grade` (= bucket 内順位の百分位) 由来で、
+# 割引が順位を動かすと候補密度の高い帯を一気に通過するため。実測 (seed 12345、ボード10人):
+#   1.00 → **9人指名** (うち3人が支配下・1巡目もあり) / 0.88 → 3人 (支配下1) /
+#   **0.84 → 2〜3人で全員が育成指名** / 0.76 → 0人。
+# 0.84 は seed 12345 / 20260815 / 777 の3本で 2/3/2人・**全部育成**を確認した値
+# (実 NPB = 年1〜3人・2024年の初指名2人はどちらも育成)。
+# 較正ガードは `test_farm_club_prospects_are_drafted_at_a_realistic_rate` (1〜3人 + 育成1人以上)。
+const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.84
 # 候補 ID の名前空間。生成候補は 1..CANDIDATE_POOL_SIZE を使うので衝突しない値から始める。
 const FARM_CLUB_CANDIDATE_ID_BASE: int = 100000
 
@@ -438,6 +440,13 @@ static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
 		})
 
 	state["finalized"] = true
+	# 指名漏れした候補を能力の基準として残す (`FarmClubService` が同じオフの growth ステップで読む)。
+	var undrafted: Array = []
+	for candidate_row in state.get("candidate_pool", []) as Array:
+		if not bool((candidate_row as Dictionary).get("picked", false)):
+			undrafted.append(candidate_row)
+	_last_undrafted_templates = _templates_from_candidates(undrafted)
+
 	var result: Dictionary = {
 		"draft_complete": true,
 		"draft_picks": picks.duplicate(true),
@@ -448,6 +457,59 @@ static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
 	}
 	state["final_result"] = result
 	return result
+
+
+# ---- 指名漏れ候補の能力基準 (FarmClubService が読む) -------------------------
+#
+# 専用球団の生成組 (NPB未経験) は「**実際に指名漏れした候補**」を能力の基準にする
+# (表示能力の固定値で水準を決めないため。詳細は `FarmClubService` の const ブロック)。
+# `finalize_draft` が毎年ここへ未指名候補を残し、同じオフの growth ステップで読まれる。
+#
+# ⚠️ **ワールド生成時はここを読んではいけない。** static はプロセス内で生き残るので、
+#    1度プレイした後に新規ワールドを作ると前の世界のドラフト結果が混ざり、
+#    **同じ seed でも初期ロスターが変わる** (Phase 3.5 で踏んだ非決定性と同型)。
+#    そのため `from_last_draft=false` では必ず候補モデルからのサンプルを使う。
+static var _last_undrafted_templates: Array = []
+
+# サンプル代用時の生成数と、そのうち「指名された側」として除く人数
+# (実際のドラフトの成立数 = 12球団 × 6〜7人 に相当)。能力値ではなく**指名の規模**なので固定でよい。
+const UNDRAFTED_SAMPLE_SIZE: int = 200
+const TYPICAL_DRAFT_PICK_COUNT: int = 78
+
+
+# 指名漏れ候補の {z_abilities, position, grade} 配列。
+# from_last_draft=true で直近のドラフトの実際の未指名候補、false で候補モデルからのサンプル。
+static func undrafted_candidate_templates(from_last_draft: bool) -> Array:
+	if from_last_draft and not _last_undrafted_templates.is_empty():
+		return _last_undrafted_templates
+	var rows: Array = []
+	for i in range(UNDRAFTED_SAMPLE_SIZE):
+		rows.append(_generate_candidate(i + 1))
+	rows.sort_custom(func(a, b) -> bool:
+		return float((a as Dictionary).get("draft_grade", 0.0)) > float((b as Dictionary).get("draft_grade", 0.0))
+	)
+	# 上位 = 指名される側なので落とす。
+	var drafted: int = int(round(float(UNDRAFTED_SAMPLE_SIZE) * float(TYPICAL_DRAFT_PICK_COUNT) / float(CANDIDATE_POOL_SIZE)))
+	return _templates_from_candidates(rows.slice(mini(drafted, rows.size() - 1)))
+
+
+static func _templates_from_candidates(rows: Array) -> Array:
+	var templates: Array = []
+	for row in rows:
+		var candidate: Dictionary = row as Dictionary
+		# 専用球団の選手は「アマの指名漏れ層」ではないので基準に混ぜない (循環参照になる)。
+		if str(candidate.get("source_type", "")) == FARM_CLUB_SOURCE_TYPE:
+			continue
+		var template: Dictionary = candidate.get("player_template", {}) as Dictionary
+		var z: Dictionary = template.get("z_abilities", {}) as Dictionary
+		if z.is_empty():
+			continue
+		templates.append({
+			"z_abilities": z,
+			"position": int(candidate.get("position", 0)),
+			"grade": float(candidate.get("draft_grade", 0.0)),
+		})
+	return templates
 
 
 static func available_candidates(state: Dictionary, limit: int = 120) -> Array:

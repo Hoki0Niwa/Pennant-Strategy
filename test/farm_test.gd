@@ -242,17 +242,49 @@ func test_generated_roster_can_field_a_game() -> void:
 			).is_greater(0)
 
 
-func test_generated_players_are_marked_as_npb_inexperienced() -> void:
-	# 供給元が Phase 6 のドラフト指名資格を決める。生成組は NPB 未経験 = 指名対象。
+func test_farm_club_roster_is_led_by_ex_npb_veterans() -> void:
+	# **ロスター像 (2026-08-16 ユーザー方針)**: 主力は NPB を戦力外になった中堅〜ベテラン、
+	# その下に NPB 未経験の若手が付く。供給元が指名資格も決める (元NPB=指名不要 / 未経験=要指名)。
 	_reload_world()
 	for club_id in PSFarmLeague.farm_club_ids():
+		var veterans: Array = []
+		var prospects: Array = []
 		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
 			var player: PSPlayer = player_row as PSPlayer
 			assert_bool(FarmClubService.is_farm_club_player(player)).is_true()
-			assert_bool(FarmClubService.has_npb_experience(player)).is_false()
 			# NPB の支配下/育成の枠組みには乗らない。
 			assert_bool(player.development_player).is_false()
 			assert_str(player.registered_roster).is_equal(FarmClubService.REGISTERED_ROSTER)
+			if FarmClubService.has_npb_experience(player):
+				veterans.append(player)
+			else:
+				prospects.append(player)
+
+		assert_int(veterans.size()).is_equal(FarmClubService.VETERAN_TARGET)
+		assert_int(prospects.size()).is_equal(
+			FarmClubService.ROSTER_TARGET - FarmClubService.VETERAN_TARGET
+		)
+		for veteran_row in veterans:
+			assert_int((veteran_row as PSPlayer).age).is_between(
+				FarmClubService.VETERAN_MIN_AGE, FarmClubService.VETERAN_MAX_AGE
+			)
+		for prospect_row in prospects:
+			assert_int((prospect_row as PSPlayer).age).is_between(
+				FarmClubService.GENERATED_MIN_AGE, FarmClubService.GENERATED_MAX_AGE
+			)
+
+		# **「主力」= 評価上位を占めること**。ここが崩れると二軍戦で若手だけが並ぶ。
+		var ranked: Array = FarmClubService.roster_players(GameDb.players, int(club_id))
+		ranked.sort_custom(func(a, b) -> bool:
+			return OffseasonService.player_value_score(a as PSPlayer) > OffseasonService.player_value_score(b as PSPlayer)
+		)
+		var veterans_in_top: int = 0
+		for i in range(10):
+			if FarmClubService.has_npb_experience(ranked[i] as PSPlayer):
+				veterans_in_top += 1
+		assert_int(veterans_in_top).override_failure_message(
+			"club %d: top10 に元NPBが %d 人しか居ない (主力はベテランのはず)" % [int(club_id), veterans_in_top]
+		).is_greater_equal(8)
 
 
 func test_farm_club_players_never_enter_npb_controlled_accounting() -> void:
@@ -342,6 +374,63 @@ func test_offseason_supply_releases_aged_players_and_refills() -> void:
 	_reload_world()
 
 
+func test_farm_club_departures_happen_without_any_age_factor() -> void:
+	# 退団は年齢だけで決まらない (2026-08-16 方針)。専用球団は NPB の契約の枠組みの外なので、
+	# 若い選手も毎オフ一定確率で抜ける (引退・独立/社会人への移籍・自己都合)。
+	_reload_world()
+	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
+	# 高齢引退が一切効かない年齢に揃える = 残るのはランダム離脱だけ。
+	for player_row in FarmClubService.roster_players(GameDb.players, club_id):
+		(player_row as PSPlayer).age = 22
+
+	Rng.set_seed_value(20260816)
+	var result: Dictionary = FarmClubService.process_offseason(GameDb.players, 2026)
+	var departures: Array = []
+	for entry_row in result.get("attrition", []) as Array:
+		var entry: Dictionary = entry_row as Dictionary
+		if int(entry.get("club_id", 0)) == club_id:
+			departures.append(entry)
+
+	assert_int(departures.size()).override_failure_message(
+		"年齢要因がゼロの球団から誰も退団していない (ランダム離脱が効いていない)"
+	).is_greater(0)
+	assert_int(departures.size()).is_less(FarmClubService.ROSTER_TARGET)
+	for entry_row in departures:
+		assert_str(str((entry_row as Dictionary).get("reason", ""))).is_equal("random")
+	# 抜けた分は補充され、ロスターは目標人数に戻る。
+	assert_int(FarmClubService.roster_count(GameDb.players, club_id)).is_equal(
+		FarmClubService.ROSTER_TARGET
+	)
+	_reload_world()
+
+
+func test_undrafted_prospects_are_not_forced_out_by_age() -> void:
+	# **廃止した旧仕様の回帰ガード**: 以前は NPB 未経験者だけ 27 歳から整理が始まり 32 で必ず消えた
+	# (= 指名されなければ在籍できない)。在籍は指名の有無と無関係にした。
+	_reload_world()
+	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
+	var prospects: Array = []
+	for player_row in FarmClubService.roster_players(GameDb.players, club_id):
+		var player: PSPlayer = player_row as PSPlayer
+		if not FarmClubService.has_npb_experience(player):
+			# 旧仕様なら確実に一掃される年齢。高齢引退 (33〜) にはまだ届かない。
+			player.age = 30
+			prospects.append(player)
+	assert_int(prospects.size()).is_greater(0)
+
+	Rng.set_seed_value(20260816)
+	FarmClubService.process_offseason(GameDb.players, 2026)
+	var survivors: int = 0
+	for player_row in prospects:
+		if (player_row as PSPlayer).team_id == club_id:
+			survivors += 1
+	# ランダム離脱で何人かは抜けるが、大半は残る (旧仕様なら 0 人)。
+	assert_int(survivors).override_failure_message(
+		"指名されなかった未経験者が年齢だけで一掃されている (廃止した旧仕様が残っている)"
+	).is_greater(int(float(prospects.size()) * 0.5))
+	_reload_world()
+
+
 func test_farm_club_players_are_excluded_from_npb_retirement() -> void:
 	# NPB の引退判定は一軍成績を見るので、専用球団の選手は全員「低出場」に見えてしまう。
 	# 除外していないとここで大量引退する。
@@ -425,7 +514,13 @@ func test_draft_board_only_takes_farm_club_players_without_npb_experience() -> v
 	# 指名対象にならない。外国人も同じ理由で対象外。
 	_reload_world()
 	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
-	var roster: Array = FarmClubService.roster_players(GameDb.players, club_id)
+	# 元NPB組は元から対象外なので、**指名対象である生成組**を3人選んで各条件を付ける
+	# (そうしないと「除外されたのは条件のおかげ」と言えない)。
+	var roster: Array = []
+	for player_row in FarmClubService.roster_players(GameDb.players, club_id):
+		if not FarmClubService.has_npb_experience(player_row as PSPlayer):
+			roster.append(player_row)
+	assert_int(roster.size()).is_greater_equal(3)
 	var experienced: PSPlayer = roster[0] as PSPlayer
 	var foreign: PSPlayer = roster[1] as PSPlayer
 	var aged: PSPlayer = roster[2] as PSPlayer
@@ -523,6 +618,47 @@ func test_farm_clubs_never_take_part_in_the_draft_as_selectors() -> void:
 	print("FARMDRAFT picked=%d of %d on board" % [
 		farm_rookies, DraftService.FARM_CLUB_CANDIDATE_POOL_SIZE
 	])
+	_reload_world()
+
+
+func test_farm_club_prospects_never_top_the_draft_board() -> void:
+	# 2026-08-16 の回帰ガード。生成水準がインフレしていた頃 (center 54-66) は専用球団の10人が
+	# 生成候補の **99〜100 パーセンタイル**に並び、「表示総合が全体最高の選手がボード40位に沈む」
+	# という表示と並び順の矛盾を起こしていた (割引 const が順位だけを下げるため)。
+	# 生成組は**育成指名レベルが上限**で、ボードの目玉にはならない。
+	_reload_world()
+	Rng.set_seed_value(20260815)
+	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 1, false)
+	var generated: Array = []
+	var farm_best: int = 0
+	for candidate_row in state.get("candidate_pool", []) as Array:
+		var candidate: Dictionary = candidate_row as Dictionary
+		var overall: int = int(candidate.get("overall", 0))
+		if str(candidate.get("source_type", "")) == DraftService.FARM_CLUB_SOURCE_TYPE:
+			farm_best = max(farm_best, overall)
+		else:
+			generated.append(overall)
+	assert_int(farm_best).is_greater(0)
+	generated.sort()
+
+	# ドラフトの目玉は必ず生成候補側から出る。
+	assert_int(farm_best).override_failure_message(
+		"専用球団の最上位 (%d) がボード全体の最上位 (%d) を超えている" % [
+			farm_best, int(generated[generated.size() - 1])
+		]
+	).is_less(int(generated[generated.size() - 1]))
+
+	# **ボードの上位10人には入らない。** 専用球団の生成組は入団までの育成ぶんだけ伸びるので
+	# (`PROSPECT_DEVELOPMENT_RATE`)、上位帯へある程度は近づくのが正しい。禁じたいのは
+	# 「ボードの目玉が専用球団から出る」ことなので、上限ではなくこの順位で張る。
+	# 実測: 育成なし → 26〜29人が上 / 現行 (率0.5) → 12人 / 満額(1.0) → **0人 = 目玉になる**。
+	var better: int = 0
+	for value in generated:
+		if int(value) >= farm_best:
+			better += 1
+	assert_int(better).override_failure_message(
+		"専用球団の最上位より上の生成候補が %d 人しか居ない (ボードの目玉になっている)" % better
+	).is_greater_equal(10)
 	_reload_world()
 
 
@@ -702,6 +838,41 @@ func test_farm_playing_time_prioritizes_prospects_and_is_not_decided_by_ability_
 	var opening_a: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 0.0, 0, -1.0)
 	var opening_b: float = PSTeamSetupBuilder.farm_usage_priority(veteran, false, 8.0, 0, -1.0)
 	assert_float(opening_a).is_equal_approx(opening_b, 0.001)
+
+
+func test_farm_club_usage_is_ability_led_because_it_has_no_parent_team() -> void:
+	# 二軍の出場方針は「**親球団が誰を育てたいか**」の表現なので、親を持たない専用球団には
+	# 適用しない (2026-08-16)。専用球団の主力は NPB を戦力外になった中堅〜ベテランで、
+	# ロスター内の能力差が大きい (実測で約15点)。12球団用の方針をそのまま掛けると
+	# **主力を外して最下層を並べる**ことになり、45日の得点が 102 → 65 まで落ちた。
+	var team_games: int = 40
+	var mean_share: float = 0.5
+	var farm_club_veteran: PSPlayerSeasonRecord = _usage_probe_record(9201, 33, false)
+	farm_club_veteran.team_id = int(PSFarmLeague.farm_club_ids()[0])
+	var npb_veteran: PSPlayerSeasonRecord = _usage_probe_record(9202, 33, false)
+	npb_veteran.team_id = 1
+
+	# 1. 専用球団ではベテラン減点・若手加点をしない (12球団の二軍では効く)。
+	assert_float(PSTeamSetupBuilder.farm_development_priority(farm_club_veteran)).override_failure_message(
+		"専用球団の主力 (ベテラン) が育成方針で減点されている"
+	).is_equal_approx(0.0, 0.001)
+	assert_float(PSTeamSetupBuilder.farm_development_priority(npb_veteran)).is_less(0.0)
+
+	# 2. 能力は素の重みで効く。
+	assert_float(PSTeamSetupBuilder.farm_ability_weight(farm_club_veteran)).is_equal_approx(
+		PSTeamSetupBuilder.FARM_CLUB_ABILITY_WEIGHT, 0.001
+	)
+	assert_float(PSTeamSetupBuilder.farm_ability_weight(npb_veteran)).is_equal_approx(
+		PSTeamSetupBuilder.FARM_ABILITY_WEIGHT, 0.001
+	)
+
+	# 3. 輪番は残すが、能力差 12 点を覆すほど強くはしない (12球団側は覆るのが仕様)。
+	var rested: float = PSTeamSetupBuilder.farm_usage_priority(farm_club_veteran, false, 4.0, team_games, mean_share)
+	var overused: float = PSTeamSetupBuilder.farm_usage_priority(farm_club_veteran, false, 36.0, team_games, mean_share)
+	assert_float(rested).is_greater(overused)
+	assert_float(rested - overused).override_failure_message(
+		"専用球団でも輪番が強すぎて、能力差より出場実績が優先されている"
+	).is_less(12.0 * PSTeamSetupBuilder.FARM_CLUB_ABILITY_WEIGHT)
 
 
 # 出場方針の検証用の最小レコード (能力は farm_usage_priority が見ないので設定しない)。
