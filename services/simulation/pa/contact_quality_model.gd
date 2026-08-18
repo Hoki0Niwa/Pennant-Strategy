@@ -9,13 +9,13 @@ class_name PSContactQualityModel
 # 同じ z カーブと重みを打者は加点、投手は減点に使うため、両者の水準が一緒に下がる環境でも
 # 対戦の相対差が維持される。正側の最上位だけは打者・投手別の固定上限で飽和させる。
 # 基準値と上限は母集団から動的に算出しない。
-const EV_BASE: float = 93.44                 # 打球初速の基準値(mph)。
+const EV_BASE: float = 94.25                 # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
 # 長打力カーブが高いほど EV を上げる量(mph)。
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
-const EV_HOME_RUN_POWER_WEIGHT: float = 4.50
+const EV_HOME_RUN_POWER_WEIGHT: float = 4.5
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
-const EV_STUFF_WEIGHT: float = 4.50          # 投手球威カーブが高いほど EV を下げる量(mph)。
+const EV_STUFF_WEIGHT: float = 4.5          # 投手球威カーブが高いほど EV を下げる量(mph)。
 const EV_FATIGUE_WEIGHT: float = 0.035
 const EV_CHASE_PENALTY: float = 3.50
 const EV_TWO_STRIKE_PENALTY: float = 1.25
@@ -47,9 +47,9 @@ const MISHIT_EV_PENALTY: float = 7.5
 const MISHIT_LA_SCATTER: float = 7.0
 
 # 投手の球威(stuff)が EV・芯・詰まり・理想角の各判定に効く重み。
-const STUFF_PERFECT_LOGIT_WEIGHT: float = 0.70
+const STUFF_PERFECT_LOGIT_WEIGHT: float = 0.7
 const STUFF_MISHIT_LOGIT_WEIGHT: float = 0.65
-const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 1.20
+const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 1.2
 
 # 打球角度(LA)の基準値・投球コース別オフセット・ばらつき範囲とクランプ。
 # LA_RANDOM_SPREAD は _gaussian の係数(実効σ ≈ spread×0.577)。Statcast 実測の打球角は
@@ -110,8 +110,15 @@ const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭
 # 投手側は K/BB の差も別経路で重なるため、stuff の正側上限を打者側より低くする。
 const BATTER_QUALITY_CURVE_TAIL_PIVOT: float = 0.65
 const BATTER_QUALITY_CURVE_TAIL_SPAN: float = 0.25
-const PITCHER_STUFF_CURVE_TAIL_PIVOT: float = 0.40
-const PITCHER_STUFF_CURVE_TAIL_SPAN: float = 0.20
+const PITCHER_STUFF_CURVE_TAIL_PIVOT: float = 0.4
+const PITCHER_STUFF_CURVE_TAIL_SPAN: float = 0.2
+# 打球品質を動かす「打者カーブ - 投手カーブ」の飽和点。上のテール圧縮が能力の絶対値に掛かるのに対し、
+# こちらは**対戦の差**に掛かる。両者が同じだけ弱くなれば差は動かないので得点環境は移動せず
+# (レベル不変)、同水準どうしの能力差も残り、極端なミスマッチだけが飽和する。
+# EV / 芯 / 詰まり / 理想角の4経路は投打の重みが対称なので同じ差を共有する。
+# 較正は tools/run_pa_response_surface の farm_club_win_pct で行う。
+const MATCHUP_CURVE_PIVOT: float = 0.28
+const MATCHUP_CURVE_SPAN: float = 0.12
 
 
 static func generate(
@@ -150,6 +157,12 @@ static func generate(
 	contact_curve = PSBalanceProfile.compress_z_tail(contact_curve, batter_tail_pivot, batter_tail_span)
 	home_run_curve = PSBalanceProfile.compress_z_tail(home_run_curve, batter_tail_pivot, batter_tail_span)
 	stuff_curve = PSBalanceProfile.compress_z_tail(stuff_curve, pitcher_tail_pivot, pitcher_tail_span)
+	# 打球品質へ効く投打の差を1度だけ作り、飽和させてから各経路で使い回す。
+	# power 系 (EV / 理想角) は長打力 vs 球威、contact 系 (芯 / 詰まり) は接触 vs 球威。
+	var matchup_pivot: float = _rule_float(rules, "matchup_curve_pivot", MATCHUP_CURVE_PIVOT)
+	var matchup_span: float = _rule_float(rules, "matchup_curve_span", MATCHUP_CURVE_SPAN)
+	var power_delta: float = PSBalanceProfile.compress_matchup_advantage(home_run_curve - stuff_curve, matchup_pivot, matchup_span)
+	var contact_delta: float = PSBalanceProfile.compress_matchup_advantage(contact_curve - stuff_curve, matchup_pivot, matchup_span)
 
 	# 投球結果(球速・コース・ゾーン内外・2ストライク防御・強制アウト)を取り出す。
 	var pitch_velocity: int = int(pitch_outcome.get("pitch_velocity", 142))
@@ -165,9 +178,12 @@ static func generate(
 	# EV(打球初速)を基準値から組み立てる。
 	var ev: float = _rule_float(rules, "ev_base", EV_BASE)
 	# 打者の長打力と投手の球威を同じカーブ・同じ重みで相殺し、球速・疲労・被弾傾向を加える。
-	ev += home_run_curve * _rule_float(rules, "ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
+	# 投打の重みは対称であることが前提 (2026-08-14 の対称化)。平均を取って圧縮済みの差へ掛ける。
+	ev += power_delta * _symmetric_weight(
+		_rule_float(rules, "ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT),
+		_rule_float(rules, "ev_stuff_weight", EV_STUFF_WEIGHT)
+	)
 	ev += (float(pitch_velocity) - _rule_float(rules, "pitch_velocity_base", PITCH_VELOCITY_BASE)) * _rule_float(rules, "ev_pitch_velocity_weight", EV_PITCH_VELOCITY_WEIGHT)
-	ev -= stuff_curve * _rule_float(rules, "ev_stuff_weight", EV_STUFF_WEIGHT)
 	ev -= float(batter_fatigue) * _rule_float(rules, "ev_fatigue_weight", EV_FATIGUE_WEIGHT)
 	ev += pitcher_contact_damage * _rule_float(rules, "pitcher_contact_damage_ev_weight", 0.75)
 	# 追いかけ・2ストライク防御・強制アウト・投手打者の各状況で EV を減らす。
@@ -180,8 +196,12 @@ static func generate(
 		ev -= _rule_float(rules, "ev_forced_protective_out_penalty", EV_FORCED_PROTECTIVE_OUT_PENALTY)
 	if batter_is_pitcher:
 		ev -= _rule_float(rules, "pitcher_batter_ev_penalty", 4.0)
-	# 接触能力が低い(マイナス側)ほど EV を下げる。
-	var contact_weakness: float = max(0.0, -contact_curve)
+	# 接触で投手に押されているほど EV を下げる。
+	# ⚠️ **contact_curve ではなく contact_delta (投打の差) を使う。** 能力の絶対値で見ると
+	# 「打者が弱い側にだけ発火する片側減点」になり、リーグ全体の水準が下がっただけで
+	# 打球品質が落ちる (投手側に対応する加点が無いため)。差で見れば両者が同じだけ弱くなっても
+	# 発火せず、「投手に力負けしている打席」でだけ効くという本来の意図が保たれる。
+	var contact_weakness: float = max(0.0, -contact_delta)
 	ev -= contact_weakness * _rule_float(rules, "ev_contact_weak_penalty", EV_CONTACT_WEAK_PENALTY)
 	# ギャップ能力に応じて、後で打球角度をライナーへ寄せる量を先に算出しておく。
 	var gap_liner_pull: float = clamp(max(0.0, gap_curve) * _rule_float(rules, "gap_liner_la_pull", GAP_LINER_LA_PULL), 0.0, 0.42)
@@ -202,7 +222,8 @@ static func generate(
 	# 接触能力が高いほど角度のばらつきを抑え、低い・追いかけ・2ストライク・強制アウトで広げる。
 	# 実測の打者間 LA σ は ~22-28° の幅なので、能力による増減は ±1割程度に留める。
 	var la_spread: float = _rule_float(rules, "la_random_spread", LA_RANDOM_SPREAD)
-	la_spread *= 1.0 - max(0.0, contact_curve) * _rule_float(rules, "contact_la_control_weight", 0.12) + contact_weakness * _rule_float(rules, "contact_weak_la_spread_weight", 0.08)
+	# こちらも同じ理由で contact_delta 基準 (絶対値で見ると弱いリーグほど角度が散る)。
+	la_spread *= 1.0 - max(0.0, contact_delta) * _rule_float(rules, "contact_la_control_weight", 0.12) + contact_weakness * _rule_float(rules, "contact_weak_la_spread_weight", 0.08)
 	if chase:
 		la_spread += _rule_float(rules, "la_chase_noise_boost", LA_CHASE_NOISE_BOOST)
 	if two_strike:
@@ -216,8 +237,10 @@ static func generate(
 
 	# 芯で捉える確率(perfect)を、基準率＋接触能力・球威・状況のロジットから算出する。
 	var perfect_logit: float = PSBalanceProfile.logit(_rule_float(rules, "perfect_contact_base_rate", PERFECT_CONTACT_BASE_RATE))
-	perfect_logit += contact_curve * _rule_float(rules, "perfect_contact_curve_weight", 0.70)
-	perfect_logit -= stuff_curve * _rule_float(rules, "stuff_perfect_logit_weight", STUFF_PERFECT_LOGIT_WEIGHT)
+	perfect_logit += contact_delta * _symmetric_weight(
+		_rule_float(rules, "perfect_contact_curve_weight", 0.70),
+		_rule_float(rules, "stuff_perfect_logit_weight", STUFF_PERFECT_LOGIT_WEIGHT)
+	)
 	perfect_logit += pitcher_contact_damage * _rule_float(rules, "pitcher_contact_damage_perfect_weight", 0.05)
 	perfect_logit += arsenal_hr_bias * _rule_float(rules, "arsenal_hr_perfect_weight", ARSENAL_HR_PERFECT_WEIGHT)  # 被弾寄り球種で芯を微増(微差)。
 	if two_strike:
@@ -228,8 +251,10 @@ static func generate(
 
 	# 詰まり/芯外し(mishit)の確率を、同様にロジットから算出する。
 	var mishit_logit: float = PSBalanceProfile.logit(_rule_float(rules, "mishit_base_rate", MISHIT_BASE_RATE))
-	mishit_logit -= contact_curve * _rule_float(rules, "mishit_contact_curve_weight", 0.65)
-	mishit_logit += stuff_curve * _rule_float(rules, "stuff_mishit_logit_weight", STUFF_MISHIT_LOGIT_WEIGHT)
+	mishit_logit -= contact_delta * _symmetric_weight(
+		_rule_float(rules, "mishit_contact_curve_weight", 0.65),
+		_rule_float(rules, "stuff_mishit_logit_weight", STUFF_MISHIT_LOGIT_WEIGHT)
+	)
 	mishit_logit -= pitcher_contact_damage * _rule_float(rules, "pitcher_contact_damage_mishit_weight", 0.04)
 	if two_strike:
 		mishit_logit += _rule_float(rules, "mishit_two_strike_penalty", 0.28)
@@ -255,8 +280,10 @@ static func generate(
 	# 本塁打向きの理想角(ideal power)を引く確率を、長打力・球威・状況から算出する。
 	var ideal_power_logit: float = PSBalanceProfile.logit(_rule_float(rules, "power_ideal_la_base_rate", POWER_IDEAL_LA_BASE_RATE))
 	# 長打力ゲート。上げると上位打者ほど本塁打向きの理想角に入りやすくなる。
-	ideal_power_logit += home_run_curve * _rule_float(rules, "ideal_power_curve_weight", 1.20)
-	ideal_power_logit -= stuff_curve * _rule_float(rules, "stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
+	ideal_power_logit += power_delta * _symmetric_weight(
+		_rule_float(rules, "ideal_power_curve_weight", 1.20),
+		_rule_float(rules, "stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
+	)
 	ideal_power_logit += pitcher_contact_damage * _rule_float(rules, "pitcher_contact_damage_ideal_weight", 0.04)
 	ideal_power_logit += arsenal_hr_bias * _rule_float(rules, "arsenal_hr_ideal_weight", ARSENAL_HR_IDEAL_WEIGHT)  # 被弾寄り球種で理想角を微増(微差)。
 	if chase:
@@ -401,6 +428,11 @@ static func _gaussian(spread: float) -> float:
 static func _round_float(value: float, digits: int) -> float:
 	var scale: float = pow(10.0, float(digits))
 	return round(value * scale) / scale
+
+
+# 投打で対称であるべき重みの組を1本にまとめる。Mod がわずかに崩しても平均で受ける。
+static func _symmetric_weight(batter_weight: float, pitcher_weight: float) -> float:
+	return (batter_weight + pitcher_weight) * 0.5
 
 
 static func _rule_float(rules: Dictionary, name: String, fallback: float) -> float:

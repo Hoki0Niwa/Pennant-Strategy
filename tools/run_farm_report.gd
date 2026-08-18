@@ -36,6 +36,15 @@ const HEALTH_FIRST_TEAM_PLAYERS_USED: Array = [55.0, 65.0]
 const HEALTH_INJURED_PLAYERS_PER_TEAM: Array = [8.0, 45.0]
 
 # 未達が判明していて一時的に warn 扱いにする項目。現在は空。
+# ファーム専用球団の勝率。**実クラブの実測が基準** (ハヤテ静岡2024 .315 / オイシックス新潟2024 .358)。
+# ⚠️ これは「PA モデルの能力差感度」の唯一の実測ゲート。2026-08-17 まで
+# `run_pa_response_surface` の「両側 -0.8σ の Pythagorean 勝率」で代用していたが、
+# **ゲーム内の 0.8σ が実クラブの実力差と等しいという根拠が無い**ため、実シーズンの実勝率へ移した
+# ([[project_pa_talent_sensitivity_calibration]] の Lv.2.5 節)。
+# 2球団×1シーズンでは振れるので、**3シーズン以上の平均で判断する**
+# ([[project_farm_system_design]] の「2球団 × 1シーズンでは測れない」)。
+const HEALTH_FARM_CLUB_WIN_RATE: Array = [0.270, 0.420]
+
 const HEALTH_KNOWN_OPEN_ISSUES: Dictionary = {}
 
 # 起用加重の能力水準を測るキー。**質の軸だけ**を使う (スタイル軸を混ぜると水準がぼやける)。
@@ -520,6 +529,8 @@ func _defensive_innings_summary(season: PSSeason) -> Dictionary:
 
 func _farm_club_summary(season: PSSeason) -> Dictionary:
 	var rows: Array = []
+	var win_rate_sum: float = 0.0
+	var win_rate_count: int = 0
 	for club_id_value in PSFarmLeague.farm_club_ids():
 		var club_id: int = int(club_id_value)
 		var roster: int = 0
@@ -532,13 +543,27 @@ func _farm_club_summary(season: PSSeason) -> Dictionary:
 				appeared += 1
 			if bool(record.source_data.get("npb_experienced", false)):
 				npb_experienced += 1
+		var stats: PSStats = season.farm_standings.get(club_id, null) as PSStats
+		var decided: int = 0 if stats == null else stats.wins + stats.losses
+		var win_rate: float = 0.0 if decided == 0 else float(stats.wins) / float(decided)
+		if decided > 0:
+			win_rate_sum += win_rate
+			win_rate_count += 1
 		rows.append({
 			"club_id": club_id,
 			"roster": roster,
 			"appeared": appeared,
 			"npb_experienced": npb_experienced,
+			"wins": 0 if stats == null else stats.wins,
+			"losses": 0 if stats == null else stats.losses,
+			"draws": 0 if stats == null else stats.draws,
+			"win_rate": _round3(win_rate),
 		})
-	return {"rows": rows}
+	return {
+		"rows": rows,
+		# 専用球団の平均勝率。感度較正の主ゲート (実クラブ .315 / .358 が基準)。
+		"mean_win_rate": _round3(0.0 if win_rate_count == 0 else win_rate_sum / float(win_rate_count)),
+	}
 
 
 # 谷間の先発 (スポット昇格) がどれだけ発火したか。season 側には登板中のものしか残らないので、
@@ -590,6 +615,7 @@ func _health(report: Dictionary) -> Dictionary:
 	var first_pitching: Dictionary = report.get("first_team_pitching", {}) as Dictionary
 	var roster_moves: Dictionary = report.get("roster_moves", {}) as Dictionary
 	var injuries: Dictionary = report.get("injuries", {}) as Dictionary
+	var farm_clubs: Dictionary = report.get("farm_clubs", {}) as Dictionary
 
 	_add_range_check(checks, "farm_batting_average", float(batting.get("average", 0.0)), HEALTH_FARM_AVG, "二軍リーグの打率")
 	_add_range_check(checks, "farm_walk_rate", float(batting.get("walk_rate", 0.0)), HEALTH_FARM_WALK_RATE, "二軍リーグの BB% (実 NPB ファームは9〜10%)")
@@ -600,6 +626,8 @@ func _health(report: Dictionary) -> Dictionary:
 	_add_min_check(checks, "farm_defensive_innings", float(defense.get("total_innings", 0.0)), 1.0, "二軍の守備イニング (守備適性成長の入力)")
 
 	_add_range_check(checks, "farm_era", float(farm_pitching.get("era", 0.0)), HEALTH_FARM_ERA, "二軍リーグの防御率 (実 NPB ファームは3.2〜3.7)")
+	# **能力差感度の主ゲート**。低い = 能力差が勝敗へ効きすぎている。
+	_add_range_check(checks, "farm_club_win_rate", float(farm_clubs.get("mean_win_rate", 0.0)), HEALTH_FARM_CLUB_WIN_RATE, "ファーム専用球団の平均勝率 (実 ハヤテ2024 .315 / オイシックス2024 .358)。3シーズン以上の平均で判断する")
 	# 顔ぶれと故障は**通季でしか意味を持たない累積量**なので、`--days=N` の短縮実行では
 	# 判定せず skipped にする (でないと短い確認実行が必ず fail して exit code が使えなくなる)。
 	var full_season: bool = int(schedule.get("played", 0)) + int(schedule.get("cancelled", 0)) >= int(schedule.get("total", 0))

@@ -19,6 +19,21 @@ static func compress_z_tail(z: float, pivot: float, span: float) -> float:
 	return pivot + span * tanh((z - pivot) / max(0.001, span))
 
 
+# 対戦優位 (打者項 - 投手項) を pivot 超過分だけ tanh で両側に飽和させる。
+# compress_z_tail との違い: **個々の能力ではなく投打の差に掛ける**。
+# 両者が同じだけ弱くなっても差は動かないので、
+#   - リーグ全体の水準が下がっても得点環境は動かない (レベル不変性が構造的に保たれる)
+#   - 同水準どうしのリーグ内部の能力差はそのまま残る (二軍の中の優劣が潰れない)
+#   - 極端なミスマッチ (専用球団 vs 12球団、エース vs 弱打者) だけが飽和する
+# という3つが同時に成り立つ。個々の能力に下側圧縮を掛ける方式ではこれが両立しない。
+static func compress_matchup_advantage(delta: float, pivot: float, span: float) -> float:
+	var magnitude: float = absf(delta)
+	if magnitude <= pivot:
+		return delta
+	var excess: float = magnitude - pivot
+	return signf(delta) * (pivot + span * tanh(excess / max(0.001, span)))
+
+
 static func sigmoid(logit_value: float) -> float:
 	return 1.0 / (1.0 + exp(-clamp(logit_value, -12.0, 12.0)))
 

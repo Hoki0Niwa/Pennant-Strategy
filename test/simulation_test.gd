@@ -1513,16 +1513,28 @@ func test_contact_quality_preserves_matchup_balance_when_both_levels_drop() -> v
 	print("LEVEL_EV base=%.2f weak_bat=%.2f weak_pit=%.2f both=%.2f" % [
 		baseline_ev, weak_batter_ev, weak_pitcher_ev, lower_level_ev,
 	])
-	assert_float(weak_batter_ev).is_less(baseline_ev - 2.0)
-	assert_float(weak_pitcher_ev).is_greater(baseline_ev + 2.0)
+	# 向きは保つ (弱い打者は打球が弱く、弱い投手は打たれる)。
+	assert_float(weak_batter_ev).is_less(baseline_ev - 0.5)
+	assert_float(weak_pitcher_ev).is_greater(baseline_ev + 0.5)
+	# ⚠️ **片側応答には上限がある** (2026-08-17 の対戦優位圧縮)。以前はここが「2.0 mph 超」の
+	# 下限だったが、能力差が結果へ効きすぎる問題を直すために上限側の不変条件へ置き換えた。
+	# 極端なミスマッチでも打球品質が青天井にならないことを固定する。
+	assert_float(weak_batter_ev).override_failure_message(
+		"打者が弱いときの打球品質の落ち込みが飽和していない"
+	).is_greater(baseline_ev - 3.2)
+	assert_float(weak_pitcher_ev).override_failure_message(
+		"投手が弱いときの打球品質の伸びが飽和していない"
+	).is_less(baseline_ev + 3.2)
+	# レベル不変性は圧縮を差分に掛けたことで構造的に成立するので、許容を 1.5 → 0.6 へ詰める。
 	assert_float(absf(lower_level_ev - baseline_ev)).override_failure_message(
 		"投打が同じだけ弱くなったときに打球品質の基準が移動している"
-	).is_less(1.5)
+	).is_less(0.6)
+	# 片側項を contact_delta 基準にしたぶん対称性も改善するので 1.5 → 1.0 へ詰める。
 	assert_float(absf(
 		(baseline_ev - weak_batter_ev) - (weak_pitcher_ev - baseline_ev)
 	)).override_failure_message(
 		"打者低下と投手低下の打球品質への寄与が非対称"
-	).is_less(1.5)
+	).is_less(1.0)
 
 
 func test_contact_quality_caps_elite_matchup_tails() -> void:

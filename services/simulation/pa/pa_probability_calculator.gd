@@ -23,8 +23,8 @@ const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY
 # raw z から実測母平均を引いてから重みを掛けていたものを代数的に1つの logit 定数へ畳み込んだ値
 # (K_LOGIT_BASE = logit(0.34) - Pit_KCreate母平均*K_CREATE_WEIGHT + Bat_KAvoid母平均*K_AVOID_WEIGHT 等)。
 # BIP だけは能力補正を持たないため、確率のまま(較正で直接いじる基準率)。
-const K_LOGIT_BASE: float = -0.6524042174102638
-const BB_LOGIT_BASE: float = -1.0343852840971538
+const K_LOGIT_BASE: float = -0.54
+const BB_LOGIT_BASE: float = -1.0
 const HBP_LOGIT_BASE: float = -4.20058985013459
 const LEAGUE_BIP_BASE: float = 0.72  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
 # K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。
@@ -45,6 +45,21 @@ const GAMECALL_BB_COEF: float = 0.03  # 捕手の配球が四球に効く係数�
 const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増える量。
 # 左右(プラトーン)相性が三振 logit に効く強さ。
 const PLATOON_WEIGHT: float = 0.3
+# 能力差による logit の振れ幅の飽和点 (対戦優位の圧縮)。
+# **能力ではなく「投手項 - 打者項」に掛ける**ので、両者が同じだけ弱くなっても結果は動かない
+# (= リーグ水準が変わってもレベル不変) 一方、極端なミスマッチだけが飽和する。
+# 圧縮の対象は raw z 由来の項だけで、フレーミング・配球・巡目・プラトーンといった状況項は含めない
+# (状況項は対戦の能力差ではないため)。値の較正は tools/run_pa_response_surface の
+# farm_club_win_pct で行う。詳細は docs/agent_memory/project_pa_talent_sensitivity_calibration.md。
+# ⚠️ 圧縮の中心は 0 ではない。K_LOGIT_BASE が畳み込んでいるのは**全選手プールの平均**なので、
+# 能力差項が 0 になるのはプール平均どうしの対戦であって、一軍どうしの対戦ではない。
+# 一軍の標準的な対戦での能力差項を中心に据えないと、一軍の平常運転が圧縮側に入ってしまう。
+# 値は contact_quality_model の *_CURVE_CENTER と同種のチューニング定数 (実行時に母集団を
+# 追跡しない一度きりの実測値)。K は打者側の重みが2倍なので中心が負へ寄る。
+const K_MATCHUP_CENTER: float = -0.32
+const BB_MATCHUP_CENTER: float = -0.20
+const MATCHUP_LOGIT_PIVOT: float = 0.4
+const MATCHUP_LOGIT_SPAN: float = 0.3
 
 
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
@@ -77,19 +92,30 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 
 	var platoon_term: float = bat_platoon * platoon_sign * platoon_weight
 
-	var k_logit: float = _rule_float(rules, "k_logit_base", K_LOGIT_BASE)
-	k_logit += pit_k_create * _rule_float(rules, "k_create_weight", K_CREATE_WEIGHT)
-	k_logit -= bat_k_avoid * _rule_float(rules, "k_avoid_weight", K_AVOID_WEIGHT)
-	k_logit += pit_edge_rate * _rule_float(rules, "arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
-	k_logit += arsenal_k_bias * _rule_float(rules, "arsenal_tendency_k_weight", ARSENAL_TENDENCY_K_WEIGHT)  # 球種構成のK寄り傾向(微差)。
+	var matchup_pivot: float = _rule_float(rules, "matchup_logit_pivot", MATCHUP_LOGIT_PIVOT)
+	var matchup_span: float = _rule_float(rules, "matchup_logit_span", MATCHUP_LOGIT_SPAN)
+
+	# 能力差由来の項だけを先に積んでから飽和させ、そのあとで状況項 (フレーミング/配球/巡目/
+	# プラトーン) を足す。状況項は対戦の能力差ではないので圧縮の対象にしない。
+	var k_ability: float = pit_k_create * _rule_float(rules, "k_create_weight", K_CREATE_WEIGHT)
+	k_ability -= bat_k_avoid * _rule_float(rules, "k_avoid_weight", K_AVOID_WEIGHT)
+	k_ability += pit_edge_rate * _rule_float(rules, "arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
+	k_ability += arsenal_k_bias * _rule_float(rules, "arsenal_tendency_k_weight", ARSENAL_TENDENCY_K_WEIGHT)  # 球種構成のK寄り傾向(微差)。
+	var k_center: float = _rule_float(rules, "k_matchup_center", K_MATCHUP_CENTER)
+	k_ability = k_center + PSBalanceProfile.compress_matchup_advantage(k_ability - k_center, matchup_pivot, matchup_span)
+
+	var k_logit: float = _rule_float(rules, "k_logit_base", K_LOGIT_BASE) + k_ability
 	k_logit += framing_strikes * _rule_float(rules, "framing_k_coef", FRAMING_K_COEF)
 	k_logit += c_game_call * _rule_float(rules, "gamecall_k_coef", GAMECALL_K_COEF)
 	k_logit -= tto_round_weight * _rule_float(rules, "tto_k_drop", TTO_K_DROP)
 	k_logit -= platoon_term
 
-	var bb_logit: float = _rule_float(rules, "bb_logit_base", BB_LOGIT_BASE)
-	bb_logit += bat_bb_create * _rule_float(rules, "bb_create_weight", BB_CREATE_WEIGHT)
-	bb_logit -= pit_bb_prevent * _rule_float(rules, "bb_prevent_weight", BB_PREVENT_WEIGHT)
+	var bb_ability: float = bat_bb_create * _rule_float(rules, "bb_create_weight", BB_CREATE_WEIGHT)
+	bb_ability -= pit_bb_prevent * _rule_float(rules, "bb_prevent_weight", BB_PREVENT_WEIGHT)
+	var bb_center: float = _rule_float(rules, "bb_matchup_center", BB_MATCHUP_CENTER)
+	bb_ability = bb_center + PSBalanceProfile.compress_matchup_advantage(bb_ability - bb_center, matchup_pivot, matchup_span)
+
+	var bb_logit: float = _rule_float(rules, "bb_logit_base", BB_LOGIT_BASE) + bb_ability
 	bb_logit -= framing_strikes * _rule_float(rules, "framing_bb_coef", FRAMING_BB_COEF)
 	bb_logit -= c_game_call * _rule_float(rules, "gamecall_bb_coef", GAMECALL_BB_COEF)
 	bb_logit += tto_round_weight * _rule_float(rules, "tto_bb_drop", TTO_BB_DROP)

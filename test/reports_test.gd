@@ -50,3 +50,59 @@ func _released_status(released_per_year: float) -> String:
 		if str(check.get("id", "")) == "released_per_year":
 			return str(check.get("status", ""))
 	return ""
+
+
+# --- PA 応答曲面 (services/reports/pa_response_surface_runner.gd) ---
+# 能力差 → 結果 の傾きを測る計測層。値そのものは較正の対象なので固定しない。
+# 固定するのは「曲面が読める形で出ること」= 符号と整合性の構造だけ。
+# 詳細は docs/agent_memory/project_pa_talent_sensitivity_calibration.md。
+
+const PaResponseSurface = preload("res://services/reports/pa_response_surface_runner.gd")
+
+# 短縮グリッド。1セル 270 アウト = 10試合ぶんで、構造の検査には足りる。
+const SURFACE_OPTIONS: Dictionary = {
+	"batter_offsets": [-0.8, 0.0],
+	"pitcher_offsets": [-0.8, 0.0],
+	"target_outs": 270,
+	"seed": 4242,
+}
+
+
+# 打者を強くすれば得点は増え、投手を強くすれば減る。この符号が崩れたら曲面を読む意味がない。
+# 併せて「対角 = 打者傾き + 投手傾き」が成り立つこと (局所線形なので定義上一致する) を確認する。
+func test_pa_response_surface_slopes_have_the_expected_signs() -> void:
+	var report: Dictionary = PaResponseSurface.new().run(SURFACE_OPTIONS)
+	assert_bool(bool(report.get("ok", false))).is_true()
+	assert_int((report.get("cells", []) as Array).size()).is_equal(4)
+
+	var runs: Dictionary = (report.get("slopes", {}) as Dictionary).get("runs_per_game", {}) as Dictionary
+	var batter_slope: float = float(runs.get("batter_slope", 0.0))
+	var pitcher_slope: float = float(runs.get("pitcher_slope", 0.0))
+	assert_float(batter_slope).is_greater(0.0)
+	assert_float(pitcher_slope).is_less(0.0)
+	assert_float(float(runs.get("diagonal_slope", 0.0))).is_equal_approx(batter_slope + pitcher_slope, 0.001)
+
+
+# δ=0 のセルは一軍の動作点でなければならない。ここがずれると「別の場所の傾き」を測ってしまうので、
+# 母集団の作り方 (スタメン選出・投手の抽出) を変えたらこのテストが先に落ちる。
+func test_pa_response_surface_reference_cell_reproduces_the_first_team() -> void:
+	var report: Dictionary = PaResponseSurface.new().run(SURFACE_OPTIONS)
+	var reference: Dictionary = report.get("reference_cell", {}) as Dictionary
+	assert_dict(reference).is_not_empty()
+	# 帯は report_health.gd のリーグ帯より広く取る (270 アウトの標本誤差ぶん)。
+	assert_float(float(reference.get("runs_per_game", 0.0))).is_between(2.2, 5.2)
+	assert_float(float(reference.get("strikeout_rate", 0.0))).is_between(0.14, 0.25)
+	assert_float(float(reference.get("walk_rate", 0.0))).is_between(0.05, 0.12)
+	assert_float(float(reference.get("babip", 0.0))).is_between(0.24, 0.38)
+
+	var population: Dictionary = report.get("reference_population", {}) as Dictionary
+	assert_int(int(population.get("teams", 0))).is_equal(GameDb.teams.size())
+	# 専用球団 (GameDb.farm_clubs) が母集団へ混ざっていないこと。混ざると水準が下がり動作点が狂う。
+	assert_int(int(population.get("batter_sample", 0))).is_equal(GameDb.teams.size() * 9)
+
+
+# 同じ seed で2回走らせたら完全に一致する。Rng レーンを跨ぐ計測なので決定性を明示的に張る。
+func test_pa_response_surface_is_deterministic_for_a_seed() -> void:
+	var first: Dictionary = PaResponseSurface.new().run(SURFACE_OPTIONS)
+	var second: Dictionary = PaResponseSurface.new().run(SURFACE_OPTIONS)
+	assert_str(JSON.stringify(first.get("cells", []))).is_equal(JSON.stringify(second.get("cells", [])))
