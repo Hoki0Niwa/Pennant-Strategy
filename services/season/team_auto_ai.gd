@@ -66,6 +66,14 @@ const RELIEVER_ADJUSTMENT_INTERVAL_DAYS: int = 14
 const DEPTH_ADJUSTMENT_MAX_QUALITY_GAP: float = 10.0
 const PROTECTED_RELIEF_ROLE_COUNT: int = 6
 const ROSTER_GROUP_FIELDER: String = "fielder"
+# 12球団二軍の使用投手を実 NPB の40人台へ近づけるため、週次入替で投手の動きが
+# 1件も無かった週は「10日間の再調整」として1枠を循環させる。能力不振とは別の機構なので、
+# 一軍主力も年1回程度は対象になり得るが、同役割・品質差内の代役とだけ交換する。
+const PITCHER_CIRCULATION_FIRST_DAY: int = 14
+const PITCHER_CIRCULATION_INTERVAL_DAYS: int = 7
+const PITCHER_CIRCULATION_MAX_QUALITY_GAP: float = 22.0
+const PITCHER_CIRCULATION_MIN_STARTS: int = 2
+const PITCHER_CIRCULATION_MIN_RELIEF_GAMES: int = 3
 
 # 守備位置 (捕→遊→中→二→三→一→左→右)。希少順。
 const DEFENSIVE_POSITIONS: Array[int] = [2, 6, 8, 4, 5, 3, 7, 9]
@@ -1077,13 +1085,25 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 		if not adjustment.is_empty():
 			pairs.append(adjustment)
 			summary["swapped_pairs"] = pairs
-		for roster_group in [ROSTER_GROUP_FIELDER, PITCHER_ROLE_RELIEVER]:
-			var depth_adjustment: Dictionary = _try_depth_roster_adjustment(
-				season, team.id, current_day, str(roster_group)
-			)
-			if depth_adjustment.is_empty():
-				continue
-			pairs.append(depth_adjustment)
+		var relief_adjustment: Dictionary = _try_depth_roster_adjustment(
+			season, team.id, current_day, PITCHER_ROLE_RELIEVER
+		)
+		if not relief_adjustment.is_empty():
+			pairs.append(relief_adjustment)
+			summary["swapped_pairs"] = pairs
+		# 成績入替とは目的が違う独立の週次再調整枠。通常入替が投手を動かした週に止めると、
+		# 通季の使用投手が30人台前半で頭打ちになったため、品質・同役割ゲートの範囲で毎週試す。
+		var circulation: Dictionary = _try_pitcher_circulation_adjustment(
+			season, team.id, current_day
+		)
+		if not circulation.is_empty():
+			pairs.append(circulation)
+			summary["swapped_pairs"] = pairs
+		var fielding_adjustment: Dictionary = _try_depth_roster_adjustment(
+			season, team.id, current_day, ROSTER_GROUP_FIELDER
+		)
+		if not fielding_adjustment.is_empty():
+			pairs.append(fielding_adjustment)
 			summary["swapped_pairs"] = pairs
 		season.set_last_auto_swap_day(team.id, current_day)
 		season.clear_stale_demotions(team.id, current_day)
@@ -1093,6 +1113,146 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 	return {
 		"ok": true,
 		"executed": executed,
+	}
+
+
+# 成績不振ではなく「二軍で一度も投げていない投手へ再調整機会を作る」ための循環。
+# 降格者は二軍登板数の少ない順、昇格者は既に一軍登板歴がある順なので、
+# 一軍の年間使用人数を際限なく増やさずに一二軍の重なりを広げる。
+static func _try_pitcher_circulation_adjustment(
+	season: PSSeason, team_id: int, current_day: int
+) -> Dictionary:
+	if current_day < PITCHER_CIRCULATION_FIRST_DAY:
+		return {}
+	var roster: Dictionary = season.get_active_roster(team_id).duplicate(true)
+	var last_day: int = int(roster.get("last_pitcher_circulation_day", 0))
+	if last_day > 0 and current_day - last_day < PITCHER_CIRCULATION_INTERVAL_DAYS:
+		return {}
+	var all_records: Array = RecordStore.get_team_player_records(
+		team_id, season.year, season.season_number
+	)
+	var record_by_id: Dictionary = {}
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record != null:
+			record_by_id[record.player_id] = record
+	var active_id_list: Array = (roster.get("player_ids", []) as Array).duplicate()
+	var active_ids: Dictionary = {}
+	for id_value in active_id_list:
+		active_ids[int(id_value)] = true
+	if active_ids.is_empty():
+		return {}
+
+	var spot_callups: Dictionary = season.get_spot_callups(team_id)
+	var baselines: Dictionary = season.get_callup_appearance_baselines(team_id)
+	var down_candidates: Array = []
+	for id_value in active_id_list:
+		var record: PSPlayerSeasonRecord = record_by_id.get(int(id_value), null) as PSPlayerSeasonRecord
+		if record == null or not record.is_pitcher() or record.injury_days > 0 \
+				or record.development_player or spot_callups.has(str(record.player_id)):
+			continue
+		var appearances: int = record.pitcher_stats.games
+		if _is_starting_pitcher(record):
+			if record.pitcher_stats.starts < PITCHER_CIRCULATION_MIN_STARTS:
+				continue
+		elif appearances < PITCHER_CIRCULATION_MIN_RELIEF_GAMES:
+			continue
+		var baseline_key: String = str(record.player_id)
+		if baselines.has(baseline_key) and appearances <= int(baselines[baseline_key]):
+			continue
+		down_candidates.append(record)
+	if down_candidates.is_empty():
+		return {}
+	var down_scores: Dictionary = _selection_scores_by_id([down_candidates])
+	down_candidates.sort_custom(func(a, b) -> bool:
+		var record_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+		var record_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+		if record_a.farm_pitcher_stats.games != record_b.farm_pitcher_stats.games:
+			return record_a.farm_pitcher_stats.games < record_b.farm_pitcher_stats.games
+		var score_a: float = _cached_selection_score(record_a, down_scores)
+		var score_b: float = _cached_selection_score(record_b, down_scores)
+		if not is_equal_approx(score_a, score_b):
+			return score_a < score_b
+		return record_a.player_id < record_b.player_id
+	)
+
+	var demotion_days: Dictionary = season.get_demotion_days(team_id)
+	var up_candidates: Array = []
+	for record_row in all_records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or not record.is_pitcher() or active_ids.has(record.player_id) \
+				or record.injury_days > 0 or record.development_player:
+			continue
+		var demoted_day: int = int(demotion_days.get(str(record.player_id), 0))
+		if demoted_day > 0 and current_day - demoted_day < DEMOTION_COOLDOWN_DAYS:
+			continue
+		up_candidates.append(record)
+	if up_candidates.is_empty():
+		return {}
+	var up_scores: Dictionary = _selection_scores_by_id([up_candidates])
+	up_candidates.sort_custom(func(a, b) -> bool:
+		var record_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+		var record_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+		var used_a: bool = record_a.pitcher_stats.games > 0
+		var used_b: bool = record_b.pitcher_stats.games > 0
+		if used_a != used_b:
+			return used_a
+		var demoted_a: int = int(demotion_days.get(str(record_a.player_id), 0))
+		var demoted_b: int = int(demotion_days.get(str(record_b.player_id), 0))
+		if demoted_a != demoted_b:
+			return demoted_a > demoted_b
+		var score_a: float = _cached_selection_score(record_a, up_scores)
+		var score_b: float = _cached_selection_score(record_b, up_scores)
+		if not is_equal_approx(score_a, score_b):
+			return score_a > score_b
+		return record_a.player_id < record_b.player_id
+	)
+
+	var down: PSPlayerSeasonRecord = null
+	var up: PSPlayerSeasonRecord = null
+	for down_row in down_candidates:
+		var down_candidate: PSPlayerSeasonRecord = down_row as PSPlayerSeasonRecord
+		var down_starter: bool = _is_starting_pitcher(down_candidate)
+		var down_score: float = _cached_selection_score(down_candidate, down_scores)
+		for up_row in up_candidates:
+			var up_candidate: PSPlayerSeasonRecord = up_row as PSPlayerSeasonRecord
+			if _is_starting_pitcher(up_candidate) != down_starter:
+				continue
+			if _cached_selection_score(up_candidate, up_scores) \
+					< down_score - PITCHER_CIRCULATION_MAX_QUALITY_GAP:
+				continue
+			var proposed: Dictionary = active_ids.duplicate()
+			proposed.erase(down_candidate.player_id)
+			proposed[up_candidate.player_id] = true
+			if not ForeignActiveRosterRules.is_within_limits(
+				ForeignActiveRosterRules.counts_from_active_set(proposed, record_by_id)
+			):
+				continue
+			down = down_candidate
+			up = up_candidate
+			break
+		if up != null:
+			break
+	if down == null or up == null:
+		return {}
+
+	var down_index: int = active_id_list.find(down.player_id)
+	if down_index < 0:
+		return {}
+	active_id_list[down_index] = up.player_id
+	roster["player_ids"] = active_id_list
+	roster["last_pitcher_circulation_day"] = current_day
+	season.set_active_roster(team_id, roster)
+	season.record_demotions(team_id, [down.player_id], current_day)
+	_record_callup_appearance_baselines(season, team_id, [up.player_id], record_by_id)
+	if _is_starting_pitcher(down):
+		_replace_rotation_pitcher(season, team_id, down.player_id, up.player_id)
+	else:
+		_replace_relief_role_pitcher(season, team_id, down.player_id, up.player_id)
+	return {
+		"down": down.player_id,
+		"up": up.player_id,
+		"reason": "pitcher_circulation",
 	}
 
 
@@ -1420,6 +1580,28 @@ static func _replace_rotation_pitcher(
 	else:
 		order.append(up_id)
 	rotation["pitcher_ids"] = order
+	season.set_rotation(team_id, rotation)
+
+
+static func _replace_relief_role_pitcher(
+	season: PSSeason, team_id: int, down_id: int, up_id: int
+) -> void:
+	var rotation: Dictionary = season.get_rotation(team_id).duplicate(true)
+	var relief_roles: Dictionary = (rotation.get("relief_roles", {}) as Dictionary).duplicate(true)
+	if relief_roles.is_empty():
+		return
+	for key in ["long_ids", "middle_ids", "setup_ids"]:
+		var ids: Array = (relief_roles.get(key, []) as Array).duplicate()
+		var index: int = ids.find(down_id)
+		if index < 0:
+			continue
+		ids.erase(up_id)
+		index = mini(index, ids.size())
+		ids.insert(index, up_id)
+		relief_roles[key] = ids
+	if int(relief_roles.get("closer_id", 0)) == down_id:
+		relief_roles["closer_id"] = up_id
+	rotation["relief_roles"] = relief_roles
 	season.set_rotation(team_id, rotation)
 
 

@@ -42,6 +42,10 @@ var injury_type: String = ""
 var injury_severity: int = 0
 var consecutive_appearances: int = 0
 var last_pitched_team_game: int = 0
+# 連投は「そのレベルの直前のチーム試合に登板したか」で決まる。一軍と二軍では
+# 消化試合数が違うため台帳を分ける (疲労と先発の最終登板日は引き続き共有)。
+var farm_consecutive_appearances: int = 0
+var farm_last_pitched_team_game: int = 0
 var position_aptitudes_snapshot: Dictionary = {}
 var position_experience_snapshot: Dictionary = {}
 var source_data: Dictionary = {}
@@ -107,6 +111,8 @@ static func from_player(player: PSPlayer, p_year: int, p_season_number: int) -> 
 	record.injury_severity = player.injury_severity
 	record.consecutive_appearances = 0
 	record.last_pitched_team_game = 0
+	record.farm_consecutive_appearances = 0
+	record.farm_last_pitched_team_game = 0
 	record.position_aptitudes_snapshot = player.position_aptitudes.duplicate(true)
 	record.position_experience_snapshot = player.position_experience.duplicate(true)
 	record.source_data = player.source_data.duplicate(true)
@@ -148,6 +154,8 @@ static func from_dict(data: Dictionary) -> PSPlayerSeasonRecord:
 	record.injury_severity = int(data.get("injury_severity", 0))
 	record.consecutive_appearances = int(data.get("consecutive_appearances", 0))
 	record.last_pitched_team_game = int(data.get("last_pitched_team_game", 0))
+	record.farm_consecutive_appearances = int(data.get("farm_consecutive_appearances", 0))
+	record.farm_last_pitched_team_game = int(data.get("farm_last_pitched_team_game", 0))
 	record.position_aptitudes_snapshot = (data.get("position_aptitudes_snapshot", {}) as Dictionary).duplicate(true)
 	record.position_experience_snapshot = PSPlayer.normalized_position_experience((data.get("position_experience_snapshot", {}) as Dictionary), record.position, record.position_aptitudes_snapshot)
 	record.source_data = (data.get("source_data", {}) as Dictionary).duplicate(true)
@@ -287,6 +295,8 @@ func to_dict() -> Dictionary:
 		"injury_severity": injury_severity,
 		"consecutive_appearances": consecutive_appearances,
 		"last_pitched_team_game": last_pitched_team_game,
+		"farm_consecutive_appearances": farm_consecutive_appearances,
+		"farm_last_pitched_team_game": farm_last_pitched_team_game,
 		"position_aptitudes_snapshot": position_aptitudes_snapshot,
 		"position_experience_snapshot": position_experience_snapshot,
 		"source_data": source_data,

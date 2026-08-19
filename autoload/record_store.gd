@@ -552,8 +552,15 @@ func _refreshed_player_record(record: PSPlayerSeasonRecord, player: PSPlayer) ->
 	refreshed.batter_stats = record.batter_stats
 	refreshed.pitcher_stats = record.pitcher_stats
 	refreshed.advanced_stats = record.advanced_stats
+	# 選手名などの同一性だけを最新 master へ合わせる処理なので、二軍側のシーズン成績も
+	# 一軍成績と同様にそのまま引き継ぐ。ここを落とすと途中ロード時に二軍成績が消える。
+	refreshed.farm_batter_stats = record.farm_batter_stats
+	refreshed.farm_pitcher_stats = record.farm_pitcher_stats
+	refreshed.farm_advanced_stats = record.farm_advanced_stats
 	refreshed.season_injury_days = record.season_injury_days
 	refreshed.injury_return_day = record.injury_return_day
 	refreshed.consecutive_appearances = record.consecutive_appearances
 	refreshed.last_pitched_team_game = record.last_pitched_team_game
+	refreshed.farm_consecutive_appearances = record.farm_consecutive_appearances
+	refreshed.farm_last_pitched_team_game = record.farm_last_pitched_team_game
 	return refreshed

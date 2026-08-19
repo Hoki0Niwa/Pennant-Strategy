@@ -720,7 +720,9 @@ func test_foreign_contract_market_entries_exclude_locked_players() -> void:
 	var open_player: PSPlayer = _player_with_z(9461, 1, 4, false, -1.0)
 	open_player.foreign_player = true
 	open_player.age = 30
-	var players: Array = [locked, open_player]
+	var farm_player: PSPlayer = _player_with_z(9462, int(PSFarmLeague.farm_club_ids()[0]), 4, false, -1.0)
+	farm_player.foreign_player = true
+	var players: Array = [locked, open_player, farm_player]
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
 	season.season_number = 1
@@ -732,6 +734,7 @@ func test_foreign_contract_market_entries_exclude_locked_players() -> void:
 		entry_ids.append(int((row as Dictionary).get("player_id", 0)))
 	assert_array(entry_ids).not_contains(locked.id)
 	assert_array(entry_ids).contains(open_player.id)
+	assert_array(entry_ids).not_contains(farm_player.id)
 
 
 func test_foreign_contract_market_skips_contract_phase_when_no_entries() -> void:
@@ -992,6 +995,12 @@ func test_foreign_contract_departed_player_excluded_from_released_market() -> vo
 	ForeignPlayerService._apply_contract_departure(player, 1, 2026)
 	assert_bool(player.is_retired()).is_true()
 	assert_bool(ReleasedMarket._is_released_market_player(player)).is_false()
+	assert_int(int(player.source_data.get(
+		PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR, 0
+	))).is_equal(2026)
+	assert_int(int(player.source_data.get(
+		PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_TEAM, 0
+	))).is_equal(1)
 
 
 func test_foreign_contract_apply_result_sets_multi_year_keys() -> void:
@@ -3097,6 +3106,24 @@ func test_depth_chart_display_rows_rank_current_and_future_separately() -> void:
 	assert_int(int(strong_row["future_rank"])).is_equal(2)
 	assert_int(int(young_row["top_prospect"]["player_id"])).is_equal(9861)
 	assert_array(StrengthGrade.GRADES).contains([str(young_row["future_grade"])])
+
+
+func test_rare_awakening_outlier_is_a_coherent_large_jump() -> void:
+	Rng.set_seed_value(20260819)
+	var quality_keys: Array[String] = [
+		"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Barrel",
+	]
+	var deltas: Array = []
+	for key in quality_keys:
+		var delta: float = Offseason._growth_delta_z(
+			Offseason.GROWTH_KIND_AWAKENING, 24, key, true
+		)
+		deltas.append(delta)
+		assert_float(delta).override_failure_message(
+			"突出覚醒で関連能力が同時に大きく伸びていない: %s" % key
+		).is_greater(0.80)
+	# 1能力だけの上振れではなく、スター性を作る共通因子として全キーへ効く。
+	assert_float(float(deltas.min())).is_greater(0.80)
 
 
 # --- helpers -----------------------------------------------------------------

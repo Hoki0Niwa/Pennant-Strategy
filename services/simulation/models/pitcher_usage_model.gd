@@ -630,14 +630,15 @@ static func reliever_selection_score(
 	inning: int,
 	close_game: bool,
 	current_day: int = 0,
-	team_games_played_before: int = 0
+	team_games_played_before: int = 0,
+	farm: bool = false
 ) -> float:
 	if record == null:
 		return -999999.0
 	var fatigue_penalty: float = float(record.fatigue) * 1.15
 	var score: float = float(PlayerValueEvaluator.pitching_score_without_fatigue(record)) - fatigue_penalty
 	var arsenal: Dictionary = arsenal_summary(record)
-	var next_streak: int = next_consecutive_appearance_count(record, team_games_played_before)
+	var next_streak: int = next_consecutive_appearance_count(record, team_games_played_before, farm)
 	if next_streak >= 3:
 		score -= 120.0 + float(next_streak - 3) * 70.0
 	if recently_returned_from_injury(record, current_day, INJURY_RETURN_SOFT_REST_DAYS):
@@ -662,7 +663,8 @@ static func is_reliever_available(
 	record: PSPlayerSeasonRecord,
 	allow_tired: bool = false,
 	current_day: int = 0,
-	team_games_played_before: int = 0
+	team_games_played_before: int = 0,
+	farm: bool = false
 ) -> bool:
 	if record == null or record.injury_days > 0:
 		return false
@@ -676,7 +678,7 @@ static func is_reliever_available(
 		return false
 	if recently_returned_from_injury(record, current_day, INJURY_RETURN_SOFT_REST_DAYS):
 		return false
-	if next_consecutive_appearance_count(record, team_games_played_before) >= 3:
+	if next_consecutive_appearance_count(record, team_games_played_before, farm) >= 3:
 		return false
 	return true
 
@@ -717,11 +719,15 @@ static func consecutive_appearance_fatigue(previous_consecutive_count: int) -> f
 	return gain
 
 
-static func next_consecutive_appearance_count(record: PSPlayerSeasonRecord, team_games_played_before: int) -> int:
+static func next_consecutive_appearance_count(
+	record: PSPlayerSeasonRecord, team_games_played_before: int, farm: bool = false
+) -> int:
 	if record == null:
 		return 1
-	if team_games_played_before > 0 and record.last_pitched_team_game == team_games_played_before:
-		return max(1, record.consecutive_appearances + 1)
+	var last_game: int = record.farm_last_pitched_team_game if farm else record.last_pitched_team_game
+	var consecutive: int = record.farm_consecutive_appearances if farm else record.consecutive_appearances
+	if team_games_played_before > 0 and last_game == team_games_played_before:
+		return max(1, consecutive + 1)
 	return 1
 
 

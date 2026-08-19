@@ -31,6 +31,7 @@ const HEALTH_DEVELOPMENT_APPEARANCE_MIN: float = 0.5
 const HEALTH_FARM_ERA: Array = [2.80, 4.60]
 # 一軍で1試合以上出場した選手数/球団。NPB は年間 55〜65人 (登録・抹消の往復で顔ぶれが増える)。
 const HEALTH_FIRST_TEAM_PLAYERS_USED: Array = [55.0, 65.0]
+const HEALTH_FIRST_TEAM_STARTERS_USED: Array = [12.0, 16.0]
 # 故障者数/球団。曝露が控え・二軍まで広がったので一軍だけの頃より増えるのが正常。
 # MLB の IL 入りは近年 30件/球団前後だが、こちらは軽傷 (3-15日) も1件と数えるので上限は広く取る。
 const HEALTH_INJURED_PLAYERS_PER_TEAM: Array = [8.0, 45.0]
@@ -44,13 +45,23 @@ const HEALTH_INJURED_PLAYERS_PER_TEAM: Array = [8.0, 45.0]
 # 2球団×1シーズンでは振れるので、**3シーズン以上の平均で判断する**
 # ([[project_farm_system_design]] の「2球団 × 1シーズンでは測れない」)。
 const HEALTH_FARM_CLUB_WIN_RATE: Array = [0.270, 0.420]
+# 実 NPB 二軍 (例: オリックス2025 は使用47人・最多93.1回) に対し、ゲーム内の
+# 12球団二軍は従来 23〜30人・132〜168回だった。一軍との往復が成立しているかを
+# 専用球団の勝率とは別に直接測る。
+const HEALTH_AFFILIATED_FARM_PITCHERS_USED: Array = [40.0, 49.0]
+const HEALTH_AFFILIATED_FARM_MAX_INNINGS: Array = [80.0, 110.0]
 
 const HEALTH_KNOWN_OPEN_ISSUES: Dictionary = {}
 
 # 起用加重の能力水準を測るキー。**質の軸だけ**を使う (スタイル軸を混ぜると水準がぼやける)。
-# 投手側は `PSPitcherRoleModel.ROLE_QUALITY_KEYS` と同じ考え方 (Pit_EdgeRate は除外)。
-const BATTER_QUALITY_KEYS: Array[String] = ["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Barrel"]
-const PITCHER_QUALITY_KEYS: Array[String] = ["Pit_KCreate", "Pit_BBPrevent", "Pit_Efficiency", "Pit_Stamina"]
+# **試合結果へ直接入る**打席能力だけを測る。役割判定用の Stamina/Efficiency で代用すると、
+# ImpactLimit/BarrelDeny/LoftControl が低い投手を「品質は同等」と誤診するため分離する。
+const BATTER_QUALITY_KEYS: Array[String] = [
+	"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Barrel", "Bat_Loft",
+]
+const PITCHER_QUALITY_KEYS: Array[String] = [
+	"Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_BarrelDeny", "Pit_LoftControl",
+]
 
 
 func _ready() -> void:
@@ -141,9 +152,11 @@ func _season_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
 		"farm_pitching": _level_pitching_line(season, PSPerformanceReference.LEVEL_FARM),
 		"first_team_pitching": _level_pitching_line(season, PSPerformanceReference.LEVEL_FIRST),
 		"usage_levels": _usage_level_summary(season),
+		"ability_distribution": _ability_distribution_summary(season),
 		"appearances": _appearance_summary(season),
 		"defense": _defensive_innings_summary(season),
 		"farm_clubs": _farm_club_summary(season),
+		"farm_pitcher_usage": _farm_pitcher_usage_summary(season),
 		"callups": _callup_summary(season),
 		"roster_moves": _roster_move_summary(season, moves),
 		"injuries": _injury_summary(season),
@@ -217,6 +230,9 @@ func _standings_summary(season: PSSeason) -> Dictionary:
 			"wins": stats.wins,
 			"losses": stats.losses,
 			"draws": stats.draws,
+			"runs_scored": stats.runs_scored,
+			"runs_allowed": stats.runs_allowed,
+			"run_diff": stats.runs_scored - stats.runs_allowed,
 			"win_rate": 0.0 if decided == 0 else _round3(float(stats.wins) / float(decided)),
 		})
 	# 試合数が球団間で揃わない前提なので勝率順 (実 NPB のファームも勝率で順位を決める)。
@@ -322,6 +338,230 @@ func _accumulate_level(accumulator: Array, level: float, weight: float) -> void:
 
 func _weighted_mean(accumulator: Array) -> float:
 	return _safe_div(float(accumulator[0]), float(accumulator[1]))
+
+
+# 能力母集団の裾と、各球団が実際に使った主力層を分けて測る。個別能力が正規的でも、
+# 複数能力の組み合わせで決まる総合値の上端には別の形が現れうる。
+func _ability_distribution_summary(season: PSSeason) -> Dictionary:
+	var npb_fielder_overall: Array = []
+	var npb_pitcher_overall: Array = []
+	var npb_fielder_quality: Array = []
+	var npb_pitcher_quality: Array = []
+	var team_buckets: Dictionary = {}
+	for record_row in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.year != season.year or record.season_number != season.season_number:
+			continue
+		var team_id: int = record.team_id
+		if team_id <= 0:
+			continue
+		if not team_buckets.has(team_id):
+			team_buckets[team_id] = {
+				"fielders": [], "pitchers": [],
+				"fielder_usage": [0.0, 0.0], "pitcher_usage": [0.0, 0.0],
+				"fielder_quality_usage": [0.0, 0.0],
+				"pitcher_quality_usage": [0.0, 0.0],
+			}
+		var bucket: Dictionary = team_buckets[team_id] as Dictionary
+		var overall: float = float(PSPlayerValueEvaluator.overall_score(record))
+		if record.is_pitcher():
+			(bucket["pitchers"] as Array).append(overall)
+			var pitcher_weight: float = float(record.farm_pitcher_stats.outs_pitched)
+			_accumulate_level(
+				bucket["pitcher_usage"] as Array, overall, pitcher_weight
+			)
+			_accumulate_level(
+				bucket["pitcher_quality_usage"] as Array,
+				_mean_z(record, PITCHER_QUALITY_KEYS), pitcher_weight
+			)
+			if not PSFarmLeague.is_farm_club_id(team_id):
+				npb_pitcher_overall.append(overall)
+				npb_pitcher_quality.append(_mean_z(record, PITCHER_QUALITY_KEYS))
+		else:
+			(bucket["fielders"] as Array).append(overall)
+			var fielder_weight: float = float(record.farm_batter_stats.plate_appearances)
+			_accumulate_level(
+				bucket["fielder_usage"] as Array, overall, fielder_weight
+			)
+			_accumulate_level(
+				bucket["fielder_quality_usage"] as Array,
+				_mean_z(record, BATTER_QUALITY_KEYS), fielder_weight
+			)
+			if not PSFarmLeague.is_farm_club_id(team_id):
+				npb_fielder_overall.append(overall)
+				npb_fielder_quality.append(_mean_z(record, BATTER_QUALITY_KEYS))
+
+	var rows: Array = []
+	var affiliated_fielder_core: Array = []
+	var affiliated_pitcher_core: Array = []
+	var affiliated_fielder_used: Array = []
+	var affiliated_pitcher_used: Array = []
+	var dedicated_fielder_core: Array = []
+	var dedicated_pitcher_core: Array = []
+	var dedicated_fielder_used: Array = []
+	var dedicated_pitcher_used: Array = []
+	var affiliated_fielder_quality_used: Array = []
+	var affiliated_pitcher_quality_used: Array = []
+	var dedicated_fielder_quality_used: Array = []
+	var dedicated_pitcher_quality_used: Array = []
+	var team_ids: Array = team_buckets.keys()
+	team_ids.sort()
+	for team_id_value in team_ids:
+		var team_id: int = int(team_id_value)
+		var bucket: Dictionary = team_buckets[team_id] as Dictionary
+		var fielders: Array = bucket["fielders"] as Array
+		var pitchers: Array = bucket["pitchers"] as Array
+		var fielder_core: float = _top_mean(fielders, 9)
+		var pitcher_core: float = _top_mean(pitchers, 6)
+		var fielder_used: float = _weighted_mean(bucket["fielder_usage"] as Array)
+		var pitcher_used: float = _weighted_mean(bucket["pitcher_usage"] as Array)
+		var fielder_quality_used: float = _weighted_mean(bucket["fielder_quality_usage"] as Array)
+		var pitcher_quality_used: float = _weighted_mean(bucket["pitcher_quality_usage"] as Array)
+		var dedicated: bool = PSFarmLeague.is_farm_club_id(team_id)
+		rows.append({
+			"team_id": team_id,
+			"farm_club": dedicated,
+			"fielder_count": fielders.size(),
+			"pitcher_count": pitchers.size(),
+			"fielder_p50": _round2(_percentile(fielders, 0.50)),
+			"fielder_p90": _round2(_percentile(fielders, 0.90)),
+			"pitcher_p50": _round2(_percentile(pitchers, 0.50)),
+			"pitcher_p90": _round2(_percentile(pitchers, 0.90)),
+			"fielder_top9_mean": _round2(fielder_core),
+			"pitcher_top6_mean": _round2(pitcher_core),
+			"fielder_farm_usage_weighted": _round2(fielder_used),
+			"pitcher_farm_usage_weighted": _round2(pitcher_used),
+			"fielder_farm_quality_weighted_z": _round3(fielder_quality_used),
+			"pitcher_farm_quality_weighted_z": _round3(pitcher_quality_used),
+		})
+		if dedicated:
+			dedicated_fielder_core.append(fielder_core)
+			dedicated_pitcher_core.append(pitcher_core)
+			dedicated_fielder_used.append(fielder_used)
+			dedicated_pitcher_used.append(pitcher_used)
+			dedicated_fielder_quality_used.append(fielder_quality_used)
+			dedicated_pitcher_quality_used.append(pitcher_quality_used)
+		else:
+			affiliated_fielder_core.append(fielder_core)
+			affiliated_pitcher_core.append(pitcher_core)
+			affiliated_fielder_used.append(fielder_used)
+			affiliated_pitcher_used.append(pitcher_used)
+			affiliated_fielder_quality_used.append(fielder_quality_used)
+			affiliated_pitcher_quality_used.append(pitcher_quality_used)
+
+	var comparison: Dictionary = {
+		"affiliated_fielder_top9_mean": _round2(_mean_values(affiliated_fielder_core)),
+		"dedicated_fielder_top9_mean": _round2(_mean_values(dedicated_fielder_core)),
+		"affiliated_pitcher_top6_mean": _round2(_mean_values(affiliated_pitcher_core)),
+		"dedicated_pitcher_top6_mean": _round2(_mean_values(dedicated_pitcher_core)),
+		"affiliated_fielder_usage_weighted": _round2(_mean_values(affiliated_fielder_used)),
+		"dedicated_fielder_usage_weighted": _round2(_mean_values(dedicated_fielder_used)),
+		"affiliated_pitcher_usage_weighted": _round2(_mean_values(affiliated_pitcher_used)),
+		"dedicated_pitcher_usage_weighted": _round2(_mean_values(dedicated_pitcher_used)),
+		"affiliated_fielder_quality_weighted_z": _round3(_mean_values(affiliated_fielder_quality_used)),
+		"dedicated_fielder_quality_weighted_z": _round3(_mean_values(dedicated_fielder_quality_used)),
+		"affiliated_pitcher_quality_weighted_z": _round3(_mean_values(affiliated_pitcher_quality_used)),
+		"dedicated_pitcher_quality_weighted_z": _round3(_mean_values(dedicated_pitcher_quality_used)),
+	}
+	comparison["fielder_core_gap"] = _round2(
+		float(comparison["dedicated_fielder_top9_mean"]) - float(comparison["affiliated_fielder_top9_mean"])
+	)
+	comparison["pitcher_core_gap"] = _round2(
+		float(comparison["dedicated_pitcher_top6_mean"]) - float(comparison["affiliated_pitcher_top6_mean"])
+	)
+	comparison["fielder_usage_gap"] = _round2(
+		float(comparison["dedicated_fielder_usage_weighted"]) - float(comparison["affiliated_fielder_usage_weighted"])
+	)
+	comparison["pitcher_usage_gap"] = _round2(
+		float(comparison["dedicated_pitcher_usage_weighted"]) - float(comparison["affiliated_pitcher_usage_weighted"])
+	)
+	comparison["fielder_quality_usage_gap_z"] = _round3(
+		float(comparison["dedicated_fielder_quality_weighted_z"])
+			- float(comparison["affiliated_fielder_quality_weighted_z"])
+	)
+	comparison["pitcher_quality_usage_gap_z"] = _round3(
+		float(comparison["dedicated_pitcher_quality_weighted_z"])
+			- float(comparison["affiliated_pitcher_quality_weighted_z"])
+	)
+	return {
+		"npb_population": {
+			"fielder_overall": _distribution_shape(npb_fielder_overall),
+			"pitcher_overall": _distribution_shape(npb_pitcher_overall),
+			"fielder_quality_z": _distribution_shape(npb_fielder_quality),
+			"pitcher_quality_z": _distribution_shape(npb_pitcher_quality),
+		},
+		"teams": rows,
+		"comparison": comparison,
+	}
+
+
+func _distribution_shape(values: Array) -> Dictionary:
+	if values.is_empty():
+		return {"count": 0}
+	var mean: float = _mean_values(values)
+	var variance: float = 0.0
+	for value in values:
+		var delta: float = float(value) - mean
+		variance += delta * delta
+	variance /= float(values.size())
+	var spread: float = sqrt(variance)
+	var skewness: float = 0.0
+	var excess_kurtosis: float = 0.0
+	var above_three_sigma: int = 0
+	if spread > 0.0:
+		for value in values:
+			var standardized: float = (float(value) - mean) / spread
+			skewness += pow(standardized, 3.0)
+			excess_kurtosis += pow(standardized, 4.0)
+			if standardized > 3.0:
+				above_three_sigma += 1
+		skewness /= float(values.size())
+		excess_kurtosis = excess_kurtosis / float(values.size()) - 3.0
+	var p95: float = _percentile(values, 0.95)
+	var p99: float = _percentile(values, 0.99)
+	var maximum: float = _percentile(values, 1.0)
+	var normal_p99: float = mean + spread * 2.32635
+	return {
+		"count": values.size(),
+		"mean": _round3(mean),
+		"stdev": _round3(spread),
+		"skewness": _round3(skewness),
+		"excess_kurtosis": _round3(excess_kurtosis),
+		"p50": _round3(_percentile(values, 0.50)),
+		"p90": _round3(_percentile(values, 0.90)),
+		"p95": _round3(p95),
+		"p99": _round3(p99),
+		"max": _round3(maximum),
+		"normal_expected_p99": _round3(normal_p99),
+		"p99_minus_normal": _round3(p99 - normal_p99),
+		"max_sigma": _round3(_safe_div(maximum - mean, spread)),
+		"above_3sigma_count": above_three_sigma,
+	}
+
+
+func _percentile(values: Array, percentile: float) -> float:
+	if values.is_empty():
+		return 0.0
+	var sorted: Array = values.duplicate()
+	sorted.sort()
+	var position: float = clampf(percentile, 0.0, 1.0) * float(sorted.size() - 1)
+	var lower: int = floori(position)
+	var upper: int = ceili(position)
+	if lower == upper:
+		return float(sorted[lower])
+	return lerpf(float(sorted[lower]), float(sorted[upper]), position - float(lower))
+
+
+func _top_mean(values: Array, count: int) -> float:
+	if values.is_empty() or count <= 0:
+		return 0.0
+	var sorted: Array = values.duplicate()
+	sorted.sort()
+	var take: int = mini(count, sorted.size())
+	var total: float = 0.0
+	for i in range(take):
+		total += float(sorted[sorted.size() - 1 - i])
+	return total / float(take)
 
 
 # 一軍の顔ぶれがどれだけ動いたか。NPB は登録・抹消の往復で年間 55〜65人が一軍出場する。
@@ -536,15 +776,20 @@ func _farm_club_summary(season: PSSeason) -> Dictionary:
 		var roster: int = 0
 		var appeared: int = 0
 		var npb_experienced: int = 0
+		var batting: PSBatterStats = PSBatterStats.new()
+		var pitching: PSPitcherStats = PSPitcherStats.new()
 		for record_row in RecordStore.get_team_player_records(club_id, season.year, season.season_number):
 			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 			roster += 1
+			batting.add_from(record.farm_batter_stats)
+			pitching.add_from(record.farm_pitcher_stats)
 			if record.farm_batter_stats.plate_appearances > 0 or record.farm_pitcher_stats.batters_faced > 0:
 				appeared += 1
 			if bool(record.source_data.get("npb_experienced", false)):
 				npb_experienced += 1
 		var stats: PSStats = season.farm_standings.get(club_id, null) as PSStats
 		var decided: int = 0 if stats == null else stats.wins + stats.losses
+		var games: int = decided if stats == null else decided + stats.draws
 		var win_rate: float = 0.0 if decided == 0 else float(stats.wins) / float(decided)
 		if decided > 0:
 			win_rate_sum += win_rate
@@ -558,11 +803,101 @@ func _farm_club_summary(season: PSSeason) -> Dictionary:
 			"losses": 0 if stats == null else stats.losses,
 			"draws": 0 if stats == null else stats.draws,
 			"win_rate": _round3(win_rate),
+			"runs_scored": 0 if stats == null else stats.runs_scored,
+			"runs_allowed": 0 if stats == null else stats.runs_allowed,
+			"runs_scored_per_game": _round3(_safe_div(float(0 if stats == null else stats.runs_scored), float(games))),
+			"runs_allowed_per_game": _round3(_safe_div(float(0 if stats == null else stats.runs_allowed), float(games))),
+			"batting_average": _round3(batting.batting_average()),
+			"ops": _round3(batting.ops()),
+			"era": _round3(_safe_div(float(pitching.earned_runs) * 27.0, float(pitching.outs_pitched))),
 		})
 	return {
 		"rows": rows,
 		# 専用球団の平均勝率。感度較正の主ゲート (実クラブ .315 / .358 が基準)。
 		"mean_win_rate": _round3(0.0 if win_rate_count == 0 else win_rate_sum / float(win_rate_count)),
+	}
+
+
+# 球団ごとの二軍使用投手数と最多投球回。一軍傘下12球団と専用球団は構造が違うため、
+# 判定に使う集計は affiliated に限定し、専用球団は観測値としてだけ残す。
+func _farm_pitcher_usage_summary(season: PSSeason) -> Dictionary:
+	var rows: Array = []
+	var affiliated_used: Array = []
+	var affiliated_max_innings: Array = []
+	var affiliated_fifty_innings: Array = []
+	var affiliated_top_six_share: Array = []
+	var team_ids: Array = []
+	for team_row in GameDb.teams:
+		team_ids.append((team_row as PSTeam).id)
+	team_ids.append_array(PSFarmLeague.farm_club_ids())
+	for team_id_value in team_ids:
+		var team_id: int = int(team_id_value)
+		var roster_pitchers: int = 0
+		var used_pitchers: int = 0
+		var max_outs: int = 0
+		var max_pitcher_id: int = 0
+		var max_pitcher_games: int = 0
+		var max_pitcher_starts: int = 0
+		var max_pitcher_role: String = ""
+		var pitcher_outs: Array = []
+		for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			if not record.is_pitcher():
+				continue
+			roster_pitchers += 1
+			if record.farm_pitcher_stats.games <= 0:
+				continue
+			used_pitchers += 1
+			if record.farm_pitcher_stats.outs_pitched > max_outs:
+				max_outs = record.farm_pitcher_stats.outs_pitched
+				max_pitcher_id = record.player_id
+				max_pitcher_games = record.farm_pitcher_stats.games
+				max_pitcher_starts = record.farm_pitcher_stats.starts
+				max_pitcher_role = record.role
+			pitcher_outs.append(float(record.farm_pitcher_stats.outs_pitched))
+		var farm_club: bool = PSFarmLeague.is_farm_club_id(team_id)
+		var max_innings: float = float(max_outs) / 3.0
+		pitcher_outs.sort_custom(func(a, b) -> bool: return float(a) > float(b))
+		var fifty_innings: int = 0
+		var total_outs: float = 0.0
+		var top_six_outs: float = 0.0
+		for index in range(pitcher_outs.size()):
+			var outs: float = float(pitcher_outs[index])
+			total_outs += outs
+			if outs >= 150.0:
+				fifty_innings += 1
+			if index < 6:
+				top_six_outs += outs
+		var top_six_share: float = _safe_div(top_six_outs, total_outs)
+		rows.append({
+			"team_id": team_id,
+			"farm_club": farm_club,
+			"roster_pitchers": roster_pitchers,
+			"used_pitchers": used_pitchers,
+			"max_innings": _round1(max_innings),
+			"max_pitcher_id": max_pitcher_id,
+			"max_pitcher_games": max_pitcher_games,
+			"max_pitcher_starts": max_pitcher_starts,
+			"max_pitcher_role": max_pitcher_role,
+			"pitchers_at_least_50_innings": fifty_innings,
+			"top_six_innings_share": _round3(top_six_share),
+		})
+		if not farm_club:
+			affiliated_used.append(float(used_pitchers))
+			affiliated_max_innings.append(max_innings)
+			affiliated_fifty_innings.append(float(fifty_innings))
+			affiliated_top_six_share.append(top_six_share)
+	return {
+		"rows": rows,
+		"affiliated_team_count": affiliated_used.size(),
+		"affiliated_mean_used_pitchers": _round1(_mean_values(affiliated_used)),
+		"affiliated_min_used_pitchers": int(_min_value(affiliated_used)),
+		"affiliated_max_used_pitchers": int(_max_value(affiliated_used)),
+		"affiliated_mean_max_innings": _round1(_mean_values(affiliated_max_innings)),
+		"affiliated_min_max_innings": _round1(_min_value(affiliated_max_innings)),
+		"affiliated_max_max_innings": _round1(_max_value(affiliated_max_innings)),
+		"affiliated_mean_pitchers_at_least_50_innings": _round1(_mean_values(affiliated_fifty_innings)),
+		"affiliated_mean_top_six_innings_share": _round3(_mean_values(affiliated_top_six_share)),
 	}
 
 
@@ -596,14 +931,93 @@ func _callup_summary(season: PSSeason) -> Dictionary:
 func _aggregate(seasons_out: Array) -> Dictionary:
 	if seasons_out.size() == 1:
 		return (seasons_out[0] as Dictionary).duplicate(true)
-	return {"per_season": seasons_out}
+	var club_win_rates: Array = []
+	var used_pitchers: Array = []
+	var max_innings: Array = []
+	var first_team_players_used: Array = []
+	var first_team_starters_used: Array = []
+	var fielder_core_gaps: Array = []
+	var pitcher_core_gaps: Array = []
+	var fielder_usage_gaps: Array = []
+	var pitcher_usage_gaps: Array = []
+	var fielder_quality_usage_gaps: Array = []
+	var pitcher_quality_usage_gaps: Array = []
+	var full_season_count: int = 0
+	for season_value in seasons_out:
+		var season_report: Dictionary = season_value as Dictionary
+		var schedule: Dictionary = season_report.get("schedule", {}) as Dictionary
+		if int(schedule.get("played", 0)) + int(schedule.get("cancelled", 0)) >= int(schedule.get("total", 0)):
+			full_season_count += 1
+		club_win_rates.append(float((season_report.get("farm_clubs", {}) as Dictionary).get("mean_win_rate", 0.0)))
+		var usage: Dictionary = season_report.get("farm_pitcher_usage", {}) as Dictionary
+		used_pitchers.append(float(usage.get("affiliated_mean_used_pitchers", 0.0)))
+		max_innings.append(float(usage.get("affiliated_mean_max_innings", 0.0)))
+		var roster_moves: Dictionary = season_report.get("roster_moves", {}) as Dictionary
+		first_team_players_used.append(float(roster_moves.get("first_team_players_used_per_team", 0.0)))
+		first_team_starters_used.append(float(roster_moves.get("first_team_starters_used_per_team", 0.0)))
+		var ability: Dictionary = season_report.get("ability_distribution", {}) as Dictionary
+		var comparison: Dictionary = ability.get("comparison", {}) as Dictionary
+		fielder_core_gaps.append(float(comparison.get("fielder_core_gap", 0.0)))
+		pitcher_core_gaps.append(float(comparison.get("pitcher_core_gap", 0.0)))
+		fielder_usage_gaps.append(float(comparison.get("fielder_usage_gap", 0.0)))
+		pitcher_usage_gaps.append(float(comparison.get("pitcher_usage_gap", 0.0)))
+		fielder_quality_usage_gaps.append(float(comparison.get("fielder_quality_usage_gap_z", 0.0)))
+		pitcher_quality_usage_gaps.append(float(comparison.get("pitcher_quality_usage_gap_z", 0.0)))
+	return {
+		"per_season": seasons_out,
+		"farm_clubs": {
+			"mean_win_rate": _round3(_mean_values(club_win_rates)),
+			"season_count": club_win_rates.size(),
+		},
+		"farm_pitcher_usage": {
+			"affiliated_mean_used_pitchers": _round1(_mean_values(used_pitchers)),
+			"affiliated_mean_max_innings": _round1(_mean_values(max_innings)),
+			"season_count": used_pitchers.size(),
+		},
+		"full_season_count": full_season_count,
+		"roster_moves": {
+			"first_team_players_used_per_team": _round1(_mean_values(first_team_players_used)),
+			"first_team_starters_used_per_team": _round1(_mean_values(first_team_starters_used)),
+			"season_count": first_team_players_used.size(),
+		},
+		"ability_distribution": {
+			"npb_population": ((seasons_out[0] as Dictionary).get("ability_distribution", {}) as Dictionary).get("npb_population", {}),
+			"comparison": {
+				"fielder_core_gap": _round2(_mean_values(fielder_core_gaps)),
+				"pitcher_core_gap": _round2(_mean_values(pitcher_core_gaps)),
+				"fielder_usage_gap": _round2(_mean_values(fielder_usage_gaps)),
+				"pitcher_usage_gap": _round2(_mean_values(pitcher_usage_gaps)),
+				"fielder_quality_usage_gap_z": _round3(_mean_values(fielder_quality_usage_gaps)),
+				"pitcher_quality_usage_gap_z": _round3(_mean_values(pitcher_quality_usage_gaps)),
+			},
+		},
+	}
 
 
 func _health(report: Dictionary) -> Dictionary:
 	var checks: Array = []
-	# 複数シーズンは per_season なので health は単季のときだけ評価する。
+	# 専用球団の勝率は2球団×1季では振れすぎるため、複数季の平均を正式ゲートにする。
+	# 従来は複数季を丸ごと skipped にしており、コメント上の契約と実装が逆だった。
 	if report.has("per_season"):
-		return {"status": "skipped", "checks": checks, "message": "health は単季レポートでのみ評価する"}
+		var multi_clubs: Dictionary = report.get("farm_clubs", {}) as Dictionary
+		var multi_usage: Dictionary = report.get("farm_pitcher_usage", {}) as Dictionary
+		var season_count: int = (report.get("per_season", []) as Array).size()
+		var multi_roster_moves: Dictionary = report.get("roster_moves", {}) as Dictionary
+		if season_count >= 3:
+			_add_range_check(checks, "farm_club_win_rate", float(multi_clubs.get("mean_win_rate", 0.0)), HEALTH_FARM_CLUB_WIN_RATE, "ファーム専用球団の3シーズン以上の平均勝率")
+		else:
+			_add_skipped_check_with_reason(checks, "farm_club_win_rate", "ファーム専用球団の平均勝率", "3シーズン以上で評価する項目")
+		if int(report.get("full_season_count", 0)) == season_count:
+			_add_range_check(checks, "affiliated_farm_pitchers_used", float(multi_usage.get("affiliated_mean_used_pitchers", 0.0)), HEALTH_AFFILIATED_FARM_PITCHERS_USED, "12球団二軍の使用投手数/球団 (複数季平均)")
+			_add_range_check(checks, "affiliated_farm_max_innings", float(multi_usage.get("affiliated_mean_max_innings", 0.0)), HEALTH_AFFILIATED_FARM_MAX_INNINGS, "12球団二軍の球団内最多投球回 (複数季平均)")
+			_add_range_check(checks, "first_team_players_used_per_team", float(multi_roster_moves.get("first_team_players_used_per_team", 0.0)), HEALTH_FIRST_TEAM_PLAYERS_USED, "一軍で1試合以上出場した選手数/球団 (複数季平均)")
+			_add_range_check(checks, "first_team_starters_used_per_team", float(multi_roster_moves.get("first_team_starters_used_per_team", 0.0)), HEALTH_FIRST_TEAM_STARTERS_USED, "一軍で先発した投手数/球団 (複数季平均)")
+		else:
+			_add_skipped_check(checks, "affiliated_farm_pitchers_used", "12球団二軍の使用投手数/球団")
+			_add_skipped_check(checks, "affiliated_farm_max_innings", "12球団二軍の球団内最多投球回")
+			_add_skipped_check(checks, "first_team_players_used_per_team", "一軍で1試合以上出場した選手数/球団")
+			_add_skipped_check(checks, "first_team_starters_used_per_team", "一軍で先発した投手数/球団")
+		return {"status": _health_status(checks), "checks": checks}
 
 	var batting: Dictionary = report.get("farm_batting", {}) as Dictionary
 	var first: Dictionary = report.get("first_team_batting", {}) as Dictionary
@@ -615,7 +1029,7 @@ func _health(report: Dictionary) -> Dictionary:
 	var first_pitching: Dictionary = report.get("first_team_pitching", {}) as Dictionary
 	var roster_moves: Dictionary = report.get("roster_moves", {}) as Dictionary
 	var injuries: Dictionary = report.get("injuries", {}) as Dictionary
-	var farm_clubs: Dictionary = report.get("farm_clubs", {}) as Dictionary
+	var farm_pitcher_usage: Dictionary = report.get("farm_pitcher_usage", {}) as Dictionary
 
 	_add_range_check(checks, "farm_batting_average", float(batting.get("average", 0.0)), HEALTH_FARM_AVG, "二軍リーグの打率")
 	_add_range_check(checks, "farm_walk_rate", float(batting.get("walk_rate", 0.0)), HEALTH_FARM_WALK_RATE, "二軍リーグの BB% (実 NPB ファームは9〜10%)")
@@ -627,15 +1041,21 @@ func _health(report: Dictionary) -> Dictionary:
 
 	_add_range_check(checks, "farm_era", float(farm_pitching.get("era", 0.0)), HEALTH_FARM_ERA, "二軍リーグの防御率 (実 NPB ファームは3.2〜3.7)")
 	# **能力差感度の主ゲート**。低い = 能力差が勝敗へ効きすぎている。
-	_add_range_check(checks, "farm_club_win_rate", float(farm_clubs.get("mean_win_rate", 0.0)), HEALTH_FARM_CLUB_WIN_RATE, "ファーム専用球団の平均勝率 (実 ハヤテ2024 .315 / オイシックス2024 .358)。3シーズン以上の平均で判断する")
+	_add_skipped_check_with_reason(checks, "farm_club_win_rate", "ファーム専用球団の平均勝率", "3シーズン以上で評価する項目")
 	# 顔ぶれと故障は**通季でしか意味を持たない累積量**なので、`--days=N` の短縮実行では
 	# 判定せず skipped にする (でないと短い確認実行が必ず fail して exit code が使えなくなる)。
 	var full_season: bool = int(schedule.get("played", 0)) + int(schedule.get("cancelled", 0)) >= int(schedule.get("total", 0))
 	if full_season:
+		_add_range_check(checks, "affiliated_farm_pitchers_used", float(farm_pitcher_usage.get("affiliated_mean_used_pitchers", 0.0)), HEALTH_AFFILIATED_FARM_PITCHERS_USED, "12球団二軍の使用投手数/球団")
+		_add_range_check(checks, "affiliated_farm_max_innings", float(farm_pitcher_usage.get("affiliated_mean_max_innings", 0.0)), HEALTH_AFFILIATED_FARM_MAX_INNINGS, "12球団二軍の球団内最多投球回")
 		_add_range_check(checks, "first_team_players_used_per_team", float(roster_moves.get("first_team_players_used_per_team", 0.0)), HEALTH_FIRST_TEAM_PLAYERS_USED, "一軍で1試合以上出場した選手数/球団 (NPB 55〜65人)")
+		_add_range_check(checks, "first_team_starters_used_per_team", float(roster_moves.get("first_team_starters_used_per_team", 0.0)), HEALTH_FIRST_TEAM_STARTERS_USED, "一軍で先発した投手数/球団 (NPB 12〜16人)")
 		_add_range_check(checks, "injured_players_per_team", float(injuries.get("injured_players_per_team", 0.0)), HEALTH_INJURED_PLAYERS_PER_TEAM, "故障者数/球団 (二軍戦のぶん曝露が増えている)")
 	else:
+		_add_skipped_check(checks, "affiliated_farm_pitchers_used", "12球団二軍の使用投手数/球団")
+		_add_skipped_check(checks, "affiliated_farm_max_innings", "12球団二軍の球団内最多投球回")
 		_add_skipped_check(checks, "first_team_players_used_per_team", "一軍で1試合以上出場した選手数/球団")
+		_add_skipped_check(checks, "first_team_starters_used_per_team", "一軍で先発した投手数/球団")
 		_add_skipped_check(checks, "injured_players_per_team", "故障者数/球団")
 
 	# 二軍の打撃水準は一軍より低いのが正常 (投打の質差が自然に出るのが設計の前提)。
@@ -661,6 +1081,10 @@ func _health(report: Dictionary) -> Dictionary:
 		"status": "pass" if farm_era > first_era else "warn",
 	})
 
+	return {"status": _health_status(checks), "checks": checks}
+
+
+func _health_status(checks: Array) -> String:
 	var status: String = "pass"
 	for check_row in checks:
 		var check_status: String = str((check_row as Dictionary).get("status", "pass"))
@@ -668,7 +1092,7 @@ func _health(report: Dictionary) -> Dictionary:
 			status = "fail"
 		elif check_status == "warn" and status == "pass":
 			status = "warn"
-	return {"status": status, "checks": checks}
+	return status
 
 
 func _add_range_check(checks: Array, id: String, value: float, range_values: Array, message: String) -> void:
@@ -702,6 +1126,10 @@ func _add_skipped_check(checks: Array, id: String, message: String) -> void:
 	})
 
 
+func _add_skipped_check_with_reason(checks: Array, id: String, message: String, reason: String) -> void:
+	checks.append({"id": id, "message": message, "status": "skipped", "reason": reason})
+
+
 func _add_min_check(checks: Array, id: String, value: float, minimum: float, message: String) -> void:
 	checks.append({
 		"id": id, "message": message, "value": _round3(value), "min": minimum,
@@ -719,7 +1147,17 @@ func _add_max_check(checks: Array, id: String, value: float, maximum: float, mes
 # JSON 全文はレビューしづらいので、判断に使う行だけ最後にまとめて出す。
 func _print_digest(report: Dictionary) -> void:
 	if report.has("per_season"):
-		print("FARM REPORT: %d seasons (health は単季のみ)" % (report["per_season"] as Array).size())
+		var multi_clubs: Dictionary = report.get("farm_clubs", {}) as Dictionary
+		var multi_usage: Dictionary = report.get("farm_pitcher_usage", {}) as Dictionary
+		var multi_moves: Dictionary = report.get("roster_moves", {}) as Dictionary
+		print("FARM REPORT: %d seasons / clubs %.3f / affiliated pitchers %.1f / max IP %.1f / first used %.1f / starters %.1f / health %s" % [
+			(report["per_season"] as Array).size(), float(multi_clubs.get("mean_win_rate", 0.0)),
+			float(multi_usage.get("affiliated_mean_used_pitchers", 0.0)),
+			float(multi_usage.get("affiliated_mean_max_innings", 0.0)),
+			float(multi_moves.get("first_team_players_used_per_team", 0.0)),
+			float(multi_moves.get("first_team_starters_used_per_team", 0.0)),
+			str((report.get("health", {}) as Dictionary).get("status", "")),
+		])
 		return
 	var batting: Dictionary = report.get("farm_batting", {}) as Dictionary
 	var first: Dictionary = report.get("first_team_batting", {}) as Dictionary
@@ -729,6 +1167,7 @@ func _print_digest(report: Dictionary) -> void:
 	var appearances: Dictionary = report.get("appearances", {}) as Dictionary
 	var defense: Dictionary = report.get("defense", {}) as Dictionary
 	var callups: Dictionary = report.get("callups", {}) as Dictionary
+	var pitcher_usage: Dictionary = report.get("farm_pitcher_usage", {}) as Dictionary
 	print("")
 	print("=== FARM REPORT (seed %d) ===" % int(report.get("seed", 0)))
 	print("Schedule : played %d / %d (cancelled %d)" % [
@@ -788,6 +1227,12 @@ func _print_digest(report: Dictionary) -> void:
 		int(callups.get("demotion_ledger_entries", 0)), int(callups.get("shuttled_starters", 0)),
 		int(callups.get("pending_spot_callups", 0)),
 	])
+	print("Farm use : 12球団 使用投手 %.1f人 (範囲 %d〜%d) / 最多IP平均 %.1f (範囲 %.1f〜%.1f)" % [
+		float(pitcher_usage.get("affiliated_mean_used_pitchers", 0.0)),
+		int(pitcher_usage.get("affiliated_min_used_pitchers", 0)), int(pitcher_usage.get("affiliated_max_used_pitchers", 0)),
+		float(pitcher_usage.get("affiliated_mean_max_innings", 0.0)),
+		float(pitcher_usage.get("affiliated_min_max_innings", 0.0)), float(pitcher_usage.get("affiliated_max_max_innings", 0.0)),
+	])
 	var moves: Dictionary = report.get("roster_moves", {}) as Dictionary
 	print("Moves    : 昇格 %d (%.1f/球団) / 降格 %d (%.1f/球団) / 一軍出場 %.1f人 (投手 %.1f・野手 %.1f)・先発 %.1f人/球団 / 両リーグ出場 %d人" % [
 		int(moves.get("promotions", 0)), float(moves.get("promotions_per_team", 0.0)),
@@ -832,6 +1277,33 @@ func _print_digest(report: Dictionary) -> void:
 
 func _safe_div(numerator: float, denominator: float) -> float:
 	return 0.0 if denominator <= 0.0 else numerator / denominator
+
+
+func _mean_values(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var total: float = 0.0
+	for value in values:
+		total += float(value)
+	return total / float(values.size())
+
+
+func _min_value(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var result: float = float(values[0])
+	for value in values:
+		result = min(result, float(value))
+	return result
+
+
+func _max_value(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var result: float = float(values[0])
+	for value in values:
+		result = max(result, float(value))
+	return result
 
 
 func _round1(value: float) -> float:

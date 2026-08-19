@@ -77,6 +77,9 @@ const RELIEF_ROLE_CLOSER: String = "closer"
 # (登板間隔の台帳) と `manual_skip_pitcher_ids` は一軍と共有する** — 台帳を分けると
 # 「二軍で投げた翌日に昇格して中0日で先発」が起きるため。疲労 (`record.fatigue`) も同様に共有。
 const FARM_PITCHER_IDS_KEY: String = "farm_pitcher_ids"
+# 二軍の先発は全員に少なくとも1先発を与えた後、能力順で使いつつ95回付近で次へ回す。
+# 実 NPB 2025 の最多93.1回を基準に、1登板ぶん超える余地を残す soft cap。
+const FARM_STARTER_SOFT_CAP_OUTS: int = 285
 
 
 # 指定レベルから見たローテ状態。序列キーだけ差し替えた view を返す
@@ -86,8 +89,14 @@ static func rotation_state_for_level(season: PSSeason, team_id: int, level: int)
 	if level == PSTeamSetupBuilder.LEVEL_FIRST:
 		return saved
 	var view: Dictionary = saved.duplicate()
-	view["pitcher_ids"] = (saved.get(FARM_PITCHER_IDS_KEY, []) as Array).duplicate()
-	# 二軍の序列は自動生成のみ (二軍用のローテ編集画面は持たない)。
+	# 二軍は「今まで登板が少ない投手」を毎試合再評価する。初戦の上位6人を
+	# farm_pitcher_ids に固定すると、その6人が通季でローテを守り、最多IPが実態より
+	# 40〜70回多くなる。登板間隔の共有台帳だけを残し、序列は保存しない。
+	view["pitcher_ids"] = []
+	# relief_roles は一軍の選手IDで保存された設定。一軍登録の裏返しである二軍へ流用すると
+	# 該当者が0人になり、自動役割生成も抑止されるため二軍viewから除く。
+	view.erase("relief_roles")
+	# 二軍の序列・救援役割は自動生成のみ (二軍用の編集画面は持たない)。
 	view["auto_generated"] = true
 	return view
 
@@ -173,7 +182,9 @@ static func select_starter_for_day(
 		# 中6日 (段0) で埋まらなければ、ローテを短い間隔で使い回す前に代役を立てる。
 		# NPB の「連戦の谷間は7人目の先発かロングリリーフ」に相当し、先発の顔ぶれも増える。
 		if pass_index == 0:
-			var spot: Dictionary = _spot_starter_from_pool(spot_pool, saved, days_from_now)
+			var spot: Dictionary = _spot_starter_from_pool(
+				spot_pool, saved, day, last_starts, days_from_now
+			)
 			if not spot.is_empty():
 				return spot
 	return {}
@@ -258,7 +269,13 @@ static func _spot_pool(rotation: Array, starter_pitchers: Array, reliever_pool: 
 
 # ローテが中6日で埋まらない日の代役。7人目の先発を優先し、いなければブルペンから。
 # 抑え/セットアッパーはブルペンの軸なので外す。
-static func _spot_starter_from_pool(spot_pool: Array, saved: Dictionary, days_from_now: int) -> Dictionary:
+static func _spot_starter_from_pool(
+	spot_pool: Array,
+	saved: Dictionary,
+	day: int,
+	last_starts: Dictionary,
+	days_from_now: int
+) -> Dictionary:
 	if spot_pool.is_empty():
 		return {}
 	var excluded: Dictionary = _bullpen_core_ids(spot_pool, saved)
@@ -268,6 +285,10 @@ static func _spot_starter_from_pool(spot_pool: Array, saved: Dictionary, days_fr
 	for pitcher_value in spot_pool:
 		var pitcher: PSPlayerSeasonRecord = pitcher_value as PSPlayerSeasonRecord
 		if pitcher == null or pitcher.injury_days > 0:
+			continue
+		# ローテ外の投手も先発台帳を共有している。ここで間隔を見ないと、疲労回復が速い
+		# 7番手を数日おきに谷間へ立て続け、通季200回超を投げさせてしまう。
+		if not _has_minimum_rest(pitcher, day + days_from_now, last_starts):
 			continue
 		var is_starter: bool = pitcher.is_starter_pitcher()
 		if not is_starter and excluded.has(pitcher.player_id):
@@ -492,7 +513,30 @@ static func resolve_rotation_order_from_saved(
 		if used.has(pitcher.player_id):
 			continue
 		rest.append(pitcher)
-	rest.sort_custom(_by_pitching_score(_pitching_scores_by_id(rest, farm, farm_team_games)))
+	var rest_scores: Dictionary = _pitching_scores_by_id(rest, farm, farm_team_games)
+	if farm and _is_affiliated_farm_pool(rest):
+		# 二軍先発は全員へ最低1先発を配り、その後は能力順。ただし95回付近へ届いた投手は
+		# 未到達者の後ろへ回す。単純な均等配分は最多IPが60〜90まで下がりすぎたため、
+		# 「エースは存在するが通季固定はしない」という実二軍の形を直接表す。
+		rest.sort_custom(func(a, b) -> bool:
+			var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+			var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+			var unstarted_a: bool = pitcher_a.farm_pitcher_stats.starts <= 0
+			var unstarted_b: bool = pitcher_b.farm_pitcher_stats.starts <= 0
+			if unstarted_a != unstarted_b:
+				return unstarted_a
+			var capped_a: bool = pitcher_a.farm_pitcher_stats.outs_pitched >= FARM_STARTER_SOFT_CAP_OUTS
+			var capped_b: bool = pitcher_b.farm_pitcher_stats.outs_pitched >= FARM_STARTER_SOFT_CAP_OUTS
+			if capped_a != capped_b:
+				return not capped_a
+			var score_a: int = _cached_pitching_score(pitcher_a, rest_scores)
+			var score_b: int = _cached_pitching_score(pitcher_b, rest_scores)
+			if score_a != score_b:
+				return score_a > score_b
+			return pitcher_a.player_id < pitcher_b.player_id
+		)
+	else:
+		rest.sort_custom(_by_pitching_score(rest_scores))
 	for pitcher_row in rest:
 		if rotation.size() >= ROTATION_SIZE_MAX:
 			break
@@ -598,7 +642,25 @@ static func select_relievers_for_innings(
 	# エース救援が疲れた日に評価が下がってクローザーの座が日替わりで入れ替わり、現実離れした「日替わり抑え」と
 	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
 	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。
-	eligible.sort_custom(_by_pitching_score(_pitching_scores_by_id(eligible, farm, farm_team_games)))
+	var eligible_scores: Dictionary = _pitching_scores_by_id(eligible, farm, farm_team_games)
+	if farm and _is_affiliated_farm_pool(eligible):
+		# 二軍で未登板の救援は、その日の役割枠へまず載せる。出場率差の連続スコアだけでは
+		# 大所帯の球団で下位5〜6人が通季0登板のまま残り、使用投手40人台へ届かなかった。
+		eligible.sort_custom(func(a, b) -> bool:
+			var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
+			var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
+			var unused_a: bool = pitcher_a.farm_pitcher_stats.games <= 0
+			var unused_b: bool = pitcher_b.farm_pitcher_stats.games <= 0
+			if unused_a != unused_b:
+				return unused_a
+			var score_a: int = _cached_pitching_score(pitcher_a, eligible_scores)
+			var score_b: int = _cached_pitching_score(pitcher_b, eligible_scores)
+			if score_a != score_b:
+				return score_a > score_b
+			return pitcher_a.player_id < pitcher_b.player_id
+		)
+	else:
+		eligible.sort_custom(_by_pitching_score(eligible_scores))
 	# 救援役割の指定枠は6人だが、当日のブルペンは健康な一軍救援を全員使える。
 	# 先発6人+救援9人+野手16人の登録なら、先発当番を含む投手10人と野手16人で
 	# ベンチ入り26人になる。役割枠外の3人を非常時専用にすると、一軍登録中なのに
@@ -757,6 +819,14 @@ static func _cached_pitching_score(row: Variant, scores: Dictionary) -> int:
 	if record == null:
 		return 0
 	return int(scores.get(record.player_id, 0))
+
+
+static func _is_affiliated_farm_pool(records: Array) -> bool:
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record != null:
+			return not PSFarmLeague.is_farm_club_id(record.team_id)
+	return false
 
 
 static func _add_role_id(roles: Dictionary, player_id: int, role: String, allowed: Dictionary, restrict: bool) -> void:

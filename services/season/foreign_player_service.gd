@@ -351,6 +351,9 @@ static func _build_contract_market_entries(players: Array, teams: Array, season:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or not player.foreign_player or player.is_retired() or player.team_id <= 0:
 			continue
+		# 専用球団は NPB の外国人契約市場に参加せず、独自の退団処理だけを通る。
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			continue
 		if player.is_multi_year_locked_offseason(year):
 			continue
 		var record: PSPlayerSeasonRecord = null
@@ -652,10 +655,12 @@ static func _apply_contract_result(player: PSPlayer, team_id: int, is_home: bool
 		PSCareerLog.log_foreign_move(player, year, from_team, team_id, salary)
 
 
-# 退団 (帰国) 扱い: retired のみ立て released は立てない。戦力外獲得市場は released を条件に
-# 候補を拾うため、これにより退団外国人はそちらへ供給されない。
+# 退団 (帰国) 扱い: retired のみ立て released は立てない。戦力外獲得市場へは供給せず、
+# 同年のファーム専用球団補充だけが専用の退団印を一度抽選する。
 static func _apply_contract_departure(player: PSPlayer, team_id: int, year: int) -> void:
 	PSCareerLog.log_foreign_depart(player, year, team_id)
+	player.source_data[PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR] = year
+	player.source_data[PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_TEAM] = team_id
 	player.source_data["retired"] = true
 	player.source_data["retired_age"] = player.age
 	player.team_id = 0

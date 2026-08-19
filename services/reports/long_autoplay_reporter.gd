@@ -108,6 +108,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var season_summary: Dictionary = simulation_reporter.call("_public_season_summary", season_report) as Dictionary
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
 		var trades_summary: Dictionary = _trade_summary(season)
+		var farm_club_summary: Dictionary = _farm_club_season_summary(season)
 		var offseason_result: Dictionary = _run_auto_offseason(season, selected_team_id)
 		GameDb.advance_players_one_year()
 		GameDb.rebuild_player_indices()
@@ -129,6 +130,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 			"season": season_summary,
 			"leaderboards": leaderboards,
 			"trades": trades_summary,
+			"farm_clubs": farm_club_summary,
 			"offseason": offseason_result,
 			"roster_after_offseason_next_year": roster_after,
 			"simulated_games": int(simulation_result.get("simulated_count", 0)),
@@ -253,6 +255,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var season_summary: Dictionary = simulation_reporter.call("_public_season_summary", season_report) as Dictionary
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
 		var trades_summary: Dictionary = _trade_summary(season)
+		var farm_club_summary: Dictionary = _farm_club_season_summary(season)
 		if outer_progress_cb.is_valid():
 			outer_progress_cb.call(progress_base + season_total_games, total_progress_units, "offseason %d" % season.year)
 		var offseason_result: Dictionary = _run_auto_offseason(season, selected_team_id)
@@ -276,6 +279,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			"season": season_summary,
 			"leaderboards": leaderboards,
 			"trades": trades_summary,
+			"farm_clubs": farm_club_summary,
 			"offseason": offseason_result,
 			"roster_after_offseason_next_year": roster_after,
 			"simulated_games": int(simulation_result.get("simulated_count", 0)),
@@ -358,6 +362,41 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 	return {
 		"count": executed.size(),
 		"by_source": by_source,
+	}
+
+
+func _farm_club_season_summary(season: PSSeason) -> Dictionary:
+	var rows: Array = []
+	var win_rate_sum: float = 0.0
+	var counted: int = 0
+	for club_id_value in PSFarmLeague.farm_club_ids():
+		var club_id: int = int(club_id_value)
+		var stats: PSStats = season.farm_standings.get(club_id, null) as PSStats
+		var decided: int = 0 if stats == null else stats.wins + stats.losses
+		var win_rate: float = 0.0 if decided == 0 else float(stats.wins) / float(decided)
+		if decided > 0:
+			win_rate_sum += win_rate
+			counted += 1
+		var foreign_count: int = 0
+		var experienced_count: int = 0
+		for player_row in FarmClubService.roster_players(GameDb.players, club_id):
+			var player: PSPlayer = player_row as PSPlayer
+			if player.foreign_player:
+				foreign_count += 1
+			if PSFarmLeague.has_npb_experience(player):
+				experienced_count += 1
+		rows.append({
+			"club_id": club_id,
+			"wins": 0 if stats == null else stats.wins,
+			"losses": 0 if stats == null else stats.losses,
+			"draws": 0 if stats == null else stats.draws,
+			"win_rate": _round_float(win_rate, 3),
+			"foreign_players": foreign_count,
+			"npb_experienced": experienced_count,
+		})
+	return {
+		"mean_win_rate": _round_float(0.0 if counted == 0 else win_rate_sum / float(counted), 3),
+		"rows": rows,
 	}
 
 
@@ -692,6 +731,10 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		# ファーム専用球団の流出入。ロスターが目標人数付近で bounded かの監視用。
 		"farm_club_attrition_count": int(farm_supply_result.get("attrition_count", 0)),
 		"farm_club_signed_count": int(farm_supply_result.get("signed_count", 0)),
+		"farm_club_foreign_signed_count": int(farm_supply_result.get("foreign_signed_count", 0)),
+		"farm_club_foreign_signings": (
+			farm_supply_result.get("foreign_signings", []) as Array
+		).duplicate(true),
 		"farm_club_generated_count": int(farm_supply_result.get("generated_count", 0)),
 		"farm_club_roster_sizes": farm_supply_result.get("clubs", {}),
 		"development_tenure_max": dev_tenure_max,
@@ -1122,6 +1165,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	var controlled_players: int = 0
 	var development_players: int = 0
 	var foreign_players: int = 0
+	var talent_outliers: int = 0
 	var draft_generated_players: int = 0
 	var seed_cohort_players: int = 0
 	var total_age: int = 0
@@ -1190,6 +1234,8 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		if player.foreign_player:
 			foreign_players += 1
 			by_team_foreign[str(player.team_id)] = int(by_team_foreign.get(str(player.team_id), 0)) + 1
+		if bool(player.source_data.get("talent_outlier", false)):
+			talent_outliers += 1
 		if player.injury_days > 0:
 			injured_players += 1
 			if player.injury_days >= 120:
@@ -1247,6 +1293,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		"controlled_players": controlled_players,
 		"development_players": development_players,
 		"foreign_players": foreign_players,
+		"talent_outliers": talent_outliers,
 		"draft_generated_active_players": draft_generated_players,
 		"non_draft_active_players": active_players - draft_generated_players,
 		"draft_generated_ratio": _round_float(_safe_div(draft_generated_players, active_players), 4),

@@ -110,10 +110,10 @@ const FARM_CLUB_CANDIDATE_MAX_AGE: int = 26
 # 割引が順位を動かすと候補密度の高い帯を一気に通過するため。実測 (seed 12345、ボード10人):
 #   1.00 → **9人指名** (うち3人が支配下・1巡目もあり) / 0.88 → 3人 (支配下1) /
 #   **0.84 → 2〜3人で全員が育成指名** / 0.76 → 0人。
-# 0.84 は seed 12345 / 20260815 / 777 の3本で 2/3/2人・**全部育成**を確認した値
+# 守備位置別の能力参照へ移行後、0.885 は seed 12345 で2人・育成1人以上を確認した値。
 # (実 NPB = 年1〜3人・2024年の初指名2人はどちらも育成)。
 # 較正ガードは `test_farm_club_prospects_are_drafted_at_a_realistic_rate` (1〜3人 + 育成1人以上)。
-const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.84
+const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.885
 # 候補 ID の名前空間。生成候補は 1..CANDIDATE_POOL_SIZE を使うので衝突しない値から始める。
 const FARM_CLUB_CANDIDATE_ID_BASE: int = 100000
 

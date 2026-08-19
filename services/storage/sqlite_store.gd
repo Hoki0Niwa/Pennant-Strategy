@@ -6,7 +6,7 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
 # セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
 # 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
-const SCHEMA_VERSION: int = 9
+const SCHEMA_VERSION: int = 10
 
 # スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
 # 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -105,6 +105,7 @@ const PLAYER_SEASON_COLUMNS: Array = [
 	"fatigue", "injury_days", "season_injury_days",
 	"injury_return_day", "injury_type", "injury_severity",
 	"consecutive_appearances", "last_pitched_team_game",
+	"farm_consecutive_appearances", "farm_last_pitched_team_game",
 	"position_aptitudes_snapshot_json", "position_experience_snapshot_json",
 	"source_data_json", "z_abilities_snapshot_json", "raw_abilities_snapshot_json",
 	"arsenal_snapshot_json", "advanced_stats_json",
@@ -828,6 +829,8 @@ static func _normalized_player_season_dict(row: Dictionary) -> Dictionary:
 		"injury_severity": int(row.get("injury_severity", 0)),
 		"consecutive_appearances": int(row.get("consecutive_appearances", 0)),
 		"last_pitched_team_game": int(row.get("last_pitched_team_game", 0)),
+		"farm_consecutive_appearances": int(row.get("farm_consecutive_appearances", 0)),
+		"farm_last_pitched_team_game": int(row.get("farm_last_pitched_team_game", 0)),
 		"position_aptitudes_snapshot": _parse_json_dict(str(row.get("position_aptitudes_snapshot_json", "{}"))),
 		"position_experience_snapshot": _parse_json_dict(str(row.get("position_experience_snapshot_json", "{}"))),
 		"source_data": _parse_json_dict(str(row.get("source_data_json", "{}"))),
@@ -1006,6 +1009,8 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			injury_severity INTEGER NOT NULL DEFAULT 0,
 			consecutive_appearances INTEGER NOT NULL DEFAULT 0,
 			last_pitched_team_game INTEGER NOT NULL DEFAULT 0,
+			farm_consecutive_appearances INTEGER NOT NULL DEFAULT 0,
+			farm_last_pitched_team_game INTEGER NOT NULL DEFAULT 0,
 			position_aptitudes_snapshot_json TEXT NOT NULL DEFAULT '{}',
 			position_experience_snapshot_json TEXT NOT NULL DEFAULT '{}',
 			source_data_json TEXT NOT NULL DEFAULT '{}',

@@ -76,6 +76,9 @@ const DISTRICT_BY_TEAM_ID: Dictionary = {
 # 立てるのは `FarmClubService` (選手を作る/拾う側)、読むのは `DraftService` (指名する側)。
 # 判定をここ (domain) に置くのは、両サービスが互いを preload しないようにするため。
 const SOURCE_KEY_NPB_EXPERIENCED: String = "npb_experienced"
+# 外国人契約市場で退団が確定した選手を、その年の専用球団補充へ一度だけ渡す印。
+const SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR: String = "foreign_contract_departed_year"
+const SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_TEAM: String = "foreign_contract_departed_team_id"
 
 
 static func farm_club_ids() -> Array[int]:

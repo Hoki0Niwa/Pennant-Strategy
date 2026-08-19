@@ -112,13 +112,22 @@ static func mark_reliever_appeared(setup: Dictionary, reliever: PSPlayerSeasonRe
 	reliever.pitcher_stats.games += 1
 	reliever.pitcher_stats.relief_appearances += 1
 
+	var farm: bool = _is_farm_setup(setup)
 	var consecutive_count: int = 0
-	if reliever.last_pitched_team_game == team_games_played_before and team_games_played_before > 0:
-		consecutive_count = reliever.consecutive_appearances
+	var last_game: int = reliever.farm_last_pitched_team_game if farm else reliever.last_pitched_team_game
+	if last_game == team_games_played_before and team_games_played_before > 0:
+		consecutive_count = reliever.farm_consecutive_appearances if farm else reliever.consecutive_appearances
 	else:
-		reliever.consecutive_appearances = 0
-	reliever.consecutive_appearances = consecutive_count + 1
-	reliever.last_pitched_team_game = team_games_played_before + 1
+		if farm:
+			reliever.farm_consecutive_appearances = 0
+		else:
+			reliever.consecutive_appearances = 0
+	if farm:
+		reliever.farm_consecutive_appearances = consecutive_count + 1
+		reliever.farm_last_pitched_team_game = team_games_played_before + 1
+	else:
+		reliever.consecutive_appearances = consecutive_count + 1
+		reliever.last_pitched_team_game = team_games_played_before + 1
 	mark_pitcher_used(setup, reliever)
 	var usage: Dictionary = pitcher_usage_for(setup, reliever, role)
 	usage["consecutive_count"] = consecutive_count
@@ -138,6 +147,7 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	var game_day: int = int(setup.get("game_day", 0))
 	var team_games_played_before: int = int(setup.get("team_games_played_before", 0))
 	var is_visitor: bool = _is_visitor_setup(setup, game_result)
+	var farm: bool = _is_farm_setup(setup)
 	var candidates: Array = []
 	for allow_tired in [false, true]:
 		candidates.clear()
@@ -147,7 +157,7 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 				continue
 			if used_ids.has(reliever.player_id):
 				continue
-			if not PSPitcherUsageModel.is_reliever_available(reliever, bool(allow_tired), game_day, team_games_played_before):
+			if not PSPitcherUsageModel.is_reliever_available(reliever, bool(allow_tired), game_day, team_games_played_before, farm):
 				if bool(allow_tired) or not _can_relax_availability_for_late_role(setup, reliever, inning, score_margin, game_day, team_games_played_before):
 					continue
 			candidates.append(reliever)
@@ -177,11 +187,11 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	#   ホーム: 9回からクローザーを通常どおり投入し、以降は能力の高いリリーフ順。
 	if not prefer_long and score_margin == 0 and inning >= GameSimulator.REGULATION_INNINGS:
 		if is_visitor and inning < GameSimulator.MAX_INNINGS:
-			return _pick_bridge_reliever(eligible, inning, close_game, game_day, team_games_played_before)
+			return _pick_bridge_reliever(eligible, inning, close_game, game_day, team_games_played_before, farm)
 		var closer: PSPlayerSeasonRecord = _find_role_in(setup, eligible, PSRotationPlanner.RELIEF_ROLE_CLOSER)
 		if closer != null:
 			return closer
-		return _highest_ability_reliever(eligible, inning, close_game, game_day, team_games_played_before)
+		return _highest_ability_reliever(eligible, inning, close_game, game_day, team_games_played_before, farm)
 
 	# 選抜スコアは登板可否・役割ボーナス・疲労を含む合成値で、1試合の継投判断ごとに引かれる。
 	# comparator の中で計算すると 1 回の sort で O(n log n) 回走るので先に 1 人 1 回だけ引く
@@ -251,7 +261,7 @@ static func _role_eligible_in_spot(setup: Dictionary, reliever: PSPlayerSeasonRe
 				return false
 			if score_margin == 0 and is_visitor and inning < GameSimulator.MAX_INNINGS:
 				return false
-			if score_margin == CLOSER_FOUR_RUN_MARGIN and _pitched_previous_game(reliever, team_games_played_before):
+			if score_margin == CLOSER_FOUR_RUN_MARGIN and _pitched_previous_game(reliever, team_games_played_before, _is_farm_setup(setup)):
 				return false
 			return true
 		_:
@@ -259,14 +269,19 @@ static func _role_eligible_in_spot(setup: Dictionary, reliever: PSPlayerSeasonRe
 
 
 # 前日(直前のチーム試合)に登板していたら true。今登板すると連投になる場合を指す。
-static func _pitched_previous_game(reliever: PSPlayerSeasonRecord, team_games_played_before: int) -> bool:
-	return PSPitcherUsageModel.next_consecutive_appearance_count(reliever, team_games_played_before) >= 2
+static func _pitched_previous_game(
+	reliever: PSPlayerSeasonRecord, team_games_played_before: int, farm: bool = false
+) -> bool:
+	return PSPitcherUsageModel.next_consecutive_appearance_count(reliever, team_games_played_before, farm) >= 2
 
 
 # ビジターが同点で延長に入ったときの逆算継投。クローザーは12回まで温存されここには来ないので、
 # 残り候補を評価(能力)降順に並べ、最終回(12回)直前に最良が来るよう逆算インデックスで選ぶ。
 # 例: 9回=3番手, 10回=2番手, 11回=最良, 12回=クローザー。候補が足りなければ末尾(最弱)に丸める。
-static func _pick_bridge_reliever(candidates: Array, inning: int, close_game: bool, game_day: int, team_games_played_before: int) -> PSPlayerSeasonRecord:
+static func _pick_bridge_reliever(
+	candidates: Array, inning: int, close_game: bool, game_day: int,
+	team_games_played_before: int, farm: bool = false
+) -> PSPlayerSeasonRecord:
 	if candidates.is_empty():
 		return null
 	var ordered: Array = candidates.duplicate()
@@ -275,7 +290,7 @@ static func _pick_bridge_reliever(candidates: Array, inning: int, close_game: bo
 		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
 		if reliever != null and not ability_by_id.has(reliever.player_id):
 			ability_by_id[reliever.player_id] = _reliever_ability_score(
-				reliever, inning, close_game, game_day, team_games_played_before
+				reliever, inning, close_game, game_day, team_games_played_before, farm
 			)
 	ordered.sort_custom(func(a, b) -> bool:
 		return (
@@ -288,14 +303,17 @@ static func _pick_bridge_reliever(candidates: Array, inning: int, close_game: bo
 
 
 # 能力(基礎リリーフ評価)が最も高い候補を返す。同点でホームがクローザー投入後の継投に使う。
-static func _highest_ability_reliever(candidates: Array, inning: int, close_game: bool, game_day: int, team_games_played_before: int) -> PSPlayerSeasonRecord:
+static func _highest_ability_reliever(
+	candidates: Array, inning: int, close_game: bool, game_day: int,
+	team_games_played_before: int, farm: bool = false
+) -> PSPlayerSeasonRecord:
 	var best: PSPlayerSeasonRecord = null
 	var best_score: float = -INF
 	for reliever_row in candidates:
 		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
 		if reliever == null:
 			continue
-		var ability: float = _reliever_ability_score(reliever, inning, close_game, game_day, team_games_played_before)
+		var ability: float = _reliever_ability_score(reliever, inning, close_game, game_day, team_games_played_before, farm)
 		if best == null or ability > best_score:
 			best = reliever
 			best_score = ability
@@ -303,8 +321,13 @@ static func _highest_ability_reliever(candidates: Array, inning: int, close_game
 
 
 # 役割補正を含まない基礎リリーフ評価 (能力 - 疲労等)。同点延長の「評価の高い順」並べ替えに使う。
-static func _reliever_ability_score(reliever: PSPlayerSeasonRecord, inning: int, close_game: bool, game_day: int, team_games_played_before: int) -> float:
-	return PSPitcherUsageModel.reliever_selection_score(reliever, false, inning, close_game, game_day, team_games_played_before)
+static func _reliever_ability_score(
+	reliever: PSPlayerSeasonRecord, inning: int, close_game: bool, game_day: int,
+	team_games_played_before: int, farm: bool = false
+) -> float:
+	return PSPitcherUsageModel.reliever_selection_score(
+		reliever, false, inning, close_game, game_day, team_games_played_before, farm
+	)
 
 
 # 指定役割の候補を1人返す (なければ null)。
@@ -327,7 +350,10 @@ static func reliever_selection_score_for_setup(
 	game_day: int,
 	team_games_played_before: int
 ) -> float:
-	var score: float = PSPitcherUsageModel.reliever_selection_score(reliever, prefer_long, inning, close_game, game_day, team_games_played_before)
+	var farm: bool = _is_farm_setup(setup)
+	var score: float = PSPitcherUsageModel.reliever_selection_score(
+		reliever, prefer_long, inning, close_game, game_day, team_games_played_before, farm
+	)
 	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
 	var role: String = str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))
 	var baselines: Dictionary = setup.get("callup_appearance_baseline", {}) as Dictionary
@@ -420,7 +446,13 @@ static func _can_relax_availability_for_late_role(
 			return false
 	else:
 		return false
-	return PSPitcherUsageModel.is_reliever_available(reliever, true, game_day, team_games_played_before)
+	return PSPitcherUsageModel.is_reliever_available(
+		reliever, true, game_day, team_games_played_before, _is_farm_setup(setup)
+	)
+
+
+static func _is_farm_setup(setup: Dictionary) -> bool:
+	return int(setup.get("level", PSTeamSetupBuilder.LEVEL_FIRST)) == PSTeamSetupBuilder.LEVEL_FARM
 
 
 static func _relief_role_for_pitcher(setup: Dictionary, reliever: PSPlayerSeasonRecord) -> String:

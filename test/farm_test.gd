@@ -228,12 +228,16 @@ func test_generated_roster_can_field_a_game() -> void:
 	for club_id in PSFarmLeague.farm_club_ids():
 		var by_position: Dictionary = {}
 		var pitchers: int = 0
+		var starters: int = 0
 		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
 			var player: PSPlayer = player_row as PSPlayer
 			by_position[player.position] = int(by_position.get(player.position, 0)) + 1
 			if player.position == 1:
 				pitchers += 1
+				if player.role == "starter":
+					starters += 1
 		assert_int(pitchers).is_greater_equal(15)
+		assert_int(starters).is_equal(FarmClubService.STARTER_ROLE_TARGET)
 		# 捕手2人以上 + 内外野の全ポジションに本職が居る。
 		assert_int(int(by_position.get(2, 0))).is_greater_equal(2)
 		for position in [3, 4, 5, 6, 7, 8, 9]:
@@ -249,6 +253,8 @@ func test_farm_club_roster_is_led_by_ex_npb_veterans() -> void:
 	for club_id in PSFarmLeague.farm_club_ids():
 		var veterans: Array = []
 		var prospects: Array = []
+		var pitcher_anchors: Array = []
+		var fielder_anchors: Array = []
 		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id)):
 			var player: PSPlayer = player_row as PSPlayer
 			assert_bool(FarmClubService.is_farm_club_player(player)).is_true()
@@ -257,6 +263,10 @@ func test_farm_club_roster_is_led_by_ex_npb_veterans() -> void:
 			assert_str(player.registered_roster).is_equal(FarmClubService.REGISTERED_ROSTER)
 			if FarmClubService.has_npb_experience(player):
 				veterans.append(player)
+				if bool(player.source_data.get("farm_club_pitcher_anchor", false)):
+					pitcher_anchors.append(player)
+				if bool(player.source_data.get("farm_club_fielder_anchor", false)):
+					fielder_anchors.append(player)
 			else:
 				prospects.append(player)
 
@@ -264,6 +274,16 @@ func test_farm_club_roster_is_led_by_ex_npb_veterans() -> void:
 		assert_int(prospects.size()).is_equal(
 			FarmClubService.ROSTER_TARGET - FarmClubService.VETERAN_TARGET
 		)
+		assert_int(pitcher_anchors.size()).is_equal(
+			FarmClubService.VETERAN_PITCHER_ANCHOR_TARGET_PER_CLUB
+		)
+		for anchor_row in pitcher_anchors:
+			assert_bool((anchor_row as PSPlayer).is_pitcher()).is_true()
+		assert_int(fielder_anchors.size()).is_equal(
+			FarmClubService.VETERAN_FIELDER_ANCHOR_TARGET_PER_CLUB
+		)
+		for anchor_row in fielder_anchors:
+			assert_bool((anchor_row as PSPlayer).is_pitcher()).is_false()
 		for veteran_row in veterans:
 			assert_int((veteran_row as PSPlayer).age).is_between(
 				FarmClubService.VETERAN_MIN_AGE, FarmClubService.VETERAN_MAX_AGE
@@ -285,6 +305,18 @@ func test_farm_club_roster_is_led_by_ex_npb_veterans() -> void:
 		assert_int(veterans_in_top).override_failure_message(
 			"club %d: top10 に元NPBが %d 人しか居ない (主力はベテランのはず)" % [int(club_id), veterans_in_top]
 		).is_greater_equal(8)
+
+
+func test_farm_club_generation_uses_position_specific_ability_references() -> void:
+	var reference: Dictionary = {
+		0: [{"C_GameCall": -3.0, "Bat_Impact": -3.0}],
+		2: [{"C_GameCall": 2.0, "Bat_Impact": 2.0}],
+	}
+	var catcher_z: Dictionary = FarmClubService._sample_z_abilities(reference, 2)
+	assert_float(float(catcher_z.get("C_GameCall", -9.0))).override_failure_message(
+		"捕手生成が捕手帯ではなく野手全体帯を参照している"
+	).is_greater(1.7)
+	assert_float(float(catcher_z.get("Bat_Impact", -9.0))).is_greater(1.7)
 
 
 func test_farm_club_players_never_enter_npb_controlled_accounting() -> void:
@@ -358,6 +390,95 @@ func test_offseason_supply_signs_released_players_up_to_the_cap() -> void:
 		assert_int(FarmClubService.roster_count(GameDb.players, int(club_id))).is_equal(
 			FarmClubService.ROSTER_TARGET
 		)
+	_reload_world()
+
+
+func test_departed_foreign_players_can_join_farm_clubs_once() -> void:
+	_reload_world()
+	var club_ids: Array = PSFarmLeague.farm_club_ids()
+	# 各球団に外国人上限ぶんの空きを作る。
+	for club_id_value in club_ids:
+		var removed: int = 0
+		for player_row in FarmClubService.roster_players(GameDb.players, int(club_id_value)):
+			var roster_player: PSPlayer = player_row as PSPlayer
+			roster_player.team_id = 0
+			roster_player.source_data["retired"] = true
+			removed += 1
+			if removed >= FarmClubService.FOREIGN_ROSTER_LIMIT_PER_CLUB:
+				break
+
+	var candidate_ids: Dictionary = {}
+	var candidates_by_group: Dictionary = {"pitcher": 0, "fielder": 0}
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.is_retired() or not player.foreign_player or player.team_id <= 0:
+			continue
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			continue
+		var group_key: String = "pitcher" if player.is_pitcher() else "fielder"
+		if int(candidates_by_group[group_key]) >= club_ids.size():
+			continue
+		player.source_data["contract_end_year"] = 2027
+		player.source_data["contract_total_years"] = 2
+		player.source_data["contract_signed_year"] = 2025
+		candidate_ids[player.id] = true
+		candidates_by_group[group_key] = int(candidates_by_group[group_key]) + 1
+		ForeignPlayerService._apply_contract_departure(player, player.team_id, 2026)
+		if int(candidates_by_group["pitcher"]) >= club_ids.size() \
+				and int(candidates_by_group["fielder"]) >= club_ids.size():
+			break
+	assert_int(candidate_ids.size()).is_equal(
+		club_ids.size() * FarmClubService.FOREIGN_ROSTER_LIMIT_PER_CLUB
+	)
+
+	var signings: Array = FarmClubService._sign_departed_foreign_players(GameDb.players, 2026, 1.0)
+	assert_int(signings.size()).is_equal(candidate_ids.size())
+	var signed_by_club: Dictionary = {}
+	var signed_group_by_club: Dictionary = {}
+	for signing_row in signings:
+		var signing: Dictionary = signing_row as Dictionary
+		var player: PSPlayer = GameDb.get_player(int(signing.get("player_id", 0)))
+		var club_id: int = int(signing.get("club_id", 0))
+		assert_bool(candidate_ids.has(player.id)).is_true()
+		assert_bool(player.foreign_player).is_true()
+		assert_bool(player.is_retired()).is_false()
+		assert_bool(FarmClubService.has_npb_experience(player)).is_true()
+		assert_str(player.registered_roster).is_equal(FarmClubService.REGISTERED_ROSTER)
+		assert_bool(player.source_data.has("contract_end_year")).is_false()
+		assert_bool(player.source_data.has(PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR)).is_false()
+		signed_by_club[club_id] = int(signed_by_club.get(club_id, 0)) + 1
+		var group_key: String = "pitcher" if player.is_pitcher() else "fielder"
+		var club_groups: Dictionary = signed_group_by_club.get(club_id, {}) as Dictionary
+		club_groups[group_key] = int(club_groups.get(group_key, 0)) + 1
+		signed_group_by_club[club_id] = club_groups
+	for club_id_value in club_ids:
+		var club_id: int = int(club_id_value)
+		assert_int(int(signed_by_club.get(club_id, 0))).is_equal(
+			FarmClubService.FOREIGN_ROSTER_LIMIT_PER_CLUB
+		)
+		var club_groups: Dictionary = signed_group_by_club.get(club_id, {}) as Dictionary
+		assert_int(int(club_groups.get("pitcher", 0))).is_equal(1)
+		assert_int(int(club_groups.get("fielder", 0))).is_equal(1)
+	# 同じ退団を二度抽選しない。
+	assert_array(FarmClubService._sign_departed_foreign_players(GameDb.players, 2026, 1.0)).is_empty()
+	_reload_world()
+
+
+func test_unselected_departed_foreign_player_remains_retired() -> void:
+	_reload_world()
+	var candidate: PSPlayer = null
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.foreign_player and not player.is_retired() and player.team_id > 0 \
+				and not PSFarmLeague.is_farm_club_id(player.team_id):
+			candidate = player
+			break
+	assert_object(candidate).is_not_null()
+	ForeignPlayerService._apply_contract_departure(candidate, candidate.team_id, 2026)
+	assert_array(FarmClubService._sign_departed_foreign_players(GameDb.players, 2026, 0.0)).is_empty()
+	assert_int(candidate.team_id).is_equal(0)
+	assert_bool(candidate.is_retired()).is_true()
+	assert_bool(candidate.source_data.has(PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR)).is_false()
 	_reload_world()
 
 
@@ -865,14 +986,19 @@ func test_farm_club_usage_is_ability_led_because_it_has_no_parent_team() -> void
 	assert_float(PSTeamSetupBuilder.farm_ability_weight(npb_veteran)).is_equal_approx(
 		PSTeamSetupBuilder.FARM_ABILITY_WEIGHT, 0.001
 	)
+	# 専用球団ではプロスペクト指定だけで主力との能力差を覆さない。
+	var farm_club_prospect: float = PSTeamSetupBuilder.farm_usage_priority(
+		farm_club_veteran, true, 20.0, team_games, mean_share
+	)
+	var farm_club_regular: float = PSTeamSetupBuilder.farm_usage_priority(
+		farm_club_veteran, false, 20.0, team_games, mean_share
+	)
+	assert_float(farm_club_prospect).is_equal_approx(farm_club_regular, 0.001)
 
-	# 3. 輪番は残すが、能力差 12 点を覆すほど強くはしない (12球団側は覆るのが仕様)。
+	# 3. 専用球団は勝つための編成なので輪番を掛けない (12球団側は育成のため掛ける)。
 	var rested: float = PSTeamSetupBuilder.farm_usage_priority(farm_club_veteran, false, 4.0, team_games, mean_share)
 	var overused: float = PSTeamSetupBuilder.farm_usage_priority(farm_club_veteran, false, 36.0, team_games, mean_share)
-	assert_float(rested).is_greater(overused)
-	assert_float(rested - overused).override_failure_message(
-		"専用球団でも輪番が強すぎて、能力差より出場実績が優先されている"
-	).is_less(12.0 * PSTeamSetupBuilder.FARM_CLUB_ABILITY_WEIGHT)
+	assert_float(rested).is_equal_approx(overused, 0.001)
 
 
 # 出場方針の検証用の最小レコード (能力は farm_usage_priority が見ないので設定しない)。
@@ -966,7 +1092,7 @@ func test_farm_games_use_the_shorter_extra_inning_limit() -> void:
 
 func test_farm_rotation_shares_the_rest_ledger_with_the_first_team() -> void:
 	# 二軍で投げた投手の登板日が共有台帳へ入ること = 翌日昇格しても中0日で先発しない。
-	# 序列 (pitcher_ids) は分離されていること = 二軍のローテが一軍のローテを壊さない。
+	# 二軍の自動序列は登板機会を再配分するため毎試合作り直し、一軍の序列を壊さない。
 	var season: PSSeason = _fresh_season_with_records()
 	var team_id: int = (GameDb.teams[0] as PSTeam).id
 	var before: Dictionary = season.get_rotation(team_id).duplicate(true)
@@ -978,10 +1104,38 @@ func test_farm_rotation_shares_the_rest_ledger_with_the_first_team() -> void:
 	assert_array(after.get("pitcher_ids", []) as Array).override_failure_message(
 		"二軍戦が一軍のローテ序列を書き換えた"
 	).is_equal(first_team_order)
-	assert_bool(after.has(PSRotationPlanner.FARM_PITCHER_IDS_KEY)).is_true()
+	var farm_view: Dictionary = PSRotationPlanner.rotation_state_for_level(
+		season, team_id, PSTeamSetupBuilder.LEVEL_FARM
+	)
+	assert_array(farm_view.get("pitcher_ids", []) as Array).is_empty()
 	# 台帳は共有 = 二軍の先発が登録されている。
 	var last_starts: Dictionary = after.get("last_start_day_by_pitcher", {}) as Dictionary
 	assert_int(last_starts.size()).is_greater((before.get("last_start_day_by_pitcher", {}) as Dictionary).size())
+
+
+func test_farm_relief_streak_uses_its_own_team_game_ledger() -> void:
+	var reliever: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	reliever.player_id = 990001
+	reliever.position = 1
+	reliever.role = "reliever"
+	reliever.last_pitched_team_game = 40
+	reliever.consecutive_appearances = 2
+	var setup: Dictionary = {
+		"level": PSTeamSetupBuilder.LEVEL_FARM,
+		"pitcher_usage": {},
+		"used_pitcher_ids": {},
+	}
+
+	PSBullpenManager.mark_reliever_appeared(
+		setup, reliever, 12, PSPitcherUsageModel.ROLE_SHORT_RELIEF
+	)
+
+	assert_int(reliever.farm_last_pitched_team_game).is_equal(13)
+	assert_int(reliever.farm_consecutive_appearances).is_equal(1)
+	assert_int(reliever.last_pitched_team_game).is_equal(40)
+	assert_int(reliever.consecutive_appearances).is_equal(2)
+	assert_int(PSPitcherUsageModel.next_consecutive_appearance_count(reliever, 13, true)).is_equal(2)
+	assert_int(PSPitcherUsageModel.next_consecutive_appearance_count(reliever, 40, false)).is_equal(3)
 
 
 func test_farm_defensive_innings_accumulate_for_aptitude_growth() -> void:
@@ -1463,6 +1617,70 @@ func test_periodic_depth_adjustment_cycles_an_appeared_bottom_reliever() -> void
 	)).is_true()
 
 
+func test_pitcher_circulation_sends_an_untried_active_pitcher_to_farm() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	var active_list: Array = (preview.get("player_ids", []) as Array).duplicate()
+	season.set_active_roster(team_id, {"player_ids": active_list})
+	season.current_day = 40
+	var active_set: Dictionary = {}
+	for id_value in active_list:
+		active_set[int(id_value)] = true
+	var active_pitchers: Array = []
+	var inactive_by_role: Dictionary = {"starter": [], "reliever": []}
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or not record.is_pitcher():
+			continue
+		var role_key: String = "starter" if record.is_starter_pitcher() else "reliever"
+		if active_set.has(record.player_id):
+			record.pitcher_stats.games = 5
+			record.pitcher_stats.starts = 2 if record.is_starter_pitcher() else 0
+			record.farm_pitcher_stats.games = 0
+			active_pitchers.append(record)
+		elif not record.development_player:
+			(inactive_by_role[role_key] as Array).append(record)
+	assert_int(active_pitchers.size()).is_equal(TeamAutoAI.TARGET_PITCHERS)
+	# 母集団差で品質ゲートだけがテストを止めないよう、両役割に同等の代役を1人作る。
+	for role_key in inactive_by_role.keys():
+		var inactive: Array = inactive_by_role[role_key] as Array
+		if inactive.is_empty():
+			continue
+		var template: PSPlayerSeasonRecord = null
+		for active_row in active_pitchers:
+			var active: PSPlayerSeasonRecord = active_row as PSPlayerSeasonRecord
+			if ("starter" if active.is_starter_pitcher() else "reliever") == str(role_key):
+				template = active
+				break
+		if template == null:
+			continue
+		var candidate: PSPlayerSeasonRecord = inactive[0] as PSPlayerSeasonRecord
+		candidate.z_abilities_snapshot = template.z_abilities_snapshot.duplicate(true)
+		candidate.raw_abilities_snapshot = template.raw_abilities_snapshot.duplicate(true)
+		candidate.arsenal_snapshot = template.arsenal_snapshot.duplicate(true)
+		candidate.role = str(role_key)
+
+	var result: Dictionary = TeamAutoAI._try_pitcher_circulation_adjustment(
+		season, team_id, season.current_day
+	)
+
+	assert_bool(result.is_empty()).is_false()
+	assert_str(str(result.get("reason", ""))).is_equal("pitcher_circulation")
+	var down: PSPlayerSeasonRecord = RecordStore.get_player_record(
+		int(result.get("down", 0)), season.year, season.season_number
+	)
+	var up: PSPlayerSeasonRecord = RecordStore.get_player_record(
+		int(result.get("up", 0)), season.year, season.season_number
+	)
+	assert_int(down.farm_pitcher_stats.games).is_equal(0)
+	assert_bool(down.is_starter_pitcher()).is_equal(up.is_starter_pitcher())
+	var roster_ids: Array = season.get_active_roster(team_id).get("player_ids", []) as Array
+	assert_int(roster_ids.size()).is_equal(TeamAutoAI.TARGET_TOTAL)
+	assert_bool(roster_ids.has(down.player_id)).is_false()
+	assert_bool(roster_ids.has(up.player_id)).is_true()
+
+
 # ---- 成績の器 --------------------------------------------------------------
 
 func _record_with_farm_stats() -> PSPlayerSeasonRecord:
@@ -1481,6 +1699,8 @@ func _record_with_farm_stats() -> PSPlayerSeasonRecord:
 	record.farm_batter_stats.home_runs = 4
 	record.pitcher_stats.strikeouts = 90
 	record.farm_pitcher_stats.strikeouts = 15
+	record.farm_consecutive_appearances = 2
+	record.farm_last_pitched_team_game = 41
 	record.farm_advanced_stats.player_id = record.player_id
 	record.farm_advanced_stats.plate_appearances = 100
 	record.farm_advanced_stats.woba_denominator = 100
@@ -1547,6 +1767,8 @@ func test_player_record_round_trip_keeps_farm_stats() -> void:
 	assert_int(restored.farm_batter_stats.hits).is_equal(25)
 	assert_int(restored.farm_batter_stats.home_runs).is_equal(4)
 	assert_int(restored.farm_pitcher_stats.strikeouts).is_equal(15)
+	assert_int(restored.farm_consecutive_appearances).is_equal(2)
+	assert_int(restored.farm_last_pitched_team_game).is_equal(41)
 	assert_float(restored.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
 	assert_float(restored.farm_advanced_stats.woba()).is_equal_approx(0.372, 0.001)
 	assert_float(restored.farm_advanced_stats.wraa()).is_equal_approx(4.596, 0.001)
@@ -1611,6 +1833,8 @@ func test_farm_stats_survive_a_sqlite_round_trip() -> void:
 	assert_int(found.farm_batter_stats.home_runs).is_equal(4)
 	assert_int(found.farm_pitcher_stats.strikeouts).is_equal(15)
 	assert_int(found.pitcher_stats.strikeouts).is_equal(90)
+	assert_int(found.farm_consecutive_appearances).is_equal(2)
+	assert_int(found.farm_last_pitched_team_game).is_equal(41)
 	assert_float(found.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
 	assert_float(found.farm_advanced_stats.woba()).is_equal_approx(0.372, 0.001)
 	assert_float(found.farm_advanced_stats.wraa()).is_equal_approx(4.596, 0.001)

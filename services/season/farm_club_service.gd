@@ -10,12 +10,13 @@ class_name FarmClubService
 # その下に NPB 未経験の若手が付く。若手の水準は**育成指名レベル**が基準で、上振れは作らない。
 # 流入2チャネルがそのままこの2層に対応する。
 #
-# 流入は2チャネル、流出は3経路:
+# 流入は3チャネル、流出は3経路:
 #
-#   流入 ① 戦力外から一定数獲得 — NPB12球団の獲得フェーズが終わった後の残り物を拾う
+#   流入 ① 再契約不成立の既存外国人 — その年の退団者だけを確率で拾う
+#   流入 ② 戦力外から一定数獲得 — NPB12球団の獲得フェーズが終わった後の残り物を拾う
 #          (実際の受け皿としての位置づけ)。**主力の供給経路**で、目標は VETERAN_TARGET 人。
 #          専用球団には枠制約が一切効かないので、目標と1オフの上限の両方で必ず縛る。
-#   流入 ② 自動生成 — 育成指名レベルの若手を目標人数まで作る (下振れ寄り)。
+#   流入 ③ 自動生成 — 育成指名レベルの若手を目標人数まで作る (下振れ寄り)。
 #          ※ 初期ワールドだけは戦力外市場が存在しないので、①の層もここで作る (VETERAN_*)。
 #
 #   流出 ① 退団 — **年齢に依らないランダム離脱 (`DEPARTURE_RATE`) + 高齢引退 (`ATTRITION_*`)**。
@@ -67,6 +68,12 @@ const VETERAN_TARGET: int = 12
 # ここを離脱数より小さくすると**ベテラン層が毎年痩せていく**ので、余裕を持たせること
 # (3シーズン実測で元NPB34人が維持されることを確認済み)。
 const MAX_RELEASED_SIGNINGS_PER_CLUB: int = 12
+# NPB 全球団との再契約が成立しなかった既存外国人を拾う確率と、専用球団ごとの保有上限。
+# 初回の長期実測では上位4人が全員野手になり、主な弱点だった投手層へ届かなかったため、
+# 投手/野手は各1人までとする。総枠を増やすための制約ではなく、2枠を片側で使い切らないための制約。
+const FOREIGN_SIGNING_CHANCE: float = 0.35
+const FOREIGN_ROSTER_LIMIT_PER_CLUB: int = 2
+const FOREIGN_ROSTER_LIMIT_PER_GROUP: int = 1
 # 戦力外獲得の年齢上限。高齢引退 (ATTRITION_START_AGE) の手前まで拾う。
 const RELEASED_SIGNING_MAX_AGE: int = 32
 
@@ -110,13 +117,23 @@ const ATTRITION_CERTAIN_AGE: int = 38
 # ノブは固定値ではなく **「母集団のどの帯から採るか」** (評価降順の分位点。0.0 = 母集団の最上位)。
 const ABILITY_JITTER_Z: float = 0.25
 
-# ベテラン組の参照母集団 = NPB12球団の VETERAN_MIN_AGE 以上。そのうち**評価下位の帯**が
-# 「一軍から弾かれて戦力外になる側」。専用球団は市場に出た中では良い方を拾うので、
-# 帯の中でも上端寄りを採る = 下位10〜20パーセンタイル。
+# ベテラン組の参照母集団 = NPB12球団の VETERAN_MIN_AGE 以上。通常の野手は上から55〜75%、
+# 通常の投手は35〜55%の帯から採る。少数の軸はさらに上の帯から採り、一様な強化ではなく
+# 「通常層 + 外れ値に近い主力」という混合分布にする。
 # ※ プレイ中は流入① が**実在の戦力外選手**をそのまま獲るので、この生成は初期ワールド専用
 #   (世界生成の時点では市場が存在しないため)。
-const VETERAN_SOURCE_PCT_LOW: float = 0.75
-const VETERAN_SOURCE_PCT_HIGH: float = 0.90
+const VETERAN_SOURCE_PCT_LOW: float = 0.55
+const VETERAN_SOURCE_PCT_HIGH: float = 0.75
+const VETERAN_PITCHER_SOURCE_PCT_LOW: float = 0.35
+const VETERAN_PITCHER_SOURCE_PCT_HIGH: float = 0.55
+# 投手のうち少数だけは、同じ年齢母集団の上位帯から採る。全員の分散を広げるのではなく、
+# 通常の元NPB層に2人の軸を混ぜることで、専用球団にも突出した経験者がいる分布にする。
+const VETERAN_PITCHER_ANCHOR_SOURCE_PCT_LOW: float = 0.10
+const VETERAN_PITCHER_ANCHOR_SOURCE_PCT_HIGH: float = 0.30
+const VETERAN_PITCHER_ANCHOR_TARGET_PER_CLUB: int = 2
+const VETERAN_FIELDER_ANCHOR_SOURCE_PCT_LOW: float = 0.15
+const VETERAN_FIELDER_ANCHOR_SOURCE_PCT_HIGH: float = 0.35
+const VETERAN_FIELDER_ANCHOR_TARGET_PER_CLUB: int = 1
 const VETERAN_MIN_AGE: int = 27
 const VETERAN_MAX_AGE: int = 33
 
@@ -150,6 +167,10 @@ const POSITION_QUOTA: Dictionary = {
 	8: 3,   # 中堅
 	9: 2,   # 右翼
 }
+# POSITION_QUOTA の投手24人に対し、NPB12球団の初期構成 (先発15〜17 / 投手37〜45)
+# と同じ約40%を先発にする。個々の判定だけでは固定seedで4人対17人まで偏り、後者は
+# 救援が7人しか残らず1人へ200回超が集中した。能力値は変えず、先発向きさ上位を役割へ割り当て直す。
+const STARTER_ROLE_TARGET: int = 10
 
 
 static func roster_players(players: Array, club_id: int) -> Array:
@@ -208,6 +229,7 @@ static func ensure_initial_rosters(players: Array, year: int) -> Dictionary:
 		generated_total += _fill_to_target(
 			players, int(club_id), year, INITIAL_ROSTER_SEED, VETERAN_TARGET, false
 		)
+		_normalize_pitcher_roles(players, int(club_id))
 	return {
 		"generated_count": generated_total,
 		"clubs": _roster_summary(players),
@@ -218,6 +240,7 @@ static func ensure_initial_rosters(players: Array, year: int) -> Dictionary:
 # (専用球団は残り物を拾う立場なので、順序が逆だと NPB より先に有望な選手を取ってしまう)。
 static func process_offseason(players: Array, year: int) -> Dictionary:
 	var released_out: Array = []
+	var foreign_signed: Array = []
 	var signed: Array = []
 	var generated_total: int = 0
 
@@ -225,20 +248,110 @@ static func process_offseason(players: Array, year: int) -> Dictionary:
 		var club_id: int = int(club_id_value)
 		released_out.append_array(_process_attrition(players, club_id, year))
 
+	# 外国人を先に処理し、元NPB目標の残りを戦力外選手で埋める。
+	foreign_signed = _sign_departed_foreign_players(players, year)
 	# 獲得は全球団ぶんを1つの候補プールから順に取る (先に1球団が総取りしないよう club を交互に回す)。
 	signed = _sign_released_players(players, year)
 
 	for club_id_value in PSFarmLeague.farm_club_ids():
-		generated_total += _fill_to_target(players, int(club_id_value), year)
+		var club_id: int = int(club_id_value)
+		generated_total += _fill_to_target(players, club_id, year)
+		_normalize_pitcher_roles(players, club_id)
 
 	return {
 		"attrition": released_out,
 		"attrition_count": released_out.size(),
+		"foreign_signings": foreign_signed,
+		"foreign_signed_count": foreign_signed.size(),
 		"signings": signed,
 		"signed_count": signed.size(),
 		"generated_count": generated_total,
 		"clubs": _roster_summary(players),
 	}
+
+
+# ---- 流入①: 再契約不成立の既存外国人 --------------------------------------
+
+static func _sign_departed_foreign_players(
+	players: Array, year: int, signing_chance: float = FOREIGN_SIGNING_CHANCE
+) -> Array:
+	var candidates: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != 0 or not player.foreign_player:
+			continue
+		if int(player.source_data.get(PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR, 0)) != year:
+			continue
+		candidates.append(player)
+	candidates.sort_custom(func(a, b) -> bool:
+		var value_a: int = Offseason.player_value_score(a as PSPlayer)
+		var value_b: int = Offseason.player_value_score(b as PSPlayer)
+		if value_a == value_b:
+			return (a as PSPlayer).id < (b as PSPlayer).id
+		return value_a > value_b
+	)
+
+	var club_ids: Array = PSFarmLeague.farm_club_ids()
+	var quota_by_club: Dictionary = {}
+	for club_id_value in club_ids:
+		var club_id: int = int(club_id_value)
+		var current_foreign: int = 0
+		var current_foreign_pitchers: int = 0
+		var current_foreign_fielders: int = 0
+		for roster_row in roster_players(players, club_id):
+			var roster_player: PSPlayer = roster_row as PSPlayer
+			if not roster_player.foreign_player:
+				continue
+			current_foreign += 1
+			if roster_player.is_pitcher():
+				current_foreign_pitchers += 1
+			else:
+				current_foreign_fielders += 1
+		quota_by_club[club_id] = {
+			"total": maxi(0, FOREIGN_ROSTER_LIMIT_PER_CLUB - current_foreign),
+			"pitcher": maxi(0, FOREIGN_ROSTER_LIMIT_PER_GROUP - current_foreign_pitchers),
+			"fielder": maxi(0, FOREIGN_ROSTER_LIMIT_PER_GROUP - current_foreign_fielders),
+		}
+
+	var signings: Array = []
+	var club_cursor: int = 0
+	for candidate_row in candidates:
+		var player: PSPlayer = candidate_row as PSPlayer
+		var group_key: String = "pitcher" if player.is_pitcher() else "fielder"
+		var selected_club: int = 0
+		if Rng.roll_float() < clampf(signing_chance, 0.0, 1.0):
+			for _attempt in range(club_ids.size()):
+				var club_id: int = int(club_ids[posmod(club_cursor, club_ids.size())])
+				club_cursor += 1
+				var quota: Dictionary = quota_by_club.get(club_id, {}) as Dictionary
+				if int(quota.get("total", 0)) <= 0 or int(quota.get(group_key, 0)) <= 0:
+					continue
+				if roster_count(players, club_id) >= ROSTER_TARGET:
+					quota["total"] = 0
+					continue
+				selected_club = club_id
+				break
+		if selected_club > 0:
+			var from_team: int = int(player.source_data.get(
+				PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_TEAM, 0
+			))
+			_apply_farm_club_signing(player, selected_club, year)
+			var selected_quota: Dictionary = quota_by_club[selected_club] as Dictionary
+			selected_quota["total"] = int(selected_quota["total"]) - 1
+			selected_quota[group_key] = int(selected_quota[group_key]) - 1
+			signings.append({
+				"player_id": player.id,
+				"name": player.name,
+				"age": player.age,
+				"position": player.position,
+				"from_team": from_team,
+				"club_id": selected_club,
+				"value": Offseason.player_value_score(player),
+			})
+		# 候補印は成否にかかわらず消費し、同じ退団で再抽選しない。
+		player.source_data.erase(PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_YEAR)
+		player.source_data.erase(PSFarmLeague.SOURCE_KEY_FOREIGN_CONTRACT_DEPARTED_TEAM)
+	return signings
 
 
 # ---- 流出: 高齢整理 --------------------------------------------------------
@@ -280,7 +393,7 @@ static func _departure_reason(age: int) -> String:
 	return "age" if Rng.roll_float() < chance else ""
 
 
-# ---- 流入①: 戦力外からの獲得 ----------------------------------------------
+# ---- 流入②: 戦力外からの獲得 ----------------------------------------------
 
 # NPB の獲得フェーズを通り抜けて残った戦力外選手 (team_id==0 かつ released) を、
 # 価値の高い順に球団へ交互配分する。**これが専用球団の主力の供給経路**。
@@ -360,6 +473,9 @@ static func _apply_farm_club_signing(player: PSPlayer, club_id: int, year: int) 
 	player.source_data.erase("released")
 	player.source_data.erase("retired")
 	player.source_data.erase("retired_age")
+	player.source_data.erase("contract_end_year")
+	player.source_data.erase("contract_total_years")
+	player.source_data.erase("contract_signed_year")
 	# 育成契約は NPB の制度なので専用球団では持たない。支配下枠の計数からも外れる。
 	player.development_player = false
 	player.registered_roster = REGISTERED_ROSTER
@@ -372,7 +488,7 @@ static func _apply_farm_club_signing(player: PSPlayer, club_id: int, year: int) 
 	player.source_data[PSFarmLeague.SOURCE_KEY_NPB_EXPERIENCED] = true
 
 
-# ---- 流入②: 自動生成 ------------------------------------------------------
+# ---- 流入③: 自動生成 ------------------------------------------------------
 
 # 目標人数まで生成する。守備位置は POSITION_QUOTA の不足分から埋め、
 # 余りは投手と野手を交互に足して構成の偏りを防ぐ。
@@ -421,6 +537,9 @@ static func _fill_to_target(
 	Rng.begin_game_stream(-1, seed_key)
 	# 能力の基準になる参照母集団を実測で切り出す (固定値は使わない。上の const ブロック参照)。
 	var veteran_reference: Dictionary = _veteran_reference_pool(players) if veteran_quota > 0 else {}
+	var veteran_anchor_reference: Dictionary = (
+		_veteran_anchor_reference_pool(players) if veteran_quota > 0 else {}
+	)
 	var prospect_reference: Dictionary = _prospect_reference_pool(from_last_draft)
 	var next_id: int = _max_player_id(players) + 1
 	var generated: int = 0
@@ -428,28 +547,112 @@ static func _fill_to_target(
 	var slot_count: int = wanted.size()
 	var quota: int = clampi(veteran_quota, 0, slot_count)
 	var spread: int = 0
+	var pitcher_anchors_used: int = 0
+	var fielder_anchors_used: int = 0
 	for position_value in wanted:
 		spread += quota
 		var as_veteran: bool = spread >= slot_count
 		if as_veteran:
 			spread -= slot_count
+		var position: int = int(position_value)
 		var reference: Dictionary = veteran_reference if as_veteran else prospect_reference
-		players.append(_generate_player(next_id, int(position_value), club_id, year, as_veteran, reference))
+		var anchor_group: String = ""
+		if (
+			as_veteran and position == 1
+			and pitcher_anchors_used < VETERAN_PITCHER_ANCHOR_TARGET_PER_CLUB
+		):
+			anchor_group = "pitcher"
+			pitcher_anchors_used += 1
+		elif as_veteran and position > 2 \
+			and fielder_anchors_used < VETERAN_FIELDER_ANCHOR_TARGET_PER_CLUB:
+			anchor_group = "fielder"
+			fielder_anchors_used += 1
+		if not anchor_group.is_empty():
+			reference = veteran_anchor_reference
+		players.append(_generate_player(
+			next_id, position, club_id, year, as_veteran, reference, anchor_group
+		))
 		next_id += 1
 		generated += 1
 	Rng.end_game_stream()
 	return generated
 
 
+static func _normalize_pitcher_roles(players: Array, club_id: int) -> void:
+	var candidates: Array = []
+	var shape_by_id: Dictionary = {}
+	for player_row in roster_players(players, club_id):
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or not player.is_pitcher():
+			continue
+		# 抑えは専任役割として維持する。先発/中継だけをロスター比率へ合わせる。
+		if player.role == "closer":
+			continue
+		var neutral: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
+		neutral.role = ""
+		shape_by_id[player.id] = PitcherRoleModel.starter_shape_advantage(neutral)
+		candidates.append(player)
+	candidates.sort_custom(func(a, b) -> bool:
+		var player_a: PSPlayer = a as PSPlayer
+		var player_b: PSPlayer = b as PSPlayer
+		var shape_a: float = float(shape_by_id.get(player_a.id, -INF))
+		var shape_b: float = float(shape_by_id.get(player_b.id, -INF))
+		if not is_equal_approx(shape_a, shape_b):
+			return shape_a > shape_b
+		return player_a.id < player_b.id
+	)
+	for index in range(candidates.size()):
+		var player: PSPlayer = candidates[index] as PSPlayer
+		player.role = (
+			PitcherRoleModel.ROLE_STARTER
+			if index < min(STARTER_ROLE_TARGET, candidates.size())
+			else PitcherRoleModel.ROLE_RELIEVER
+		)
+
+
 # ---- 能力の基準 (実測) ------------------------------------------------------
 #
-# 返すのは {1: [z_abilities...], 0: [z_abilities...]} (投手 / 野手)。
-# 投手と野手では z のキー集合そのものが違う (投手だけ Pit_* / PF_* を持つ) ので必ず分ける。
+# 返すのは {1: 投手, 0: 野手全体, 2..9: 各守備位置} の z 能力帯。
+# 投打を分けるだけでは、外野手の参照から捕手を作って C_GameCall 等の相関が消える。
+# 実在する同じ守備位置を優先し、該当帯が空の異常時だけ投手/野手全体へ戻す。
 
 # ベテラン組の基準 = NPB12球団で**戦力外になる側**の帯 (評価下位 VETERAN_SOURCE_PCT_*)。
 static func _veteran_reference_pool(players: Array) -> Dictionary:
-	var pitchers: Array = []
-	var fielders: Array = []
+	var fielder_pool: Dictionary = _npb_veteran_reference_pool(
+		players, VETERAN_SOURCE_PCT_LOW, VETERAN_SOURCE_PCT_HIGH
+	)
+	var pitcher_pool: Dictionary = _npb_veteran_reference_pool(
+		players, VETERAN_PITCHER_SOURCE_PCT_LOW, VETERAN_PITCHER_SOURCE_PCT_HIGH
+	)
+	var result: Dictionary = fielder_pool.duplicate()
+	result[1] = pitcher_pool.get(1, [])
+	return result
+
+
+static func _veteran_anchor_reference_pool(players: Array) -> Dictionary:
+	var pitcher_pool: Dictionary = _npb_veteran_reference_pool(
+		players,
+		VETERAN_PITCHER_ANCHOR_SOURCE_PCT_LOW,
+		VETERAN_PITCHER_ANCHOR_SOURCE_PCT_HIGH,
+		true
+	)
+	var fielder_pool: Dictionary = _npb_veteran_reference_pool(
+		players,
+		VETERAN_FIELDER_ANCHOR_SOURCE_PCT_LOW,
+		VETERAN_FIELDER_ANCHOR_SOURCE_PCT_HIGH,
+		true
+	)
+	var result: Dictionary = fielder_pool.duplicate()
+	result[1] = pitcher_pool.get(1, [])
+	return result
+
+
+static func _npb_veteran_reference_pool(
+	players: Array, low_pct: float, high_pct: float, rank_by_competitive_value: bool = false
+) -> Dictionary:
+	var entries_by_position: Dictionary = {0: [], 1: []}
+	for position in range(2, 10):
+		entries_by_position[position] = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.is_retired() or player.team_id <= 0:
@@ -458,15 +661,37 @@ static func _veteran_reference_pool(players: Array) -> Dictionary:
 			continue
 		if player.age < VETERAN_MIN_AGE:
 			continue
-		var entry: Dictionary = {"z": player.z_abilities, "v": Offseason.player_value_score(player)}
+		var entry: Dictionary = {
+			"z": player.z_abilities,
+			"v": (
+				_competitive_reference_score(player)
+				if rank_by_competitive_value
+				else float(Offseason.player_value_score(player))
+			),
+		}
 		if player.position == 1:
-			pitchers.append(entry)
+			(entries_by_position[1] as Array).append(entry)
 		else:
-			fielders.append(entry)
-	return {
-		1: _band_of(pitchers, VETERAN_SOURCE_PCT_LOW, VETERAN_SOURCE_PCT_HIGH),
-		0: _band_of(fielders, VETERAN_SOURCE_PCT_LOW, VETERAN_SOURCE_PCT_HIGH),
-	}
+			(entries_by_position[0] as Array).append(entry)
+			if entries_by_position.has(player.position):
+				(entries_by_position[player.position] as Array).append(entry)
+	return _reference_bands(entries_by_position, low_pct, high_pct)
+
+
+# 表示総合は守備・持久・球種も含む編成用の評価。少数の「軸」を選ぶときだけは、
+# 試合の打席計算へ直接入る能力を使い、総合上位なのに得失点へ効かない選手へ偏るのを防ぐ。
+static func _competitive_reference_score(player: PSPlayer) -> float:
+	if player == null:
+		return -INF
+	var keys: Array = (
+		["Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_BarrelDeny", "Pit_LoftControl"]
+		if player.is_pitcher()
+		else ["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Barrel", "Bat_Loft"]
+	)
+	var total: float = 0.0
+	for key_value in keys:
+		total += float(player.z_abilities.get(str(key_value), 0.0))
+	return total / float(keys.size())
 
 
 # 生成組の基準 = **ドラフトで指名漏れした候補**の上位帯 (PROSPECT_SOURCE_PCT_*)。
@@ -476,22 +701,37 @@ static func _veteran_reference_pool(players: Array) -> Dictionary:
 #    (`DraftService.undrafted_candidate_templates` のコメント参照)。
 static func _prospect_reference_pool(from_last_draft: bool) -> Dictionary:
 	var templates: Array = Draft.undrafted_candidate_templates(from_last_draft)
-	var pitchers: Array = []
-	var fielders: Array = []
+	var entries_by_position: Dictionary = {0: [], 1: []}
+	for position in range(2, 10):
+		entries_by_position[position] = []
 	for row in templates:
 		var template: Dictionary = row as Dictionary
 		var z: Dictionary = template.get("z_abilities", {}) as Dictionary
 		if z.is_empty():
 			continue
 		var entry: Dictionary = {"z": z, "v": float(template.get("grade", 0.0))}
-		if int(template.get("position", 0)) == 1:
-			pitchers.append(entry)
+		var position: int = int(template.get("position", 0))
+		if position == 1:
+			(entries_by_position[1] as Array).append(entry)
 		else:
-			fielders.append(entry)
-	return {
-		1: _band_of(pitchers, PROSPECT_SOURCE_PCT_LOW, PROSPECT_SOURCE_PCT_HIGH),
-		0: _band_of(fielders, PROSPECT_SOURCE_PCT_LOW, PROSPECT_SOURCE_PCT_HIGH),
-	}
+			(entries_by_position[0] as Array).append(entry)
+			if entries_by_position.has(position):
+				(entries_by_position[position] as Array).append(entry)
+	return _reference_bands(
+		entries_by_position, PROSPECT_SOURCE_PCT_LOW, PROSPECT_SOURCE_PCT_HIGH
+	)
+
+
+static func _reference_bands(
+	entries_by_position: Dictionary, low_pct: float, high_pct: float
+) -> Dictionary:
+	var bands: Dictionary = {}
+	for position_value in entries_by_position.keys():
+		var position: int = int(position_value)
+		bands[position] = _band_of(
+			entries_by_position[position] as Array, low_pct, high_pct
+		)
+	return bands
 
 
 # 評価降順に並べ、[low, high] の分位点帯 (0.0 = 最上位) の z だけを返す。
@@ -512,7 +752,10 @@ static func _band_of(entries: Array, low_pct: float, high_pct: float) -> Array:
 
 # 参照帯から1人ぶんの z を引いて複製し、わずかに揺らす。帯が空なら {} (呼び出し側で扱う)。
 static func _sample_z_abilities(reference: Dictionary, position: int) -> Dictionary:
-	var band: Array = reference.get(1 if position == 1 else 0, []) as Array
+	var fallback_key: int = 1 if position == 1 else 0
+	var band: Array = reference.get(position, []) as Array
+	if band.is_empty():
+		band = reference.get(fallback_key, []) as Array
 	if band.is_empty():
 		return {}
 	var source: Dictionary = band[Rng.range_int(0, band.size() - 1)] as Dictionary
@@ -526,7 +769,7 @@ static func _sample_z_abilities(reference: Dictionary, position: int) -> Diction
 # 指名対象から外れる = 実ルールの「指名歴がある選手はドラフトを経ずに移籍できる」側になる。
 static func _generate_player(
 	player_id: int, position: int, club_id: int, year: int, veteran: bool = false,
-	reference: Dictionary = {}
+	reference: Dictionary = {}, veteran_anchor_group: String = ""
 ) -> PSPlayer:
 	var age: int = (
 		Rng.range_int(VETERAN_MIN_AGE, VETERAN_MAX_AGE) if veteran
@@ -574,6 +817,10 @@ static func _generate_player(
 		"raw_abilities": Offseason.generated_raw_abilities(position, z_abilities),
 		"arsenal": Offseason.generated_arsenal(position, z_abilities),
 	}
+	if veteran_anchor_group == "pitcher":
+		(data["source_data"] as Dictionary)["farm_club_pitcher_anchor"] = true
+	elif veteran_anchor_group == "fielder":
+		(data["source_data"] as Dictionary)["farm_club_fielder_anchor"] = true
 	var player: PSPlayer = PSPlayer.from_dict(data)
 	if not veteran:
 		_apply_development_years(player, age)

@@ -149,21 +149,31 @@ func test_player_record_identity_refresh_preserves_season_decision_inputs() -> v
 	record.pitcher_stats.strikeouts = 91
 	record.advanced_stats.plate_appearances = 321
 	record.advanced_stats.oaa_by_position = {"8": 4.5}
+	record.farm_batter_stats.hits = 27
+	record.farm_pitcher_stats.strikeouts = 33
+	record.farm_advanced_stats.plate_appearances = 144
 	record.season_injury_days = 42
 	record.injury_return_day = 117
 	record.consecutive_appearances = 3
 	record.last_pitched_team_game = 82
+	record.farm_consecutive_appearances = 2
+	record.farm_last_pitched_team_game = 71
 
 	var refreshed: PSPlayerSeasonRecord = RecordStore._refreshed_player_record(record, player)
 
 	assert_int(refreshed.batter_stats.hits).is_equal(88)
 	assert_int(refreshed.pitcher_stats.strikeouts).is_equal(91)
 	assert_int(refreshed.advanced_stats.plate_appearances).is_equal(321)
+	assert_int(refreshed.farm_batter_stats.hits).is_equal(27)
+	assert_int(refreshed.farm_pitcher_stats.strikeouts).is_equal(33)
+	assert_int(refreshed.farm_advanced_stats.plate_appearances).is_equal(144)
 	assert_float(float(refreshed.advanced_stats.oaa_by_position.get("8", 0.0))).is_equal(4.5)
 	assert_int(refreshed.season_injury_days).is_equal(42)
 	assert_int(refreshed.injury_return_day).is_equal(117)
 	assert_int(refreshed.consecutive_appearances).is_equal(3)
 	assert_int(refreshed.last_pitched_team_game).is_equal(82)
+	assert_int(refreshed.farm_consecutive_appearances).is_equal(2)
+	assert_int(refreshed.farm_last_pitched_team_game).is_equal(71)
 
 
 func test_team_player_index_partitions_history_and_returns_fresh_arrays() -> void:

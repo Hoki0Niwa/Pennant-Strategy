@@ -20,7 +20,15 @@ extends Node
 #     → (c) の「完投」列がこの症状の指標。他球団が0-5のところ専用球団だけ35-37だった。
 
 const PIT_KEYS: Array = [
-	"Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_BarrelDeny", "Pit_Stamina",
+	"Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_BarrelDeny", "Pit_LoftControl",
+	"Pit_Efficiency", "Pit_Stamina", "Pit_FatigueResist",
+]
+const BAT_KEYS: Array = [
+	"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Barrel", "Bat_Loft", "Bat_Spray",
+	"Bat_Aggression",
+]
+const CATCHER_KEYS: Array = [
+	"C_Framing", "C_Blocking", "C_Throw", "C_GameCall", "C_FieldSecure",
 ]
 
 
@@ -50,6 +58,16 @@ func _ready() -> void:
 	print("team                       n   " + " ".join(PIT_KEYS.map(func(k): return "%12s" % k)) + "  overall")
 	for team_id_value in PSFarmLeague.all_team_ids(_first_team_ids()):
 		_print_pitcher_abilities(int(team_id_value), season)
+	print("")
+	print("=== 野手の z 能力 (二軍参加14球団) ===")
+	print("team                       n   " + " ".join(BAT_KEYS.map(func(k): return "%12s" % k)) + "  overall")
+	for team_id_value in PSFarmLeague.all_team_ids(_first_team_ids()):
+		_print_fielder_abilities(int(team_id_value), season)
+	print("")
+	print("=== 捕手の z 能力 (二軍参加14球団) ===")
+	print("team                       n   " + " ".join(CATCHER_KEYS.map(func(k): return "%12s" % k)))
+	for team_id_value in PSFarmLeague.all_team_ids(_first_team_ids()):
+		_print_catcher_abilities(int(team_id_value), season)
 
 	# --- (a2) 役割の内訳と二軍ローテの人数 ---
 	print("")
@@ -150,6 +168,48 @@ func _print_pitcher_abilities(team_id: int, season: PSSeason) -> void:
 	for key in PIT_KEYS:
 		cells.append("%12.2f" % (float(sums[key]) / float(count)))
 	print("%-24s %3d   %s  %6.1f" % [_team_label(team_id), count, " ".join(cells), overall / float(count)])
+
+
+func _print_fielder_abilities(team_id: int, season: PSSeason) -> void:
+	var sums: Dictionary = {}
+	for key in BAT_KEYS:
+		sums[key] = 0.0
+	var overall: float = 0.0
+	var count: int = 0
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.is_pitcher():
+			continue
+		count += 1
+		for key in BAT_KEYS:
+			sums[key] = float(sums[key]) + float(record.z_abilities_snapshot.get(key, 0.0))
+		overall += float(PSPlayerValueEvaluator.overall_score(record))
+	if count == 0:
+		return
+	var cells: Array = []
+	for key in BAT_KEYS:
+		cells.append("%12.2f" % (float(sums[key]) / float(count)))
+	print("%-24s %3d   %s  %6.1f" % [_team_label(team_id), count, " ".join(cells), overall / float(count)])
+
+
+func _print_catcher_abilities(team_id: int, season: PSSeason) -> void:
+	var sums: Dictionary = {}
+	for key in CATCHER_KEYS:
+		sums[key] = 0.0
+	var count: int = 0
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record.position != 2:
+			continue
+		count += 1
+		for key in CATCHER_KEYS:
+			sums[key] = float(sums[key]) + float(record.z_abilities_snapshot.get(key, 0.0))
+	if count == 0:
+		return
+	var cells: Array = []
+	for key in CATCHER_KEYS:
+		cells.append("%12.2f" % (float(sums[key]) / float(count)))
+	print("%-24s %3d   %s" % [_team_label(team_id), count, " ".join(cells)])
 
 
 func _print_roles(team_id: int, season: PSSeason) -> void:

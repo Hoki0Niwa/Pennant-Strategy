@@ -805,6 +805,7 @@ func advance_offseason() -> Dictionary:
 				GameDb.players, current_season.year if current_season != null else 0
 			)
 			step_result["farm_club_signed_count"] = int(farm_supply.get("signed_count", 0))
+			step_result["farm_club_foreign_signed_count"] = int(farm_supply.get("foreign_signed_count", 0))
 			step_result["farm_club_generated_count"] = int(farm_supply.get("generated_count", 0))
 			step_result["farm_club_attrition_count"] = int(farm_supply.get("attrition_count", 0))
 			GameDb.rebuild_player_indices()

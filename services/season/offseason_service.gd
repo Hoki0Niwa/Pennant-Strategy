@@ -155,6 +155,11 @@ const GROWTH_KIND_LABELS: Dictionary = {
 # z は Z_ABILITY_MIN/MAX (±4) でクランプされるため暴走しない。年齢別の成長/劣化バランス
 # (_growth_kind_probabilities) は確率側で決まり、このスケールには線形なので交差年齢は変わらない。
 const GROWTH_DELTA_SCALE: float = 1.8
+# 覚醒の一部は、多数の関連能力が同時に伸びる稀な突出成長になる。
+# 値を上げるほど正規的な母集団から離れたスターが増える。
+const AWAKENING_OUTLIER_SHARE: float = 0.20
+const AWAKENING_OUTLIER_DELTA_MIN: float = 0.45
+const AWAKENING_OUTLIER_DELTA_MAX: float = 0.70
 const Z_ABILITY_MIN: float = -4.0
 const Z_ABILITY_MAX: float = 4.0
 
@@ -1423,6 +1428,7 @@ static func process_growth_decay(players: Array, user_team_id: int = 0, season: 
 			"growth_label": development_kind_label(growth_kind),
 			"changed_keys": int(mutation.get("changed_keys", 0)),
 			"net_z_delta": float(mutation.get("net_z_delta", 0.0)),
+			"talent_outlier": bool(mutation.get("talent_outlier", false)),
 		}
 		if want_abilities:
 			change["abilities"] = _build_ability_changes(before_ratings, _capture_display_ratings(player))
@@ -1582,13 +1588,15 @@ static func _detail_dict_has_delta(rows: Dictionary) -> bool:
 
 static func _mutate_abilities(player: PSPlayer) -> Dictionary:
 	var growth_kind: String = _choose_growth_kind(player)
+	var talent_outlier: bool = growth_kind == GROWTH_KIND_AWAKENING \
+		and Rng.roll_float() < AWAKENING_OUTLIER_SHARE
 	var keys_to_mutate: Array = _development_keys_for_player(player)
 	var changed_keys: int = 0
 	var net_z_delta: float = 0.0
 	var raw_velocity_delta: int = 0
 	for key_variant in keys_to_mutate:
 		var key: String = str(key_variant)
-		var d_z: float = _growth_delta_z(growth_kind, player.age, key)
+		var d_z: float = _growth_delta_z(growth_kind, player.age, key, talent_outlier)
 		if absf(d_z) < 0.005:
 			continue
 		var current: float = float(player.z_abilities.get(key, 0.0))
@@ -1606,12 +1614,16 @@ static func _mutate_abilities(player: PSPlayer) -> Dictionary:
 		# を持てない) を数年で突き破り、10+ WAR の両刀スターが再発する。成長後にも同じ上限を保つ。
 		# 位置別の打撃キャップ (C/SS) は既存スターの打撃を削る方向なので成長時には適用しない。
 		_apply_two_way_frontier(player.z_abilities)
+	if talent_outlier:
+		player.source_data["talent_outlier"] = true
+		player.source_data["talent_outlier_age"] = player.age
 	return {
 		"kind": growth_kind,
 		"label": development_kind_label(growth_kind),
 		"changed_keys": changed_keys,
 		"net_z_delta": net_z_delta,
 		"raw_velocity_delta": raw_velocity_delta,
+		"talent_outlier": talent_outlier,
 	}
 
 
@@ -1789,12 +1801,16 @@ static func _awakening_chance(age: int) -> float:
 	return 1.0 if age <= 29 else 0.0
 
 
-static func _growth_delta_z(kind: String, age: int, key: String) -> float:
+static func _growth_delta_z(
+	kind: String, age: int, key: String, talent_outlier: bool = false
+) -> float:
 	var roll: int = Rng.roll_percent()
 	var delta: float = 0.0
 	match kind:
 		GROWTH_KIND_AWAKENING:
-			if roll <= 8:
+			if talent_outlier:
+				delta = _range_float(AWAKENING_OUTLIER_DELTA_MIN, AWAKENING_OUTLIER_DELTA_MAX)
+			elif roll <= 8:
 				delta = -_range_float(0.02, 0.08)
 			else:
 				delta = _range_float(0.08, 0.28)

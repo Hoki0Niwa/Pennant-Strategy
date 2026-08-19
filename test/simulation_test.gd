@@ -2360,6 +2360,18 @@ func test_spot_relief_starter_covers_a_day_the_rotation_cannot() -> void:
 	assert_int((seventh.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_equal(486)
 	assert_str(str(seventh.get("reason", ""))).is_equal("spot_starter")
 
+	# 谷間候補も先発台帳に従う。前日に先発した7番手を疲労値だけで再登板させない。
+	var stored: Dictionary = season.get_rotation(1).duplicate(true)
+	var last_starts: Dictionary = (stored.get("last_start_day_by_pitcher", {}) as Dictionary).duplicate(true)
+	last_starts["486"] = 19
+	stored["last_start_day_by_pitcher"] = last_starts
+	season.set_rotation(1, stored)
+	var recent_seventh: Dictionary = PSRotationPlanner.resolve_rotation_decision(
+		season, 1, with_seventh, relievers
+	)
+	assert_str(str(recent_seventh.get("reason", ""))).is_equal("spot_relief")
+	assert_int((recent_seventh.get("pitcher", null) as PSPlayerSeasonRecord).player_id).is_not_equal(486)
+
 
 func test_stretch_run_advances_the_ace_on_short_rest() -> void:
 	# 9月以降は、疲労が抜けているエースを中5日で前倒しする (day 159 = 2026-09-05)。
