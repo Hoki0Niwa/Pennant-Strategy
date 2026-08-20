@@ -108,11 +108,26 @@ static func maybe_select_pitcher_spot_pinch_hitter(
 	else:
 		pinch_hitter = select_preserve_top_pinch_hitter(setup, minimum_score)
 	if pinch_hitter == null:
-		return batter
+		return pitcher_spot_batter_without_pinch_hitter(setup, batter)
 	mark_pinch_hitter_appeared(setup, pinch_hitter)
 	if not already_relieved:
 		PSBullpenManager.mark_starter_relieved(setup)
 	return pinch_hitter
+
+
+# 投手の打順で代打を立てられなかったときに実際に打席へ立つ選手。
+# 代打は打順スロットを置き換えない (スロットには先発投手のレコードが残り続ける) ので、
+# そのまま scheduled を返すと**既に降板した先発**が打つ。試合に残っているのは現在の投手なので、
+# 先発が降板済みならそちらを打者にする。ベンチを使い切ったかどうかの判断自体は変えない。
+static func pitcher_spot_batter_without_pinch_hitter(
+	setup: Dictionary, scheduled: PSPlayerSeasonRecord
+) -> PSPlayerSeasonRecord:
+	if not bool(setup.get("starter_relieved", false)):
+		return scheduled
+	var current: PSPlayerSeasonRecord = setup.get("pitcher", null) as PSPlayerSeasonRecord
+	if current == null:
+		return scheduled
+	return current
 
 
 static func is_pitcher_batting_spot(setup: Dictionary, batter: PSPlayerSeasonRecord) -> bool:

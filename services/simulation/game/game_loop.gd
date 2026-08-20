@@ -232,7 +232,7 @@ static func simulate_half_inning(
 			outs += int(pre_applied.get("outs", 0))
 			runs += int(pre_applied.get("runs", 0))
 			var pre_charges: Array = run_charges_for_runner_events(pre_runner_events, runner_responsibility, pitcher, earned_outs)
-			var pre_charge_totals: Dictionary = charge_pitcher_run_charges(pre_charges, pitcher, defense, game_result, inning, half, runs)
+			var pre_charge_totals: Dictionary = charge_pitcher_run_charges(pre_charges, pitcher, defense, game_result, half, runs)
 			_earned_runs += int(pre_charge_totals.get("total_earned_runs", 0))
 			earned_outs = advance_earned_outs_for_runner_events(earned_outs, pre_runner_events, int(pre_applied.get("outs", 0)))
 			apply_pitcher_outs(pitcher, int(pre_applied.get("outs", 0)))
@@ -290,7 +290,15 @@ static func simulate_half_inning(
 			runs
 		)
 		offense["batting_index"] = batting_index + 1
-		if batter != null and scheduled_batter != null and batter.player_id != scheduled_batter.player_id:
+		# 打者が入れ替わったら代打として記録する。ただし投手の打順で代打を立てられず現在の投手が
+		# 打つ場合は代打ではない (投手交代は "pitching" で記録済み)。
+		var pinch_hit_applied: bool = (
+			batter != null
+			and scheduled_batter != null
+			and batter.player_id != scheduled_batter.player_id
+			and batter != (offense.get("pitcher", null) as PSPlayerSeasonRecord)
+		)
+		if pinch_hit_applied:
 			_record_substitution(game_result, inning, half, int(offense.get("team_id", 0)), "pinch_hit", scheduled_batter.player_id, batter.player_id, 0, batting_slot)
 
 		var bases_before: Array = bases.duplicate()
@@ -335,7 +343,7 @@ static func simulate_half_inning(
 			earned_outs,
 			int(applied.get("outs", 0))
 		)
-		var plate_charge_totals: Dictionary = charge_pitcher_run_charges(plate_charges, pitcher, defense, game_result, inning, half, runs)
+		var plate_charge_totals: Dictionary = charge_pitcher_run_charges(plate_charges, pitcher, defense, game_result, half, runs)
 		_earned_runs += int(plate_charge_totals.get("total_earned_runs", 0))
 		assign_batter_responsibility_after_plate(runner_responsibility, batter, pitcher, outcome, bases, earned_outs, int(applied.get("outs", 0)))
 		mark_unearned_plate_error_advances(runner_responsibility, outcome, bases_before, bases)
@@ -367,7 +375,7 @@ static func simulate_half_inning(
 			outs += int(runner_applied.get("outs", 0))
 			runs += int(runner_applied.get("runs", 0))
 			post_runner_charges = run_charges_for_runner_events(runner_events, runner_responsibility, pitcher, earned_outs)
-			var runner_charge_totals: Dictionary = charge_pitcher_run_charges(post_runner_charges, pitcher, defense, game_result, inning, half, runs)
+			var runner_charge_totals: Dictionary = charge_pitcher_run_charges(post_runner_charges, pitcher, defense, game_result, half, runs)
 			_earned_runs += int(runner_charge_totals.get("total_earned_runs", 0))
 			earned_outs = advance_earned_outs_for_runner_events(earned_outs, runner_events, int(runner_applied.get("outs", 0)))
 			post_runner_current_runs = int(runner_charge_totals.get("current_runs", 0))
@@ -976,7 +984,6 @@ static func charge_pitcher_run_charges(
 	current_pitcher: PSPlayerSeasonRecord,
 	defense: Dictionary,
 	game_result: Dictionary,
-	inning: int,
 	half: String,
 	current_half_runs: int
 ) -> Dictionary:
@@ -1000,7 +1007,6 @@ static func charge_pitcher_run_charges(
 				int(defense.get("team_id", 0)),
 				0 if responsible_pitcher == null else responsible_pitcher.player_id,
 				earned_runs,
-				inning,
 				half,
 				current_half_runs
 			)
@@ -1035,14 +1041,17 @@ static func go_ahead_pitcher_id_for_charges(
 	return int(charge.get("pitcher_id", 0))
 
 
+# 継承走者の生還など、降板済みの投手へ後から失点を付ける (呼び出しは責任投手 != 現在の投手のときだけ)。
+# 失点と exit_lead は動かす — その走者はこの投手の責任で、ホールド判定は「リードを渡さずに降りたか」を
+# 見るため。一方 **end_inning / end_half / end_event_index は動かさない**: これは登板範囲 (いつ降りたか)
+# であって、降板後のイベントまで伸ばすと試合ログ上の登板が実際より長く見える。
 static func add_run_to_pitcher_outing(
 	game_result: Dictionary,
 	team_id: int,
 	pitcher_id: int,
 	earned_runs: int,
-	inning: int,
 	half: String,
-	_current_half_runs: int
+	current_half_runs: int
 ) -> void:
 	if game_result.is_empty() or pitcher_id <= 0:
 		return
@@ -1053,10 +1062,7 @@ static func add_run_to_pitcher_outing(
 			continue
 		outing["runs"] = int(outing.get("runs", 0)) + 1
 		outing["earned_runs"] = int(outing.get("earned_runs", 0)) + max(0, earned_runs)
-		outing["end_inning"] = inning
-		outing["end_half"] = half
-		outing["end_event_index"] = max(int(outing.get("end_event_index", -1)), next_play_event_index(game_result) - 1)
-		update_outing_exit_score_for_team(outing, team_id, game_result, half, _current_half_runs)
+		update_outing_exit_score_for_team(outing, team_id, game_result, half, current_half_runs)
 		outings[index] = outing
 		game_result["pitcher_outings"] = outings
 		return

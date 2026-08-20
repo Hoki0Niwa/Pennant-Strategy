@@ -1823,6 +1823,67 @@ func test_long_role_is_preferred_for_mop_up() -> void:
 	assert_int(picked.player_id).is_equal(long_reliever.player_id)
 
 
+# 投手の打順で代打を立てられないとき、打席に立つのは**現在マウンドにいる投手**。
+# 代打は打順スロットを置き換えず先発のレコードが残るので、ここを取り違えると
+# 既に降板した先発が打席に立つ。先発がまだ投げているなら従来どおり先発が打つ。
+func test_pitcher_spot_batter_is_the_current_pitcher_after_the_starter_left() -> void:
+	var starter: PSPlayerSeasonRecord = _pitcher(301, "Starter", 0.4)
+	var reliever: PSPlayerSeasonRecord = _pitcher(302, "Reliever", 0.2)
+	var bases: Array = [null, null, null]
+	var setup: Dictionary = {
+		"team_id": 1,
+		"dh_enabled": false,
+		"starter_pitcher": starter,
+		"pitcher": reliever,
+		"starter_relieved": true,
+		"batters": [starter],
+		"bench": [],  # 代打候補なし
+		"relievers": [],
+	}
+
+	var batter: PSPlayerSeasonRecord = PSInGameSubstitutions.maybe_select_pinch_hitter(
+		setup, starter, 0, 8, {}, 7, "top", bases, 1, 0
+	)
+
+	assert_object(batter).is_not_null()
+	assert_int(batter.player_id).is_equal(reliever.player_id)
+
+	# 先発が降板していなければ打者は先発のまま (代打不成立時の従来挙動)。
+	setup["pitcher"] = starter
+	setup["starter_relieved"] = false
+	var still_pitching: PSPlayerSeasonRecord = PSInGameSubstitutions.maybe_select_pinch_hitter(
+		setup, starter, 0, 8, {}, 7, "top", bases, 1, 0
+	)
+	assert_int(still_pitching.player_id).is_equal(starter.player_id)
+
+
+# 継承走者の生還は降板済み投手の失点として付き、ホールド判定に使う exit_lead も動く。
+# 一方で登板範囲 (end_inning / end_half / end_event_index) は降板時点のまま。
+# ここを伸ばすと試合ログ上の登板イニングが実際より長く見える。
+func test_inherited_run_charges_departed_pitcher_without_extending_the_outing() -> void:
+	var outing: Dictionary = _outing(11, 1, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 10, 12, 3, 2, 2, 1, 0)
+	outing["end_inning"] = 7
+	outing["end_half"] = "top"
+	var game_result: Dictionary = {
+		"away_team_id": 1,
+		"home_team_id": 2,
+		"away_score": 4,
+		"home_score": 2,
+		"next_play_event_index": 40,
+		"pitcher_outings": [outing],
+	}
+
+	PSGameLoop.add_run_to_pitcher_outing(game_result, 1, 11, 1, "bottom", 1)
+
+	var updated: Dictionary = (game_result.get("pitcher_outings", []) as Array)[0] as Dictionary
+	assert_int(int(updated.get("runs", 0))).is_equal(1)
+	assert_int(int(updated.get("earned_runs", 0))).is_equal(1)
+	assert_int(int(updated.get("end_inning", 0))).is_equal(7)
+	assert_str(str(updated.get("end_half", ""))).is_equal("top")
+	assert_int(int(updated.get("end_event_index", 0))).is_equal(12)
+	assert_int(int(updated.get("exit_lead", 0))).is_equal(1)
+
+
 func test_save_and_hold_conditions_use_official_situations() -> void:
 	var result: Dictionary = {
 		"draw": false,
