@@ -19,19 +19,36 @@ static func compress_z_tail(z: float, pivot: float, span: float) -> float:
 	return pivot + span * tanh((z - pivot) / max(0.001, span))
 
 
-# 対戦優位 (打者項 - 投手項) を pivot 超過分だけ tanh で両側に飽和させる。
+# 対戦優位 (打者項 - 投手項) を pivot 超過分だけ tanh で飽和させる。
 # compress_z_tail との違い: **個々の能力ではなく投打の差に掛ける**。
 # 両者が同じだけ弱くなっても差は動かないので、
 #   - リーグ全体の水準が下がっても得点環境は動かない (レベル不変性が構造的に保たれる)
 #   - 同水準どうしのリーグ内部の能力差はそのまま残る (二軍の中の優劣が潰れない)
 #   - 極端なミスマッチ (専用球団 vs 12球団、エース vs 弱打者) だけが飽和する
 # という3つが同時に成り立つ。個々の能力に下側圧縮を掛ける方式ではこれが両立しない。
-static func compress_matchup_advantage(delta: float, pivot: float, span: float) -> float:
+#
+# 天井は正負で別に持てる。**符号の意味は呼び出し側の delta の作り方で決まる** ので、
+# 非対称にするなら呼び出し側の向きを確認すること (打球品質は正 = 打者優位)。
+# 非対称にする理由: 失点は 0 で下げ止まるので投手優位の効果は早く飽和するが、打撃の上振れには
+# 同じ頭打ちが無い。実 NPB でも「規定投手の防御率下限 ~1.2」に対し「本塁打王 40-56」と応答が
+# 非対称になる。両側を同じ天井にすると、本塁打王を戻すと同時に 1 点台の投手が増えすぎる。
+static func compress_matchup_advantage(
+	delta: float,
+	pivot: float,
+	span: float,
+	negative_pivot: float = -1.0,
+	negative_span: float = -1.0
+) -> float:
+	var side_pivot: float = pivot
+	var side_span: float = span
+	if delta < 0.0 and negative_pivot >= 0.0 and negative_span >= 0.0:
+		side_pivot = negative_pivot
+		side_span = negative_span
 	var magnitude: float = absf(delta)
-	if magnitude <= pivot:
+	if magnitude <= side_pivot:
 		return delta
-	var excess: float = magnitude - pivot
-	return signf(delta) * (pivot + span * tanh(excess / max(0.001, span)))
+	var excess: float = magnitude - side_pivot
+	return signf(delta) * (side_pivot + side_span * tanh(excess / max(0.001, side_span)))
 
 
 static func sigmoid(logit_value: float) -> float:

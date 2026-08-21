@@ -39,7 +39,10 @@ const FIELD_NAMES: Dictionary = {
 	9: "right",
 }
 
-const DOUBLE_RATE_SCALE: float = 0.52
+# 単打を二塁打へ格上げする割合のスケール。リーグの二塁打/チーム試合を決める水準ノブで、
+# 実 NPB は約1.5。HR 総量 (hr_wall_clearance) を実勢へ削ると失われる長打をここで戻す
+# — SLG だけを動かし AVG/OBP を動かさないので、HR を減らしたときの補正に向く。
+const DOUBLE_RATE_SCALE: float = 0.60
 
 
 static func resolve_hit(

@@ -13,9 +13,9 @@ const EV_BASE: float = 94.25                 # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
 # 長打力カーブが高いほど EV を上げる量(mph)。
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
-const EV_HOME_RUN_POWER_WEIGHT: float = 4.5
+const EV_HOME_RUN_POWER_WEIGHT: float = 5.6
 const EV_PITCH_VELOCITY_WEIGHT: float = 0.08 # 投球速度が基準より速いほど EV を上げる重み。
-const EV_STUFF_WEIGHT: float = 4.5          # 投手球威カーブが高いほど EV を下げる量(mph)。
+const EV_STUFF_WEIGHT: float = 5.6          # 投手球威カーブが高いほど EV を下げる量(mph)。
 const EV_FATIGUE_WEIGHT: float = 0.035
 const EV_CHASE_PENALTY: float = 3.50
 const EV_TWO_STRIKE_PENALTY: float = 1.25
@@ -34,7 +34,7 @@ const GAP_LINER_TARGET_LA: float = 16.0
 const GAP_LINER_LA_PULL: float = 0.34
 
 # 本塁打向きの理想打球角(ideal power)の発生率・目標角・EV上乗せ・飛距離ボーナス。
-const POWER_IDEAL_LA_BASE_RATE: float = 0.056
+const POWER_IDEAL_LA_BASE_RATE: float = 0.045
 const POWER_IDEAL_LA_PULL: float = 0.52
 const POWER_IDEAL_LA_TARGET: float = 28.0
 const POWER_IDEAL_LA_EV_BOOST: float = 1.4
@@ -50,6 +50,9 @@ const MISHIT_LA_SCATTER: float = 7.0
 const STUFF_PERFECT_LOGIT_WEIGHT: float = 0.7
 const STUFF_MISHIT_LOGIT_WEIGHT: float = 0.65
 const STUFF_IDEAL_POWER_LOGIT_WEIGHT: float = 1.2
+# 長打力カーブが本塁打向きの理想角を引く確率へ効く強さ。EV 経路と合わせて「本塁打はパワーの
+# 上位へ集まる」形を作る。リーグ HR 総量は hr_wall_clearance 側で決め、こちらは分布の集中度を持つ。
+const IDEAL_POWER_CURVE_WEIGHT: float = 1.6
 
 # 打球角度(LA)の基準値・投球コース別オフセット・ばらつき範囲とクランプ。
 # LA_RANDOM_SPREAD は _gaussian の係数(実効σ ≈ spread×0.577)。Statcast 実測の打球角は
@@ -116,9 +119,16 @@ const PITCHER_STUFF_CURVE_TAIL_SPAN: float = 0.2
 # こちらは**対戦の差**に掛かる。両者が同じだけ弱くなれば差は動かないので得点環境は移動せず
 # (レベル不変)、同水準どうしの能力差も残り、極端なミスマッチだけが飽和する。
 # EV / 芯 / 詰まり / 理想角の4経路は投打の重みが対称なので同じ差を共有する。
-# 較正は tools/run_pa_response_surface の farm_club_win_pct で行う。
-const MATCHUP_CURVE_PIVOT: float = 0.28
-const MATCHUP_CURVE_SPAN: float = 0.12
+#
+# **天井は投打で非対称** (差が正 = 打者優位)。打者優位側 (0.55+0.25=0.80) を投手優位側
+# (0.28+0.12=0.40) より高くしてある。同じ天井にすると、本塁打王を実勢 (30-40本) へ戻したときに
+# 規定 ERA 1点台の投手が帯 (3人以下) を超える — 失点は 0 で下げ止まるが打撃の上振れには
+# 同じ頭打ちが無いという実勢の非対称を、そのまま天井の差として持たせている。
+# 検証は tools/run_balance_report の 3 シードと tools/run_farm_report --seasons=3 の勝率ゲート。
+const MATCHUP_CURVE_PIVOT: float = 0.55
+const MATCHUP_CURVE_SPAN: float = 0.25
+const MATCHUP_CURVE_PITCHER_PIVOT: float = 0.28
+const MATCHUP_CURVE_PITCHER_SPAN: float = 0.12
 
 
 static func generate(
@@ -161,8 +171,14 @@ static func generate(
 	# power 系 (EV / 理想角) は長打力 vs 球威、contact 系 (芯 / 詰まり) は接触 vs 球威。
 	var matchup_pivot: float = _rule_float(rules, "matchup_curve_pivot", MATCHUP_CURVE_PIVOT)
 	var matchup_span: float = _rule_float(rules, "matchup_curve_span", MATCHUP_CURVE_SPAN)
-	var power_delta: float = PSBalanceProfile.compress_matchup_advantage(home_run_curve - stuff_curve, matchup_pivot, matchup_span)
-	var contact_delta: float = PSBalanceProfile.compress_matchup_advantage(contact_curve - stuff_curve, matchup_pivot, matchup_span)
+	var matchup_pitcher_pivot: float = _rule_float(rules, "matchup_curve_pitcher_pivot", MATCHUP_CURVE_PITCHER_PIVOT)
+	var matchup_pitcher_span: float = _rule_float(rules, "matchup_curve_pitcher_span", MATCHUP_CURVE_PITCHER_SPAN)
+	var power_delta: float = PSBalanceProfile.compress_matchup_advantage(
+		home_run_curve - stuff_curve, matchup_pivot, matchup_span, matchup_pitcher_pivot, matchup_pitcher_span
+	)
+	var contact_delta: float = PSBalanceProfile.compress_matchup_advantage(
+		contact_curve - stuff_curve, matchup_pivot, matchup_span, matchup_pitcher_pivot, matchup_pitcher_span
+	)
 
 	# 投球結果(球速・コース・ゾーン内外・2ストライク防御・強制アウト)を取り出す。
 	var pitch_velocity: int = int(pitch_outcome.get("pitch_velocity", 142))
@@ -281,7 +297,7 @@ static func generate(
 	var ideal_power_logit: float = PSBalanceProfile.logit(_rule_float(rules, "power_ideal_la_base_rate", POWER_IDEAL_LA_BASE_RATE))
 	# 長打力ゲート。上げると上位打者ほど本塁打向きの理想角に入りやすくなる。
 	ideal_power_logit += power_delta * _symmetric_weight(
-		_rule_float(rules, "ideal_power_curve_weight", 1.20),
+		_rule_float(rules, "ideal_power_curve_weight", IDEAL_POWER_CURVE_WEIGHT),
 		_rule_float(rules, "stuff_ideal_power_logit_weight", STUFF_IDEAL_POWER_LOGIT_WEIGHT)
 	)
 	ideal_power_logit += pitcher_contact_damage * _rule_float(rules, "pitcher_contact_damage_ideal_weight", 0.04)

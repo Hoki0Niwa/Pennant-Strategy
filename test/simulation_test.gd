@@ -1537,6 +1537,32 @@ func test_contact_quality_preserves_matchup_balance_when_both_levels_drop() -> v
 	).is_less(1.0)
 
 
+# 対戦優位の天井は**投打で非対称** (打者優位側 0.80 / 投手優位側 0.40)。
+# 大きなミスマッチでだけ差が出て、±0.8σ 程度の通常域では対称のまま
+# (test_contact_quality_preserves_matchup_balance_when_both_levels_drop が固定している)。
+# 同じ天井に戻すと、本塁打王を実勢へ戻したときに規定 ERA 1点台の投手が増えすぎる。
+func test_contact_quality_matchup_ceiling_is_asymmetric_for_large_mismatches() -> void:
+	var old_seed: int = Rng.current_seed
+	var old_state: int = Rng.generator.state
+	var baseline_ev: float = _contact_quality_average_ev(0.0, 0.0)
+	var batter_edge_ev: float = _contact_quality_average_ev(0.0, -2.5)
+	var pitcher_edge_ev: float = _contact_quality_average_ev(-2.5, 0.0)
+	Rng.current_seed = old_seed
+	Rng.generator.seed = old_seed
+	Rng.generator.state = old_state
+
+	var batter_swing: float = batter_edge_ev - baseline_ev
+	var pitcher_swing: float = baseline_ev - pitcher_edge_ev
+	print("ASYM_EV base=%.2f batter_swing=%.2f pitcher_swing=%.2f" % [
+		baseline_ev, batter_swing, pitcher_swing,
+	])
+	assert_float(batter_swing).override_failure_message(
+		"大きなミスマッチで打者優位側の天井が投手優位側より高くなっていない"
+	).is_greater(pitcher_swing + 1.0)
+	# 打者優位側にも天井はある (青天井にしない)。
+	assert_float(batter_swing).is_less(8.0)
+
+
 func test_contact_quality_caps_elite_matchup_tails() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state

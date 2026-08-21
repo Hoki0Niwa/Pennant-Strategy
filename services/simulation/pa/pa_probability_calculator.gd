@@ -58,8 +58,13 @@ const PLATOON_WEIGHT: float = 0.3
 # 追跡しない一度きりの実測値)。K は打者側の重みが2倍なので中心が負へ寄る。
 const K_MATCHUP_CENTER: float = -0.32
 const BB_MATCHUP_CENTER: float = -0.20
-const MATCHUP_LOGIT_PIVOT: float = 0.4
-const MATCHUP_LOGIT_SPAN: float = 0.3
+# K/BB は**両側同じ天井** (contact_quality 側だけ打者優位側を高くしている)。
+# 天井 0.90 は奪三振王の水準で決めた — 0.70 だとエースの奪三振が頭打ちで K/9 のリーグ最高が
+# 9 台に留まり、実 NPB (10-11.5) に届かない。緩めると規定 ERA 1点台の投手が増える方向だが、
+# 3シード実測では 3-4 人 (帯は 3 人以下) に収まる。
+# (K は「正 = 投手優位」で contact_quality と符号の意味が逆な点に注意。)
+const MATCHUP_LOGIT_PIVOT: float = 0.55
+const MATCHUP_LOGIT_SPAN: float = 0.35
 
 
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。

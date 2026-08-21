@@ -9,6 +9,8 @@ const DefenseAlignmentService = preload("res://services/simulation/lineup/defens
 const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 
 const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
+# 自動編成チームの守備起用設定を組み直す間隔 (チーム試合数)。143 試合で約10回。
+const AI_USAGE_REBUILD_INTERVAL: int = 14
 const MIN_ACTIVE_CATCHERS: int = 2
 # 先発候補は保存 role を正準にする。先発 role が1人でもいればリリーフをローテへ混ぜず、
 # 先発ゼロの小規模/壊れたロスターだけ緊急補充を許す。その補充上限がこの定数。
@@ -843,12 +845,29 @@ static func build_setup_from_auto(
 		_prime_farm_batting_memo(batting_memo, available_fielders, team_games_played_before)
 	var usage_settings: Dictionary = {} if is_farm else season.get_fielder_usage(team_id)
 	var team: PSTeam = GameDb.get_team(team_id)
-	if not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders):
+	var needs_ai_defaults: bool = not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders)
+	# 自動編成チームの守備起用設定は AI_USAGE_REBUILD_INTERVAL 試合ごとに組み直す。
+	# 定位置を一度決めたきり動かさないと、不振のレギュラーが一年間出続けて規定打席到達者が
+	# リーグ 75-79 人 (NPB 48-61) まで膨らむ。スタメン選出 (`starter_assignment_score`) は
+	# 今季成績込み (`batting_score_with_form` + 実測 OAA) なので、組み直せば不振の選手は
+	# 定位置を失い、好調な控えが取る。毎試合やると日替わりスタメンになるので間隔を空け、
+	# 選出側の在籍ボーナスがヒステリシスとして働く。
+	var periodic_rebuild: bool = (
+		not is_farm
+		and not needs_ai_defaults
+		and team != null
+		and team.auto_lineup
+		and team_games_played_before > 0
+		and team_games_played_before % AI_USAGE_REBUILD_INTERVAL == 0
+	)
+	if needs_ai_defaults or periodic_rebuild:
+		# 組み直しでは保存設定を渡さない — 渡すと現レギュラーがそのまま選ばれ、評価し直す意味が無い。
+		var evaluation_usage: Dictionary = {} if periodic_rebuild else usage_settings
 		var base_slots: Array = select_defensive_starters_with_usage(
-			team_id, available_fielders, usage_settings, 1, batting_memo
+			team_id, available_fielders, evaluation_usage, 1, batting_memo
 		)
 		if base_slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
-			usage_settings = build_ai_fielder_usage(available_fielders, base_slots, usage_settings)
+			usage_settings = build_ai_fielder_usage(available_fielders, base_slots, usage_settings, periodic_rebuild)
 			season.set_fielder_usage(team_id, usage_settings)
 	if not is_farm and team != null and team.auto_lineup:
 		usage_settings = _usage_with_callup_start(
@@ -1231,7 +1250,15 @@ static func _usage_needs_ai_defaults(usage_settings: Dictionary, available_field
 	return false
 
 
-static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slots: Array, existing_usage: Dictionary = {}) -> Dictionary:
+# refresh_intervals: 定期組み直しでは控えの起用間隔も測り直す。間隔はスターかどうか (今季成績込み)
+# で変わるので、保存値を持ち回すと不振になったスターがそのまま全試合出場を続けてしまう。
+# ユーザーが手で設定した間隔を壊さないよう、既定生成時 (false) は保存値を優先する。
+static func build_ai_fielder_usage(
+	available_fielders: Array,
+	base_fielding_slots: Array,
+	existing_usage: Dictionary = {},
+	refresh_intervals: bool = false
+) -> Dictionary:
 	var existing_slots: Dictionary = existing_usage.get("position_slots", {}) as Dictionary
 	var position_slots: Dictionary = existing_slots.duplicate(true)
 	var starter_ids: Dictionary = {}
@@ -1250,7 +1277,10 @@ static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slot
 		var existing_slot: Dictionary = _usage_slot_for_position(position_slots, position)
 		var starter_id: int = int(existing_slot.get("starter_id", 0))
 		var starter: PSPlayerSeasonRecord = _record_by_id(available_fielders, starter_id)
-		if starter_id <= 0 or starter == null or position_aptitude(starter, position) <= 0:
+		# base_fielding_slots は今季成績込みの選出結果なので、その位置の最良をそのまま定位置にする。
+		# 僅差では選出側の在籍ボーナスで現レギュラーが残るため、ここで別途ヒステリシスは持たない。
+		if starter_id <= 0 or starter == null or position_aptitude(starter, position) <= 0 \
+				or record.player_id != starter_id:
 			starter_id = record.player_id
 		starter_ids[starter_id] = true
 		var sub_id: int = int(existing_slot.get("sub_id", 0))
@@ -1268,7 +1298,7 @@ static func build_ai_fielder_usage(available_fielders: Array, base_fielding_slot
 			sub_id = 0 if sub == null else sub.player_id
 		if sub_id > 0:
 			assigned_sub_ids[sub_id] = true
-		if interval == 0 and sub != null:
+		if (interval == 0 or refresh_intervals) and sub != null:
 			interval = _sub_interval_for(record, sub, position)
 		# ユーザが「控え」で設定した補充優先リストは AI 既定生成でも保持する。
 		var backup_ids: Array = (existing_slot.get("backup_ids", []) as Array).duplicate()
@@ -1322,14 +1352,40 @@ static func _best_sub_for_position(
 # 正捕手でも守備負荷ゆえ定期休養させる上限間隔。7 試合に 1 度の控え先発で
 # 143 試合中の先発は約 122 試合 (MLB のフル稼働正捕手 ~120-130 先発と同水準) になる。
 const CATCHER_SUB_INTERVAL_MAX: int = 7
+# スター以外の上限。控えとの能力差がどれだけ開いていても 10 試合に 1 度は控えが先発する
+# (143 試合中の先発は約 129 = 実 NPB の主力野手の上限帯)。UI の選択肢 (最大 10) とも揃える。
+const SUB_INTERVAL_STAR_MAX: int = 10
+# 「全試合スタメン」を許すリーグ相対の水準 (σ)。判定に使うのは `PSBatterForm` の総合指標 =
+# 表示能力を**そのシーズンの支配下野手の分布**で σ 化し、今季・過去の成績をブレンドした値。
+# したがって次の2つが自動的に満たされる ([[project_player_form_evaluation]] の作法):
+#   - リーグ内で能力が突出していない選手は、控えとの差が大きくても対象外
+#   - 能力はあっても**今季の成績が落ちていれば指標が下がり**、休養が入る (打席が増えるほど成績の比重が上がる)
+# 絶対値の rating 点ではなく母集団相対で置くのは、リーグ水準が動いても判定がズレないようにするため。
+const EVERYDAY_STAR_INDEX_Z: float = 1.3
+
+
+# リーグ相対で突出した打者か。能力だけでなく今季の成績も入った母集団 σ 指標で見るので、
+# 「能力はスターだが今季は打てていない」選手は false になり、定期休養の対象へ戻る。
+static func _is_everyday_star(record: PSPlayerSeasonRecord) -> bool:
+	if record == null or record.is_pitcher():
+		return false
+	var indexes: Dictionary = PSBatterForm.indexes(record)
+	return float(indexes.get("total", 0.0)) >= EVERYDAY_STAR_INDEX_Z
 
 
 static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, position: int) -> int:
 	if starter == null or sub == null:
 		return 0
+	# **リーグ相対で突出した打者は「基本的に全試合スタメン」** (捕手だけは守備負荷で上限あり)。
+	# ここだけは控えとの能力差を見ない — 控えが良いからスターを休ませる、は現実の起用ではない。
+	if _is_everyday_star(starter):
+		return CATCHER_SUB_INTERVAL_MAX if position == 2 else SUB_INTERVAL_FATIGUE_EMERGENCY
 	var gap: int = max(0, PlayerValueEvaluator.overall_score(starter) - PlayerValueEvaluator.overall_score(sub))
 	# 能力差(gap)に応じた控えの定期スタメン間隔。差が小さいほど頻繁に起用する。
-	var interval: int = SUB_INTERVAL_FATIGUE_EMERGENCY  # 5 点差以上 → 疲労/緊急時のみ
+	# スター以外は**どれだけ控えとの差が開いていても全試合出場にはしない** (最大 SUB_INTERVAL_STAR_MAX)。
+	# 「控えより上」だけを条件にすると全スロットが休養なしになり、規定打席到達者がリーグ 75-79 人
+	# (NPB 48-61) まで膨らむ。実 NPB でも 143 全試合出場は毎年数人で、多くの主力は 120-135 先発。
+	var interval: int = SUB_INTERVAL_STAR_MAX
 	if gap <= 1:
 		interval = 2  # ほぼ互角 → 2 試合に 1 度
 	elif gap <= 2:
@@ -1337,6 +1393,8 @@ static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeason
 	elif gap <= 3:
 		interval = 4
 	elif gap <= 4:
+		interval = 5
+	elif gap <= 6:
 		interval = 6
 	# 捕手は能力差が大きくても「休養なし」にはしない (現実の正捕手は年 120 先発前後が上限)。
 	if position == 2 and (interval <= 0 or interval > CATCHER_SUB_INTERVAL_MAX):
