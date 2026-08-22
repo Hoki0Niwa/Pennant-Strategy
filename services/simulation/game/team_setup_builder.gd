@@ -8,7 +8,6 @@ const DefenseAlignmentProfile = preload("res://domain/defense_alignment_profile.
 const DefenseAlignmentService = preload("res://services/simulation/lineup/defense_alignment_service.gd")
 const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
 
-const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
 # 自動編成チームの守備起用設定を組み直す間隔 (チーム試合数)。143 試合で約10回。
 const AI_USAGE_REBUILD_INTERVAL: int = 14
 const MIN_ACTIVE_CATCHERS: int = 2
@@ -40,7 +39,7 @@ static func build_team_setup(
 	# 二軍は序列 (pitcher_ids) だけ別キーで持ち、**登板間隔の台帳 (last_start_day_by_pitcher) は
 	# 一軍と共有する**。これで「二軍で投げた翌日に昇格して中0日で先発」を構造的に防げる。
 	var saved_rotation: Dictionary = PSRotationPlanner.rotation_state_for_level(season, team_id, level)
-	# 消化試合数はレベルごとに数える。守備の交代間隔 (`rested_starter_ids_for_game`) と
+	# 消化試合数はレベルごとに数える。守備の出場シェア (`rested_starter_ids_for_game`) と
 	# 日替わり打順がこの値を使うので、二軍で一軍の試合数を渡すと休養サイクルがずれる。
 	# **二軍の出場輪番 (farm_usage_priority) の分母**でもあるのでローテ決定より前に出す。
 	var team_games_played_before: int = 0
@@ -847,11 +846,12 @@ static func build_setup_from_auto(
 	var team: PSTeam = GameDb.get_team(team_id)
 	var needs_ai_defaults: bool = not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders)
 	# 自動編成チームの守備起用設定は AI_USAGE_REBUILD_INTERVAL 試合ごとに組み直す。
-	# 定位置を一度決めたきり動かさないと、不振のレギュラーが一年間出続けて規定打席到達者が
-	# リーグ 75-79 人 (NPB 48-61) まで膨らむ。スタメン選出 (`starter_assignment_score`) は
-	# 今季成績込み (`batting_score_with_form` + 実測 OAA) なので、組み直せば不振の選手は
-	# 定位置を失い、好調な控えが取る。毎試合やると日替わりスタメンになるので間隔を空け、
-	# 選出側の在籍ボーナスがヒステリシスとして働く。
+	# 定位置を一度決めたきり動かさないと、不振のレギュラーが一年間同じ出場シェアで出続ける。
+	# スタメン選出 (`starter_assignment_score`) は今季成績込み (`batting_score_with_form` +
+	# 実測 OAA) なので、組み直せば不振の選手は定位置を失い、好調な控えが取る。
+	# 組み直しでは出場シェア自体も測り直す (refresh_shares) — シェアはリーグ相対の位置で
+	# 決まるため、保存値を持ち回すと不振の主力が高いシェアのまま残る。
+	# 毎試合やると日替わりスタメンになるので間隔を空け、選出側の在籍ボーナスがヒステリシスになる。
 	var periodic_rebuild: bool = (
 		not is_farm
 		and not needs_ai_defaults
@@ -1225,13 +1225,27 @@ static func _usage_needs_ai_defaults(usage_settings: Dictionary, available_field
 		if record != null:
 			record_by_id[record.player_id] = record
 	var starter_ids: Dictionary = {}
+	var sub_ids: Array = []
 	for position in GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER:
 		var slot: Dictionary = _usage_slot_for_position(position_slots, int(position))
-		var starter_id: int = int(slot.get("starter_id", 0))
-		var sub_id: int = int(slot.get("sub_id", 0))
-		if sub_id <= 0 or int(slot.get("sub_start_interval", 0)) == 0 or sub_id == starter_id:
+		var candidates: Array = DefenseAlignmentService.slot_candidates(slot)
+		if candidates.is_empty():
 			return true
+		var starter_share: float = DefenseAlignmentService.slot_starter_share(slot)
+		var starter_id: int = int((candidates[0] as Dictionary).get("player_id", 0))
 		starter_ids[starter_id] = true
+		# シェア未設定 (0.0 = 「自動」) は AI に決めさせる。
+		if starter_share <= 0.0:
+			return true
+		# シェアが 1.0 未満なのに併用相手が居ない枠は、残りを取る候補を AI に埋めさせる。
+		if candidates.size() < 2:
+			if starter_share >= 1.0:
+				continue
+			return true
+		var sub_id: int = int((candidates[1] as Dictionary).get("player_id", 0))
+		if sub_id <= 0 or sub_id == starter_id:
+			return true
+		sub_ids.append(sub_id)
 		if not record_by_id.is_empty():
 			if starter_id <= 0 or not record_by_id.has(starter_id) or not record_by_id.has(sub_id):
 				return true
@@ -1242,22 +1256,20 @@ static func _usage_needs_ai_defaults(usage_settings: Dictionary, available_field
 				return true
 			if sub == null or sub.injury_days > 0 or position_aptitude(sub, position_id) <= 0:
 				return true
-	for position in GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER:
-		var slot: Dictionary = _usage_slot_for_position(position_slots, int(position))
-		var sub_id: int = int(slot.get("sub_id", 0))
-		if starter_ids.has(sub_id):
+	for sub_id_value in sub_ids:
+		if starter_ids.has(int(sub_id_value)):
 			return true
 	return false
 
 
-# refresh_intervals: 定期組み直しでは控えの起用間隔も測り直す。間隔はスターかどうか (今季成績込み)
-# で変わるので、保存値を持ち回すと不振になったスターがそのまま全試合出場を続けてしまう。
-# ユーザーが手で設定した間隔を壊さないよう、既定生成時 (false) は保存値を優先する。
+# refresh_shares: 定期組み直しでは出場シェアも測り直す。シェアはリーグ相対の位置 (今季成績込み)
+# で変わるので、保存値を持ち回すと不振になった主力がそのまま同じ出場割合を保ってしまう。
+# ユーザーが手で設定したシェアを壊さないよう、既定生成時 (false) は保存値を優先する。
 static func build_ai_fielder_usage(
 	available_fielders: Array,
 	base_fielding_slots: Array,
 	existing_usage: Dictionary = {},
-	refresh_intervals: bool = false
+	refresh_shares: bool = false
 ) -> Dictionary:
 	var existing_slots: Dictionary = existing_usage.get("position_slots", {}) as Dictionary
 	var position_slots: Dictionary = existing_slots.duplicate(true)
@@ -1275,7 +1287,8 @@ static func build_ai_fielder_usage(
 		if record == null or position < 2 or position > 9:
 			continue
 		var existing_slot: Dictionary = _usage_slot_for_position(position_slots, position)
-		var starter_id: int = int(existing_slot.get("starter_id", 0))
+		var existing_candidates: Array = DefenseAlignmentService.slot_candidates(existing_slot)
+		var starter_id: int = DefenseAlignmentService.slot_starter_id(existing_slot)
 		var starter: PSPlayerSeasonRecord = _record_by_id(available_fielders, starter_id)
 		# base_fielding_slots は今季成績込みの選出結果なので、その位置の最良をそのまま定位置にする。
 		# 僅差では選出側の在籍ボーナスで現レギュラーが残るため、ここで別途ヒステリシスは持たない。
@@ -1283,10 +1296,17 @@ static func build_ai_fielder_usage(
 				or record.player_id != starter_id:
 			starter_id = record.player_id
 		starter_ids[starter_id] = true
-		var sub_id: int = int(existing_slot.get("sub_id", 0))
+		var sub_id: int = 0
+		if existing_candidates.size() > 1:
+			sub_id = int((existing_candidates[1] as Dictionary).get("player_id", 0))
+		elif not (existing_slot.get("backup_ids", []) as Array).is_empty():
+			# ユーザーが「控え」に置いた先頭を併用相手として優先する。
+			sub_id = int((existing_slot.get("backup_ids", []) as Array)[0])
 		if starter_ids.has(sub_id) or assigned_sub_ids.has(sub_id):
 			sub_id = 0
-		var interval: int = int(existing_slot.get("sub_start_interval", 0))
+		var share: float = 0.0
+		if not existing_candidates.is_empty():
+			share = float((existing_candidates[0] as Dictionary).get("share", 0.0))
 		var sub: PSPlayerSeasonRecord = null
 		if sub_id > 0:
 			sub = _record_by_id(available_fielders, sub_id)
@@ -1298,16 +1318,18 @@ static func build_ai_fielder_usage(
 			sub_id = 0 if sub == null else sub.player_id
 		if sub_id > 0:
 			assigned_sub_ids[sub_id] = true
-		if (interval == 0 or refresh_intervals) and sub != null:
-			interval = _sub_interval_for(record, sub, position)
+		# ユーザーが打順設定画面で明示指定したシェアは定期組み直しでも測り直さない。
+		var share_locked: bool = DefenseAlignmentService.slot_share_locked(existing_slot)
+		if share <= 0.0 or (refresh_shares and not share_locked):
+			share = _starter_share_for(record, sub, position)
 		# ユーザが「控え」で設定した補充優先リストは AI 既定生成でも保持する。
-		var backup_ids: Array = (existing_slot.get("backup_ids", []) as Array).duplicate()
-		position_slots[str(position)] = {
-			"starter_id": starter_id,
-			"sub_id": sub_id,
-			"sub_start_interval": interval,
-			"backup_ids": backup_ids,
-		}
+		# AI 既定は 2 人までのデプス。3 人以上の併用はユーザーが手で組む枠。
+		var candidates: Array = [{"player_id": starter_id, "share": share}]
+		if sub_id > 0 and share < 1.0:
+			candidates.append({"player_id": sub_id, "share": 1.0 - share})
+		position_slots[str(position)] = DefenseAlignmentService.make_slot(
+			candidates, (existing_slot.get("backup_ids", []) as Array), share_locked
+		)
 
 	var result: Dictionary = existing_usage.duplicate(true)
 	result["position_slots"] = position_slots
@@ -1349,57 +1371,82 @@ static func _best_sub_for_position(
 	return best
 
 
-# 正捕手でも守備負荷ゆえ定期休養させる上限間隔。7 試合に 1 度の控え先発で
-# 143 試合中の先発は約 122 試合 (MLB のフル稼働正捕手 ~120-130 先発と同水準) になる。
-const CATCHER_SUB_INTERVAL_MAX: int = 7
-# スター以外の上限。控えとの能力差がどれだけ開いていても 10 試合に 1 度は控えが先発する
-# (143 試合中の先発は約 129 = 実 NPB の主力野手の上限帯)。UI の選択肢 (最大 10) とも揃える。
-const SUB_INTERVAL_STAR_MAX: int = 10
-# 「全試合スタメン」を許すリーグ相対の水準 (σ)。判定に使うのは `PSBatterForm` の総合指標 =
-# 表示能力を**そのシーズンの支配下野手の分布**で σ 化し、今季・過去の成績をブレンドした値。
-# したがって次の2つが自動的に満たされる ([[project_player_form_evaluation]] の作法):
-#   - リーグ内で能力が突出していない選手は、控えとの差が大きくても対象外
-#   - 能力はあっても**今季の成績が落ちていれば指標が下がり**、休養が入る (打席が増えるほど成績の比重が上がる)
-# 絶対値の rating 点ではなく母集団相対で置くのは、リーグ水準が動いても判定がズレないようにするため。
-const EVERYDAY_STAR_INDEX_Z: float = 1.3
+# --- 出場シェア (定位置がその守備位置の先発を何割取るか) ---
+#
+# **シェアはリーグの先発級の中での相対位置だけで決める。控えとの能力差では決めない。**
+# 旧方式 (控えとの rating 差 → 休養間隔) は、控えが定義上ベンチ級で差がほぼ常に大きいため
+# 96 枠中 82 枠が上限へ張り付き、しかもその上限 (10 試合に 1 度の休養 = 129 先発) が
+# 規定打席ライン (105 先発) より上だったので、**どう設定しても全枠が規定に届いた**
+# (2026-08-22 の実測は [[project_qualified_batter_count]])。
+#
+# `PSBatterForm.regular_z` は「能力だけで測った先発級分布」に「今季成績込みの総合指標」を
+# 当てた σ 値なので、次の 2 つが自動的に入る ([[project_player_form_evaluation]] の作法):
+#   - リーグ内で突出していない選手は、控えとの差が大きくても全試合出場にならない
+#   - 能力はあっても今季打てていなければ位置が下がり、出場が減る (打席が増えるほど成績の比重が上がる)
+#
+# アンカーは (z, share)。z は守備位置別にゼロ点を合わせてあるので、
+# **その守備位置の平均的な定位置選手 (z=0) が share 0.72 ≒ 103 先発 = 規定打席未到達**。
+# ここが到達者数の唯一のノブ: 全体を上げれば到達者が増え、下げれば減る。
+const SHARE_CURVE: Array = [
+	[-1.50, 0.48],
+	[-1.00, 0.55],
+	[-0.50, 0.63],
+	[0.00, 0.72],
+	[0.60, 0.82],
+	[1.30, 0.92],
+	[2.20, 1.00],
+]
+# 控えとの差による副次補正。主役はあくまでリーグ相対だが、これが無いと
+# 「代役がベンチ級しか居ないのに定位置選手が休む」「控えが定位置級でも出番が増えない」が起きる。
+# TYPICAL は「ふつうの定位置 vs 控え」の z 差で、そこからのズレだけを ±で効かせる。
+const SHARE_GAP_TYPICAL_Z: float = 1.0
+const SHARE_GAP_WEIGHT: float = 0.08
+const SHARE_GAP_MIN: float = -0.10
+const SHARE_GAP_MAX: float = 0.08
+# 捕手だけは守備負荷でシェアに上限を置く (旧 CATCHER_SUB_INTERVAL_MAX = 7 と同水準の 123 先発)。
+# 他ポジション (遊撃・中堅など) の耐久上限はまだ入れていない。
+const CATCHER_SHARE_MAX: float = 0.86
+const SHARE_MIN: float = 0.40
+const SHARE_MAX: float = 1.00
 
 
-# リーグ相対で突出した打者か。能力だけでなく今季の成績も入った母集団 σ 指標で見るので、
-# 「能力はスターだが今季は打てていない」選手は false になり、定期休養の対象へ戻る。
-static func _is_everyday_star(record: PSPlayerSeasonRecord) -> bool:
-	if record == null or record.is_pitcher():
-		return false
-	var indexes: Dictionary = PSBatterForm.indexes(record)
-	return float(indexes.get("total", 0.0)) >= EVERYDAY_STAR_INDEX_Z
+# 定位置選手がその守備位置の先発を取る割合。控えが居なければ休ませようがないので 1.0。
+static func _starter_share_for(
+	starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, position: int
+) -> float:
+	if starter == null:
+		return 1.0
+	if sub == null:
+		return 1.0
+	# z は**その守備位置の先発級**基準。捕手・遊撃のように打撃水準の低いポジションでも
+	# 「その位置の定位置級として平均なら share も平均」になる (ゼロ点合わせは基準分布側の責務)。
+	var starter_z: float = PSBatterForm.regular_z(starter, position)
+	var share: float = _share_from_curve(starter_z)
+	var gap: float = starter_z - PSBatterForm.regular_z(sub, position)
+	share += clampf(
+		(gap - SHARE_GAP_TYPICAL_Z) * SHARE_GAP_WEIGHT, SHARE_GAP_MIN, SHARE_GAP_MAX
+	)
+	if position == 2:
+		share = minf(share, CATCHER_SHARE_MAX)
+	return clampf(share, SHARE_MIN, SHARE_MAX)
 
 
-static func _sub_interval_for(starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, position: int) -> int:
-	if starter == null or sub == null:
-		return 0
-	# **リーグ相対で突出した打者は「基本的に全試合スタメン」** (捕手だけは守備負荷で上限あり)。
-	# ここだけは控えとの能力差を見ない — 控えが良いからスターを休ませる、は現実の起用ではない。
-	if _is_everyday_star(starter):
-		return CATCHER_SUB_INTERVAL_MAX if position == 2 else SUB_INTERVAL_FATIGUE_EMERGENCY
-	var gap: int = max(0, PlayerValueEvaluator.overall_score(starter) - PlayerValueEvaluator.overall_score(sub))
-	# 能力差(gap)に応じた控えの定期スタメン間隔。差が小さいほど頻繁に起用する。
-	# スター以外は**どれだけ控えとの差が開いていても全試合出場にはしない** (最大 SUB_INTERVAL_STAR_MAX)。
-	# 「控えより上」だけを条件にすると全スロットが休養なしになり、規定打席到達者がリーグ 75-79 人
-	# (NPB 48-61) まで膨らむ。実 NPB でも 143 全試合出場は毎年数人で、多くの主力は 120-135 先発。
-	var interval: int = SUB_INTERVAL_STAR_MAX
-	if gap <= 1:
-		interval = 2  # ほぼ互角 → 2 試合に 1 度
-	elif gap <= 2:
-		interval = 3
-	elif gap <= 3:
-		interval = 4
-	elif gap <= 4:
-		interval = 5
-	elif gap <= 6:
-		interval = 6
-	# 捕手は能力差が大きくても「休養なし」にはしない (現実の正捕手は年 120 先発前後が上限)。
-	if position == 2 and (interval <= 0 or interval > CATCHER_SUB_INTERVAL_MAX):
-		interval = CATCHER_SUB_INTERVAL_MAX
-	return interval
+# SHARE_CURVE の線形補間 (両端はクランプ)。
+static func _share_from_curve(z: float) -> float:
+	var first: Array = SHARE_CURVE[0] as Array
+	if z <= float(first[0]):
+		return float(first[1])
+	for index in range(1, SHARE_CURVE.size()):
+		var high: Array = SHARE_CURVE[index] as Array
+		if z > float(high[0]):
+			continue
+		var low: Array = SHARE_CURVE[index - 1] as Array
+		var span: float = float(high[0]) - float(low[0])
+		if span <= 0.0:
+			return float(high[1])
+		var t: float = (z - float(low[0])) / span
+		return float(low[1]) + (float(high[1]) - float(low[1])) * t
+	return float((SHARE_CURVE[SHARE_CURVE.size() - 1] as Array)[1])
 
 
 static func _record_by_id(records: Array, player_id: int) -> PSPlayerSeasonRecord:
@@ -1424,7 +1471,7 @@ static func _usage_with_callup_start(
 	var position_slots: Dictionary = usage_settings.get("position_slots", {}) as Dictionary
 	for slot_value in position_slots.values():
 		var slot: Dictionary = slot_value as Dictionary
-		starter_ids[int(slot.get("starter_id", 0))] = true
+		starter_ids[DefenseAlignmentService.slot_starter_id(slot)] = true
 	for row in available_fielders:
 		var record: PSPlayerSeasonRecord = row as PSPlayerSeasonRecord
 		if record == null or record.injury_days > 0 or record.is_pitcher():
@@ -1468,25 +1515,34 @@ static func _usage_with_callup_start(
 	var out: Dictionary = usage_settings.duplicate(true)
 	var out_slots: Dictionary = (out.get("position_slots", {}) as Dictionary).duplicate(true)
 	var callup_slot: Dictionary = _usage_slot_for_position(out_slots, best_position).duplicate(true)
-	callup_slot["sub_id"] = candidate.player_id
-	callup_slot["sub_start_interval"] = 1
+	# この試合だけ候補列を差し替える。定位置選手を share 0 で先頭に残すのは、
+	# `rested_starter_ids_for_game` が「今日は休み」と判定して DH へ回さないようにするため
+	# (make_slot は share 0 を落とすので、ここは正規化せず直接組む)。
+	var rested_starter_id: int = DefenseAlignmentService.slot_starter_id(callup_slot)
+	var callup_candidates: Array = []
+	if rested_starter_id > 0 and rested_starter_id != candidate.player_id:
+		callup_candidates.append({"player_id": rested_starter_id, "share": 0.0})
+	callup_candidates.append({"player_id": candidate.player_id, "share": 1.0})
+	callup_slot["candidates"] = callup_candidates
 	out_slots[str(best_position)] = callup_slot
 	out["position_slots"] = out_slots
 	return out
 
 
+# その試合で「休養日」になる定位置選手 (= 出場シェア上、当日の担当が別の候補になる枠)。
+# DH 選出から除外するために使う — 守備を休ませた選手をそのまま DH で使ったら休養にならない。
 static func rested_starter_ids_for_game(usage_settings: Dictionary, next_game_number: int) -> Dictionary:
 	var rested: Dictionary = {}
 	var position_slots: Dictionary = usage_settings.get("position_slots", {}) as Dictionary
 	for slot_value in position_slots.values():
 		var slot: Dictionary = slot_value as Dictionary
-		var interval: int = int(slot.get("sub_start_interval", 0))
-		if interval <= 0 or next_game_number <= 0 or next_game_number % interval != 0:
+		var starter_id: int = DefenseAlignmentService.slot_starter_id(slot)
+		if starter_id <= 0:
 			continue
-		var starter_id: int = int(slot.get("starter_id", 0))
-		var sub_id: int = int(slot.get("sub_id", 0))
-		if starter_id > 0 and sub_id > 0 and starter_id != sub_id:
-			rested[starter_id] = true
+		var due_ids: Array = DefenseAlignmentService.ordered_candidate_ids_for_game(slot, next_game_number)
+		if due_ids.is_empty() or int(due_ids[0]) == starter_id:
+			continue
+		rested[starter_id] = true
 	return rested
 
 

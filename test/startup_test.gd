@@ -2095,6 +2095,72 @@ func test_remaining_season_screens_build_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+# 打順設定の「出場配分」操作 (スライダー / 数値直接入力 / 自動へ戻す)。
+# クリック循環をやめてスライダー+数値入力にした 2026-08-22 の回帰ガード。
+func test_lineup_editor_share_slider_and_numeric_input() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var screen_script: GDScript = load("res://ui/screens/lineup_editor_screen.gd") as GDScript
+	var screen: Control = screen_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	# スライダーの矩形は _draw で確定するので、判定だけを見るためここで直接与える。
+	var position_id: int = 3
+	screen._slider_hits = [{"rect": Rect2(100.0, 0.0, 100.0, 6.0), "pos": position_id}]
+
+	# 左端 = 下限、中央 = 下限と 100% の中点、右端 = 100%。触れた時点で「指定」になる。
+	screen._apply_slider_value(position_id, 100.0)
+	assert_float(screen._effective_share(position_id)).is_equal_approx(screen.SHARE_SLIDER_MIN, 0.005)
+	assert_bool(bool(screen._share_locked.get(position_id, false))).is_true()
+	screen._apply_slider_value(position_id, 150.0)
+	assert_float(screen._effective_share(position_id)).is_equal_approx(
+		screen.SHARE_SLIDER_MIN + (1.0 - screen.SHARE_SLIDER_MIN) * 0.5, 0.01
+	)
+	screen._apply_slider_value(position_id, 400.0)
+	assert_float(screen._effective_share(position_id)).is_equal_approx(1.0, 0.005)
+
+	# 数値直接入力: 範囲外は丸め、0/空欄は「自動」へ戻す。
+	screen._share_edit.visible = true
+	screen._share_edit_pos = position_id
+	screen._share_edit.text = "65"
+	screen._commit_share_edit()
+	assert_float(screen._effective_share(position_id)).is_equal_approx(0.65, 0.005)
+
+	screen._share_edit.visible = true
+	screen._share_edit_pos = position_id
+	screen._share_edit.text = "150"
+	screen._commit_share_edit()
+	assert_float(screen._effective_share(position_id)).is_equal_approx(1.0, 0.005)
+
+	screen._share_edit.visible = true
+	screen._share_edit_pos = position_id
+	screen._share_edit.text = "0"
+	screen._commit_share_edit()
+	assert_bool(bool(screen._share_locked.get(position_id, false))).is_false()
+
+	screen.queue_free()
+	await get_tree().process_frame
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 # シーズン開始前の入口画面 (セーブもシーズンも無い状態で開かれる)。
 func test_entry_screens_build_without_active_season() -> void:
 	var old_screen: String = AppState.current_screen

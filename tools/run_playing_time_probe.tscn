@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_playing_time_probe.gd" id="1_run_playing_time_probe"]
+
+[node name="RunPlayingTimeProbe" type="Node"]
+script = ExtResource("1_run_playing_time_probe")

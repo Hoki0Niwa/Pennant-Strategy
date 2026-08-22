@@ -773,12 +773,9 @@ func test_usage_backup_ids_take_priority_over_profile() -> void:
 	profile.starting_positions = template.duplicate()
 	profile.backup_priority = {2: [profile_backup.player_id]}
 
-	var usage: Dictionary = {"position_slots": {"2": {
-		"starter_id": injured_catcher.player_id,
-		"sub_id": 0,
-		"sub_start_interval": 0,
-		"backup_ids": [usage_backup.player_id],
-	}}}
+	var usage: Dictionary = {"position_slots": {"2": PSDefenseAlignmentService.make_slot(
+		[{"player_id": injured_catcher.player_id, "share": 1.0}], [usage_backup.player_id]
+	)}}
 
 	var slots: Array = PSDefenseAlignmentService.assign_defensive_starters(fielders, profile, usage, 1)
 	var catcher_id: int = 0
@@ -856,7 +853,9 @@ func test_ai_alignment_demotes_collapsed_premium_starter() -> void:
 
 	var profile: PSDefenseAlignmentProfile = PSDefenseAlignmentProfile.build_default(9998)
 	profile.starting_positions = template.duplicate()
-	var slot_six: Dictionary = {"starter_id": collapsed_ss.player_id, "sub_id": 0, "sub_start_interval": 0, "backup_ids": []}
+	var slot_six: Dictionary = PSDefenseAlignmentService.make_slot(
+		[{"player_id": collapsed_ss.player_id, "share": 1.0}]
+	)
 
 	var ai_usage: Dictionary = {"position_slots": {"6": slot_six.duplicate(true)}, "ai_generated": true}
 	var ai_slots: Array = PSDefenseAlignmentService.assign_defensive_starters(fielders, profile, ai_usage, 1)
@@ -2160,15 +2159,66 @@ func test_promoted_reliever_gets_first_low_leverage_opportunity() -> void:
 	assert_int(selected.player_id).is_equal(callup.player_id)
 
 
+# 出場シェアが「シェアどおりの先発数」と「均等に散った休養日」の両方を満たすか。
+# 規定打席ラインが share 0.735 (先発 105 試合) なので、ここがズレると到達者数が動く。
+func test_starter_share_produces_proportional_and_evenly_spread_starts() -> void:
+	for share_value in [1.0, 0.9, 0.72, 0.5]:
+		var share: float = float(share_value)
+		var starts: int = 0
+		var longest_rest_streak: int = 0
+		var rest_streak: int = 0
+		for game_number in range(1, 144):
+			if PSDefenseAlignmentService.share_index_for_game([share, 1.0 - share], game_number) == 0:
+				starts += 1
+				rest_streak = 0
+			else:
+				rest_streak += 1
+				longest_rest_streak = maxi(longest_rest_streak, rest_streak)
+		assert_int(starts).override_failure_message(
+			"share %.2f should produce round(143*share) starts, got %d" % [share, starts]
+		).is_equal(int(round(143.0 * share)))
+		# シェアどおりに散っていれば連続休養は最大 1 試合 (share >= 0.5 の範囲)。
+		assert_int(longest_rest_streak).is_less_equal(1)
+
+	# 3 人併用でもシェアの比どおりに配分される (最大剰余法の一般形)。
+	var counts: Array = [0, 0, 0]
+	for game_number in range(1, 144):
+		var index: int = PSDefenseAlignmentService.share_index_for_game([0.6, 0.25, 0.15], game_number)
+		counts[index] = int(counts[index]) + 1
+	assert_int(int(counts[0])).is_between(84, 88)
+	assert_int(int(counts[1])).is_between(34, 38)
+	assert_int(int(counts[2])).is_between(19, 23)
+
+
+# シェアは**リーグ相対**で決まり、控えの質は副次補正 (SHARE_GAP_*) の幅しか動かさない。
+# 旧方式 (控えとの能力差が主役) に戻ると全枠が上限へ張り付いて規定到達者が膨らむ。
+func test_starter_share_is_league_relative_not_bench_relative() -> void:
+	var starter: PSPlayerSeasonRecord = _fielder(520, "Starter", 1.0)
+	var weak_sub: PSPlayerSeasonRecord = _fielder(521, "Weak Sub", -1.5)
+	var strong_sub: PSPlayerSeasonRecord = _fielder(522, "Strong Sub", 0.9)
+	var better_starter: PSPlayerSeasonRecord = _fielder(523, "Better Starter", 2.2)
+
+	var share_with_weak_sub: float = PSTeamSetupBuilder._starter_share_for(starter, weak_sub, 3)
+	var share_with_strong_sub: float = PSTeamSetupBuilder._starter_share_for(starter, strong_sub, 3)
+	var gap_band: float = PSTeamSetupBuilder.SHARE_GAP_MAX - PSTeamSetupBuilder.SHARE_GAP_MIN
+	assert_float(share_with_weak_sub - share_with_strong_sub).override_failure_message(
+		"bench quality must not move the share by more than the gap correction band"
+	).is_between(0.0, gap_band + 0.001)
+
+	# 同じ控えなら、リーグ相対で上の打者ほどシェアが高い。
+	assert_float(
+		PSTeamSetupBuilder._starter_share_for(better_starter, weak_sub, 3)
+	).is_greater(share_with_weak_sub)
+	# 控えが居ない枠は休ませようがないので全試合。
+	assert_float(PSTeamSetupBuilder._starter_share_for(starter, null, 3)).is_equal(1.0)
+
+
 func test_promoted_fielder_gets_one_automatic_start_without_rewriting_usage() -> void:
 	var starter: PSPlayerSeasonRecord = _fielder(380, "Starter", 1.0)
 	var callup: PSPlayerSeasonRecord = _fielder(381, "Callup", 0.0)
-	var usage: Dictionary = {"position_slots": {"3": {
-		"starter_id": starter.player_id,
-		"sub_id": 0,
-		"sub_start_interval": 0,
-		"backup_ids": [],
-	}}, "ai_generated": true}
+	var usage: Dictionary = {"position_slots": {"3": PSDefenseAlignmentService.make_slot(
+		[{"player_id": starter.player_id, "share": 1.0}]
+	)}, "ai_generated": true}
 
 	var game_usage: Dictionary = PSTeamSetupBuilder._usage_with_callup_start(
 		usage, [starter, callup], {str(callup.player_id): 0}
@@ -2176,9 +2226,11 @@ func test_promoted_fielder_gets_one_automatic_start_without_rewriting_usage() ->
 	var slot: Dictionary = (game_usage.get("position_slots", {}) as Dictionary).get("3", {}) as Dictionary
 	var saved_slot: Dictionary = (usage.get("position_slots", {}) as Dictionary).get("3", {}) as Dictionary
 
-	assert_int(int(slot.get("sub_id", 0))).is_equal(callup.player_id)
-	assert_int(int(slot.get("sub_start_interval", 0))).is_equal(1)
-	assert_int(int(saved_slot.get("sub_id", 0))).is_equal(0)
+	# その試合だけ昇格選手が先発し、定位置選手は share 0 の先頭に残って「休養」扱いになる。
+	assert_int(int(PSDefenseAlignmentService.ordered_candidate_ids_for_game(slot, 1)[0])).is_equal(callup.player_id)
+	assert_int(PSDefenseAlignmentService.slot_starter_id(slot)).is_equal(starter.player_id)
+	assert_bool(PSTeamSetupBuilder.rested_starter_ids_for_game(game_usage, 1).has(starter.player_id)).is_true()
+	assert_int(PSDefenseAlignmentService.slot_candidates(saved_slot).size()).is_equal(1)
 	callup.batter_stats.games = 1
 	var after_appearance: Dictionary = PSTeamSetupBuilder._usage_with_callup_start(
 		usage, [starter, callup], {str(callup.player_id): 0}
@@ -2212,12 +2264,11 @@ func test_callup_start_override_reaches_the_final_defensive_alignment() -> void:
 		}
 		fielders.append(starter)
 		fielders.append(sub)
-		position_slots[str(position)] = {
-			"starter_id": starter.player_id,
-			"sub_id": sub.player_id,
-			"sub_start_interval": 99,
-			"backup_ids": [],
-		}
+		# share 1.0 = 定位置選手が全試合。昇格選手の 1 試合だけがこれを上書きできるかを見る。
+		position_slots[str(position)] = PSDefenseAlignmentService.make_slot([
+			{"player_id": starter.player_id, "share": 1.0},
+			{"player_id": sub.player_id, "share": 0.0},
+		])
 		if position == 3:
 			callup = sub
 	season.set_fielder_usage(team.id, {

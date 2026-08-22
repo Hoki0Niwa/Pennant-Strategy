@@ -1,12 +1,14 @@
 extends "res://ui/components/dashboard_screen.gd"
 
-# 打順・守備位置画面。一軍野手一覧、打順ドロップ枠、守備図、控え優先リストを同時に編集する。
-# 一覧/打順/守備図/控えの間でドラッグ&ドロップし、DH 使用時だけ打順枠の DH/守備切替を表示する。
+# 打順・守備位置画面。一軍野手一覧、打順ドロップ枠、守備図、出場配分を同時に編集する。
+# 一覧/打順/守備図/出場配分の間でドラッグ&ドロップし、DH 使用時だけ打順枠の DH/守備切替を表示する。
 #
 # データ:
 #   - 打順 = season.set_lineup(team_id, dh, {batting_order:[{slot,position,player_id}]})
-#   - 控え = season.fielder_usage.position_slots[pos] = {starter_id, sub_id(=控え1), sub_start_interval, backup_ids[]}
-#     backup_ids が「控え=補充優先リスト」。defense_alignment_service が usage の backup_ids を最優先で使う。
+#   - 出場配分 = season.fielder_usage.position_slots[pos]
+#     = {candidates:[{player_id, share}], backup_ids:[...], share_locked:bool}
+#     candidates[0] が定位置、[1] が併用相手 (=backup_ids[0])。backup_ids は補充優先リストで、
+#     defense_alignment_service が最優先で使う。share_locked=false は「配分は AI に任せる」。
 #   - 「自動編成」= AI 任せと同義 (preview_lineup で全自動埋め)。専用の常時 AI トグルは置かない。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
@@ -63,8 +65,27 @@ const O_OPS_R: float = 944.0
 const PITCHER_SLOT_INDEX: int = 8
 const DEF_POSITIONS: Array = [2, 3, 4, 5, 6, 7, 8, 9]
 const MAX_BENCH: int = 3
-const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
-const SUB_INTERVAL_OPTIONS: Array = [SUB_INTERVAL_FATIGUE_EMERGENCY, 2, 3, 4, 5, 6, 7, 10]
+# 定位置選手の出場シェア (その守備位置の先発を何割取るか)。0.0 = AI に任せる。
+const SHARE_AUTO: float = 0.0
+# スライダーの下限。これ未満は「定位置」と呼べないので、下げたいときは控えと入れ替える。
+const SHARE_SLIDER_MIN: float = 0.30
+# 「規定到達見込み」の表示に使う 先発1試合あたりの打席数の目安 (実測 4.2)。
+# 規定打席 = 試合数 × QUALIFIER_PA_PER_TEAM_GAME なので、必要先発数はこの比で出る。
+# 表示専用の概算で、実際の到達判定は成績側 (RecordStore の打席数) が正典。
+const PA_PER_START_ESTIMATE: float = 4.2
+const QUALIFIER_PA_PER_TEAM_GAME: float = 3.1
+
+# 出場配分リストの座標 (FIELD_PANEL の右半分)。守備図が左、配分が右。
+# 1行 = 1守備位置で、上段に 定位置 + スライダー + % + 自動チップ、下段に控え1..MAX_BENCH。
+const SHARE_LIST_LEFT: float = 1502.0
+const SHARE_LIST_RIGHT: float = 1884.0
+const SHARE_LIST_TOP: float = 704.0
+const SHARE_ROW_H: float = 42.0
+const SHARE_BADGE_W: float = 26.0
+const SHARE_NAME_W: float = 120.0
+const SHARE_SLIDER_W: float = 130.0
+const SHARE_VALUE_W: float = 46.0
+const SHARE_AUTO_CHIP_W: float = 38.0
 const CARD: Vector2 = Vector2(104, 34)
 
 var _team_id: int = 0
@@ -75,7 +96,15 @@ var _fielders: Array = []                 # PSPlayerSeasonRecord (1軍登録野�
 var _war_by_id: Dictionary = {}           # player_id -> season_war 結果 dict
 var _slots: Array = []                    # size 9: {"pid": int, "pos": int} = 打順i (index 0..8)
 var _backups: Dictionary = {}             # pos(2-9) -> Array[int]
-var _intervals: Dictionary = {}           # pos(2-9) -> int (sub_start_interval)
+# 出場配分。ユーザー指定値 (_shares) と、エンジンが実際に使っている値 (_effective_shares) を
+# 分けて持つ。_share_locked が false の枠は「AI に任せる」= 表示は _effective_shares 側。
+var _shares: Dictionary = {}              # pos(2-9) -> float (ユーザー指定の出場シェア)
+var _effective_shares: Dictionary = {}    # pos(2-9) -> float (保存済み candidates[0].share)
+var _share_locked: Dictionary = {}        # pos(2-9) -> bool
+# エンジンが実際に併用相手にしている選手 (保存済み candidates[1])。控えが未設定の枠でも
+# AI は誰かに残りの先発を割り当てているので、それを薄く出さないと「74試合の残りは誰?」になる。
+var _platoon_ids: Dictionary = {}         # pos(2-9) -> player_id
+var _team_scheduled_games: int = 0        # 先発試合数の表示に使うシーズン試合数
 var _rotation_pitcher_id: int = 0
 var _rotation_pitcher_name: String = "(未定)"
 var _status_text: String = ""
@@ -97,23 +126,51 @@ var _order_hits: Array = []               # {rect, index}
 var _field_hits: Array = []               # {rect, pos, draggable}
 var _bench_cell_hits: Array = []          # {rect, pos}
 var _bench_chip_hits: Array = []          # {rect, pos, pid}
-var _freq_hits: Array = []                # {rect, pos}
+var _slider_hits: Array = []              # {rect, pos} 出場配分スライダー
+var _share_value_hits: Array = []         # {rect, pos} % 表示 (クリックで数値入力)
+var _auto_chip_hits: Array = []           # {rect, pos} 「自動」へ戻すチップ
+
+# スライダー操作と数値直接入力。
+var _slider_drag_pos: int = 0             # 0 = 非ドラッグ、それ以外は操作中の守備位置
+var _share_edit: LineEdit = null
+var _share_edit_pos: int = 0
+var _share_edit_rect: Rect2 = Rect2()
 
 
 func _ready() -> void:
 	_init_chrome()
+	# 守備図は FIELD_PANEL の左半分 (x 1094-1478) に縦長で収める。右半分は出場配分リスト。
 	_field_centers = {
-		8: Vector2(1489, 712), 7: Vector2(1298, 736), 9: Vector2(1686, 736),
-		6: Vector2(1404, 778), 4: Vector2(1566, 778),
-		5: Vector2(1334, 816), 3: Vector2(1646, 816),
-		2: Vector2(1489, 848),
+		8: Vector2(1286, 726), 7: Vector2(1160, 772), 9: Vector2(1412, 772),
+		6: Vector2(1222, 830), 4: Vector2(1350, 830),
+		5: Vector2(1160, 888), 3: Vector2(1412, 888),
+		2: Vector2(1286, 946),
 	}
 	for i in range(9):
 		_slots.append({"pid": 0, "pos": 0})
 	_build_chrome_buttons()
+	_build_share_edit()
 	_load_initial_state()
 	_layout_buttons()
 	queue_redraw()
+
+
+# 出場配分の数値直接入力欄。1つを使い回し、編集中の枠へ重ねて表示する。
+func _build_share_edit() -> void:
+	_share_edit = LineEdit.new()
+	_share_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_share_edit.max_length = 3
+	_share_edit.context_menu_enabled = false
+	_share_edit.visible = false
+	_share_edit.text_submitted.connect(func(_t: String) -> void: _commit_share_edit())
+	_share_edit.focus_exited.connect(_commit_share_edit)
+	add_child(_share_edit)
+
+
+func _layout_buttons() -> void:
+	super._layout_buttons()
+	if _share_edit != null and _share_edit.visible:
+		_place_share_edit()
 
 
 # ============================================================ input
@@ -124,15 +181,26 @@ func _gui_input(event: InputEvent) -> void:
 		var base_pos: Vector2 = _to_base(event.position)
 		if event.pressed:
 			_press_screen = event.position
+			# スライダーは選手カードのドラッグより先に拾う (同じ押下で両方は起きない)。
+			var slider_pos: int = _slider_at(base_pos)
+			if slider_pos > 0:
+				_slider_drag_pos = slider_pos
+				_apply_slider_value(slider_pos, base_pos.x)
+				return
 			_pending = _pick_draggable(base_pos)
 		else:
-			if _drag_active:
+			if _slider_drag_pos > 0:
+				_slider_drag_pos = 0
+			elif _drag_active:
 				_finish_drag(base_pos)
 			else:
 				_handle_click(base_pos)
 			_pending = {}
 	elif event is InputEventMouseMotion:
-		if _drag_active:
+		if _slider_drag_pos > 0:
+			_update_transform()
+			_apply_slider_value(_slider_drag_pos, _to_base(event.position).x)
+		elif _drag_active:
 			_drag_pos = event.position
 			queue_redraw()
 		elif not _pending.is_empty() and event.position.distance_to(_press_screen) > 6.0:
@@ -232,13 +300,18 @@ func _drop_target_at(base_pos: Vector2) -> Dictionary:
 
 
 func _handle_click(base_pos: Vector2) -> void:
-	for hit_value in _freq_hits:
-		var hit: Dictionary = hit_value as Dictionary
-		if (hit["rect"] as Rect2).has_point(base_pos):
-			_cycle_interval(int(hit["pos"]))
-			_refresh_status()
-			queue_redraw()
+	for hit_value in _auto_chip_hits:
+		var auto_hit: Dictionary = hit_value as Dictionary
+		if (auto_hit["rect"] as Rect2).has_point(base_pos):
+			_set_share_auto(int(auto_hit["pos"]))
 			return
+	for hit_value in _share_value_hits:
+		var value_hit: Dictionary = hit_value as Dictionary
+		if (value_hit["rect"] as Rect2).has_point(base_pos):
+			_open_share_edit(int(value_hit["pos"]), value_hit["rect"] as Rect2)
+			return
+	# 入力欄の外をクリックしたら確定して閉じる (focus_exited でも同じ処理が走る)。
+	_commit_share_edit()
 
 
 # ============================================================ lineup ops
@@ -311,8 +384,6 @@ func _add_bench(pos: int, pid: int) -> void:
 		return
 	list.append(pid)
 	_backups[pos] = list
-	if not _intervals.has(pos):
-		_intervals[pos] = SUB_INTERVAL_FATIGUE_EMERGENCY
 
 
 func _remove_from_origin(origin: Dictionary, pid: int) -> void:
@@ -331,11 +402,92 @@ func _remove_from_origin(origin: Dictionary, pid: int) -> void:
 			_backups[int(origin["pos"])] = list
 
 
-func _cycle_interval(pos: int) -> void:
-	var cur: int = int(_intervals.get(pos, SUB_INTERVAL_FATIGUE_EMERGENCY))
-	var idx: int = SUB_INTERVAL_OPTIONS.find(cur)
-	idx = (idx + 1) % SUB_INTERVAL_OPTIONS.size()
-	_intervals[pos] = int(SUB_INTERVAL_OPTIONS[idx])
+# --- 出場配分の操作 (スライダー / 数値入力 / 自動へ戻す) ---
+
+# 当たり判定だけトラックより広く取る (トラックは高さ 6px で、そのままでは掴みにくい)。
+# 保持する矩形はトラックそのもの — 値の写像に使うので広げた矩形を保存してはいけない。
+func _slider_at(base_pos: Vector2) -> int:
+	for hit_value in _slider_hits:
+		var hit: Dictionary = hit_value as Dictionary
+		if (hit["rect"] as Rect2).grow_individual(6.0, 9.0, 6.0, 9.0).has_point(base_pos):
+			return int(hit["pos"])
+	return 0
+
+
+# スライダーの x 座標から出場シェアを決める。触った時点で「指定」になる。
+# 下限は SHARE_SLIDER_MIN — それ未満にしたいなら定位置と控えを入れ替えるのが本筋。
+func _apply_slider_value(pos: int, base_x: float) -> void:
+	var rect: Rect2 = _slider_rect_for(pos)
+	if rect.size.x <= 0.0:
+		return
+	var t: float = clampf((base_x - rect.position.x) / rect.size.x, 0.0, 1.0)
+	_set_share(pos, SHARE_SLIDER_MIN + t * (1.0 - SHARE_SLIDER_MIN))
+
+
+# シェアを 1% 刻みに丸めて「指定」として保持する。
+func _set_share(pos: int, share: float) -> void:
+	_shares[pos] = clampf(round(share * 100.0) / 100.0, SHARE_SLIDER_MIN, 1.0)
+	_share_locked[pos] = true
+	_refresh_status()
+	queue_redraw()
+
+
+func _set_share_auto(pos: int) -> void:
+	_share_locked[pos] = false
+	_shares.erase(pos)
+	_refresh_status()
+	queue_redraw()
+
+
+func _slider_rect_for(pos: int) -> Rect2:
+	for hit_value in _slider_hits:
+		var hit: Dictionary = hit_value as Dictionary
+		if int(hit["pos"]) == pos:
+			return hit["rect"] as Rect2
+	return Rect2()
+
+
+# % 表示をクリックしたときの数値直接入力。空欄か 0 で「自動」へ戻す。
+func _open_share_edit(pos: int, rect: Rect2) -> void:
+	if _share_edit == null:
+		return
+	_commit_share_edit()
+	_share_edit_pos = pos
+	_share_edit_rect = rect
+	var share: float = _effective_share(pos)
+	_share_edit.text = "" if share <= 0.0 else str(int(round(share * 100.0)))
+	_share_edit.visible = true
+	_place_share_edit()
+	_share_edit.grab_focus()
+	_share_edit.select_all()
+
+
+func _place_share_edit() -> void:
+	var r: Rect2 = _r(_share_edit_rect)
+	_share_edit.position = r.position
+	_share_edit.size = r.size
+	if _font != null:
+		_share_edit.add_theme_font_override("font", _font)
+	_share_edit.add_theme_font_size_override("font_size", max(9, int(round(13.0 * _scale_f))))
+	_share_edit.add_theme_color_override("font_color", TEXT)
+	_share_edit.add_theme_color_override("caret_color", TEXT)
+	_share_edit.add_theme_stylebox_override("normal", _box(PANEL_2, BLUE, 4))
+	_share_edit.add_theme_stylebox_override("focus", _box(PANEL_2, BLUE, 4))
+
+
+func _commit_share_edit() -> void:
+	if _share_edit == null or not _share_edit.visible:
+		return
+	var pos: int = _share_edit_pos
+	var text: String = _share_edit.text.strip_edges()
+	_share_edit.visible = false
+	_share_edit_pos = 0
+	if pos <= 0:
+		return
+	if text.is_empty() or not text.is_valid_int() or int(text) <= 0:
+		_set_share_auto(pos)
+		return
+	_set_share(pos, float(int(text)) / 100.0)
 
 
 # ============================================================ draw
@@ -526,9 +678,11 @@ func _draw_order_row(i: int, baseline: float) -> void:
 
 # --- 守備位置設定 + 控え ---
 
+# 左に守備図、右に出場配分リスト。1つのパネルを縦のヘアラインで区切る。
 func _draw_field_panel() -> void:
 	_panel(FIELD_PANEL, "守備位置設定")
 	_text("一軍登録野手から各枠へドラッグ", Vector2(FIELD_PANEL.position.x + 168, FIELD_PANEL.position.y + 32), 12, FAINT)
+	_line(Vector2(1486, FIELD_PANEL.position.y + 56), Vector2(1486, FIELD_PANEL.end.y - 20), HAIRLINE, 1.0)
 
 	_draw_field_backdrop()
 
@@ -536,26 +690,25 @@ func _draw_field_panel() -> void:
 	for pos_value in DEF_POSITIONS:
 		var pos: int = int(pos_value)
 		_draw_field_card(_field_centers[pos] as Vector2, pos, true)
-	# 余剰枠: DH (打撃のみ・D&D可) もしくは 投 (ローテ・固定)。
-	# 守備位置外なので右端、一塁〜捕手あたりの高さに置く。
-	var extra_center: Vector2 = Vector2(1820, 824)
+	# 余剰枠: DH (打撃のみ・D&D可) もしくは 投 (ローテ・固定)。守備図の最下段に置く。
+	var extra_center: Vector2 = Vector2(1286, 1004)
 	if _dh_enabled:
 		_draw_field_card(extra_center, 10, true)
 	else:
 		_draw_field_card(extra_center, 1, false)
 
-	_draw_bench_grid()
+	_draw_share_list()
 
 
 func _draw_field_backdrop() -> void:
 	# 内野ダイヤと2本のファウルラインを淡く描き、守備図だと一目で分かるようにする。
-	var home: Vector2 = Vector2(1489, 866)
-	var b1: Vector2 = Vector2(1582, 800)
-	var b2: Vector2 = Vector2(1489, 736)
-	var b3: Vector2 = Vector2(1396, 800)
+	var home: Vector2 = Vector2(1286, 964)
+	var b1: Vector2 = Vector2(1372, 902)
+	var b2: Vector2 = Vector2(1286, 840)
+	var b3: Vector2 = Vector2(1200, 902)
 	var grass: Color = Color(0.13, 0.22, 0.16, 0.55)
-	_line(home, Vector2(1252, 700), grass, 1.5)
-	_line(home, Vector2(1726, 700), grass, 1.5)
+	_line(home, Vector2(1112, 716), grass, 1.5)
+	_line(home, Vector2(1460, 716), grass, 1.5)
 	_line(home, b1, BORDER_SOFT, 1.0)
 	_line(b1, b2, BORDER_SOFT, 1.0)
 	_line(b2, b3, BORDER_SOFT, 1.0)
@@ -585,45 +738,141 @@ func _draw_field_card(center: Vector2, pos: int, draggable: bool) -> void:
 	_field_hits.append({"rect": rect, "pos": pos, "draggable": draggable})
 
 
-func _draw_bench_grid() -> void:
+# 出場配分リスト (FIELD_PANEL 右半分)。1行 = 1守備位置で 2 段:
+#   上段 = 定位置 + 出場シェアのスライダー + % + 「自動」チップ
+#   下段 = 控え1..MAX_BENCH (上から補充優先。控え1 は併用相手として残りのシェアを取る)
+# 定位置セルは守備図と同じドロップ先で、控えセルは D&D で入れ替えられる。
+func _draw_share_list() -> void:
 	_bench_cell_hits = []
 	_bench_chip_hits = []
-	_freq_hits = []
-	var top: float = 868.0
-	_text("控え守備配置  (上から補充優先 / 頻度クリックで変更)", Vector2(FIELD_PANEL.position.x + 18, top), 12, MUTED)
-	var grid_left: float = 1094.0
-	var grid_right: float = 1886.0
-	var col_w: float = (grid_right - grid_left) / float(DEF_POSITIONS.size())
-	var header_y: float = top + 26.0
-	for c in range(DEF_POSITIONS.size()):
-		var pos: int = int(DEF_POSITIONS[c])
-		var cx: float = grid_left + float(c) * col_w
-		var inner: float = col_w - 8.0
-		_pos_badge(Rect2(cx + (inner - 34) * 0.5 + 4, header_y, 34, 19), pos)
-		var list: Array = _backups.get(pos, []) as Array
-		var cell_top: float = header_y + 26.0
-		for r in range(MAX_BENCH):
-			var cell_rect: Rect2 = Rect2(cx + 4, cell_top + float(r) * 27.0, inner, 24)
-			var is_target: bool = _drag_active and _is_bench_target(pos)
-			if r < list.size():
-				var pid: int = int(list[r])
-				var record: PSPlayerSeasonRecord = _record_by_id(pid)
-				# 枠線は無し (面の濃淡だけで区別)。ドロップ先としての強調のみ意味のある枠として残す。
-				_round(cell_rect, PANEL_3, Color.TRANSPARENT, 5, 0)
-				_text(record.name if record != null else "?", Vector2(cell_rect.position.x + 6, cell_rect.position.y + 17), 12, TEXT, cell_rect.size.x - 10)
-				_bench_chip_hits.append({"rect": cell_rect, "pos": pos, "pid": pid})
-			else:
-				var bg: Color = Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if is_target else Color(0.07, 0.083, 0.10)
-				_round(cell_rect, bg, BLUE if is_target else Color.TRANSPARENT, 5, 1 if is_target else 0)
-				if r == list.size():
-					_text("控え%d" % (r + 1), Vector2(cell_rect.position.x + 6, cell_rect.position.y + 17), 11, FAINT)
-		var zone: Rect2 = Rect2(cx + 4, cell_top, inner, 27.0 * float(MAX_BENCH) - 3.0)
-		_bench_cell_hits.append({"rect": zone, "pos": pos})
-		# 頻度 (交代間隔) — クリックで循環
-		var freq_rect: Rect2 = Rect2(cx + 4, cell_top + 27.0 * float(MAX_BENCH) + 2.0, inner, 20)
-		_round(freq_rect, PANEL, Color.TRANSPARENT, 5, 0)
-		_text(_interval_label(int(_intervals.get(pos, SUB_INTERVAL_FATIGUE_EMERGENCY))), Vector2(freq_rect.position.x, freq_rect.position.y + 15), 11, MUTED, freq_rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
-		_freq_hits.append({"rect": freq_rect, "pos": pos})
+	_slider_hits = []
+	_share_value_hits = []
+	_auto_chip_hits = []
+
+	_text("出場配分", Vector2(SHARE_LIST_LEFT, SHARE_LIST_TOP - 26.0), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(
+		"スライダーか%%をクリックして数値入力 (0=自動) ・ 全%d試合" % _team_scheduled_games,
+		Vector2(SHARE_LIST_LEFT + 62.0, SHARE_LIST_TOP - 26.0), 11, FAINT
+	)
+
+	# 定位置セルは守備図と同じドロップ先。ドラッグ中の強調判定 (_is_field_target) が自分のセルを
+	# 見られるよう、描画ループより先に全行ぶんのヒット矩形を登録しておく。
+	for i in range(DEF_POSITIONS.size()):
+		_field_hits.append({
+			"rect": _share_starter_rect(i), "pos": int(DEF_POSITIONS[i]), "draggable": true,
+		})
+
+	for i in range(DEF_POSITIONS.size()):
+		_draw_share_row(i, int(DEF_POSITIONS[i]))
+
+
+func _draw_share_row(index: int, pos: int) -> void:
+	var top: float = SHARE_LIST_TOP + float(index) * SHARE_ROW_H
+	var locked: bool = bool(_share_locked.get(pos, false))
+	var share: float = _effective_share(pos)
+
+	# --- 上段: 定位置セル + スライダー + % + 自動チップ ---
+	_pos_badge(Rect2(SHARE_LIST_LEFT, top + 2.0, SHARE_BADGE_W, 17.0), pos)
+	var starter_rect: Rect2 = _share_starter_rect(index)
+	var starter_target: bool = _drag_active and _is_field_target(pos)
+	_round(
+		starter_rect,
+		Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if starter_target else PANEL_2,
+		BLUE if starter_target else Color.TRANSPARENT, 5, 1 if starter_target else 0
+	)
+	var starter: PSPlayerSeasonRecord = _record_by_id(_player_at_position(pos))
+	_text(
+		starter.name if starter != null else "未設定",
+		Vector2(starter_rect.position.x + 6.0, starter_rect.position.y + 15.0), 12,
+		TEXT if starter != null else FAINT, starter_rect.size.x - 10.0
+	)
+
+	var slider_rect: Rect2 = _share_slider_rect(index)
+	_draw_share_slider(slider_rect, share, locked)
+	_slider_hits.append({"rect": slider_rect, "pos": pos})
+
+	var value_rect: Rect2 = Rect2(
+		slider_rect.end.x + 6.0, top + 1.0, SHARE_VALUE_W, 19.0
+	)
+	if _share_edit_pos != pos:
+		_text(
+			"自動" if share <= 0.0 else "%d%%" % int(round(share * 100.0)),
+			Vector2(value_rect.position.x, value_rect.position.y + 14.0), 13,
+			TEXT if locked else FAINT, value_rect.size.x, HORIZONTAL_ALIGNMENT_RIGHT
+		)
+	_share_value_hits.append({"rect": value_rect, "pos": pos})
+
+	var auto_rect: Rect2 = Rect2(SHARE_LIST_RIGHT - SHARE_AUTO_CHIP_W, top + 2.0, SHARE_AUTO_CHIP_W, 17.0)
+	_chip(auto_rect, "自動", MUTED if locked else BLUE, not locked)
+	_auto_chip_hits.append({"rect": auto_rect, "pos": pos})
+
+	# --- 下段: 控え (上から補充優先)。控え1 は併用相手として残りのシェアを取る ---
+	var list: Array = _backups.get(pos, []) as Array
+	var is_target: bool = _drag_active and _is_bench_target(pos)
+	var cell_w: float = (SHARE_LIST_RIGHT - starter_rect.position.x - 8.0) / float(MAX_BENCH)
+	for r in range(MAX_BENCH):
+		var cell_rect: Rect2 = Rect2(
+			starter_rect.position.x + float(r) * cell_w, top + 22.0, cell_w - 4.0, 18.0
+		)
+		if r < list.size():
+			var record: PSPlayerSeasonRecord = _record_by_id(int(list[r]))
+			_round(cell_rect, PANEL_3, Color.TRANSPARENT, 4, 0)
+			_share_cell_text(
+				cell_rect, record.name if record != null else "?", TEXT,
+				_platoon_share_label(pos) if r == 0 else "補", MUTED if r == 0 else FAINT
+			)
+			_bench_chip_hits.append({"rect": cell_rect, "pos": pos, "pid": int(list[r])})
+			continue
+		var bg: Color = Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if is_target else Color(0.07, 0.083, 0.10)
+		_round(cell_rect, bg, BLUE if is_target else Color.TRANSPARENT, 4, 1 if is_target else 0)
+		# 控え未設定でも AI が併用相手を決めているので、その枠には相手を薄く出す
+		# (出さないと「定位置が 51%、残りは誰?」が読めない)。
+		var platoon: PSPlayerSeasonRecord = (
+			_record_by_id(int(_platoon_ids.get(pos, 0))) if r == 0 and list.is_empty() else null
+		)
+		if platoon != null:
+			_share_cell_text(cell_rect, platoon.name, MUTED, _platoon_share_label(pos), FAINT)
+		elif r == list.size():
+			_text("控え%d" % (r + 1), Vector2(cell_rect.position.x + 5.0, cell_rect.position.y + 13.0), 10, FAINT)
+	_bench_cell_hits.append({
+		"rect": Rect2(starter_rect.position.x, top + 22.0, SHARE_LIST_RIGHT - starter_rect.position.x, 18.0),
+		"pos": pos,
+	})
+
+
+# シェアのスライダー。指定済みは青、自動は灰で塗る (数値側の色分けと揃える)。
+func _draw_share_slider(rect: Rect2, share: float, locked: bool) -> void:
+	_round(rect, PANEL_3, Color.TRANSPARENT, 3, 0)
+	if share <= 0.0:
+		return
+	var t: float = clampf((share - SHARE_SLIDER_MIN) / (1.0 - SHARE_SLIDER_MIN), 0.0, 1.0)
+	var fill: Color = BLUE if locked else Color(MUTED.r, MUTED.g, MUTED.b, 0.55)
+	_round(Rect2(rect.position, Vector2(maxf(rect.size.x * t, 3.0), rect.size.y)), fill, Color.TRANSPARENT, 3, 0)
+	var knob_x: float = rect.position.x + rect.size.x * t
+	_round(Rect2(knob_x - 3.0, rect.position.y - 3.0, 6.0, rect.size.y + 6.0), fill, Color.TRANSPARENT, 3, 0)
+
+
+func _share_starter_rect(index: int) -> Rect2:
+	return Rect2(
+		SHARE_LIST_LEFT + SHARE_BADGE_W + 6.0,
+		SHARE_LIST_TOP + float(index) * SHARE_ROW_H,
+		SHARE_NAME_W, 20.0
+	)
+
+
+func _share_slider_rect(index: int) -> Rect2:
+	var starter_rect: Rect2 = _share_starter_rect(index)
+	return Rect2(starter_rect.end.x + 8.0, starter_rect.position.y + 7.0, SHARE_SLIDER_W, 6.0)
+
+
+# 控えセルの 1 行 = 左に選手名 (省略あり)、右に短いラベル (シェア/「補」)。
+func _share_cell_text(
+	rect: Rect2, name_text: String, name_color: Color, right_text: String, right_color: Color
+) -> void:
+	var baseline: float = rect.position.y + 13.0
+	var right_width: float = _measure(right_text, 10) + 4.0
+	_text(name_text, Vector2(rect.position.x + 5.0, baseline), 11, name_color, rect.size.x - 8.0 - right_width)
+	_text_right(right_text, rect.end.x - 4.0, baseline, 10, right_color, right_width)
 
 
 func _draw_status_bar() -> void:
@@ -632,6 +881,11 @@ func _draw_status_bar() -> void:
 	x = _status_item(x, y, "打順", _order_ok())
 	x = _status_item(x, y, "守備位置", _defense_ok())
 	x = _status_item(x, y, "控え配置", true)
+	# 出場配分の結果を数で見せる。実 NPB は 1 球団あたり 4-5 人 ([[project_qualified_batter_count]])。
+	var projected: String = "規定到達見込み: %d人" % _projected_qualified_count()
+	_dot(Vector2(x + 6, y - 4), 5, BLUE)
+	_text(projected, Vector2(x + 18, y), 13, MUTED)
+	x += 18 + _measure(projected, 13) + 26
 	var unset: int = _unset_count()
 	if unset > 0:
 		_dot(Vector2(x + 6, y - 4), 5, AMBER)
@@ -769,7 +1023,11 @@ func _load_fielders(season: PSSeason) -> void:
 
 func _load_backups(season: PSSeason) -> void:
 	_backups = {}
-	_intervals = {}
+	_shares = {}
+	_effective_shares = {}
+	_share_locked = {}
+	_platoon_ids = {}
+	_team_scheduled_games = _count_scheduled_games(season)
 	var usage: Dictionary = season.get_fielder_usage(_team_id)
 	var slots: Dictionary = usage.get("position_slots", {}) as Dictionary
 	for pos_value in DEF_POSITIONS:
@@ -782,9 +1040,24 @@ func _load_backups(season: PSSeason) -> void:
 				list.append(pid)
 		if not list.is_empty():
 			_backups[pos] = list
-		var interval: int = int(slot.get("sub_start_interval", 0))
-		if interval != 0:
-			_intervals[pos] = interval
+		var share: float = PSDefenseAlignmentService.slot_starter_share(slot)
+		var locked: bool = PSDefenseAlignmentService.slot_share_locked(slot)
+		_effective_shares[pos] = share
+		_share_locked[pos] = locked
+		if locked:
+			_shares[pos] = share
+		var candidates: Array = PSDefenseAlignmentService.slot_candidates(slot)
+		if candidates.size() > 1:
+			_platoon_ids[pos] = int((candidates[1] as Dictionary).get("player_id", 0))
+
+
+func _count_scheduled_games(season: PSSeason) -> int:
+	var games: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("home_team_id", 0)) == _team_id or int(game.get("away_team_id", 0)) == _team_id:
+			games += 1
+	return games if games > 0 else PSSchedule.PENNANT_GAMES_PER_TEAM
 
 
 func _load_lineup_for_mode() -> void:
@@ -892,8 +1165,6 @@ func _assign_all_reserves(clear: bool) -> void:
 		var list: Array = (_backups.get(target, []) as Array).duplicate()
 		list.append(record.player_id)
 		_backups[target] = list
-		if not _intervals.has(target):
-			_intervals[target] = SUB_INTERVAL_FATIGUE_EMERGENCY
 
 
 # 適性 (>0) のある守備位置を適性降順で返す。
@@ -936,21 +1207,22 @@ func _on_save_pressed() -> void:
 		batting_order.append({"slot": i + 1, "position": pos, "player_id": pid})
 	season.set_lineup(_team_id, _dh_enabled, {"batting_order": batting_order})
 
-	# 守備起用 (スタメン守備 + 控え=backup_ids + 交代頻度)
+	# 守備起用 (スタメン守備 + 控え=backup_ids + 出場配分)
+	# 「自動」(share_locked=false) の枠は share 0.0 で保存し、PSTeamSetupBuilder 側の
+	# AI 既定生成がシェアと併用相手を埋める。指定済みの枠は定期組み直しでも測り直されない。
 	var position_slots: Dictionary = {}
 	for pos_value in DEF_POSITIONS:
 		var pos: int = int(pos_value)
 		var starter_id: int = _player_at_position(pos)
 		var backup_ids: Array = (_backups.get(pos, []) as Array).duplicate()
-		var interval: int = int(_intervals.get(pos, 0))
-		if starter_id <= 0 and backup_ids.is_empty() and interval == 0:
+		var locked: bool = bool(_share_locked.get(pos, false))
+		var share: float = float(_shares.get(pos, SHARE_AUTO)) if locked else SHARE_AUTO
+		if starter_id <= 0 and backup_ids.is_empty() and not locked:
 			continue
-		position_slots[str(pos)] = {
-			"starter_id": starter_id,
-			"sub_id": int(backup_ids[0]) if backup_ids.size() > 0 else 0,
-			"sub_start_interval": interval,
-			"backup_ids": backup_ids,
-		}
+		var candidates: Array = [{"player_id": starter_id, "share": share}]
+		if backup_ids.size() > 0 and share > 0.0 and share < 1.0:
+			candidates.append({"player_id": int(backup_ids[0]), "share": 1.0 - share})
+		position_slots[str(pos)] = PSDefenseAlignmentService.make_slot(candidates, backup_ids, locked)
 	season.set_fielder_usage(_team_id, {"position_slots": position_slots})
 
 	# 「保存=この編成を使う」。常時 AI 任せフラグは立てない。
@@ -1146,12 +1418,43 @@ func _bats(record: PSPlayerSeasonRecord) -> String:
 		_: return "右"
 
 
-func _interval_label(interval: int) -> String:
-	if interval == SUB_INTERVAL_FATIGUE_EMERGENCY:
-		return "頻度:疲労時"
-	if interval <= 0:
-		return "頻度:自動"
-	return "頻度:%d戦" % interval
+# 定位置選手が実際に取る出場シェア。指定済みならその値、未指定なら AI の実効配分。
+# どちらも無い枠 (まだ生成されていない) は 0.0 = 「自動」。
+func _effective_share(pos: int) -> float:
+	if bool(_share_locked.get(pos, false)):
+		return float(_shares.get(pos, SHARE_AUTO))
+	return float(_effective_shares.get(pos, SHARE_AUTO))
+
+
+func _share_games(share: float) -> int:
+	return int(round(clampf(share, 0.0, 1.0) * float(_team_scheduled_games)))
+
+
+# 併用相手 (控え1) が取るシェア。定位置が全試合なら出番は補充だけ。
+# 配分がまだ決まっていない枠は空欄 (「自動」は上段に出ているので繰り返さない)。
+func _platoon_share_label(pos: int) -> String:
+	var share: float = _effective_share(pos)
+	if share <= 0.0:
+		return ""
+	if share >= 1.0:
+		return "補"
+	return "%d%%" % int(round((1.0 - share) * 100.0))
+
+
+# 規定打席に届く見込みの定位置選手数 (先発 = 規定打席 ÷ 打席/先発 を満たす枠の数)。
+# 出場配分を触ったときに「何人が規定に届く編成なのか」をその場で見せるための概算。
+func _projected_qualified_count() -> int:
+	var required_starts: float = (
+		float(_team_scheduled_games) * QUALIFIER_PA_PER_TEAM_GAME / PA_PER_START_ESTIMATE
+	)
+	var count: int = 0
+	for pos_value in DEF_POSITIONS:
+		var pos: int = int(pos_value)
+		if _player_at_position(pos) <= 0:
+			continue
+		if float(_share_games(_effective_share(pos))) >= required_starts:
+			count += 1
+	return count
 
 
 func _short_pos(pos: int) -> String:

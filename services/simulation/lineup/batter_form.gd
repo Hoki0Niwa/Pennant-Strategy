@@ -72,6 +72,30 @@ static func indexes(record: PSPlayerSeasonRecord) -> Dictionary:
 	}
 
 
+# 「リーグの先発級 (PSPerformanceReference の regulars 分布) の中でどの位置に居るか」を σ で返す。
+# 出場シェア (PSTeamSetupBuilder.SHARE_CURVE) の唯一の入力。
+# **自チームの控えとの能力差では測らない** — 控えは定義上ベンチ級なので差はほぼ常に大きく、
+# それを基準にすると全枠が上限へ張り付く ([[project_qualified_batter_count]])。
+# 物差し (regulars) は能力だけで測った固定分布、評価される値 (total) は今季成績込みなので、
+# 「今季打てていない主力は位置が下がる」が自然に入る。
+#
+# position を渡すと**その守備位置の先発級**を基準にする (捕手・遊撃のように打撃水準が低い
+# ポジションでも「その位置の定位置級として平均なら z=0」になる)。0 ならリーグ全体基準。
+static func regular_z(record: PSPlayerSeasonRecord, position: int = 0) -> float:
+	if record == null or record.is_pitcher():
+		return 0.0
+	var reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
+	var regulars: Dictionary = reference.get("regulars", {}) as Dictionary
+	var spread: float = float(regulars.get("spread", 0.0))
+	if spread <= 0.0:
+		return 0.0
+	var mean: float = float(regulars.get("mean", 0.0))
+	var by_position: Dictionary = regulars.get("by_position", {}) as Dictionary
+	if position > 0 and by_position.has(position):
+		mean = float(by_position[position])
+	return (float(indexes(record)["total"]) - mean) / spread
+
+
 # 出場判断用: 成績が能力からどれだけ上振れ/下振れしているかを rating 点で返す。成績が無ければ 0。
 # current_stats を渡すと今季ぶんをその成績で評価する (一二軍入替の月別評価に使う)。
 static func rating_delta(

@@ -100,7 +100,24 @@ const MIN_REFERENCE_PLATE_APPEARANCES: int = 200
 # 成績基準を探して遡る最大年数。
 const STAT_REFERENCE_LOOKBACK: int = 5
 # 成績母集団がまだ無いとき、alignment を測る「レギュラー相当」の人数 (1 球団あたり)。
+# 出場シェア (PSTeamSetupBuilder) が使う `regulars` 分布の母集団サイズも同じ値で切る。
 const REGULARS_PER_TEAM: int = 9
+# `regulars` = 支配下野手を能力総合で並べた上位 (球団数 × REGULARS_PER_TEAM) の分布。
+# 「リーグの先発級の中でどの位置に居るか」を測る物差しで、出場シェアの唯一の入力。
+# **上位打ち切りの母集団なので左に裾が無い** — z の中央値は 0 ではなく -0.3 前後に寄る。
+# シェア曲線 (PSTeamSetupBuilder.SHARE_CURVE) のアンカーはそれを前提に置いてある。
+#
+# `by_position` は登録ポジションごとの「1 球団 1 人ぶんの先発級」の平均 (spread は全体の値を共用)。
+# 打撃指標そのままだと捕手・遊撃のように「打てなくても代わりが居ない」定位置ほど z が下がり、
+# 出場シェアが実際と逆になる (実測で 捕 -1.47σ / 左 +0.48σ)。守備位置ごとに平均を測り直して
+# ゼロ点を揃えることで、**その守備位置の先発級として平均なら share も平均**になる。
+# fWAR のポジション補正を定数で足す方式は採らない — 本実装の守備配置ロジックが作る
+# 実際の偏り (例: 中堅が打てる、一塁が打てない) と合わず、較正が固定値に依存するため。
+const DEFAULT_REGULAR_REFERENCE: Dictionary = {"mean": 1.00, "spread": 0.43, "by_position": {}}
+const MIN_REGULAR_SAMPLE: int = 27
+const MIN_REGULAR_SPREAD: float = 0.10
+# 守備位置別の平均を採用する最低人数 (これ未満のポジションは全体平均に落とす)。
+const MIN_POSITION_REGULAR_SAMPLE: int = 6
 # spread の下限。母集団が偏って spread≈0 になっても指標が発散しないようにする。
 const MIN_RATING_SPREAD: float = 2.0
 const MIN_STAT_SPREAD: float = 0.010
@@ -155,6 +172,7 @@ static func for_season(year: int, season_number: int, level: int = LEVEL_FIRST) 
 	var stat_records: Array = records if level == LEVEL_FIRST else _season_records(year, season_number, level)
 	var measured: Dictionary = {
 		"ratings": ratings,
+		"regulars": _measure_regulars(records, ratings),
 		"stats": _resolve_stats(year, season_number, ratings, stat_records, level),
 		"scores": _measure_scores(records),
 		"pitcher_ratings": pitcher_ratings,
@@ -270,6 +288,61 @@ static func _measure_ratings(records: Array) -> Dictionary:
 	return _distributions_or_default(
 		samples, DEFAULT_RATING_REFERENCE, MIN_RATING_SAMPLE, MIN_RATING_SPREAD
 	)
+
+
+# 「リーグの先発級」の能力総合分布。能力スナップショットはシーズン中ほぼ動かないので
+# ratings と同じくプリウォームで凍結できる (試合日の並列実行から書き込みが起きない)。
+# 成績は混ぜない — 混ぜると物差し自体がシーズン中に動き、シェアの意味がブレるため。
+static func _measure_regulars(records: Array, ratings_reference: Dictionary) -> Dictionary:
+	var totals: Array = []
+	var totals_by_position: Dictionary = {}
+	for record_row in records:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or record.is_pitcher() or record.development_player:
+			continue
+		var total: float = ability_total_index(record, ratings_reference)
+		totals.append(total)
+		if record.position >= 2 and record.position <= 9:
+			var position_totals: Array = totals_by_position.get(record.position, []) as Array
+			position_totals.append(total)
+			totals_by_position[record.position] = position_totals
+	if totals.size() < MIN_REGULAR_SAMPLE:
+		return DEFAULT_REGULAR_REFERENCE.duplicate(true)
+	var team_count: int = maxi(GameDb.teams.size(), 1)
+	var regulars: Array = _top_values(totals, team_count * REGULARS_PER_TEAM)
+	var mean: float = _mean_of(regulars)
+	var variance: float = 0.0
+	for value in regulars:
+		variance += pow(float(value) - mean, 2.0)
+	# 守備位置ごとは「1 球団 1 人」= 各ポジションの定位置相当の平均だけを測る。
+	# spread を位置別に測らないのは標本が 12 人しかなく不安定なため (全体の spread を共用)。
+	var by_position: Dictionary = {}
+	for position_value in totals_by_position.keys():
+		var position_totals: Array = totals_by_position[position_value] as Array
+		if position_totals.size() < MIN_POSITION_REGULAR_SAMPLE:
+			continue
+		by_position[int(position_value)] = _mean_of(_top_values(position_totals, team_count))
+	return {
+		"mean": mean,
+		"spread": maxf(MIN_REGULAR_SPREAD, sqrt(variance / float(regulars.size()))),
+		"by_position": by_position,
+	}
+
+
+static func _top_values(values: Array, count: int) -> Array:
+	var sorted_values: Array = values.duplicate()
+	sorted_values.sort()
+	sorted_values.reverse()
+	return sorted_values.slice(0, mini(sorted_values.size(), maxi(count, 1)))
+
+
+static func _mean_of(values: Array) -> float:
+	if values.is_empty():
+		return 0.0
+	var total: float = 0.0
+	for value in values:
+		total += float(value)
+	return total / float(values.size())
 
 
 # 進行中のシーズンは規定到達打者がまだ居ないので、標本が揃う直近の過去シーズンまで遡る。

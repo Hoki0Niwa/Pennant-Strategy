@@ -105,7 +105,10 @@ static func balance_health(report: Dictionary) -> Dictionary:
 		_add_range_check(checks, "wild_pitches_per_team_game", float(running.get("wild_pitches_per_team_game", 0.0)), 0.10, 0.35, 0.02, 0.60, "wild pitches per team game (NPB ~0.20)")
 		_add_range_check(checks, "passed_balls_per_team_game", float(running.get("passed_balls_per_team_game", 0.0)), 0.010, 0.100, 0.0, 0.250, "passed balls per team game (NPB ~0.03-0.05)")
 	_add_min_check(checks, "hard_hit_rate", float(batted_ball.get("hard_hit_rate", 0.0)), 0.20, 0.10, "hard-hit rate should not collapse")
-	_add_range_check(checks, "qualified_batter_count", qualified_batters, 48.0, 70.0, 36.0, 82.0, "qualified batter count (NPB 2015-23: 48-61)")
+	# NPB 2015-23 は 48-61 人だが、それは片リーグのみ DH (打席スロット 9×6 + 8×6 = 102) の値。
+	# 本作の既定は両リーグ DH (108 スロット) なので、スロットあたりの到達率 (約 0.51) を保った
+	# 等価目標は 52-65 人。warn 帯はそれに少し余裕を持たせてある ([[project_qualified_batter_count]])。
+	_add_range_check(checks, "qualified_batter_count", qualified_batters, 50.0, 68.0, 36.0, 82.0, "qualified batter count (NPB 48-61 を両リーグDHへ換算して 52-65)")
 	_add_range_check(checks, "qualified_pitcher_count", qualified_pitchers, 14.0, 28.0, 6.0, 38.0, "qualified pitcher count (NPB 2015-23: 14-26)")
 	_add_range_check(checks, "qualified_batter_average_p10", _dist_value(batter_dist, "batting_average", "p10"), 0.225, 0.255, 0.200, 0.275, "qualified batter AVG p10")
 	_add_range_check(checks, "qualified_batter_average_p50", _dist_value(batter_dist, "batting_average", "p50"), 0.255, 0.290, 0.235, 0.310, "qualified batter AVG median")

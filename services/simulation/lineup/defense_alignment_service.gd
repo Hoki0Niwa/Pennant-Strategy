@@ -2,7 +2,8 @@ extends RefCounted
 class_name PSDefenseAlignmentService
 
 # 守備配置テンプレートから当日の先発守備を決めるサービス。
-# 保存済み starter/sub 設定を優先し、欠員や重複があればポジション順に最適候補を補充する。
+# 保存済みのポジション別デプスチャート (candidates + 出場シェア) を優先し、
+# 欠員や重複があればポジション順に最適候補を補充する。
 # 不在判定は injury_days > 0 のみ。疲労は候補除外ではなくスコア減点として扱う。
 # 初回などテンプレートが空のときは、健康な野手から greedy に標準配置を作って profile へ保存する。
 #
@@ -15,8 +16,16 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 
 # GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER と同一: 捕手 → 遊撃 → 中堅 → 二塁 → 三塁 → 一塁 → 左翼 → 右翼
 const POSITIONS: Array[int] = [2, 6, 8, 4, 5, 3, 7, 9]
-const SUB_INTERVAL_FATIGUE_EMERGENCY: int = -1
-const FIELDER_FATIGUE_SUB_THRESHOLD: int = 80
+
+# --- 出場シェア (ポジション別デプスチャート) ---
+# position_slots[str(pos)] = {
+#     "candidates": [{"player_id": int, "share": float}, ...],  # share 降順・合計 1.0
+#     "backup_ids": [int, ...],                                 # 補充優先リスト (ユーザー設定)
+# }
+# candidates[0] が定位置で、share は「その守備位置の先発をどれだけ取るか」。
+# share の決め方 (リーグ相対) は PSTeamSetupBuilder 側、ここは「当日誰が出るか」への落とし込み。
+# 旧形式 (starter_id / sub_id / sub_start_interval) は 2026-08-22 に廃止
+# ([[project_qualified_batter_count]])。旧セーブは candidates が無いので AI 既定生成へ落ちる。
 
 
 # batting_memo: 呼び出し元が同じ試合内で複数回この関数を通すとき (検証 → AI既定生成 → 本番) に
@@ -54,29 +63,29 @@ static func assign_defensive_starters(
 		template = _generate_greedy_template(healthy, batting_cache)
 		profile.starting_positions = template.duplicate()
 
-	# 守備負荷の高い順に、保存設定・休養ローテ・補充候補を解決していく。
+	# 守備負荷の高い順に、デプスチャート・補充候補を解決していく。
 	var assignments: Array = []
 	var used_ids: Dictionary = {}
-	# AI 管理チームだけ、実績崩壊選手の固定 (starter/sub/テンプレ/バックアップ) を外す。
+	# AI 管理チームだけ、実績崩壊選手の固定 (候補列/テンプレ/バックアップ) を外す。
 	var ai_managed: bool = bool(usage_settings.get("ai_generated", false))
 
 	for position_row in POSITIONS:
 		var position: int = int(position_row)
 		var chosen: PSPlayerSeasonRecord = null
 		var slot_settings: Dictionary = _position_slot_settings(profile, usage_settings, position)
-		if int(slot_settings.get("sub_id", 0)) > 0 and int(slot_settings.get("sub_id", 0)) == int(slot_settings.get("starter_id", 0)):
-			slot_settings["sub_id"] = 0
-		var should_start_sub: bool = _sub_should_start(slot_settings, record_by_id, next_game_number)
-
-		if should_start_sub:
-			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "sub_id", position, ai_managed)
-			if chosen != null:
-				var rested_starter_id: int = int(slot_settings.get("starter_id", 0))
-				if rested_starter_id > 0 and rested_starter_id != chosen.player_id:
-					used_ids[rested_starter_id] = true
-
-		if chosen == null:
-			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "starter_id", position, ai_managed)
+		# 出場シェアで決まる当日の担当 → 使えなければ同じ枠の残り候補 (定位置・併用者) の順。
+		var candidate_ids: Array = ordered_candidate_ids_for_game(slot_settings, next_game_number)
+		var starter_id: int = slot_starter_id(slot_settings)
+		for candidate_index in range(candidate_ids.size()):
+			chosen = _configured_record_by_id(
+				record_by_id, used_ids, int(candidate_ids[candidate_index]), position, ai_managed
+			)
+			if chosen == null:
+				continue
+			# 休養日の定位置選手は他の守備位置や DH へ回さない (「今日は休み」を守る)。
+			if starter_id > 0 and starter_id != chosen.player_id:
+				used_ids[starter_id] = true
+			break
 
 		# a. template の指定選手 (健康かつ未使用)
 		var tmpl_id: int = int(template.get(position, template.get(str(position), 0)))
@@ -103,9 +112,6 @@ static func assign_defensive_starters(
 							and not (ai_managed and PlayerValueEvaluator.fielding_collapsed_at_position(b_rec, position)):
 						chosen = b_rec
 						break
-
-		if chosen == null and not should_start_sub:
-			chosen = _configured_record_for_position(record_by_id, used_ids, slot_settings, "sub_id", position, ai_managed)
 
 		# c. 残候補から starter_assignment_score 最高値で貪欲補充
 		# (打撃/守備の position 別ブレンド。純守備版は defensive_assignment_score を参照)
@@ -241,33 +247,136 @@ static func _position_slot_settings(profile: PSDefenseAlignmentProfile, usage_se
 	return {}
 
 
-static func _sub_is_due(slot_settings: Dictionary, next_game_number: int) -> bool:
-	var interval: int = int(slot_settings.get("sub_start_interval", 0))
-	return interval > 0 and next_game_number > 0 and next_game_number % interval == 0
+# --- 出場シェアのヘルパー (書き手は PSTeamSetupBuilder / 打順設定画面) ---
+
+static func slot_candidates(slot_settings: Dictionary) -> Array:
+	return slot_settings.get("candidates", []) as Array
 
 
-static func _sub_should_start(slot_settings: Dictionary, record_by_id: Dictionary, next_game_number: int) -> bool:
-	if _sub_is_due(slot_settings, next_game_number):
-		return true
-	var interval: int = int(slot_settings.get("sub_start_interval", 0))
-	if interval != SUB_INTERVAL_FATIGUE_EMERGENCY:
-		return false
-	var starter_id: int = int(slot_settings.get("starter_id", 0))
-	if starter_id <= 0 or not record_by_id.has(starter_id):
-		return false
-	var starter: PSPlayerSeasonRecord = record_by_id[starter_id] as PSPlayerSeasonRecord
-	return starter != null and starter.injury_days <= 0 and starter.fatigue >= FIELDER_FATIGUE_SUB_THRESHOLD
+# 定位置 = candidates[0]。休養日の判定 (誰が「今日は休み」か) はこの id を基準にする。
+static func slot_starter_id(slot_settings: Dictionary) -> int:
+	var candidates: Array = slot_candidates(slot_settings)
+	if candidates.is_empty():
+		return 0
+	return int((candidates[0] as Dictionary).get("player_id", 0))
 
 
-static func _configured_record_for_position(
+# candidates から slot を組む。player_id <= 0 と重複は落とす。
+# 併用相手が居る (2 人以上) 枠だけ share 降順・合計 1.0 へ正規化する。
+# 1 人だけの枠は share をそのまま残す — 0.0 は「未設定 (AI が決める)」、1.0 は「全試合」、
+# その中間は「相方を AI が埋める」を意味し、正規化するとこの区別が消えるため。
+static func make_slot(
+	candidates: Array, backup_ids: Array = [], share_locked: bool = false
+) -> Dictionary:
+	var cleaned: Array = []
+	var total: float = 0.0
+	var seen: Dictionary = {}
+	for candidate_value in candidates:
+		var candidate: Dictionary = candidate_value as Dictionary
+		var player_id: int = int(candidate.get("player_id", 0))
+		if player_id <= 0 or seen.has(player_id):
+			continue
+		seen[player_id] = true
+		var share: float = clampf(float(candidate.get("share", 0.0)), 0.0, 1.0)
+		cleaned.append({"player_id": player_id, "share": share})
+		total += share
+	if cleaned.size() >= 2 and total > 0.0:
+		cleaned.sort_custom(func(a, b) -> bool:
+			var share_a: float = float((a as Dictionary).get("share", 0.0))
+			var share_b: float = float((b as Dictionary).get("share", 0.0))
+			if is_equal_approx(share_a, share_b):
+				return int((a as Dictionary).get("player_id", 0)) < int((b as Dictionary).get("player_id", 0))
+			return share_a > share_b
+		)
+		for candidate_value in cleaned:
+			var candidate: Dictionary = candidate_value as Dictionary
+			candidate["share"] = float(candidate["share"]) / total
+	return {
+		"candidates": cleaned,
+		"backup_ids": backup_ids.duplicate(),
+		"share_locked": share_locked,
+	}
+
+
+# candidates[0] のシェア。0.0 は「未設定」= AI 既定生成でシェアを決めさせる印。
+static func slot_starter_share(slot_settings: Dictionary) -> float:
+	var candidates: Array = slot_candidates(slot_settings)
+	if candidates.is_empty():
+		return 0.0
+	return float((candidates[0] as Dictionary).get("share", 0.0))
+
+
+# ユーザーが打順設定画面で明示指定したシェアか。true の枠は定期組み直しでも測り直さない
+# (指定が 14 試合ごとに AI の値へ戻ると「設定したのに効かない」になるため)。
+static func slot_share_locked(slot_settings: Dictionary) -> bool:
+	return bool(slot_settings.get("share_locked", false))
+
+
+# 当日の担当を先頭に、残りの候補を続けた player_id の並び。
+# 担当が故障などで使えないとき、呼び出し側はこの順に降りていく。
+static func ordered_candidate_ids_for_game(slot_settings: Dictionary, next_game_number: int) -> Array:
+	var candidates: Array = slot_candidates(slot_settings)
+	if candidates.is_empty():
+		return []
+	# シェアが未設定 (合計 0) の枠は定位置選手がそのまま出る。AI 既定生成が入るまでの過渡状態で、
+	# `select_defensive_starters_with_usage` による評価呼び出しがここを通る。
+	var shares: Array = []
+	var total: float = 0.0
+	for candidate_value in candidates:
+		var share: float = float((candidate_value as Dictionary).get("share", 0.0))
+		shares.append(share)
+		total += share
+	if total <= 0.0:
+		shares[0] = 1.0
+		total = 1.0
+	for index in range(shares.size()):
+		shares[index] = float(shares[index]) / total
+	var due: int = share_index_for_game(shares, next_game_number)
+	var ids: Array = [int((candidates[due] as Dictionary).get("player_id", 0))]
+	for index in range(candidates.size()):
+		if index == due:
+			continue
+		ids.append(int((candidates[index] as Dictionary).get("player_id", 0)))
+	return ids
+
+
+# 出場シェアを「試合 g の担当」へ落とす。目標消化 (share×g) と実消化の差が最大の候補を
+# 選ぶ最大剰余法で、シェアどおりの試合数になりつつ休養日が均等に散る。
+#
+# 候補 2 人なら閉じた形になる: 貪欲則を展開すると「定位置の消化数 a(g) = floor(share×g + 0.5)」
+# (Webster 丸め) と一致するので、g を回さずに O(1) で解ける。3 人以上は素直に回す
+# (AI 既定生成は 2 人までなので、ここへ来るのはユーザーが手で 3 人以上を設定した枠だけ)。
+static func share_index_for_game(shares: Array, next_game_number: int) -> int:
+	if shares.size() <= 1 or next_game_number <= 0:
+		return 0
+	if shares.size() == 2:
+		var share: float = float(shares[0])
+		var before: int = int(floor(share * float(next_game_number - 1) + 0.5))
+		var now: int = int(floor(share * float(next_game_number) + 0.5))
+		return 0 if now > before else 1
+	var counts: PackedInt32Array = PackedInt32Array()
+	counts.resize(shares.size())
+	var picked: int = 0
+	for game_number in range(1, next_game_number + 1):
+		var best: int = 0
+		var best_debt: float = -INF
+		for index in range(shares.size()):
+			var debt: float = float(shares[index]) * float(game_number) - float(counts[index])
+			if debt > best_debt:
+				best_debt = debt
+				best = index
+		counts[best] += 1
+		picked = best
+	return picked
+
+
+static func _configured_record_by_id(
 	record_by_id: Dictionary,
 	used_ids: Dictionary,
-	slot_settings: Dictionary,
-	key: String,
+	player_id: int,
 	position: int,
 	block_collapsed: bool = false
 ) -> PSPlayerSeasonRecord:
-	var player_id: int = int(slot_settings.get(key, 0))
 	if player_id <= 0 or used_ids.has(player_id) or not record_by_id.has(player_id):
 		return null
 	var record: PSPlayerSeasonRecord = record_by_id[player_id] as PSPlayerSeasonRecord

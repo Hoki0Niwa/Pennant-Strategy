@@ -13,7 +13,8 @@ const RESOURCE_DIR: String = "res://data/teams/"
 @export var starting_positions: Dictionary = {}
 # { position(int 2-9): Array[int] backup_player_ids (優先度順) }
 @export var backup_priority: Dictionary = {}
-# { position(int 2-9): {"starter_id": int, "sub_id": int, "sub_start_interval": int} }
+# { position(int 2-9): PSDefenseAlignmentService の slot 形式 }
+# = {"candidates": [{"player_id": int, "share": float}, ...], "backup_ids": [int, ...]}
 @export var position_slots: Dictionary = {}
 
 static var _cache: Dictionary = {}
