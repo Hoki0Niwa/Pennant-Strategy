@@ -3700,6 +3700,103 @@ func test_long_autoplay_prepares_every_season_for_streaming_report_aggregation()
 	assert_bool(season.generate_game_logs).is_false()
 
 
+# 故障のティア抽選は投手と野手で別テーブル。どちらも実 NPB の故障者リスト基準で、
+# **投手の方が長期側へ寄っている** (オフ時点に離脱中の投手の 6-8 割が手術)。
+# 特に投手の「重大手術」= トミー・ジョン級は 1球団 年1件が目標で、ここが薄くなると
+# オフの故障者が実勢の 1/3 になる (2026-08-23 の較正前がその状態)。
+func test_injury_tiers_are_weighted_separately_for_batters_and_pitchers() -> void:
+	var previous_seed: int = Rng.current_seed
+	var previous_state: int = Rng.generator.state
+	Rng.set_seed_value(4242)
+
+	var samples: int = 4000
+	var batter_15plus: int = 0
+	var pitcher_15plus: int = 0
+	var pitcher_severe: int = 0
+	for _i in range(samples):
+		if PSInjuryModel._roll_tier(false) >= PSInjuryModel.TIER_MODERATE:
+			batter_15plus += 1
+		var pitcher_tier: int = PSInjuryModel._roll_tier(true)
+		if pitcher_tier >= PSInjuryModel.TIER_MODERATE:
+			pitcher_15plus += 1
+		if pitcher_tier == PSInjuryModel.TIER_SEVERE:
+			pitcher_severe += 1
+
+	Rng.current_seed = previous_seed
+	Rng.generator.seed = previous_seed
+	Rng.generator.state = previous_state
+
+	assert_float(float(batter_15plus) / float(samples)).is_between(0.40, 0.50)
+	assert_float(float(pitcher_15plus) / float(samples)).is_between(0.50, 0.60)
+	assert_float(float(pitcher_severe) / float(samples)).is_between(0.04, 0.07)
+
+
+# 野手の故障頻度は実 NPB 準拠 (2026-08-22 時点で離脱中の野手 34人/12球団 = 2.83人)。
+# 先発ぶんの判定だけを 1球団1シーズン (143試合 × 野手 9人) 回すと、15日以上の離脱が
+# 3-6 件出る水準。実際のシムはこれに代打/守備交代と二軍戦、疲労の上乗せが乗る。
+# 頻度を半分に戻すと下限を、倍にすると上限を割る。
+func test_batter_injury_frequency_matches_npb_absence_volume() -> void:
+	var previous_seed: int = Rng.current_seed
+	var previous_state: int = Rng.generator.state
+	Rng.set_seed_value(20260823)
+
+	var teams: int = 12
+	var starts_per_team: int = 143 * 9
+	var long_absences: int = 0
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	# 実在しない player_id にする — 重傷の恒久能力低下は GameDb の持続 player まで書き換えるので、
+	# 実在 id を使うと後続テストの選手能力が削れる。
+	record.player_id = -1
+	record.position = 8
+	for _team in range(teams):
+		for _start in range(starts_per_team):
+			# 実際の判定は「離脱中の選手は再抽選しない」ので、毎回健康な状態から回す。
+			record.injury_days = 0
+			var injury: Dictionary = PSInjuryModel.maybe_injure(record, false)
+			if not injury.is_empty() and int(injury.get("days", 0)) >= 15:
+				long_absences += 1
+
+	Rng.current_seed = previous_seed
+	Rng.generator.seed = previous_seed
+	Rng.generator.state = previous_state
+
+	assert_float(float(long_absences) / float(teams)).is_between(3.0, 6.0)
+
+
+# 投手の故障頻度も実 NPB 準拠 (オフ時点に離脱中の投手が 1球団 4.2人)。1球団1シーズンぶんの
+# 登板判定 (143試合 × 1試合あたり投手 4人) を回すと、15日以上が 2-4.5 件 / 重大手術が 0.15-0.6 件。
+# **重大手術の下限が要**で、ここが薄いとオフの故障者リストが実勢の 1/3 になる。
+func test_pitcher_injury_frequency_matches_npb_absence_volume() -> void:
+	var previous_seed: int = Rng.current_seed
+	var previous_state: int = Rng.generator.state
+	Rng.set_seed_value(20260824)
+
+	var teams: int = 12
+	var appearances_per_team: int = 143 * 4
+	var long_absences: int = 0
+	var severe: int = 0
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = -1  # 恒久能力低下が実在 player を削らないよう存在しない id にする
+	record.position = 1
+	for _team in range(teams):
+		for _appearance in range(appearances_per_team):
+			record.injury_days = 0
+			var injury: Dictionary = PSInjuryModel.maybe_injure(record, true)
+			if injury.is_empty():
+				continue
+			if int(injury.get("days", 0)) >= 15:
+				long_absences += 1
+			if int(injury.get("tier", 0)) == PSInjuryModel.TIER_SEVERE:
+				severe += 1
+
+	Rng.current_seed = previous_seed
+	Rng.generator.seed = previous_seed
+	Rng.generator.state = previous_state
+
+	assert_float(float(long_absences) / float(teams)).is_between(2.0, 4.5)
+	assert_float(float(severe) / float(teams)).is_between(0.15, 0.6)
+
+
 func _report_advanced_record(
 	player_id: int,
 	plate_appearances: int,

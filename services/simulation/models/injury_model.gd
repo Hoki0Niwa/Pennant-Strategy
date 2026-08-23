@@ -22,20 +22,43 @@ const TIER_NAMES := {
 }
 
 # --- 発生頻度 (tunable) ---
-# 1試合(野手スタメン) / 1登板(投手) あたりの基礎発生確率。旧値(0.003/0.001)の約2倍。
-const BASE_CHANCE_PITCHER: float = 0.006
-const BASE_CHANCE_BATTER: float = 0.002
-# 疲労による上乗せ (fatigue × 係数)。旧値(0.00006/0.000035)の約1.7倍。
-const FATIGUE_MULT_PITCHER: float = 0.0001
-const FATIGUE_MULT_BATTER: float = 0.00006
+# 1試合(野手スタメン) / 1登板(投手) あたりの基礎発生確率。
+# **較正基準は実 NPB の故障者リスト** (集計は docs/agent_memory/project_injury_system.md)。
+# 完了したシーズンはオフ時点の形でしか残らないので、**過去4シーズン (2022-2025) のオフ時点に
+# 離脱中だった人数 = 投手 4.2人 / 野手 2.7人 per 球団**を正準とする。
+# 計測は `tools/run_playing_time_probe.tscn` の `injuries` セクションで、比べる値は
+# `season_end_concurrent_15plus_per_team` (軽傷は実データに載らないので 15日以上だけ)。
+# 野手はこれに合わせると 15日以上の離脱が年 9件前後 / 30日超が 5件前後 / 一軍戦力野手の
+# 30日超が 2.4人前後になる。
+# 投手も同じ基準で較正済み (オフ時点に離脱中の投手 1球団 4.2人)。**投手のストックの 6-8 割は
+# 手術**で、うち靭帯再建 (トミー・ジョン級) だけで 1球団 1.25-1.67 人を占める — つまり投手側は
+# 「件数」より**長期離脱の比率**で決まる。頻度だけ上げても届かないので TIER_WEIGHTS_PITCHER と
+# セットで動かすこと。
+const BASE_CHANCE_PITCHER: float = 0.0095
+const BASE_CHANCE_BATTER: float = 0.0075
+# 疲労による上乗せ (fatigue × 係数)。base に対する比率が変わらないよう base と一緒に動かす。
+const FATIGUE_MULT_PITCHER: float = 0.00016
+const FATIGUE_MULT_BATTER: float = 0.00022
 const EXPOSURE_MAX: float = 2.0
 
 # --- ティア抽選の重み (内部で正規化)。大半は軽傷、長期離脱は希少。 ---
-const TIER_WEIGHTS := {
-	TIER_MINOR: 0.68,
-	TIER_MODERATE: 0.22,
-	TIER_MAJOR: 0.08,
-	TIER_SEVERE: 0.02,
+# **投手と野手で分ける。** 実 NPB の平均離脱期間は投手が肩 64日 / 肘 59日 と長く、野手は
+# 太もも 39.8日 / ひざ 55.5日。野手の故障者リストは「数試合で戻る軽傷」を載せないので、
+# 較正は 15日以上の spell だけで行い、軽傷の比率はシム内部の値として置く。
+const TIER_WEIGHTS_BATTER := {
+	TIER_MINOR: 0.55,
+	TIER_MODERATE: 0.28,
+	TIER_MAJOR: 0.16,
+	TIER_SEVERE: 0.01,
+}
+# 投手は野手よりさらに長期側へ寄せる。**重大 (トミー・ジョン級) の目標は 1球団 年1件**で、
+# オフ時点のストックに 1.25-1.67 人/球団 の靭帯再建術が居る実測から逆算した値
+# (手術は 12-18 ヶ月残るので、年1件の発生で 1.4 人前後のストックになる)。
+const TIER_WEIGHTS_PITCHER := {
+	TIER_MINOR: 0.45,
+	TIER_MODERATE: 0.35,
+	TIER_MAJOR: 0.145,
+	TIER_SEVERE: 0.055,
 }
 
 # --- ティア別 離脱日数レンジ [min, max] (tunable) ---
@@ -146,7 +169,7 @@ static func maybe_injure(record: PSPlayerSeasonRecord, is_pitcher: bool, exposur
 	var exposure_scale: float = clampf(exposure, 0.0, EXPOSURE_MAX)
 	if Rng.roll_float() >= (base_chance + fatigue_chance) * exposure_scale:
 		return {}
-	return apply_injury(record, is_pitcher, _roll_tier())
+	return apply_injury(record, is_pitcher, _roll_tier(is_pitcher))
 
 
 # 指定ティアの怪我を record に適用する (smoke からも直接呼べるよう public)。
@@ -173,14 +196,15 @@ static func apply_injury(record: PSPlayerSeasonRecord, is_pitcher: bool, tier: i
 	}
 
 
-static func _roll_tier() -> int:
+static func _roll_tier(is_pitcher: bool) -> int:
+	var weights: Dictionary = TIER_WEIGHTS_PITCHER if is_pitcher else TIER_WEIGHTS_BATTER
 	var total: float = 0.0
-	for w in TIER_WEIGHTS.values():
+	for w in weights.values():
 		total += float(w)
 	var r: float = Rng.roll_float() * total
 	var acc: float = 0.0
 	for tier in [TIER_MINOR, TIER_MODERATE, TIER_MAJOR, TIER_SEVERE]:
-		acc += float(TIER_WEIGHTS[tier])
+		acc += float(weights[tier])
 		if r < acc:
 			return tier
 	return TIER_MINOR
