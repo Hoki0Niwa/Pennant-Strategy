@@ -21,7 +21,8 @@ static func build_team_setup(
 	team_id: int,
 	dh_enabled: bool,
 	postseason: bool = false,
-	level: int = LEVEL_FIRST
+	level: int = LEVEL_FIRST,
+	opponent_hand: String = ""
 ) -> Dictionary:
 	# 1試合1チームぶんの打撃スコア memo。ロスター検証 → AI既定配置の生成 → 本番配置で
 	# PSDefenseAlignmentService を最大3回通すため、共有しないと同じ選手の
@@ -39,7 +40,7 @@ static func build_team_setup(
 	# 二軍は序列 (pitcher_ids) だけ別キーで持ち、**登板間隔の台帳 (last_start_day_by_pitcher) は
 	# 一軍と共有する**。これで「二軍で投げた翌日に昇格して中0日で先発」を構造的に防げる。
 	var saved_rotation: Dictionary = PSRotationPlanner.rotation_state_for_level(season, team_id, level)
-	# 消化試合数はレベルごとに数える。守備の出場シェア (`rested_starter_ids_for_game`) と
+	# 消化試合数はレベルごとに数える。守備の出場シェア (`share_index_for_game`) と
 	# 日替わり打順がこの値を使うので、二軍で一軍の試合数を渡すと休養サイクルがずれる。
 	# **二軍の出場輪番 (farm_usage_priority) の分母**でもあるのでローテ決定より前に出す。
 	var team_games_played_before: int = 0
@@ -69,7 +70,8 @@ static func build_team_setup(
 	# 二軍の打順・守備配置は保存設定を使わず必ず自動生成する (二軍用の打順エディタは持たない)。
 	var use_saved: bool = level == LEVEL_FIRST and (team == null or not team.auto_lineup)
 	if use_saved:
-		var saved: Dictionary = season.get_lineup(team_id, dh_enabled)
+		# 相手先発の左右で打順を切り替える。対左を保存していないチームは基本打順へ落ちる。
+		var saved: Dictionary = season.get_lineup(team_id, dh_enabled, opponent_hand)
 		if not saved.is_empty():
 			var saved_setup: Dictionary = build_setup_from_saved(
 				season, team_id, dh_enabled, available_fielders, rotation_pitcher, saved, batting_memo
@@ -844,7 +846,9 @@ static func build_setup_from_auto(
 		_prime_farm_batting_memo(batting_memo, available_fielders, team_games_played_before)
 	var usage_settings: Dictionary = {} if is_farm else season.get_fielder_usage(team_id)
 	var team: PSTeam = GameDb.get_team(team_id)
-	var needs_ai_defaults: bool = not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders)
+	var needs_ai_defaults: bool = (
+		not is_farm and _usage_needs_ai_defaults(usage_settings, available_fielders)
+	)
 	# 自動編成チームの守備起用設定は AI_USAGE_REBUILD_INTERVAL 試合ごとに組み直す。
 	# 定位置を一度決めたきり動かさないと、不振のレギュラーが一年間同じ出場シェアで出続ける。
 	# スタメン選出 (`starter_assignment_score`) は今季成績込み (`batting_score_with_form` +
@@ -867,7 +871,9 @@ static func build_setup_from_auto(
 			team_id, available_fielders, evaluation_usage, 1, batting_memo
 		)
 		if base_slots.size() >= GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
-			usage_settings = build_ai_fielder_usage(available_fielders, base_slots, usage_settings, periodic_rebuild)
+			usage_settings = build_ai_fielder_usage(
+				available_fielders, base_slots, usage_settings, periodic_rebuild
+			)
 			season.set_fielder_usage(team_id, usage_settings)
 	if not is_farm and team != null and team.auto_lineup:
 		usage_settings = _usage_with_callup_start(
@@ -884,16 +890,24 @@ static func build_setup_from_auto(
 	)
 	if fielding_slots.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
 		return {"ok": false, "message": "%sの守備位置を埋められません" % GameSimulator._team_name(team_id)}
-	var rested_fielder_ids: Dictionary = rested_starter_ids_for_game(usage_settings, team_games_played_before + 1)
-
 	var batting_order: Array = records_from_fielding_slots(fielding_slots)
 	var position_by_player_id: Dictionary = position_map_from_fielding_slots(fielding_slots)
 	if dh_enabled:
-		var designated_hitter: PSPlayerSeasonRecord = select_designated_hitter(
-			available_fielders, fielding_slots, rested_fielder_ids, batting_memo
+		# **DH は独立した守備位置ではなく、守備枠から溢れた選手の受け皿。**
+		# 2026 パ・リーグの実測では DH 先発の 2/3 を守備もする選手が取っている
+		# (守備レギュラーの半休 39% / 守備と半々 27%)。「その日守備で先発しない中の打撃最良」で
+		# 埋めるだけで、併用型 (DeNA 佐野/宮﨑/筒香 のように 3 人で 2 枠) も半休型
+		# (ソフトバンク 柳田 DH64・左翼24 / 近藤 DH32・守備75) も同じ機構から出る。
+		# **休養日の選手を除外しない**のが要点 — 守備を外れた日に DH へ回るのが実際の起用。
+		# 詳細と実データは [[project_qualified_batter_count]]。
+		# ユーザーが専任DHを指定していればその選手を優先する (シェアで休養日も入る)。
+		var designated_hitter: PSPlayerSeasonRecord = _dedicated_dh_for_game(
+			usage_settings, available_fielders, fielding_slots, team_games_played_before + 1
 		)
-		if designated_hitter == null and not rested_fielder_ids.is_empty():
-			designated_hitter = select_designated_hitter(available_fielders, fielding_slots, {}, batting_memo)
+		if designated_hitter == null:
+			designated_hitter = select_designated_hitter(
+				available_fielders, fielding_slots, {}, batting_memo
+			)
 		if designated_hitter == null:
 			return {"ok": false, "message": "%sにDH候補がいません" % GameSimulator._team_name(team_id)}
 		batting_order.append(designated_hitter)
@@ -1280,6 +1294,14 @@ static func build_ai_fielder_usage(
 		var record: PSPlayerSeasonRecord = assignment.get("record", null) as PSPlayerSeasonRecord
 		if record != null:
 			starter_ids[record.player_id] = true
+	# DH は既定ではデプスチャートを持たない (下の DH 選出の注記を参照)。例外はユーザーが
+	# 打順設定画面で**専任DHを指定した**枠だけで、それは share_locked で残す。
+	# **守備枠のループより前に**専任DHを確保しないと `_best_sub_for_position` に取られる。
+	var dh_slot: Dictionary = _usage_slot_for_position(position_slots, BattingOrderService.DH_POSITION)
+	if DefenseAlignmentService.slot_share_locked(dh_slot):
+		assigned_sub_ids[DefenseAlignmentService.slot_starter_id(dh_slot)] = true
+	else:
+		position_slots.erase(str(BattingOrderService.DH_POSITION))
 	for slot_row in base_fielding_slots:
 		var assignment: Dictionary = slot_row as Dictionary
 		var position: int = int(assignment.get("position", 0))
@@ -1322,6 +1344,11 @@ static func build_ai_fielder_usage(
 		var share_locked: bool = DefenseAlignmentService.slot_share_locked(existing_slot)
 		if share <= 0.0 or (refresh_shares and not share_locked):
 			share = _starter_share_for(record, sub, position)
+		# 併用相手を確保できなかった枠は全試合出場に倒す。1.0 未満のまま相手なしで残すと
+		# `_usage_needs_ai_defaults` が毎試合 true を返し、AI 既定生成が毎試合走ってしまう
+		# (DH の定位置を先に確保するぶんベンチが 1 人減るので、実際に起きる)。
+		if sub_id <= 0:
+			share = 1.0
 		# ユーザが「控え」で設定した補充優先リストは AI 既定生成でも保持する。
 		# AI 既定は 2 人までのデプス。3 人以上の併用はユーザーが手で組む枠。
 		var candidates: Array = [{"player_id": starter_id, "share": share}]
@@ -1388,12 +1415,12 @@ static func _best_sub_for_position(
 # **その守備位置の平均的な定位置選手 (z=0) が share 0.72 ≒ 103 先発 = 規定打席未到達**。
 # ここが到達者数の唯一のノブ: 全体を上げれば到達者が増え、下げれば減る。
 const SHARE_CURVE: Array = [
-	[-1.50, 0.48],
-	[-1.00, 0.55],
-	[-0.50, 0.63],
-	[0.00, 0.72],
-	[0.60, 0.82],
-	[1.30, 0.92],
+	[-1.50, 0.44],
+	[-1.00, 0.50],
+	[-0.50, 0.57],
+	[0.00, 0.66],
+	[0.60, 0.78],
+	[1.30, 0.90],
 	[2.20, 1.00],
 ]
 # 控えとの差による副次補正。主役はあくまでリーグ相対だが、これが無いと
@@ -1403,9 +1430,17 @@ const SHARE_GAP_TYPICAL_Z: float = 1.0
 const SHARE_GAP_WEIGHT: float = 0.08
 const SHARE_GAP_MIN: float = -0.10
 const SHARE_GAP_MAX: float = 0.08
-# 捕手だけは守備負荷でシェアに上限を置く (旧 CATCHER_SUB_INTERVAL_MAX = 7 と同水準の 123 先発)。
-# 他ポジション (遊撃・中堅など) の耐久上限はまだ入れていない。
-const CATCHER_SHARE_MAX: float = 0.86
+# **守備位置ごとのシェア上限。** リーグ相対の位置がどれだけ高くてもここを超えない。
+# 上限を置くのは「その枠は 1 人では回せない」という身体的な理由がある位置だけ
+# (載せない位置は SHARE_MAX = 1.0)。遊撃・二塁・中堅は実 NPB でも全試合出場の主力がいるので
+# 上限を持たない。**DH も不要**: 2026-08-22 に上限 0.62 / 0.80 / 1.00 の 3 通りで実測したが、
+# DH の定位置は構造上「守備スタメン 9 人目の打者」= リーグ相対 z が低く、曲線の出力が 0.78 を
+# 超えないため上限が発火しない (到達者数も DH 枠の延べ起用人数も 3 通りで有意差なし)。
+#   - 捕手: 守備負荷。143×0.86 ≒ 123 先発 (旧 CATCHER_SUB_INTERVAL_MAX = 7 と同水準)。
+#     現行の較正では捕手の曲線出力が 0.63 前後なので、実際に効くのは打撃が突出した正捕手だけ。
+const POSITION_SHARE_MAX: Dictionary = {
+	2: 0.86,
+}
 const SHARE_MIN: float = 0.40
 const SHARE_MAX: float = 1.00
 
@@ -1414,21 +1449,20 @@ const SHARE_MAX: float = 1.00
 static func _starter_share_for(
 	starter: PSPlayerSeasonRecord, sub: PSPlayerSeasonRecord, position: int
 ) -> float:
-	if starter == null:
+	if starter == null or sub == null:
 		return 1.0
-	if sub == null:
-		return 1.0
-	# z は**その守備位置の先発級**基準。捕手・遊撃のように打撃水準の低いポジションでも
-	# 「その位置の定位置級として平均なら share も平均」になる (ゼロ点合わせは基準分布側の責務)。
 	var starter_z: float = PSBatterForm.regular_z(starter, position)
-	var share: float = _share_from_curve(starter_z)
 	var gap: float = starter_z - PSBatterForm.regular_z(sub, position)
-	share += clampf(
+	var gap_bonus: float = clampf(
 		(gap - SHARE_GAP_TYPICAL_Z) * SHARE_GAP_WEIGHT, SHARE_GAP_MIN, SHARE_GAP_MAX
 	)
-	if position == 2:
-		share = minf(share, CATCHER_SHARE_MAX)
-	return clampf(share, SHARE_MIN, SHARE_MAX)
+	return _clamped_share(_share_from_curve(starter_z) + gap_bonus, position)
+
+
+static func _clamped_share(share: float, position: int) -> float:
+	return clampf(
+		minf(share, float(POSITION_SHARE_MAX.get(position, SHARE_MAX))), SHARE_MIN, SHARE_MAX
+	)
 
 
 # SHARE_CURVE の線形補間 (両端はクランプ)。
@@ -1516,34 +1550,18 @@ static func _usage_with_callup_start(
 	var out_slots: Dictionary = (out.get("position_slots", {}) as Dictionary).duplicate(true)
 	var callup_slot: Dictionary = _usage_slot_for_position(out_slots, best_position).duplicate(true)
 	# この試合だけ候補列を差し替える。定位置選手を share 0 で先頭に残すのは、
-	# `rested_starter_ids_for_game` が「今日は休み」と判定して DH へ回さないようにするため
-	# (make_slot は share 0 を落とすので、ここは正規化せず直接組む)。
-	var rested_starter_id: int = DefenseAlignmentService.slot_starter_id(callup_slot)
+	# 「この枠の定位置は本来この選手」という情報を落とさないため (make_slot は share 0 を
+	# 落とすので、ここは正規化せず直接組む)。押し出された選手は守備には就かないが、
+	# その日の DH 候補には入る (実際の起用でも「守備を外れて DH」は普通)。
+	var displaced_starter_id: int = DefenseAlignmentService.slot_starter_id(callup_slot)
 	var callup_candidates: Array = []
-	if rested_starter_id > 0 and rested_starter_id != candidate.player_id:
-		callup_candidates.append({"player_id": rested_starter_id, "share": 0.0})
+	if displaced_starter_id > 0 and displaced_starter_id != candidate.player_id:
+		callup_candidates.append({"player_id": displaced_starter_id, "share": 0.0})
 	callup_candidates.append({"player_id": candidate.player_id, "share": 1.0})
 	callup_slot["candidates"] = callup_candidates
 	out_slots[str(best_position)] = callup_slot
 	out["position_slots"] = out_slots
 	return out
-
-
-# その試合で「休養日」になる定位置選手 (= 出場シェア上、当日の担当が別の候補になる枠)。
-# DH 選出から除外するために使う — 守備を休ませた選手をそのまま DH で使ったら休養にならない。
-static func rested_starter_ids_for_game(usage_settings: Dictionary, next_game_number: int) -> Dictionary:
-	var rested: Dictionary = {}
-	var position_slots: Dictionary = usage_settings.get("position_slots", {}) as Dictionary
-	for slot_value in position_slots.values():
-		var slot: Dictionary = slot_value as Dictionary
-		var starter_id: int = DefenseAlignmentService.slot_starter_id(slot)
-		if starter_id <= 0:
-			continue
-		var due_ids: Array = DefenseAlignmentService.ordered_candidate_ids_for_game(slot, next_game_number)
-		if due_ids.is_empty() or int(due_ids[0]) == starter_id:
-			continue
-		rested[starter_id] = true
-	return rested
 
 
 static func best_fielder_for_position(
@@ -1619,6 +1637,35 @@ static func _cached_batting_score(
 	if not batting_memo.has(record.player_id):
 		batting_memo[record.player_id] = PlayerValueEvaluator.batting_score_with_form(record)
 	return int(batting_memo[record.player_id])
+
+
+# ユーザー指定の専任DH枠から当日の担当を返す。指定が無い/休養日/故障/その日守備に就いている
+# ときは null (呼び出し側が「守備を外れた選手の打撃最良」へ落ちる)。
+static func _dedicated_dh_for_game(
+	usage_settings: Dictionary,
+	available_fielders: Array,
+	fielding_slots: Array,
+	next_game_number: int
+) -> PSPlayerSeasonRecord:
+	var position_slots: Dictionary = usage_settings.get("position_slots", {}) as Dictionary
+	var slot: Dictionary = _usage_slot_for_position(position_slots, BattingOrderService.DH_POSITION)
+	if not DefenseAlignmentService.slot_share_locked(slot):
+		return null
+	var due_ids: Array = DefenseAlignmentService.ordered_candidate_ids_for_game(slot, next_game_number)
+	if due_ids.is_empty() or int(due_ids[0]) != DefenseAlignmentService.slot_starter_id(slot):
+		return null  # シェア上の休養日
+	var fielding_ids: Dictionary = {}
+	for slot_row in fielding_slots:
+		var fielder: PSPlayerSeasonRecord = (slot_row as Dictionary).get("record", null) as PSPlayerSeasonRecord
+		if fielder != null:
+			fielding_ids[fielder.player_id] = true
+	var starter_id: int = DefenseAlignmentService.slot_starter_id(slot)
+	if fielding_ids.has(starter_id):
+		return null
+	var record: PSPlayerSeasonRecord = _record_by_id(available_fielders, starter_id)
+	if record == null or record.is_pitcher() or record.injury_days > 0:
+		return null
+	return record
 
 
 static func select_designated_hitter(

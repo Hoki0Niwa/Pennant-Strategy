@@ -2190,6 +2190,87 @@ func test_starter_share_produces_proportional_and_evenly_spread_starts() -> void
 	assert_int(int(counts[2])).is_between(19, 23)
 
 
+# 打順は DH の有無 × 相手先発の左右 で保存され、対左を保存していないチームは基本打順へ落ちる。
+# 「対左を作ったのに使われない」「対左を作っていないのに空の打順が使われる」の両方を防ぐ。
+func test_lineup_is_stored_per_opponent_hand_with_fallback() -> void:
+	var season: PSSeason = PSSeason.new()
+	var team_id: int = 4242
+	var base_order: Array = [{"slot": 1, "position": 3, "player_id": 11}]
+	var versus_left: Array = [{"slot": 1, "position": 3, "player_id": 22}]
+
+	season.set_lineup(team_id, true, {"batting_order": base_order})
+	# 対左が未保存なら基本打順へフォールバックする。
+	assert_bool(season.has_lineup(team_id, true, "L")).is_false()
+	var fallback: Array = season.get_lineup(team_id, true, "L").get("batting_order", []) as Array
+	assert_int(int((fallback[0] as Dictionary).get("player_id", 0))).is_equal(11)
+
+	season.set_lineup(team_id, true, {"batting_order": versus_left}, "L")
+	assert_bool(season.has_lineup(team_id, true, "L")).is_true()
+	var left_order: Array = season.get_lineup(team_id, true, "L").get("batting_order", []) as Array
+	assert_int(int((left_order[0] as Dictionary).get("player_id", 0))).is_equal(22)
+	# 右投手 (既定) と DH 無しは別枠のまま。
+	var right_order: Array = season.get_lineup(team_id, true, "R").get("batting_order", []) as Array
+	assert_int(int((right_order[0] as Dictionary).get("player_id", 0))).is_equal(11)
+	assert_bool(season.has_lineup(team_id, false, "L")).is_false()
+
+
+# **DH は既定では枠を持たない。** 2026 パ・リーグの実測では DH 先発の 2/3 を守備もする選手が
+# 取っており、「その日守備で先発しない中の打撃最良」が入るのが実際の埋まり方
+# ([[project_qualified_batter_count]])。AI が勝手に DH 定位置を作る実装へ戻る退行と、
+# ユーザーが指定した専任DH が組み直しで消える退行の両方を検出する。
+func test_dh_is_automatic_unless_the_user_designates_one() -> void:
+	var aptitude_keys: Dictionary = PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS
+	var fielders: Array = []
+	var base_slots: Array = []
+	var next_id: int = 600
+	for position_row in [2, 6, 8, 4, 5, 3, 7, 9]:
+		var position: int = int(position_row)
+		var starter: PSPlayerSeasonRecord = _fielder(next_id, "Starter %d" % position, 1.0)
+		next_id += 1
+		starter.position = position
+		starter.position_aptitudes_snapshot = {str(aptitude_keys.get(position, "catcher")): 100}
+		var sub: PSPlayerSeasonRecord = _fielder(next_id, "Sub %d" % position, -0.5)
+		next_id += 1
+		sub.position = position
+		sub.position_aptitudes_snapshot = {str(aptitude_keys.get(position, "catcher")): 90}
+		fielders.append(starter)
+		fielders.append(sub)
+		base_slots.append({"record": starter, "position": position})
+	# 守備スタメンから溢れた打撃最良の選手。守備適性は普通にあるが、この日は守らない。
+	var surplus: PSPlayerSeasonRecord = _fielder(next_id, "Surplus Bat", 2.5)
+	surplus.position = 3
+	surplus.position_aptitudes_snapshot = {"first": 100}
+	fielders.append(surplus)
+
+	var usage: Dictionary = PSTeamSetupBuilder.build_ai_fielder_usage(fielders, base_slots, {}, true)
+	assert_bool((usage.get("position_slots", {}) as Dictionary).has("10")).override_failure_message(
+		"DH must not get a persisted depth chart"
+	).is_false()
+
+	# その日守備で先発しない中の打撃最良が DH に入る。
+	var designated: PSPlayerSeasonRecord = PSTeamSetupBuilder.select_designated_hitter(
+		fielders, base_slots, {}, {}
+	)
+	assert_int(designated.player_id).is_equal(surplus.player_id)
+
+	# ユーザーが専任DHを指定した (share_locked) 枠だけは AI 既定生成でも残り、
+	# その選手は守備枠の併用相手に取られない。
+	var locked_usage: Dictionary = {"position_slots": {"10": PSDefenseAlignmentService.make_slot(
+		[{"player_id": surplus.player_id, "share": 0.9}], [], true
+	)}}
+	var kept: Dictionary = PSTeamSetupBuilder.build_ai_fielder_usage(
+		fielders, base_slots, locked_usage, true
+	)
+	var kept_slots: Dictionary = kept.get("position_slots", {}) as Dictionary
+	assert_int(PSDefenseAlignmentService.slot_starter_id(kept_slots.get("10", {}) as Dictionary)) 		.override_failure_message("a user-designated DH must survive the AI rebuild") 		.is_equal(surplus.player_id)
+	for position_row in [2, 6, 8, 4, 5, 3, 7, 9]:
+		var slot: Dictionary = kept_slots.get(str(int(position_row)), {}) as Dictionary
+		for candidate_value in PSDefenseAlignmentService.slot_candidates(slot):
+			assert_int(int((candidate_value as Dictionary).get("player_id", 0))).override_failure_message(
+				"the designated DH must not be reused as a fielding platoon partner"
+			).is_not_equal(surplus.player_id)
+
+
 # シェアは**リーグ相対**で決まり、控えの質は副次補正 (SHARE_GAP_*) の幅しか動かさない。
 # 旧方式 (控えとの能力差が主役) に戻ると全枠が上限へ張り付いて規定到達者が膨らむ。
 func test_starter_share_is_league_relative_not_bench_relative() -> void:
@@ -2226,10 +2307,9 @@ func test_promoted_fielder_gets_one_automatic_start_without_rewriting_usage() ->
 	var slot: Dictionary = (game_usage.get("position_slots", {}) as Dictionary).get("3", {}) as Dictionary
 	var saved_slot: Dictionary = (usage.get("position_slots", {}) as Dictionary).get("3", {}) as Dictionary
 
-	# その試合だけ昇格選手が先発し、定位置選手は share 0 の先頭に残って「休養」扱いになる。
+	# その試合だけ昇格選手が先発し、定位置選手は share 0 の先頭に残る (保存側は無改変)。
 	assert_int(int(PSDefenseAlignmentService.ordered_candidate_ids_for_game(slot, 1)[0])).is_equal(callup.player_id)
 	assert_int(PSDefenseAlignmentService.slot_starter_id(slot)).is_equal(starter.player_id)
-	assert_bool(PSTeamSetupBuilder.rested_starter_ids_for_game(game_usage, 1).has(starter.player_id)).is_true()
 	assert_int(PSDefenseAlignmentService.slot_candidates(saved_slot).size()).is_equal(1)
 	callup.batter_stats.games = 1
 	var after_appearance: Dictionary = PSTeamSetupBuilder._usage_with_callup_start(

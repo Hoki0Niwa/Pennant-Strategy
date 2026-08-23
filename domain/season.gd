@@ -141,22 +141,39 @@ func total_games() -> int:
 	return schedule.size()
 
 
-func get_lineup(team_id: int, dh_enabled: bool) -> Dictionary:
+# 打順は DH の有無 × 相手先発の左右 で持つ。左投手用 (`opponent_hand == "L"`) を保存していない
+# チームは基本打順 (対右) にフォールバックするので、左右別を使わないチームは従来どおり 1 つで済む。
+func _lineup_key(dh_enabled: bool, opponent_hand: String) -> String:
+	var key: String = "dh" if dh_enabled else "non_dh"
+	return key + "_vs_l" if opponent_hand.to_upper() == "L" else key
+
+
+func get_lineup(team_id: int, dh_enabled: bool, opponent_hand: String = "") -> Dictionary:
 	_mutex.lock()
 	var team_entry: Dictionary = team_lineups.get(str(team_id), {}) as Dictionary
-	var key: String = "dh" if dh_enabled else "non_dh"
-	var out: Dictionary = team_entry.get(key, {}) as Dictionary
+	var out: Dictionary = team_entry.get(_lineup_key(dh_enabled, opponent_hand), {}) as Dictionary
+	if out.is_empty() and not opponent_hand.is_empty():
+		out = team_entry.get(_lineup_key(dh_enabled, ""), {}) as Dictionary
 	_mutex.unlock()
 	return out
 
 
-func set_lineup(team_id: int, dh_enabled: bool, lineup: Dictionary) -> void:
+# 左右別の打順が実際に保存されているか (フォールバックを挟まない素の判定)。
+func has_lineup(team_id: int, dh_enabled: bool, opponent_hand: String = "") -> bool:
 	_mutex.lock()
 	var team_entry: Dictionary = team_lineups.get(str(team_id), {}) as Dictionary
-	var key: String = "dh" if dh_enabled else "non_dh"
+	var stored: Dictionary = team_entry.get(_lineup_key(dh_enabled, opponent_hand), {}) as Dictionary
+	var found: bool = not (stored.get("batting_order", []) as Array).is_empty()
+	_mutex.unlock()
+	return found
+
+
+func set_lineup(team_id: int, dh_enabled: bool, lineup: Dictionary, opponent_hand: String = "") -> void:
+	_mutex.lock()
+	var team_entry: Dictionary = team_lineups.get(str(team_id), {}) as Dictionary
 	var stored: Dictionary = lineup.duplicate(true)
 	stored["updated_at_day"] = current_day
-	team_entry[key] = stored
+	team_entry[_lineup_key(dh_enabled, opponent_hand)] = stored
 	team_lineups[str(team_id)] = team_entry
 	_mutex.unlock()
 

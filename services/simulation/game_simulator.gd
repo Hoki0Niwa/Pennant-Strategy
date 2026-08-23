@@ -838,6 +838,12 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 # の共有コンテナへは(排他所有が保証されたPSPlayerSeasonRecord/PSPlayer以外は)書き込まない。
 # 1日分の試合はチームが完全に排反なので、WorkerThreadPoolで複数試合を並列に呼んでも安全。
 # lane_id >= 0 のときだけ Rng のレーンストリームを開始/終了する(-1 は従来の共有generatorのまま)。
+# セットアップの先発投手の利き腕 ("R"/"L")。相手打順の左右切替に使う。
+static func _starter_hand(setup: Dictionary) -> String:
+	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", null) as PSPlayerSeasonRecord
+	return "" if starter == null else starter.throwing_hand.to_upper()
+
+
 static func _simulate_game_calculation(
 	season: PSSeason,
 	game_index: int,
@@ -855,12 +861,26 @@ static func _simulate_game_calculation(
 	var away_team_id: int = int(game.get("away_team_id", 0))
 	var home_team_id: int = int(game.get("home_team_id", 0))
 	var dh_enabled: bool = bool(game.get("dh_enabled", false))
+	# 打順は相手先発の左右で変わり得る。away を先に組んでその先発の利き腕を home へ渡し、
+	# home の先発が左で **away が対左の打順を保存している場合だけ** away を組み直す。
+	# セットアップ構築は Rng を一切消費しない (乱数ストリームは試合ループ側だけ) ので、
+	# 組み直しても乱数系列と既存の結果は変わらない。
 	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, away_team_id, dh_enabled)
-	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, home_team_id, dh_enabled)
 	if not bool(away_setup.get("ok", false)):
 		return away_setup
+	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(
+		season, home_team_id, dh_enabled, false, PSTeamSetupBuilder.LEVEL_FIRST,
+		_starter_hand(away_setup)
+	)
 	if not bool(home_setup.get("ok", false)):
 		return home_setup
+	var home_hand: String = _starter_hand(home_setup)
+	if home_hand == "L" and season.has_lineup(away_team_id, dh_enabled, home_hand):
+		away_setup = PSTeamSetupBuilder.build_team_setup(
+			season, away_team_id, dh_enabled, false, PSTeamSetupBuilder.LEVEL_FIRST, home_hand
+		)
+		if not bool(away_setup.get("ok", false)):
+			return away_setup
 
 	if lane_id >= 0:
 		var seed_key: int = hash([Rng.current_seed, season.year, season.season_number, game_index])
