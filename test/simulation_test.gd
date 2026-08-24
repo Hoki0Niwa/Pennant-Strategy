@@ -1618,6 +1618,165 @@ func test_tto_penalty_flows_into_pa_weights() -> void:
 		float(fresh_weights.get(PSPaProbabilityCalculator.OUTCOME_WALK, 0.0)))
 
 
+# バント企図は「監督が何番に置いたか」と塁状況・アウトで決まる。NPB の犠打は一塁/一二塁と
+# 下位打線・2番に集中し、三塁走者ありのスクイズと満塁は稀、2アウトと走者なしでは出ない。
+func test_bunt_call_follows_batting_slot_base_state_and_outs() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(880, "Bunt Candidate", 0.0)
+
+	assert_float(_bunt_rate(batter, [null, null, null], 0, 1)).is_equal(0.0)
+	assert_float(_bunt_rate(batter, [batter, null, null], 2, 1)).is_equal(0.0)
+
+	# 打順: 下位打線 (7-9番) > 2番 > 6番 > 5番 > 4番 (4番はほぼ送らない)。
+	# 1番と2番は較正上ほぼ同率なので順序は問わない。
+	var slot_rates: Array = []
+	for slot in range(9):
+		slot_rates.append(_bunt_rate(batter, [batter, null, null], 0, slot))
+	assert_float(float(slot_rates[6])).is_greater(float(slot_rates[1]))
+	assert_float(float(slot_rates[7])).is_greater(float(slot_rates[1]))
+	assert_float(float(slot_rates[8])).is_greater(float(slot_rates[1]))
+	assert_float(float(slot_rates[1])).is_greater(float(slot_rates[5]))
+	assert_float(float(slot_rates[5])).is_greater(float(slot_rates[4]))
+	assert_float(float(slot_rates[4])).is_greater(float(slot_rates[3]))
+	assert_float(float(slot_rates[3])).is_less(0.02)
+
+	# 塁状況: 一二塁 > 一塁 > 二塁 > 三塁を含む状況、満塁はほぼ出ない
+	var first_only: float = _bunt_rate(batter, [batter, null, null], 0, 1)
+	var first_second: float = _bunt_rate(batter, [batter, batter, null], 0, 1)
+	var second_only: float = _bunt_rate(batter, [null, batter, null], 0, 1)
+	var third_only: float = _bunt_rate(batter, [null, null, batter], 0, 1)
+	var loaded: float = _bunt_rate(batter, [batter, batter, batter], 0, 1)
+	assert_float(first_second).is_greater(first_only)
+	assert_float(first_only).is_greater(second_only)
+	assert_float(second_only).is_greater(third_only)
+	assert_float(loaded).is_less(third_only)
+
+	# アウト: 0アウトが主で、1アウトからの送りは大きく減る
+	var one_out: float = _bunt_rate(batter, [batter, null, null], 1, 1)
+	assert_float(one_out).is_less(first_only * 0.5)
+	assert_float(one_out).is_greater(0.0)
+
+
+# 大差ではバントの価値が無いので企図を抑え、終盤の同点/1点差では増やす。
+func test_bunt_call_reacts_to_inning_and_score_margin() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(881, "Situational Bunter", 0.0)
+	var bases: Array = [batter, null, null]
+	var neutral: float = _bunt_rate(batter, bases, 0, 1, {"inning": 4, "score_margin": 0})
+	var blowout_lead: float = _bunt_rate(batter, bases, 0, 1, {"inning": 4, "score_margin": 5})
+	var blowout_deficit: float = _bunt_rate(batter, bases, 0, 1, {"inning": 4, "score_margin": -5})
+	var late_close: float = _bunt_rate(batter, bases, 0, 1, {"inning": 8, "score_margin": -1})
+
+	assert_float(blowout_lead).is_less(neutral * 0.6)
+	assert_float(blowout_deficit).is_less(neutral * 0.6)
+	assert_float(late_close).is_greater(neutral)
+
+
+# バント企図の結末は「バント安打 / 犠打成立 / 失敗」の3通り。犠打成立が主で、
+# 打者が生きるのは少数、スクイズと一二塁は成立しにくい。
+func test_bunt_outcomes_split_into_hit_sacrifice_and_failure() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(882, "Sacrifice Specialist", 0.0)
+	var first_only: Dictionary = _bunt_outcome_rates(batter, [batter, null, null])
+	var first_second: Dictionary = _bunt_outcome_rates(batter, [batter, batter, null])
+	var squeeze: Dictionary = _bunt_outcome_rates(batter, [null, null, batter])
+
+	assert_float(float(first_only["sacrifice"])).is_between(0.68, 0.85)
+	# 能力 z が全て 0 の打者なので実戦の平均 (走力 z ≒ 1.6) より低く出る。少数派であることだけを見る。
+	assert_float(float(first_only["hit"])).is_between(0.01, 0.12)
+	assert_float(float(first_only["unknown"])).is_equal(0.0)
+	assert_float(float(first_second["sacrifice"])).is_less(float(first_only["sacrifice"]))
+	assert_float(float(squeeze["sacrifice"])).is_less(float(first_second["sacrifice"]))
+	assert_float(float(squeeze["sacrifice"])).is_greater(0.50)
+
+	# バント安打は走力で増える。
+	var speedster: PSPlayerSeasonRecord = _fielder(883, "Speedster", 0.0)
+	speedster.z_abilities_snapshot["Run_Speed"] = 2.0
+	var plodder: PSPlayerSeasonRecord = _fielder(884, "Plodder", 0.0)
+	plodder.z_abilities_snapshot["Run_Speed"] = -2.0
+	var fast_rates: Dictionary = _bunt_outcome_rates(speedster, [speedster, null, null])
+	var slow_rates: Dictionary = _bunt_outcome_rates(plodder, [plodder, null, null])
+	assert_float(float(fast_rates["hit"])).is_greater(float(slow_rates["hit"]))
+
+
+# スクイズ崩れは三塁走者が本塁で刺され、打者は野選で一塁へ生きる。
+func test_failed_squeeze_retires_the_runner_at_home() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(885, "Squeeze Bunter", 0.0)
+	var runner_third: PSPlayerSeasonRecord = _fielder(886, "Third Base Runner", 0.0)
+	var rates: Dictionary = _bunt_outcome_rates(batter, [null, null, runner_third])
+
+	# 三塁走者ありの失敗は、走者の憤死が打者だけのゴロアウトより多い。
+	assert_float(float(rates["fielders_choice"])).is_greater(float(rates["out"]))
+	# 一塁走者だけのときは憤死経路に入らない。
+	var first_only: Dictionary = _bunt_outcome_rates(batter, [batter, null, null])
+	assert_float(float(first_only["fielders_choice"])).is_equal(0.0)
+
+	var bases: Array = [null, null, runner_third]
+	var outcome: Dictionary = PSPlayResolver.fielders_choice_outcome(bases, 1, 3, 4)
+	var applied: Dictionary = PSPlateEventReducer.apply_plate_outcome(batter, null, bases, 0, outcome)
+	assert_int(int(applied.get("outs", 0))).is_equal(1)
+	assert_int(int(applied.get("runs", 0))).is_equal(0)
+	assert_object(bases[2]).is_null()
+	assert_object(bases[0]).is_equal(batter)
+	assert_int(runner_third.batter_stats.runs).is_equal(0)
+
+
+# _should_bunt をモンテカルロで叩き、バント機会1回あたりの企図率を返す。
+# 同じ種で回して呼び出し間の比較を再現可能にし、共有 Rng の状態は呼び出し前へ戻す。
+func _bunt_rate(
+	batter: PSPlayerSeasonRecord,
+	bases: Array,
+	outs: int,
+	batting_slot: int,
+	extra_context: Dictionary = {}
+) -> float:
+	var restore: Dictionary = _begin_seeded_rng()
+	var context: Dictionary = {"batting_slot": batting_slot}
+	context.merge(extra_context)
+	var trials: int = 4000
+	var calls: int = 0
+	for _index in range(trials):
+		if PSPlateAppearanceCoordinator._should_bunt(batter, bases, outs, {}, context):
+			calls += 1
+	_end_seeded_rng(restore)
+	return float(calls) / float(trials)
+
+
+# _resolve_bunt をモンテカルロで叩き、結末カテゴリごとの割合を返す。
+# 想定外のカテゴリが出たら "unknown" に溜まるので、分岐の取りこぼしも検出できる。
+func _bunt_outcome_rates(batter: PSPlayerSeasonRecord, bases: Array) -> Dictionary:
+	var restore: Dictionary = _begin_seeded_rng()
+	var trials: int = 4000
+	var counts: Dictionary = {"hit": 0, "sacrifice": 0, "fielders_choice": 0, "out": 0, "unknown": 0}
+	var malformed_hits: int = 0
+	for _index in range(trials):
+		var outcome: Dictionary = PSPlateAppearanceCoordinator._resolve_bunt(batter, bases.duplicate())
+		var category: String = str(outcome.get("category", ""))
+		if category == "hit" and not (
+			int(outcome.get("bases", 0)) == 1
+			and str(outcome.get("result", "")).begins_with("bunt_single")
+		):
+			malformed_hits += 1
+		if not counts.has(category):
+			category = "unknown"
+		counts[category] = int(counts[category]) + 1
+	_end_seeded_rng(restore)
+	assert_int(malformed_hits).is_equal(0)
+	var rates: Dictionary = {}
+	for key in counts.keys():
+		rates[key] = float(int(counts[key])) / float(trials)
+	return rates
+
+
+func _begin_seeded_rng() -> Dictionary:
+	var restore: Dictionary = {"seed": Rng.current_seed, "state": Rng.generator.state}
+	Rng.set_seed_value(20260824)
+	return restore
+
+
+func _end_seeded_rng(restore: Dictionary) -> void:
+	Rng.current_seed = int(restore.get("seed", 0))
+	Rng.generator.seed = int(restore.get("seed", 0))
+	Rng.generator.state = int(restore.get("state", 0))
+
+
 func test_short_reliever_gets_initial_output_bonus() -> void:
 	var pitcher: PSPlayerSeasonRecord = _pitcher(804, "Max Effort", 0.0)
 	var direct_z: Dictionary = {

@@ -335,7 +335,12 @@ static func simulate_half_inning(
 			defense,
 			bases,
 			outs,
-			{"runner_intents": deferred_steal_intents},
+			{
+				"runner_intents": deferred_steal_intents,
+				"batting_slot": batting_slot,
+				"inning": inning,
+				"score_margin": offense_score_margin(game_result, half, runs),
+			},
 			pa_cache
 		)
 		var event_index: int = next_play_event_index(game_result)
@@ -417,6 +422,7 @@ static func simulate_half_inning(
 		# 失策得点や走者の自力得点(盗塁本盗等)は打点に入らない。
 		if batter != null:
 			outcome["rbi"] = batter.batter_stats.runs_batted_in - batter_rbi_before
+		outcome["batting_slot"] = batting_slot
 		append_play_event(
 			game_result,
 			inning,
@@ -739,6 +745,14 @@ static func set_last_play_score_and_lead(
 			"score_before": before_score,
 			"score_after": after_score,
 		}
+
+
+# 攻撃側から見た現在の点差(正ならリード)。バント等の作戦判断が参照する。
+static func offense_score_margin(game_result: Dictionary, half: String, current_half_runs: int) -> int:
+	var score: Dictionary = score_pair_for_half(game_result, half, current_half_runs)
+	var away_score: int = int(score.get("away", 0))
+	var home_score: int = int(score.get("home", 0))
+	return away_score - home_score if half == "top" else home_score - away_score
 
 
 static func score_pair_for_half(game_result: Dictionary, half: String, current_half_runs: int) -> Dictionary:

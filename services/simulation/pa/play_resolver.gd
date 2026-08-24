@@ -1283,6 +1283,19 @@ static func _fielders_choice_probability(
 	return clamp(probability, 0.0, FIELDERS_CHOICE_MAX)
 
 
+# 指定した塁の走者を封殺する野選 outcome を作る。打球解決を経ずに野選へ落とす経路
+# (バント失敗でスクイズの三塁走者が本塁で刺される等) が使う。呼び出し側は result を
+# 差し替えてよい。probability は診断用のメタ情報で、進塁計算には影響しない。
+static func fielders_choice_outcome(
+	bases: Array,
+	position: int,
+	force_from_base: int,
+	force_to_base: int,
+	probability: float = 1.0
+) -> Dictionary:
+	return _fielders_choice_outcome(bases, position, force_from_base, force_to_base, probability)
+
+
 static func _fielders_choice_outcome(
 	bases: Array,
 	position: int,

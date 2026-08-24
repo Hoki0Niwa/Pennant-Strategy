@@ -46,14 +46,51 @@ const BATTER_GAP_TAIL_PIVOT: float = 1.7849
 const BATTER_GAP_TAIL_SPAN: float = 1.20
 const BATTER_PATIENCE_TAIL_PIVOT: float = 1.3089
 const BATTER_PATIENCE_TAIL_SPAN: float = 1.50
-const BUNT_BASE_PROBABILITY: float = 0.205
-const BUNT_SKILL_WEIGHT: float = 0.015
-const BUNT_IMPACT_PENALTY: float = 0.008
-const BUNT_BARREL_PENALTY: float = 0.006
-const BUNT_OUT_PENALTY: float = 0.040
-const BUNT_RUNNER_SECOND_ONLY_BONUS: float = 0.080
-const BUNT_RUNNER_THIRD_PENALTY: float = 0.070
-const BUNT_PITCHER_BONUS: float = 0.280
+# バント企図の確率は「バント機会(走者あり・2アウト未満)1回あたり」で、下の係数を掛け合わせて作る。
+# BUNT_BASE_PROBABILITY は基準状況(0アウト・走者一塁・平均的な打順)の企図率で、全体量のノブ。
+const BUNT_BASE_PROBABILITY: float = 0.215
+# 塁状況の係数。添字は走者コード(bit0=一塁, bit1=二塁, bit2=三塁)で、走者なしは使わない。
+# 送りバントは一塁/一二塁に集中し、三塁走者ありのスクイズは稀、満塁ではほぼ出ない。
+const BUNT_STATE_FACTORS: Array[float] = [0.00, 0.98, 0.54, 2.02, 0.40, 0.95, 0.43, 0.05]
+# 打順スロット(0始まり)の係数。監督が下位打線と2番に送らせる度合いで、上げるとその打順が多く送る。
+const BUNT_SLOT_FACTORS: Array[float] = [1.16, 1.13, 0.27, 0.05, 0.39, 0.61, 1.48, 2.45, 2.45]
+# 1アウトでのバントは0アウトに対してどれだけ出るか。上げると1アウトからの送りが増える。
+const BUNT_ONE_OUT_FACTOR: float = 0.26
+# バント技術 z が企図率をどれだけ動かすか(打順係数が主で、これは同じ打順内の差)。
+const BUNT_SKILL_WEIGHT: float = 0.10
+const BUNT_SKILL_FACTOR_MIN: float = 0.60
+const BUNT_SKILL_FACTOR_MAX: float = 1.40
+# 大差(この点差以上)ではバントの価値が無いので企図を抑える。
+const BUNT_BLOWOUT_MARGIN: int = 4
+const BUNT_BLOWOUT_FACTOR: float = 0.35
+# 終盤の同点/1点差では1点を取りにいくので企図を増やす。
+const BUNT_LATE_INNING: int = 7
+const BUNT_LATE_CLOSE_FACTOR: float = 1.30
+# 投手が打席に立つ(DH無し)ときの倍率。
+const BUNT_PITCHER_FACTOR: float = 2.00
+const BUNT_PROBABILITY_MAX: float = 0.85
+# バント安打(内野安打)。送りの構えからでも打者が生きることがあり、走者も1つ進む。
+# 企図全体から先に抽選し、生きなかったぶんを犠打成立/失敗へ振り分ける。
+# 上げると犠打が減って安打が増えるので、BUNT_BASE_PROBABILITY と対で調整する。
+const BUNT_HIT_BASE: float = 0.025
+const BUNT_HIT_SPEED_WEIGHT: float = 0.020
+const BUNT_HIT_SPRAY_WEIGHT: float = 0.010
+# 打球方向による内野安打のしやすさ。三塁線は送球が長く、投手正面は最も生きにくい。
+const BUNT_HIT_POSITION_BONUS: Dictionary = {1: -0.025, 3: 0.005, 5: 0.045}
+const BUNT_HIT_MIN: float = 0.002
+const BUNT_HIT_MAX: float = 0.250
+# スクイズ失敗時に三塁走者が本塁で刺される確率。残りは打者のゴロアウトのみで走者は留まる。
+const BUNT_SQUEEZE_FAILURE_RUNNER_OUT_PROBABILITY: float = 0.65
+# バント成功率(打者が生きなかったとき、走者が進んで犠打が記録される確率)。
+# 失敗はゴロアウトで走者は進まない。
+const BUNT_SUCCESS_BASE: float = 0.760
+const BUNT_SUCCESS_SKILL_WEIGHT: float = 0.050
+const BUNT_SUCCESS_RUNNER_SPEED_WEIGHT: float = 0.020
+const BUNT_SUCCESS_FIRST_AND_SECOND_PENALTY: float = 0.060
+const BUNT_SUCCESS_SQUEEZE_PENALTY: float = 0.120
+const BUNT_SUCCESS_SECOND_ONLY_BONUS: float = 0.030
+const BUNT_SUCCESS_MIN: float = 0.300
+const BUNT_SUCCESS_MAX: float = 0.950
 const HIT_AND_RUN_BIP_LOGIT_BONUS: float = 0.16
 const HIT_AND_RUN_K_LOGIT_PENALTY: float = 0.05
 const HIT_AND_RUN_BB_LOGIT_PENALTY: float = 0.30
@@ -106,7 +143,7 @@ static func resolve(
 	# 敬遠とバントは打席シーケンスに入らず早期判定する
 	if _should_intentionally_walk(batter, pitcher, bases, outs):
 		return _terminal_walk_outcome(RESULT_INTENTIONAL_WALK, _intentional_walk_pitch_summary())
-	if not hit_and_run and _should_bunt(batter, bases, outs, plate_rules):
+	if not hit_and_run and _should_bunt(batter, bases, outs, plate_rules, batting_context):
 		return _resolve_bunt(batter, bases)
 
 	var precomp: Dictionary = _build_precomp(
@@ -330,41 +367,57 @@ static func _should_intentionally_walk(
 	return Rng.range_int(0, INTENTIONAL_WALK_BASE_DENOMINATOR - 1) < chance
 
 
-# バント判定。
-# bunt_z = 0.5*Bat_Spray + 0.3*Bat_KAvoid - 0.4*Bat_Impact - 0.2*Bat_Barrel
-# 投手バンド (+220 バイアス) は維持。
+# バント判定。監督判断なので「その打者を何番に置いたか」を主軸に置き、塁状況・アウト・
+# 試合状況(イニングと点差)で増減させる。各係数を掛け合わせた値がバント機会1回あたりの企図率。
+# batting_context に batting_slot / inning / score_margin が無い呼び出し(単体テストや probe)では
+# 該当する係数を 1.0 として扱うので、打者と塁状況だけでも判定できる。
 static func _should_bunt(
 	batter: PSPlayerSeasonRecord,
 	bases: Array,
 	outs: int,
-	rules: Dictionary = {}
+	rules: Dictionary = {},
+	context: Dictionary = {}
 ) -> bool:
-	if outs >= 2:
+	if outs >= 2 or batter == null:
 		return false
-	if not (_has_runner(bases, 0) or _has_runner(bases, 1) or _has_runner(bases, 2)):
+	var base_code: int = _base_code(bases)
+	if base_code == 0:
 		return false
-	if batter == null:
-		return false
-	var bat_impact: float = batter.z_ability("Bat_Impact", 0.0)
-	var bat_barrel: float = batter.z_ability("Bat_Barrel", 0.0)
-	# 強打者は通常稀にしかバントしない
-	if bat_impact > 1.5 or bat_barrel > 1.5:
-		return Rng.range_int(0, 99) < 6
-	var bunt_z: float = _bunt_skill_z(batter)
-	# バント確率(0..1)。バント技術 z が高いほど上げ、長打力(Impact)・芯(Barrel) z が高いほど下げる。
-	# アウトが増えるほど下げ、走者状況で増減し、投手打者は大きく上げる。
-	var bunt_prob: float = _rule_float(rules, "bunt_base_probability", BUNT_BASE_PROBABILITY) \
-		+ bunt_z * _rule_float(rules, "bunt_skill_weight", BUNT_SKILL_WEIGHT) \
-		- bat_impact * _rule_float(rules, "bunt_impact_penalty", BUNT_IMPACT_PENALTY) \
-		- bat_barrel * _rule_float(rules, "bunt_barrel_penalty", BUNT_BARREL_PENALTY) \
-		- float(outs) * _rule_float(rules, "bunt_out_penalty", BUNT_OUT_PENALTY)
-	if _has_runner(bases, 2):
-		bunt_prob -= _rule_float(rules, "bunt_runner_third_penalty", BUNT_RUNNER_THIRD_PENALTY)
-	elif _has_runner(bases, 1) and not _has_runner(bases, 0):
-		bunt_prob += _rule_float(rules, "bunt_runner_second_only_bonus", BUNT_RUNNER_SECOND_ONLY_BONUS)
+	var probability: float = _rule_float(rules, "bunt_base_probability", BUNT_BASE_PROBABILITY)
+	probability *= BUNT_STATE_FACTORS[base_code]
+	probability *= _bunt_slot_factor(int(context.get("batting_slot", -1)))
+	if outs >= 1:
+		probability *= _rule_float(rules, "bunt_one_out_factor", BUNT_ONE_OUT_FACTOR)
+	probability *= _bunt_game_state_factor(context, rules)
+	probability *= clamp(
+		1.0 + _bunt_skill_z(batter) * _rule_float(rules, "bunt_skill_weight", BUNT_SKILL_WEIGHT),
+		BUNT_SKILL_FACTOR_MIN,
+		BUNT_SKILL_FACTOR_MAX
+	)
 	if batter.is_pitcher():
-		bunt_prob += _rule_float(rules, "bunt_pitcher_bonus", BUNT_PITCHER_BONUS)
-	return Rng.roll_float() < clamp(bunt_prob, 0.001, 1.0)
+		probability *= _rule_float(rules, "bunt_pitcher_factor", BUNT_PITCHER_FACTOR)
+	return Rng.roll_float() < clamp(probability, 0.0, BUNT_PROBABILITY_MAX)
+
+
+# 打順スロット(0始まり)の係数。スロットが不明な呼び出しでは打順による差を付けない。
+static func _bunt_slot_factor(batting_slot: int) -> float:
+	if batting_slot < 0 or batting_slot >= BUNT_SLOT_FACTORS.size():
+		return 1.0
+	return BUNT_SLOT_FACTORS[batting_slot]
+
+
+# イニングと点差による係数。大差では抑え、終盤の同点/1点差では増やす。
+# score_margin は攻撃側から見た点差(正ならリード)。イニングが不明なら係数を掛けない。
+static func _bunt_game_state_factor(context: Dictionary, rules: Dictionary) -> float:
+	var inning: int = int(context.get("inning", 0))
+	if inning <= 0:
+		return 1.0
+	var margin: int = absi(int(context.get("score_margin", 0)))
+	if margin >= int(_rule_float(rules, "bunt_blowout_margin", float(BUNT_BLOWOUT_MARGIN))):
+		return _rule_float(rules, "bunt_blowout_factor", BUNT_BLOWOUT_FACTOR)
+	if inning >= BUNT_LATE_INNING and margin <= 1:
+		return _rule_float(rules, "bunt_late_close_factor", BUNT_LATE_CLOSE_FACTOR)
+	return 1.0
 
 
 # z 近似 bunt skill: Spray(方向制御) と KAvoid(コンタクト) が +、Impact/Barrel が -。
@@ -377,43 +430,77 @@ static func _bunt_skill_z(batter: PSPlayerSeasonRecord) -> float:
 		- 0.2 * batter.z_ability("Bat_Barrel", 0.0)
 
 
-# バント処理。
+# バント処理。企図の結末は3通り:
+#   バント安打 = 打者が一塁で生き、走者も1つ進む (内野安打として記録)
+#   犠打成立   = 打者アウトで走者が1つ進む
+#   失敗       = 走者は進まない。三塁走者がいるスクイズ崩れでは本塁で刺されることがあり、
+#                それ以外は打者のゴロアウトのみ
 static func _resolve_bunt(batter: PSPlayerSeasonRecord, bases: Array) -> Dictionary:
-	# 走者が速いほど成功率を上げる（最速走者の走力 z で加点）。
-	var runner_plus: float = 0.0
-	for index in range(3):
-		if _has_runner(bases, index):
-			runner_plus = max(runner_plus, 0.10 + _runner_speed(bases, index) * 0.025)
-	# 成功確率(0..1)。バント技術 z が高いほど上げ、走者状況で増減。
-	var bunt_z: float = _bunt_skill_z(batter)
-	var success_prob: float = 0.50 + bunt_z * 0.125 + runner_plus
-	if _has_runner(bases, 2):
-		success_prob -= 0.30
-	elif _has_runner(bases, 0) and _has_runner(bases, 1):
-		success_prob -= 0.20
-	elif _has_runner(bases, 1) and not _has_runner(bases, 0):
-		success_prob += 0.10
-	success_prob = max(0.05, success_prob)
-	if Rng.roll_float() < success_prob:
-		var position: int = _roll_bunt_position()
-		var result_prefix: String = "squeeze_bunt" if _has_runner(bases, 2) else "sacrifice_bunt"
+	var position: int = _roll_bunt_position()
+	var squeeze: bool = _has_runner(bases, 2)
+	if Rng.roll_float() < _bunt_hit_probability(batter, position):
 		return {
-			"result": "%s_%s" % [result_prefix, PSPlayResolver.FIELD_NAMES.get(position, "unknown")],
+			"result": "bunt_single_%s" % PSPlayResolver.FIELD_NAMES.get(position, "unknown"),
+			"category": "hit",
+			"bases": 1,
+			"fielder_position": position,
+			"pitch_summary": _bunt_pitch_summary(true),
+		}
+	if Rng.roll_float() < _bunt_success_probability(batter, bases):
+		return {
+			"result": "%s_%s" % [
+				"squeeze_bunt" if squeeze else "sacrifice_bunt",
+				PSPlayResolver.FIELD_NAMES.get(position, "unknown"),
+			],
 			"category": CATEGORY_SACRIFICE,
 			"bases": 0,
 			"fielder_position": position,
-			"runner_strategy": "squeeze" if _has_runner(bases, 2) else "sacrifice_bunt",
+			"runner_strategy": "squeeze" if squeeze else "sacrifice_bunt",
 			"pitch_summary": _bunt_pitch_summary(true),
 		}
+	# スクイズ崩れ: 本塁へ突っ込んだ三塁走者が刺され、打者は野選で一塁へ生きる。
+	if squeeze and Rng.roll_float() < BUNT_SQUEEZE_FAILURE_RUNNER_OUT_PROBABILITY:
+		var outcome: Dictionary = PSPlayResolver.fielders_choice_outcome(bases, position, 3, 4)
+		outcome["result"] = "failed_squeeze_bunt_%s" % PSPlayResolver.FIELD_NAMES.get(position, "unknown")
+		outcome["pitch_summary"] = _bunt_pitch_summary(true)
+		return outcome
 	# バント失敗: ゴロアウトとして処理
-	var fail_position: int = _roll_bunt_position()
 	return {
-		"result": "failed_bunt_groundout_%s" % PSPlayResolver.FIELD_NAMES.get(fail_position, "unknown"),
+		"result": "failed_bunt_groundout_%s" % PSPlayResolver.FIELD_NAMES.get(position, "unknown"),
 		"category": "out",
 		"bases": 0,
-		"fielder_position": fail_position,
+		"fielder_position": position,
 		"pitch_summary": _bunt_pitch_summary(true),
 	}
+
+
+# バント安打になる確率。走力と方向制御が高いほど、また三塁線へ転がすほど生きやすい。
+# 能力 z の母集団平均は 0 ではないので、BUNT_HIT_BASE がそのぶんを畳み込んだ基準値になる。
+static func _bunt_hit_probability(batter: PSPlayerSeasonRecord, position: int) -> float:
+	if batter == null:
+		return 0.0
+	var probability: float = BUNT_HIT_BASE \
+		+ batter.z_ability("Run_Speed", 0.0) * BUNT_HIT_SPEED_WEIGHT \
+		+ batter.z_ability("Bat_Spray", 0.0) * BUNT_HIT_SPRAY_WEIGHT \
+		+ float(BUNT_HIT_POSITION_BONUS.get(position, 0.0))
+	return clamp(probability, BUNT_HIT_MIN, BUNT_HIT_MAX)
+
+
+# 打者が生きなかったとき、走者が進んで犠打が記録される確率。
+# バント技術 z と最速走者の走力で上がり、走者状況で増減する。
+static func _bunt_success_probability(batter: PSPlayerSeasonRecord, bases: Array) -> float:
+	var runner_plus: float = 0.0
+	for index in range(3):
+		if _has_runner(bases, index):
+			runner_plus = max(runner_plus, _runner_speed(bases, index) * BUNT_SUCCESS_RUNNER_SPEED_WEIGHT)
+	var success_prob: float = BUNT_SUCCESS_BASE + _bunt_skill_z(batter) * BUNT_SUCCESS_SKILL_WEIGHT + runner_plus
+	if _has_runner(bases, 2):
+		success_prob -= BUNT_SUCCESS_SQUEEZE_PENALTY
+	elif _has_runner(bases, 0) and _has_runner(bases, 1):
+		success_prob -= BUNT_SUCCESS_FIRST_AND_SECOND_PENALTY
+	elif _has_runner(bases, 1) and not _has_runner(bases, 0):
+		success_prob += BUNT_SUCCESS_SECOND_ONLY_BONUS
+	return clamp(success_prob, BUNT_SUCCESS_MIN, BUNT_SUCCESS_MAX)
 
 
 static func _roll_bunt_position() -> int:
@@ -427,6 +514,15 @@ static func _roll_bunt_position() -> int:
 
 static func _has_runner(bases: Array, base_index: int) -> bool:
 	return base_index >= 0 and base_index < bases.size() and bases[base_index] != null
+
+
+# 走者コード: bit0=一塁, bit1=二塁, bit2=三塁。BUNT_STATE_FACTORS の添字。
+static func _base_code(bases: Array) -> int:
+	var code: int = 0
+	for index in range(3):
+		if _has_runner(bases, index):
+			code |= 1 << index
+	return code
 
 
 # 指定塁の走者の走力を z で返す（0.0 が全体平均）。

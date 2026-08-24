@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_bunt_probe.gd" id="1_run_bunt_probe"]
+
+[node name="RunBuntProbe" type="Node"]
+script = ExtResource("1_run_bunt_probe")

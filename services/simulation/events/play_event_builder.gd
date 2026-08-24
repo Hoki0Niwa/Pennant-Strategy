@@ -196,6 +196,8 @@ static func _plate_event(
 		"batter_id": 0 if batter == null else batter.player_id,
 		"pitcher_id": 0 if pitcher == null else pitcher.player_id,
 		"catcher_id": _catcher_id(defense),
+		# 打順スロット(0始まり)。game_loop が outcome へ載せる。単発呼び出しでは -1。
+		"batting_slot": int(outcome.get("batting_slot", -1)),
 		"result": result,
 		"category": category,
 		"bases": bases_taken,
