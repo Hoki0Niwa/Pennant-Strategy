@@ -178,7 +178,17 @@ static func _log_defensive_subs(result: Dictionary, applied: Array, inning: int,
 			out_id = int(option.get("outgoing_player_id", 0))
 		var replacement: PSPlayerSeasonRecord = option.get("replacement", null) as PSPlayerSeasonRecord
 		var in_id: int = 0 if replacement == null else replacement.player_id
-		_record_substitution(result, inning, half, team_id, "defense", out_id, in_id, int(option.get("position", 0)), int(option.get("lineup_slot", -1)))
+		var position: int = int(option.get("position", 0))
+		var mover: PSPlayerSeasonRecord = option.get("mover", null) as PSPlayerSeasonRecord
+		if mover != null:
+			# 玉突きの配置転換: 退いた選手の守備位置へ動いた選手を「守備位置変更」として残し、
+			# 控えは動いた選手の元の位置に入ったものとして記録する。
+			# 動いた選手は打順を変えないので slot は記録しない (-1)。
+			_record_substitution(
+				result, inning, half, team_id, "position_change", out_id, mover.player_id, position, -1
+			)
+			position = int(option.get("mover_from_position", position))
+		_record_substitution(result, inning, half, team_id, "defense", out_id, in_id, position, int(option.get("lineup_slot", -1)))
 
 
 static func simulate_half_inning(

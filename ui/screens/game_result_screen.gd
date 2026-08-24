@@ -13,6 +13,7 @@ const POSITION_LABELS: Dictionary = {
 
 const SUB_KIND_LABELS: Dictionary = {
 	"pitching": "投手交代", "pinch_hit": "代打", "pinch_run": "代走", "defense": "守備固め",
+	"position_change": "守備位置変更",
 }
 
 # --- レイアウト基準 (base 座標) ---

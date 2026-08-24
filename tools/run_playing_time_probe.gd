@@ -62,6 +62,7 @@ func _ready() -> void:
 				})
 				break
 			_sample_injuries(season, injury_tracker)
+			_tally_substitution_kinds(day_result, injury_tracker)
 		season_rows.append(_analyze_season(season, injury_tracker))
 
 	RecordStore.load_from_dict(original_records)
@@ -527,6 +528,10 @@ func _new_injury_tracker() -> Dictionary:
 		# 前半戦終了時点の打撃成績 (player_id -> {pa, ops})。「前半不振だった定位置選手が
 		# 後半に出場を減らすか」= 不振への反応を測るために使う。
 		"midseason_form": {},
+		# 交代の種別ごとの件数 (代打/代走/守備固め/守備位置変更/投手交代)。
+		# 実 NPB の内訳と比べる用 ([[reference_npb_usage_data]])。
+		"substitution_kinds": {},
+		"team_games_played": 0,
 		# 日ごとの離脱中人数。`_15plus` は中度以上 (= 実 NPB の故障者リストに載る水準) だけを数える。
 		"daily_batter": [],
 		"daily_batter_15plus": [],
@@ -575,6 +580,23 @@ func _sample_injuries(season: PSSeason, tracker: Dictionary) -> void:
 
 # シーズンの 1/3 を過ぎた最初の日に、全野手の累計打撃成績を控える。
 # 「前半の成績」と「後半の先発シェア」を突き合わせて、不振への反応を測るための基準点。
+# その日の試合結果から交代の種別を数える。1 試合につき 2 チームぶんなので、
+# 「1球団1試合あたり」に直すときは試合数×2 で割る。
+func _tally_substitution_kinds(day_result: Dictionary, tracker: Dictionary) -> void:
+	var kinds: Dictionary = tracker["substitution_kinds"] as Dictionary
+	var games: int = 0
+	for result_value in (day_result.get("results", []) as Array):
+		# day_result.results[] は {ok, game, result, message}。交代ログは内側の `result` にある。
+		var result: Dictionary = (result_value as Dictionary).get("result", {}) as Dictionary
+		if result.is_empty():
+			continue
+		games += 1
+		for sub_value in (result.get("substitutions", []) as Array):
+			var kind: String = str((sub_value as Dictionary).get("kind", ""))
+			kinds[kind] = int(kinds.get(kind, 0)) + 1
+	tracker["team_games_played"] = int(tracker["team_games_played"]) + games * 2
+
+
 func _capture_midseason_form(season: PSSeason, tracker: Dictionary) -> void:
 	var form: Dictionary = tracker["midseason_form"] as Dictionary
 	if not form.is_empty():
@@ -631,7 +653,18 @@ func _injury_report(tracker: Dictionary) -> Dictionary:
 		"npb_reference_pitcher": {
 			"season_end_concurrent_15plus_per_team": NPB_PITCHER_CONCURRENT_PER_TEAM,
 		},
+		"substitutions_per_team_game": _substitution_kind_rates(tracker),
 	}
+
+
+# 交代の種別ごとの 1球団1試合あたり件数。実 NPB は守備位置変更が 0.85 (パ)。
+func _substitution_kind_rates(tracker: Dictionary) -> Dictionary:
+	var kinds: Dictionary = tracker["substitution_kinds"] as Dictionary
+	var team_games: float = float(max(1, int(tracker["team_games_played"])))
+	var out: Dictionary = {"npb_position_change_reference": 0.85}
+	for kind_value in kinds.keys():
+		out[str(kind_value)] = _round2(float(int(kinds[kind_value])) / team_games)
+	return out
 
 
 func _injury_side_report(

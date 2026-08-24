@@ -1927,6 +1927,54 @@ func test_pinch_runner_replaces_a_slow_runner_only_in_a_close_late_game() -> voi
 	assert_bool(PSInGameSubstitutions.maybe_apply_pinch_runner(quick_setup, [quick, null, null], 8, close_game).is_empty()).is_true()
 
 
+# 守備固めは**玉突きの配置転換**もできる。控えがその守備位置を守れなくても、今守っている選手を
+# そこへ動かし、空いた守備位置に控えを入れれば交代が成立する (実 NPB は 1試合 0.85 回)。
+# ここが無いと、交代の自由度が「控えがその位置を守れるか」だけで頭打ちになる。
+func test_defensive_replacement_can_shuffle_an_existing_fielder_to_cover_the_position() -> void:
+	# 遊撃 = 守備難の先発 / 一塁 = 遊撃も守れる選手 / 控え = 一塁しか守れないが守備は良い
+	var weak_shortstop: PSPlayerSeasonRecord = _defender(911, "WeakSS", 6, {"shortstop": 60, "first": 80}, 0.0)
+	var mover: PSPlayerSeasonRecord = _defender(912, "Mover", 3, {"shortstop": 95, "first": 100}, 2.4)
+	var bench_glove: PSPlayerSeasonRecord = _defender(913, "BenchGlove", 3, {"first": 100}, 2.6)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"batters": [weak_shortstop, mover],
+		"bench": [bench_glove],
+		"fielders": [
+			{"record": weak_shortstop, "position": 6},
+			{"record": mover, "position": 3},
+		],
+	}
+
+	var shuffle: Dictionary = PSInGameSubstitutions._shuffle_option_for_replacement(
+		setup, weak_shortstop, 6, bench_glove,
+		PSInGameSubstitutions.defense_only_score(weak_shortstop, 6)
+	)
+
+	assert_bool(shuffle.is_empty()).is_false()
+	assert_int((shuffle["mover"] as PSPlayerSeasonRecord).player_id).is_equal(mover.player_id)
+	assert_int(int(shuffle["mover_from_position"])).is_equal(3)
+
+	PSInGameSubstitutions.apply_defensive_replacement(setup, {
+		"outgoing": weak_shortstop,
+		"replacement": bench_glove,
+		"position": 6,
+		"lineup_slot": 0,
+		"mover": mover,
+		"mover_from_position": 3,
+	})
+
+	# 動いた選手が遊撃へ、控えが空いた一塁へ入り、退いた選手は守備から消える。
+	var by_position: Dictionary = {}
+	for assignment_row in (setup["fielders"] as Array):
+		var assignment: Dictionary = assignment_row as Dictionary
+		by_position[int(assignment["position"])] = (assignment["record"] as PSPlayerSeasonRecord).player_id
+	assert_int(int(by_position[6])).is_equal(mover.player_id)
+	assert_int(int(by_position[3])).is_equal(bench_glove.player_id)
+	# 打順は退いた選手の枠を控えが引き継ぐ (動いた選手の打順は変わらない)。
+	assert_int(((setup["batters"] as Array)[0] as PSPlayerSeasonRecord).player_id).is_equal(bench_glove.player_id)
+	assert_bool((setup["bench"] as Array).has(bench_glove)).is_false()
+
+
 # 継承走者の生還は降板済み投手の失点として付き、ホールド判定に使う exit_lead も動く。
 # 一方で登板範囲 (end_inning / end_half / end_event_index) は降板時点のまま。
 # ここを伸ばすと試合ログ上の登板イニングが実際より長く見える。
@@ -2835,6 +2883,29 @@ func _outing(
 		"inherited_runners": entry_base_runners,
 		"runs": runs,
 	}
+
+
+# 守備適性と守備能力を指定して野手を作る (守備交代まわりのテスト用)。
+# defense_z は内野守備系の z にまとめて入る値で、そのまま defense_only_score の高さになる。
+func _defender(
+	player_id: int, player_name: String, position: int, aptitudes: Dictionary, defense_z: float
+) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = player_id
+	record.name = player_name
+	record.position = position
+	record.role = "fielder"
+	record.age = 27
+	record.position_aptitudes_snapshot = aptitudes
+	record.z_abilities_snapshot = {
+		"IF_Secure": defense_z,
+		"IF_Reach": defense_z,
+		"IF_ThrowPower": defense_z,
+		"IF_ThrowAccuracy": defense_z,
+		"IF_Exchange": defense_z,
+		"Run_Speed": 0.0,
+	}
+	return record
 
 
 func _fielder(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:

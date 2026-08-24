@@ -53,7 +53,9 @@ static func maybe_select_pinch_hitter(
 		batter,
 		pinch_hitter,
 		defensive_replacement,
-		int(pinch_hit_option.get("position", 0))
+		int(pinch_hit_option.get("position", 0)),
+		pinch_hit_option.get("mover", null) as PSPlayerSeasonRecord,
+		int(pinch_hit_option.get("mover_from_position", 0))
 	)
 	return pinch_hitter
 
@@ -286,6 +288,8 @@ static func position_player_pinch_hit_option(
 
 	var best_candidate: PSPlayerSeasonRecord = null
 	var defensive_replacement: PSPlayerSeasonRecord = null
+	var shuffle_mover: PSPlayerSeasonRecord = null
+	var shuffle_from: int = 0
 	var candidates: Array = sorted_pinch_hit_candidates(setup, batter_score + GameSimulator.PINCH_HIT_MIN_GAIN)
 	for candidate_row in candidates:
 		var candidate: PSPlayerSeasonRecord = candidate_row as PSPlayerSeasonRecord
@@ -298,6 +302,18 @@ static func position_player_pinch_hit_option(
 		if pinch_hitter_can_stay_on_defense(candidate, position):
 			best_candidate = candidate
 			defensive_replacement = candidate
+			break
+		# 代打がその守備位置を守れなくても、**今守っている選手をそこへ動かし、空いた位置に
+		# 代打を入れれば**守備が組める (玉突きの配置転換)。控えを 2 人使う下の手より優先する
+		# — 打てる代打をそのまま試合に残せるうえ、ベンチの消費も 1 人で済む。
+		var shuffle: Dictionary = _shuffle_option_for_replacement(
+			setup, batter, position, candidate, defense_only_score(batter, position)
+		)
+		if not shuffle.is_empty():
+			best_candidate = candidate
+			defensive_replacement = candidate
+			shuffle_mover = shuffle.get("mover", null) as PSPlayerSeasonRecord
+			shuffle_from = int(shuffle.get("mover_from_position", 0))
 			break
 		if available_count < reserve + 2:
 			continue
@@ -315,6 +331,8 @@ static func position_player_pinch_hit_option(
 		"pinch_hitter": best_candidate,
 		"defensive_replacement": defensive_replacement,
 		"position": position,
+		"mover": shuffle_mover,
+		"mover_from_position": shuffle_from,
 	}
 
 
@@ -332,7 +350,9 @@ static func apply_position_player_pinch_hitter(
 	outgoing: PSPlayerSeasonRecord,
 	pinch_hitter: PSPlayerSeasonRecord,
 	defensive_replacement: PSPlayerSeasonRecord,
-	position: int
+	position: int,
+	mover: PSPlayerSeasonRecord = null,
+	mover_from_position: int = 0
 ) -> void:
 	remove_from_bench(setup, pinch_hitter)
 	var batters: Array = setup.get("batters", []) as Array
@@ -340,7 +360,10 @@ static func apply_position_player_pinch_hitter(
 		batters[batting_slot] = pinch_hitter
 		setup["batters"] = batters
 	if position >= 2 and position <= 9:
-		reserve_defensive_substitution(setup, batting_slot, outgoing, pinch_hitter, defensive_replacement, position)
+		reserve_defensive_substitution(
+			setup, batting_slot, outgoing, pinch_hitter, defensive_replacement, position,
+			mover, mover_from_position
+		)
 	mark_pinch_hitter_appeared(setup, pinch_hitter)
 
 
@@ -449,7 +472,9 @@ static func reserve_defensive_substitution(
 	outgoing: PSPlayerSeasonRecord,
 	pinch_hitter: PSPlayerSeasonRecord,
 	defensive_replacement: PSPlayerSeasonRecord,
-	position: int
+	position: int,
+	mover: PSPlayerSeasonRecord = null,
+	mover_from_position: int = 0
 ) -> void:
 	if outgoing == null or pinch_hitter == null or defensive_replacement == null:
 		return
@@ -461,6 +486,9 @@ static func reserve_defensive_substitution(
 		"replacement": defensive_replacement,
 		"replacement_id": defensive_replacement.player_id,
 		"position": position,
+		# 玉突きの配置転換つき。mover が outgoing の守備位置へ動き、代打はその空いた位置へ入る。
+		"mover": mover,
+		"mover_from_position": mover_from_position,
 	})
 	setup["pending_defensive_subs"] = pending
 	var reserved_ids: Dictionary = setup.get("reserved_fielder_ids", {}) as Dictionary
@@ -486,7 +514,14 @@ static func apply_pending_defensive_subs(setup: Dictionary) -> Array:
 		if lineup_slot >= 0 and lineup_slot < batters.size():
 			batters[lineup_slot] = replacement
 			setup["batters"] = batters
-		replace_fielder(setup, int(substitution.get("outgoing_player_id", 0)), replacement, position)
+		var mover: PSPlayerSeasonRecord = substitution.get("mover", null) as PSPlayerSeasonRecord
+		var mover_from: int = int(substitution.get("mover_from_position", 0))
+		if mover != null and mover_from >= 2 and mover_from <= 9:
+			# 先に mover を退いた選手の守備位置へ動かし、空いた元の位置へ代打を入れる。
+			replace_fielder(setup, int(substitution.get("outgoing_player_id", 0)), mover, position)
+			replace_fielder(setup, mover.player_id, replacement, mover_from)
+		else:
+			replace_fielder(setup, int(substitution.get("outgoing_player_id", 0)), replacement, position)
 		mark_substitute_appeared(setup, replacement)
 		applied.append(substitution)
 	setup["pending_defensive_subs"] = []
@@ -640,9 +675,20 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 				continue
 			if is_reserved_fielder(setup, candidate):
 				continue
-			if not can_trust_fielder_for_position(candidate, position):
-				continue
-			var defense_gain: int = defense_only_score(candidate, position) - outgoing_defense
+			# 直接その守備位置へ入れる案と、**玉突きの配置転換**の案を両方見て良い方を採る。
+			# (控えがその位置を守れないときの代替ではなく、守備が良くなる方の選択肢として扱う。)
+			var direct_gain: int = -999999
+			if can_trust_fielder_for_position(candidate, position):
+				direct_gain = defense_only_score(candidate, position) - outgoing_defense
+			var shuffle: Dictionary = _shuffle_option_for_replacement(
+				setup, outgoing, position, candidate, outgoing_defense
+			)
+			var shuffle_gain: int = int(shuffle.get("defense_gain", -999999))
+			var defense_gain: int = direct_gain
+			if shuffle_gain > direct_gain:
+				defense_gain = shuffle_gain
+			else:
+				shuffle = {}
 			if defense_gain < GameSimulator.DEFENSIVE_REPLACEMENT_MIN_GAIN:
 				continue
 			@warning_ignore("integer_division")
@@ -656,8 +702,50 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 					"replacement": candidate,
 					"position": position,
 					"lineup_slot": lineup_slot,
+					"mover": shuffle.get("mover", null),
+					"mover_from_position": int(shuffle.get("mover_from_position", 0)),
 				}
 	return best_option
+
+
+# 守備位置変更 (玉突き) の相手を探す。**控えがその守備位置を守れなくても、今守っている選手を
+# そこへ動かし、空いた守備位置に控えを入れれば交代が成立する。** 実 NPB は 1試合あたり 0.85 回
+# この配置転換をしていて、これが無いと交代の自由度が控えの守備適性で頭打ちになる
+# (詳細 docs/agent_memory/project_bench_usage.md)。
+# 守備力の増減は 2 枠ぶんの合計で見る — 動かした選手が元の位置で失う分も差し引く。
+static func _shuffle_option_for_replacement(
+	setup: Dictionary,
+	outgoing: PSPlayerSeasonRecord,
+	position: int,
+	candidate: PSPlayerSeasonRecord,
+	outgoing_defense: int
+) -> Dictionary:
+	var best_mover: PSPlayerSeasonRecord = null
+	var best_from: int = 0
+	var best_gain: int = -999999
+	for assignment_row in (setup.get("fielders", []) as Array):
+		var assignment: Dictionary = assignment_row as Dictionary
+		var mover: PSPlayerSeasonRecord = assignment.get("record", null) as PSPlayerSeasonRecord
+		var from_position: int = int(assignment.get("position", 0))
+		if mover == null or from_position < 2 or from_position > 9 or from_position == position:
+			continue
+		if mover.player_id == outgoing.player_id:
+			continue
+		if not can_trust_fielder_for_position(mover, position):
+			continue
+		if not can_trust_fielder_for_position(candidate, from_position):
+			continue
+		var gain: int = (
+			defense_only_score(mover, position) - outgoing_defense
+			+ defense_only_score(candidate, from_position) - defense_only_score(mover, from_position)
+		)
+		if best_mover == null or gain > best_gain:
+			best_gain = gain
+			best_mover = mover
+			best_from = from_position
+	if best_mover == null:
+		return {}
+	return {"mover": best_mover, "mover_from_position": best_from, "defense_gain": best_gain}
 
 
 static func apply_defensive_replacement(setup: Dictionary, option: Dictionary) -> void:
@@ -672,7 +760,15 @@ static func apply_defensive_replacement(setup: Dictionary, option: Dictionary) -
 	if lineup_slot >= 0 and lineup_slot < batters.size():
 		batters[lineup_slot] = replacement
 		setup["batters"] = batters
-	replace_fielder(setup, outgoing.player_id, replacement, position)
+	var mover: PSPlayerSeasonRecord = option.get("mover", null) as PSPlayerSeasonRecord
+	var mover_from: int = int(option.get("mover_from_position", 0))
+	if mover != null and mover_from >= 2 and mover_from <= 9:
+		# **順番が重要**: 先に動かす選手を空いた守備位置へ入れてから、その元の位置へ控えを入れる。
+		# replace_fielder は (守備位置, player_id) の両方で照合するので、この順なら取り違えない。
+		replace_fielder(setup, outgoing.player_id, mover, position)
+		replace_fielder(setup, mover.player_id, replacement, mover_from)
+	else:
+		replace_fielder(setup, outgoing.player_id, replacement, position)
 	mark_substitute_appeared(setup, replacement)
 
 
