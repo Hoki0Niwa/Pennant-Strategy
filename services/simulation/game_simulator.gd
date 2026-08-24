@@ -42,6 +42,10 @@ const DEFENSIVE_REPLACEMENT_MIN_GAIN: int = 22
 const FINAL_DEFENSE_MAX_LEAD: int = 10
 # この点差以上なら「勝ち試合の締め」として 3 枚まで替える (レギュラーを休ませる動き)。
 const BLOWOUT_LEAD: int = 6
+# 決着済みの試合で「休養のため」に送る代打の 1 試合上限。無制限だと打順が回るたびに替えて
+# しまう。2026-08-24 実測の 1球団1試合あたり代打数 (上限なし 0.93 / 2 → 0.71 / 1 → 0.49) と
+# 途中出場の総量 (3.26 / 2.98 / 2.69。実 NPB は 2.85) から 1 を採用。
+const MAX_REST_PINCH_HITS: int = 1
 # この点差以上リードしていれば「あと1打席残っている選手」でも守備固めに踏み切り、
 # 1イニングに 2 枚替えることも許す。**リードが薄いうちは打線を崩さない**という区別。
 const DEFENSIVE_REPLACEMENT_COMFORT_LEAD: int = 3

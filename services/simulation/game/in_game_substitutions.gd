@@ -57,6 +57,8 @@ static func maybe_select_pinch_hitter(
 		pinch_hit_option.get("mover", null) as PSPlayerSeasonRecord,
 		int(pinch_hit_option.get("mover_from_position", 0))
 	)
+	if bool(pinch_hit_option.get("rest", false)):
+		setup["rest_pinch_hits"] = int(setup.get("rest_pinch_hits", 0)) + 1
 	return pinch_hitter
 
 
@@ -257,10 +259,19 @@ static func position_player_pinch_hit_option(
 	# 走者が居なくても、終盤に打線の穴が回ってくれば代打を送る (実勢の代打はこの形が多い)。
 	# 得点機 (important) / 最終回 (final) だけに限ると、8回先頭の弱打者に一度も代打が出ない。
 	var late_chance: bool = is_late_low_bat_pinch_hit_chance(inning, deficit)
-	if not important_chance and not final_chance and not late_chance:
+	# **勝敗がほぼ決した終盤は、打力に関係なくレギュラーを下げて控えへ打席を回す。**
+	# 守備側の大量リード時の交代 (BLOWOUT_LEAD) と対になる動きで、勝っていても負けていても行う。
+	# ここが無いと「競った終盤の弱打者」にしか代打が出ず、実勢の半分以下に留まる。
+	var decided: bool = (
+		inning >= GameSimulator.LATE_PINCH_HIT_START_INNING
+		and absi(deficit) >= GameSimulator.BLOWOUT_LEAD
+		and int(setup.get("rest_pinch_hits", 0)) < GameSimulator.MAX_REST_PINCH_HITS
+	)
+	if not important_chance and not final_chance and not late_chance and not decided:
 		return {}
-	# deficit = 相手得点 − 自軍得点。負なら自軍リード。3点リードまでは代打を出す。
-	if deficit < -3 or deficit > 5:
+	# deficit = 相手得点 − 自軍得点。負なら自軍リード。3点リードまでは代打を出す
+	# (決着済みの場面は上の decided で別扱い)。
+	if not decided and (deficit < -3 or deficit > 5):
 		return {}
 	var batter_score: int = pinch_hit_batting_score(batter)
 	var low_score_limit: int = batting_score_line(
@@ -270,7 +281,7 @@ static func position_player_pinch_hit_option(
 		low_score_limit += GameSimulator.PINCH_HIT_LATE_SCORE_MARGIN
 	if important_chance:
 		low_score_limit += GameSimulator.PINCH_HIT_IMPORTANT_SCORE_MARGIN
-	if batter_score > low_score_limit:
+	if not decided and batter_score > low_score_limit:
 		return {}
 
 	var position: int = fielding_position_for_player(setup, batter.player_id)
@@ -290,7 +301,11 @@ static func position_player_pinch_hit_option(
 	var defensive_replacement: PSPlayerSeasonRecord = null
 	var shuffle_mover: PSPlayerSeasonRecord = null
 	var shuffle_from: int = 0
-	var candidates: Array = sorted_pinch_hit_candidates(setup, batter_score + GameSimulator.PINCH_HIT_MIN_GAIN)
+	# 決着済みの場面は「休養のための交代」なので、控えが打者を上回っている必要はない。
+	var minimum_candidate_score: int = (
+		-999999 if decided else batter_score + GameSimulator.PINCH_HIT_MIN_GAIN
+	)
+	var candidates: Array = sorted_pinch_hit_candidates(setup, minimum_candidate_score)
 	for candidate_row in candidates:
 		var candidate: PSPlayerSeasonRecord = candidate_row as PSPlayerSeasonRecord
 		if is_dh_spot:
@@ -333,6 +348,8 @@ static func position_player_pinch_hit_option(
 		"position": position,
 		"mover": shuffle_mover,
 		"mover_from_position": shuffle_from,
+		# 決着済みの試合での休養交代か (1試合の回数を数えて上限をかけるため)。
+		"rest": decided,
 	}
 
 
