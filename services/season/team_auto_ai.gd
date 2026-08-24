@@ -49,6 +49,11 @@ const TARGET_TOTAL: int = 31
 const TARGET_STARTERS: int = 6
 const TARGET_PITCHERS: int = 15
 const MIN_ACTIVE_CATCHERS: int = 2
+# ⚠️ **「守備固め用の守備要員を一軍へ確保する」枠は要らない** (2026-08-24 に実測して撤去)。
+# 一軍の控えには既に「その位置の先発より守備が 22点以上上」の選手が **8枠中 3.5枠 (44%)**
+# 居る。守備固めが出ていなかったのは控えの顔ぶれではなく判定側のゲートが原因だった
+# (`PSInGameSubstitutions.defensive_replacement_option` の絶対水準ゲート)。
+# 控えの守備力は `run_playing_time_probe` の `bench_defense` で測れる。
 const PITCHER_ROLE_STARTER: String = "starter"
 const PITCHER_ROLE_RELIEVER: String = "reliever"
 # 下位ローテを二軍で再調整し、休養十分な二軍先発へ枠を渡す間隔。

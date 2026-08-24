@@ -205,6 +205,21 @@ static func simulate_half_inning(
 	while outs < 3:
 		pitcher = defense["pitcher"] as PSPlayerSeasonRecord
 		pitcher_usage = PSBullpenManager.pitcher_usage_for(defense, pitcher)
+		# 代走は次の打者を迎える前に送る。走者が速くなるぶん盗塁判断にも効くので、
+		# 走者プラン (pre_plate_runner_plan) より前に置く。
+		var pinch_run: Dictionary = PSInGameSubstitutions.maybe_apply_pinch_runner(
+			offense, bases, inning, game_result
+		)
+		if not pinch_run.is_empty():
+			var pinch_runner: PSPlayerSeasonRecord = pinch_run.get("runner", null) as PSPlayerSeasonRecord
+			var replaced_runner: PSPlayerSeasonRecord = pinch_run.get("outgoing", null) as PSPlayerSeasonRecord
+			bases[int(pinch_run.get("base_index", 0))] = pinch_runner
+			# 失点責任は走者の player_id で引かれているので、差し替えと同時に付け替える。
+			transfer_runner_responsibility(runner_responsibility, replaced_runner, pinch_runner)
+			_record_substitution(
+				game_result, inning, half, int(offense.get("team_id", 0)), "pinch_run",
+				replaced_runner.player_id, pinch_runner.player_id, 0, int(pinch_run.get("slot", -1))
+			)
 		var batting_order: Array = offense["batters"] as Array
 		var batting_index: int = int(offense.get("batting_index", 0))
 		var batting_slot: int = batting_index % batting_order.size()
@@ -1111,6 +1126,21 @@ static func assign_batter_responsibility_after_plate(
 		"pitcher_id": pitcher.player_id,
 		"earned": plate_run_can_be_earned(str(outcome.get("category", "out")), earned_outs_before, outs_added),
 	}
+
+
+# 代走で走者が入れ替わったとき、失点責任 (どの投手の走者か) を引き継ぐ。
+# これを忘れると sync_runner_responsibility_to_bases が旧走者のエントリを消し、
+# 得点したときの自責点が本来の投手に付かなくなる。
+static func transfer_runner_responsibility(
+	runner_responsibility: Dictionary, outgoing: PSPlayerSeasonRecord, incoming: PSPlayerSeasonRecord
+) -> void:
+	if outgoing == null or incoming == null:
+		return
+	var key: String = str(outgoing.player_id)
+	if not runner_responsibility.has(key):
+		return
+	runner_responsibility[str(incoming.player_id)] = runner_responsibility[key]
+	runner_responsibility.erase(key)
 
 
 static func sync_runner_responsibility_to_bases(runner_responsibility: Dictionary, bases: Array) -> void:

@@ -13,21 +13,51 @@ const DEFENSIVE_SUB_FATIGUE_GAIN: int = 3
 const FATIGUE_MAX: int = 200
 const DEFENSIVE_ASSIGNMENT_ORDER: Array[int] = [2, 6, 8, 4, 5, 3, 7, 9]
 const PINCH_HIT_START_INNING: int = 7
-const DEFENSIVE_REPLACEMENT_START_INNING: int = 8
+# 走者が居なくても弱打者に代打を送り始めるイニング (得点機なら PINCH_HIT_START_INNING から)。
+const LATE_PINCH_HIT_START_INNING: int = 8
+# 守備固めは実勢では**7回以降・リードしている場面**で、守らせるのは 1-2 イニング
+# (9回表なら1イニング、8回表・7回裏なら2イニング)。監督によっては7-8回と早めに動く。
+const DEFENSIVE_REPLACEMENT_START_INNING: int = 7
 # 代打/守備固めの打力ライン。**母集団相対** — その年の支配下野手の打撃スコア分布から
 # mean + sigma*spread を引く (絶対値だとリーグ水準が動いただけで代打の出方が変わる)。
-# 実測 (1シーズン): 打撃スコア mean 71.95 / spread 12.21 で、旧・絶対値 44 は -2.29σ、
-# 62 は -0.82σ に相当した。絶対値は母集団が取れないときのフォールバックとして残す。
-const LOW_BATTER_SIGMA: float = -2.29
-const SOLID_BATTER_SIGMA: float = -0.82
-const LOW_BATTER_SCORE: int = 44
-const SOLID_BATTER_SCORE: int = 62
+# 実測 (1シーズン): 打撃スコア mean 71.95 / spread 12.21。
+# **_SCORE は母集団が取れないときのフォールバックなので、_SIGMA を動かしたら必ず一緒に直す**
+# (現行ワールドで σ ラインと一致していることを
+#  `test_decision_lines_track_population_not_absolute_constants` が検査している)。
+#
+# LOW_BATTER = 代打を送る対象の上限。2026-08-24 に -2.29σ (下位1%) → **-1.0σ (下位約16%)**。
+#   旧値では打線の穴にすら代打が出ず、途中出場が実勢の 1/5 だった ([[project_bench_usage]])。
+# SOLID_BATTER = 守備固めで**下げてよい打者**の下限。-0.82σ → **-1.6σ** で対象を広げた。
+const LOW_BATTER_SIGMA: float = -1.0
+const SOLID_BATTER_SIGMA: float = -1.6
+const LOW_BATTER_SCORE: int = 60
+const SOLID_BATTER_SCORE: int = 52
 const IMPORTANT_PINCH_HIT_CHANCE_SCORE: int = 8
 const PINCH_HIT_MIN_GAIN: int = 8
 const PINCH_HIT_LATE_SCORE_MARGIN: int = 5
 const PINCH_HIT_IMPORTANT_SCORE_MARGIN: int = 5
-const DEFENSIVE_REPLACEMENT_MIN_GAIN: int = 34
-const FINAL_DEFENSE_MAX_LEAD: int = 5
+const DEFENSIVE_REPLACEMENT_MIN_GAIN: int = 22
+# リードがこれを超えると守備固めを打ち切る…**わけではない**。大量リードの終盤は実際には
+# レギュラーを下げて控えを出すので、上限は「守る意味が無いほど離れた」水準まで上げてある。
+const FINAL_DEFENSE_MAX_LEAD: int = 10
+# この点差以上なら「勝ち試合の締め」として 3 枚まで替える (レギュラーを休ませる動き)。
+const BLOWOUT_LEAD: int = 6
+# この点差以上リードしていれば「あと1打席残っている選手」でも守備固めに踏み切り、
+# 1イニングに 2 枚替えることも許す。**リードが薄いうちは打線を崩さない**という区別。
+const DEFENSIVE_REPLACEMENT_COMFORT_LEAD: int = 3
+# --- 代走 ---
+# 終盤の僅差で、足の遅い走者を控えの俊足選手に替える。実 NPB の途中出場は 1試合あたり
+# 2.85人 (両リーグ DH の本作と条件が揃うパ・リーグ実測 — [[reference_npb_usage_data]]) で、
+# 代走はその一角。**代走だけの公表値は見つからないので、総量の方を目標にする。**
+const PINCH_RUN_START_INNING: int = 7
+# この点差を超えたら替えない (追う側・守る側とも。1点をやり取りする場面に限る)。
+const PINCH_RUN_MAX_MARGIN: int = 3
+# 走力 z がこれを超える走者は替えない (もともと速い走者に代走は出さない)。
+const PINCH_RUN_MAX_RUNNER_SPEED: float = 0.5
+# 控えとの走力 z 差がこれ未満なら替える意味がない。
+const PINCH_RUN_MIN_SPEED_GAIN: float = 0.65
+# 代走を出した後もこの人数の野手を控えに残す (延長で守備が組めなくなるのを防ぐ)。
+const PINCH_RUN_BENCH_RESERVE: int = 1
 const POSITION_APTITUDE_KEYS: Dictionary = {
 	2: "catcher",
 	3: "first",
@@ -1326,11 +1356,16 @@ static func _player_appearance_label(result: Dictionary, player_id: int, team_id
 	if started:
 		return "スタメン"
 	var pinch_hit: bool = bool(sub_kinds.get("pinch_hit", false))
+	var pinch_run: bool = bool(sub_kinds.get("pinch_run", false))
 	var defense: bool = bool(sub_kinds.get("defense", false))
 	if pinch_hit and defense:
 		return "代打→守備"
+	if pinch_run and defense:
+		return "代走→守備"
 	if pinch_hit:
 		return "代打"
+	if pinch_run:
+		return "代走"
 	if defense:
 		return "守備"
 	if batter_stats.plate_appearances > 0 or batter_stats.games > 0:

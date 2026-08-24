@@ -252,9 +252,13 @@ static func position_player_pinch_hit_option(
 	var chance_score: int = offensive_chance_score(setup, game_result, inning, half, bases, outs, current_half_runs)
 	var important_chance: bool = is_important_pinch_hit_chance(setup, game_result, inning, half, bases, outs, current_half_runs)
 	var final_chance: bool = is_final_low_bat_pinch_hit_chance(inning, deficit)
-	if not important_chance and not final_chance:
+	# 走者が居なくても、終盤に打線の穴が回ってくれば代打を送る (実勢の代打はこの形が多い)。
+	# 得点機 (important) / 最終回 (final) だけに限ると、8回先頭の弱打者に一度も代打が出ない。
+	var late_chance: bool = is_late_low_bat_pinch_hit_chance(inning, deficit)
+	if not important_chance and not final_chance and not late_chance:
 		return {}
-	if deficit < -1 or deficit > 5:
+	# deficit = 相手得点 − 自軍得点。負なら自軍リード。3点リードまでは代打を出す。
+	if deficit < -3 or deficit > 5:
 		return {}
 	var batter_score: int = pinch_hit_batting_score(batter)
 	var low_score_limit: int = batting_score_line(
@@ -268,7 +272,12 @@ static func position_player_pinch_hit_option(
 		return {}
 
 	var position: int = fielding_position_for_player(setup, batter.player_id)
-	if position == 0:
+	# 守備に就いていない打者 (= DH) は守備の後始末が要らないので、代打をそのまま入れられる。
+	# **ここを「守備位置が無い＝代打不可」で弾いていたため、DH には一度も代打が出なかった**
+	# (両リーグ DH の本作では打線の 1/9 が丸ごと対象外になっていた)。
+	# ただし既に代打で入って守備交代を予約済みの選手は除く — 予約が二重になる。
+	var is_dh_spot: bool = position == 0
+	if is_dh_spot and _has_pending_pinch_hitter(setup, batter.player_id):
 		return {}
 	var reserve: int = 0 if important_chance or final_chance else pinch_hit_bench_reserve(inning, chance_score, outs)
 	var available_count: int = available_bench_fielder_count(setup)
@@ -280,6 +289,12 @@ static func position_player_pinch_hit_option(
 	var candidates: Array = sorted_pinch_hit_candidates(setup, batter_score + GameSimulator.PINCH_HIT_MIN_GAIN)
 	for candidate_row in candidates:
 		var candidate: PSPlayerSeasonRecord = candidate_row as PSPlayerSeasonRecord
+		if is_dh_spot:
+			# DH 枠はそのまま引き継ぐ (守備には就かない)。呼び出し側の null チェックを通すため
+			# defensive_replacement には本人を入れる — position 0 なので交代予約は走らない。
+			best_candidate = candidate
+			defensive_replacement = candidate
+			break
 		if pinch_hitter_can_stay_on_defense(candidate, position):
 			best_candidate = candidate
 			defensive_replacement = candidate
@@ -303,6 +318,14 @@ static func position_player_pinch_hit_option(
 	}
 
 
+# 既に代打として入り、次の守備イニングの交代を予約されている選手か。
+static func _has_pending_pinch_hitter(setup: Dictionary, player_id: int) -> bool:
+	for row in (setup.get("pending_defensive_subs", []) as Array):
+		if int((row as Dictionary).get("pinch_hitter_id", 0)) == player_id:
+			return true
+	return false
+
+
 static func apply_position_player_pinch_hitter(
 	setup: Dictionary,
 	batting_slot: int,
@@ -319,6 +342,105 @@ static func apply_position_player_pinch_hitter(
 	if position >= 2 and position <= 9:
 		reserve_defensive_substitution(setup, batting_slot, outgoing, pinch_hitter, defensive_replacement, position)
 	mark_pinch_hitter_appeared(setup, pinch_hitter)
+
+
+# --- 代走 -------------------------------------------------------------------
+# 終盤の僅差で、足の遅い走者を控えの俊足選手に替える。**bases の書き換えは呼び出し側**
+# (game_loop) が行う — 走者の失点責任 (runner_responsibility) が player_id で引かれており、
+# 差し替えと同時に付け替える必要があるため。戻り値が空でなければ代走が成立している。
+#
+# 後始末は代打と同じ: 打順スロットを引き継ぎ、退いた選手が守備に就いていたなら次の守備
+# イニングの交代を予約する (DH の走者なら守備の後始末は不要)。
+static func maybe_apply_pinch_runner(
+	setup: Dictionary, bases: Array, inning: int, game_result: Dictionary
+) -> Dictionary:
+	if inning < GameSimulator.PINCH_RUN_START_INNING:
+		return {}
+	if absi(score_margin_for_setup(setup, game_result)) > GameSimulator.PINCH_RUN_MAX_MARGIN:
+		return {}
+	var available_count: int = available_bench_fielder_count(setup)
+	if available_count < GameSimulator.PINCH_RUN_BENCH_RESERVE + 1:
+		return {}
+
+	var best: Dictionary = {}
+	var best_gain: float = GameSimulator.PINCH_RUN_MIN_SPEED_GAIN
+	for base_index in range(bases.size()):
+		var runner: PSPlayerSeasonRecord = bases[base_index] as PSPlayerSeasonRecord
+		if runner == null or runner.is_pitcher():
+			continue
+		var runner_speed: float = runner.z_ability("Run_Speed", 0.0)
+		if runner_speed > GameSimulator.PINCH_RUN_MAX_RUNNER_SPEED:
+			continue
+		var slot: int = lineup_slot_for_player(setup, runner.player_id)
+		if slot < 0:
+			continue
+		var option: Dictionary = _pinch_runner_option(setup, runner, runner_speed, available_count, best_gain)
+		if option.is_empty():
+			continue
+		best_gain = float(option.get("speed_gain", 0.0))
+		best = option
+		best["base_index"] = base_index
+		best["outgoing"] = runner
+		best["slot"] = slot
+	if best.is_empty():
+		return {}
+
+	var runner_in: PSPlayerSeasonRecord = best.get("runner", null) as PSPlayerSeasonRecord
+	var outgoing: PSPlayerSeasonRecord = best.get("outgoing", null) as PSPlayerSeasonRecord
+	var slot_index: int = int(best.get("slot", -1))
+	var position: int = int(best.get("position", 0))
+	remove_from_bench(setup, runner_in)
+	var batters: Array = setup.get("batters", []) as Array
+	if slot_index >= 0 and slot_index < batters.size():
+		batters[slot_index] = runner_in
+		setup["batters"] = batters
+	if position >= 2 and position <= 9:
+		reserve_defensive_substitution(
+			setup, slot_index, outgoing, runner_in,
+			best.get("defensive_replacement", null) as PSPlayerSeasonRecord, position
+		)
+	mark_substitute_appeared(setup, runner_in)
+	return best
+
+
+# 走者 1 人ぶんの代走候補を選ぶ。守備の後始末が付かない候補は捨てる (代打と同じ判断)。
+static func _pinch_runner_option(
+	setup: Dictionary,
+	runner: PSPlayerSeasonRecord,
+	runner_speed: float,
+	available_count: int,
+	minimum_gain: float
+) -> Dictionary:
+	var position: int = fielding_position_for_player(setup, runner.player_id)
+	var bench: Array = setup.get("bench", []) as Array
+	var best: PSPlayerSeasonRecord = null
+	var best_speed: float = 0.0
+	for bench_row in bench:
+		var candidate: PSPlayerSeasonRecord = bench_row as PSPlayerSeasonRecord
+		if candidate == null or candidate.injury_days > 0 or candidate.is_pitcher():
+			continue
+		if is_reserved_fielder(setup, candidate):
+			continue
+		var speed: float = candidate.z_ability("Run_Speed", 0.0)
+		if speed - runner_speed <= minimum_gain:
+			continue
+		if best == null or speed > best_speed:
+			best = candidate
+			best_speed = speed
+	if best == null:
+		return {}
+	# DH の走者 (position 0) は守備に就いていないので、打順を引き継ぐだけで足りる。
+	if position < 2 or position > 9:
+		return {"runner": best, "defensive_replacement": null, "position": 0, "speed_gain": best_speed - runner_speed}
+	if pinch_hitter_can_stay_on_defense(best, position):
+		return {"runner": best, "defensive_replacement": best, "position": position, "speed_gain": best_speed - runner_speed}
+	# 代走が守れないなら、その守備位置を埋める控えをもう 1 人確保できるときだけ成立させる。
+	if available_count < GameSimulator.PINCH_RUN_BENCH_RESERVE + 2:
+		return {}
+	var reserved: PSPlayerSeasonRecord = best_defensive_reservation_for_position(setup, position, best.player_id)
+	if reserved == null:
+		return {}
+	return {"runner": best, "defensive_replacement": reserved, "position": position, "speed_gain": best_speed - runner_speed}
 
 
 static func reserve_defensive_substitution(
@@ -448,19 +570,30 @@ static func maybe_apply_defensive_replacements(setup: Dictionary, inning: int, h
 	if inning < GameSimulator.DEFENSIVE_REPLACEMENT_START_INNING:
 		return []
 	var margin: int = score_margin_for_setup(setup, game_result)
-	if margin <= 0 or margin > GameSimulator.FINAL_DEFENSE_MAX_LEAD:
+	# 同点でも守備を固める (勝ち越し点をやらないための交代は実際に行われる)。
+	# ビハインドでは打線を優先するので入れない。
+	if margin < 0 or margin > GameSimulator.FINAL_DEFENSE_MAX_LEAD:
 		return []
 	var expected_plate_appearances: int = expected_remaining_plate_appearances_for_defensive_team(setup, inning, half, game_result)
 	if expected_plate_appearances >= 9:
 		return []
 	var reserve: int = 0 if expected_plate_appearances == 0 or inning >= GameSimulator.REGULATION_INNINGS else 1
-	var max_replacements: int = 2 if expected_plate_appearances == 0 else 1
+	# 点差が開いていれば打席が 1 つ残っていても替える (実勢の守備固めはこう動く)。
+	var comfortable: bool = margin >= GameSimulator.DEFENSIVE_REPLACEMENT_COMFORT_LEAD
+	var pa_tolerance: int = 1 if comfortable else 0
+	var max_replacements: int = 2 if expected_plate_appearances == 0 or comfortable else 1
+	if margin >= GameSimulator.BLOWOUT_LEAD:
+		# 大量リードの終盤はレギュラーを下げて控えに回す。打席が残っていても構わない。
+		max_replacements = 3
+		pa_tolerance = 2
 	var applied: Array = []
 	var made: int = 0
 	while made < max_replacements:
 		if available_bench_fielder_count(setup) <= reserve:
 			break
-		var option: Dictionary = defensive_replacement_option(setup, expected_plate_appearances)
+		var option: Dictionary = defensive_replacement_option(
+			setup, expected_plate_appearances - pa_tolerance
+		)
 		if option.is_empty():
 			break
 		apply_defensive_replacement(setup, option)
@@ -480,8 +613,10 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		var position: int = int(assignment.get("position", 0))
 		if outgoing == null or position < 2 or position > 9:
 			continue
-		if outgoing.age < 30 and outgoing.years < 8:
-			continue
+		# 守備固めの対象は「守備が弱い」ことだけで決める。**年齢/経験年数では絞らない** —
+		# 実際の 守備固め は守備難のある若い強打者にも出る (2026-08-24 に旧ゲート
+		# 「30歳未満かつ8年未満は対象外」を撤去)。守備の質は下の 2 条件で担保する:
+		# 退く選手が信頼水準を下回っていること + 控えが DEFENSIVE_REPLACEMENT_MIN_GAIN 以上上回ること。
 		var batting_score: int = pinch_hit_batting_score(outgoing)
 		if batting_score < batting_score_line(
 			outgoing, GameSimulator.SOLID_BATTER_SIGMA, GameSimulator.SOLID_BATTER_SCORE
@@ -493,8 +628,12 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		if plate_appearance_distance_to_slot(setup, lineup_slot) <= expected_plate_appearances:
 			continue
 		var outgoing_defense: int = defense_only_score(outgoing, position)
-		if outgoing_defense >= minimum_trusted_defense_score(position) + 20:
-			continue
+		# **退く選手の守備力に絶対の上限は置かない。** 旧実装は「信頼水準 +20 を超える守備なら
+		# 対象外」としていたが、スタメンは守備込みで組まれるので大半がこの線を超え、控えに
+		# 明確な上位互換が居ても交代が成立しなかった (2026-08-24 の実測で、一軍控えに
+		# 22点以上の上積みがある枠が 44% あるのに交代がほとんど出ていなかった)。
+		# 「置き換える価値があるか」は下の defense_gain (相対差) と
+		# can_trust_fielder_for_position (控え側の絶対水準) の 2 つで足りる。
 		for bench_row in bench:
 			var candidate: PSPlayerSeasonRecord = bench_row as PSPlayerSeasonRecord
 			if candidate == null or candidate.injury_days > 0 or candidate.is_pitcher():
@@ -667,6 +806,15 @@ static func is_important_pinch_hit_chance(
 
 static func is_final_low_bat_pinch_hit_chance(inning: int, deficit: int) -> bool:
 	return inning >= 9 and deficit >= 0 and deficit <= 4
+
+
+# 終盤 (既定 8回以降) で試合が動く点差なら、走者が居なくても弱打者に代打を送れる場面とみなす。
+static func is_late_low_bat_pinch_hit_chance(inning: int, deficit: int) -> bool:
+	return (
+		inning >= GameSimulator.LATE_PINCH_HIT_START_INNING
+		and deficit >= -3
+		and deficit <= 4
+	)
 
 
 static func pinch_hit_bench_reserve(inning: int, chance_score: int, outs: int) -> int:

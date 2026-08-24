@@ -174,6 +174,8 @@ static func _position_label(entry: Dictionary) -> String:
 	match str(entry.get("kind", "")):
 		"pinch_hit":
 			return "打"
+		"pinch_run":
+			return "走"
 		"pitching":
 			return "投"
 		"start":

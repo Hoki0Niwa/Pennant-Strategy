@@ -1882,6 +1882,51 @@ func test_pitcher_spot_batter_is_the_current_pitcher_after_the_starter_left() ->
 	assert_int(still_pitching.player_id).is_equal(starter.player_id)
 
 
+# 代走は「終盤 × 僅差 × 足の遅い走者 × 明確に速い控え」の全部が揃ったときだけ出す。
+# 打順スロットは代走が引き継ぎ、控えからは外れる。どれか 1 つでもゲートが外れると
+# 「毎回代走」か「一度も代走が出ない」のどちらかになる (実装前は後者だった)。
+func test_pinch_runner_replaces_a_slow_runner_only_in_a_close_late_game() -> void:
+	var slow: PSPlayerSeasonRecord = _fielder(901, "Slow", -0.6)
+	var fast: PSPlayerSeasonRecord = _fielder(902, "Fast", 0.9)
+	var spare: PSPlayerSeasonRecord = _fielder(903, "Spare", -0.2)
+	var close_game: Dictionary = {
+		"away_team_id": 1, "home_team_id": 2, "away_score": 3, "home_score": 4,
+	}
+	var make_setup: Callable = func(runner: PSPlayerSeasonRecord) -> Dictionary:
+		return {
+			"team_id": 1,
+			"batters": [runner, spare],
+			"bench": [fast, spare],
+			"fielders": [{"record": runner, "position": 3}],
+		}
+
+	var setup: Dictionary = make_setup.call(slow)
+	var bases: Array = [slow, null, null]
+	var applied: Dictionary = PSInGameSubstitutions.maybe_apply_pinch_runner(setup, bases, 8, close_game)
+
+	assert_bool(applied.is_empty()).is_false()
+	assert_int((applied["runner"] as PSPlayerSeasonRecord).player_id).is_equal(fast.player_id)
+	assert_int(int(applied["base_index"])).is_equal(0)
+	assert_int(((setup["batters"] as Array)[0] as PSPlayerSeasonRecord).player_id).is_equal(fast.player_id)
+	assert_bool((setup["bench"] as Array).has(fast)).is_false()
+
+	# 序盤は出さない。
+	var early: Dictionary = make_setup.call(slow)
+	assert_bool(PSInGameSubstitutions.maybe_apply_pinch_runner(early, [slow, null, null], 5, close_game).is_empty()).is_true()
+
+	# 点差が開いていたら出さない。
+	var blowout: Dictionary = make_setup.call(slow)
+	var blowout_game: Dictionary = {
+		"away_team_id": 1, "home_team_id": 2, "away_score": 1, "home_score": 9,
+	}
+	assert_bool(PSInGameSubstitutions.maybe_apply_pinch_runner(blowout, [slow, null, null], 8, blowout_game).is_empty()).is_true()
+
+	# もともと速い走者には代走を出さない。
+	var quick: PSPlayerSeasonRecord = _fielder(904, "Quick", 0.8)
+	var quick_setup: Dictionary = make_setup.call(quick)
+	assert_bool(PSInGameSubstitutions.maybe_apply_pinch_runner(quick_setup, [quick, null, null], 8, close_game).is_empty()).is_true()
+
+
 # 継承走者の生還は降板済み投手の失点として付き、ホールド判定に使う exit_lead も動く。
 # 一方で登板範囲 (end_inning / end_half / end_event_index) は降板時点のまま。
 # ここを伸ばすと試合ログ上の登板イニングが実際より長く見える。
