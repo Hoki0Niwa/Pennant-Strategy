@@ -176,7 +176,7 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	var fielders: Array = []
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		# roadmap #3: 育成選手は一軍登録不可 (試合に出場できない)。
+		# 育成選手は一軍登録不可 (試合に出場できない)。
 		if record.development_player:
 			continue
 		if record.is_pitcher():
@@ -486,7 +486,7 @@ const LEVEL_FARM: int = 1
 
 # ============================================================ 二軍の出場方針
 #
-# **二軍は一軍とは別の基準で出場を決める** (2026-08-13 ユーザー方針)。一軍は「勝つために強い順」だが、
+# **二軍は一軍とは別の基準で出場を決める**。一軍は「勝つために強い順」だが、
 # 二軍は育てる場なので、出場機会の配り方そのものが違う。3本柱:
 #
 #   1. **トッププロスペクトは優先して出す。** チーム内の若手のうち評価上位 FARM_PROSPECT_SLOTS 人を
@@ -505,7 +505,7 @@ const FARM_YOUTH_PRIORITY_BONUS: float = 6.0
 const FARM_VETERAN_PRIORITY_AGE: int = 30
 const FARM_VETERAN_PRIORITY_PENALTY: float = 6.0
 
-# 能力の重み。1.0 だと従来どおり能力が支配的になる。下げるほど「誰に経験を積ませるか」で決まる。
+# 能力の重み。1.0 なら一軍と同じく能力が支配的になる。下げるほど「誰に経験を積ませるか」で決まる。
 const FARM_ABILITY_WEIGHT: float = 0.55
 # トッププロスペクト = 24歳以下でチーム内評価上位 N 人。**チーム相対**で決めるので、
 # 絶対閾値が母集団の変化で陳腐化しない ([[project_player_form_evaluation]] と同じ考え方)。
@@ -517,7 +517,7 @@ const FARM_PROSPECT_BONUS: float = 16.0
 const FARM_OPPORTUNITY_WEIGHT: float = 30.0
 const FARM_PROSPECT_SHARE_MULT: float = 2.0
 
-# ---- ファーム専用球団は別扱い (2026-08-16) ----------------------------------
+# ---- ファーム専用球団は別扱い ----------------------------------------------
 #
 # 上の3本柱は「**親球団が誰を育てたいか**」の表現なので、親を持たない専用球団
 # (ノースメン長野 / オスプレー大分) には当てはまらない。専用球団は自分が勝つために組む。
@@ -1198,10 +1198,8 @@ static func setup_to_lineup_dict(setup: Dictionary, dh_enabled: bool, rotation_p
 	}
 
 
-# Phase 4: 旧 DP (best_fielding_assignment_dp) と周辺 fallback (repair_starter_selection_for_coverage,
-# greedy_defensive_starters, starter_candidate_pool, initial_starter_selection 等 14 関数) を
-# PSDefenseAlignmentService に置換。lazy default で初回は greedy template を算出してキャッシュし、
-# 以後の試合は不在選手のみ backup_priority 経由で補充する。
+# 当日の先発守備を `PSDefenseAlignmentService` に解かせる。初回はチームの greedy template を
+# 算出して profile へキャッシュし、以後の試合は不在選手だけを backup_priority 経由で補充する。
 static func select_defensive_starters(
 	season: PSSeason,
 	team_id: int,
@@ -1401,10 +1399,10 @@ static func _best_sub_for_position(
 # --- 出場シェア (定位置がその守備位置の先発を何割取るか) ---
 #
 # **シェアはリーグの先発級の中での相対位置だけで決める。控えとの能力差では決めない。**
-# 旧方式 (控えとの rating 差 → 休養間隔) は、控えが定義上ベンチ級で差がほぼ常に大きいため
-# 96 枠中 82 枠が上限へ張り付き、しかもその上限 (10 試合に 1 度の休養 = 129 先発) が
-# 規定打席ライン (105 先発) より上だったので、**どう設定しても全枠が規定に届いた**
-# (2026-08-22 の実測は [[project_qualified_batter_count]])。
+# 控えとの rating 差から休養間隔を決める形にすると、控えは定義上ベンチ級で差がほぼ常に大きく、
+# 96 枠中 82 枠が上限へ張り付く。その上限 (10 試合に 1 度の休養 = 129 先発) は規定打席ライン
+# (105 先発) より上なので、**どう設定しても全枠が規定に届いてしまう**
+# ([[project_qualified_batter_count]] に実測)。
 #
 # `PSBatterForm.regular_z` は「能力だけで測った先発級分布」に「今季成績込みの総合指標」を
 # 当てた σ 値なので、次の 2 つが自動的に入る ([[project_player_form_evaluation]] の作法):
@@ -1415,15 +1413,12 @@ static func _best_sub_for_position(
 # **その守備位置の平均的な定位置選手 (z=0) が share 0.85 ≒ 122 先発**。
 # **シェアは「怪我をしなければ何試合先発するか」の設定値**であって実際の先発数ではない。
 # 故障や途中交代で平均 15 試合前後が落ちるので、z=0 の実測先発数は 100 前後 = 規定打席の前後。
-# → **故障や途中出場の量を変えたらここを動かして総量を戻す**
-#   (2026-08-23 に故障頻度を実 NPB 準拠へ上げて +0.13、2026-08-24 に代走を入れて更に +0.03)。
+# → **故障や途中出場の量を変えたらここを動かして総量を戻す**。
 #
 # 曲線は帯によって効く指標が違うので、ズレている方だけを動かす:
 #   - z ≒ -0.3〜+0.4 (規定打席ラインの前後) … **規定到達者数** (目標 52-65人)
 #   - z ≧ +0.6 (準全試合出場の層) … **先発130試合以上の人数** (実 NPB は 17人 = 1球団 1.4人)
-# ⚠️ 上端を 0.93/0.99 まで上げた版は `run_balance_report` が 10分 → 45分超に伸びた
-#    (同じ設定でも `run_playing_time_probe` は 75秒/シーズンのままなので、遅いのはレポート収集側)。
-#    原因未特定。**上端を 0.97 より上げるときは実行時間も計測すること。**
+# 上端の値は実行時間に影響しない (0.99 でも `run_balance_report` の所要時間は変わらない)。
 const SHARE_CURVE: Array = [
 	[-1.50, 0.48],
 	[-1.00, 0.55],
@@ -1443,10 +1438,10 @@ const SHARE_GAP_MAX: float = 0.08
 # **守備位置ごとのシェア上限。** リーグ相対の位置がどれだけ高くてもここを超えない。
 # 上限を置くのは「その枠は 1 人では回せない」という身体的な理由がある位置だけ
 # (載せない位置は SHARE_MAX = 1.0)。遊撃・二塁・中堅は実 NPB でも全試合出場の主力がいるので
-# 上限を持たない。**DH も不要**: 2026-08-22 に上限 0.62 / 0.80 / 1.00 の 3 通りで実測したが、
-# DH の定位置は構造上「守備スタメン 9 人目の打者」= リーグ相対 z が低く、曲線の出力が 0.78 を
-# 超えないため上限が発火しない (到達者数も DH 枠の延べ起用人数も 3 通りで有意差なし)。
-#   - 捕手: 守備負荷。143×0.86 ≒ 123 先発 (旧 CATCHER_SUB_INTERVAL_MAX = 7 と同水準)。
+# 上限を持たない。**DH も不要**: DH の定位置は構造上「守備スタメン 9 人目の打者」= リーグ相対 z が
+# 低く、曲線の出力が 0.78 を超えないため上限が発火しない (0.62 / 0.80 / 1.00 の 3 通りで実測しても
+# 到達者数・DH 枠の延べ起用人数とも有意差なし)。
+#   - 捕手: 守備負荷。143×0.86 ≒ 123 先発。
 #     現行の較正では捕手の曲線出力が 0.63 前後なので、実際に効くのは打撃が突出した正捕手だけ。
 const POSITION_SHARE_MAX: Dictionary = {
 	2: 0.86,

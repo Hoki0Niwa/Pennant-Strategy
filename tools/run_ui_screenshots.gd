@@ -1,6 +1,6 @@
 extends Node
 
-# UI 刷新作業用: セーブをロードして主要画面を順に開き、各画面のスクリーンショットを
+# セーブをロードして主要画面を順に開き、各画面のスクリーンショットを
 # reports/ui_shots/ へ書き出す手動調査ツール。ウィンドウ描画が必要なので --headless では動かない。
 # 実行: godot --path . res://tools/run_ui_screenshots.tscn
 # 画面を絞る: -- --screens=home,standings

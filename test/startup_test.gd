@@ -1,5 +1,4 @@
-# GdUnit4 への移行後の最初のテスト雛形。
-# 旧 run_startup_smoke.gd 相当: 主要スクリプトのロードと autoload 登録を確認する。
+# 起動 smoke: 主要スクリプトのロードと autoload 登録、各画面が _ready で落ちないことを確認する。
 # 新しいテストは test/ 配下に *_test.gd を追加するだけで自動検出される(専用 .tscn 不要)。
 extends GdUnitTestSuite
 
@@ -113,8 +112,8 @@ func test_save_select_screen_flags_saves_from_other_versions() -> void:
 
 
 func test_autoloads_registered() -> void:
-	# autoload はシーン/プロジェクト起動時のみ登録される(=旧運用で .tscn が必要だった理由)。
-	# GdUnit はプロジェクト文脈で実行するため singleton として参照できる。
+	# autoload はプロジェクト起動時にのみ登録される。GdUnit はプロジェクト文脈で実行するため、
+	# ここから singleton として参照できる。
 	assert_object(Engine.get_main_loop().root.get_node_or_null("AppState")).is_not_null()
 	assert_object(Engine.get_main_loop().root.get_node_or_null("GameDb")).is_not_null()
 	assert_object(Engine.get_main_loop().root.get_node_or_null("ModManager")).is_not_null()
@@ -190,7 +189,7 @@ func test_home_screen_builds_with_active_season() -> void:
 
 func test_home_screen_calendar_distinguishes_offseason_from_rest_day() -> void:
 	# シーズン期間外(日本シーズン終了〜翌年開幕まで)の空セルは「休養」ではなく「オフシーズン」と
-	# 表示する。シーズン期間内の空セル(交流戦後の休養カード等)は従来どおり「休養」のまま。
+	# 表示する。シーズン期間内の空セル(交流戦後の休養カード等)は「休養」のまま。
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
 	var old_screen: String = AppState.current_screen
@@ -739,7 +738,7 @@ func test_ability_stats_screen_builds_each_tab_and_mode() -> void:
 
 
 func test_farm_screen_and_player_detail_farm_tab_build() -> void:
-	# 二軍の閲覧 UI (Phase 4)。二軍はファーム情報画面へ集約し、一軍側の画面 (順位表 /
+	# 二軍の閲覧 UI。二軍はファーム情報画面へ集約し、一軍側の画面 (順位表 /
 	# 能力・成績一覧) には混ぜない。張る不変条件は
 	# **二軍成績が farm_* コンテナからしか読まれないこと** と
 	# **ファーム専用球団 (GameDb.teams に居ない2球団) が二軍の文脈でだけ見えること**。
@@ -1403,7 +1402,7 @@ func _first_record(records: Array, pitcher: bool) -> PSPlayerSeasonRecord:
 	return null
 
 
-# オフシーズン画面 (dashboard_screen 継承の自前描画刷新) の build/draw スモーク。
+# オフシーズン画面 (dashboard_screen 継承の自前描画) の build/draw スモーク。
 # 戦力外通告 (対話パネル) と 引退/成長/ドラフト (結果テーブル + 2カラム + 12球団グリッド) の
 # 描画経路を、画面を tree に載せて 1 フレーム回し例外なく通ることで確認する。
 func test_offseason_screen_builds_each_step() -> void:
@@ -2012,7 +2011,7 @@ func test_postseason_pending_game_log_persists_through_save_and_reload() -> void
 	var result_before: Dictionary = game_before.get("result", {}) as Dictionary
 	assert_bool(result_before.has("play_events")).is_true()  # まだフル result (縮小前)
 
-	# バグ再現: persist=false だったのでログファイルはまだ存在しない。
+	# persist=false で消化したので、ログファイルはまだ存在しない。
 	var log_before_flush: Dictionary = PSGameLogService.read_postseason_game_log(AppState.current_season, "cs1_league1", 1)
 	assert_bool(log_before_flush.is_empty()).is_true()
 
@@ -2054,9 +2053,9 @@ func test_postseason_pending_game_log_persists_through_save_and_reload() -> void
 		SaveContext.activate_save_id(old_save_id)
 
 
-# 個別テストの無かった画面の起動 smoke。_ready で落ちる/何も描かない退行を拾う。
-# (2026-08-06 追加。dev/レポート系の balance_report / player_probe / draft_simulator は
-#  実行にレポート生成が伴うのでここでは扱わない。)
+# 個別テストの無い画面の起動 smoke。_ready で落ちる/何も描かない退行を拾う。
+# dev/レポート系の balance_report / player_probe / draft_simulator は実行にレポート生成が
+# 伴うのでここでは扱わない。
 func test_remaining_season_screens_build_with_active_season() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
@@ -2095,8 +2094,8 @@ func test_remaining_season_screens_build_with_active_season() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
-# 打順設定の「出場配分」操作 (スライダー / 数値直接入力 / 自動へ戻す)。
-# クリック循環をやめてスライダー+数値入力にした 2026-08-22 の回帰ガード。
+# 打順設定の「出場配分」操作 (スライダー / 数値直接入力 / 自動へ戻す) が
+# 保存値 (share と share_locked) へ正しく反映されること。
 func test_lineup_editor_share_slider_and_numeric_input() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season

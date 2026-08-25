@@ -225,12 +225,12 @@ func fielding_ability_category() -> String:
 
 
 func breaking_score() -> int:
-	# pitch_values は廃止（常に空）。投球 z があれば z 由来、無ければ既定 50。
+	# 投球 z があれば z 由来、無ければ既定 50。
 	return _z_breaking_score() if _has_pitching_z() else 50
 
 
 # 変化球アーセナルを返す。明示的に持っていればそれを、無ければ z から派生する。
-# (現行の投手は初期シード backfill / 生成時に明示値を持つ。派生は旧セーブ等のフォールバック。)
+# (投手は初期シード backfill / 生成時に明示値を持つので、派生はフォールバック経路。)
 # derive_from_z は決定論的なので呼ぶたびに同じ結果になる (role 適性が安定する)。
 func arsenal_or_derived() -> Array:
 	if not arsenal_snapshot.is_empty():
@@ -312,7 +312,7 @@ func to_dict() -> Dictionary:
 	}
 
 
-# R4 Step1: FA権取得までの残り年数相当 (0 = 取得済み = 保有権消滅)。
+# FA権取得までの残り年数相当 (0 = 取得済み = 保有権消滅)。
 func fa_remaining_years() -> int:
 	var remaining_days: int = maxi(0, fa_service_days_required() - fa_service_days())
 	return int(ceil(float(remaining_days) / float(PSPlayer.FA_SERVICE_DAYS_PER_YEAR)))

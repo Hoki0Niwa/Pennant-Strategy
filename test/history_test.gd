@@ -1,6 +1,6 @@
 extends GdUnitTestSuite
 
-# R7 記録・履歴基盤: 選手経歴ログ (PSCareerLog) の記録・整形・永続化と、
+# 記録・履歴基盤: 選手経歴ログ (PSCareerLog) の記録・整形・永続化と、
 # 各イベント発生箇所 (トレード/戦力外/引退) からの配線を検証する。
 
 const Offseason = preload("res://services/season/offseason_service.gd")

@@ -1,6 +1,6 @@
 extends GdUnitTestSuite
 
-# シーズン中トレード v1: 対象判定、交換期限、成立時の状態遷移 (team_id / 当季record /
+# シーズン中トレード: 対象判定、交換期限、成立時の状態遷移 (team_id / 当季record /
 # 一軍ロスター / FA日数台帳の移管)、CPU受諾判定、trade_state のセーブ round-trip を検証する。
 
 const ALL_Z_KEYS: Array = [
@@ -177,7 +177,7 @@ func test_evaluate_user_proposal_rejects_invalid_sides() -> void:
 	assert_str(str(with_foreign.get("message", ""))).contains("トレード対象にできません")
 
 
-# 人数不均等な提案 (2対1) で受け側の支配下が70枠を超える場合は不可 (2026-07-10 修正)。
+# 人数不均等な提案 (2対1) で受け側の支配下が70枠を超える場合は不可。
 # 自軍がちょうど70人(givenの1人含む)の状態で1人放出・2人受け取りなら71人になり超過する。
 func test_evaluate_user_proposal_rejects_when_capacity_exceeded() -> void:
 	var season: PSSeason = _season(10)
@@ -196,12 +196,12 @@ func test_evaluate_user_proposal_rejects_when_capacity_exceeded() -> void:
 	var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21, 22])
 	assert_bool(bool(result.get("ok", false))).is_false()
 	# **理由まで固定する**。ok=false だけだと、枠チェックを外しても予算チェックが同じ提案を
-	# 弾いてテストが通ってしまい、70枠の検証になっていなかった (2026-08-06)。
+	# 弾いてもテストが通ってしまい、70枠の検証にならない。
 	assert_str(str(result.get("message", ""))).contains("支配下枠")
 
 
 # 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象であること
-# (2026-07-10 修正: 従来は相手球団の上限しか見ておらず自軍だけ無制限に成立できた)。
+# (相手球団の上限しか見ないと、自軍だけ無制限にトレードを成立させられる)。
 func test_evaluate_user_proposal_rejects_when_user_team_over_trade_limit() -> void:
 	var season: PSSeason = _season(10)
 	var teams: Array = [_team(1), _team(2)]

@@ -1,7 +1,7 @@
 extends Node
 
-# 戦力外選定刷新の比較レポート。1シーズン自動進行後、全12球団の支配下・非引退・非育成選手について
-# 現行 TeamAutoAI.cut_score と新規 ReleaseValueProjector.projected_value_components を並べ、
+# 戦力外選定の2指標を突き合わせるレポート。1シーズン自動進行後、全12球団の支配下・非引退・非育成選手について
+# TeamAutoAI.cut_score と ReleaseValueProjector.projected_value_components を並べ、
 # 序列相関・仮想放出セットの重複・不一致選手を出す。**ゲーム挙動には一切介入しない** (読み取り専用)。
 
 const OffseasonService = preload("res://services/season/offseason_service.gd")
@@ -288,7 +288,7 @@ func _build_report(season: PSSeason, seed_value: int, start_year: int) -> Dictio
 	}
 
 
-# team_id の支配下 (非引退・非育成) 選手を、旧 cut_score と新 projected_value 両方を添えて集める。
+# team_id の支配下 (非引退・非育成) 選手を、cut_score と projected_value の両方を添えて集める。
 func _team_roster_rows(team_id: int, season: PSSeason) -> Array:
 	var rows: Array = []
 	for player_row in GameDb.players:

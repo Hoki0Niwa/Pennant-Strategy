@@ -738,7 +738,7 @@ func _contract_player_rows(_result: Dictionary = {}) -> Array:
 
 # 契約更改表に出す契約年数。複数年契約の期間中はその総年数、FA権保有者が単年を選んだ場合は 1 (単年)。
 # **FA権未取得の選手は 0 を返し "-" で描く** — 契約年数を決める場面が無く自動更新されるだけなので、
-# 自分で単年を選んだ選手と同じ「単年」表記にすると区別がつかない (ユーザー指摘)。
+# 自分で単年を選んだ選手と同じ「単年」表記にすると区別がつかない。
 func _player_contract_years(player: PSPlayer, offseason_year: int) -> int:
 	if player == null:
 		return 0
@@ -1157,7 +1157,7 @@ func _draw_empty() -> void:
 	_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
 
 
-# ステップ名はヘッダ見出し。ステップ番号表示は廃止 (将来ステップ構成が変わるため)。ここは状況テキストのみ。
+# ステップ名はヘッダ見出しが持つ。ここは状況テキストだけを描く (ステップ番号は表示しない)。
 func _draw_subheader() -> void:
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(INNER_L, 111), 14, _status_color, 1620)
@@ -2777,7 +2777,7 @@ func _heading_table(rect: Rect2, heading: String, columns: Array, rows: Array, e
 
 
 # ============================================================ table primitives
-# 描画本体は基底 dashboard_screen._draw_data_table に集約 (2026-06-24)。ここは offseason 既定値
+# 描画本体は基底の dashboard_screen._draw_data_table が持つ。ここは offseason 既定値
 # (見出し15px / 本文13px / 文字列左寄せ・数値右寄せ / 固定行高28 + スクロール・選択) を opts へ橋渡しする薄いラッパ。
 
 func _draw_table(rect: Rect2, title: String, columns: Array, rows: Array, scroll_key: String, sel_kind: String, selected_id: int) -> void:

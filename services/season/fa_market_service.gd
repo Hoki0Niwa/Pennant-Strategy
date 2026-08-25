@@ -1,7 +1,7 @@
 extends RefCounted
 class_name FaMarketService
 
-# R4: 簡易FA / 自由契約市場。
+# FA / 自由契約市場。
 # 自軍だけ手動選択できるよう、ドラフトと同じ「state生成 -> 自軍選択 -> 残り自動 -> 確定」
 # の形にする。process_fa_market は長期検証/CPU用の完全自動ラッパーとして残す。
 
@@ -63,7 +63,7 @@ const REGULAR_WAR: float = 1.0
 # 「レギュラー級の能力か」は**母集団相対**で見る。その年の支配下選手の overall 分布から
 # mean + sigma*spread を引く。絶対値で置くとリーグ全体の水準が動いただけで FA 宣言者数が動く。
 # 実測 (1シーズン): 野手 mean 68.96/spread 9.91、投手 mean 68.92/spread 7.70。
-# -0.1σ は旧・絶対値 68 とほぼ一致 = 「ほぼリーグ平均以上」。
+# -0.1σ = 「ほぼリーグ平均以上」の水準。
 const REGULAR_OVERALL_SIGMA: float = -0.1
 # 母集団が取れないとき (合成データのテスト等) のフォールバック。
 const REGULAR_OVERALL: int = 68
@@ -895,7 +895,7 @@ static func _on_cooldown(player: PSPlayer, year: int) -> bool:
 	return year > 0 and (year - signed) < FA_RESIGN_COOLDOWN_YEARS
 
 
-# roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
+# 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
 	return TeamFinance.controlled_count(players, team_id)
 

@@ -1,15 +1,15 @@
 extends Node
 
 # 二軍 (ファーム) の健全性を1シーズン通しで実測するレポート。
-# 二軍成績の閲覧 UI は v1 対象外なので、**これが二軍を観測する唯一の手段**になる。
+# 二軍成績を一覧できる画面は無いので、**これが二軍を観測する唯一の手段**になる。
 #
 # 見るもの:
 #   - 二軍リーグの成績水準 (一軍との対比。実 NPB のファームは一軍より **ERA が高い**)
 #   - 引き分け率 (延長10回打ち切りの効果。実 NPB のファームは約10%)
-#   - 出場分布 (何人が出たか / 育成選手が出ているか = v1 の目的の一つ)
+#   - 出場分布 (何人が出たか / 育成選手が出ているか)
 #   - 守備イニング (オフの守備適性成長の入力になっているか)
 #   - 昇降格 (日次の active_roster 差分で実測。谷間の先発が何回発火したか / 先発の顔ぶれ)
-#   - 故障件数 (二軍戦を足すと曝露が増えるので、一軍だけの頃より必ず増える)
+#   - 故障件数 (控え・二軍の曝露ぶんが乗る)
 #   - 起用加重の能力水準 (一軍と二軍で打者・投手がそれぞれ何σ違うか = 得点環境のズレの切り分け)
 #   - 専用球団の状態 (ロスターサイズ・出場)
 #   - 地区別の消化と勝率 (試合数が揃わない前提なので順位は勝率)
@@ -38,16 +38,15 @@ const HEALTH_INJURED_PLAYERS_PER_TEAM: Array = [8.0, 45.0]
 
 # 未達が判明していて一時的に warn 扱いにする項目。現在は空。
 # ファーム専用球団の勝率。**実クラブの実測が基準** (ハヤテ静岡2024 .315 / オイシックス新潟2024 .358)。
-# ⚠️ これは「PA モデルの能力差感度」の唯一の実測ゲート。2026-08-17 まで
-# `run_pa_response_surface` の「両側 -0.8σ の Pythagorean 勝率」で代用していたが、
-# **ゲーム内の 0.8σ が実クラブの実力差と等しいという根拠が無い**ため、実シーズンの実勝率へ移した
-# ([[project_pa_talent_sensitivity_calibration]] の Lv.2.5 節)。
+# ⚠️ これは「PA モデルの能力差感度」の唯一の実測ゲート。`run_pa_response_surface` の
+# 「両側 -0.8σ の Pythagorean 勝率」では代用しない — **ゲーム内の 0.8σ が実クラブの実力差と
+# 等しいという根拠が無い**ため、実シーズンの実勝率で測る
+# ([[project_pa_talent_sensitivity_calibration]])。
 # 2球団×1シーズンでは振れるので、**3シーズン以上の平均で判断する**
 # ([[project_farm_system_design]] の「2球団 × 1シーズンでは測れない」)。
 const HEALTH_FARM_CLUB_WIN_RATE: Array = [0.270, 0.420]
-# 実 NPB 二軍 (例: オリックス2025 は使用47人・最多93.1回) に対し、ゲーム内の
-# 12球団二軍は従来 23〜30人・132〜168回だった。一軍との往復が成立しているかを
-# 専用球団の勝率とは別に直接測る。
+# 実 NPB 二軍は 1球団あたり使用47人・最多93.1回 (オリックス2025) 規模。使用人数が少なく
+# 1人あたりの回数が多いときは一軍との往復が成立していないので、専用球団の勝率とは別に直接測る。
 const HEALTH_AFFILIATED_FARM_PITCHERS_USED: Array = [40.0, 49.0]
 const HEALTH_AFFILIATED_FARM_MAX_INNINGS: Array = [80.0, 110.0]
 
@@ -565,7 +564,7 @@ func _top_mean(values: Array, count: int) -> float:
 
 
 # 一軍の顔ぶれがどれだけ動いたか。NPB は登録・抹消の往復で年間 55〜65人が一軍出場する。
-# 二軍戦を作った当初の動機 (先発の顔ぶれを増やす) の到達度をここで見る。
+# 一軍と二軍の往復が機能しているかをこの人数で見る。
 func _roster_move_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
 	var teams: float = float(max(1, GameDb.teams.size()))
 	var players_used: int = 0
@@ -631,7 +630,7 @@ func _roster_move_summary(season: PSSeason, moves: Dictionary) -> Dictionary:
 	}
 
 
-# 故障件数。二軍戦を足すまで控え・二軍は曝露ゼロだったので、リーグ全体の件数は必ず増える
+# 故障件数。控え・二軍は二軍戦でのみ曝露するので、その分がリーグ全体の件数に乗る
 # ([[project_injury_system]] の較正監視項目)。専用球団は NPB の仕組みの外なので分けて出す。
 func _injury_summary(season: PSSeason) -> Dictionary:
 	var npb_injured: int = 0
@@ -680,8 +679,7 @@ func _severity_key(severity: int) -> String:
 	return "minor"
 
 
-# 誰が二軍戦に出たか。**育成選手の出場率が v1 の目的の一つ** (二軍戦の追加で初めて
-# 育成制度が機能する) なので、支配下と分けて出す。
+# 誰が二軍戦に出たか。**育成選手の出場機会は二軍戦だけ**なので、支配下と分けて出す。
 func _appearance_summary(season: PSSeason) -> Dictionary:
 	var controlled_total: int = 0
 	var controlled_played: int = 0
@@ -996,8 +994,8 @@ func _aggregate(seasons_out: Array) -> Dictionary:
 
 func _health(report: Dictionary) -> Dictionary:
 	var checks: Array = []
-	# 専用球団の勝率は2球団×1季では振れすぎるため、複数季の平均を正式ゲートにする。
-	# 従来は複数季を丸ごと skipped にしており、コメント上の契約と実装が逆だった。
+	# 専用球団の勝率は2球団×1季では振れすぎるため、複数季の平均を正式ゲートにする
+	# (単季の値は参考表示にとどめ、判定には使わない)。
 	if report.has("per_season"):
 		var multi_clubs: Dictionary = report.get("farm_clubs", {}) as Dictionary
 		var multi_usage: Dictionary = report.get("farm_pitcher_usage", {}) as Dictionary
@@ -1069,7 +1067,7 @@ func _health(report: Dictionary) -> Dictionary:
 		"status": "pass" if farm_ops < first_ops else "warn",
 	})
 
-	# 実 NPB のファームは一軍より ERA が **高い** (投手と守備が劣るぶん)。逆転していたら
+	# 実 NPB のファームは一軍より ERA が **高い** (投手と守備が劣るぶん)。逆転していれば
 	# 「打線だけが薄い」= 投打の質差の効き方が非対称になっているサイン。
 	var farm_era: float = float(farm_pitching.get("era", 0.0))
 	var first_era: float = float(first_pitching.get("era", 0.0))

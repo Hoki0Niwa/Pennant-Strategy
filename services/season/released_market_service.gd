@@ -5,18 +5,16 @@ class_name ReleasedMarketService
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-# 1球団が1オフに獲得できる上限。**支配下契約だけを数える** (2026-08-04、ユーザー方針
-# 「育成は戦力外にするのも戦力外から獲得するのも無制限。枠の制限は支配下のみ」)。
+# 1球団が1オフに獲得できる上限。**支配下契約だけを数える** — 育成は戦力外にするのも
+# 戦力外から獲得するのも無制限で、人数の制限は支配下にだけ掛かる。
 # 育成契約は CONTROLLED_LIMIT(70) も消費しないので、育成 track の獲得は人数上限を一切持たない
 # (質のゲートは _team_fit_evaluation / MIN_AI_SIGNING_SCORE / 予算のみ)。
 const MAX_CONTROLLED_SIGNINGS_PER_TEAM: int = 2
 # 一軍当落線をこれだけ上回る候補だけをAIが「今すぐ使える戦力」とみなす (value 単位)。
-# ※ 旧 `MIN_NEED_TO_SIGN`(=4.0、リーグ相対 need への閾値) は 2026-08-03 のデプスチャート統合で
-#   参照されなくなり (`evaluate_candidate` の is_weakness = need>0 に置き換わった) 実質的に消えていた。
-#   need>0 は「リーグ平均未満」= 全球団の約半数×約半分のスロットが常に該当するゆるいゲートなので、
-#   これだけでは 12球団×2人=24 の上限に毎年張り付く。need へ閾値を戻すと投手は need が構造的に
-#   立たず野手偏重に逆戻りするため ([[project_released_market]] の 2026-07-21 節)、投打で同尺度の
-#   **当落線からの上積み幅**で絞る。0 にすると 1点でも上回れば獲得する旧挙動へ戻る。
+# ※ 絞り込みは need ではなく**当落線からの上積み幅**で行う。need>0 (リーグ平均未満) は全球団の
+#   約半数×約半分のスロットが常に該当するゆるいゲートで、これだけでは 12球団×2人=24 の上限に
+#   毎年張り付く。かといって need 側へ閾値を置くと投手は need が構造的に立たず野手偏重になる
+#   ([[project_released_market]])。0 にすると 1点でも上回れば獲得する。
 const MIN_UPGRADE_MARGIN: float = 1.0
 # 能力・実績・需要から年俸負担を引いた後も、この水準を満たす候補だけをAIが獲得する。
 const MIN_AI_SIGNING_SCORE: float = 35.0
@@ -44,11 +42,11 @@ const DEV_TRACK_VALUE_PIVOT: int = 50
 const DEV_TRACK_VALUE_OFFSET: float = 0.012
 const DEV_TRACK_CHANCE_MIN: float = 0.05
 const DEV_TRACK_CHANCE_MAX: float = 0.90
-# **育成契約になる理由は2つあり、年齢に対して単調ではない** (2026-08-04):
+# **育成契約になる理由は2つあり、年齢に対して単調ではない**:
 #   ① 高齢 = 「今すぐ支配下で通用するか怪しい」→ 上の年齢項が拾う
 #   ② 素材年齢 = 「今はまだ足りないが伸びしろに賭ける」→ この項が拾う
-# 年齢項だけの単調式だと ② の経路がほぼ閉じ (22歳の育成率が5〜10%)、育成契約が高齢者だけに
-# なっていた (実測: 育成獲得の平均年齢 30.4歳)。素材年齢から1歳若いごとに育成寄りへ振る。
+# 年齢項だけの単調式にすると ② の経路がほぼ閉じ (22歳の育成率が5〜10%)、育成契約が高齢者
+# だけになる。素材年齢から1歳若いごとに育成寄りへ振る。
 const DEV_TRACK_PROSPECT_MAX_AGE: int = TeamDepthChart.PROSPECT_MAX_AGE
 const DEV_TRACK_PROSPECT_CHANCE_PER_YEAR: float = 0.10
 
@@ -63,18 +61,14 @@ const DEV_TRACK_PROSPECT_CHANCE_PER_YEAR: float = 0.10
 #     **今は一軍水準に届かない若手を将来性で拾う**経路を明示的に残す。
 # 結果として要求水準は年齢に対して V 字 (若い/高齢の両端で緩急が付く) になる。
 # 上げ下げの単位は value (overall スケール) と同じ。
-# 較正 (2026-08-04): 初版 (pivot 27 / 1.5点/歳 / 割引 一律4.0) では傾斜が緩すぎ、育成獲得の平均年齢が
-# 30.57歳と**放出全体の平均 30.0歳より高い**ままだった (=高齢ペナルティが実質効いていない)。
-# 20代後半の「そこそこ使える選手」が +1.5〜4.5点程度の加算で素通りしていたのが原因。
 # 監視値は long_autoplay の `released_signed_development_avg_age` で、**放出全体の
-# `released_average_age` より低いこと**が合否の目安。
-# 若手割引を一律から年齢比例へ変えたのは形を素直にするため。**総数を動かす主ノブは
-# `DEV_SIGN_AGE_PENALTY_PER_YEAR` の側**で、割引を一律6.0→年齢比例2.5にした変更は
-# seed=20260528 では1件も判定が変わらなかった (育成候補の大半が26〜33歳に居るため、
-# 24歳以下の割引をいじっても動く母数がほぼ無い)。
+# `released_average_age` より低いこと**が合否の目安。傾斜が緩いと高齢ペナルティが実質効かず、
+# 20代後半の「そこそこ使える選手」が素通りして育成獲得の平均年齢が放出全体より高くなる。
 const DEV_SIGN_AGE_PIVOT: int = 26
-# 2.5 は若返り (育成27.5歳 < 放出全体29.8歳) を達成したが育成獲得が 19.0→7.5人/年 まで落ちた。
-# 2.0 は候補の主たる帯 (26〜30歳) の要求を1歳あたり0.5点ぶん緩めて総数を戻すための中間値。
+# **総数を動かす主ノブはこちら**。候補の大半が 26〜33歳に居るので、素材年齢側の割引
+# (DEV_SIGN_PROSPECT_DISCOUNT_PER_YEAR) をいじっても動く母数はほとんど無い。
+# 上げるほど高齢が弾かれて若返るが総数は減る (2.5 で 19.0→7.5人/年)。2.0 は候補の主たる帯
+# (26〜30歳) の要求を1歳あたり0.5点ぶん緩めて総数を保つ位置。
 const DEV_SIGN_AGE_PENALTY_PER_YEAR: float = 2.0
 const DEV_SIGN_PROSPECT_DISCOUNT_PER_YEAR: float = 2.5
 
@@ -520,7 +514,7 @@ static func _can_team_accept_candidate(players: Array, team_id: int, entry: Dict
 	if bool(entry.get("foreign_player", false)):
 		if _foreign_count_for_team(players, team_id) >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM:
 			return false
-	# 育成track は支配下枠(CONTROLLED_LIMIT)も獲得人数上限も消費しない (2026-08-02 / 2026-08-04)。
+	# 育成track は支配下枠(CONTROLLED_LIMIT)も獲得人数上限も消費しない。
 	# 質のゲート (_team_fit_evaluation / MIN_AI_SIGNING_SCORE / 予算) だけが効く。
 	if str(entry.get("track", TRACK_CONTROLLED)) == TRACK_DEVELOPMENT:
 		return true
@@ -559,17 +553,17 @@ static func _is_released_market_player(player: PSPlayer) -> bool:
 
 # AIがその候補を獲得対象にするか。投手・野手を対称に「その球団の同一役割の最弱選手を上回る (=戦力
 # アップグレードになる)」で判断する。投手はその球団の最弱投手、野手は同ポジションの最弱選手が基準。
-# 旧実装は野手=リーグ相対 positional need / 投手=depth-fit と非対称で、投手 need が構造的に立たず
-# 戦力外獲得が極端な野手偏重 (実測 投:野 ≈ 23:84) になっていた。役割数の偏り (投手は深く常に埋まる) と
+# 投打で判定を非対称 (野手=リーグ相対 need / 投手=depth-fit) にすると投手 need が構造的に立たず、
+# 獲得が極端な野手偏重 (投:野 ≈ 23:84) になる。役割数の偏り (投手は深く常に埋まる) と
 # 野手が systematically 高 value な分は `_signing_score` の投手 parity で相殺する。
-# 獲得基準 (2026-08-03 厳格化、ユーザー方針「戦力外はとりあえず取る枠ではない」)。
+# 獲得基準は「とりあえず取る枠ではない」水準に置く:
 # **自軍のデプスチャート ([[TeamDepthChart]]) に照らして、即戦力 or 将来に賭ける価値がある選手だけ**を獲る:
 #   - 即戦力 = その役割スロットの**一軍当落線** (先発5番手/救援6番手/そのポジションのレギュラー) を
 #     MIN_UPGRADE_MARGIN 以上上回る
 #   - 将来性 = 24歳以下で、成長の楽観側なら当落線 + margin に届き、かつそのスロットが将来空く
 # どちらでもなければ獲らない = **0人で終わるオフが普通に起きる**。
-# 旧基準は「自軍の同役割**最弱**選手を上回れば獲得」で、68人ロスターの最下位を超えれば通るため
-# 事実上ほぼ全候補が該当し、全球団が毎年上限2人まで獲っていた (実測 1.95人/球団/年)。
+# 基準を「自軍の同役割**最弱**選手を上回れば獲得」にすると、68人ロスターの最下位を超えれば
+# 通るので事実上ほぼ全候補が該当し、全球団が毎年上限2人まで獲る (1.95人/球団/年)。
 # 該当しなければ **空** を返す (呼び出し元は獲得先の優先順位付けに評価結果をそのまま使う)。
 static func _team_fit_evaluation(
 	players: Array, charts: Dictionary, ready_thresholds: Dictionary, team_id: int, entry: Dictionary
@@ -623,8 +617,8 @@ static func _team_preference(evaluation: Dictionary) -> float:
 	return upgrade + float(evaluation.get("slot_need", 0.0))
 
 
-# 獲得スコア = 能力 value + WAR + 投手 parity − 年俸負担。旧実装のポジション need 乗算は撤去
-# (need は野手だけ立つため野手の score を過大にし、獲得枠を野手が独占していた)。投手 parity は野手が
+# 獲得スコア = 能力 value + WAR + 投手 parity − 年俸負担。**ポジション need は掛けない** —
+# need は野手だけ立つため、掛けると野手の score が過大になり獲得枠を野手が独占する。投手 parity は野手が
 # systematically 高 value (実測 p90 82 vs 78) な分を相殺し、獲得を NPB 実績どおり投打バランスさせる。
 static func _signing_score(entry: Dictionary, _team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
 	var score: float = float(entry.get("value", 0))
@@ -647,7 +641,7 @@ static func _record_war(record: PSPlayerSeasonRecord, league_ctx: Dictionary) ->
 	return float(WarCalculator.season_war(record, league_ctx).get("war", 0.0))
 
 
-# roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
+# 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
 	return TeamFinance.controlled_count(players, team_id)
 

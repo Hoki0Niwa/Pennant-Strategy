@@ -97,7 +97,7 @@ static func aggregate_biases(arsenal: Array) -> Dictionary:
 
 # z 能力から妥当な arsenal を *決定論的* に合成する (derive-on-read と生成の単一ソース)。
 # mastery は PSPitcherUsageModel の既存合成 (synth_mastery_values) をそのまま採用するため、
-# 役割適性 (starter_depth_rating 等) は従来挙動を保つ。type のみ z リーンと player_id ハッシュで割当。
+# 役割適性 (starter_depth_rating 等) と値が揃う。type のみ z リーンと player_id ハッシュで割当。
 # 注: derive-on-read で繰り返し呼ばれるため Rng を使わず player_id ハッシュで決定論にする。
 static func derive_from_z(
 	record: PSPlayerSeasonRecord,
@@ -175,9 +175,8 @@ static func generate_arsenal(z_abilities: Dictionary, seed_value: int) -> Array:
 
 
 # 既存 arsenal に直球(ストレート)が無ければ1本ぶんを直球へ読み替えて返す (本数は変えない)。
-# assign_types が直球を保証する前に作られたデータ (シンカー/ツーシームが直球の代役だった頃の
-# シード CSV や生成結果) を、全投手が直球を持つ現行ルールへ揃えるための正規化。
-# 読み替え先は「代役になっていた速球系のうち最良のもの」を優先し、無ければ最良球。
+# 直球を持たない投手を「全投手が直球を持つ」ルールへ揃えるための正規化。
+# 読み替え先は速球系 (シンカー/ツーシーム等) のうち最良のものを優先し、無ければ最良球。
 static func ensure_straight(arsenal: Array) -> Array:
 	if arsenal == null or arsenal.is_empty():
 		return arsenal

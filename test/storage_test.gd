@@ -401,7 +401,7 @@ func test_process_retirement_marks_final_season_record_without_erasing_stats() -
 
 # ensure_season_records 単体の erase 意図確認: 引退済み (source_data["retired"]=true) の選手は
 # GameDb.players に残っている限り当季レコードを保持し、GameDb.players から完全に消えた選手は
-# 従来どおり当季レコードが erase される。非引退選手のレコード新規作成も従来どおり動く。
+# 当季レコードが erase される。非引退選手のレコード新規作成も併せて確認する。
 func test_ensure_season_records_keeps_retired_record_but_erases_fully_removed_player() -> void:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var target_team_id: int = (GameDb.players[0] as PSPlayer).team_id
@@ -453,7 +453,7 @@ func test_ensure_season_records_keeps_retired_record_but_erases_fully_removed_pl
 
 # 実プレイでの再現条件を通した回帰テスト: 引退ステップが引退を確定してオートセーブし、
 # その後セーブから再開する (RecordStore.load_records → ensure_season_records の実行順) と、
-# 旧実装では引退選手の最終シーズン成績が正規化テーブルからも失われていた。
+# 引退選手の最終シーズン成績が正規化テーブルから消えないことを見る。
 func test_retired_player_final_season_stats_survive_offseason_save_reload() -> void:
 	var old_state: Dictionary = _capture_app_state()
 	var old_player_rows: Array = []
@@ -677,9 +677,8 @@ func test_unsaved_next_season_progress_does_not_persist_records() -> void:
 
 
 func test_player_season_stats_round_trip_through_normalized_tables() -> void:
-	# ユーザー報告「ポストシーズン終了セーブから再開すると支配下が激減」の根本原因調査:
-	# 実セーブの batter_stats / pitcher_stats 正規化テーブルが全行 0 だった。
-	# 選手個人成績が save_records → load_records (正規化テーブル経由) を往復できることを検証する。
+	# 選手個人成績が save_records → load_records (正規化テーブル経由) を往復できること。
+	# ここが 0 で戻ると、再開後に出場実績ベースの判定が総崩れになり支配下が激減する。
 	var old_state: Dictionary = _capture_app_state()
 	var test_save_id: String = ""
 
@@ -764,7 +763,7 @@ func test_player_game_history_appends_in_place_and_keeps_replacements_sorted() -
 
 func test_season_history_split_saves_incrementally_and_round_trips() -> void:
 	# player_game_history / player_stat_history は game_state blob から分離し、
-	# season_history テーブルへ日単位で増分永続化する (2026-07-16 セーブ高速化)。
+	# season_history テーブルへ日単位で増分永続化する。
 	var old_state: Dictionary = _capture_app_state()
 	var test_save_id: String = ""
 

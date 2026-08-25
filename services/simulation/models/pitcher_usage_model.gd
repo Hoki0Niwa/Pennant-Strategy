@@ -739,7 +739,7 @@ static func recently_returned_from_injury(record: PSPlayerSeasonRecord, current_
 
 
 # z から合成した mastery 値 (降順前のプロファイル順) を返す。PSPitchTypes.derive_from_z が
-# arsenal 未保持の投手のアーセナルを派生するときの単一ソース。従来の _pitch_values_from_profile を踏襲。
+# arsenal 未保持の投手のアーセナルを派生するときの単一ソース。
 static func synth_mastery_values(record: PSPlayerSeasonRecord) -> Array:
 	if record == null:
 		return []
@@ -781,7 +781,7 @@ static func arsenal_summary(record: PSPlayerSeasonRecord) -> Dictionary:
 		}
 	var profile: Dictionary = pitcher_profile(record)
 	# 実 arsenal (保存済み or z 派生) の mastery を pitch_values として採用する。
-	# derive-on-read は synth_mastery_values と同値なので、従来の役割適性挙動を保つ。
+	# derive-on-read は synth_mastery_values と同値なので、役割適性の値は保存の有無で変わらない。
 	var arsenal_entries: Array = (
 		record.arsenal_snapshot
 		if not record.arsenal_snapshot.is_empty()

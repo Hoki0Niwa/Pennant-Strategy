@@ -34,7 +34,7 @@ static func save_state(app_state) -> bool:
 
 	if app_state.current_season != null:
 		# 選手履歴 (試合別差分 / 日次スナップショット) は season_history テーブルへ日単位で
-		# 増分永続化し、成功したときだけ blob から外す (失敗時は従来通り blob に全量を残す)。
+		# 増分永続化し、成功したときだけ blob から外す (失敗時は blob に全量を残す)。
 		history_in_blob = not _persist_season_history(app_state.current_season)
 		season_data = app_state.current_season.to_dict(history_in_blob)
 	if app_state.current_postseason != null:
@@ -48,7 +48,7 @@ static func save_state(app_state) -> bool:
 		"current_screen": app_state.current_screen,
 		"season": season_data,
 		"players": _players_to_dicts(),
-		# R4 Step1: チーム予算 (funds) を {team_id: funds} で永続化。teams 本体は初期シード
+		# チーム予算 (funds) を {team_id: funds} で永続化。teams 本体は初期シード
 		# から再ロードされるため funds のみ保存する。
 		"team_funds": _team_funds_map(),
 		"team_previous_ranks": _team_previous_ranks_map(),

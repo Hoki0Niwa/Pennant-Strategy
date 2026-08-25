@@ -627,7 +627,7 @@ func _usage_row(keys: Array, year_label: String, counts: Dictionary, total_start
 	return row
 
 
-# 描画本体は基底 _draw_data_table に集約 (2026-06-24)。タブボタンはヘッダ帯に重なるため見出しは描かず
+# 描画本体は基底の _draw_data_table が持つ。タブボタンはヘッダ帯に重なるため見出しは描かず
 # header_top=84 から始める。通算行 (is_total) 強調 + 奇数行縞 (alt_rows) + 行高上限40 は opts で指定。
 func _draw_table(rect: Rect2) -> void:
 	_draw_data_table(rect, _columns_for_tab(), _rows_for_tab(), {

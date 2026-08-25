@@ -16,8 +16,8 @@ const POSITION_DIFFICULTY_MAX_AVG: float = 2.16   # POSITION_AVG_ABILITY_SCORE �
 
 # スタメン選出 (starter_assignment_score) で使う打撃/守備のブレンド比率。
 # fallback は全体集計の 76/24。守備位置ごとの評価では下の position 別比率を使う。
-# 守備のみで選ぶと選手 1 人あたり ~16 runs/season の機会損失が出ることが
-# バランス調査で判明したため、打撃を主軸にした総合力でスタメンを決める。
+# 守備のみで選ぶと選手 1 人あたり ~16 runs/season の機会損失が出るので、
+# 打撃を主軸にした総合力でスタメンを決める。
 const STARTER_OFFENSE_WEIGHT: float = 0.76
 const STARTER_DEFENSE_WEIGHT: float = 0.24
 const STARTER_OFFENSE_WEIGHT_BY_POSITION: Dictionary = {
@@ -44,8 +44,8 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 
 # --- 守備実績 (シーズン累積 OAA) の配置反映 ---
 # 能力推定ではなく「その守備位置で実際に出た OAA」を配置スコアへ加減算する。
-# 生 OAA には小さな残バイアス (2026-07-06 実測 ≈ -0.004/機会) があるが、rating 換算 ~1 点なので
-# センタリングなしで使う (WAR 側は従来どおり recenter_fielding 経由)。
+# 生 OAA には小さな残バイアス (≈ -0.004/機会) があるが、rating 換算 ~1 点なので
+# センタリングなしで使う (WAR 側は recenter_fielding を通す)。
 # サンプル不足の暴れは prior chances で縮約し、FIELDING_RESULT_MIN_CHANCES 未満は無視する
 # (up-the-middle の守備機会は年 ~1000-1200 なので 120 は 2-3 週間相当)。
 const FIELDING_RESULT_MIN_CHANCES: int = 120
@@ -122,7 +122,7 @@ static func batting_score_without_fatigue(record: PSPlayerSeasonRecord) -> int:
 static func _batting_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: bool) -> int:
 	if record == null:
 		return 0
-	# fatigue は display 点で減点していた値を z 換算 (÷12.5)。能力下限は display 1 = z -3.92。
+	# fatigue の減点は display 点を z 換算 (÷12.5) して掛ける。能力下限は display 1 = z -3.92。
 	var fatigue_penalty: float = ((float(record.fatigue) / 5.0) / 12.5) if apply_fatigue_penalty else 0.0
 	var contact: float = max(-3.92, _batting(record, "contact") - fatigue_penalty)
 	var eye: float = max(-3.92, _batting(record, "eye") - fatigue_penalty)
@@ -309,7 +309,7 @@ static func starter_assignment_score(
 	score += int(round(realized_fielding_rating_delta(record, position) * 100.0))
 	score += aptitude
 	# 在籍(同一守備位置)ボーナスはタイブレーク規模 (+250 ≒ 2.5 ブレンド点) に留める。
-	# 旧 +1500 は格下の現レギュラーを固定し「惰性」を生んでいた。挑戦者が ~2.5 点以上
+	# ここを大きくすると格下の現レギュラーが固定され「惰性」が生まれる。挑戦者が ~2.5 点以上
 	# 明確に上なら定位置を奪い、同程度なら現レギュラーが残る (実績+能力が拮抗なら現役優先)。
 	if record.position == position:
 		score += 250

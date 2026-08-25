@@ -142,7 +142,7 @@ func total_games() -> int:
 
 
 # 打順は DH の有無 × 相手先発の左右 で持つ。左投手用 (`opponent_hand == "L"`) を保存していない
-# チームは基本打順 (対右) にフォールバックするので、左右別を使わないチームは従来どおり 1 つで済む。
+# チームは基本打順 (対右) にフォールバックするので、左右別を使わないチームは 1 つで済む。
 func _lineup_key(dh_enabled: bool, opponent_hand: String) -> String:
 	var key: String = "dh" if dh_enabled else "non_dh"
 	return key + "_vs_l" if opponent_hand.to_upper() == "L" else key
@@ -767,8 +767,8 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.schedule_template_id = str(data.get("schedule_template_id", ""))
 	season.schedule_bucket_seed = int(data.get("schedule_bucket_seed", 0))
 	season.schedule = data.get("schedule", []) as Array
-	# 旧バージョンは交流戦ブロックを配列末尾に append しており、day 順でない日程は
-	# シミュレータに飛ばされてしまう。読込時に day 順へ整列して復旧する。
+	# day 順に並んでいない日程はシミュレータに飛ばされてしまう (交流戦ブロックが配列末尾に
+	# 積まれたセーブなど) ので、読込時に day 順へ整列し直す。
 	PSSchedule.sort_by_day(season.schedule)
 	# 整列の結果、current_day より前に未消化試合(飛ばされた交流戦)が残っていれば
 	# そこまで巻き戻して取りこぼしを消化できるようにする。

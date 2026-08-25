@@ -237,8 +237,8 @@ static func outings_for_team(outings: Array, team_id: int) -> Array:
 # 決勝点が入った瞬間の「記録上の投手 (pitcher of record)」= その時点までに登板していた
 # (start_event_index が決勝点イベント以前の) 勝ちチーム投手のうち、最後に登板した投手を返す。
 # サヨナラ勝ちでは最終回の表を投げた投手の outing が試合終了 (決勝点の後) まで延長され
-# end_event_index が決勝点を超えるため、end 基準だとその投手が除外され先発にフォールバックしていた。
-# start 基準にすることで「最終回の表に投げた最後の投手」が正しく勝ち投手 (pitcher of record) になる。
+# end_event_index が決勝点を超えるので、**end 基準で絞るとその投手が除外され先発へ落ちてしまう**。
+# start 基準にすることで「最終回の表に投げた最後の投手」が勝ち投手 (pitcher of record) になる。
 static func latest_pitcher_before_event(outings: Array, event_index: int, fallback_pitcher_id: int) -> int:
 	var selected_id: int = 0
 	var selected_start: int = -999999
@@ -528,7 +528,7 @@ static func finalize_pitcher_stats(setup: Dictionary, _result: Dictionary) -> vo
 		if starter_runs == 0:
 			starter.pitcher_stats.shutouts += 1
 	# QS (規則9.19): 6回(18アウト)以上・自責点3以下。失点(自責+非自責)ではなく自責点で判定する
-	# (味方失策等の非自責点が乗った試合で QS の成否が不正確になっていた、2026-07-10 修正)。
+	# (失点で判定すると、味方失策等の非自責点が乗った試合で QS の成否がずれる)。
 	if starter_outs >= 18 and starter_earned_runs <= 3:
 		starter.pitcher_stats.quality_starts += 1
 

@@ -296,7 +296,7 @@ static func _clamp_rating(value: float) -> int:
 	return clampi(int(round(value)), MIN_RATING, MAX_RATING)
 
 
-# 旧 UI 互換のため display_ratings と ratings の両方に同じ配列を入れる。
+# 呼び出し元がどちらのキーを読んでも同じ内容になるよう、display_ratings と ratings に同じ配列を入れる。
 static func _display_rating_result(kind: String, display_ratings: Array) -> Dictionary:
 	var rows: Array = []
 	for rating_value in display_ratings:

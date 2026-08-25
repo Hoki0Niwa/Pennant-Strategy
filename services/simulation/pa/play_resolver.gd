@@ -524,7 +524,7 @@ static func _assign_fielder(spray: float, distance: float, trajectory: String) -
 static func _infield_position_for_spray(spray: float) -> int:
 	# ゴロの担当内野手。境界は守備範囲の現実的な分担に合わせる（三塁線〜遊撃〜二塁〜一塁）。
 	# 捕球確率は担当野手の定位置からの横ズレで変わるため、境界は安打率・OAA・併殺帰属に影響する。
-	# 3B(<-22)と1B(>=18)の境界は併殺多発の二遊間(1.25倍)と分けるため従来値を維持し、
+	# 3B(<-22)と1B(>=18)の境界は併殺多発の二遊間(1.25倍)と分けるために固定し、
 	# 失策分布のための再配分は SS/2B 間（どちらも DP 1.25倍）でのみ行う＝得点環境(併殺率)に影響しない。
 	if spray < -22.0:
 		return 5

@@ -173,8 +173,8 @@ func get_player_career_pitcher_stats(player_id: int) -> PSPitcherStats:
 
 # include_retired=false (既定) では、その年のオフに引退した選手のレコード (process_retirement が
 # source_data[RETIRED_AT_SEASON_END_KEY]=true を立てたもの) を除外する。本番呼び出し22箇所は
-# すべて season.year/season.season_number = 当季で「現ロスター」の意味で使っているため、既定を
-# 除外にすることで呼び出し側を1つも変えずに従来どおりの見え方を保てる。過去年度をチーム軸で
+# すべて season.year/season.season_number = 当季で「現ロスター」の意味で使うので、既定は除外。
+# 過去年度をチーム軸で
 # (その年に実際に在籍した全員という意味で) 引きたい将来の用途では include_retired=true を渡す。
 func get_team_player_records(team_id: int, year: int, season_number: int, include_retired: bool = false) -> Array:
 	ensure_loaded()
@@ -393,7 +393,7 @@ func load_records() -> void:
 	# 実データ保護: DB ファイルが存在するのに開けない (ロック等の一時故障) 場合、「セーブが空」と
 	# 誤認してはならない。空の RecordStore を正として進むと、ensure_season_records が当該シーズンの
 	# 空白レコードを再生成し、次の autosave が実データを空白で上書きして全成績が失われる
-	# (2026-07-03 ユーザー実セーブで発生: 順位表は143試合消化済みなのに全成績レコードが0)。
+	# (順位表は143試合消化済みなのに全成績レコードが0、という壊れ方をする)。
 	# ロード失敗として扱い (_records_loaded=false → save_records がブロック)、次アクセスで再試行する。
 	if SQLiteStoreService.is_available() and SQLiteStoreService.runtime_db_file_exists() \
 			and not SQLiteStoreService.can_open_runtime_db():

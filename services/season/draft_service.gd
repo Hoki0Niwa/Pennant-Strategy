@@ -6,14 +6,13 @@ const PitcherRoleModel = preload("res://services/simulation/models/pitcher_role_
 
 # ドラフト指名は候補の素点に、球団ごとの不足ポジション補正を加えて決める。
 # need は [[TeamDepthChart]] の `first_team_need` (= 一軍枠の質のリーグ差、value 単位) で、
-# 現有戦力が弱いポジションほど候補評価を押し上げる。
-# ⚠️ **2026-08-03 に単位が WAR (0〜2程度) から value (0〜15程度) へ変わったため、重みを約1/7へ下げた。**
+# 現有戦力が弱いポジションほど候補評価を押し上げる。上げるほど素点より穴埋めを優先する。
 # 投手も野手と同じ重みを使う (グロスの投手/野手比は _bucket_balance_score が別途担保する)。
 const POSITION_NEED_WEIGHT_ROUND1: float = 0.2
 const POSITION_NEED_WEIGHT_LATER: float = 0.45
 
 # ドラフトで獲った選手が一軍戦力として効いてくるのは数年後なので、需要は
-# **現在 (first_team_need) と将来 (future_need) の加重和**で測る (2026-08-05)。
+# **現在 (first_team_need) と将来 (future_need) の加重和**で測る。
 # 将来側を主にすることで「今はレギュラーが健在だが高齢で後継が居ない」ポジションを先回りで
 # 補強し、逆に「既に将来を託せる若手が居る」ポジションは重複指名しなくなる。
 # 1.0 にしないのは、現に穴が空いているポジションを無視して数年待つのは不自然なため。
@@ -30,8 +29,7 @@ const POSITION_APT_NEED_WEIGHT_LATER: float = 4.0
 # 「その位置に健在の主力がいるか」は**母集団相対**で見る。ドラフト対象の母集団 (= 全球団の
 # 支配下野手) の overall 分布から mean + sigma*spread を引く。絶対値で置くとリーグ全体の
 # 水準が動いただけで「主力がいる」判定が一斉にズレる。
-# 実測 (1シーズン): 野手 mean 68.96/spread 9.91 で、旧・絶対値 60 は -0.90σ に相当した
-# (= 「主力」の基準はかなり低く、平均をやや下回る水準)。
+# -0.9σ は「平均をやや下回る選手が居れば主力とみなす」= その位置の補強優先度を下げる線。
 const STRONG_STARTER_OVERALL_SIGMA: float = -0.9
 # 母集団が取れないとき (合成データのテスト等) のフォールバック。
 const STRONG_STARTER_OVERALL: int = 60
@@ -53,12 +51,9 @@ const UTILITY_SUBPOS_WEIGHT: float = 0.6
 const ROSTER_LIMIT: int = 70
 # ドラフトは本指名(支配下)のあと育成ドラフトへ進む2フェーズ制。
 # AppState では別ステップとして表示するが、レポート/テスト用の直接実行では通しで処理できる。
-# **本指名数は固定の指名枠** (2026-08-03 ユーザー方針)。現実のドラフトは「支配下の空き数」から
-# 逆算するのではなく、毎年おおむね6〜7人を指名し、**誰を取るか**を年齢・ポジション・能力の
-# デプスチャート need で決める運用。人数の帳尻は戦力外側 (offseason_service._release_plan_count が
-# 在籍+見込み流入−開幕目標の「余り」で決める) が合わせる。
-# 旧方式 (2026-07-03〜2026-08-03) は指名数自体を 開幕目標−在籍−補強予約 の差分で決めていたため、
-# 「毎年必ず2人補強する」前提の予約枠が指名数を直接押し下げていた。
+# **本指名数は固定の指名枠**で、支配下の空き数からは逆算しない。毎年おおむね6〜7人を指名し、
+# **誰を取るか**を年齢・ポジション・能力のデプスチャート need で決める。人数の帳尻は戦力外側
+# (offseason_service._release_plan_count が 在籍+見込み流入−開幕目標の「余り」で決める) が合わせる。
 const MAIN_DRAFT_TARGET_MIN: int = 6
 const MAIN_DRAFT_TARGET_MAX: int = 7
 # hard 70枠に対する安全弁 (指名枠より優先)。枠が残り僅かな球団はここで縮む。
@@ -66,10 +61,6 @@ const MAIN_DRAFT_MAX_PICKS: int = 10
 const MAIN_DRAFT_MIN_PICKS: int = 4
 # 外国人は4人保有を目標に、不足人数分の支配下枠を本指名で埋め切らず予約する。
 const FOREIGN_ROSTER_RESERVE_TARGET: int = 4
-# ※ 旧 DRAFT_PROMO_RESERVE_CAP / DRAFT_PROMO_TARGET_REDUCTION_CAP (育成昇格見込みで指名数を控える)
-#   は 2026-08-03 に撤廃。指名枠を固定にしたため「見込みで枠を削る」概念自体が無くなった。
-#   そもそもノブとしてもほぼ効いていなかった (即戦力基準を満たす育成は球団あたり0〜1人しかおらず、
-#   上限2に張り付く球団が出ない。2→1 を試して 73.0→73.2人/年と無変化だった)。
 # 育成ドラフト: 1球団あたりの指名上限 (実際は 0〜この値の一様乱数)。**育成人数を決める唯一のノブ** —
 # 保有数 ≒ 平均指名数 (上限の半分) × 育成契約年数 (OffseasonService.DEV_CONTRACT_MAX_SEASONS) で
 # 決まる。NPB は年間 45〜50人/12球団 (≈4/球団) だが、単一球団が10人超を指名するような編成は
@@ -80,7 +71,7 @@ const CANDIDATE_POOL_SIZE: int = 320
 const ROOKIE_MIN_AGE: int = 18
 const ROOKIE_MAX_AGE: int = 26
 
-# ---- ファーム専用球団からの指名 (6c) --------------------------------------
+# ---- ファーム専用球団からの指名 ------------------------------------------
 # 専用球団 (`PSFarmLeague.FARM_CLUB_DEFS`) の選手は、他の候補と違い **生成物ではなく実在の選手**。
 # ボードに載る唯一の「実際の二軍成績を持つ候補」で、指名 AI もプレイヤーも成績で判断できる。
 # 実ルール準拠で対象は NPB 経験のない日本人のみ (`PSFarmLeague.is_draft_eligible_farm_club_player`)。
@@ -92,26 +83,20 @@ const FARM_CLUB_SOURCE_TYPE: String = "farm_club"
 # **実際に指名されるのは年 1〜3 人**という規模 (NPB の実績も 2024 年の2人が初)。
 const FARM_CLUB_CANDIDATE_POOL_SIZE: int = 10
 # 年齢上限。生成候補の `ROOKIE_MAX_AGE` と同じにして、ボード上の年齢帯を揃える。
-# ⚠️ 専用球団の選手は**指名されなくても在籍し続ける** (2026-08-16 に「未経験者は27歳で消える」
-# 仕様を廃止した) ので、この上限を超えた選手はそのまま専用球団でプレーを続ける。
+# 専用球団の選手は**指名されなくても在籍し続ける**ので、この上限を超えた選手はボードから
+# 外れるだけで、そのまま専用球団でプレーを続ける。
 const FARM_CLUB_CANDIDATE_MAX_AGE: int = 26
 # ボード評価の割引。**指名数を決める唯一のノブ**で、`draft_grade` に掛けて順位だけを下げる
 # (`overall` / `potential` の表示値は割引かない = 実力は実力として見せる)。
 #
 # 意味は「**NPB が一度は見送った層**」というスカウト側の割り引き。専用球団の選手は指名対象に
 # なる時点で高校/大学/社会人のルートを通り過ぎているので、同じ実力の新卒候補より低く見られる。
-# 実際の指名は年1〜3人 (2024年の2人が初) で、いずれも育成指名だった。
-#
-# 2026-08-16 に `FarmClubService` の生成水準を「育成指名レベル・上振れなし」へ直したのに伴い
-# **0.58 → 0.84 へ取り直した**。旧 0.58 は生成水準のインフレ (center 54-66) を吸うための値で、
-# 新水準にそのまま掛けるとボードの最下層へ沈んで**指名ゼロ**になる。
+# 実 NPB の指名は年1〜3人 (2024年の2人が初) で、いずれも育成指名だった。
 #
 # ⚠️ 効きは急。CPU の候補スコアが `bucket_grade` (= bucket 内順位の百分位) 由来で、
 # 割引が順位を動かすと候補密度の高い帯を一気に通過するため。実測 (seed 12345、ボード10人):
 #   1.00 → **9人指名** (うち3人が支配下・1巡目もあり) / 0.88 → 3人 (支配下1) /
-#   **0.84 → 2〜3人で全員が育成指名** / 0.76 → 0人。
-# 守備位置別の能力参照へ移行後、0.885 は seed 12345 で2人・育成1人以上を確認した値。
-# (実 NPB = 年1〜3人・2024年の初指名2人はどちらも育成)。
+#   0.84 → 2〜3人で全員が育成指名 / 0.76 → 0人。下げ過ぎると指名ゼロになる。
 # 較正ガードは `test_farm_club_prospects_are_drafted_at_a_realistic_rate` (1〜3人 + 育成1人以上)。
 const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.885
 # 候補 ID の名前空間。生成候補は 1..CANDIDATE_POOL_SIZE を使うので衝突しない値から始める。
@@ -181,14 +166,13 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 	return advance_until_user_turn_or_complete(state)
 
 
-# 全チームのポジション別 補強需要を集計する。**実体は [[TeamDepthChart]]** (2026-08-03 統合)。
+# 全チームのポジション別 補強需要を集計する。**実体は [[TeamDepthChart]]**。
 # 戻り値: {team_id_str: {position: need}} (position 1 = 先発/救援スロットの need の大きい方)。
-# 旧実装は直近シーズンの WAR (`WarCalculator.team_position_war` + 上位K枚平均) で測っていたが、
-# 需要の実装が4箇所に散る原因になっていたためデプスチャートへ寄せた。副次的な利点:
-#  - 先発と救援を別スロットで測れる (旧実装は全投手が position=1 の1バケツだった)。
-#  - **シーズン未完了・成績レコード不在でも need が出る** (旧実装は WAR が全0になり need も全0だった)。
-# ⚠️ 単位が WAR (0〜2程度) から value (0〜15程度) へ変わるため、重み (POSITION_NEED_WEIGHT_*) も
-#   同じ比率で下げてある。ここを触るときは long_autoplay の draft の投手比を必ず見ること。
+# デプスチャート由来なので次の 2 つが成り立つ:
+#  - 先発と救援を別スロットで測れる (投手を position=1 の1バケツにまとめない)。
+#  - **シーズン未完了・成績レコード不在でも need が出る** (成績ではなく能力から測るため)。
+# ⚠️ need の単位は value (0〜15程度) で、重み (POSITION_NEED_WEIGHT_*) はその桁に合わせてある。
+#   ここを触るときは long_autoplay の draft の投手比を必ず見ること。
 static func _build_team_position_need(players: Array, teams: Array) -> Dictionary:
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	var need: Dictionary = {}
@@ -381,7 +365,7 @@ static func _begin_development_segment(state: Dictionary) -> void:
 
 # 育成ドラフトの球団別 appetite (0〜DEV_DRAFT_MAX_PICKS の一様乱数)。育成は人数無制限だが、
 # **育成契約に年数上限がある** (OffseasonService.DEV_CONTRACT_MAX_SEASONS) ので保有数は
-# 「年間指名数 × 契約年数」で自然に頭打ちになる。目標人数を持たせる必要はない (2026-08-02)。
+# 「年間指名数 × 契約年数」で自然に頭打ちになる。目標人数は持たせていない。
 # CPU は 0 (指名なし) もあり得る。ユーザーは手動 (見送りで打ち切り) のため上限のみ与える。
 static func _compute_dev_targets(state: Dictionary) -> Dictionary:
 	var targets: Dictionary = {}
@@ -467,7 +451,7 @@ static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
 #
 # ⚠️ **ワールド生成時はここを読んではいけない。** static はプロセス内で生き残るので、
 #    1度プレイした後に新規ワールドを作ると前の世界のドラフト結果が混ざり、
-#    **同じ seed でも初期ロスターが変わる** (Phase 3.5 で踏んだ非決定性と同型)。
+#    **同じ seed でも初期ロスターが変わる**。
 #    そのため `from_last_draft=false` では必ず候補モデルからのサンプルを使う。
 static var _last_undrafted_templates: Array = []
 
@@ -866,7 +850,7 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 	var profiles: Dictionary = state.get("team_profiles", {}) as Dictionary
 	var profile: Dictionary = profiles.get(str(team_id), {}) as Dictionary
 	if str(state.get("segment", "main")) == "development":
-		# 育成ドラフト: 育成の人数上限は無い (2026-08-02 撤廃) ので、球団ごとの appetite
+		# 育成ドラフト: 育成の人数上限は無いので、球団ごとの appetite
 		# (team_dev_targets、保有目安との差で決まる) と1球団あたりの上限だけで止める。
 		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
 		var dev_picked: int = int(dev_counts.get(str(team_id), 0))
@@ -962,7 +946,7 @@ static func _team_candidate_score(state: Dictionary, team_id: int, candidate: Di
 	var need_weight: float = 1.2 if round_no == 1 else 3.2
 	score += float(shortage) * need_weight
 	score += _bucket_balance_score(profile, str(candidate.get("draft_bucket", "")), round_no)
-	# ポジション別 WAR 不足を補強需要として加算 (Phase C)。
+	# ポジション別 WAR 不足を補強需要として加算。
 	# 候補のポジションが「チームのそのポジションの WAR がリーグ平均を下回る」場合に
 	# 候補スコアを押し上げ、CPU が穴ポジションを優先的に補強しやすくする。
 	score += _position_need_bonus(state, team_id, candidate, round_no)
@@ -1068,8 +1052,8 @@ static func _bucket_balance_score(profile: Dictionary, bucket: String, round_no:
 
 
 # 本指名の球団別目標指名数。**人数は毎年6〜7人の固定枠**で、在籍数・昇格見込み・後段補強の
-# いずれからも引かない (2026-08-03 ユーザー方針)。現実のドラフトは空き枠の逆算ではなく
-# 「毎年この人数を指名し、**誰を取るか**を年齢・ポジション・能力の need で決める」運用のため。
+# いずれからも引かない。空き枠の逆算ではなく「毎年この人数を指名し、**誰を取るか**を
+# 年齢・ポジション・能力の need で決める」方式のため。
 # 人数の帳尻は戦力外側 (`OffseasonService._release_plan_count` が余りで決める) が合わせる。
 # hard 70枠 (+外国人枠の確保) だけが安全弁として枠を縮められる。
 # profiles は _build_team_profiles 済み (initial_total = 戦力外後の在籍支配下)。
@@ -1079,7 +1063,7 @@ static func _compute_main_draft_targets(_players: Array, profiles: Dictionary) -
 		var profile: Dictionary = profiles[key] as Dictionary
 		var current: int = int(profile.get("initial_total", profile.get("total", 0)))
 		# 指名枠は固定 (6〜7人)。**在籍数からも昇格見込みからも引かない** — 人数の帳尻は
-		# 戦力外側が余りで合わせる (2026-08-03)。hard 70枠の安全弁だけが枠を縮められる。
+		# 戦力外側が余りで合わせる。hard 70枠の安全弁だけが枠を縮められる。
 		var target: int = Rng.range_int(MAIN_DRAFT_TARGET_MIN, MAIN_DRAFT_TARGET_MAX)
 		targets[key] = clampi(min(target, _main_draft_capacity(current, profile)), 0, MAIN_DRAFT_MAX_PICKS)
 	return targets
@@ -1095,9 +1079,8 @@ static func _main_draft_capacity(current_controlled: int, profile: Dictionary) -
 
 
 # 本指名で埋め切らずに残す hard 枠。**外国人の不足分だけ**を予約する — 外国人4人保有は編成の前提で
-# 枠を確保しないと成立しないため。FA/戦力外獲得のための一般予約 (旧 DRAFT_SIGNING_RESERVE=2) は
-# 2026-08-03 に撤廃した: 「毎年必ず2人補強する」前提は現実と乖離しており (誰も獲らない年が普通)、
-# その予約が指名枠と戦力外数の両方を押し下げていた。
+# 枠を確保しないと成立しないため。FA/戦力外獲得のための一般予約は置かない — 誰も獲らない年が
+# 普通なので、常設の予約は指名枠と戦力外数の両方を押し下げてしまう。
 static func _main_draft_signing_reserve(profile: Dictionary) -> int:
 	var foreign_count: int = int(profile.get("foreign", 0))
 	return max(0, FOREIGN_ROSTER_RESERVE_TARGET - foreign_count)
@@ -1129,7 +1112,7 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		var player: PSPlayer = player_row as PSPlayer
 		if player.is_retired():
 			continue
-		# roadmap #3: 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外するが、
+		# 育成選手は支配下70枠の外。容量(initial_total)・需要(position_*)から除外するが、
 		# 育成ドラフトの appetite (保有目安との差) を出すため initial_development_total を別途集計する。
 		if player.development_player:
 			var key_dev: String = str(player.team_id)
@@ -1520,8 +1503,8 @@ static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> v
 # 総合は打撃を重く評価する (offense_weight≈0.68-0.84) ため、相殺に必要な守備の振り幅は
 # 打撃の振り幅より大きくなる (= 守備型は守備を大きく+、打撃型は守備を大きく-)。
 # 振り幅は no-bias 時の本職ポジ別 mean overall (≒39) に各ポジが戻るよう実測で較正。
-# 三塁(5)・右翼(9) はユーザーの 2 リストに無いため中庸 (バイアス無し)。
-# 旧 1-100 点デルタを z 換算 (÷12.5)。bat ±2→±0.16、def は 22/18/24/13/-32/-20 → ÷12.5。
+# 三塁(5)・右翼(9) は守備型/打撃型のどちらにも寄せず中庸 (バイアス無し)。
+# 値の単位は z (表示 1-100 点なら ÷ PSAbilityScale.DISPLAY_STDEV)。
 const POSITION_ABILITY_BIAS: Dictionary = {
 	2: {"bat": -0.16, "def": 1.76},   # 捕手 (守備型)
 	4: {"bat": -0.16, "def": 1.44},   # 二塁 (守備型)
@@ -1566,14 +1549,14 @@ static func _set_z(z: Dictionary, key: String, z_value: float, min_z: float, max
 	z[key] = clampf(z_value, min_z, max_z)
 
 
-# 旧 Rng.range_int(lo, hi) (1-100 点) を z 換算した乱数デルタ。整数抽選の挙動は保ちつつ z で扱う。
+# 表示 1-100 点で lo〜hi の整数を抽選し、z へ換算した乱数デルタ。
 static func _rng_delta_z(lo: int, hi: int) -> float:
 	return float(Rng.range_int(lo, hi)) / PSAbilityScale.DISPLAY_STDEV
 
 
 static func _player_data_from_candidate(candidate: Dictionary, player_id: int, team_id: int, round_no: int, pick: Dictionary, draft_year: int) -> Dictionary:
 	var data: Dictionary = (candidate.get("player_template", {}) as Dictionary).duplicate(true)
-	# 支配下/育成は segment ベースの pick["development"] で決める (旧 round>=7 判定は撤廃)。
+	# 支配下/育成は segment ベースの pick["development"] で決める (巡目では判定しない)。
 	var is_dev: bool = bool(pick.get("development", false))
 	data["id"] = player_id
 	data["sensyu_num"] = player_id
@@ -1738,10 +1721,10 @@ static func _age_for_source(source_type: String) -> int:
 			return Rng.range_int(ROOKIE_MIN_AGE, 22)
 
 
-# ドラフト候補の守備位置分布。投手54% / 捕手8% は従来どおり、野手は up-the-middle 偏重にする。
+# ドラフト候補の守備位置分布。投手54% / 捕手8%、野手は up-the-middle 偏重。
 # 現実のドラフトはアマの主戦ポジ (遊撃/中堅/捕手) が大半で、一塁/左翼の指名は稀
-# (プロ入り後にコンバートで下るのが通常方向)。旧実装の内野一様/外野一様は 1B/LF を
-# 過剰供給し、リーグのポジション構成が現実 (SS/CF 厚め・コーナー薄め) と逆転していた。
+# (プロ入り後にコンバートで下るのが通常方向)。内野/外野を一様に振ると 1B/LF が過剰供給になり、
+# リーグのポジション構成が現実 (SS/CF 厚め・コーナー薄め) と逆転する。
 static func _candidate_position() -> int:
 	var roll: int = Rng.roll_percent()
 	if roll <= 54:
@@ -1763,7 +1746,7 @@ static func _candidate_position() -> int:
 	return 7       # 左翼 4%
 
 
-# サブ守備適性のポジション別付与ルール (2026-06-02 の動的守備適性仕様に対応)。
+# サブ守備適性のポジション別付与ルール。
 # 本職適性は 70-100。サブ適性は本職適性 (primary) の一定割合で、本職を超えない。
 # - 一塁: 左翼のみ取得し得る。
 # - 二塁・遊撃: 捕手以外すべて取得し得る (遊撃の方がサブ適性が高め)。

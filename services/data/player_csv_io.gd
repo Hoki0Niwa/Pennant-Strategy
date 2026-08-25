@@ -7,7 +7,7 @@ class_name PSPlayerCsvIo
 # - z_abilities / raw_abilities / position_aptitudes / position_experience はドット記法の
 #   個別列に平坦化（例 z_abilities.Bat_Impact）。能力値は編集しやすいよう列に展開する。
 # - source_data / arsenal は可変構造なので 1 セルに JSON 文字列で格納（*_json 列）。
-# - 旧能力 (batting_abilities/fielding_abilities/legacy_abilities) は含めない（z が正準）。
+# - 能力は z_abilities / raw_abilities だけを書く（z が正準。表示 1-100 点の列は持たない）。
 # - クォート/エスケープは FileAccess.store_csv_line / get_csv_line に委譲（RFC 準拠）。
 # - PSPlayer.to_dict() / PSTeam.to_dict() と 1 対 1 でラウンドトリップする。
 
@@ -152,13 +152,11 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int, ca
 
 
 # 初期世界の投手に変化球アーセナルの実データを持たせ、現行ルールへ揃える。
-# 1) 空なら生成して埋める: 旧シード CSV には arsenal 列が無く、初期選手だけが arsenal 空 =
-#    z からの派生表示に頼る状態だった (派生は z で一意に決まるため球種構成に個性が無く、
-#    ドラフト/外国人の生成投手とも扱いが違った)。生成器はそれらと同じ
-#    PSPitchTypes.generate_arsenal。seed は選手 ID 由来で固定するので起動ごと・読み込み経路ごとに
-#    ブレず、世界 Rng も消費しない。
-# 2) 直球(ストレート)が無ければ1本を直球へ読み替える: 直球がシンカー等に差し替わりうる頃に
-#    書き出されたシード CSV を、全投手が直球を持つ現行ルールへ揃える。
+# 1) arsenal が空なら生成して埋める: 空のままだと球種が z からの派生表示になり、z で一意に
+#    決まるぶん球種構成に個性が出ず、ドラフト/外国人の生成投手とも扱いが変わる。生成器は
+#    それらと同じ PSPitchTypes.generate_arsenal。seed は選手 ID 由来で固定するので
+#    起動ごと・読み込み経路ごとにブレず、世界 Rng も消費しない。
+# 2) 直球(ストレート)が無ければ1本を直球へ読み替え、「全投手が直球を持つ」ルールへ揃える。
 # どちらも既存データを尊重する形なので再正規化しても結果が変わらない (冪等)。
 static func _normalize_arsenal(out: Dictionary) -> void:
 	if int(out.get("position", 0)) != 1:

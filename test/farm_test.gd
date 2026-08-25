@@ -181,7 +181,7 @@ func test_new_season_builds_farm_schedule_and_standings() -> void:
 	assert_int(season.farm_standings.size()).is_equal(14)
 	assert_int(season.farm_schedule.size()).is_equal(PSFarmSchedule.GAMES_PER_TEAM * 14 / 2)
 	assert_int(season.farm_games_remaining()).is_equal(season.farm_schedule.size())
-	# 一軍の日程・順位は従来どおり12球団のまま。
+	# 二軍が14球団でも、一軍の日程・順位は12球団のまま。
 	assert_int(season.standings.size()).is_equal(12)
 	assert_int(season.schedule.size()).is_equal(PSSchedule.EXPECTED_TOTAL_GAMES)
 
@@ -247,7 +247,7 @@ func test_generated_roster_can_field_a_game() -> void:
 
 
 func test_farm_club_roster_is_led_by_ex_npb_veterans() -> void:
-	# **ロスター像 (2026-08-16 ユーザー方針)**: 主力は NPB を戦力外になった中堅〜ベテラン、
+	# **ロスター像**: 主力は NPB を戦力外になった中堅〜ベテラン、
 	# その下に NPB 未経験の若手が付く。供給元が指名資格も決める (元NPB=指名不要 / 未経験=要指名)。
 	_reload_world()
 	for club_id in PSFarmLeague.farm_club_ids():
@@ -496,7 +496,7 @@ func test_offseason_supply_releases_aged_players_and_refills() -> void:
 
 
 func test_farm_club_departures_happen_without_any_age_factor() -> void:
-	# 退団は年齢だけで決まらない (2026-08-16 方針)。専用球団は NPB の契約の枠組みの外なので、
+	# 退団は年齢だけでは決まらない。専用球団は NPB の契約の枠組みの外なので、
 	# 若い選手も毎オフ一定確率で抜ける (引退・独立/社会人への移籍・自己都合)。
 	_reload_world()
 	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
@@ -526,15 +526,15 @@ func test_farm_club_departures_happen_without_any_age_factor() -> void:
 
 
 func test_undrafted_prospects_are_not_forced_out_by_age() -> void:
-	# **廃止した旧仕様の回帰ガード**: 以前は NPB 未経験者だけ 27 歳から整理が始まり 32 で必ず消えた
-	# (= 指名されなければ在籍できない)。在籍は指名の有無と無関係にした。
+	# **在籍は指名の有無と無関係**。NPB 未経験者にだけ年齢の強制退団 (27歳から整理・32歳で消滅)
+	# を掛けない = 指名されなくても専用球団でプレーを続けられる。
 	_reload_world()
 	var club_id: int = int(PSFarmLeague.farm_club_ids()[0])
 	var prospects: Array = []
 	for player_row in FarmClubService.roster_players(GameDb.players, club_id):
 		var player: PSPlayer = player_row as PSPlayer
 		if not FarmClubService.has_npb_experience(player):
-			# 旧仕様なら確実に一掃される年齢。高齢引退 (33〜) にはまだ届かない。
+			# 年齢で一掃する実装なら確実に消える年齢。高齢引退 (33〜) にはまだ届かない。
 			player.age = 30
 			prospects.append(player)
 	assert_int(prospects.size()).is_greater(0)
@@ -545,9 +545,9 @@ func test_undrafted_prospects_are_not_forced_out_by_age() -> void:
 	for player_row in prospects:
 		if (player_row as PSPlayer).team_id == club_id:
 			survivors += 1
-	# ランダム離脱で何人かは抜けるが、大半は残る (旧仕様なら 0 人)。
+	# ランダム離脱で何人かは抜けるが、大半は残る (年齢で一掃する実装なら 0 人になる)。
 	assert_int(survivors).override_failure_message(
-		"指名されなかった未経験者が年齢だけで一掃されている (廃止した旧仕様が残っている)"
+		"指名されなかった未経験者が年齢だけで一掃されている"
 	).is_greater(int(float(prospects.size()) * 0.5))
 	_reload_world()
 
@@ -743,10 +743,9 @@ func test_farm_clubs_never_take_part_in_the_draft_as_selectors() -> void:
 
 
 func test_farm_club_prospects_never_top_the_draft_board() -> void:
-	# 2026-08-16 の回帰ガード。生成水準がインフレしていた頃 (center 54-66) は専用球団の10人が
-	# 生成候補の **99〜100 パーセンタイル**に並び、「表示総合が全体最高の選手がボード40位に沈む」
-	# という表示と並び順の矛盾を起こしていた (割引 const が順位だけを下げるため)。
-	# 生成組は**育成指名レベルが上限**で、ボードの目玉にはならない。
+	# 生成組は**育成指名レベルが上限**で、ボードの目玉にはならない。生成水準がインフレすると
+	# 専用球団の10人が生成候補の **99〜100 パーセンタイル**に並び、割引 const は順位しか下げないので
+	# 「表示総合が全体最高の選手がボード40位に沈む」という表示と並び順の矛盾が起きる。
 	_reload_world()
 	Rng.set_seed_value(20260815)
 	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 1, false)
@@ -890,8 +889,8 @@ func test_farm_games_record_standings_and_decisions() -> void:
 
 
 func test_development_players_appear_in_farm_games() -> void:
-	# 育成選手はこれまで年間0試合だった。二軍戦の追加で初めて出場できるようになる
-	# = 育成制度が機能し始める、という Phase 1-2 の主目的の一つ。
+	# 育成選手は一軍に登録できないので、出場機会は二軍戦だけ。
+	# ここが 0 試合になると育成制度そのものが機能しない。
 	var season: PSSeason = _fresh_season_with_records()
 	var development_ids: Dictionary = {}
 	for record_row in RecordStore.player_records.values():
@@ -924,7 +923,7 @@ func test_development_players_appear_in_farm_games() -> void:
 
 
 func test_farm_playing_time_prioritizes_prospects_and_is_not_decided_by_ability_alone() -> void:
-	# **二軍は一軍とは別の基準で出場を決める** (2026-08-13 ユーザー方針)。
+	# **二軍は一軍とは別の基準で出場を決める**。
 	#   1. トッププロスペクトは優先して出す
 	#   2. それ以外は能力だけで機会を決めない (出ていない選手ほど優先度が上がる輪番)
 	# 一軍の「強い順に9人」との違いがここに集約されるので、方針が消えたら落ちるようにしておく。
@@ -963,9 +962,9 @@ func test_farm_playing_time_prioritizes_prospects_and_is_not_decided_by_ability_
 
 func test_farm_club_usage_is_ability_led_because_it_has_no_parent_team() -> void:
 	# 二軍の出場方針は「**親球団が誰を育てたいか**」の表現なので、親を持たない専用球団には
-	# 適用しない (2026-08-16)。専用球団の主力は NPB を戦力外になった中堅〜ベテランで、
-	# ロスター内の能力差が大きい (実測で約15点)。12球団用の方針をそのまま掛けると
-	# **主力を外して最下層を並べる**ことになり、45日の得点が 102 → 65 まで落ちた。
+	# 適用しない。専用球団の主力は NPB を戦力外になった中堅〜ベテランで、ロスター内の能力差が
+	# 大きい (約15点)。12球団用の方針をそのまま掛けると**主力を外して最下層を並べる**ことになり、
+	# 45日の得点が 102 → 65 まで落ちる。
 	var team_games: int = 40
 	var mean_share: float = 0.5
 	var farm_club_veteran: PSPlayerSeasonRecord = _usage_probe_record(9201, 33, false)

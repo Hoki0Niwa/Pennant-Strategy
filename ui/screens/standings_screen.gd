@@ -111,7 +111,7 @@ func _draw() -> void:
 		_text("交流戦はまだ開幕していません", Vector2(INTER_RECT.position.x + 24, INTER_RECT.position.y + INTER_RECT.size.y * 0.5), 15, MUTED, INTER_RECT.size.x - 48, HORIZONTAL_ALIGNMENT_CENTER)
 
 
-# 汎用テーブル描画 (リーグ順位表 / 交流戦で共用)。描画本体は基底 _draw_data_table に集約 (2026-06-24)。
+# 汎用テーブル描画 (リーグ順位表 / 交流戦で共用)。描画本体は基底の _draw_data_table が持つ。
 func _draw_table(rect: Rect2, title: String, right_label: String, columns: Array, rows: Array) -> void:
 	_draw_data_table(rect, columns, rows, {"title": title, "right_label": right_label})
 

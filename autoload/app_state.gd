@@ -38,8 +38,8 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	OFFSEASON_STEP_GENEKI_DRAFT,
 	# 契約更改 (全選手の年俸再査定) は補強市場より前に置く。ここを通過した時点で player.salary が
 	# 来季の確定額になり、以降の FA/外国人/トレードの予算ゲートが来季 payroll に対して正確になる
-	# (旧: 最終ステップで再査定していたため、ゲートを通した後に payroll だけが上振れし
-	#  翌季を予算超過で開始していた)。
+	# ここを最終ステップへ動かすと、ゲートを通した後に payroll だけが上振れし、
+	# 翌季を予算超過で開始することになる。
 	OFFSEASON_STEP_CONTRACT_RENEWAL,
 	OFFSEASON_STEP_FA_MARKET,
 	OFFSEASON_STEP_CONTRACT_YEARS,
@@ -647,7 +647,7 @@ func commit_release(player_ids: Array, demote_ids: Array = []) -> Dictionary:
 
 	# 外国人の去就 (残留/引き抜き/退団) は戦力外通告ではなく外国人契約市場 (オフステップ7) が
 	# 一括で決める ([[foreign_player_service.gd]])。ここでは日本人選手だけを扱う。
-	# roadmap #3: 自軍の育成降格 (release ではなく育成化) を release より先に適用し支配下枠を空ける。
+	# 自軍の育成降格 (release ではなく育成化) を release より先に適用し支配下枠を空ける。
 	var demote_result: Dictionary = OffseasonService.process_demotion(GameDb.players, selected_team_id, demote_ids, offseason_year)
 	var user_result: Dictionary = OffseasonService.process_release(GameDb.players, selected_team_id, player_ids, offseason_year)
 	var cpu_result: Dictionary = OffseasonService.process_cpu_releases(GameDb.players, GameDb.teams, selected_team_id, current_season)
@@ -724,14 +724,14 @@ func advance_offseason() -> Dictionary:
 		OFFSEASON_STEP_RETIREMENT:
 			# 怪我の越冬回復をオフ冒頭で確定させる。player.injury_days を書き換えるのはここだけで、
 			# シーズン中は record 側しか動かないため、**戦力外/育成降格より前に**適用しないと
-			# 今季の大怪我が判定に一切反映されない (2026-08-02 修正、旧位置はキャンプステップ)。
+			# 今季の大怪我が判定に一切反映されない。
 			# record.injury_days から計算するので冪等 (再実行しても二重に回復しない)。
 			var carryover: Dictionary = OffseasonService.process_injury_carryover(GameDb.players, current_season)
 			step_result = OffseasonService.process_retirement(GameDb.players, current_season)
 			step_result["injury_carryover"] = carryover
 			step_result["title"] = "引退判定"
 			# 予算は固定 (TeamFinance.FIXED_BUDGET) のため年次改定はしない。前年順位だけ更新する
-			# (draft_service のフォールバック並び替え・team_select_screen の表示用、2026-08-04)。
+			# (draft_service のフォールバック並び替えと team_select_screen の表示が読む)。
 			TeamFinance.update_previous_ranks(GameDb.teams, current_season)
 			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_RELEASE_EDIT:
@@ -739,7 +739,7 @@ func advance_offseason() -> Dictionary:
 			# 戦力外エディタは editor 表示なので結果データは持たない。
 			has_result_to_store = false
 		OFFSEASON_STEP_DRAFT_MAIN:
-			# R4/R5 調整: 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長 の順。
+			# 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長 の順。
 			# ドラフトを先に行い、残り枠を戦力外獲得・FA・外国人へ回す。
 			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id, false, draft_full_waiver)
 			if _is_main_draft_complete():
@@ -792,7 +792,7 @@ func advance_offseason() -> Dictionary:
 		OFFSEASON_STEP_GROWTH:
 			step_result = OffseasonService.process_growth_decay(GameDb.players, selected_team_id, current_season)
 			step_result["title"] = "成長 / 衰え"
-			# roadmap #3: 成長で育った育成選手を CPU 球団は自動で支配下登録 (自軍は手動)。
+			# 成長で育った育成選手を CPU 球団は自動で支配下登録 (自軍は手動)。
 			var promo: Dictionary = OffseasonService.process_development_promotions(GameDb.players, GameDb.teams, selected_team_id, current_season.year if current_season != null else 0)
 			step_result["promoted"] = promo.get("promoted", [])
 			step_result["promoted_count"] = int(promo.get("promoted_count", 0))
@@ -1254,7 +1254,7 @@ func withdraw_foreign_contract_offer(player_id: int) -> Dictionary:
 
 
 # 契約市場を確定する: ユーザー球団は明示提示 (submit_foreign_contract_offer) した選手のみを扱い、
-# 未提示の自軍満了者へはCPU残留提示を生成しない (auto_user_team=false)。他球団はCPUが従来どおり
+# 未提示の自軍満了者へはCPU残留提示を生成しない (auto_user_team=false)。他球団はCPUが
 # 自動で残留/引き抜きを判断する。解決後は結果パネル (OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT) を
 # 経てから scout フェーズへ進む。
 func finalize_foreign_contract_market() -> Dictionary:
@@ -1885,11 +1885,11 @@ func restore_from_save(data: Dictionary) -> bool:
 		GameDb.replace_players_from_rows(player_rows)
 
 	# 予算は全球団一律の固定額 (TeamFinance.FIXED_BUDGET) なので、セーブに残っている
-	# team_funds は復元しない (2026-08-04)。変動予算制だった頃のセーブは球団ごとに違う額を
-	# 持っており、そのまま復元すると固定予算制が黙って崩れる。保存側は互換のため書き続ける。
+	# team_funds は復元しない。球団ごとに違う額が入ったセーブを復元すると固定予算制が黙って崩れる。
+	# 保存側は互換のため書き続ける。
 	TeamFinance.apply_fixed_budget(GameDb.teams)
 
-	# 年次予算キャップ導入 (2026-07-12): previous_rank も毎オフ更新されるため funds と同様に復元する。
+	# previous_rank は毎オフ更新されるのでセーブから復元する。
 	var saved_ranks: Dictionary = data.get("team_previous_ranks", {}) as Dictionary
 	for rank_key in saved_ranks.keys():
 		var ranked_team: PSTeam = GameDb.get_team(int(rank_key))
@@ -1942,7 +1942,7 @@ func restore_from_save(data: Dictionary) -> bool:
 		RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, false)
 		_prewarm_lineup_caches()
 		# 破損検知: シーズンが進んでいるのに当該シーズンの選手成績が全て0なら、過去に成績
-		# レコードが空白上書きで失われたセーブの可能性が高い (2026-07-03 実発生)。ロスターは
+		# レコードが空白上書きで失われたセーブの可能性が高い。ロスターは
 		# 無事なので続行は可能だが、出場実績ベースの判定の質が落ちるため痕跡を警告する。
 		if _season_records_look_wiped(current_season):
 			push_warning("Saved season stats are all zero despite played games; this save likely lost its record data earlier.")

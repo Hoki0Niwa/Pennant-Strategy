@@ -143,8 +143,8 @@ const CAREER_BAT_RECT: Rect2 = Rect2(262, 150, 808, 448)
 const CAREER_PIT_RECT: Rect2 = Rect2(1092, 150, 808, 448)
 const SEASON_BAT_RECT: Rect2 = Rect2(262, 610, 808, 448)
 const SEASON_PIT_RECT: Rect2 = Rect2(1092, 610, 808, 448)
-# 他ビューのパネルと同じコンテンツ幅 (262..1900 = 1638) を使う。旧 1240 幅は増設した列
-# (選手・球団・記録 を第1/第2リーグ別に7列) に対して狭すぎ、右側に約400pxの空白が残っていた。
+# 他ビューのパネルと同じコンテンツ幅 (262..1900 = 1638)。選手・球団・記録をリーグ別に並べた
+# 7列を収める幅で、これより狭いと右側に大きな空白が残る。
 const TITLE_TABLE_RECT: Rect2 = Rect2(262, 190, 1638, 868)
 
 # 通算/シーズン記録テーブルの列は打者/投手モードで固定 (部門チップを切り替えても列構成は変わらない)。
@@ -218,7 +218,7 @@ func _season_pit_columns(category: Dictionary) -> Array:
 # **記録は左揃え**(他画面の数値専用「記録」列は右揃えだが、ここは可変長の複合文字列
 # 例: ".371 / 29本 / 81点" なので、球団の直後で左揃えにして地続きに読ませる)。右揃えのまま列を
 # 広げると「球団の短い文字列の直後〜記録の右詰め文字列の直前」に大きな空白の谷ができてしまう
-# (2026-07-31 に実測して判明。列幅の比率だけ直しても解消しなかった)。左揃えなら余った幅は
+# (列幅の比率を変えるだけでは解消しない)。左揃えなら余った幅は
 # ブロック末尾(次ブロックの sep_before 罫線の直前、または表の右端)に流れるだけなので目立たない。
 # 空いた幅は 選手(可変長の氏名) と 記録 に回す。球団のような「内容に対して桁違いに広い列」を
 # 作らないことが列間の不自然な空白を避ける要点。
@@ -270,7 +270,7 @@ const POSITION_RECT_TOP3: Rect2 = Rect2(262, 144, 1638, 388)
 const GAMES_RECT_TOP3: Rect2 = Rect2(262, 548, 1638, 508)
 
 # 守備位置別スタメン数パネルの表示モード。既定は概要(上位3名) = カードグリッド、
-# 「全員」は従来のグループ化テーブル (詳細モード)。
+# 「全員」はグループ化テーブル (詳細モード)。
 const LU_POS_MODE_TOP3: String = "top3"
 const LU_POS_MODE_ALL: String = "all"
 
@@ -501,7 +501,7 @@ func _category_by_key(categories: Array, key: String) -> Dictionary:
 
 # ============================================================ 順位表 (順位表画面から流用)
 
-# 描画本体は基底 _draw_data_table に集約 (2026-06-24)。
+# 描画本体は基底の _draw_data_table が持つ。
 func _draw_table(rect: Rect2, title: String, columns: Array, rows: Array) -> void:
 	_draw_data_table(rect, columns, rows, {"title": title, "empty_text": "記録がありません"})
 
@@ -706,7 +706,7 @@ func _draw_titles(rect: Rect2, title: String, rows: Array) -> void:
 	var c1_x: float = inner_x + label_w
 	var c2_x: float = c1_x + col_w
 
-	# ヘッダ帯 (v2 の _draw_data_table と同じ言語)。
+	# ヘッダ帯 (_draw_data_table と同じ言語)。
 	var hy: float = rect.position.y + 60.0
 	_round(Rect2(inner_x, hy - 18.0, rect.end.x - 16.0 - inner_x, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	_text("部門", Vector2(inner_x + 2.0, hy), 11, MUTED, label_w, HORIZONTAL_ALIGNMENT_LEFT, true)
@@ -806,7 +806,7 @@ func _draw_position_panel(rect: Rect2) -> void:
 		_draw_position_cards(rect)
 
 
-# 詳細モード (「全員」): 従来のグループ化テーブル。スクロールしないと全守備位置を見渡せないが、
+# 詳細モード (「全員」): 守備位置ごとのグループ化テーブル。スクロールしないと全守備位置を見渡せないが、
 # 野手16列 / 投手12列の全項目を選手全員分見せる (概要モードでは上位3名+主要項目のみ)。
 func _draw_position_table(rect: Rect2) -> void:
 	var inner_x: float = rect.position.x + 18.0
@@ -1976,7 +1976,7 @@ func _refresh_lineup() -> void:
 
 
 # 守備位置別テーブルの元データ。位置ごとに {pos, total_games, is_pitcher, rows} を積む
-# (DH はエントリが無ければグループごと省略 = 従来挙動を維持)。総試合数はその位置の
+# (DH はエントリが無ければグループごと省略する)。総試合数はその位置の
 # 全選手のスタメン数合計 (=その位置にスタメンが立った延べ試合数)。
 func _build_position_groups(pos_starts: Dictionary) -> Array:
 	var groups: Array = []

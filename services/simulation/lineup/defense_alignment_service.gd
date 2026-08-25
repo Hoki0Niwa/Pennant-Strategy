@@ -24,13 +24,13 @@ const POSITIONS: Array[int] = [2, 6, 8, 4, 5, 3, 7, 9]
 # }
 # candidates[0] が定位置で、share は「その守備位置の先発をどれだけ取るか」。
 # share の決め方 (リーグ相対) は PSTeamSetupBuilder 側、ここは「当日誰が出るか」への落とし込み。
-# 旧形式 (starter_id / sub_id / sub_start_interval) は 2026-08-22 に廃止
-# ([[project_qualified_batter_count]])。旧セーブは candidates が無いので AI 既定生成へ落ちる。
+# candidates を持たない usage は未設定として扱い、AI 既定生成へ落ちる
+# ([[project_qualified_batter_count]])。
 
 
 # batting_memo: 呼び出し元が同じ試合内で複数回この関数を通すとき (検証 → AI既定生成 → 本番) に
 # 打撃スコアを共有するための memo。同一試合中は成績も疲労も動かないので、渡しても値は変わらない。
-# 空を渡す/省略すると従来どおり関数内で作る (UI プレビュー等の単発呼び出し)。
+# 空を渡す/省略すると関数内で作る (UI プレビュー等の単発呼び出し)。
 static func assign_defensive_starters(
 	available_fielders: Array,
 	profile: PSDefenseAlignmentProfile,

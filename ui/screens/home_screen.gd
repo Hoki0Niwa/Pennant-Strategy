@@ -105,7 +105,7 @@ func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
 	var gb_value: float = float(standing.get("gb", 0.0))
 
 	# 個別カード列ではなく1本の帯 (_stat_strip)。順位/勝率のみ色で強調し、
-	# 予算超過は年俸総額セルの note で警告する (旧カードの AMBER チップ相当)。
+	# 予算超過は年俸総額セルの note で警告する。
 	var cells: Array = [
 		{"label": "順位", "value": "%s位" % str(standing.get("rank", "-")), "color": BLUE},
 		{"label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws]},
@@ -467,7 +467,7 @@ func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_panel(rect, "順位 / チーム指標")
 	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
-	# ミニ順位表もテーブル v2 の体裁 (bold ヘッダ + 太めルール + 行ヘアライン + 自軍のアクセントバー)。
+	# ミニ順位表も共通テーブルの体裁 (bold ヘッダ + 太めルール + 行ヘアライン + 自軍のアクセントバー)。
 	var hy: float = rect.position.y + 56
 	_text("順", Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text("チーム", Vector2(rect.position.x + 50, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
@@ -555,7 +555,7 @@ func _build_buttons() -> void:
 		_layout_buttons()
 		return
 
-	# 上部アクション (1試合だけ消化する操作は廃止。日単位で進める)
+	# 上部アクション。進行は日単位で、1試合だけ消化する操作は持たない。
 	_add_button("today", "本日を終了", Rect2(1384, 22, 128, 42), _simulate_current_day, "primary")
 	_skip_button = _add_button("skip", "スキップ ▾", Rect2(1522, 22, 120, 42), _on_skip_pressed, "action")
 	_add_button("save", "セーブ", Rect2(1652, 22, 88, 42), _save_game, "action")

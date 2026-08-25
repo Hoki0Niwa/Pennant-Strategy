@@ -9,7 +9,7 @@ const RESOURCE_DIR: String = "res://data/teams/"
 
 @export var team_id: int = 0
 @export var profile_name: String = "default"
-# index 0 = 1番、index 8 = 9番。空なら BattingOrderService 側で従来 sort を base として使う。
+# index 0 = 1番、index 8 = 9番。空なら BattingOrderService が能力順の並びを base として使う。
 @export var base_order_player_ids: Array[int] = []
 @export var dh_enabled: bool = true
 @export var top_group: Array[int] = [1, 2]

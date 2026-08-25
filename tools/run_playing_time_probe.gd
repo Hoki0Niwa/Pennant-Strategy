@@ -425,9 +425,9 @@ func _count_at_least(values: Array, threshold: int) -> int:
 
 # --- 定位置の入れ替わり -------------------------------------------------------
 # シーズンを3分割し、守備位置ごとに「その期間の最多先発」を出して前期と後期を比べる。
-# 実際の監督は不振・故障・若手の台頭で定位置を入れ替えるが、シムは開幕時の序列を保ちがちだった
-# (`AI_USAGE_REBUILD_INTERVAL` の組み直しはあるが、評価指標が累計成績なので動きにくい)。
-# `changed` = 前期と後期で最多先発が別人だった枠の数。故障による交代も含むので、
+# 実際の監督は不振・故障・若手の台頭で定位置を入れ替える。シム側の入れ替えは
+# `AI_USAGE_REBUILD_INTERVAL` の組み直しで起きるが、評価指標が累計成績なので動きは鈍い。
+# `changed` = 前期と後期で最多先発が別人になった枠の数。故障による交代も含むので、
 # 併せて「故障日数 15日未満で入れ替わった枠」= 実力・不振による交代だけの数も出す。
 func _starter_turnover_report(
 	starts_by_third: Dictionary, injury_days_by_player: Dictionary, midseason_form: Dictionary
@@ -525,7 +525,7 @@ func _new_injury_tracker() -> Dictionary:
 	return {
 		"seen_days": {},   # player_id -> それまでに観測した season_injury_days の累計
 		"spells": [],      # {days, severity, is_pitcher}
-		# 前半戦終了時点の打撃成績 (player_id -> {pa, ops})。「前半不振だった定位置選手が
+		# 前半戦終了時点の打撃成績 (player_id -> {pa, ops})。「前半不振の定位置選手が
 		# 後半に出場を減らすか」= 不振への反応を測るために使う。
 		"midseason_form": {},
 		# 交代の種別ごとの件数 (代打/代走/守備固め/守備位置変更/投手交代)。

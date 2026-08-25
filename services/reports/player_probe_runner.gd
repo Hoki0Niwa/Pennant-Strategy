@@ -1104,7 +1104,7 @@ func _default_z_abilities() -> Dictionary:
 	var z50: float = 0.0
 	var z70: float = PSAbilityScale.display_to_z(70)
 	return {
-		# Batting (旧 contact/gap_power/home_run_power/eye/avoid_k=60, bunt=40 相当)
+		# Batting: 主要4軸は display 60、スタイル系 (打球方向/積極性/対左右) は 50。
 		"Bat_Barrel": z60,
 		"Bat_Impact": z60,
 		"Bat_Loft": z60,
@@ -1113,7 +1113,7 @@ func _default_z_abilities() -> Dictionary:
 		"Bat_Spray": z50,
 		"Bat_Aggression": z50,
 		"Bat_Platoon": z50,
-		# Pitching (旧 stuff/movement/control=60, stamina=70, hold_runners/recovery=60)
+		# Pitching: 質系は display 60、スタミナのみ 70、スタイル軸 (EdgeRate) は 50。
 		"Pit_KCreate": z60,
 		"Pit_BBPrevent": z60,
 		"Pit_ImpactLimit": z60,
@@ -1124,7 +1124,7 @@ func _default_z_abilities() -> Dictionary:
 		"Pit_FatigueResist": z60,
 		"Pit_HoldRunner": z60,
 		"Pit_EdgeRate": z50,
-		# Running (旧 speed=60, stealing=50)
+		# Running: 走力のみ display 60、判断/盗塁は 50。
 		"Run_Speed": z60,
 		"Run_Judgment": z50,
 		"Run_Steal": z50,

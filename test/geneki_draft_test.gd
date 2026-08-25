@@ -100,7 +100,7 @@ func test_is_eligible_rules() -> void:
 	var rookie: PSPlayer = _make_player(900010, 1, 3, 2500, {"source_data": {"rookie_year": true, "draft_year": TEST_YEAR}})
 	assert_bool(GenekiDraftService.is_eligible(rookie, TEST_YEAR)).is_false()
 	# 初期シードが持ち込む未来年 draft_year + 生涯 rookie_year=true の在籍中堅は対象
-	# (>= 比較で全球団対象者ゼロになった 2026-07-20 の回帰)。
+	# (draft_year を >= で比較すると全球団の対象者がゼロになる)。
 	var seed_veteran: PSPlayer = _make_player(900013, 1, 3, 2500, {"years": 5, "source_data": {"rookie_year": true, "draft_year": TEST_YEAR + 18}})
 	assert_bool(GenekiDraftService.is_eligible(seed_veteran, TEST_YEAR)).is_true()
 	# 今オフ入団 (在籍0年) の rookie_year 持ちは draft_year が欠けていても新人扱い。
@@ -284,9 +284,9 @@ func test_cpu_list_exposes_blocked_talent_over_regular_and_scrub() -> void:
 	assert_bool(ids.has(3)).override_failure_message("能力の低い選手より talent を優先すべき").is_false()
 
 
-# 回帰: 指名スコアにポジション需要を足していた頃は投手 need~0 のため自軍(=どの球団も)が毎回
-# 野手を指名していた (実測 30ドラフトで自軍獲得 投手0/野手30)。need を外し、自軍も投手を普通に
-# 指名する (=野手ばかりにならない) ことを保証する。GameDb.players は複製して共有状態を汚さない。
+# 指名スコアにポジション需要を足すと投手 need~0 のためどの球団も毎回野手を指名する
+# (30ドラフトで自軍獲得 投手0/野手30)。need を混ぜず、自軍も投手を普通に指名する
+# (=野手ばかりにならない) ことを保証する。GameDb.players は複製して共有状態を汚さない。
 func test_user_team_picks_are_not_all_fielders() -> void:
 	var team_id: int = (GameDb.teams[0] as PSTeam).id
 	var season: PSSeason = _make_season()

@@ -6,8 +6,8 @@ class_name PSPaProbabilityCalculator
 # 各カテゴリの logit を raw z 能力と調整係数からそのまま作り、softmax で相対確率へ変換する。
 # K_LOGIT_BASE/BB_LOGIT_BASE/HBP_LOGIT_BASE は「能力差ゼロの平均的対戦」を基準にした
 # LEAGUE_*_BASE の logit に、Bat_KAvoid/Bat_BBCreate/Pit_KCreate/Pit_BBPrevent の実測母平均分の
-# 補正項を1回だけ畳み込んだ定数(旧: raw z から母平均を引いてから重みを掛ける2段階の式だったものを、
-# 代数的に「raw z に重みを掛けてベース定数へ足すだけ」の1段階の式へ整理したもの。数式として同一)。
+# 補正項を1回だけ畳み込んだ定数。おかげで実行時は「raw z に重みを掛けてベース定数へ足す」
+# 1段階で済み、母平均を実行時に参照しない。
 
 
 const OUTCOME_STRIKEOUT: String = "k"

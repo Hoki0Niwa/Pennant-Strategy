@@ -197,7 +197,7 @@ func _load_initial_data_from_sqlite() -> bool:
 	var team_rows: Array = _sqlite_query(db, "SELECT id, name, short_name, league, color, previous_rank, funds, ratings_json FROM teams ORDER BY id")
 	var player_columns: Dictionary = _sqlite_table_columns(db, "players")
 	var position_experience_select: String = "position_experience_json" if player_columns.has("position_experience_json") else "'{}' AS position_experience_json"
-	# 旧 *_abilities_json 列は読まない (apply_dict は z_abilities のみ参照)。
+	# 能力は z_abilities だけを読む (apply_dict が参照するのはこれのみ)。
 	var player_rows: Array = _sqlite_query(db, "SELECT id, sensyu_num, jersey_number, development_player, team_id, name, age, years, height, weight, position, role, throwing_hand, batting_side, salary, draft_round, hometown, registered_roster, contract_status, foreign_player, position_aptitudes_json, %s, source_data_json, fatigue, injury_days FROM players ORDER BY id" % position_experience_select)
 	if db.has_method("close_db"):
 		db.call("close_db")
@@ -299,7 +299,7 @@ func get_team(team_id: int) -> PSTeam:
 
 
 # 一軍12球団 + ファーム専用球団のどちらでも引ける参照。**二軍の文脈でだけ使う** —
-# 一軍系のコードは従来どおり `get_team` を使い、専用球団を見えないままにしておく。
+# 一軍系のコードは `get_team` を使い、専用球団を見えないままにしておく。
 func get_any_team(team_id: int) -> PSTeam:
 	var team: PSTeam = teams_by_id.get(team_id) as PSTeam
 	if team != null:

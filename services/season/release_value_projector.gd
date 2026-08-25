@@ -15,7 +15,7 @@ const OFFSEASON_SERVICE_PATH: String = "res://services/season/offseason_service.
 const PROJECTION_HORIZON_YEARS: int = 3
 # expected_development_score_bonus の生値 (概ね -8..+12) を current (overall スケール, 概ね
 # 30-90) と同じ桁に引き伸ばす係数。
-# 手計算 (2026-07-14, PROJECTION_HORIZON_YEARS=3 時点):
+# 係数の効き (PROJECTION_HORIZON_YEARS=3 のとき):
 #   age=20: 20/21/22歳はいずれも成長曲線が同一区分 (覚醒1% 成長59% 停滞40% 衰退0%) で
 #     year_bonus=(1*8+59*2.6)/100=1.614、3年分を future_weight (0.86 減衰) で合成すると
 #     1.614*(1+0.86+0.86^2)≈4.196 -> growth ≈ 4.196*4.0 ≈ +16.8
@@ -83,7 +83,7 @@ static func projected_value_components(player: PSPlayer, record: PSPlayerSeasonR
 
 
 # 出場の「質」による加減点。usage_evidence が出場“量”を能力主張の裏付けとして見るのに対し、
-# こちらは残した成績が能力どおりだったかを見る (編成判断ノブ = 長い記憶・弱い追随)。
+# こちらは残した成績が能力どおりかを見る (編成判断ノブ = 長い記憶・弱い追随)。
 # 成績が無ければ 0 なので、新人や出場ゼロの選手は usage_evidence だけで評価される。
 # 野手は打撃成績 (PSBatterForm)、投手は失点抑止 (PSPitcherForm) で対称に評価する。
 static func form_evidence_for(record: PSPlayerSeasonRecord) -> float:
@@ -119,7 +119,7 @@ static func is_regular_usage(record: PSPlayerSeasonRecord) -> bool:
 
 # 出場実績による**放出保護**。当季その役割を務めた選手に加え、シーズンの過半を怪我で欠場した
 # 選手も守る (出ていないのは能力の問題ではないため。長期離脱者の整理は育成降格の別経路が担う)。
-# 放出判定が球団相対 (代替水準) になったことで「最下位というだけで切られる」ようになったので、
+# 放出判定は球団相対 (代替水準) なので、放っておくと「最下位というだけ」で誰かが切られる。
 # 実力ではなく稼働で説明できるケースをここで除外する。
 static func is_usage_protected(record: PSPlayerSeasonRecord) -> bool:
 	if record == null:

@@ -194,7 +194,7 @@ static func generate(
 	# EV(打球初速)を基準値から組み立てる。
 	var ev: float = _rule_float(rules, "ev_base", EV_BASE)
 	# 打者の長打力と投手の球威を同じカーブ・同じ重みで相殺し、球速・疲労・被弾傾向を加える。
-	# 投打の重みは対称であることが前提 (2026-08-14 の対称化)。平均を取って圧縮済みの差へ掛ける。
+	# 投打の重みは対称であることが前提。平均を取って圧縮済みの差へ掛ける。
 	ev += power_delta * _symmetric_weight(
 		_rule_float(rules, "ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT),
 		_rule_float(rules, "ev_stuff_weight", EV_STUFF_WEIGHT)

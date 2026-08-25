@@ -128,7 +128,7 @@ func test_fielder_position_training_still_capped_at_three() -> void:
 			state, fielders, teams, null, fielder.id, CampServiceRef.TRAIN_POSITION_LEARN, 6)
 		if bool(result.get("ok", false)):
 			ok_count += 1
-	# 野手の位置習得/本職変更は従来どおり1チーム3人まで。4人目は上限で弾かれる。
+	# 野手の位置習得/本職変更は1チーム3人まで。4人目は上限で弾かれる。
 	assert_int(ok_count).is_equal(3)
 	assert_int(int((state.get("team_action_counts", {}) as Dictionary).get("1", 0))).is_equal(3)
 

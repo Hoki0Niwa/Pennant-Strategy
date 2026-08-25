@@ -3,7 +3,7 @@ class_name TradeService
 
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
-# シーズン中トレード v1 (R4 Step4)。「余剰と不足の交換」を最小構成で成立させる。
+# シーズン中トレード。「余剰と不足の交換」を成立させる。
 # - 交換期限 (7/31) までの試合日に、週次で CPU 間トレードと CPU→自軍提案を低頻度判定する。
 # - ユーザーはトレード画面から提案を作成でき、CPU は同じ評価軸 (future_value - 年俸負担 + 需要) で受諾判定する。
 # - 対象は支配下の健康な日本人非新人のみ (外国人 / 育成 / 怪我人 / FA宣言中 / 入団初年は対象外)。
@@ -36,7 +36,7 @@ const VALUE_DIFF_SCORE_PENALTY: float = 0.4
 # この値以上なら受諾。0 だと等価交換を全部飲むので、わずかに CPU 有利を要求する。
 const CPU_ACCEPT_MIN_GAIN: float = 1.5
 const NEED_FIT_VALUE_WEIGHT: float = 0.35
-# 提案の人数制約 (v1 は 1〜2人 対 1〜2人)。
+# 提案の人数制約 (1〜2人 対 1〜2人)。
 const MAX_PLAYERS_PER_SIDE: int = 2
 
 # 余剰判定: 本職で上位2人 (捕手は3人) / 先発7番手以降 / 救援9番手以降を出せる駒とみなす。
@@ -196,9 +196,8 @@ static func need_fit(player: PSPlayer, team_need: Dictionary) -> float:
 
 
 # 需要マップ: { team_id: { 2..9: gap, "starter": gap, "reliever": gap } }。
-# **実体は [[TeamDepthChart]]** (2026-08-03 統合)。旧実装は「野手はポジション最高値のリーグ平均比、
-# 投手は役割別デプス (先発上位6/救援上位8の平均) のリーグ平均比」を独自に数え直していたが、
-# デプスチャートの `first_team_need` (= 一軍枠の質のリーグ差) がまったく同じ尺度なのでそちらへ委譲する。
+# **実体は [[TeamDepthChart]]**。ここで need を数え直さず、チャートの `first_team_need`
+# (= 一軍枠の質のリーグ差) をそのまま使う。
 # 先発/救援の枠数はチャート側の FIRST_TEAM_SLOTS (先発5/救援6) が単一ソースになる。
 static func build_team_needs(players: Array, teams: Array) -> Dictionary:
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
@@ -434,7 +433,7 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "accepted": false, "message": str(validation.get("message", ""))}
 	# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象とする。
-	# 従来は cpu_team_id 側しか見ておらず、自軍だけこの上限を回避できてしまっていた。
+	# cpu_team_id 側だけを見ると、自軍がこの上限を回避できてしまう。
 	if trades_count_for_team(season, cpu_team_id) >= MAX_TRADES_PER_TEAM:
 		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": "相手球団は今季のトレードに消極的です。"}
 	if trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:

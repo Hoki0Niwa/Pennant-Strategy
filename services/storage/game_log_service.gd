@@ -51,7 +51,7 @@ static func build_game_log(result: Dictionary, season: PSSeason = null) -> Dicti
 
 
 # 打球失策(plate_event.category=="error")を {inning,half,fielding_team_id,fielder_id,position} で収集。
-# 走者イベント失策(捕手の盗塁送球ミス等)は v1 では対象外。
+# 走者イベント失策(捕手の盗塁送球ミス等)は対象外。
 static func build_error_log(result: Dictionary) -> Array:
 	var errors: Array = []
 	for event_row in (result.get("play_events", []) as Array):

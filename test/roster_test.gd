@@ -1,6 +1,6 @@
 extends GdUnitTestSuite
 
-# roadmap #3 育成選手制度: 支配下/育成の計数、昇格/降格、一軍出場不可、永続化を検証する。
+# 育成選手制度: 支配下/育成の計数、昇格/降格、一軍出場不可、永続化を検証する。
 
 const Offseason = preload("res://services/season/offseason_service.gd")
 const ReleasedMarket = preload("res://services/season/released_market_service.gd")
@@ -219,8 +219,8 @@ func test_foreign_user_can_sign_then_issue_another_request() -> void:
 # --- FA日数 -------------------------------------------------------------------
 
 # NPB は1年で最大145日(FA_SERVICE_DAYS_PER_YEAR)しか一軍登録日数を積めない。
-# フルシーズン在籍(≈190日超)でも145日/年キャップで加算されること
-# (2026-07-10 修正: 上限が無いとフル出場選手のFA権取得が現実より1.5〜2年早まっていた)。
+# フルシーズン在籍(≈190日超)でも145日/年キャップで加算されること。
+# キャップが無いとフル出場選手の FA 権取得が現実より 1.5〜2 年早まる。
 func test_fa_service_days_capped_at_145_per_season() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2099
@@ -374,8 +374,8 @@ func test_initial_seed_csv_career_log_has_no_future_years() -> void:
 
 
 # --- 初期シード投手の変化球アーセナル ----------------------------------------
-# 旧シード CSV には arsenal 列が無く、初期選手だけ変化球の実データを持たなかった
-# (z 派生表示に頼るため球種構成に個性が無く、生成投手とも扱いが違った)。
+# 初期シードの投手も arsenal を実データとして持つ。arsenal が空だと球種が z 派生表示になり、
+# 球種構成に個性が出ず、ドラフト/外国人の生成投手とも扱いが変わってしまう。
 
 func test_initial_seed_csv_pitchers_all_have_arsenal() -> void:
 	var rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(
@@ -630,7 +630,7 @@ func test_contract_renewal_keeps_draft_rookie_salary() -> void:
 	assert_bool(Offseason._contract_salary_is_locked(rookie, 2027)).is_false()
 
 
-# --- 複数年契約ロック (契約基盤 Step1) ---------------------------------------
+# --- 複数年契約ロック -------------------------------------------------------
 
 func test_contract_renewal_skips_salary_reassessment_while_multi_year_locked() -> void:
 	var locked: PSPlayer = _player({
@@ -1027,7 +1027,7 @@ func test_build_contract_offers_skips_user_retain_unless_auto_user_team() -> voi
 	var offers_auto: Array = ForeignPlayerService._build_contract_offers(entry, players, [team], {}, 1, true)
 	assert_int(offers_auto.size()).is_equal(1)
 	assert_str(str((offers_auto[0] as Dictionary).get("source", ""))).is_equal("retain")
-	# 他球団 (home != user_team_id) は auto_user_team に関係なく従来どおり自動残留提示が出る。
+	# 他球団 (home != user_team_id) は auto_user_team に関係なく自動残留提示が出る。
 	var cpu_entry: Dictionary = entry.duplicate(true)
 	cpu_entry["player_id"] = 4001
 	var cpu_offers: Array = ForeignPlayerService._build_contract_offers(cpu_entry, players, [team], {}, 2, false)
@@ -1589,11 +1589,9 @@ func test_release_plan_bounded_even_when_stats_missing() -> void:
 	assert_int(players.size() - cut_ids.size()).is_equal(66 - expected)
 
 
-# 放出計画は外国人の去就を見ない (2026-08-03、ユーザー要望「外国人の戦力外は専用画面で行うので
-# 放出数計算の対象外にすべき」)。放出数は支配下人数だけで決まり、外国人保有数を 0〜4 の間で
-# 動かしても放出候補数は変わらない。旧実装は「在籍(支配下+外国人)+外国人不足−開幕目標」で
-# 数式上たまたま外国人数の項が打ち消し合っていたが、支配下限定の目標 (DOMESTIC_ROSTER_TARGET)
-# を使う現行実装ではそもそも外国人を一切見ないため、打ち消しに頼らず不変になる。
+# 放出計画は外国人の去就を見ない (外国人の戦力外は専用画面が扱う)。放出数は支配下人数だけで
+# 決まるので、外国人保有数を 0〜4 の間で動かしても放出候補数は変わらない。
+# 目標は支配下限定 (DOMESTIC_ROSTER_TARGET) で、計算のどこにも外国人数が入らないことを見る。
 func test_release_plan_is_independent_of_foreign_headcount() -> void:
 	var domestic: Array = _plan_team(1, 60, 9500, -1.0)
 	var no_foreign: Array = domestic.duplicate()
@@ -1716,7 +1714,7 @@ func test_release_keeps_regular_pushed_out_by_higher_projection_youngsters() -> 
 	fringe.age = 21
 	players.append(fringe)
 	records.append(PSPlayerSeasonRecord.from_player(fringe, 2099, 1))
-	# 前提: 将来価値では若手のほうが上位に来る (= 旧実装ならレギュラーがスロット外に落ちる)。
+	# 前提: 将来価値だけで並べると若手が上位に来る (= 出場実績を見なければレギュラーが溢れる)。
 	assert_float(ReleaseValueProjector.projected_value(regular, regular_record)).is_less(
 		ReleaseValueProjector.projected_value(players[1] as PSPlayer, records[1] as PSPlayerSeasonRecord)
 	)
@@ -1785,8 +1783,7 @@ func test_release_keeps_long_injured_high_ability_surplus_player() -> void:
 
 # 出場実績による放出保護 (is_usage_protected)。**代替水準を下回る余剰のレギュラー**でも、
 # 当季その役割を務めていれば切らない (球団相対の判定だけだと「最下位というだけ」で誰かが必ず
-# 切られてしまうため 2026-08-04 に導入)。同スペックの控え (出場ゼロ) が切られることで、
-# 保護が効いていることを差分で示す。
+# 切られてしまう)。同スペックの控え (出場ゼロ) が切られることで、保護が効いていることを差分で示す。
 func test_release_protects_regular_usage_player_below_replacement_line() -> void:
 	var players: Array = _plan_team(1, 60, 9300, 2.0)
 	var records: Array = []
@@ -1901,7 +1898,7 @@ func test_promotion_excludes_user_team() -> void:
 # --- 怪我の越冬回復と長期故障の育成降格 ---------------------------------------
 # player.injury_days を書き換えるのは process_injury_carryover だけで、シーズン中は record 側しか
 # 動かない。この関数をオフ冒頭 (引退判定) で走らせないと、戦力外/育成降格が読む player.injury_days が
-# 1年前の値のままになり、今季シーズン絶望の大怪我が判定に一切乗らない (2026-08-02 まで実際にそうなっていた)。
+# 1年前の値のままになり、今季シーズン絶望の大怪我が判定に一切乗らない。
 func test_injury_carryover_feeds_long_injury_demotion() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
@@ -1916,7 +1913,7 @@ func test_injury_carryover_feeds_long_injury_demotion() -> void:
 	var previous_record: Variant = RecordStore.player_records.get(record_key, null)
 	RecordStore.set_player_record(record, record_key)
 
-	# 越冬回復前は判定材料が無く、降格対象にならない (これが旧実装の状態)。
+	# 越冬回復前は player.injury_days が 0 のままなので、判定材料が無く降格対象にならない。
 	assert_bool(Offseason._should_demote_to_development(injured)).is_false()
 
 	var carryover: Dictionary = Offseason.process_injury_carryover([injured], season)
@@ -1960,7 +1957,7 @@ func test_injury_carryover_keeps_short_absence_out_of_demotion() -> void:
 
 # 長期故障の育成降格は**戦力外候補かどうかと独立**に走る。怪我人は戦力外候補にならないよう
 # 保護されている (_can_claim_release_slot / ReleaseValueProjector の怪我 excuse) ので、
-# 「候補の中から降格へ振り分ける」旧実装では一度も発火しなかった (2026-08-02 修正)。
+# 「候補の中から降格へ振り分ける」作りにすると一度も発火しない。
 func test_long_injury_demotion_runs_independently_of_release_candidates() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2026
@@ -2111,7 +2108,7 @@ func test_development_release_keeps_first_year() -> void:
 
 # 育成契約の最初の DEV_RELEASE_GRACE_SEASONS シーズンは成長予測を問わず保持し、
 # それ以降は昇格見込み (projected_ceiling) で判断する。出身 (高卒/大社) による差は付けない —
-# NPB の育成契約の年数ルールが出身を問わず一律のため (2026-08-02、旧・出身別猶予から変更)。
+# NPB の育成契約の年数ルールが出身を問わず一律のため。
 func test_development_release_grace_is_counted_in_development_seasons() -> void:
 	var since_year: int = 2026
 	var in_grace: PSPlayer = _player_with_z(84, 1, 3, true, -2.0)
@@ -2148,11 +2145,10 @@ func test_injury_value_penalty_scales_and_caps() -> void:
 	assert_float(Offseason.injury_value_penalty(wrecked)).is_equal(Offseason.INJURY_PENALTY_CAP)
 
 
-# --- 支配下→育成 降格の3類型 -------------------------------------------------
+# --- 支配下→育成 降格 --------------------------------------------------------
 
 func test_should_demote_only_for_long_injury() -> void:
-	# CPU の育成降格は長期故障のリハビリ型のみ (2026-07-03 ユーザー方針
-	# 「怪我以外での育成落ちはなくす」。旧・素材保持型/ベテラン確率型は撤廃)。
+	# CPU の育成降格は長期故障のリハビリ型のみで、怪我以外を理由には落とさない。
 	# 健康な若手素材は降格しない (戦力外候補なら release へ)。
 	var healthy_prospect: PSPlayer = _player_with_z(95, 1, 3, false, 0.5)
 	healthy_prospect.age = 22
@@ -2202,7 +2198,7 @@ func test_development_release_cuts_faded_prospect_keeps_ready_and_rehab() -> voi
 
 
 # 育成の人数に上限は無い代わりに、**育成契約は DEV_CONTRACT_MAX_SEASONS シーズンで満了**する
-# (NPB の「育成のまま3年で自由契約」相当、2026-08-02)。即戦力水準に届いていても
+# (NPB の「育成のまま3年で自由契約」相当)。即戦力水準に届いていても
 # 支配下枠が空かずに滞留した選手はここで切れる = 人数が発散しない構造的な歯止め。
 func test_development_contract_expires_after_max_seasons() -> void:
 	var since_year: int = 2026
@@ -2269,8 +2265,8 @@ func test_development_contract_expiry_overrides_ready_hold() -> void:
 
 func test_development_release_uses_growth_projection_not_fixed_age() -> void:
 	# 現在能力が同じでも、成長期待(年齢とともに縮む)を加味した projected_ceiling が
-	# 即戦力基準に届くかどうかで昇格見込みを判定する(2026-07-02、固定26歳カットオフを撤廃し
-	# 成長予測ベースに変更)。猶予シーズンは超えているので3人とも projection で判定される。
+	# 即戦力基準に届くかどうかで昇格見込みを判定する (年齢の固定カットオフでは切らない)。
+	# 猶予シーズンは超えているので3人とも projection で判定される。
 	# 同じ現在能力(z=0.0)でも22-24歳は成長期待でギリギリ即戦力基準を上回り保持、25歳は下回り放出。
 	var since_year: int = 2026
 	var grace_over: int = since_year - Offseason.DEV_RELEASE_GRACE_SEASONS
@@ -2296,8 +2292,8 @@ func test_development_release_uses_growth_projection_not_fixed_age() -> void:
 
 func test_development_release_one_year_rule_for_midcareer() -> void:
 	# 中堅以上 (>DEMOTE_PROSPECT_MAX_AGE=26) の育成は「再調整は1年」: 昇格ステップで支配下に
-	# 戻れなければ、即戦力水準の能力があっても放出される (2026-07-02 ユーザー要望。
-	# 旧実装は「即戦力は満枠待ちで保持」が年齢無制限で、降格ベテランが育成に何年も居座れた)。
+	# 戻れなければ、即戦力水準の能力があっても放出される。「即戦力は満枠待ちで保持」を
+	# 年齢無制限にすると、降格ベテランが育成に何年も居座る。
 	var midcareer_ready: PSPlayer = _player_with_z(9600, 1, 3, true, 2.5)
 	midcareer_ready.age = 30
 	midcareer_ready.years = 8
@@ -2336,8 +2332,8 @@ func test_released_market_dev_track_signing_gets_one_offseason_hold() -> void:
 
 func test_compute_development_release_candidates_for_user_team_recommendation() -> void:
 	# 自軍は process_development_releases から除外されるため、戦力外エディタの推奨が
-	# この候補列挙を合流させる (2026-07-02、「条件を満たす初期育成選手が自軍で戦力外に
-	# ならない」報告の修正)。CPU の育成整理と同じ基準・非破壊 (hold は消費しない)。
+	# この候補列挙を合流させる。ここを共有しないと条件を満たす育成選手が自軍だけ戦力外にならない。
+	# CPU の育成整理と同じ基準・非破壊 (hold は消費しない)。
 	var midcareer: PSPlayer = _player_with_z(9620, 1, 3, true, 0.5)
 	midcareer.age = 30
 	midcareer.years = 6
@@ -2377,7 +2373,7 @@ func test_process_development_releases_consumes_hold_for_excluded_team() -> void
 
 func test_development_release_holds_the_offseason_a_player_was_demoted() -> void:
 	# 支配下→育成に降格した選手は、その同じオフの育成整理では即放出されない
-	# (dev_demote_hold、2026-07-02)。翌年以降は通常の projection 判定に戻る。
+	# (dev_demote_hold)。翌年以降は通常の projection 判定に戻る。
 	var demoted: PSPlayer = _player_with_z(9803, 1, 3, false, -2.0)
 	demoted.age = 30
 	demoted.years = 5
@@ -2517,9 +2513,8 @@ func test_high_fatigue_record_is_not_auto_demotion_candidate() -> void:
 
 
 # perf_score は overall_prior と同じ rating スケールに乗る (投手/野手で桁が揃う)。
-# 旧実装は stat_score_batter/pitcher が counting stats 込みの独自スケールで、野手レギュラー ≒171 /
-# 救援 最大735 と発散し、絶対閾値 (INJURY_*_STASH_SCORE_MIN) も平均比 (旧 UNDERPERFORM_RATIO) も
-# 意味を失っていた。成績は率のみをリーグ実測分布で σ 化して能力へ加算する形に統一した。
+# 成績は率のみをリーグ実測分布で σ 化して能力へ加算する — counting stats を混ぜると出場量で
+# スコアが発散し、絶対閾値 (INJURY_*_STASH_SCORE_MIN) も平均比も意味を失う。
 func test_perf_score_stays_on_overall_rating_scale() -> void:
 	var fielder: PSPlayer = _player_with_z(9620, 1, 7, false, 0.5)
 	var fielder_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(fielder, 0, 0)
@@ -2547,7 +2542,7 @@ func test_perf_score_stays_on_overall_rating_scale() -> void:
 	# 能力からの乖離は form のクリップ幅に収まる = 出場量でスコアが膨らまない。
 	assert_float(absf(fielder_perf - fielder_prior)).is_less_equal(PSBatterForm.FORM_RATING_MAX + 0.001)
 	assert_float(absf(pitcher_perf - pitcher_prior)).is_less_equal(PSPitcherForm.FORM_RATING_MAX + 0.001)
-	# 投手と野手が同じ桁に乗る (旧実装は救援が 700 超まで伸びた)。
+	# 投手と野手が同じ桁に乗る。
 	assert_float(absf(fielder_perf - pitcher_perf)).is_less(40.0)
 
 	# 出場ゼロなら能力そのもの (成績が無ければ form=0)。
@@ -2578,7 +2573,7 @@ func test_pitcher_form_rewards_run_prevention() -> void:
 	assert_float(TeamAutoAIRef.perf_score(good)).is_greater(TeamAutoAIRef.perf_score(bad))
 	# 編成判断ノブは出場判断より弱い追随。
 	assert_float(absf(PSPitcherForm.roster_rating_delta(bad))).is_less(absf(bad_delta))
-	# 戦力外の form_evidence も投手に効く (以前は 0 固定だった)。
+	# 戦力外の form_evidence は投手にも効く (野手だけの指標ではない)。
 	assert_float(ReleaseValueProjector.form_evidence_for(good)).is_greater(
 		ReleaseValueProjector.form_evidence_for(bad)
 	)
@@ -2598,8 +2593,8 @@ func test_underperforming_regular_batter_becomes_auto_demotion_candidate() -> vo
 
 
 # FA日数台帳: 入替時に get_active_roster の複製 (古い台帳入り) を渡しても、set_active_roster 内で
-# accrue した区間が巻き戻らないこと。週次入替のたびに直前区間が消え、長期で FA権取得者が
-# 全くいなくなる回帰 (2026-07-06 の15年検証で fa_declared 全ゼロ) の再発防止。
+# accrue した区間が巻き戻らないこと。巻き戻ると週次入替のたびに直前区間が消え、長期では
+# FA 権取得者が 1 人も出なくなる。
 func test_active_roster_fa_days_survive_swap_with_stale_ledger_copy() -> void:
 	var season: PSSeason = PSSeason.new()
 	season.year = 2099
@@ -2818,7 +2813,7 @@ func test_development_contract_salary_uses_separate_scale() -> void:
 	Offseason._apply_demotion_to_development(demoted)
 	assert_int(demoted.salary).is_equal(Offseason.DEVELOPMENT_CONTRACT_SALARY)
 
-	# 昇格時に支配下最低年俸を保証し、以降は従来の支配下スケールへ戻る。
+	# 昇格時に支配下最低年俸を保証し、以降は通常の支配下スケールで査定される。
 	Offseason._apply_promotion_to_controlled(demoted)
 	assert_int(demoted.salary).is_equal(Offseason.SALARY_MIN)
 	assert_int(Offseason._compute_new_salary(demoted, null, 0.0)).is_greater_equal(Offseason.SALARY_MIN)
@@ -2927,7 +2922,7 @@ func test_release_projection_weighs_batting_performance_quality() -> void:
 	assert_float(absf(PSBatterForm.roster_rating_delta(bad_record))).is_less(
 		absf(PSBatterForm.rating_delta(bad_record))
 	)
-	# 投手は打撃版の成績評価が無いので 0 のまま (従来どおり能力+登板量+年齢+年俸)。
+	# 投手は打撃版の成績評価が無いので 0 のまま (能力+登板量+年齢+年俸だけで決まる)。
 	var pitcher: PSPlayer = _player_with_z(9612, 1, 1, false, 0.5)
 	pitcher.age = 28
 	pitcher.role = "starter"
@@ -2959,8 +2954,8 @@ func test_release_projection_null_record_falls_back_to_player_ability() -> void:
 
 
 # 補強需要は投手をエース1枚でなく上位K枚平均 (depth) で測る。投手が手薄な球団は position 1 に
-# 需要が立ち、エースが同等でも投手 depth の差が need に出る (旧「最良1枚」実装だとゼロだった)。
-# これが直らないと戦力外獲得・現役ドラフトで投手がほとんど移動しない。
+# 需要が立ち、エースが同等でも投手 depth の差が need に出る。最良1枚だけを見ると need がゼロになり、
+# 戦力外獲得・現役ドラフトで投手がほとんど移動しなくなる。
 func test_position_need_reflects_pitcher_depth_not_just_ace() -> void:
 	var teams: Array = [_team(1), _team(2)]
 	var players: Array = []
@@ -2978,7 +2973,7 @@ func test_position_need_reflects_pitcher_depth_not_just_ace() -> void:
 	var need: Dictionary = Offseason.position_need(players, teams)
 	var thin_need: float = float((need.get(2, {}) as Dictionary).get(1, 0.0))
 	var deep_need: float = float((need.get(1, {}) as Dictionary).get(1, 0.0))
-	# 投手が手薄な team2 に明確な投手需要が立つ (旧「最良1枚」実装ではゼロだった)。
+	# 投手が手薄な team2 に明確な投手需要が立つ。
 	assert_float(thin_need).is_greater(3.0)
 	# depth が厚い team1 より team2 の方が投手需要が高い。
 	assert_float(thin_need).is_greater(deep_need)
@@ -3011,7 +3006,7 @@ func test_released_market_ai_signs_pitchers_via_depth_fit() -> void:
 
 # 弱点スロットでも「当落線を僅かに上回るだけ」の候補は upgrade_margin で弾かれる。
 # is_weakness (need > 0 = リーグ平均未満) は全球団の約半数が常に該当するゆるいゲートなので、
-# 獲得数を絞っているのは margin のほう。margin=0 なら旧挙動どおり通る。
+# 獲得数を絞っているのは margin のほう。margin=0 ならこの候補も通る。
 func test_depth_chart_upgrade_margin_gates_marginal_candidate() -> void:
 	var teams: Array = [_team(1), _team(2)]
 	var players: Array = [
@@ -3047,7 +3042,7 @@ func test_depth_chart_future_counts_development_without_moving_first_team() -> v
 
 # **高齢のレギュラーが居座るスロットは将来性が低い**。同じ現在値でも 38歳と 24歳では
 # 数年後の予測が変わり、future_need (後継の必要性) が高齢側に立つ。
-# 旧実装 (24歳以下の平均) では両者とも「若手ゼロ」で区別できなかった。
+# 「24歳以下の平均」のような若手カウントで測ると、どちらも若手ゼロで区別が付かない。
 func test_depth_chart_future_value_drops_for_aging_regular() -> void:
 	var teams: Array = [_team(1), _team(2)]
 	var aging: PSPlayer = _player_with_z(9870, 1, 3, false, 1.0)
@@ -3242,8 +3237,8 @@ func _team(team_id: int) -> PSTeam:
 		"name": "Team %d" % team_id,
 		"short_name": "T%d" % team_id,
 		"league": "league1",
-		# 予算ゲート導入 (2026-07-12) 後もこのファイルの既存テストは支配下枠/年齢等の判定が
-		# 主眼なので、年俸で誤ブロックしないよう十分大きな既定予算を持たせる。
+		# このファイルのテストは支配下枠/年齢等の判定が主眼なので、予算ゲートで誤ブロック
+		# されないよう十分大きな既定予算を持たせる。
 		"funds": 400000,
 	})
 

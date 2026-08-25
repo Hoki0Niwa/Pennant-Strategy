@@ -7,7 +7,7 @@ const DraftService = preload("res://services/season/draft_service.gd")
 
 
 # ドラフト候補の野手位置分布は up-the-middle (遊撃/中堅) 偏重で、一塁/左翼は稀。
-# 旧実装 (内野一様/外野一様) は 1B/LF を過剰供給し、リーグ構成が現実と逆転していた。
+# 内野/外野を一様に振ると 1B/LF が過剰供給になり、リーグ構成が現実と逆転する。
 func test_candidate_positions_favor_up_the_middle() -> void:
 	Rng.set_seed_value(20260706)
 	var counts: Dictionary = {}
@@ -21,8 +21,8 @@ func test_candidate_positions_favor_up_the_middle() -> void:
 
 
 # 投手需要は「エース1枚」ではなくローテ/ブルペンの一軍枠の質で測る。エースが同等でも
-# 下位が薄い球団の投手 need は高くなる。これが直らないとドラフトAIが投手陣の薄さを検知できない。
-# (2026-08-03: 判定は WAR ベースの独自実装から TeamDepthChart へ移行。テストもチャート経由に変更)
+# 下位が薄い球団の投手 need は高くなる。ここが立たないとドラフトAIが投手陣の薄さを検知できない。
+# need の実体は TeamDepthChart なので、このテストもチャート経由で見る。
 func test_pitcher_need_reflects_rotation_depth_not_single_ace() -> void:
 	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []
@@ -281,7 +281,7 @@ func test_main_draft_can_complete_before_development_step() -> void:
 	assert_int((state.get("candidate_pool", []) as Array).size()).is_equal(pool_size_before)
 
 
-# 指名数は在籍数に依らず固定の枠 (2026-08-03 に差分埋めから変更)。枠が足りない球団だけ
+# 指名数は在籍数に依らず固定の枠。枠が足りない球団だけ
 # capacity で縮む — 人数の帳尻は戦力外側 (在籍+見込み流入−開幕目標の余り) が合わせる。
 func test_draft_target_is_fixed_band_regardless_of_roster_size() -> void:
 	var teams: Array = [
@@ -486,8 +486,8 @@ func test_headless_create_resolves_first_round_silently() -> void:
 	assert_int(_round_pick_count(state, 1)).is_greater(0)
 
 
-# 指名枠は固定なので、**育成の昇格見込みがあっても指名数は変わらない** (2026-08-03 に変更。
-# 旧実装は昇格見込みで最大2人控えていた)。人数の帳尻は戦力外側が余りで合わせる。
+# 指名枠は固定なので、**育成の昇格見込みがあっても指名数は変わらない**。
+# 人数の帳尻は戦力外側が余りで合わせる。
 func test_draft_target_ignores_development_promotions() -> void:
 	var teams: Array = [_team(1, "league1", 1)]
 	var base_players: Array = []

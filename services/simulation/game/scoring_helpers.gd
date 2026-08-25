@@ -15,7 +15,7 @@ static func pitcher_order_score(record: PSPlayerSeasonRecord) -> int:
 
 
 static func maybe_injure(record: PSPlayerSeasonRecord, is_pitcher: bool, exposure: float = 1.0) -> Dictionary:
-	# 怪我の発生判定・重症度ティア・部位名・(まれな)恒久能力低下は PSInjuryModel に集約 (roadmap #6)。
+	# 怪我の発生判定・重症度ティア・部位名・(まれな)恒久能力低下は PSInjuryModel が持つ。
 	return PSInjuryModel.maybe_injure(record, is_pitcher, exposure)
 
 

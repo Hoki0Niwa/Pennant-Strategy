@@ -84,7 +84,7 @@ func _build_buttons() -> void:
 
 # ============================================================ actions
 
-# 前回のアクティブセーブ (無ければ最新) をそのまま読み込む従来のロード。
+# 前回のアクティブセーブ (無ければ最新) をそのまま読み込む。
 func _continue_game() -> void:
 	var save_data: Dictionary = SaveService.load_state()
 	if save_data.is_empty():

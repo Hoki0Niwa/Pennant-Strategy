@@ -265,7 +265,7 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "teamless_active_players", int(final_roster.get("teamless_active_players", 0)), 0.0, 0.0, "teamless active players")
 	_add_max_check(checks, "free_agent_orphans", int(final_roster.get("free_agent_orphans", 0)), 0.0, 0.0, "unresolved FA pool players")
 	_add_max_check(checks, "released_orphans", int(final_roster.get("released_orphans", 0)), 0.0, 0.0, "unresolved released players outside retirement")
-	# 戦力外刷新の受入指標。測るのは「戦力外フェーズで支配下枠から外れた人数」(戦力外通告 + 育成降格)で、
+	# 測るのは「戦力外フェーズで支配下枠から外れた人数」(戦力外通告 + 育成降格)で、
 	# 戦力外通告だけを数えると育成降格の分だけ実際の枠の空き方より過少に見えるため合算で持つ。
 	# 帯の根拠 (NPB 実測): 12月頭に一括公示される支配下選手の自由契約 (= 戦力外通告 + 支配下→育成再契約 +
 	# 外国人退団) から外国人を除いた日本人の人数は
@@ -285,7 +285,7 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 1.0, 4.0, "zero-appearance 30+ players surviving the release phase")
 	_add_min_check(checks, "post_team_controlled_min", _dist_value(post_roster_dist, "team_controlled_min", "min"), 66.0, 64.0, "every team should finish the offseason with at least 66 controlled players")
 	_add_max_check(checks, "post_team_controlled_max", _dist_value(post_roster_dist, "team_controlled_max", "max"), 68.0, 70.0, "every team should finish the offseason with at most 68 controlled players")
-	# 選手流動の沈黙/過熱検知。2026-07-06 の「FA宣言が15年間全ゼロでも health pass」の盲点を受けて追加。
+	# 選手流動の沈黙/過熱検知。これが無いと「FA宣言が15年間全ゼロ」でも health が pass になる。
 	# 平均0 (完全停止) は warn 側に倒して可視化する (初期データのFA日数過少による立ち上がり遅れは許容)。
 	_add_range_check(checks, "trades_per_year", _dist_value(flow_dist, "trades", "mean"), 1.0, 8.0, 0.0, 15.0, "in-season trades per year")
 	_add_range_check(checks, "fa_declared_per_year", _dist_value(flow_dist, "fa_declared", "mean"), 1.0, 10.0, 0.0, 20.0, "FA declarations per year")

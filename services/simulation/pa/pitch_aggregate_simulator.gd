@@ -43,8 +43,8 @@ const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が�
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
 const TTO_PITCH_COEF: float = 4.6           # 打順3巡目以降の粘られやすさを球数へ反映する係数。
 # 球数デルタの基準値。raw z の各項 (bat_bb_create*PATIENCE_COEF 等) を中立点なしでそのまま
-# 合算するための定数項 (旧: 各項を「実測母平均を引いてから係数を掛ける」形にしていたものを、
-# 母平均*係数の合計として1回だけここに畳み込んだもの。数式は代数的に同一、平均の実行時参照は無い)。
+# 合算するための定数項。各能力の「実測母平均 × 係数」の総和を畳み込んであるので、
+# 実行時に母平均を参照せず raw z へ係数を掛けて足すだけで済む。
 const PITCH_DELTA_BASE: float = 0.57237
 const FATIGUE_PITCH_COEF: float = 1.6       # 疲労が球数を増やす係数。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。

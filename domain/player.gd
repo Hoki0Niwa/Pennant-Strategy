@@ -148,7 +148,7 @@ var hometown: String
 var registered_roster: String
 var contract_status: String
 var foreign_player: bool
-# R4 Step1: FA権を得る在籍年数 (8=高卒 / 7=その他)。0 以下なら apply_dict が出身から既定値を計算。
+# FA権を得る在籍年数 (8=高卒 / 7=その他)。0 以下なら apply_dict が出身から既定値を計算。
 var fa_eligible_years: int = 0
 var position_aptitudes: Dictionary = {}
 var position_experience: Dictionary = {}
@@ -159,7 +159,7 @@ var z_abilities: Dictionary = {}
 var raw_abilities: Dictionary = {}
 # 変化球(球種)アーセナル: [{ "type": <String>, "mastery": <float z> }, ...]。
 # 初期シード投手は読み込み時に backfill され、ドラフト/外国人の生成投手は生成時に埋まるので通常は非空。
-# 空の場合(旧セーブ等)は record 側 arsenal_or_derived() が z から派生する。詳細 PSPitchTypes。
+# 空の場合は record 側 arsenal_or_derived() が z から派生する。詳細 PSPitchTypes。
 var arsenal: Array = []
 var fatigue: int
 var injury_days: int
@@ -279,7 +279,7 @@ func development_seasons_completed(offseason_year: int) -> int:
 	return maxi(0, offseason_year - since)
 
 
-# R4 Step1: 出身から FA閾値 (8=高卒 / 7=その他) を推定する。
+# 出身から FA閾値 (8=高卒 / 7=その他) を推定する。
 #  - 生成選手は source_data["draft_source"] に出身種別が入る。
 #  - 初期シード選手は列が無いため、デビュー年齢 (age - years + 1) が18以下なら高卒と推定。
 #  - 外国人は当面その他 (7) 扱い。
@@ -448,5 +448,5 @@ func _max_velocity_display_value(default_value: Variant) -> int:
 	return 0 if default_value == null else int(default_value)
 
 
-# 旧 ability → z 変換 (convert_legacy_to_z / convert_legacy_to_raw) は撤去した。
-# z_abilities / raw_abilities はシード CSV・ドラフト生成・セーブデータが直接保持する。
+# z_abilities / raw_abilities はシード CSV・ドラフト生成・セーブデータが直接保持する
+# (表示 1-100 点から変換して作る経路は持たない)。

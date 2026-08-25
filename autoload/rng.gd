@@ -13,8 +13,8 @@ var current_seed: int = 1
 # ため(このマシンでは12コア)、MAX_LANES=64 は衝突の実用上のリスクがない。配列は _ready() で
 # 事前確保して以後リサイズしないため、異なるスロットへの並行アクセスはロック不要
 # (Thread-safe APIs: 「サイズを変える操作」だけがロック必須という規定に合致)。
-# レーンを登録しない全ての既存呼び出し元(ドラフト・オフシーズン・トレード・単発試合デバッグ等)
-# は自スロットが非activeのため従来通り共有 generator を使う。
+# レーンを登録しない呼び出し元(ドラフト・オフシーズン・トレード・単発試合デバッグ等)は
+# 自スロットが非activeなので共有 generator を使う。
 const MAX_LANES: int = 64
 var _lane_generators: Array[RandomNumberGenerator] = []
 var _lane_active: Array[bool] = []
@@ -64,7 +64,7 @@ func _slot_for_current_thread() -> int:
 
 
 # 呼び出し中のスレッド専用スロットが active ならそこの generator を返す。非active(メインスレッドの
-# 通常処理等)なら従来の共有 generator にフォールバックし、挙動は一切変わらない。
+# 通常処理等)なら共有 generator を返す。
 func _generator_for_current_thread() -> RandomNumberGenerator:
 	var slot: int = _slot_for_current_thread()
 	if _lane_active[slot]:

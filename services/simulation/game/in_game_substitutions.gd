@@ -666,8 +666,8 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		if outgoing == null or position < 2 or position > 9:
 			continue
 		# 守備固めの対象は「守備が弱い」ことだけで決める。**年齢/経験年数では絞らない** —
-		# 実際の 守備固め は守備難のある若い強打者にも出る (2026-08-24 に旧ゲート
-		# 「30歳未満かつ8年未満は対象外」を撤去)。守備の質は下の 2 条件で担保する:
+		# 実際の 守備固め は守備難のある若い強打者にも出るので、年齢や経験年数でゲートしない。
+		# 守備の質は下の 2 条件で担保する:
 		# 退く選手が信頼水準を下回っていること + 控えが DEFENSIVE_REPLACEMENT_MIN_GAIN 以上上回ること。
 		var batting_score: int = pinch_hit_batting_score(outgoing)
 		if batting_score < batting_score_line(
@@ -680,10 +680,9 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		if plate_appearance_distance_to_slot(setup, lineup_slot) <= expected_plate_appearances:
 			continue
 		var outgoing_defense: int = defense_only_score(outgoing, position)
-		# **退く選手の守備力に絶対の上限は置かない。** 旧実装は「信頼水準 +20 を超える守備なら
-		# 対象外」としていたが、スタメンは守備込みで組まれるので大半がこの線を超え、控えに
-		# 明確な上位互換が居ても交代が成立しなかった (2026-08-24 の実測で、一軍控えに
-		# 22点以上の上積みがある枠が 44% あるのに交代がほとんど出ていなかった)。
+		# **退く選手の守備力に絶対の上限は置かない。** スタメンは守備込みで組まれるので
+		# 「一定水準を超える守備なら対象外」にすると大半のスタメンが除外され、控えに明確な
+		# 上位互換 (一軍控えの 44% は 22点以上の上積みを持つ) が居ても交代が成立しない。
 		# 「置き換える価値があるか」は下の defense_gain (相対差) と
 		# can_trust_fielder_for_position (控え側の絶対水準) の 2 つで足りる。
 		for bench_row in bench:

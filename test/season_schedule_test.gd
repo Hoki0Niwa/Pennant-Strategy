@@ -210,10 +210,9 @@ func test_intraleague_series_lengths_mix_one_to_three_games() -> void:
 
 
 func test_single_game_series_only_occur_in_september_or_later() -> void:
-	# 単独1試合(length=1)は9月以降限定で組む(ユーザー指摘、2026-07-08: 火水木カードの
-	# 「水曜移動日」を単独戦と誤認していたことの反省を踏まえ、真の単独戦は9月以降にのみ
-	# 現れるよう再設計した)。2連戦にはこの制約は適用しない(4-9月に分散するのが正しい実データ、
-	# 既存の派生調査を参照)。
+	# 単独1試合(length=1)は9月以降限定で組む。実データで単独戦に見えるものの多くは
+	# 火水木カードの「水曜移動日」で、真の単独戦は9月以降にしか現れない。
+	# 2連戦にはこの制約は適用しない(4-9月に分散するのが実データ)。
 	for year in [2026, 2027, 2028, 2029, 2030, 2100]:
 		var season_number: int = year - 2025
 		var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, year, season_number)
@@ -358,7 +357,7 @@ func _date_is_in_golden_week(date_text: String) -> bool:
 func test_series_right_after_long_breaks_stay_full_length() -> void:
 	# 開幕戦・交流戦明け・オールスター明けは、長い休養(オフシーズン/交流戦の休養カード/
 	# オールスター休養)の直後に短縮カード(1・2連戦)が来ると不自然なため、必ず3連戦になる
-	# ことを確認する(ユーザー指摘、2026-07-08)。intra_days はセ・パ共通なので、該当日には
+	# ことを確認する。intra_days はセ・パ共通なので、該当日には
 	# 両リーグそれぞれのカードが存在し、どちらも3連戦であることを確認する。
 	var base_opening: String = SeasonCalendar.opening_date_for_year(PSSchedule.TEMPLATE_BASE_YEAR)
 	for year in [2026, 2027, 2100]:

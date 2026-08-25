@@ -58,7 +58,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var original_rng_seed: int = Rng.current_seed
 	var original_rng_state: int = Rng.generator.state
-	# 永続化レイヤ v1: レポート中は RecordStore の中間状態 (各シーズン分の clear/再構築)
+	# レポート中は RecordStore の中間状態 (各シーズン分の clear/再構築)
 	# を新テーブルへ漏らさないため persistence を suspend する。
 	RecordStore.suspend_persistence()
 	if seed_value >= 0:
@@ -195,7 +195,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var original_rng_seed: int = Rng.current_seed
 	var original_rng_state: int = Rng.generator.state
-	# 永続化レイヤ v1: レポート中は RecordStore の中間状態を新テーブルへ漏らさない。
+	# レポート中は RecordStore の中間状態を永続化テーブルへ漏らさない。
 	RecordStore.suspend_persistence()
 	if seed_value >= 0:
 		Rng.set_seed_value(seed_value)

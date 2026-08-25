@@ -162,7 +162,7 @@ static func resolve(
 		_apply_hit_and_run_weights(weights)
 	var category_key: String = PSPaProbabilityCalculator.pick(weights)
 
-	# 2) 球数 summary 生成 (pitch-by-pitch 廃止)
+	# 2) 球数 summary 生成 (1球ずつは回さず、打席ぶんをまとめて作る)
 	var pitch_summary: Dictionary = PSPitchAggregateSimulator.simulate(category_key, precomp)
 
 	# 3) カテゴリ別に terminal/BIP を分岐
@@ -535,7 +535,7 @@ static func _runner_speed(bases: Array, base_index: int) -> float:
 
 # z_abilities ソースの precomp を構築する。
 # ContactQualityModel へは z 値 (batter_contact_z/gap_z/hr_z/avoid_k_z, pitcher_stuff_z) を
-# 直接渡し、curve はモデル内で ability_curve_z により算出する（display 往復は廃止）。
+# 直接渡し、curve はモデル内で ability_curve_z が算出する（表示 1-100 点は経由しない）。
 static func _build_precomp(
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,

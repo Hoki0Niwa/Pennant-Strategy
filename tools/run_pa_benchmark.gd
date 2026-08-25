@@ -1,6 +1,6 @@
 extends Node
 
-# PA benchmark for the active v2 plate simulator.
+# 打席シミュレータのベンチマーク。
 const DEFAULT_GAMES_PER_MODE: int = 40
 const SEED: int = 20260520
 

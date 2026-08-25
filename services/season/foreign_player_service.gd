@@ -1,7 +1,7 @@
 extends RefCounted
 class_name ForeignPlayerService
 
-# R4: 外国人選手雇用。
+# 外国人選手雇用。
 # FAと同じく state 型にし、自軍だけ手動で複数獲得できるようにする。完全自動の
 # process_foreign_market は長期検証/CPU用ラッパーとして維持する。
 
@@ -1198,7 +1198,7 @@ static func _state_candidate_by_id(state: Dictionary, candidate_id: int) -> Dict
 	return {}
 
 
-# roadmap #3: 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
+# 支配下枠 (育成除外) の人数。計数の単一ソースは TeamFinance。
 static func _active_count_for_team(players: Array, team_id: int) -> int:
 	return TeamFinance.controlled_count(players, team_id)
 

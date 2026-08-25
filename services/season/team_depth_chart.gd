@@ -2,9 +2,8 @@ extends RefCounted
 class_name TeamDepthChart
 
 # 球団の戦力と弱点を「年齢・ポジション・能力」で1枚に表したデプスチャート。
-# 戦力外 / ドラフト / FA / 外国人 / 戦力外獲得 / 現役ドラフト / トレードの補強AIが**共有する単一ソース**
-# (2026-08-03 新設。従来は position_need / _build_team_position_need / build_team_needs /
-#  release_depth_chart_evaluations と、同じ「需要」の実装が4箇所に散っていた)。
+# 戦力外 / ドラフト / FA / 外国人 / 戦力外獲得 / 現役ドラフト / トレードの補強AIが**共有する単一ソース**。
+# 「需要」の実装をここ以外に増やさないこと。
 #
 # ## スロット
 # 役割スロット = 先発 / 救援 / 守備位置2〜9。`slot_key_for(player)` が単一ソース。
@@ -23,9 +22,9 @@ class_name TeamDepthChart
 # - `future_value`: 将来の一軍枠の質 (現在値でいう first_team_value)。リーグ差が `future_need`。
 # - `future_line` : 将来の当落線 (現在値でいう first_team_line)。**「そのスロットの数年後の枠を
 #   誰が埋めているか」の水準**で、獲得候補の将来性はこれと比べて判定する。
-# ⚠️ 「24歳以下の上位2人の平均」という旧 prospect_value は 2026-08-05 に廃止した。年齢の閾値だけで
-#   区切ると (a) 38歳のレギュラーが居座るスロットが「将来安泰」に見え、(b) 25歳の主力が将来性に
-#   数えられない、という2つの誤りが出る。現在の方式は加齢を能力の衰えと引退確率の両方で効かせる。
+# ⚠️ 将来性を「24歳以下の上位2人の平均」のような年齢の閾値で測ってはいけない。閾値で区切ると
+#   (a) 38歳のレギュラーが居座るスロットが「将来安泰」に見え、(b) 25歳の主力が将来性に
+#   数えられない、という2つの誤りが出る。ここでは加齢を能力の衰えと引退確率の両方で効かせる。
 #
 # ## 候補の評価
 # `evaluate_candidate` が「そのスロットに入れたとき即戦力か / 将来に賭ける価値があるか」を返す。
@@ -249,7 +248,7 @@ static func _apply_league_baselines(charts: Dictionary) -> void:
 			# `need` = 支配下の厚み (快適人数ぶんの平均) のリーグ差。層の薄さを測る。
 			slot["need"] = maxf(0.0, league_depth - float(slot.get("depth_value", 0.0)))
 			# `first_team_need` = **一軍で使う枠の質**のリーグ差。野手は「そのポジションのレギュラー」、
-			# 投手は「ローテ/ブルペンの主力平均」の差になり、旧 position_need と同じ value 尺度になる。
+			# 投手は「ローテ/ブルペンの主力平均」の差で、単位は value。
 			# 補強AIの閾値 (FA の MIN_NEED_TO_SIGN 等) はこの尺度で較正されているのでこちらを公開する。
 			slot["first_team_need"] = maxf(0.0, league_first_team - float(slot.get("first_team_value", 0.0)))
 			# `future_need` = 数年後の一軍枠の質のリーグ差。**現在は足りていても後継が居なければ立つ**
@@ -314,14 +313,14 @@ static func slot_future_need(chart: Dictionary, slot_key: String) -> float:
 #
 # `future` の判定を future_line (将来の当落線) との比較にしてあるので、**既に将来を託せる選手が
 # 居るスロットは自動的に閉じる** (その選手が線を押し上げる)。逆に主力が高齢なだけのスロットは
-# 線が下がって後継を求める。旧実装は「24歳以下 ∧ 成長の楽観側が現在の当落線に届く ∧ 若手が0人」
-# だったが、年齢だけで区切ると素通しになりやすく、当落線も現在値だったため後継の要否を測れなかった。
+# 線が下がって後継を求める。「24歳以下 ∧ 若手が0人」のような年齢の区切りでは素通しになりやすく、
+# 当落線を現在値で測ると後継の要否そのものが判定できない。
 #
 # `upgrade_margin` は「当落線をどれだけ明確に上回れば戦力とみなすか」の余裕幅 (value 単位、
 # 既定 0 = 1点でも上回れば可)。**is_weakness (need > 0) はリーグ平均との比較なので構造的に
 # 全球団の約半数・約半分のスロットが該当する**ゆるいゲートで、これ単独では獲得数を絞れない
-# (毎年12球団すべてが上限まで獲る)。margin は投打で同じ value 尺度なので、旧 MIN_NEED_TO_SIGN の
-# ようにリーグ相対 need へ閾値を置いたとき投手側だけ need が立たず野手偏重になる問題も起きない。
+# (毎年12球団すべてが上限まで獲る)。margin は投打で同じ value 尺度なので、リーグ相対 need へ
+# 閾値を置いたときのように投手側だけ need が立たず野手偏重になる、という偏りも起きない。
 static func evaluate_candidate(chart: Dictionary, candidate: PSPlayer, upgrade_margin: float = 0.0) -> Dictionary:
 	if chart.is_empty() or candidate == null:
 		return {"immediate": false, "future": false, "fit": false}
@@ -348,9 +347,8 @@ static func evaluate_candidate(chart: Dictionary, candidate: PSPlayer, upgrade_m
 	}
 
 
-# 球団×ポジションの補強需要 {team_id: {1..9: need}}。旧 OffseasonService.position_need の互換ビュー。
-# **`first_team_need` (一軍枠の質のリーグ差) を返す** — 旧実装が野手「最良1人」・投手「上位K枚平均」を
-# リーグ平均と比べていたのと同じ value 尺度で、補強AIの閾値はこの尺度で較正されている。
+# 球団×ポジションの補強需要 {team_id: {1..9: need}}。position 番号のマップを期待する呼び出し元向けのビュー。
+# **`first_team_need` (一軍枠の質のリーグ差) を返す** — 単位は value で、補強AIの閾値はこの尺度で較正されている。
 # 投手 (position 1) は先発/救援スロットの need の大きい方 = より手薄な役割を返す。
 static func position_need_view(charts: Dictionary) -> Dictionary:
 	var need: Dictionary = {}

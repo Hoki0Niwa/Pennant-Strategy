@@ -15,8 +15,8 @@ const INJURY_MAINSTAY_STASH_MAX_DAYS: int = 5
 # その年の支配下選手の overall 分布から mean + sigma*spread を引く)。絶対値で置くと
 # リーグ全体の水準が動いただけで「主力」の範囲が一斉にズレる。
 # 実測 (1シーズン): 野手 mean 68.96/spread 9.91、投手 mean 68.92/spread 7.70。
-# MAINSTAY=+0.12σ は旧・絶対値 70.0 とほぼ一致。CORE=+1.4σ は旧 82.0 が野手 +1.32σ /
-# 投手 +1.70σ と**side で厳しさがズレていた**のを、どちらも上位 8% 相当へ揃えた値。
+# MAINSTAY=+0.12σ は「平均をわずかに上回る」水準、CORE=+1.4σ は投打どちらも上位 8% 相当。
+# σ で置くのは、絶対値だと同じ点数が投手と野手で違う厳しさになるため。
 const INJURY_MAINSTAY_STASH_SIGMA: float = 0.12
 const INJURY_CORE_STASH_SIGMA: float = 1.4
 # 母集団が取れないとき (合成データのテスト等) のフォールバック。
@@ -49,10 +49,10 @@ const TARGET_TOTAL: int = 31
 const TARGET_STARTERS: int = 6
 const TARGET_PITCHERS: int = 15
 const MIN_ACTIVE_CATCHERS: int = 2
-# ⚠️ **「守備固め用の守備要員を一軍へ確保する」枠は要らない** (2026-08-24 に実測して撤去)。
-# 一軍の控えには既に「その位置の先発より守備が 22点以上上」の選手が **8枠中 3.5枠 (44%)**
-# 居る。守備固めが出ていなかったのは控えの顔ぶれではなく判定側のゲートが原因だった
-# (`PSInGameSubstitutions.defensive_replacement_option` の絶対水準ゲート)。
+# ⚠️ **「守備固め用の守備要員を一軍へ確保する」枠は置かない。** 一軍の控えには既に
+# 「その位置の先発より守備が 22点以上上」の選手が **8枠中 3.5枠 (44%)** 居るので、
+# 守備固めが出ないときの原因は控えの顔ぶれではなく判定側のゲート
+# (`PSInGameSubstitutions.defensive_replacement_option`) を疑うこと。
 # 控えの守備力は `run_playing_time_probe` の `bench_defense` で測れる。
 const PITCHER_ROLE_STARTER: String = "starter"
 const PITCHER_ROLE_RELIEVER: String = "reliever"
@@ -184,12 +184,11 @@ static func _active_starter_records(active_records: Array) -> Array:
 
 
 # 戦力外用: 能力(総合評価) + 出場数 - 年齢ペナルティ。低いほど切られやすい。
-# **成績(ERA/勝敗等の実績)は使わない**。能力が高く出場機会を得たが成績不振だった選手を、
-# 出場ゼロの格下選手より先に切ってしまう問題があったため、能力ベースに統一する。
+# **成績(ERA/勝敗等の実績)は使わない**。成績を混ぜると、能力が高く出場機会を得たが不振だった
+# 選手を出場ゼロの格下選手より先に切ってしまうため、能力ベースに統一する。
 # 出場数(登板数/試合数)は「起用されている=編成上の価値がある」として加点する
-# (出場数であって成績ではない点に注意)。旧実装は投手だけ加点があり、中間層の野手が
-# 構造的に先へ切られて戦力外の投手:野手が約1:2に偏っていたため、野手にも同スケール
-# (最大24点前後) の加点を追加した (2026-07-03)。
+# (出場数であって成績ではない点に注意)。**投手と野手で同スケール (最大24点前後)** にすること —
+# 片側だけ加点があると中間層がそちらに偏って先に切られ、戦力外の投手:野手が 1:2 に傾く。
 # (一二軍入替の _swap_one_team は引き続き perf_score=成績ベースで判断する)
 const PITCHER_USAGE_STARTER_WEIGHT: float = 3.0
 const PITCHER_USAGE_RELIEVER_WEIGHT: float = 1.5
@@ -233,7 +232,7 @@ static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> 
 	var fielders: Array = []
 	for record_row in all_records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		# roadmap #3: 育成選手は一軍登録不可 (試合に出場できない)。
+		# 育成選手は一軍登録不可 (試合に出場できない)。
 		if record.development_player:
 			continue
 		if record.is_pitcher():
@@ -1075,7 +1074,7 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 		if last_day > 0 and current_day - last_day < SWAP_INTERVAL_DAYS:
 			continue
 		# 自軍の自動入替が無効でも、ロスター画面の「直近2週間」表示用にスナップショットだけは残す
-		# (入替判定はしない)。CPU 球団・自動入替ONの自軍は従来通り _swap_one_team で入替+記録。
+		# (入替判定はしない)。CPU 球団・自動入替ONの自軍は _swap_one_team が入替と記録を行う。
 		if is_user and not include_user_team:
 			_append_snapshots(season, RecordStore.get_team_player_records(team.id, season.year, season.season_number), current_day)
 			season.set_last_auto_swap_day(team.id, current_day)
@@ -1715,7 +1714,7 @@ static func _swap_one_team(season: PSSeason, team_id: int, current_day: int, war
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.injury_days > 0:
 			continue
-		# roadmap #3: 育成選手は一軍へ昇格できない (支配下登録が必要)。
+		# 育成選手は一軍へ昇格できない (支配下登録が必要)。
 		if record.development_player:
 			continue
 		var pid_key: String = str(record.player_id)

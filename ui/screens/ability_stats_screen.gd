@@ -404,7 +404,7 @@ func _on_tab_pressed(tab_id: String) -> void:
 		return
 	_active_tab = tab_id
 	# タブ切替は列セットが変わるだけなので、ソートをやり直さず現在の並び順を維持する
-	# (絞り込み変更 _on_filter_pressed は母集団自体が変わるので従来通りソートし直す)。
+	# (絞り込み変更 _on_filter_pressed は母集団自体が変わるのでソートし直す)。
 	_refresh(true)
 	_build_buttons()
 	queue_redraw()

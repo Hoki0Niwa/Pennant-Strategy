@@ -25,9 +25,9 @@ const DEFENSIVE_REPLACEMENT_START_INNING: int = 7
 # (現行ワールドで σ ラインと一致していることを
 #  `test_decision_lines_track_population_not_absolute_constants` が検査している)。
 #
-# LOW_BATTER = 代打を送る対象の上限。2026-08-24 に -2.29σ (下位1%) → **-1.0σ (下位約16%)**。
-#   旧値では打線の穴にすら代打が出ず、途中出場が実勢の 1/5 だった ([[project_bench_usage]])。
-# SOLID_BATTER = 守備固めで**下げてよい打者**の下限。-0.82σ → **-1.6σ** で対象を広げた。
+# LOW_BATTER = 代打を送る対象の上限 (-1.0σ = 下位約16%)。ここを絞りすぎると打線の穴にすら
+#   代打が出ず、途中出場が実勢の 1/5 まで落ちる ([[project_bench_usage]])。
+# SOLID_BATTER = 守備固めで**下げてよい打者**の下限 (-1.6σ)。下げるほど交代対象が広がる。
 const LOW_BATTER_SIGMA: float = -1.0
 const SOLID_BATTER_SIGMA: float = -1.6
 const LOW_BATTER_SCORE: int = 60
@@ -43,8 +43,8 @@ const FINAL_DEFENSE_MAX_LEAD: int = 10
 # この点差以上なら「勝ち試合の締め」として 3 枚まで替える (レギュラーを休ませる動き)。
 const BLOWOUT_LEAD: int = 6
 # 決着済みの試合で「休養のため」に送る代打の 1 試合上限。無制限だと打順が回るたびに替えて
-# しまう。2026-08-24 実測の 1球団1試合あたり代打数 (上限なし 0.93 / 2 → 0.71 / 1 → 0.49) と
-# 途中出場の総量 (3.26 / 2.98 / 2.69。実 NPB は 2.85) から 1 を採用。
+# しまう。1球団1試合あたりの代打数は 上限なし 0.93 / 2 → 0.71 / 1 → 0.49、途中出場の総量は
+# 3.26 / 2.98 / 2.69 と動く (実 NPB は 2.85) ので 1 を採る。
 const MAX_REST_PINCH_HITS: int = 1
 # この点差以上リードしていれば「あと1打席残っている選手」でも守備固めに踏み切り、
 # 1イニングに 2 枚替えることも許す。**リードが薄いうちは打線を崩さない**という区別。
@@ -201,8 +201,8 @@ static func _run_spot_starter_callups(season: PSSeason, day: int, auto_swap_ctx:
 
 
 # 当日の二軍戦を消化する。一軍とは別の WorkerThreadPool グループで回す。
-# Phase 0 の実測では「一軍と同一グループにまとめる」案との速度差は3%しかなく、別グループの
-# 方が実装がはるかに単純 (一軍のレーンID割当も seed 空間も一切変えずに済む)。
+# 一軍と同一グループにまとめても速度差は3%しかないので、一軍のレーンID割当と seed 空間を
+# 一切変えずに済む別グループ方式を採る。
 static func _simulate_farm_day(season: PSSeason, day: int, force_sequential: bool) -> void:
 	if season.farm_schedule.is_empty():
 		return
@@ -418,7 +418,7 @@ static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dict
 	# シーズン中トレード (交換期限まで週次・低頻度)。成立時は players の team_id が動くので
 	# インデックスを再構築する。自軍もCPU自動管理のとき (オートプレイ/自動入替ON/自動トレードON) は
 	# 自軍宛て提案を作らず、自軍もCPU間マッチングに参加させる。include_user_trade 未指定の呼び出し元
-	# (long_autoplay_reporter 等) は include_user_team のみで判定する従来挙動にフォールバックする。
+	# (long_autoplay_reporter 等) は include_user_team のみで判定する。
 	var include_user_trade: bool = bool(ctx.get("include_user_trade", include_user))
 	var trade_user_id: int = 0 if include_user_trade else user_team_id
 	var trade_result: Dictionary = TradeService.run_periodic_trade_check(season, GameDb.players, GameDb.teams, day, trade_user_id)
@@ -859,8 +859,8 @@ static func simulate_until_day_async(
 
 
 static func simulate_game_at_index(season: PSSeason, game_index: int, persist: bool = true) -> Dictionary:
-	# lane_id=-1: レーン機構を使わない(Rngは従来の共有generatorへフォールバック)。
-	# 逐次呼び出し(postseason/単発デバッグツール/このラッパー自身)の挙動は一切変わらない。
+	# lane_id=-1: レーン機構を使わない(Rng は共有 generator を使う)。
+	# 逐次呼び出し(postseason/単発デバッグツール/このラッパー自身)向けの入口。
 	var rule_groups: Array[Dictionary] = ModManager.hot_rule_groups_snapshot()
 	var calc: Dictionary = _simulate_game_calculation(season, game_index, -1, rule_groups)
 	if not bool(calc.get("ok", false)):
@@ -871,7 +871,7 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 # 1試合の計算フェーズ。setup構築とPSGameLoop.simulate_gameのみを行い、season/RecordStore/GameDb
 # の共有コンテナへは(排他所有が保証されたPSPlayerSeasonRecord/PSPlayer以外は)書き込まない。
 # 1日分の試合はチームが完全に排反なので、WorkerThreadPoolで複数試合を並列に呼んでも安全。
-# lane_id >= 0 のときだけ Rng のレーンストリームを開始/終了する(-1 は従来の共有generatorのまま)。
+# lane_id >= 0 のときだけ Rng のレーンストリームを開始/終了する(-1 は共有 generator を使う)。
 # セットアップの先発投手の利き腕 ("R"/"L")。相手打順の左右切替に使う。
 static func _starter_hand(setup: Dictionary) -> String:
 	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", null) as PSPlayerSeasonRecord

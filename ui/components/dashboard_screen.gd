@@ -437,7 +437,7 @@ func _luminance(c: Color) -> float:
 
 
 # 守備位置 (1-10) → 役割色。全画面共通: 投=PINK / 捕=BLUE / 内野(一二三遊)=AMBER / 外野(左中右)=GREEN / DH=VIOLET。
-# lineup_editor / active_roster / team_detail が共用する (各画面の重複実装は廃止)。
+# lineup_editor / active_roster / team_detail が共用する。画面ごとに実装を持たないこと。
 func _pos_color(pos: int) -> Color:
 	match pos:
 		1:
@@ -635,7 +635,7 @@ func _draw_baseball_stitches(arc_center: Vector2, arc_radius: float, angles_degr
 
 # ============================================================ shared data table
 
-# 共通テーブル描画 (2026-06-24)。各画面に重複していた _draw_table / _draw_table_row / _fmt_cell を集約。
+# 共通テーブル描画。一覧を持つ画面はここを呼び、_draw_table / _fmt_cell を各画面に作らない。
 # 列 columns: 幅 = w / 整列 = align ("l"|"left"/"c"|"center"/"r"|"right", 無指定は default_align) / 書式 = fmt。
 #   任意キー: sep_before:bool (列の左に縦ヘアライン。列グループの境界表現) /
 #   strong:bool (セルを bold で描く。選手名・球団名列の強調用)。
@@ -791,8 +791,8 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 				_text(str(row.get("rank", "")), Vector2(cx + 4.0, ty), cell_size, AMBER if is_leader else base_color, content_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_leader)
 			"team":
 				# 名前/色は row[key] / row[key+"_color"] を優先し、無ければ row["team"] / row["color"]
-				# にフォールバックする。既存の呼び出し (key=="team") はフォールバック経路そのままで
-				# 従来どおり動く。1行に複数の team 列を持たせたい画面 (例: タイトル履歴の両リーグ列)
+				# にフォールバックする。key=="team" の呼び出しはこのフォールバック経路で動く。
+				# 1行に複数の team 列を持たせたい画面 (例: タイトル履歴の両リーグ列)
 				# は key を "team" 以外にして row[key]/row[key+"_color"] を個別に持たせればよい。
 				var team_color: Color = row.get("%s_color" % key, row.get("color", MUTED)) as Color
 				_dot(Vector2(cx + 9.0, ry + row_h * 0.5), 5.0, team_color)
@@ -895,7 +895,7 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 # (ability_stats が最初に自前で持っていたものを、farm が2人目の利用者になった時点で集約した)。
 
 # ヘッダのクリック可能矩形を `_draw_data_table` と**同一の幾何**で再構築し hits へ積む。
-# ⚠️ 帯は header_top-18 から高さ26 (_draw_data_table v2 のヘッダ帯と一致)。ここがずれると
+# ⚠️ 帯は header_top-18 から高さ26 (_draw_data_table のヘッダ帯と一致)。ここがずれると
 # 見た目は正しいのにクリック位置だけ外れる、という気付きにくい壊れ方をする。
 func _build_table_header_hits(hits: Array, rect: Rect2, columns: Array, opts: Dictionary) -> void:
 	var inner_pad: float = float(opts.get("inner_pad", 12.0))

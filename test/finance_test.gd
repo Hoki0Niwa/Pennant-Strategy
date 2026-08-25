@@ -1,7 +1,7 @@
 extends GdUnitTestSuite
 
-# 年俸・予算経済オーバーホール (2026-07-12、2026-08-04に固定予算へ移行): 予算 (全球団固定額)・
-# ハードゲート (FA/外国人/戦力外獲得/トレード)・FA金銭補償の資金移動を検証する。
+# 年俸と予算まわりの検証: 予算 (全球団固定額)・ハードゲート (FA/外国人/戦力外獲得/トレード)・
+# FA金銭補償の資金移動。
 
 
 func test_final_ranks_orders_by_win_rate_then_wins() -> void:
@@ -34,8 +34,8 @@ func test_update_previous_ranks_does_not_touch_funds() -> void:
 	assert_int(t2.previous_rank).is_equal(2)
 
 
-# 予算の単一ソースは FIXED_BUDGET。シード CSV / 旧セーブがどんな funds を持っていても、
-# ロード時に apply_fixed_budget が全球団を固定額へ揃える (変動予算制の名残が復活しない保証)。
+# 予算の単一ソースは FIXED_BUDGET。シード CSV / セーブがどんな funds を持っていても、
+# ロード時に apply_fixed_budget が全球団を固定額へ揃える。
 func test_apply_fixed_budget_levels_every_team() -> void:
 	var teams: Array = [_team(1, "league1", 416500), _team(2, "league1", 467600), _team(3, "league2", TeamFinance.FIXED_BUDGET)]
 	# 既に固定額の球団は書き換え対象に数えない。
@@ -238,7 +238,7 @@ func test_fa_stay_keeps_renewal_salary_instead_of_offer() -> void:
 	assert_int(from_team.funds).is_equal(100000)
 
 
-# --- 複数年契約 (FA複数年オファー, 2026-07-17 Step2a) ------------------------
+# --- 複数年契約 (FA の複数年オファー) ----------------------------------------
 
 func test_fa_signing_sets_multi_year_contract_keys() -> void:
 	var signer: PSTeam = _team(1, "league1", 100000)

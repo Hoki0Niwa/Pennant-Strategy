@@ -83,7 +83,7 @@ const MIN_PITCHER_STAT_SPREAD: float = 0.30
 # 「他の選択肢より良いか」を問う閾値 (主力か/レギュラー級か/代打を送る弱さか) を、
 # 絶対値ではなく母集団の mean + sigma*spread で表すための基準。
 # 絶対値で置くとリーグ全体の水準が動いただけで判定が一斉にズレる
-# (前例: 旧 RELEASE_REPLACEMENT_VALUE を 52→56 と 4 点動かすだけで放出が 75.5→83.75 人/年)。
+# (放出ラインを絶対値で 4 点動かすだけで放出が 75.5→83.75 人/年 変わる程度に効きが急)。
 const DEFAULT_SCORE_REFERENCE: Dictionary = {
 	"overall_batter": {"mean": 67.0, "spread": 9.0},
 	"overall_pitcher": {"mean": 67.0, "spread": 9.0},

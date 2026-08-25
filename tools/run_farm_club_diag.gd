@@ -11,13 +11,12 @@ extends Node
 #   --roles を付けると試合を回さず、**役割判定が能力水準に依らないか**だけを
 #   水準別1000人の生成で測る (PSPitcherRoleModel.STARTER_DECISION_MARGIN を決めるための実測)。
 #
-# 2026-08-12 にこのツールで判明したこと (詳細は docs/agent_memory/project_farm_system_design.md):
-#   - 役割判定が能力水準に依存しており、専用球団は22人中0人が先発判定だった → 判定を
-#     starter_shape_advantage (水準を打ち消した差) へ変更して解消。
-#   - 専用球団の投手の質 z が 12球団より 2σ 低かった → 生成水準を引き上げ。
-#   - **当日のブルペン6人が全員疲労上限を超えると継投先が null になり、先発が投げ続けていた**
-#     (1試合370球の先発が実在した)。`relief_reserve` + 非常時の継投で解消。
-#     → (c) の「完投」列がこの症状の指標。他球団が0-5のところ専用球団だけ35-37だった。
+# 読み方 (詳細は docs/agent_memory/project_farm_system_design.md):
+#   - (b) の先発判定が専用球団だけ極端に少なければ、役割判定が能力の**水準**に依存している
+#     (判定は starter_shape_advantage = 水準を打ち消した差で行う)。
+#   - (a) の質 z が専用球団だけ 12球団より大きく低ければ、生成水準の問題。
+#   - (c) の「完投」列が他球団 0-5 に対して専用球団だけ 30 超なら、ブルペンが全員疲労上限を
+#     超えて継投先が null になり先発が投げ続けている (`relief_reserve` と非常時の継投を疑う)。
 
 const PIT_KEYS: Array = [
 	"Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_BarrelDeny", "Pit_LoftControl",

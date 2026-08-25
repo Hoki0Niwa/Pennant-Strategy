@@ -438,7 +438,7 @@ func _draw_box_score(rect: Rect2) -> void:
 	var inn_w: float = (iw - fixed_w) / float(col_count)
 
 	var hy: float = rect.position.y + 64.0
-	# ヘッダ帯 (v2 の _draw_data_table と同じ言語: PANEL_2 の帯 + bold ラベル + 下端太めルール)。
+	# ヘッダ帯 (_draw_data_table と同じ言語: PANEL_2 の帯 + bold ラベル + 下端太めルール)。
 	_round(Rect2(ix, hy - 18.0, iw, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	# 固定列ヘッダ
 	var cx: float = ix
@@ -582,7 +582,7 @@ func _draw_pitching(rect: Rect2) -> void:
 	var ix: float = rect.position.x + 18.0
 	var hy: float = rect.position.y + 60.0
 
-	# ヘッダ帯 + bold ラベル (v2 の _draw_data_table と同じ言語)。
+	# ヘッダ帯 + bold ラベル (_draw_data_table と同じ言語)。
 	_round(Rect2(ix, hy - 18.0, rect.end.x - 18.0 - ix, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	var cx: float = ix
 	# 列グループ境界 (投手識別 | 勝敗 | 出場・投球回 | 被安打以下 | 防御率) の x を積みながらヘッダを描く。

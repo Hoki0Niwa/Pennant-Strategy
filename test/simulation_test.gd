@@ -33,7 +33,7 @@ func test_camp_training_count_varies_by_need() -> void:
 		SaveContext.delete_current_save_data()
 
 	# 需要連動: 機械的に全球団が上限 (3) へ張り付かないこと。初期データの構成が均衡していて
-	# 開幕時点の需要が無ければ全球団 0 もあり得る (2026-07-06 ポジション構成リバランス後は正常挙動)。
+	# 開幕時点の需要が無ければ全球団 0 もあり得る (異常ではない)。
 	assert_int(int(counts[counts.size() - 1])).is_less_equal(CampServiceRef.MAX_SPECIAL_TRAININGS_PER_TEAM)
 	assert_int(int(counts[0])).is_less_equal(1)
 
@@ -41,24 +41,24 @@ func test_camp_training_count_varies_by_need() -> void:
 # 表示評価値 (overall_score) は 野手 / 先発 / 中継 で同スケールであること。
 # 先発は係数圧縮で野手スケールへ、中継は relief 強調式で先発スケールへ較正済み。
 #
-# **母集団は支配下のみ** (2026-08-04)。育成を混ぜると、比較しているのが「評価式のスケール」ではなく
+# **母集団は支配下のみ**。育成を混ぜると、比較しているのが「評価式のスケール」ではなく
 # 「育成をどれだけ抱えているか」になってしまう。実測: 同一シードで支配下のみなら 投手68.92 /
 # 野手68.98 (差 0.06) だが、育成込みだと 投手66.7 / 野手65.4 (差 1.29) へ跳ねる。育成は
 # 野手平均48.9 / 投手平均52.3 と低評価かつ野手側の裾が長いため、保有数が増えるほど野手平均だけが
-# 下がるためで、投打の評価スケール自体は動いていない。実際、育成保有数を増やす変更
-# ([[project_released_market]] の育成無制限化) を入れただけでこのテストが落ちるようになった。
+# 下がるためで、投打の評価スケール自体は動いていない。**育成保有数が増えるだけで
+# このテストは落ちる**ので、母集団に育成を混ぜないこと。
 # 編成AI (デプスチャート等) も支配下だけを見るので、母集団を揃えるほうが本来の意図に合う。
 # 役割の初期判定 (role="" の投手を先発/中継へ振る) は「先発向きか救援向きかの**形**」だけで
 # 決まり、**その投手がどれだけ強いかには依らない**こと。
-# 依存していた頃は、一律に弱い集団は全員が中継ぎ判定になり、ファーム専用球団は22人中0人が
-# 先発 = 二軍戦がブルペンデー連発になっていた (2026-08-12 実測)。
+# ここが水準に依存すると、一律に弱い集団は全員が中継ぎ判定になり、ファーム専用球団は
+# 先発が 1 人も立たず二軍戦がブルペンデー連発になる。
 func test_pitcher_role_decision_ignores_overall_ability_level() -> void:
 	for shape in ["starter", "reliever"]:
 		var decisions: Array = []
 		var shape_advantages: Array = []
 		var raw_advantages: Array = []
 		# 水準の幅は ±1.6σ。補正が無いと 1.95 × 3.2σ ぶん判定がずれるので、
-		# 「形は同じなのに役割が反転する」旧挙動をこの幅で捕まえられる。
+		# 「形は同じなのに役割が反転する」壊れ方をこの幅で捕まえられる。
 		for level in [-1.6, -0.5, 0.5, 1.6]:
 			var record: PSPlayerSeasonRecord = _shaped_pitcher_record(str(shape), float(level))
 			decisions.append(PSPitcherRoleModel.is_starter_record(record))
@@ -70,7 +70,7 @@ func test_pitcher_role_decision_ignores_overall_ability_level() -> void:
 		assert_float(shape_span).override_failure_message(
 			"shape=%s: starter_shape_advantage が水準で %.2f も動いた (%s)" % [shape, shape_span, str(shape_advantages)]
 		).is_less(0.35)
-		# 補正前の生の差は水準に強く引きずられる (= 補正が必要だったことの裏取り)。
+		# 補正前の生の差は水準に強く引きずられる (= 補正が効いていることの裏取り)。
 		# ここが小さくなったら重み構成が変わったということなので ROLE_LEVEL_WEIGHT_DELTA を見直す。
 		var raw_span: float = float(raw_advantages.max()) - float(raw_advantages.min())
 		assert_float(raw_span).override_failure_message(
@@ -364,10 +364,10 @@ func test_batting_reference_is_measured_from_population() -> void:
 
 
 # 「他の選択肢より良いか」を問う判定ラインは絶対値ではなく母集団相対 (mean + sigma*spread)。
-# 絶対値だとリーグ全体の水準が動いただけで判定が一斉にズレる
-# (前例: 旧 RELEASE_REPLACEMENT_VALUE を 4 点動かすだけで放出が 75.5→83.75 人/年)。
-# ここでは (1) ラインが実測母集団に一致すること (2) sigma 定数が現行ワールドで
-# 旧・絶対値を再現すること (= 相対化が挙動保存であること) を固定する。
+# 絶対値だとリーグ全体の水準が動いただけで判定が一斉にズレる (放出ラインを 4 点動かすだけで
+# 放出が 75.5→83.75 人/年 変わる程度に効きが急)。
+# ここでは (1) ラインが実測母集団に一致すること (2) 各 sigma が現行ワールドで
+# フォールバック定数と同じ位置に来ることを固定する。
 func test_decision_lines_track_population_not_absolute_constants() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season
@@ -407,7 +407,7 @@ func test_decision_lines_track_population_not_absolute_constants() -> void:
 		PSPerformanceReference.score_threshold(season.year, season.season_number, "overall_batter", 1.5)
 	).is_equal_approx(mean + 1.5 * spread, 0.001)
 
-	# (2) 各 sigma が現行ワールドで旧・絶対値を再現する (相対化で挙動が飛んでいない)。
+	# (2) 各 sigma が現行ワールドでフォールバック定数と同じ位置に来る。
 	var line_of: Callable = func(key: String, sigma: float) -> float:
 		return PSPerformanceReference.score_threshold(season.year, season.season_number, key, sigma)
 	var lines: Dictionary = {
@@ -1267,7 +1267,7 @@ func test_relief_role_assignment_is_stable_under_fatigue() -> void:
 # ここが null を返すと呼び出し側は継投を諦め、先発が投げ続ける。実際に当日ブルペンは
 # 疲労を見ない能力上位6人固定なので、6人が全員 RELIEVER_EMERGENCY_FATIGUE_LIMIT を超えると
 # 「健康な救援がロスターに残っているのに誰も投げられない」状態になり、
-# **1試合370球を投げる先発**が発生していた (2026-08-12、二軍のファーム専用球団で実測)。
+# **1試合370球を投げる先発**が生まれる (二軍のファーム専用球団で起きやすい)。
 func test_exhausted_bullpen_still_yields_an_emergency_reliever() -> void:
 	var bullpen: Array = []
 	for i in range(6):
@@ -1294,7 +1294,7 @@ func test_exhausted_bullpen_still_yields_an_emergency_reliever() -> void:
 	assert_int(picked.player_id).is_equal(reserve_fresh.player_id)
 
 	# 控えが尽きたら、疲労上限を超えていてもブルペンから最も疲労の少ない投手を上げる
-	# (実野球では誰かが必ず投げる。ここで null を返すのが 370球の原因だった)。
+	# (実野球では誰かが必ず投げる。ここで null を返すと先発が交代できず球数が青天井になる)。
 	setup["relief_reserve"] = []
 	(bullpen[3] as PSPlayerSeasonRecord).fatigue = PSPitcherUsageModel.RELIEVER_EMERGENCY_FATIGUE_LIMIT + 1
 	var fallback: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 6, {})
@@ -1321,8 +1321,8 @@ func test_pitch_model_per_category_counts_are_realistic() -> void:
 			"event_index": i * 7 + 3,
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
-			# 平均的な対戦の raw z (旧中立点定数と同じ実測値。中立点機構は廃止済みで
-			# raw z をそのまま使うため、ここでは「平均的選手」を表す具体値を直接渡す)。
+			# 平均的な対戦の raw z。PA は raw z をそのまま使うので、
+			# ここでは「平均的選手」を表す実測値を直接渡す。
 			"batter_z": {
 				"Bat_BBCreate": 0.8291,
 				"Bat_Aggression": 0.2957,
@@ -1367,8 +1367,8 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 			"batter_id": (i * 131) % 9000 + 1,
 			"pitcher_id": (i * 977) % 9000 + 1,
 			# 分布ガードは固定リファレンス中立値の平均的な対戦で見る。
-			# 平均的な対戦の raw z (旧中立点定数と同じ実測値。中立点機構は廃止済みで
-			# raw z をそのまま使うため、ここでは「平均的選手」を表す具体値を直接渡す)。
+			# 平均的な対戦の raw z。PA は raw z をそのまま使うので、
+			# ここでは「平均的選手」を表す実測値を直接渡す。
 			"batter_z": {
 				"Bat_BBCreate": 0.8291,
 				"Bat_Aggression": 0.2957,
@@ -1399,8 +1399,8 @@ func test_pitch_model_distribution_matches_tht_shape() -> void:
 	assert_int(_max_pitch_count(counts)).is_less_equal(20)
 
 
-# 中立点機構は撤去済み。pool_snapshot は balance_report 向けの observational な計測のみを
-# 提供するスモークテスト(件数が妥当な範囲か・全キーが浮動小数として返るかだけを確認する)。
+# pool_snapshot は balance_report 向けの observational な計測だけを返す。
+# ここでは件数が妥当な範囲か・全キーが浮動小数として返るかだけを確認する。
 func test_ability_reference_snapshot_matches_initial_pool() -> void:
 	GameDb.load_initial_data()
 	var snapshot: Dictionary = PSAbilityReference.pool_snapshot(GameDb.players)
@@ -1515,9 +1515,8 @@ func test_contact_quality_preserves_matchup_balance_when_both_levels_drop() -> v
 	# 向きは保つ (弱い打者は打球が弱く、弱い投手は打たれる)。
 	assert_float(weak_batter_ev).is_less(baseline_ev - 0.5)
 	assert_float(weak_pitcher_ev).is_greater(baseline_ev + 0.5)
-	# ⚠️ **片側応答には上限がある** (2026-08-17 の対戦優位圧縮)。以前はここが「2.0 mph 超」の
-	# 下限だったが、能力差が結果へ効きすぎる問題を直すために上限側の不変条件へ置き換えた。
-	# 極端なミスマッチでも打球品質が青天井にならないことを固定する。
+	# ⚠️ **片側応答には上限がある** (対戦優位の圧縮)。極端なミスマッチでも打球品質が
+	# 青天井にならないことを固定する。
 	assert_float(weak_batter_ev).override_failure_message(
 		"打者が弱いときの打球品質の落ち込みが飽和していない"
 	).is_greater(baseline_ev - 3.2)
@@ -2009,7 +2008,7 @@ func test_long_role_is_preferred_for_mop_up() -> void:
 
 # 投手の打順で代打を立てられないとき、打席に立つのは**現在マウンドにいる投手**。
 # 代打は打順スロットを置き換えず先発のレコードが残るので、ここを取り違えると
-# 既に降板した先発が打席に立つ。先発がまだ投げているなら従来どおり先発が打つ。
+# 既に降板した先発が打席に立ってしまう。先発がまだ投げているなら先発が打つ。
 func test_pitcher_spot_batter_is_the_current_pitcher_after_the_starter_left() -> void:
 	var starter: PSPlayerSeasonRecord = _pitcher(301, "Starter", 0.4)
 	var reliever: PSPlayerSeasonRecord = _pitcher(302, "Reliever", 0.2)
@@ -2032,7 +2031,7 @@ func test_pitcher_spot_batter_is_the_current_pitcher_after_the_starter_left() ->
 	assert_object(batter).is_not_null()
 	assert_int(batter.player_id).is_equal(reliever.player_id)
 
-	# 先発が降板していなければ打者は先発のまま (代打不成立時の従来挙動)。
+	# 先発が降板していなければ打者は先発のまま (代打が成立しないケース)。
 	setup["pitcher"] = starter
 	setup["starter_relieved"] = false
 	var still_pitching: PSPlayerSeasonRecord = PSInGameSubstitutions.maybe_select_pinch_hitter(
@@ -2043,7 +2042,7 @@ func test_pitcher_spot_batter_is_the_current_pitcher_after_the_starter_left() ->
 
 # 代走は「終盤 × 僅差 × 足の遅い走者 × 明確に速い控え」の全部が揃ったときだけ出す。
 # 打順スロットは代走が引き継ぎ、控えからは外れる。どれか 1 つでもゲートが外れると
-# 「毎回代走」か「一度も代走が出ない」のどちらかになる (実装前は後者だった)。
+# 「毎回代走」か「一度も代走が出ない」のどちらかになる。
 func test_pinch_runner_replaces_a_slow_runner_only_in_a_close_late_game() -> void:
 	var slow: PSPlayerSeasonRecord = _fielder(901, "Slow", -0.6)
 	var fast: PSPlayerSeasonRecord = _fielder(902, "Fast", 0.9)
@@ -2290,7 +2289,7 @@ func test_winning_pitcher_passes_to_reliever_when_starter_under_five_innings() -
 
 
 # QS (規則9.19) は自責点3以下が条件。失点(自責+非自責)で判定すると味方失策等の非自責点で
-# 誤って逃す/満たすため、outing の earned_runs を使うこと (2026-07-10 修正)。
+# 誤って逃す/満たすため、outing の earned_runs を使うこと。
 # 6回(18アウト)・失点4・自責2 のケースは失点基準なら QS を逃すが、自責基準では成立する。
 func test_quality_start_uses_earned_runs_not_total_runs() -> void:
 	var starter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
@@ -2524,7 +2523,7 @@ func test_dh_is_automatic_unless_the_user_designates_one() -> void:
 
 
 # シェアは**リーグ相対**で決まり、控えの質は副次補正 (SHARE_GAP_*) の幅しか動かさない。
-# 旧方式 (控えとの能力差が主役) に戻ると全枠が上限へ張り付いて規定到達者が膨らむ。
+# 控えとの能力差を主役にすると全枠が上限へ張り付いて規定到達者が膨らむ。
 func test_starter_share_is_league_relative_not_bench_relative() -> void:
 	var starter: PSPlayerSeasonRecord = _fielder(520, "Starter", 1.0)
 	var weak_sub: PSPlayerSeasonRecord = _fielder(521, "Weak Sub", -1.5)
@@ -2952,7 +2951,7 @@ func test_assign_types_always_includes_exactly_one_straight() -> void:
 				assert_int(seen.size()).is_equal(count)
 
 
-# 直球が無い旧データは「代役だった速球系の最良球」を直球へ読み替えて揃える (本数は変えない)。
+# 直球を持たない投手は、速球系の最良球を直球へ読み替えて揃える (球種の本数は変えない)。
 func test_ensure_straight_retypes_substitute_fastball() -> void:
 	var legacy: Array = [
 		{"type": PSPitchTypes.CHANGEUP, "mastery": 1.4},
@@ -3443,7 +3442,7 @@ func _catcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRe
 
 
 # 盗塁企図は投球前フェーズで計画される(pre_plate_runner_plan)。大半は途中決行として即座に
-# events 側で解決され(phase=="before_pitch")、旧仕様の "caught_stealing_throwing_error"
+# events 側で解決される(phase=="before_pitch")。"caught_stealing_throwing_error"
 # (刺殺→失策セーフ変換)は出現しないこと、成功盗塁の一部が捕手送球エラーで進塁先++1
 # (記録は盗塁+E2)になることを確認する。
 func test_pre_plate_steal_events_resolve_without_strikeout() -> void:
@@ -3978,7 +3977,7 @@ func test_long_autoplay_prepares_every_season_for_streaming_report_aggregation()
 # 故障のティア抽選は投手と野手で別テーブル。どちらも実 NPB の故障者リスト基準で、
 # **投手の方が長期側へ寄っている** (オフ時点に離脱中の投手の 6-8 割が手術)。
 # 特に投手の「重大手術」= トミー・ジョン級は 1球団 年1件が目標で、ここが薄くなると
-# オフの故障者が実勢の 1/3 になる (2026-08-23 の較正前がその状態)。
+# オフの故障者が実勢の 1/3 になる。
 func test_injury_tiers_are_weighted_separately_for_batters_and_pitchers() -> void:
 	var previous_seed: int = Rng.current_seed
 	var previous_state: int = Rng.generator.state
@@ -4006,7 +4005,7 @@ func test_injury_tiers_are_weighted_separately_for_batters_and_pitchers() -> voi
 	assert_float(float(pitcher_severe) / float(samples)).is_between(0.04, 0.07)
 
 
-# 野手の故障頻度は実 NPB 準拠 (2026-08-22 時点で離脱中の野手 34人/12球団 = 2.83人)。
+# 野手の故障頻度は実 NPB 準拠 (シーズン終盤に離脱中の野手 34人/12球団 = 2.83人)。
 # 先発ぶんの判定だけを 1球団1シーズン (143試合 × 野手 9人) 回すと、15日以上の離脱が
 # 3-6 件出る水準。実際のシムはこれに代打/守備交代と二軍戦、疲労の上乗せが乗る。
 # 頻度を半分に戻すと下限を、倍にすると上限を割る。

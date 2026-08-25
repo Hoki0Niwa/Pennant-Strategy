@@ -71,7 +71,7 @@ const RANK_CHIP_W: float = 72.0
 
 # 主力 / 最有望株の2ブロック。**同じ内部レイアウト** (名前 / 育成chip / 年齢 / 総合) を共有し、
 # 育成 chip の枠は主力側では空くだけ (幾何を揃えるため確保しておく)。
-# 幅は残り領域の**等分**で決める — 個別に x を書くと片方だけ広く見える (ユーザー指摘)。
+# 幅は残り領域の**等分**で決める — 個別に x を書くと片方だけ広く見える。
 # 各ブロック内は右端に D_PLAYER_GUTTER の余白を残し、ブロック間 / 表の右端の空きを揃える。
 const D_PLAYER_AREA_L: float = 1362.0
 const D_PLAYER_AREA_R: float = 1882.0
@@ -219,8 +219,7 @@ func _draw_statbar() -> void:
 	_stat_strip(Rect2(INNER_L, STAT_Y2, INNER_R - INNER_L, STAT_H), row2)
 
 
-# リーグ内順位 → note 文言 + 色。1位=AMBER / 最下位(=リーグ最終順位)=VIOLET / それ以外=BLUE
-# (旧カード列の chip 配色をそのまま踏襲)。
+# リーグ内順位 → note 文言 + 色。1位=AMBER / 最下位(=リーグ最終順位)=VIOLET / それ以外=BLUE。
 func _rank_note(rank: int) -> Dictionary:
 	if rank <= 0:
 		return {"text": "", "color": MUTED}

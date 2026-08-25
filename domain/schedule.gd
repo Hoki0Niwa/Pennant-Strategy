@@ -382,7 +382,7 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 	#
 	# intra_days は両リーグ共通の固定週間隔カレンダー(常に火水木/金土日のペースで前進し、
 	# カードの短縮では前倒し圧縮しない)。そのため GW 判定も「保護なし試行」を経由せず、
-	# この実日付をそのまま使える(2026-07-08 の前倒し圧縮方式から固定週間隔方式へ変更)。
+	# この実日付をそのまま使える。
 	var same_week_as_next: Array = _same_week_as_next_flags(intra_days, target_opening)
 	var slot_is_holiday_monday: Array = _slot_is_holiday_monday_flags(intra_days, target_opening)
 
@@ -394,18 +394,18 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 	_mark_holiday_monday_slots_protected(league1_protected_cycles, league1_round_orders, slot_is_holiday_monday)
 	_mark_holiday_monday_slots_protected(league2_protected_cycles, league2_round_orders, slot_is_holiday_monday)
 	# 開幕戦・交流戦明け・オールスター明けは長い休養の直後なので、必ず3連戦にする
-	# (短縮カードだと不自然、ユーザー指摘)。intra_days は両リーグ共通なので判定も共通。
+	# (長い休養明けに短縮カードが来るのは不自然)。intra_days は両リーグ共通なので判定も共通。
 	var long_break_protected_block_indices: Dictionary = _long_break_protected_block_indices(intra_days)
 	_mark_long_break_slots_protected(league1_protected_cycles, league1_round_orders, long_break_protected_block_indices)
 	_mark_long_break_slots_protected(league2_protected_cycles, league2_round_orders, long_break_protected_block_indices)
-	# 単独1試合(length=1)は9月以降限定で組む(ユーザー指摘、2026-07-08)。
+	# 単独1試合(length=1)は9月以降限定で組む。
 	var league1_is_september: Array = _is_september_or_later_by_round_index(league1_round_orders, intra_days, target_opening)
 	var league2_is_september: Array = _is_september_or_later_by_round_index(league2_round_orders, intra_days, target_opening)
 
 	var league1_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league1_round_orders, cycle_length_seed + 88001, league1_protected_cycles, same_week_as_next, league1_is_september)
 	var league2_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league2_round_orders, cycle_length_seed + 271828, league2_protected_cycles, same_week_as_next, league2_is_september)
 	# 単独1試合は実際には「他の対戦カードがその窓の残り日へ相乗りする」ことが多い
-	# (ユーザー指摘: 木曜移動日の2連戦相当を単独戦と誤認していた、という反省を踏まえた再設計)。
+	# (実データで単独戦に見えるものの多くは、木曜が移動日になっただけの2連戦)。
 	# 相乗り元(ドナー)は同じ9月以降のどこかの巡にある別 round_index の length=3 を
 	# 1試合分だけ2に短縮して提供する(ドナー自身の総試合数は変わらない)。
 	var league1_companions: Dictionary = _assign_single_game_companions(league1_cycle_plans, league1_round_orders, league1_protected_cycles, league1_is_september, same_week_as_next, cycle_length_seed + 313111)
@@ -553,8 +553,7 @@ static func _template_three_game_block_days(year: int) -> Dictionary:
 				intra_days.append(day)
 				block_consumed = true
 		# 消費した3連戦分は丸ごと飛ばす。祝日月曜始まりの回では中2日目(火)がTue候補と
-		# 重複してしまうため、1日ずつ進める従来のロジックのままだと二重にブロックを
-		# 拾ってしまう。
+		# 重複してしまうため、1日ずつ進めると二重にブロックを拾ってしまう。
 		date_text = SeasonCalendar.add_days(date_text, GAMES_PER_SERIES if block_consumed else 1)
 		guard += 1
 	return {"intra": intra_days, "interleague": interleague_days}
@@ -611,8 +610,8 @@ static func _mark_holiday_monday_slots_protected(protected_cycles_by_round: Arra
 
 
 # 開幕戦・交流戦明け・オールスター明けは、長い休養(オフシーズン/交流戦の休養カード/
-# オールスター休養)の直後に短縮カード(1・2連戦)が来ると不自然なため、必ず3連戦にする
-# (ユーザー指摘、2026-07-08)。該当する block_index を intra_days(全リーグ共通の固定
+# オールスター休養)の直後に短縮カード(1・2連戦)が来ると不自然なため、必ず3連戦にする。
+# 該当する block_index を intra_days(全リーグ共通の固定
 # 週間隔カレンダー)から特定する: 開幕戦は intra_days の先頭、交流戦明け/オールスター明けは
 # その期間の終了日より後で最初に来る intra ブロック。
 static func _long_break_protected_block_indices(intra_days: Array) -> Dictionary:
@@ -687,7 +686,7 @@ static func _append_intraleague_series_specs_with_day_offset(specs: Array, pairs
 # (intra_days)なので、圧縮は行わない。短縮時にどの曜日を休むかだけをここで決める:
 # 火曜始まりカード(火水木)は前寄せ(先頭から詰めて末尾を休む: 2連戦=火水、単独1試合=火のみ)。
 # 金曜始まりカード(金土日)は土曜始まりに固定する(2連戦=土日で金曜のみ休む、単独1試合=
-# 土曜のみで金・日を休む)。ユーザー指摘通り、火水木の2連戦は火水で行い木曜休養、
+# 土曜のみで金・日を休む)。火水木の2連戦は火水で行い木曜休養、
 # 金土日の2連戦は土日で行い金曜休養とすることで、同じ週にもう一方が短縮されない限り
 # 休養は常に1日以内に収まる(2つの週境界のうち、火→金は間隔0日で無バッファ、金→翌週火は
 # 月曜移動日で1日分のバッファがあるため、後ろ寄せ/前寄せの選び方は非対称: 火曜カードは
@@ -737,7 +736,7 @@ static func _append_series_rows(rows: Array, start_day: int, specs: Array, targe
 
 
 # day_offset は窓(3日間)内での明示的な開始位置(0=初日等)。-1 なら _append_series_rows が
-# 従来通り length/曜日種別から自動決定する。相乗り単独戦(_assign_single_game_companions)の
+# length/曜日種別から自動決定する。相乗り単独戦(_assign_single_game_companions)の
 # ように、同じ窓内で複数カードが「どの日を使うか」を明示的に指定したい場合に使う。
 static func _series_spec(away_bucket: String, home_bucket: String, is_interleague: bool, series_id: int, cycle_number: int, length: int = GAMES_PER_SERIES, day_offset: int = -1) -> Dictionary:
 	return {
@@ -845,15 +844,15 @@ static func _round_orders_for_cycles(cycles_count: int, seed: int) -> Array:
 # round_orders(巡ごとのカード順シャッフル)と same_week_as_next(_same_week_as_next_flags、
 # 火カード→直後の金カードが同じ週かどうか)を渡すことで、「同じ週の火水木カードと金土日
 # カードを両方短縮しない」制約を round_index をまたいで守る。両方短縮すると、火水木側は
-# 木曜を休み・金土日側は金曜を休むため、木・金と2日連続の休養日になってしまう
-# (ユーザー指摘、2026-07-08)。round_index を 0..4 の順に処理し、既に他の round_index が
+# 木曜を休み・金土日側は金曜を休むため、木・金と2日連続の休養日になってしまう。
+# round_index を 0..4 の順に処理し、既に他の round_index が
 # 短縮済みのブロックと同じ週なら候補から除外する形でこの制約を保証する。
 # フォールバックの優先順位: 候補が尽きた場合、週制約より先に protected_cycles_by_round を
 # 無視する(=まれに保護対象が短縮される方が、休養3日以上という深刻な回帰より軽微なため)。
 #
 # is_september_or_later は round_index ごとに cycles_count 個の bool 配列を持ち、単独1試合
 # (length=1、use_two_reductions==false のパターン)はこれが true の巡にしか割り当てない
-# (ユーザー指摘、2026-07-08: 単独戦は9月以降に限定する)。2連戦(length=2)にはこの制約は
+# (単独戦は9月以降に限定する)。2連戦(length=2)にはこの制約は
 # 適用しない(実データで4-9月に渡って分散していることを確認済みのため)。
 static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, seed: int, protected_cycles_by_round: Array, same_week_as_next: Array, is_september_or_later: Array) -> Array:
 	var reduced_blocks: Dictionary = {}
@@ -893,9 +892,9 @@ static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, see
 		# 保護巡・週の相方短縮済みだけで埋まってしまう(GW保護に加えて祝日月曜・開幕/交流戦明け/
 		# オールスター明けの保護も乗るため、稀に起きうる)ケースへのフォールバック: 週制約
 		# (同じ週の二重短縮=木・金と2日連続休養)は絶対に破らず、まず保護の方を先に無視する。
-		# 週制約を破ると「休養3日以上」という、より深刻な回帰を再導入してしまうため。
+		# 週制約を破ると「休養3日以上」という、より深刻な形が出てしまうため。
 		# 9月限定制約(単独1試合のみ)は、週制約より後・保護より先には緩めない
-		# (「9月以降」自体はユーザー指摘の直接の要件なので、週制約の次に守る)。
+		# (単独戦を9月以降に限ること自体が要件なので、週制約の次に守る)。
 		if reductions_needed > 0:
 			for idx_value in shuffled:
 				var idx: int = int(idx_value)
@@ -966,8 +965,8 @@ static func _week_partner_already_reduced(block_index: int, same_week_as_next: A
 
 # 単独1試合(length=1、9月以降限定)は、実際には「その1試合だけで火水木/金土日の残り2日を
 # 空けたまま待つ」のではなく、他の対戦カード(別の round_index)がその窓の空いた1日へ
-# 相乗りすることが多い(ユーザー指摘、2026-07-08: 木曜が移動日になっていただけの2連戦相当を
-# 単独戦と誤認していた、という指摘を踏まえた再設計)。相乗り元(ドナー)は同じ9月以降の
+# 相乗りすることが多い(実データで単独戦に見えるものの多くは、木曜が移動日になっただけの
+# 2連戦)。相乗り元(ドナー)は同じ9月以降の
 # どこかの巡で length=3 の別 round_index を1試合分だけ 2 に短縮して提供する(ドナー自身の
 # 総試合数=25は変わらず、ドナー自身の窓では通常の2連戦としてそのまま処理される。相乗り分は
 # ドナーの本来の窓とは別の暦日=単独戦側の窓に「テレポート」して1試合だけ行われる)。
@@ -1074,7 +1073,7 @@ static func _gw_protected_cycles_by_round_index(round_orders: Array, intra_days:
 
 # round_index(0..ROUNDS_PER_CYCLE-1)ごとに、各 cycle_index の実際の開始日が9月以降かどうかを
 # 判定する(_gw_protected_cycles_by_round_index と同じ逆引き手順)。単独1試合(length=1)は
-# 9月以降限定で組む、というユーザー指摘の実装に使う(_intraleague_cycle_plans 参照)。
+# 9月以降限定で組む、という制約の実装に使う(_intraleague_cycle_plans 参照)。
 static func _is_september_or_later_by_round_index(round_orders: Array, intra_days: Array, target_opening: String) -> Array:
 	var cycles_count: int = round_orders.size()
 	var result: Array = []

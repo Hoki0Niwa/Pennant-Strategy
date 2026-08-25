@@ -414,7 +414,7 @@ func _collect_records(season: PSSeason) -> Array:
 	return records
 
 
-# ============================================================ metrics (旧版から移植)
+# ============================================================ metrics
 
 func _batter_metric_value(stats: PSBatterStats, key: String) -> float:
 	match key:
