@@ -517,27 +517,9 @@ const FARM_PROSPECT_BONUS: float = 16.0
 const FARM_OPPORTUNITY_WEIGHT: float = 30.0
 const FARM_PROSPECT_SHARE_MULT: float = 2.0
 
-# ---- ファーム専用球団は別扱い ----------------------------------------------
-#
-# 上の3本柱は「**親球団が誰を育てたいか**」の表現なので、親を持たない専用球団
-# (ノースメン長野 / オスプレー大分) には当てはまらない。専用球団は自分が勝つために組む。
-#
-# ⚠️ これは特例ではなく前提の違い。専用球団のロスターは
-# **元NPBの中堅〜ベテラン (主力) + 育成指名レベルの若手**で能力差が大きく (実測で約15点)、
-# 12球団の二軍 (全員が近い能力帯) 用に取った輪番 30 をそのまま掛けると
-# **主力を外して最下層を並べる**ことになる。実測では得点が 102 → 65 (45日) まで落ちた。
-# 能力を素で使い、輪番は効かせない。育成/若手/ベテランの加点とプロスペクト加点も
-# 無効化する。プロスペクト+16を残すとロスター内の約15点差を単独で覆し、
-# 「勝つために組む」というこの分岐自身の前提に反するため。
-const FARM_CLUB_ABILITY_WEIGHT: float = 1.0
-const FARM_CLUB_OPPORTUNITY_WEIGHT: float = 0.0
-
-
-# 能力の重み。専用球団だけ素の能力で組む (上のブロック参照)。
-static func farm_ability_weight(record: PSPlayerSeasonRecord) -> float:
-	if record != null and PSFarmLeague.is_farm_club_id(record.team_id):
-		return FARM_CLUB_ABILITY_WEIGHT
-	return FARM_ABILITY_WEIGHT
+# ⚠️ **ファーム専用球団も同じ3本柱で組む。** 専用球団だけ素の能力順で組ませると、
+# 元NPBの主力を毎日並べられるぶん相手 (12球団の二軍) より起用が最適化され、勝率が跳ね上がる。
+# 二軍リーグの起用ルールは全14球団で共通にする。
 
 
 # 二軍用の打撃評価を memo へ**先に**入れておく。以降の選考 (守備配置・DH・控え) は
@@ -549,7 +531,7 @@ static func _prime_farm_batting_memo(batting_memo: Dictionary, candidates: Array
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record == null or batting_memo.has(record.player_id):
 			continue
-		var score: float = float(PlayerValueEvaluator.batting_score_with_form(record)) * farm_ability_weight(record)
+		var score: float = float(PlayerValueEvaluator.batting_score_with_form(record)) * FARM_ABILITY_WEIGHT
 		score += farm_usage_priority(
 			record, prospects.has(record.player_id),
 			float(record.farm_batter_stats.games), team_farm_games, mean_share
@@ -569,14 +551,9 @@ static func farm_usage_priority(
 	if record == null:
 		return 0.0
 	var bonus: float = farm_development_priority(record)
-	var farm_club: bool = PSFarmLeague.is_farm_club_id(record.team_id)
-	if is_prospect and not farm_club:
+	if is_prospect:
 		bonus += FARM_PROSPECT_BONUS
-	var opportunity_weight: float = (
-		FARM_CLUB_OPPORTUNITY_WEIGHT if farm_club
-		else FARM_OPPORTUNITY_WEIGHT
-	)
-	bonus += _farm_opportunity_bonus(is_prospect, played_games, team_farm_games, mean_share, opportunity_weight)
+	bonus += _farm_opportunity_bonus(is_prospect, played_games, team_farm_games, mean_share)
 	return bonus
 
 
@@ -584,14 +561,13 @@ static func farm_usage_priority(
 # 目標 (プロスペクトは平均の倍、それ以外は平均) との差を評価点へ換算する。
 # 開幕直後 (team_farm_games=0) は実績が無いので効かせない。
 static func _farm_opportunity_bonus(
-	is_prospect: bool, played_games: float, team_farm_games: int, mean_share: float,
-	opportunity_weight: float = FARM_OPPORTUNITY_WEIGHT
+	is_prospect: bool, played_games: float, team_farm_games: int, mean_share: float
 ) -> float:
 	if team_farm_games <= 0 or mean_share < 0.0:
 		return 0.0
 	var share: float = played_games / float(team_farm_games)
 	var target: float = mean_share * (FARM_PROSPECT_SHARE_MULT if is_prospect else 1.0)
-	return clampf(target - share, -1.0, 1.0) * opportunity_weight
+	return clampf(target - share, -1.0, 1.0) * FARM_OPPORTUNITY_WEIGHT
 
 
 # 候補集団の平均出場率。輪番の基準点。**集団自身から測る**ので、野手 (毎日9枠) と
@@ -641,16 +617,10 @@ static func farm_prospect_ids(candidates: Array) -> Dictionary:
 
 
 # 育成 > 若手 > 中堅 > ベテラン の素の加点 (出場実績に依らない部分)。
-#
-# ⚠️ **ファーム専用球団には適用しない。** この加点は「親球団が誰を育てたいか」の表現であって、
-# 親を持たない専用球団 (ノースメン長野 / オスプレー大分) には当てはまらない。専用球団の主力は
-# NPB を戦力外になった中堅〜ベテランなので、ここで 30歳以上を減点すると**主力を外して組む**ことになる。
-# プロスペクト加点と輪番も専用球団には適用しない。親球団の育成枠ではなく、勝利を目的に
-# 能力・疲労・二軍での好不調から当日のメンバーを選ぶため。
+# 二軍リーグの全14球団に効く — 専用球団だけ外すと主力の元NPBベテランを毎日並べられ、
+# 相手より起用が最適化される。
 static func farm_development_priority(record: PSPlayerSeasonRecord) -> float:
 	if record == null:
-		return 0.0
-	if PSFarmLeague.is_farm_club_id(record.team_id):
 		return 0.0
 	var bonus: float = 0.0
 	if record.development_player:

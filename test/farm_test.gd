@@ -595,6 +595,43 @@ func test_farm_club_players_get_season_records_without_polluting_league_referenc
 			).is_false()
 
 
+func test_farm_club_players_recover_fatigue_and_injuries_each_day() -> void:
+	# 日次回復が GameDb.teams (一軍12球団) だけを舐めると、専用球団の選手は疲労も故障も
+	# 抜けないまま積み上がり、野手が9人を割って二軍戦が中止になる。
+	_reload_world()
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
+	RecordStore.clear_records()
+	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+
+	var targets: Array = []
+	for club_id in PSFarmLeague.farm_club_ids():
+		var club_records: Array = RecordStore.get_team_player_records(
+			int(club_id), season.year, season.season_number
+		)
+		assert_array(club_records).is_not_empty()
+		targets.append(club_records[0] as PSPlayerSeasonRecord)
+	var first_team_records: Array = RecordStore.get_team_player_records(
+		(GameDb.teams[0] as PSTeam).id, season.year, season.season_number
+	)
+	targets.append(first_team_records[0] as PSPlayerSeasonRecord)
+
+	for record_row in targets:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		record.fatigue = 100
+		record.injury_days = 10
+
+	PSGameDecisions.recover_after_day(season, 1)
+
+	for record_row in targets:
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		assert_int(record.injury_days).override_failure_message(
+			"team %d player did not serve an injury day" % record.team_id
+		).is_equal(9)
+		assert_int(record.fatigue).override_failure_message(
+			"team %d player did not recover fatigue" % record.team_id
+		).is_less(100)
+
+
 # ---- 専用球団からのドラフト指名 (6c) ---------------------------------------
 
 func _farm_draft_candidates(pool: Array) -> Array:
@@ -960,11 +997,9 @@ func test_farm_playing_time_prioritizes_prospects_and_is_not_decided_by_ability_
 	assert_float(opening_a).is_equal_approx(opening_b, 0.001)
 
 
-func test_farm_club_usage_is_ability_led_because_it_has_no_parent_team() -> void:
-	# 二軍の出場方針は「**親球団が誰を育てたいか**」の表現なので、親を持たない専用球団には
-	# 適用しない。専用球団の主力は NPB を戦力外になった中堅〜ベテランで、ロスター内の能力差が
-	# 大きい (約15点)。12球団用の方針をそのまま掛けると**主力を外して最下層を並べる**ことになり、
-	# 45日の得点が 102 → 65 まで落ちる。
+func test_farm_club_usage_follows_the_same_rules_as_affiliated_farm_teams() -> void:
+	# 二軍リーグの出場方針は全14球団で共通。専用球団だけ能力順で組ませると、元NPBの主力を
+	# 毎日並べられるぶん相手より起用が最適化され、勝率がゲート (.270〜.420) を超えて跳ねる。
 	var team_games: int = 40
 	var mean_share: float = 0.5
 	var farm_club_veteran: PSPlayerSeasonRecord = _usage_probe_record(9201, 33, false)
@@ -972,32 +1007,30 @@ func test_farm_club_usage_is_ability_led_because_it_has_no_parent_team() -> void
 	var npb_veteran: PSPlayerSeasonRecord = _usage_probe_record(9202, 33, false)
 	npb_veteran.team_id = 1
 
-	# 1. 専用球団ではベテラン減点・若手加点をしない (12球団の二軍では効く)。
-	assert_float(PSTeamSetupBuilder.farm_development_priority(farm_club_veteran)).override_failure_message(
-		"専用球団の主力 (ベテラン) が育成方針で減点されている"
-	).is_equal_approx(0.0, 0.001)
-	assert_float(PSTeamSetupBuilder.farm_development_priority(npb_veteran)).is_less(0.0)
+	# 1. ベテラン減点・若手加点は専用球団にも同じだけ効く。
+	var farm_club_priority: float = PSTeamSetupBuilder.farm_development_priority(farm_club_veteran)
+	assert_float(farm_club_priority).override_failure_message(
+		"専用球団のベテランが育成方針の減点を免れている"
+	).is_less(0.0)
+	assert_float(farm_club_priority).is_equal_approx(
+		PSTeamSetupBuilder.farm_development_priority(npb_veteran), 0.001
+	)
 
-	# 2. 能力は素の重みで効く。
-	assert_float(PSTeamSetupBuilder.farm_ability_weight(farm_club_veteran)).is_equal_approx(
-		PSTeamSetupBuilder.FARM_CLUB_ABILITY_WEIGHT, 0.001
-	)
-	assert_float(PSTeamSetupBuilder.farm_ability_weight(npb_veteran)).is_equal_approx(
-		PSTeamSetupBuilder.FARM_ABILITY_WEIGHT, 0.001
-	)
-	# 専用球団ではプロスペクト指定だけで主力との能力差を覆さない。
-	var farm_club_prospect: float = PSTeamSetupBuilder.farm_usage_priority(
+	# 2. プロスペクト加点も効く。
+	var as_prospect: float = PSTeamSetupBuilder.farm_usage_priority(
 		farm_club_veteran, true, 20.0, team_games, mean_share
 	)
-	var farm_club_regular: float = PSTeamSetupBuilder.farm_usage_priority(
+	var as_regular: float = PSTeamSetupBuilder.farm_usage_priority(
 		farm_club_veteran, false, 20.0, team_games, mean_share
 	)
-	assert_float(farm_club_prospect).is_equal_approx(farm_club_regular, 0.001)
+	assert_float(as_prospect).is_greater(as_regular)
 
-	# 3. 専用球団は勝つための編成なので輪番を掛けない (12球団側は育成のため掛ける)。
+	# 3. 出場機会の輪番も効く (出ていない選手が先に出る)。
 	var rested: float = PSTeamSetupBuilder.farm_usage_priority(farm_club_veteran, false, 4.0, team_games, mean_share)
 	var overused: float = PSTeamSetupBuilder.farm_usage_priority(farm_club_veteran, false, 36.0, team_games, mean_share)
-	assert_float(rested).is_equal_approx(overused, 0.001)
+	assert_float(rested).override_failure_message(
+		"専用球団に出場機会の輪番が効いていない"
+	).is_greater(overused)
 
 
 # 出場方針の検証用の最小レコード (能力は farm_usage_priority が見ないので設定しない)。

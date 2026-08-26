@@ -563,9 +563,12 @@ static func advance_current_day(season: PSSeason) -> void:
 		recover_after_day(season, elapsed_days)
 
 
+# 1日ぶんの疲労回復と故障日数の消化。**ファーム専用球団を含む全球団**を回す。
+# `GameDb.teams` (一軍12球団) だけにすると専用球団の選手は回復経路を持たず、疲労と
+# 故障日数がシーズン中ずっと積み上がって野手が9人を割り、二軍戦が中止になる。
 static func recover_after_day(season: PSSeason, elapsed_days: int = 1) -> void:
 	var days: int = max(1, elapsed_days)
-	for team_row in GameDb.teams:
+	for team_row in GameDb.farm_participating_teams():
 		var team: PSTeam = team_row as PSTeam
 		var records: Array = RecordStore.get_team_player_records(team.id, season.year, season.season_number)
 		for record_row in records:

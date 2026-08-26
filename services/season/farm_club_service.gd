@@ -117,22 +117,25 @@ const ATTRITION_CERTAIN_AGE: int = 38
 # ノブは固定値ではなく **「母集団のどの帯から採るか」** (評価降順の分位点。0.0 = 母集団の最上位)。
 const ABILITY_JITTER_Z: float = 0.25
 
-# ベテラン組の参照母集団 = NPB12球団の VETERAN_MIN_AGE 以上。通常の野手は上から55〜75%、
-# 通常の投手は35〜55%の帯から採る。少数の軸はさらに上の帯から採り、一様な強化ではなく
+# ベテラン組の参照母集団 = NPB12球団の VETERAN_MIN_AGE 以上。通常の野手は上から75〜95%、
+# 通常の投手は55〜75%の帯から採る。少数の軸はさらに上の帯から採り、一様な強化ではなく
 # 「通常層 + 外れ値に近い主力」という混合分布にする。
+# **帯を上げる (数値を小さくする) ほど専用球団が強くなる**。基準は12球団の二軍が実際に
+# 起用する選手の質で、専用球団はそれを下回っている必要がある
+# (`run_farm_report` の `ability_distribution.comparison` の `*_usage_gap` が負)。
 # ※ プレイ中は流入① が**実在の戦力外選手**をそのまま獲るので、この生成は初期ワールド専用
 #   (世界生成の時点では市場が存在しないため)。
-const VETERAN_SOURCE_PCT_LOW: float = 0.55
-const VETERAN_SOURCE_PCT_HIGH: float = 0.75
-const VETERAN_PITCHER_SOURCE_PCT_LOW: float = 0.35
-const VETERAN_PITCHER_SOURCE_PCT_HIGH: float = 0.55
+const VETERAN_SOURCE_PCT_LOW: float = 0.75
+const VETERAN_SOURCE_PCT_HIGH: float = 0.95
+const VETERAN_PITCHER_SOURCE_PCT_LOW: float = 0.55
+const VETERAN_PITCHER_SOURCE_PCT_HIGH: float = 0.75
 # 投手のうち少数だけは、同じ年齢母集団の上位帯から採る。全員の分散を広げるのではなく、
 # 通常の元NPB層に2人の軸を混ぜることで、専用球団にも突出した経験者がいる分布にする。
-const VETERAN_PITCHER_ANCHOR_SOURCE_PCT_LOW: float = 0.10
-const VETERAN_PITCHER_ANCHOR_SOURCE_PCT_HIGH: float = 0.30
+const VETERAN_PITCHER_ANCHOR_SOURCE_PCT_LOW: float = 0.30
+const VETERAN_PITCHER_ANCHOR_SOURCE_PCT_HIGH: float = 0.50
 const VETERAN_PITCHER_ANCHOR_TARGET_PER_CLUB: int = 2
-const VETERAN_FIELDER_ANCHOR_SOURCE_PCT_LOW: float = 0.15
-const VETERAN_FIELDER_ANCHOR_SOURCE_PCT_HIGH: float = 0.35
+const VETERAN_FIELDER_ANCHOR_SOURCE_PCT_LOW: float = 0.35
+const VETERAN_FIELDER_ANCHOR_SOURCE_PCT_HIGH: float = 0.55
 const VETERAN_FIELDER_ANCHOR_TARGET_PER_CLUB: int = 1
 const VETERAN_MIN_AGE: int = 27
 const VETERAN_MAX_AGE: int = 33
@@ -142,9 +145,10 @@ const VETERAN_MAX_AGE: int = 33
 #
 # ⚠️ **帯を広く (下へ) 取ると年1人も指名されなくなる。** 指名漏れ層は定義上ドラフトの
 # 足切りより下なので、帯を下げるほど「二軍で数年育ってから指名される」だけの経路になる。
-# 実測: 上位40%帯 → 初年度の指名 0人 / **上位15%帯 → 1〜3人** (足切り直下から拾うため)。
-const PROSPECT_SOURCE_PCT_LOW: float = 0.00
-const PROSPECT_SOURCE_PCT_HIGH: float = 0.15
+# 実測: 上位40%帯 → 初年度の指名 0人 / 上位15%帯 → 1〜3人 (足切り直下から拾うため)。
+# 帯を下げるときは `FARM_CLUB_DRAFT_GRADE_SCALE` (draft_service) で指名数を戻す。
+const PROSPECT_SOURCE_PCT_LOW: float = 0.10
+const PROSPECT_SOURCE_PCT_HIGH: float = 0.35
 # 入団までに積む育成の量 (NPB の育成環境に対する割引)。詳細は `_apply_development_years`。
 const PROSPECT_DEVELOPMENT_RATE: float = 0.5
 const GENERATED_MIN_AGE: int = 18

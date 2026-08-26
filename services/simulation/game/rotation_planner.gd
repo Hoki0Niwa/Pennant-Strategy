@@ -514,10 +514,11 @@ static func resolve_rotation_order_from_saved(
 			continue
 		rest.append(pitcher)
 	var rest_scores: Dictionary = _pitching_scores_by_id(rest, farm, farm_team_games)
-	if farm and _is_affiliated_farm_pool(rest):
+	if farm:
 		# 二軍先発は全員へ最低1先発を配り、その後は能力順。ただし95回付近へ届いた投手は
 		# 未到達者の後ろへ回す。単純な均等配分は最多IPが60〜90まで下がりすぎたため、
 		# 「エースは存在するが通季固定はしない」という実二軍の形を直接表す。
+		# 専用球団も同じ配分にする — 能力順で固定すると相手より起用が最適化される。
 		rest.sort_custom(func(a, b) -> bool:
 			var pitcher_a: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
 			var pitcher_b: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
@@ -643,7 +644,7 @@ static func select_relievers_for_innings(
 	# セーブ数の分散を招く。疲労は登板可否 (is_reliever_available) と試合中の選抜スコア側で別途効くので、
 	# 「誰が抑えか」は能力で固定し、疲れた日は控えが代役を務める形にする。
 	var eligible_scores: Dictionary = _pitching_scores_by_id(eligible, farm, farm_team_games)
-	if farm and _is_affiliated_farm_pool(eligible):
+	if farm:
 		# 二軍で未登板の救援は、その日の役割枠へまず載せる。出場率差の連続スコアだけでは
 		# 大所帯の球団で下位5〜6人が通季0登板のまま残り、使用投手40人台へ届かなかった。
 		eligible.sort_custom(func(a, b) -> bool:
@@ -797,7 +798,7 @@ static func _pitching_scores_by_id(records: Array, farm: bool = false, farm_team
 		if record != null and not scores.has(record.player_id):
 			var score: float = float(PlayerValueEvaluator.pitching_score_without_fatigue(record))
 			if farm:
-				score *= PSTeamSetupBuilder.farm_ability_weight(record)
+				score *= PSTeamSetupBuilder.FARM_ABILITY_WEIGHT
 				score += PSTeamSetupBuilder.farm_usage_priority(
 					record, prospects.has(record.player_id),
 					float(record.farm_pitcher_stats.games), farm_team_games, mean_share
@@ -819,14 +820,6 @@ static func _cached_pitching_score(row: Variant, scores: Dictionary) -> int:
 	if record == null:
 		return 0
 	return int(scores.get(record.player_id, 0))
-
-
-static func _is_affiliated_farm_pool(records: Array) -> bool:
-	for record_row in records:
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record != null:
-			return not PSFarmLeague.is_farm_club_id(record.team_id)
-	return false
 
 
 static func _add_role_id(roles: Dictionary, player_id: int, role: String, allowed: Dictionary, restrict: bool) -> void:

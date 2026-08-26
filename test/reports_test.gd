@@ -6,6 +6,17 @@ extends GdUnitTestSuite
 const ReportHealth = preload("res://services/reports/report_health.gd")
 
 
+# PA 応答曲面は**初期ワールドの一軍**を動作点として測る。打線と守備の選出は
+# `PSPerformanceReference` の静的キャッシュを参照するので、別 suite が合成リーグで温めた
+# 基準分布が残っていると δ=0 セルがその母集団の水準になり、動作点の検査が意味を失う
+# (実測: 得点/27アウト が 4.09 → 2.10)。レポートツールは常に新しいプロセスで走るので、
+# ここでも世界・レコード・基準分布を作り直して同じ条件にする。
+func before() -> void:
+	GameDb.load_initial_data()
+	RecordStore.clear_records()
+	PSPerformanceReference.reset_cache()
+
+
 # 戦力外フェーズの支配下枠除外数は「戦力外通告 + 育成降格」で数える。
 # 通告だけを見ていた頃は育成降格の分を取りこぼし、実際の枠の空き方より過少に出ていた。
 func test_long_distributions_released_flow_counts_controlled_removals() -> void:
