@@ -4,7 +4,8 @@ class_name PSBattingOrderService
 # 打順は「打順ごとに求める打者像 (SLOT_PROFILES)」への貪欲マッチングで組む。
 # 基本打順を作る build_base_order と、試合ごとに基本打順を微調整する build_daily_batting_order の
 # 2 経路があり、どちらも同じ SLOT_PROFILES / 打者指標を使うので役割の解釈がズレない。
-# 日替わりの揺れは疲労減点と (day, team, player) シードの乱数ボーナスだけで、能力の序列は保たれる。
+# 日替わりの揺れは疲労減点・(day, team, player) シードの乱数ボーナス・相手先発との左右の相性だけで、
+# 能力の序列は保たれる。基本打順は左右を見ない (相手ごとに変わらない土台として保存する)。
 #
 # 打者の評価には **監督が見られる情報だけ**を使う: 表示能力 (PSPlayerVisibleRatings, 1-100) と
 # 今季・過去シーズンの打撃成績。raw z は直接参照しない (詳細は「打者指標」節)。
@@ -47,18 +48,22 @@ const SLOT_PROFILES: Dictionary = {
 # 打者記録の配列を打順順 (index 0 = 1番) に並べ替えて返す。投手は必ず最終打順。
 # position_by_player_id は当日の守備位置 (player_id → position)。捕手判定に使い、
 # 未指定の選手は登録ポジションで判定する。
+# bonus_by_player_id は選手単位の加減点 (σ 単位、打順に依らない)。
 static func build_base_order(
 	entries: Array,
 	profile: PSBattingOrderProfile = null,
-	position_by_player_id: Dictionary = {}
+	position_by_player_id: Dictionary = {},
+	bonus_by_player_id: Dictionary = {}
 ) -> Array:
 	if entries.size() <= 1:
 		return entries.duplicate()
 	var evaluation: Dictionary = build_evaluation(entries, profile, position_by_player_id)
-	return _base_order_from_evaluation(entries, evaluation)
+	return _base_order_from_evaluation(entries, evaluation, bonus_by_player_id)
 
 
-static func _base_order_from_evaluation(entries: Array, evaluation: Dictionary) -> Array:
+static func _base_order_from_evaluation(
+	entries: Array, evaluation: Dictionary, bonus_by_player_id: Dictionary = {}
+) -> Array:
 	var batters: Array = []
 	var pitchers: Array = []
 	for entry_row in entries:
@@ -75,7 +80,7 @@ static func _base_order_from_evaluation(entries: Array, evaluation: Dictionary) 
 	for slot in range(1, batters.size() + 1):
 		batter_slots.append(slot)
 
-	var assigned: Dictionary = _assign_slots(batters, batter_slots, {}, evaluation)
+	var assigned: Dictionary = _assign_slots(batters, batter_slots, bonus_by_player_id, evaluation)
 
 	var ordered: Array = []
 	for slot in range(1, total_slots + 1):
@@ -194,6 +199,19 @@ static func _slot_score(slot: int, metrics: Dictionary, apply_catcher_penalty: b
 	return score
 
 
+# 相手先発の利き腕に対する相性を、打者単位の加減点 (σ 単位) として返す。利き腕が不明なら空。
+static func platoon_bonuses(entries: Array, opponent_hand: String) -> Dictionary:
+	var bonuses: Dictionary = {}
+	if opponent_hand.is_empty():
+		return bonuses
+	for entry_row in entries:
+		var record: PSPlayerSeasonRecord = entry_row as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		bonuses[record.player_id] = PSPlatoonMatchup.order_bonus_for(record, opponent_hand)
+	return bonuses
+
+
 # 打者指標は PSBatterForm (表示能力 × 今季/過去成績のブレンド) に委譲する。
 static func _metrics(record: PSPlayerSeasonRecord) -> Dictionary:
 	return PSBatterForm.indexes(record)
@@ -307,6 +325,7 @@ static func _apply_forced_locks(order: Array, profile: PSBattingOrderProfile) ->
 
 # グループ内の空き打順を、同グループの可動選手で組み直す。グループをまたぐ移動は起きないので
 # 基本打順で決まった「上位/中軸/下位」の役割は保たれ、日々の入れ替えはグループ内に閉じる。
+# 日々の加減点は 疲労・(day, team, player) シードの乱数・相手先発との左右の相性 の 3 つ。
 static func _reorder_group(
 	order: Array,
 	slots: Array[int],
@@ -328,7 +347,11 @@ static func _reorder_group(
 		var bonus: int = _condition_bonus(rec) - _fatigue_penalty(rec)
 		if profile.allow_random_bonus:
 			bonus += _seeded_random_bonus(context, rec.player_id, profile.random_bonus_range)
-		bonus_by_player_id[rec.player_id] = float(bonus) / SIGMA_SCALE
+		# 相手先発と相性の良い打者はグループ内で上の打順へ動く (プラトーン)。
+		var platoon_bonus: float = PSPlatoonMatchup.order_bonus_for(
+			rec, str(context.get("opp_pitcher_hand", ""))
+		)
+		bonus_by_player_id[rec.player_id] = float(bonus) / SIGMA_SCALE + platoon_bonus
 		movable.append(slot_entry)
 
 	if movable.is_empty():

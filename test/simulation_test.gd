@@ -2987,6 +2987,192 @@ func test_assign_types_movement_lean_keeps_moving_fastball() -> void:
 	assert_int(with_moving).is_greater(6)
 
 
+# 左右の相性は打者の質能力そのものへ一律に載る。逆の利き腕の投手なら有利・同じなら不利で、
+# 有利と不利の差はシフト量のちょうど 2 倍になる。スイッチヒッターは常に有利側、
+# 利き腕が分からない相手には補正しない。
+func test_platoon_shifts_batter_ability_by_opponent_hand() -> void:
+	var shift: float = ModManager.rule_float(
+		"simulation.plate_appearance.platoon_ability_shift_z", PSPlatoonMatchup.ABILITY_SHIFT_Z
+	)
+	assert_float(shift).is_greater(0.0)
+	var left_batter: PSPlayerSeasonRecord = _fielder(8300, "Left Batter", 0.0)
+	left_batter.batting_side = PSPlatoonMatchup.HAND_LEFT
+	var right_pitcher: PSPlayerSeasonRecord = _pitcher(8301, "Right Pitcher", 0.0)
+	right_pitcher.throwing_hand = PSPlatoonMatchup.HAND_RIGHT
+	var left_pitcher: PSPlayerSeasonRecord = _pitcher(8302, "Left Pitcher", 0.0)
+	left_pitcher.throwing_hand = PSPlatoonMatchup.HAND_LEFT
+
+	var advantage: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		left_batter, right_pitcher, {}, {}, false
+	)
+	var disadvantage: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		left_batter, left_pitcher, {}, {}, false
+	)
+	var advantage_z: Dictionary = advantage.get("batter_z", {}) as Dictionary
+	var disadvantage_z: Dictionary = disadvantage.get("batter_z", {}) as Dictionary
+	for key in PSPlatoonMatchup.SHIFT_KEYS:
+		assert_float(float(advantage_z.get(key, 0.0)) - float(disadvantage_z.get(key, 0.0))) 			.is_equal_approx(2.0 * shift, 0.0001)
+	assert_float(float(advantage.get("batter_hr_z", 0.0))) 		.is_greater(float(disadvantage.get("batter_hr_z", 0.0)))
+	# 相性が良いほど三振しにくい (K の logit が下がる)。
+	var advantage_weights: Dictionary = PSPaProbabilityCalculator.build_weights(advantage)
+	var disadvantage_weights: Dictionary = PSPaProbabilityCalculator.build_weights(disadvantage)
+	assert_float(float(advantage_weights.get(PSPaProbabilityCalculator.OUTCOME_STRIKEOUT, 0.0))) 		.is_less(float(disadvantage_weights.get(PSPaProbabilityCalculator.OUTCOME_STRIKEOUT, 0.0)))
+
+	# スイッチヒッターは左右どちらの先発にも有利側。
+	var switch_batter: PSPlayerSeasonRecord = _fielder(8303, "Switch Batter", 0.0)
+	switch_batter.batting_side = PSPlatoonMatchup.HAND_SWITCH
+	assert_float(PSPlatoonMatchup.sign_for_records(switch_batter, right_pitcher)) 		.is_equal(PSPlatoonMatchup.ADVANTAGE)
+	assert_float(PSPlatoonMatchup.sign_for_records(switch_batter, left_pitcher)) 		.is_equal(PSPlatoonMatchup.ADVANTAGE)
+
+	# 利き腕が不明な相手には補正が入らない。
+	var unknown_pitcher: PSPlayerSeasonRecord = _pitcher(8304, "Unknown Pitcher", 0.0)
+	unknown_pitcher.throwing_hand = ""
+	var neutral: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		left_batter, unknown_pitcher, {}, {}, false
+	)
+	var neutral_z: Dictionary = neutral.get("batter_z", {}) as Dictionary
+	for key in PSPlatoonMatchup.SHIFT_KEYS:
+		assert_float(float(neutral_z.get(key, 0.0))).is_equal_approx(0.0, 0.0001)
+
+
+# AI (auto_lineup) は相手先発の左右でスタメン・DH・打順を組み替える。
+# 「対左で組んだ打線は左投手に強い打者が多い」ことを対右で組んだ打線と比べて確かめる
+# (打順そのものの入れ替わりも 1 球団以上で起きる)。
+func test_ai_lineup_reacts_to_opponent_starter_hand() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+
+	var matched: Dictionary = {"L": 0, "R": 0}
+	var crossed: Dictionary = {"L": 0, "R": 0}
+	var order_changed_teams: int = 0
+	var teams_checked: int = 0
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		var setups: Dictionary = {}
+		for hand in [PSPlatoonMatchup.HAND_RIGHT, PSPlatoonMatchup.HAND_LEFT]:
+			var setup: Dictionary = PSTeamSetupBuilder.build_team_setup(
+				season, team.id, true, false, PSTeamSetupBuilder.LEVEL_FIRST, str(hand)
+			)
+			assert_bool(bool(setup.get("ok", false))).is_true()
+			setups[hand] = setup
+		teams_checked += 1
+		var order_by_hand: Dictionary = {}
+		for hand in setups.keys():
+			var ids: Array[int] = []
+			for batter_row in (setups[hand] as Dictionary).get("batters", []) as Array:
+				var batter: PSPlayerSeasonRecord = batter_row as PSPlayerSeasonRecord
+				if batter == null or batter.is_pitcher():
+					continue
+				ids.append(batter.player_id)
+				for versus in [PSPlatoonMatchup.HAND_RIGHT, PSPlatoonMatchup.HAND_LEFT]:
+					if not PSPlatoonMatchup.has_advantage(batter.batting_side, str(versus)):
+						continue
+					if str(versus) == str(hand):
+						matched[versus] = int(matched[versus]) + 1
+					else:
+						crossed[versus] = int(crossed[versus]) + 1
+			order_by_hand[hand] = ids
+		if order_by_hand[PSPlatoonMatchup.HAND_RIGHT] != order_by_hand[PSPlatoonMatchup.HAND_LEFT]:
+			order_changed_teams += 1
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	assert_int(teams_checked).is_greater(0)
+	print("PLATOONLINEUP teams=%d order_changed=%d matched_vs_l=%d crossed_vs_l=%d matched_vs_r=%d crossed_vs_r=%d" % [
+		teams_checked, order_changed_teams,
+		int(matched[PSPlatoonMatchup.HAND_LEFT]), int(crossed[PSPlatoonMatchup.HAND_LEFT]),
+		int(matched[PSPlatoonMatchup.HAND_RIGHT]), int(crossed[PSPlatoonMatchup.HAND_RIGHT]),
+	])
+	assert_int(order_changed_teams).is_greater(0)
+	# 対左の打線は左投手に強い打者を、対右の打線は右投手に強い打者をより多く並べる。
+	assert_int(int(matched[PSPlatoonMatchup.HAND_LEFT])).is_greater(int(crossed[PSPlatoonMatchup.HAND_LEFT]))
+	assert_int(int(matched[PSPlatoonMatchup.HAND_RIGHT])).is_greater(int(crossed[PSPlatoonMatchup.HAND_RIGHT]))
+
+
+# 代打は「今マウンドに居る投手に対して」比べる。能力が同じ左右 2 人の控えなら、相手投手と
+# 逆の利き腕の打者が先に出る。相性は投手交代で変わるので、打撃スコアの memo に焼き付いていない
+# ことも同時に見る (同じ setup で利き腕だけ変えて並びが入れ替わること)。
+func test_pinch_hitter_choice_follows_the_opposing_pitcher_hand() -> void:
+	var left_batter: PSPlayerSeasonRecord = _fielder(8320, "Left Bench", 0.4)
+	left_batter.batting_side = PSPlatoonMatchup.HAND_LEFT
+	var right_batter: PSPlayerSeasonRecord = _fielder(8321, "Right Bench", 0.4)
+	right_batter.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	var setup: Dictionary = {
+		"bench": [left_batter, right_batter],
+		"reserved_fielder_ids": {},
+	}
+
+	setup["opposing_pitcher_hand"] = PSPlatoonMatchup.HAND_RIGHT
+	var versus_right: Array = PSInGameSubstitutions.sorted_pinch_hit_candidates(setup)
+	assert_int(versus_right.size()).is_equal(2)
+	assert_int((versus_right[0] as PSPlayerSeasonRecord).player_id).is_equal(left_batter.player_id)
+
+	setup["opposing_pitcher_hand"] = PSPlatoonMatchup.HAND_LEFT
+	var versus_left: Array = PSInGameSubstitutions.sorted_pinch_hit_candidates(setup)
+	assert_int((versus_left[0] as PSPlayerSeasonRecord).player_id).is_equal(right_batter.player_id)
+
+	# 利き腕が分からない場面では打力だけで決まる (相性ぶんは 0)。
+	setup["opposing_pitcher_hand"] = ""
+	assert_int(PSInGameSubstitutions.pinch_hit_matchup_score(setup, left_batter)).is_equal(
+		PSInGameSubstitutions.pinch_hit_batting_score(left_batter)
+	)
+
+
+# 継投は次に回ってくる 3 人の左右を見る。能力が同じ左右 2 枚なら、左打者が並ぶ場面では左腕、
+# 右打者が並ぶ場面では右腕が出る。相性を効かせなければ同じ投手が 2 回とも選ばれるので、
+# 2 つの向きを両方見ることが検証になる。
+func test_relief_choice_follows_the_upcoming_batter_hands() -> void:
+	var left_arm: PSPlayerSeasonRecord = _pitcher(8330, "Left Arm", 0.0)
+	left_arm.throwing_hand = PSPlatoonMatchup.HAND_LEFT
+	var right_arm: PSPlayerSeasonRecord = _pitcher(8331, "Right Arm", 0.0)
+	right_arm.throwing_hand = PSPlatoonMatchup.HAND_RIGHT
+	var setup: Dictionary = {
+		"team_id": 1,
+		"relievers": [left_arm, right_arm],
+		"used_pitcher_ids": {},
+		"relief_role_by_pitcher": {
+			left_arm.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+			right_arm.player_id: PSRotationPlanner.RELIEF_ROLE_MIDDLE,
+		},
+		"game_day": 12,
+		"team_games_played_before": 10,
+	}
+	var game_result: Dictionary = {
+		"away_team_id": 1, "home_team_id": 2, "away_score": 3, "home_score": 2,
+	}
+
+	var offense: Dictionary = {"batters": [], "batting_index": 0}
+	var batters: Array = offense["batters"] as Array
+	for index in range(9):
+		var batter: PSPlayerSeasonRecord = _fielder(8340 + index, "Batter %d" % index, 0.0)
+		batter.batting_side = PSPlatoonMatchup.HAND_LEFT if index < 3 else PSPlatoonMatchup.HAND_RIGHT
+		batters.append(batter)
+
+	# 先頭から 3 人が左打者。
+	PSBullpenManager.record_upcoming_batters(setup, offense)
+	var all_left: Array = [PSPlatoonMatchup.HAND_LEFT, PSPlatoonMatchup.HAND_LEFT, PSPlatoonMatchup.HAND_LEFT]
+	assert_array(setup.get("upcoming_batter_sides", []) as Array).is_equal(all_left)
+	assert_float(PSBullpenManager.matchup_bonus_for_reliever(setup, left_arm)).is_greater(0.0)
+	assert_float(PSBullpenManager.matchup_bonus_for_reliever(setup, right_arm)).is_less(0.0)
+	var versus_lefties: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 7, game_result, false)
+	assert_int(versus_lefties.player_id).is_equal(left_arm.player_id)
+
+	# 4 番から 3 人は右打者。同じ 2 枚から右腕が選ばれる。
+	offense["batting_index"] = 3
+	PSBullpenManager.record_upcoming_batters(setup, offense)
+	var versus_righties: PSPlayerSeasonRecord = PSBullpenManager.pick_reliever_for_context(setup, 7, game_result, false)
+	assert_int(versus_righties.player_id).is_equal(right_arm.player_id)
+
+
 func _pitcher(player_id: int, player_name: String, z: float) -> PSPlayerSeasonRecord:
 	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
 	record.player_id = player_id

@@ -53,6 +53,8 @@ static func simulate_game(
 		_log_defensive_subs(result, PSInGameSubstitutions.apply_pending_defensive_subs(home_setup), inning, "top", home_team_id)
 		_log_defensive_subs(result, PSInGameSubstitutions.maybe_apply_defensive_replacements(home_setup, inning, "top", result), inning, "top", home_team_id)
 		var home_prev_pitcher_id: int = int((home_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
+		# 継投は次に回ってくる打者との左右の相性も見るので、判断の直前に打者の並びを渡す。
+		PSBullpenManager.record_upcoming_batters(home_setup, away_setup)
 		PSBullpenManager.substitute_reliever(home_setup, inning, result)
 		var home_inning_pitcher_id: int = int((home_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 		_record_substitution(result, inning, "top", home_team_id, "pitching", home_prev_pitcher_id, home_inning_pitcher_id, 1, -1)
@@ -67,6 +69,7 @@ static func simulate_game(
 			_log_defensive_subs(result, PSInGameSubstitutions.apply_pending_defensive_subs(away_setup), inning, "bottom", away_team_id_sub)
 			_log_defensive_subs(result, PSInGameSubstitutions.maybe_apply_defensive_replacements(away_setup, inning, "bottom", result), inning, "bottom", away_team_id_sub)
 			var away_prev_pitcher_id: int = int((away_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
+			PSBullpenManager.record_upcoming_batters(away_setup, home_setup)
 			PSBullpenManager.substitute_reliever(away_setup, inning, result)
 			away_inning_pitcher_id = int((away_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 			_record_substitution(result, inning, "bottom", away_team_id_sub, "pitching", away_prev_pitcher_id, away_inning_pitcher_id, 1, -1)
@@ -302,6 +305,8 @@ static func simulate_half_inning(
 			if outs >= 3:
 				continue
 
+		# 代打の判断は今マウンドに居る投手との相性込みで行う。
+		offense["opposing_pitcher_hand"] = "" if pitcher == null else pitcher.throwing_hand
 		var batter: PSPlayerSeasonRecord = PSInGameSubstitutions.maybe_select_pinch_hitter(
 			offense,
 			scheduled_batter,
@@ -461,6 +466,7 @@ static func simulate_half_inning(
 		set_last_play_score_and_lead(game_result, inning, half, offense, defense, runs_before, runs, pitcher, go_ahead_pitcher_id)
 		if half_inning_run_limit_reached(runs, run_limit):
 			break
+		PSBullpenManager.record_upcoming_batters(defense, offense)
 		maybe_change_pitcher_after_pa(defense, game_result, inning, half, outs, bases, runs)
 
 	apply_advanced_stats_for_event_range(game_result, half_start_event_index)

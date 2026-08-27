@@ -1,6 +1,10 @@
 extends RefCounted
 class_name PSInGameSubstitutions
 
+# 代打の比較はすべて「今マウンドに居る投手に対して」行う。相手投手の利き腕は GameLoop が
+# 打席ごとに setup["opposing_pitcher_hand"] へ書き込み、打者・控えの双方に同じ相性補正が乗る
+# (PSPlatoonMatchup.RATING_BONUS)。左右が分からない場合は補正 0 になり、打力だけで決まる。
+
 static func maybe_select_pinch_hitter(
 	setup: Dictionary,
 	batter: PSPlayerSeasonRecord,
@@ -105,7 +109,7 @@ static func maybe_select_pitcher_spot_pinch_hitter(
 	if not already_relieved and PSBullpenManager.pick_reliever_for_context(setup, next_defensive_inning, {}, prefer_long) == null:
 		return batter
 
-	var minimum_score: int = pinch_hit_batting_score(batter) + 8
+	var minimum_score: int = pinch_hit_matchup_score(setup, batter) + 8
 	var pinch_hitter: PSPlayerSeasonRecord = null
 	if important_chance:
 		pinch_hitter = select_best_pinch_hitter(setup, minimum_score)
@@ -273,7 +277,7 @@ static func position_player_pinch_hit_option(
 	# (決着済みの場面は上の decided で別扱い)。
 	if not decided and (deficit < -3 or deficit > 5):
 		return {}
-	var batter_score: int = pinch_hit_batting_score(batter)
+	var batter_score: int = pinch_hit_matchup_score(setup, batter)
 	var low_score_limit: int = batting_score_line(
 		batter, GameSimulator.LOW_BATTER_SIGMA, GameSimulator.LOW_BATTER_SCORE
 	)
@@ -887,6 +891,28 @@ static func pinch_hit_batting_score(record: PSPlayerSeasonRecord) -> int:
 	return score
 
 
+# 今の相手投手との左右の相性まで含めた打撃比較値。「代打を出すか」「誰を出すか」の判断は
+# 打者側・控え側ともこの値で比べる。
+static func pinch_hit_matchup_score(setup: Dictionary, record: PSPlayerSeasonRecord) -> int:
+	if record == null:
+		return -999999
+	return _with_platoon_bonus(setup, record, pinch_hit_batting_score(record))
+
+
+# 相手投手の利き腕 ("R"/"L")。GameLoop が打席ごとに書き込む。
+static func opposing_pitcher_hand(setup: Dictionary) -> String:
+	return str(setup.get("opposing_pitcher_hand", ""))
+
+
+static func _with_platoon_bonus(setup: Dictionary, record: PSPlayerSeasonRecord, score: int) -> int:
+	var bonus: float = PSPlatoonMatchup.rating_bonus_for(record, opposing_pitcher_hand(setup))
+	if is_zero_approx(bonus):
+		return score
+	return int(round(float(score) + bonus))
+
+
+# 能力+成績ぶんは 1 試合を通して動かないので memo するが、左右の相性は投手交代で変わるため
+# 毎回足し直す。memo に相性まで含めると、継投後も古い相手を前提に代打を選ぶことになる。
 static func _bench_pinch_hit_score(
 	setup: Dictionary,
 	record: PSPlayerSeasonRecord
@@ -897,7 +923,7 @@ static func _bench_pinch_hit_score(
 	if not score_by_id.has(record.player_id):
 		score_by_id[record.player_id] = pinch_hit_batting_score(record)
 		setup["pinch_hit_score_by_id"] = score_by_id
-	return int(score_by_id[record.player_id])
+	return _with_platoon_bonus(setup, record, int(score_by_id[record.player_id]))
 
 
 static func is_important_pinch_hit_chance(

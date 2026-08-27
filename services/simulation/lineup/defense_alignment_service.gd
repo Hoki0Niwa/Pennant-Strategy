@@ -11,6 +11,10 @@ class_name PSDefenseAlignmentService
 # (C/2B/SS/CF) でシーズン実績 OAA が崩壊した選手は starter/テンプレ/バックアップの固定を
 # 無視して貪欲補充に落とす (現実のコンバート/スタメン剥奪に相当)。ユーザーが打順設定画面で
 # 保存した usage には ai_generated が付かないため、手動配置は上書きしない。
+#
+# プラトーン起用: AI 管理チームでは、相手先発の利き腕 (opponent_hand) に対して相性の良い候補が
+# 同じ枠に居て、評価差が PSPlatoonMatchup.RATING_BONUS 以内なら、その日の担当を入れ替える。
+# 出場シェアが決める「何試合出るか」はそのままに、「どの試合で出るか」だけを相性で寄せる。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 
@@ -36,7 +40,8 @@ static func assign_defensive_starters(
 	profile: PSDefenseAlignmentProfile,
 	usage_settings: Dictionary = {},
 	next_game_number: int = 1,
-	batting_memo: Dictionary = {}
+	batting_memo: Dictionary = {},
+	opponent_hand: String = ""
 ) -> Array:
 	if available_fielders.is_empty() or profile == null:
 		return []
@@ -75,6 +80,10 @@ static func assign_defensive_starters(
 		var slot_settings: Dictionary = _position_slot_settings(profile, usage_settings, position)
 		# 出場シェアで決まる当日の担当 → 使えなければ同じ枠の残り候補 (定位置・併用者) の順。
 		var candidate_ids: Array = ordered_candidate_ids_for_game(slot_settings, next_game_number)
+		if ai_managed:
+			candidate_ids = _platoon_ordered_candidate_ids(
+				candidate_ids, record_by_id, used_ids, position, opponent_hand, batting_cache
+			)
 		var starter_id: int = slot_starter_id(slot_settings)
 		for candidate_index in range(candidate_ids.size()):
 			chosen = _configured_record_by_id(
@@ -131,6 +140,56 @@ static func assign_defensive_starters(
 		used_ids[chosen.player_id] = true
 
 	return assignments
+
+
+# その日の担当 (candidate_ids[0]) が相手先発と相性が悪いとき、同じ枠の相性の良い候補へ入れ替える。
+# 入れ替えるのは評価差が RATING_BONUS 以内のときだけなので、控えより明確に優れた定位置選手は
+# 相性に関係なく出続ける (= 併用枠だけがプラトーンになる)。
+static func _platoon_ordered_candidate_ids(
+	candidate_ids: Array,
+	record_by_id: Dictionary,
+	used_ids: Dictionary,
+	position: int,
+	opponent_hand: String,
+	batting_cache: Dictionary
+) -> Array:
+	if opponent_hand.is_empty() or candidate_ids.size() < 2:
+		return candidate_ids
+	var due: PSPlayerSeasonRecord = _configured_record_by_id(
+		record_by_id, used_ids, int(candidate_ids[0]), position, true
+	)
+	if due == null or PSPlatoonMatchup.has_advantage(due.batting_side, opponent_hand):
+		return candidate_ids
+	var due_score: int = _platoon_candidate_score(due, position, batting_cache)
+	var best_index: int = -1
+	var best_score: int = 0
+	for index in range(1, candidate_ids.size()):
+		var candidate: PSPlayerSeasonRecord = _configured_record_by_id(
+			record_by_id, used_ids, int(candidate_ids[index]), position, true
+		)
+		if candidate == null or not PSPlatoonMatchup.has_advantage(candidate.batting_side, opponent_hand):
+			continue
+		var score: int = _platoon_candidate_score(candidate, position, batting_cache)
+		if float(score) + PSPlatoonMatchup.RATING_BONUS <= float(due_score):
+			continue
+		if best_index < 0 or score > best_score:
+			best_index = index
+			best_score = score
+	if best_index < 0:
+		return candidate_ids
+	var reordered: Array = candidate_ids.duplicate()
+	var promoted: Variant = reordered[best_index]
+	reordered.remove_at(best_index)
+	reordered.insert(0, promoted)
+	return reordered
+
+
+static func _platoon_candidate_score(
+	record: PSPlayerSeasonRecord, position: int, batting_cache: Dictionary
+) -> int:
+	return PlayerValueEvaluator.starter_assignment_score(
+		record, position, true, _cached_batting_score(record, batting_cache)
+	)
 
 
 # 守備不能時の緊急起用。健康・未使用の中で打撃最良の選手を選び、その守備位置の適性を

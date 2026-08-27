@@ -2,7 +2,8 @@ extends RefCounted
 class_name PSBullpenManager
 
 # 試合中の投手起用と登板記録を管理する。
-# setup は GameLoop が持つ試合中状態で、現在投手、使用済み投手、pitcher_usage、リリーフ役割表を含む。
+# setup は GameLoop が持つ試合中状態で、現在投手、使用済み投手、pitcher_usage、リリーフ役割表、
+# 次に対戦する打者の左右 (upcoming_batter_sides) を含む。
 # ここで登板数・疲労・怪我判定まで更新し、試合後集計が同じ状態を参照できるようにする。
 
 # 役割別の登板可能イニング (ユーザー指定)。セットは7回以降、クローザーは9回以降に限定する。
@@ -17,6 +18,36 @@ const LONG_RELIEF_PREFERRED_BEFORE_INNING: int = 6
 # 昇格した救援は、クローザー/セットの役割優先を崩さない範囲で最初の登板機会を得やすくする。
 # 上げたまま一度も使わず再抹消するロスター運用を防ぐための場面スコア加点。
 const CALLUP_AUDITION_BONUS: float = 75.0
+
+# 次に打席へ入る打者の打席左右を守備側の setup へ書き写す。継投の相性判断はここだけを見るので、
+# 継投を検討する直前に GameLoop が呼ぶ。攻撃側の打順と batting_index から数えるため、
+# 代打で入れ替わった打者もそのまま反映される。
+static func record_upcoming_batters(defense: Dictionary, offense: Dictionary) -> void:
+	defense["upcoming_batter_sides"] = upcoming_batter_sides(offense)
+
+
+static func upcoming_batter_sides(offense: Dictionary) -> Array:
+	var batting_order: Array = offense.get("batters", []) as Array
+	if batting_order.is_empty():
+		return []
+	var batting_index: int = int(offense.get("batting_index", 0))
+	var sides: Array = []
+	for step in range(min(PSPlatoonMatchup.RELIEF_LOOKAHEAD_BATTERS, batting_order.size())):
+		var batter: PSPlayerSeasonRecord = batting_order[(batting_index + step) % batting_order.size()] as PSPlayerSeasonRecord
+		if batter == null:
+			continue
+		sides.append(batter.batting_side)
+	return sides
+
+
+# これから対戦する打者の並びに対する相性 (投手側から見た rating 点)。
+static func matchup_bonus_for_reliever(setup: Dictionary, reliever: PSPlayerSeasonRecord) -> float:
+	if reliever == null:
+		return 0.0
+	return PSPlatoonMatchup.reliever_matchup_bonus(
+		setup.get("upcoming_batter_sides", []) as Array, reliever.throwing_hand
+	)
+
 
 # 試合開始時の先発投手とスタメン野手の出場記録を付ける。
 # DH は守備負荷が軽いので疲労/怪我 exposure を下げ、守備についた野手とは分けて扱う。
@@ -361,6 +392,9 @@ static func reliever_selection_score_for_setup(
 	if baselines.has(baseline_key) \
 			and reliever.pitcher_stats.games <= int(baselines[baseline_key]):
 		score += CALLUP_AUDITION_BONUS
+	# 次に回ってくる打者との左右の相性。役割補正 (100-300点) より 1 桁小さいので、抑えや
+	# セットの担当場面を奪うことはなく、同じ役割帯の中の並びだけを動かす。
+	score += matchup_bonus_for_reliever(setup, reliever)
 	return score + relief_role_context_bonus(role, prefer_long, inning, close_game, score_margin)
 
 

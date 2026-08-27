@@ -575,10 +575,22 @@ static func _simulate_one_postseason_game(
 	team_games_before_by_team: Dictionary = {}
 ) -> Dictionary:
 	# postseason=true で短期決戦用のローテ判断 (序列上位のみ・中5日/中4日を通常運用) に切り替える。
-	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, away_id, true, true)
-	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, home_id, true, true)
+	# 打線はペナントと同じく相手先発の左右で組む (away の 1 回目は右投手を仮定し、
+	# home の先発が左なら組み直す)。
+	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(
+		season, away_id, true, true, PSTeamSetupBuilder.LEVEL_FIRST, PSPlatoonMatchup.DEFAULT_PITCHER_HAND
+	)
+	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(
+		season, home_id, true, true, PSTeamSetupBuilder.LEVEL_FIRST, GameSimulator.starter_hand(away_setup)
+	)
 	if not bool(away_setup.get("ok", false)) or not bool(home_setup.get("ok", false)):
 		return {"away_score": 0, "home_score": 0, "draw": true, "winning_team_id": 0}
+	if GameSimulator.starter_hand(home_setup) == PSPlatoonMatchup.HAND_LEFT:
+		var away_vs_left: Dictionary = PSTeamSetupBuilder.build_team_setup(
+			season, away_id, true, true, PSTeamSetupBuilder.LEVEL_FIRST, PSPlatoonMatchup.HAND_LEFT
+		)
+		if bool(away_vs_left.get("ok", false)):
+			away_setup = away_vs_left
 	_apply_postseason_setup_overrides(away_setup, away_id, team_games_before_by_team)
 	_apply_postseason_setup_overrides(home_setup, home_id, team_games_before_by_team)
 	var snapshots: Dictionary = _snapshot_setup_records(away_setup, home_setup)

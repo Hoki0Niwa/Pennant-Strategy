@@ -106,8 +106,10 @@ static func _profile_add(label: String, elapsed_usec: int) -> void:
 
 
 # プレビュー系 (UI から呼ばれる) は PSTeamSetupBuilder へ委譲。
-static func preview_lineup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
-	return PSTeamSetupBuilder.preview_lineup(season, team_id, dh_enabled)
+static func preview_lineup(
+	season: PSSeason, team_id: int, dh_enabled: bool, opponent_hand: String = ""
+) -> Dictionary:
+	return PSTeamSetupBuilder.preview_lineup(season, team_id, dh_enabled, opponent_hand)
 
 
 static func preview_rotation(season: PSSeason, team_id: int) -> Dictionary:
@@ -868,16 +870,25 @@ static func simulate_game_at_index(season: PSSeason, game_index: int, persist: b
 	return _apply_game_result(season, calc, persist)
 
 
-# 1試合の計算フェーズ。setup構築とPSGameLoop.simulate_gameのみを行い、season/RecordStore/GameDb
-# の共有コンテナへは(排他所有が保証されたPSPlayerSeasonRecord/PSPlayer以外は)書き込まない。
-# 1日分の試合はチームが完全に排反なので、WorkerThreadPoolで複数試合を並列に呼んでも安全。
-# lane_id >= 0 のときだけ Rng のレーンストリームを開始/終了する(-1 は共有 generator を使う)。
-# セットアップの先発投手の利き腕 ("R"/"L")。相手打順の左右切替に使う。
-static func _starter_hand(setup: Dictionary) -> String:
+# セットアップの先発投手の利き腕 ("R"/"L")。相手のスタメン・打順の左右切替に使う。
+static func starter_hand(setup: Dictionary) -> String:
 	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", null) as PSPlayerSeasonRecord
 	return "" if starter == null else starter.throwing_hand.to_upper()
 
 
+# そのチームの打線が相手先発の左右で変わるか。自動編成チームは AI がプラトーン起用を組むので常に
+# 変わり得る。手動のチームは対左の打順を保存しているときだけ。
+static func _lineup_varies_by_hand(season: PSSeason, team_id: int, dh_enabled: bool) -> bool:
+	var team: PSTeam = GameDb.get_team(team_id)
+	if team != null and team.auto_lineup:
+		return true
+	return season.has_lineup(team_id, dh_enabled, PSPlatoonMatchup.HAND_LEFT)
+
+
+# 1試合の計算フェーズ。setup構築とPSGameLoop.simulate_gameのみを行い、season/RecordStore/GameDb
+# の共有コンテナへは(排他所有が保証されたPSPlayerSeasonRecord/PSPlayer以外は)書き込まない。
+# 1日分の試合はチームが完全に排反なので、WorkerThreadPoolで複数試合を並列に呼んでも安全。
+# lane_id >= 0 のときだけ Rng のレーンストリームを開始/終了する(-1 は共有 generator を使う)。
 static func _simulate_game_calculation(
 	season: PSSeason,
 	game_index: int,
@@ -895,21 +906,25 @@ static func _simulate_game_calculation(
 	var away_team_id: int = int(game.get("away_team_id", 0))
 	var home_team_id: int = int(game.get("home_team_id", 0))
 	var dh_enabled: bool = bool(game.get("dh_enabled", false))
-	# 打順は相手先発の左右で変わり得る。away を先に組んでその先発の利き腕を home へ渡し、
-	# home の先発が左で **away が対左の打順を保存している場合だけ** away を組み直す。
+	# スタメン・打順は相手先発の左右で変わり得る。away を先に組んでその先発の利き腕を home へ渡し、
+	# home の先発が左で **away の打線が左右で変わる場合だけ** away を組み直す。
+	# away の 1 回目は相手が右投手だという既定の仮定で組むので、右のときは組み直しが要らない。
 	# セットアップ構築は Rng を一切消費しない (乱数ストリームは試合ループ側だけ) ので、
 	# 組み直しても乱数系列と既存の結果は変わらない。
-	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(season, away_team_id, dh_enabled)
+	var away_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(
+		season, away_team_id, dh_enabled, false, PSTeamSetupBuilder.LEVEL_FIRST,
+		PSPlatoonMatchup.DEFAULT_PITCHER_HAND
+	)
 	if not bool(away_setup.get("ok", false)):
 		return away_setup
 	var home_setup: Dictionary = PSTeamSetupBuilder.build_team_setup(
 		season, home_team_id, dh_enabled, false, PSTeamSetupBuilder.LEVEL_FIRST,
-		_starter_hand(away_setup)
+		starter_hand(away_setup)
 	)
 	if not bool(home_setup.get("ok", false)):
 		return home_setup
-	var home_hand: String = _starter_hand(home_setup)
-	if home_hand == "L" and season.has_lineup(away_team_id, dh_enabled, home_hand):
+	var home_hand: String = starter_hand(home_setup)
+	if home_hand == PSPlatoonMatchup.HAND_LEFT and _lineup_varies_by_hand(season, away_team_id, dh_enabled):
 		away_setup = PSTeamSetupBuilder.build_team_setup(
 			season, away_team_id, dh_enabled, false, PSTeamSetupBuilder.LEVEL_FIRST, home_hand
 		)

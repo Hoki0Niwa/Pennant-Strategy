@@ -1144,7 +1144,7 @@ func _load_lineup_for_mode() -> void:
 		_slots[i] = {"pid": 0, "pos": 0}
 	var lineup: Dictionary = season.get_lineup(_team_id, _dh_enabled, _hand_mode)
 	if lineup.is_empty() or (lineup.get("batting_order", []) as Array).is_empty():
-		var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, _dh_enabled)
+		var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, _dh_enabled, _hand_mode)
 		if bool(preview.get("ok", false)):
 			_apply_lineup(preview)
 			_set_status("保存された打順がありません。自動編成を表示しています。", false)
@@ -1189,7 +1189,7 @@ func _on_auto_pressed() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null or _team_id <= 0:
 		return
-	var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, _dh_enabled)
+	var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, _dh_enabled, _hand_mode)
 	if not bool(preview.get("ok", false)):
 		_set_status("自動編成に失敗しました: %s" % str(preview.get("message", "")), true)
 		queue_redraw()

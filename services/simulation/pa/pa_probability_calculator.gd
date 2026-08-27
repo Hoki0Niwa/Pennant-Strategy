@@ -43,12 +43,10 @@ const BB_PREVENT_WEIGHT: float = 0.5 # 投手の制球が四球を減らす強�
 const FRAMING_BB_COEF: float = 1.0    # フレーミングで得たストライクが四球を押し下げる係数。
 const GAMECALL_BB_COEF: float = 0.03  # 捕手の配球が四球に効く係数。
 const TTO_BB_DROP: float = 0.4        # 巡目ペナルティで四球が増える量。
-# 左右(プラトーン)相性が三振 logit に効く強さ。
-const PLATOON_WEIGHT: float = 0.3
 # 能力差による logit の振れ幅の飽和点 (対戦優位の圧縮)。
 # **能力ではなく「投手項 - 打者項」に掛ける**ので、両者が同じだけ弱くなっても結果は動かない
 # (= リーグ水準が変わってもレベル不変) 一方、極端なミスマッチだけが飽和する。
-# 圧縮の対象は raw z 由来の項だけで、フレーミング・配球・巡目・プラトーンといった状況項は含めない
+# 圧縮の対象は raw z 由来の項だけで、フレーミング・配球・巡目といった状況項は含めない
 # (状況項は対戦の能力差ではないため)。値の較正は tools/run_pa_response_surface の
 # farm_club_win_pct で行う。詳細は docs/agent_memory/project_pa_talent_sensitivity_calibration.md。
 # ⚠️ 圧縮の中心は 0 ではない。K_LOGIT_BASE が畳み込んでいるのは**全選手プールの平均**なので、
@@ -69,39 +67,33 @@ const MATCHUP_LOGIT_SPAN: float = 0.35
 
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
 # precomp は以下のキーを持つ想定（PlateAppearanceCoordinator が組み立てる）:
-#   batter_z: Dictionary{Bat_KAvoid, Bat_BBCreate, Bat_Platoon, ...}
+#   batter_z: Dictionary{Bat_KAvoid, Bat_BBCreate, ...} (左右の相性を織り込み済み)
 #   pitcher_z: Dictionary{Pit_KCreate, Pit_BBPrevent, Pit_EdgeRate, ...} (fatigue/TTO 後)
 #   catcher_z: Dictionary{C_Framing, ...}
-#   platoon_sign: float (+1 同利き腕 / -1 逆利き腕)
 #   tto_round_weight: float (coordinator の TTO_PENALTY_PER_ROUND[round])
 #   framing_strikes: float (C_Framing * coordinator の FRAMING_SCALE)
 static func build_weights(precomp: Dictionary) -> Dictionary:
 	var rules: Dictionary = precomp.get("_pa_probability_rules", {}) as Dictionary
 	var batter_z: Dictionary = precomp.get("batter_z", {}) as Dictionary
 	var pitcher_z: Dictionary = precomp.get("pitcher_z", {}) as Dictionary
-	var platoon_sign: float = float(precomp.get("platoon_sign", 0.0))
 	var tto_round_weight: float = float(precomp.get("tto_round_weight", 0.0))
 	var framing_strikes: float = float(precomp.get("framing_strikes", 0.0))
 	var command_leak: float = float(precomp.get("pitcher_command_leak", 0.0))
 	var arsenal_k_bias: float = float(precomp.get("arsenal_k_bias", 0.0))
 	var catcher_z: Dictionary = precomp.get("catcher_z", {}) as Dictionary
-	var platoon_weight: float = _rule_float(rules, "platoon_weight", PLATOON_WEIGHT)
 
 	var bat_k_avoid: float = float(batter_z.get("Bat_KAvoid", 0.0))
 	var bat_bb_create: float = float(batter_z.get("Bat_BBCreate", 0.0))
-	var bat_platoon: float = float(batter_z.get("Bat_Platoon", 0.0))
 	var pit_k_create: float = float(pitcher_z.get("Pit_KCreate", 0.0))
 	var pit_bb_prevent: float = float(pitcher_z.get("Pit_BBPrevent", 0.0))
 	var pit_edge_rate: float = float(pitcher_z.get("Pit_EdgeRate", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 
-	var platoon_term: float = bat_platoon * platoon_sign * platoon_weight
-
 	var matchup_pivot: float = _rule_float(rules, "matchup_logit_pivot", MATCHUP_LOGIT_PIVOT)
 	var matchup_span: float = _rule_float(rules, "matchup_logit_span", MATCHUP_LOGIT_SPAN)
 
-	# 能力差由来の項だけを先に積んでから飽和させ、そのあとで状況項 (フレーミング/配球/巡目/
-	# プラトーン) を足す。状況項は対戦の能力差ではないので圧縮の対象にしない。
+	# 能力差由来の項だけを先に積んでから飽和させ、そのあとで状況項 (フレーミング/配球/巡目) を
+	# 足す。状況項は対戦の能力差ではないので圧縮の対象にしない。
 	var k_ability: float = pit_k_create * _rule_float(rules, "k_create_weight", K_CREATE_WEIGHT)
 	k_ability -= bat_k_avoid * _rule_float(rules, "k_avoid_weight", K_AVOID_WEIGHT)
 	k_ability += pit_edge_rate * _rule_float(rules, "arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
@@ -113,7 +105,6 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	k_logit += framing_strikes * _rule_float(rules, "framing_k_coef", FRAMING_K_COEF)
 	k_logit += c_game_call * _rule_float(rules, "gamecall_k_coef", GAMECALL_K_COEF)
 	k_logit -= tto_round_weight * _rule_float(rules, "tto_k_drop", TTO_K_DROP)
-	k_logit -= platoon_term
 
 	var bb_ability: float = bat_bb_create * _rule_float(rules, "bb_create_weight", BB_CREATE_WEIGHT)
 	bb_ability -= pit_bb_prevent * _rule_float(rules, "bb_prevent_weight", BB_PREVENT_WEIGHT)

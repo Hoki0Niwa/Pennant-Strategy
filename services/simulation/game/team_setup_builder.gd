@@ -82,7 +82,7 @@ static func build_team_setup(
 	if setup.is_empty():
 		setup = build_setup_from_auto(
 			season, team_id, dh_enabled, available_fielders, rotation_pitcher,
-			team_games_played_before, batting_memo, level
+			team_games_played_before, batting_memo, level, opponent_hand
 		)
 
 	if bool(setup.get("ok", false)):
@@ -106,7 +106,11 @@ static func build_team_setup(
 	return setup
 
 
-static func preview_lineup(season: PSSeason, team_id: int, dh_enabled: bool) -> Dictionary:
+# 打順設定画面の「自動編成」。opponent_hand を渡すとその利き腕の先発を想定した打線を返す
+# (対左タブの自動編成)。
+static func preview_lineup(
+	season: PSSeason, team_id: int, dh_enabled: bool, opponent_hand: String = ""
+) -> Dictionary:
 	var prepared: Dictionary = prepare_team_setup(season, team_id, dh_enabled)
 	if not bool(prepared.get("ok", false)):
 		return prepared
@@ -120,7 +124,10 @@ static func preview_lineup(season: PSSeason, team_id: int, dh_enabled: bool) -> 
 		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
 
 	var team_games_played_before: int = 0 if team_record == null else int(team_record.stats.games)
-	var setup: Dictionary = build_setup_from_auto(season, team_id, dh_enabled, available_fielders, rotation_pitcher, team_games_played_before)
+	var setup: Dictionary = build_setup_from_auto(
+		season, team_id, dh_enabled, available_fielders, rotation_pitcher, team_games_played_before,
+		{}, LEVEL_FIRST, opponent_hand
+	)
 	if not bool(setup.get("ok", false)):
 		return setup
 
@@ -803,7 +810,8 @@ static func build_setup_from_auto(
 	rotation_pitcher: PSPlayerSeasonRecord,
 	team_games_played_before: int = -1,
 	batting_memo: Dictionary = {},
-	level: int = LEVEL_FIRST
+	level: int = LEVEL_FIRST,
+	opponent_hand: String = ""
 ) -> Dictionary:
 	if team_games_played_before < 0:
 		var team_record: PSTeamSeasonRecord = RecordStore.get_team_record(team_id, season.year, season.season_number)
@@ -851,11 +859,13 @@ static func build_setup_from_auto(
 			available_fielders,
 			season.get_callup_appearance_baselines(team_id)
 		)
+	# 当日の守備は相手先発の利き腕込みで決める (プラトーン起用)。デプスチャート自体を組み直す
+	# 上の評価呼び出しは左右を渡さない — 定位置とシェアは特定の1試合の相手で決めるものではない。
 	var fielding_slots: Array = (
 		select_defensive_starters_with_usage(team_id, available_fielders, {}, team_games_played_before + 1, batting_memo)
 		if is_farm
 		else select_defensive_starters_with_usage(
-			team_id, available_fielders, usage_settings, team_games_played_before + 1, batting_memo
+			team_id, available_fielders, usage_settings, team_games_played_before + 1, batting_memo, opponent_hand
 		)
 	)
 	if fielding_slots.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
@@ -876,7 +886,7 @@ static func build_setup_from_auto(
 		)
 		if designated_hitter == null:
 			designated_hitter = select_designated_hitter(
-				available_fielders, fielding_slots, {}, batting_memo
+				available_fielders, fielding_slots, {}, batting_memo, opponent_hand
 			)
 		if designated_hitter == null:
 			return {"ok": false, "message": "%sにDH候補がいません" % GameSimulator._team_name(team_id)}
@@ -900,7 +910,7 @@ static func build_setup_from_auto(
 			"game_day": season.current_day,
 			"team_id": team_id,
 			"dh_enabled": dh_enabled,
-			"opp_pitcher_hand": "",
+			"opp_pitcher_hand": opponent_hand,
 			"position_by_player_id": position_by_player_id,
 			"team_games_played": team_games_played_before,
 		}
@@ -908,7 +918,7 @@ static func build_setup_from_auto(
 		# 基本打順は初回と定期リフレッシュで profile 側が差し替わる。セーブへはそれをそのまま写す。
 		season.set_auto_batting_order(team_id, dh_enabled, profile.base_order_player_ids)
 	else:
-		sort_batting_order(batting_order, position_by_player_id)
+		sort_batting_order(batting_order, position_by_player_id, opponent_hand)
 		if not dh_enabled:
 			batting_order.append(rotation_pitcher)
 	var bench: Array = bench_fielders(available_fielders, batting_order)
@@ -1189,11 +1199,12 @@ static func select_defensive_starters_with_usage(
 	candidates: Array,
 	usage_settings: Dictionary,
 	next_game_number: int = 1,
-	batting_memo: Dictionary = {}
+	batting_memo: Dictionary = {},
+	opponent_hand: String = ""
 ) -> Array:
 	var profile: PSDefenseAlignmentProfile = DefenseAlignmentProfile.load_for_team(team_id)
 	return DefenseAlignmentService.assign_defensive_starters(
-		candidates, profile, usage_settings, next_game_number, batting_memo
+		candidates, profile, usage_settings, next_game_number, batting_memo, opponent_hand
 	)
 
 
@@ -1647,7 +1658,8 @@ static func select_designated_hitter(
 	candidates: Array,
 	fielding_slots: Array,
 	excluded_ids: Dictionary = {},
-	batting_memo: Dictionary = {}
+	batting_memo: Dictionary = {},
+	opponent_hand: String = ""
 ) -> PSPlayerSeasonRecord:
 	var used_ids: Dictionary = {}
 	for slot_row in fielding_slots:
@@ -1657,13 +1669,15 @@ static func select_designated_hitter(
 			used_ids[fielder.player_id] = true
 
 	var best: PSPlayerSeasonRecord = null
-	var best_score: int = -999999
+	var best_score: float = -999999.0
 	for candidate_row in candidates:
 		var candidate: PSPlayerSeasonRecord = candidate_row as PSPlayerSeasonRecord
 		if used_ids.has(candidate.player_id) or excluded_ids.has(candidate.player_id):
 			continue
-		# DH は守備が要らないぶん打撃だけで決まる。好不調 (成績の上振れ/下振れ) も込みで見る。
-		var score: int = _cached_batting_score(candidate, batting_memo)
+		# DH は守備が要らないぶん打撃だけで決まる。好不調 (成績の上振れ/下振れ) と、
+		# 相手先発との左右の相性も込みで見る。
+		var score: float = float(_cached_batting_score(candidate, batting_memo))
+		score += PSPlatoonMatchup.rating_bonus_for(candidate, opponent_hand)
 		if best == null or score > best_score:
 			best = candidate
 			best_score = score
@@ -1672,8 +1686,14 @@ static func select_designated_hitter(
 
 # 打順を役割マッチング (1-2番=出塁と機動力、3-5番=中軸、6番以降=打力順、捕手は上位を避ける) で
 # 並べ替える。position_by_player_id はその日の守備位置で、捕手判定に使う (省略時は登録ポジション)。
-static func sort_batting_order(batting_order: Array, position_by_player_id: Dictionary = {}) -> void:
-	batting_order.assign(BattingOrderService.build_base_order(batting_order, null, position_by_player_id))
+# opponent_hand を渡すと相手先発との左右の相性ぶんを加減点する。
+static func sort_batting_order(
+	batting_order: Array, position_by_player_id: Dictionary = {}, opponent_hand: String = ""
+) -> void:
+	batting_order.assign(BattingOrderService.build_base_order(
+		batting_order, null, position_by_player_id,
+		BattingOrderService.platoon_bonuses(batting_order, opponent_hand)
+	))
 
 
 static func _sort_by_starter_order(pitchers: Array) -> void:

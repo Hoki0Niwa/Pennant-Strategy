@@ -29,7 +29,6 @@
       "framing_bb_coef": 1.0,
       "gamecall_bb_coef": 0.03,
       "tto_bb_drop": 0.4,
-      "platoon_weight": 0.3,
       "matchup_logit_pivot": 0.55,
       "matchup_logit_span": 0.35,
       "command_leak_bb_weight": 0.1,
@@ -39,6 +38,7 @@
       "bb_matchup_center": -0.2
     },
     "plate_appearance": {
+      "platoon_ability_shift_z": 0.1,
       "relief_output_bonus_z": 0.08,
       "pitcher_output_tail_span": 100.0,
       "pitcher_stuff_tail_span": 100.0,

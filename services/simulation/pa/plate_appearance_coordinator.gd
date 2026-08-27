@@ -547,8 +547,9 @@ static func _build_precomp(
 ) -> Dictionary:
 	if plate_rules.is_empty() and game_cache.has(CACHE_PLATE_RULES):
 		plate_rules = game_cache.get(CACHE_PLATE_RULES, {}) as Dictionary
-	# z 視点ビュー
-	var batter_z: Dictionary = _batter_z_view(batter, game_cache, plate_rules)
+	# z 視点ビュー。打者能力は左右の相性 (同じ利き腕なら不利、逆なら有利) を織り込んだ値になる。
+	var platoon_sign: float = PSPlatoonMatchup.sign_for_records(batter, pitcher)
+	var batter_z: Dictionary = _batter_z_view(batter, game_cache, plate_rules, platoon_sign)
 	var pitcher_z_raw: Dictionary = _pitcher_z_view(pitcher, game_cache)
 	var catcher_z: Dictionary = _catcher_z_view(_catcher_record(defense), game_cache)
 
@@ -588,8 +589,6 @@ static func _build_precomp(
 	if is_reliever:
 		_apply_relief_output_bonus(pitcher_z, pitcher_role, outing_ratio, plate_rules)
 
-	# 利き腕プラトーン: 同利き腕なら -1（不利）、逆なら +1
-	var platoon_sign: float = _platoon_sign(batter, pitcher)
 	var framing_strikes: float = float(catcher_z.get("C_Framing", 0.0)) * FRAMING_SCALE
 	var game_call_z: float = float(catcher_z.get("C_GameCall", 0.0))
 	pitcher_z["Pit_ImpactLimit"] = float(pitcher_z.get("Pit_ImpactLimit", 0.0)) + game_call_z * GAMECALL_CONTACT_COEF
@@ -616,7 +615,6 @@ static func _build_precomp(
 		"fatigue_factor": fatigue_factor,
 		"tto_round": tto_round,
 		"tto_round_weight": tto_round_weight,
-		"platoon_sign": platoon_sign,
 		"framing_strikes": framing_strikes,
 		"pitcher_command_leak": command_leak,
 		# 球種傾向(微差) — pa_probability_calculator(K) / contact_quality_model(LA,被弾) が読む。
@@ -718,20 +716,6 @@ static func _limited_pitcher_stuff_z(pitcher_z: Dictionary, rules: Dictionary = 
 	)
 
 
-static func _platoon_sign(batter: PSPlayerSeasonRecord, pitcher: PSPlayerSeasonRecord) -> float:
-	if batter == null or pitcher == null:
-		return 0.0
-	var bat_hand: String = batter.batting_side
-	var pit_hand: String = pitcher.throwing_hand
-	# Switch hitter は逆向きに設定するとして +1 を返す（仮）
-	if bat_hand == "S":
-		return 1.0
-	# 同利き腕 → 打者不利（-1）。逆 → +1。
-	if bat_hand == pit_hand:
-		return -1.0
-	return 1.0
-
-
 static func _catcher_record(defense: Dictionary) -> PSPlayerSeasonRecord:
 	var direct: PSPlayerSeasonRecord = defense.get("catcher", null) as PSPlayerSeasonRecord
 	if direct != null:
@@ -746,23 +730,40 @@ static func _catcher_record(defense: Dictionary) -> PSPlayerSeasonRecord:
 	return null
 
 
+# 左右の相性ぶんの補正は打者の能力そのものへ載せるので、ビューは (打者 × 相性) 単位で持つ。
+# 相性は +1/-1/0 の 3 通りしか無く、1 試合中は打者ごとに高々 3 種類しか作られない。
 static func _batter_z_view(
 	record: PSPlayerSeasonRecord,
 	game_cache: Dictionary,
-	rules: Dictionary
+	rules: Dictionary,
+	platoon_sign: float
 ) -> Dictionary:
 	if game_cache.is_empty():
-		var direct_view: Dictionary = PSZAbilityAdapter.batter_view(record)
-		_apply_batter_tail_limits(direct_view, rules)
-		return direct_view
+		return _build_batter_z_view(record, rules, platoon_sign)
 	var views: Dictionary = game_cache.get(CACHE_BATTER_Z_VIEWS, {}) as Dictionary
 	var key: int = 0 if record == null else int(record.get_instance_id())
-	if not views.has(key):
-		var view: Dictionary = PSZAbilityAdapter.batter_view(record)
-		_apply_batter_tail_limits(view, rules)
-		views[key] = view
+	var by_platoon: Dictionary = views.get(key, {}) as Dictionary
+	var platoon_key: int = int(signf(platoon_sign))
+	if not by_platoon.has(platoon_key):
+		by_platoon[platoon_key] = _build_batter_z_view(record, rules, platoon_sign)
+		views[key] = by_platoon
 		game_cache[CACHE_BATTER_Z_VIEWS] = views
-	return views[key] as Dictionary
+	return by_platoon[platoon_key] as Dictionary
+
+
+static func _build_batter_z_view(
+	record: PSPlayerSeasonRecord,
+	rules: Dictionary,
+	platoon_sign: float
+) -> Dictionary:
+	var view: Dictionary = PSZAbilityAdapter.batter_view(record)
+	PSPlatoonMatchup.apply_batter_shift(
+		view,
+		platoon_sign,
+		_rule_float(rules, "platoon_ability_shift_z", PSPlatoonMatchup.ABILITY_SHIFT_Z)
+	)
+	_apply_batter_tail_limits(view, rules)
+	return view
 
 
 static func _pitcher_z_view(record: PSPlayerSeasonRecord, game_cache: Dictionary) -> Dictionary:
