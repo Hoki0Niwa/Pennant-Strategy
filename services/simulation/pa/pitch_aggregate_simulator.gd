@@ -41,12 +41,15 @@ const PATIENCE_COEF: float = 0.4            # 打者の選球眼が球数を増�
 const AGGRESSION_COEF: float = 0.4          # 打者の積極性が球数を減らす係数。
 const EFFICIENCY_COEF: float = 0.3          # 投手の効率(省エネ度)が球数を減らす係数。
 const GAMECALL_EFFICIENCY_COEF: float = 0.2 # 捕手の配球が球数効率に効く係数。
-const TTO_PITCH_COEF: float = 4.6           # 打順3巡目以降の粘られやすさを球数へ反映する係数。
+# 打順3巡目以降の粘られやすさを球数へ反映する係数。TTO_PENALTY_PER_ROUND (3巡目 0.10 /
+# 4巡目 0.15) と掛けて 1打席あたり +0.34 / +0.51 球。深い回の1打席が長くなりすぎると
+# 先発が8回に上がるための予測球数が膨らみ、実際の球数以上に降板を早めるので控えめに置く。
+const TTO_PITCH_COEF: float = 3.4
 # 球数デルタの基準値。raw z の各項 (bat_bb_create*PATIENCE_COEF 等) を中立点なしでそのまま
 # 合算するための定数項。各能力の「実測母平均 × 係数」の総和を畳み込んであるので、
 # 実行時に母平均を参照せず raw z へ係数を掛けて足すだけで済む。
 const PITCH_DELTA_BASE: float = 0.57237
-const FATIGUE_PITCH_COEF: float = 1.6       # 疲労が球数を増やす係数。
+const FATIGUE_PITCH_COEF: float = 1.35      # 疲労が球数を増やす係数。100球時点で +0.3 球/打席ほど。
 const MIN_PITCH_COUNT: int = 1              # 1打席あたり球数の下限クランプ。
 const MAX_PITCH_COUNT: int = 20             # 1打席あたり球数の上限クランプ。
 

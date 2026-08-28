@@ -13,11 +13,14 @@ const STARTER_STAMINA_LIMIT_MIN: int = 88
 const STARTER_STAMINA_LIMIT_MAX: int = 145
 const STARTER_COMPLETE_GAME_LIMIT_MIN: int = 104
 const STARTER_COMPLETE_GAME_LIMIT_MAX: int = 145
-const STARTER_COMPLETE_GAME_PITCHES_PER_OUT: float = 5.6
+# 完投挑戦で残りアウトを投げ切るのに要する球数の見積もり。実測では完投した登板は
+# 12.5球/回 (4.2球/out)、8回まで投げた登板は13.1球/回 (4.4球/out) なので、
+# 5.6球/out は候補になる投手の実態より過大だった。
+const STARTER_COMPLETE_GAME_PITCHES_PER_OUT: float = 4.9
 const STARTER_NEXT_INNING_BASE_PITCHES: float = 16.0
 const STARTER_CURRENT_FATIGUE_FLOOR: float = 0.20
 const STARTER_MID_INNING_FATIGUE_FLOOR: float = 0.16
-const STARTER_COMPLETE_GAME_FATIGUE_FLOOR: float = 0.48
+const STARTER_COMPLETE_GAME_FATIGUE_FLOOR: float = 0.58
 const SHORT_RELIEF_TARGET_MIN: int = 15
 const SHORT_RELIEF_TARGET_MAX: int = 32
 const LONG_RELIEF_TARGET_MIN: int = 32
@@ -25,7 +28,17 @@ const LONG_RELIEF_TARGET_MAX: int = 58
 const STARTER_NEXT_INNING_PROJECTED_BATTERS: float = 4.0
 const STARTER_TTO_HOOK_START_BF: float = 24.0
 const STARTER_TTO_HOOK_RISK_PER_BF: float = 0.024
-const STARTER_TTO_HOOK_RISK_MAX: float = 0.18
+# TTO hook は BF 24 から効き始めるので、上限を高く置くと8回頭 (BF 28 前後) でちょうど
+# 張り付き、疲労下限と二重に効いて8回登板だけを潰す。上限は疲労下限の差より小さく保つ。
+const STARTER_TTO_HOOK_RISK_MAX: float = 0.12
+
+# 先発の「格」による炎上降板の猶予 (失点しきい値へ足す点数)。ローテ序列の上位
+# STARTER_HOOK_TOLERANCE_TOP_RANKS 人までが STARTER_HOOK_TOLERANCE_RUNS 点ぶん粘らせてもらえる。
+# 根拠 (NF3 の先発一覧から抽出した NPB 2016-19 = 現行シムと同じ ERA 3.7-4.0 帯):
+# 同じ失点でも上位先発ほど深く投げる — 4失点時の平均投球回は IP上位15人 6.06 / 16-40位 5.49 /
+# 41位以下 4.62、5失点時は 5.79 / 5.15 / 4.43。序列外 (スポット先発) は猶予なし。
+const STARTER_HOOK_TOLERANCE_TOP_RANKS: int = 3
+const STARTER_HOOK_TOLERANCE_RUNS: int = 1
 
 const TROUBLE_ALERT: float = 4.0
 const MELTDOWN_THRESHOLD: float = 6.5
@@ -152,7 +165,11 @@ static func long_relief_target_pitches(record: PSPlayerSeasonRecord) -> int:
 	return int(clamp(round(workload), LONG_RELIEF_TARGET_MIN, LONG_RELIEF_TARGET_MAX))
 
 
-static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Dictionary:
+# hook_tolerance は先発の格による炎上降板の猶予 (starter_hook_tolerance)。
+# 登板中は変わらないので usage に焼き込み、以後の降板判断はここから読む。
+static func create_outing(
+	record: PSPlayerSeasonRecord, role: String, hook_tolerance: int = 0
+) -> Dictionary:
 	var resolved_role: String = _normalized_role(role)
 	var workload_pitches: int = outing_workload_pitches(record, resolved_role)
 	var fatigue_start_pitches: float = PSFatigueCalculator.start_threshold(
@@ -166,6 +183,7 @@ static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Diction
 		"record": record,
 		"pitcher_id": 0 if record == null else record.player_id,
 		"role": resolved_role,
+		"hook_tolerance": max(0, hook_tolerance) if resolved_role == ROLE_STARTER else 0,
 		"workload_pitches": workload_pitches,
 		"fatigue_start_pitches": fatigue_start_pitches,
 		"fatigue_limit_pitches": fatigue_limit_pitches,
@@ -180,6 +198,19 @@ static func create_outing(record: PSPlayerSeasonRecord, role: String) -> Diction
 		"consecutive_reached": 0,
 		"consecutive_count": 0,
 	}
+
+
+# ローテ序列 (0 始まり) から炎上降板の猶予を返す。序列外 (スポット先発・救援の緊急先発) は -1 で
+# 猶予なし。序列は `reorder_auto_rotation` が週次で成績順に組み替えるので、不振のエースは
+# 自然に猶予を失う。
+static func starter_hook_tolerance(rotation_index: int) -> int:
+	if rotation_index < 0 or rotation_index >= STARTER_HOOK_TOLERANCE_TOP_RANKS:
+		return 0
+	return STARTER_HOOK_TOLERANCE_RUNS
+
+
+static func _hook_tolerance(usage: Dictionary) -> int:
+	return max(0, int(usage.get("hook_tolerance", 0)))
 
 
 static func outing_workload_pitches(record: PSPlayerSeasonRecord, role: String) -> int:
@@ -398,13 +429,15 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD:
 			return true
 		# 失点による回またぎ降板。3失点では降ろさず、4回4失点や終盤4失点から段階的に替える。
-		if runs_allowed >= 6:
+		# 格上の先発 (ローテ上位) は tolerance ぶん粘らせる。
+		var tolerance: int = _hook_tolerance(usage)
+		if runs_allowed >= 6 + tolerance:
 			return true
-		if inning >= 4 and runs_allowed >= 5:
+		if inning >= 4 and runs_allowed >= 5 + tolerance:
 			return true
-		if inning == 5 and runs_allowed >= 4:
+		if inning == 5 and runs_allowed >= 4 + tolerance:
 			return true
-		if inning >= 7 and runs_allowed >= 4:
+		if inning >= 7 and runs_allowed >= 4 + tolerance:
 			return true
 		return false
 	if role == ROLE_LONG_RELIEF:
@@ -439,22 +472,24 @@ static func should_pull_after_plate_appearance(
 	if role == ROLE_STARTER:
 		# イニング途中の交代は「炎上が止まらない」緊急時のみ。通常の交代は回またぎ
 		# (should_pull_for_next_half) で判断し、序盤の数失点では立て直しのチャンスを与える。
+		# 失点しきい値は格上の先発ほど tolerance ぶん高い。
+		var tolerance: int = _hook_tolerance(usage)
 		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
 		if PSFatigueCalculator.factor_for_outing(record, usage, pitches) <= STARTER_MID_INNING_FATIGUE_FLOOR and not complete_game_chase:
 			return true
 		if inning <= 4:
 			# 序盤は5〜6失点級の炎上が続くときだけ即交代。2回3失点程度では降ろさない。
-			if runs_allowed >= 6 and runners_on >= 1:
+			if runs_allowed >= 6 + tolerance and runners_on >= 1:
 				return true
-			return runs_allowed >= 5 and runners_on >= 2
+			return runs_allowed >= 5 + tolerance and runners_on >= 2
 		# 5回以降のイニング途中交代: 大量失点 / 球数限界+走者 / 満塁級の止まらない連打。
-		if inning == 5 and runs_allowed >= 5 and runners_on >= 1:
+		if inning == 5 and runs_allowed >= 5 + tolerance and runners_on >= 1:
 			return true
-		if inning == 5 and runs_allowed >= 4 and runners_on >= 2:
+		if inning == 5 and runs_allowed >= 4 + tolerance and runners_on >= 2:
 			return true
-		if runs_allowed >= 6 and runners_on >= 1:
+		if runs_allowed >= 6 + tolerance and runners_on >= 1:
 			return true
-		if inning >= 6 and runs_allowed >= 5 and runners_on >= 1:
+		if inning >= 6 and runs_allowed >= 5 + tolerance and runners_on >= 1:
 			return true
 		if inning >= 6 and starter_projected_fatigue_factor(record, usage, 8.0) <= 0.20 and runners_on >= 1:
 			return true
@@ -529,17 +564,20 @@ static func _starter_next_inning_would_exhaust(record: PSPlayerSeasonRecord, usa
 	if inning <= 4:
 		return false
 	var projected: float = starter_projected_next_inning_effective_factor(record, usage)
-	return projected <= _starter_projected_fatigue_floor(inning, runs_allowed)
+	return projected <= _starter_projected_fatigue_floor(inning, runs_allowed - _hook_tolerance(usage))
 
 
+# 次の回を投げ切った後に残っていてほしい疲労係数の下限。試合終盤ほど「守るべき残り」が
+# 少ないので単調に緩める。**非単調にしない** — 8回の下限を7回より高くすると、7回に上がれた
+# 投手が8回だけ上がれなくなり、先発が「7回で交代」と「完投」に割れた二峰分布になる。
 static func _starter_projected_fatigue_floor(inning: int, runs_allowed: int) -> float:
 	var floor_value: float = 0.30
 	if inning >= 6:
-		floor_value = 0.74
+		floor_value = 0.68
 	if inning >= 7:
 		floor_value = 0.58
 	if inning >= 8:
-		floor_value = 0.62
+		floor_value = 0.56
 	if runs_allowed >= 3:
 		floor_value += 0.08
 	return floor_value

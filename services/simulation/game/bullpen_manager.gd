@@ -579,7 +579,13 @@ static func pitcher_usage_for(setup: Dictionary, pitcher: PSPlayerSeasonRecord, 
 		var resolved_role: String = role
 		if resolved_role.is_empty():
 			resolved_role = PSPitcherUsageModel.ROLE_STARTER if starter != null and starter.player_id == pitcher.player_id else PSPitcherUsageModel.ROLE_SHORT_RELIEF
-		usage_by_id[key] = PSPitcherUsageModel.create_outing(pitcher, resolved_role)
+		var hook_tolerance: int = 0
+		if resolved_role == PSPitcherUsageModel.ROLE_STARTER:
+			# 先発の格 = その日のローテ序列。スポット先発は序列外 (-1) なので猶予なし。
+			hook_tolerance = PSPitcherUsageModel.starter_hook_tolerance(
+				int(setup.get("rotation_selected_index", -1))
+			)
+		usage_by_id[key] = PSPitcherUsageModel.create_outing(pitcher, resolved_role, hook_tolerance)
 		setup["pitcher_usage"] = usage_by_id
 	return usage_by_id[key] as Dictionary
 

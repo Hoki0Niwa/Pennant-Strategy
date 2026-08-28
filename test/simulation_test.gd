@@ -1914,15 +1914,23 @@ func test_starter_complete_game_chase_is_late_low_run_only() -> void:
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 2)).is_false()
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 3)).is_false()
 
-	usage["batters_faced"] = 27
+	# 7回を投げ切った実際の対戦人数 (26〜27人) では TTO hook が乗る。94球なら8回へ、
+	# 105球では降板。3失点していれば疲労下限が上がるので94球でも降板する。
+	usage["batters_faced"] = 26
 	usage["pitches"] = 94
-	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_true()
-	usage["batters_faced"] = 0
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 3)).is_true()
 
-	usage["pitches"] = 103
-	usage["outs"] = 21
+	usage["batters_faced"] = 27
+	usage["pitches"] = 105
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_true()
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 2)).is_true()
+	usage["batters_faced"] = 0
+
+	# 対戦人数を積んでいない合成 usage (TTO hook なし) でも、球数だけで最後は降ろす。
+	usage["pitches"] = 110
+	usage["outs"] = 21
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 8, 1)).is_true()
 
 	usage["pitches"] = 92
 	usage["outs"] = 24
@@ -1933,6 +1941,73 @@ func test_starter_complete_game_chase_is_late_low_run_only() -> void:
 	usage["outs"] = 24
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 1)).is_true()
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 2)).is_true()
+
+
+# 回またぎで許される球数は終盤ほど増える (6回 ≤ 7回 ≤ 8回)。
+# 2026-08-28 の回帰: 疲労下限が 6回0.74 → 7回0.58 → 8回0.62 と非単調で、さらに TTO hook risk が
+# 8回頭でちょうど上限に張り付いたため、8回に上がれる球数だけが7回より少なくなっていた。
+# 結果、先発は「7回で交代」か「完投」に割れ、8回まで投げる登板が NPB の半分以下になった。
+func test_starter_next_half_allowance_grows_with_inning() -> void:
+	var ace: PSPlayerSeasonRecord = _pitcher(811, "Allowance Ace", 0.0)
+	ace.z_abilities_snapshot["Pit_Stamina"] = 2.3
+	ace.z_abilities_snapshot["Pit_FatigueResist"] = 2.3
+
+	var sixth: int = _max_pitches_to_take_next_inning(ace, 6)
+	var seventh: int = _max_pitches_to_take_next_inning(ace, 7)
+	var eighth: int = _max_pitches_to_take_next_inning(ace, 8)
+
+	assert_int(sixth).is_greater(60)
+	assert_int(seventh).is_greater_equal(sixth)
+	assert_int(eighth).is_greater_equal(seventh)
+
+
+# inning 回に上がることを許される最大球数。回またぎ判断は球数について単調なので、
+# 降板判定が初めて真になる手前の球数を返す。
+func _max_pitches_to_take_next_inning(pitcher: PSPlayerSeasonRecord, inning: int) -> int:
+	var allowance: int = 0
+	for pitches in range(40, 170):
+		var usage: Dictionary = PSPitcherUsageModel.create_outing(pitcher, PSPitcherUsageModel.ROLE_STARTER)
+		usage["pitches"] = pitches
+		usage["outs"] = (inning - 1) * 3
+		# 1イニング約4.2打者。TTO hook は対戦人数で効くので実勢に合わせる。
+		usage["batters_faced"] = int(round(float(inning - 1) * 4.2))
+		if PSPitcherUsageModel.should_pull_for_next_half(pitcher, usage, inning, 0):
+			break
+		allowance = pitches
+	return allowance
+
+
+# 炎上時の降板は先発の「格」(ローテ序列) で変わる。NPB 2016-19 (現行シムと同じ ERA 3.7-4.0 帯) では
+# 4失点時の平均投球回が IP上位15人 6.06 / 16-40位 5.49 / 41位以下 4.62 と、同じ失点でも上位ほど深い。
+func test_starter_hook_tolerance_gives_top_rotation_arms_more_rope() -> void:
+	assert_int(PSPitcherUsageModel.starter_hook_tolerance(0)).is_equal(1)
+	assert_int(PSPitcherUsageModel.starter_hook_tolerance(2)).is_equal(1)
+	assert_int(PSPitcherUsageModel.starter_hook_tolerance(3)).is_equal(0)
+	# 序列外 (スポット先発・救援からの緊急先発) は猶予なし。
+	assert_int(PSPitcherUsageModel.starter_hook_tolerance(-1)).is_equal(0)
+
+	var starter: PSPlayerSeasonRecord = _pitcher(812, "Rotation Arm", 0.0)
+	var back: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_STARTER, 0)
+	var ace: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_STARTER, 1)
+	for usage in [back, ace]:
+		usage["pitches"] = 70
+		usage["outs"] = 12
+
+	# 4回4失点で5回へ: 4番手以降は交代、上位3人は続投。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, back, 5, 4)).is_true()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 5, 4)).is_false()
+	# 5失点まで行けば上位でも交代する。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 5, 5)).is_true()
+
+	# イニング途中の緊急降板も同じだけずれる (6回5失点・走者1人)。
+	var one_on: Array = [_pitcher(903, "R1", 0.0), null, null]
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(starter, back, 6, 1, one_on, 5, 0)).is_true()
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(starter, ace, 6, 1, one_on, 5, 0)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(starter, ace, 6, 1, one_on, 6, 0)).is_true()
+
+	# 救援には格の猶予を持たせない。
+	var relief: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_SHORT_RELIEF, 1)
+	assert_int(int(relief.get("hook_tolerance", -1))).is_equal(0)
 
 
 # 「2回3失点程度で降板」を避ける: 序盤の数失点では立て直しを待ち、イニング途中交代は
