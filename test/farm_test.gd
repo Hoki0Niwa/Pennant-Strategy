@@ -1649,6 +1649,48 @@ func test_periodic_depth_adjustment_cycles_an_appeared_bottom_reliever() -> void
 	)).is_true()
 
 
+# 週次の循環枠はローテ中軸を動かさない。降格候補は「二軍登板の少ない順」に並ぶので、
+# 二軍登板 0 のエースがまっ先に候補になる。守らないとエースが毎週落とされ、リーグ最多先発が
+# 24試合・規定投球回到達が3〜6人まで落ちる (2026-08-28 実測)。
+func test_pitcher_circulation_keeps_the_rotation_core_on_the_active_roster() -> void:
+	var season: PSSeason = _fresh_season_with_records()
+	var team_id: int = (GameDb.teams[0] as PSTeam).id
+	var preview: Dictionary = PSTeamSetupBuilder.preview_active_roster(season, team_id)
+	var active_list: Array = (preview.get("player_ids", []) as Array).duplicate()
+	season.set_active_roster(team_id, {"player_ids": active_list})
+	season.current_day = 40
+	var active_set: Dictionary = {}
+	for id_value in active_list:
+		active_set[int(id_value)] = true
+	var active_starter_ids: Array = []
+	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if record == null or not record.is_pitcher() or not active_set.has(record.player_id):
+			continue
+		record.pitcher_stats.games = 5
+		record.pitcher_stats.starts = 2 if record.is_starter_pitcher() else 0
+		record.farm_pitcher_stats.games = 0
+		if record.is_starter_pitcher():
+			active_starter_ids.append(record.player_id)
+	assert_bool(active_starter_ids.size() >= TeamAutoAI.PITCHER_CIRCULATION_PROTECTED_ROTATION_RANKS).is_true()
+	season.set_rotation(team_id, {"pitcher_ids": active_starter_ids})
+
+	var protected_ids: Array = active_starter_ids.slice(
+		0, TeamAutoAI.PITCHER_CIRCULATION_PROTECTED_ROTATION_RANKS
+	)
+	for _week in range(6):
+		var result: Dictionary = TeamAutoAI._try_pitcher_circulation_adjustment(
+			season, team_id, season.current_day
+		)
+		if not result.is_empty():
+			assert_bool(protected_ids.has(int(result.get("down", 0)))).is_false()
+		season.current_day += TeamAutoAI.PITCHER_CIRCULATION_INTERVAL_DAYS
+
+	var roster_ids: Array = season.get_active_roster(team_id).get("player_ids", []) as Array
+	for protected_id in protected_ids:
+		assert_bool(roster_ids.has(int(protected_id))).is_true()
+
+
 func test_pitcher_circulation_sends_an_untried_active_pitcher_to_farm() -> void:
 	var season: PSSeason = _fresh_season_with_records()
 	var team_id: int = (GameDb.teams[0] as PSTeam).id

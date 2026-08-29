@@ -87,7 +87,13 @@ func run(options: Dictionary = {}) -> Dictionary:
 		season.collect_simulation_report_data = true
 		season.generate_game_logs = false
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
-		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(season, false)
+		# 週次の一軍/二軍入替フックを通す。ctx を空で渡すと `simulate_current_day` が
+		# `_run_periodic_roster_swap_hook` を丸ごと飛ばし、**実プレイと違うゲームを測ることになる**
+		# (ローテが固定され、規定投球回到達者と上位投手の先発数が実際より多く出る)。
+		# long_autoplay_reporter は当初から ctx を渡している。
+		var simulation_result: Dictionary = GameSimulator.simulate_remaining_season(
+			season, false, _auto_swap_ctx(selected_team_id)
+		)
 		if not bool(simulation_result.get("ok", false)):
 			errors.append({
 				"year": year,
@@ -232,7 +238,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 			inner_cb = func(done: int, total: int, _inner_label: String) -> void:
 				outer_progress_cb.call(done, total, season_label)
 		var simulation_result: Dictionary = await GameSimulator.simulate_remaining_season_async(
-			season, false, {}, tree, inner_cb, cancel_token
+			season, false, _auto_swap_ctx(selected_team_id), tree, inner_cb, cancel_token
 		)
 		if not bool(simulation_result.get("ok", false)):
 			errors.append({
@@ -632,6 +638,11 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 		},
 		"method": method,
 	}
+
+
+# 日次フックの適用範囲。レポートは全球団を AI 運用として測る。
+func _auto_swap_ctx(selected_team_id: int) -> Dictionary:
+	return {"user_team_id": selected_team_id, "include_user_team": true}
 
 
 func _qualified_batter(record: PSPlayerSeasonRecord) -> bool:

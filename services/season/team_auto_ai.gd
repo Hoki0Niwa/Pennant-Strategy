@@ -78,6 +78,10 @@ const PITCHER_CIRCULATION_FIRST_DAY: int = 14
 const PITCHER_CIRCULATION_INTERVAL_DAYS: int = 7
 const PITCHER_CIRCULATION_MAX_QUALITY_GAP: float = 22.0
 const PITCHER_CIRCULATION_MIN_STARTS: int = 2
+# 循環の降格候補から外すローテ上位の人数。**降格候補は二軍登板の少ない順に並ぶので、
+# 二軍登板 0 のローテ中軸がまっ先に候補になる**。ここで守らないとエースが毎週の循環枠で
+# 二軍へ落ち、リーグ最多先発が24試合・規定投球回到達が3〜6人まで落ちる (2026-08-28 実測)。
+const PITCHER_CIRCULATION_PROTECTED_ROTATION_RANKS: int = 3
 const PITCHER_CIRCULATION_MIN_RELIEF_GAMES: int = 3
 
 # 守備位置 (捕→遊→中→二→三→一→左→右)。希少順。
@@ -1149,11 +1153,14 @@ static func _try_pitcher_circulation_adjustment(
 
 	var spot_callups: Dictionary = season.get_spot_callups(team_id)
 	var baselines: Dictionary = season.get_callup_appearance_baselines(team_id)
+	var protected_ids: Dictionary = _protected_rotation_ids(season, team_id)
 	var down_candidates: Array = []
 	for id_value in active_id_list:
 		var record: PSPlayerSeasonRecord = record_by_id.get(int(id_value), null) as PSPlayerSeasonRecord
 		if record == null or not record.is_pitcher() or record.injury_days > 0 \
 				or record.development_player or spot_callups.has(str(record.player_id)):
+			continue
+		if protected_ids.has(record.player_id):
 			continue
 		var appearances: int = record.pitcher_stats.games
 		if _is_starting_pitcher(record):
@@ -1258,6 +1265,16 @@ static func _try_pitcher_circulation_adjustment(
 		"up": up.player_id,
 		"reason": "pitcher_circulation",
 	}
+
+
+# 週次の循環枠で動かさないローテ中軸の id セット。順序は保存されたローテ序列
+# (`reorder_auto_rotation` が成績順に組み替える) なので、不振で序列が下がれば守られなくなる。
+static func _protected_rotation_ids(season: PSSeason, team_id: int) -> Dictionary:
+	var protected_ids: Dictionary = {}
+	var rotation: Array = season.get_rotation(team_id).get("pitcher_ids", []) as Array
+	for index in range(min(rotation.size(), PITCHER_CIRCULATION_PROTECTED_ROTATION_RANKS)):
+		protected_ids[int(rotation[index])] = true
+	return protected_ids
 
 
 static func _try_starter_rotation_adjustment(

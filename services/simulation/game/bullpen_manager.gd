@@ -84,7 +84,8 @@ static func substitute_reliever(setup: Dictionary, inning: int, game_result: Dic
 		current,
 		usage,
 		inning,
-		int(setup.get("game_runs_allowed", 0))
+		int(setup.get("game_runs_allowed", 0)),
+		score_margin_for_setup(setup, game_result)
 	)
 	if already_relieved and starter != null and current == starter:
 		should_pull = true

@@ -1943,6 +1943,41 @@ func test_starter_complete_game_chase_is_late_low_run_only() -> void:
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 2)).is_true()
 
 
+# 大差で負けている試合は失点を理由に代えず、イニングを稼がせる (敗戦処理でブルペン温存)。
+# NPB 2016-19 実測では 8失点以上した先発の平均投球回が 3.8〜4.6 回あり、7失点時より短くならない。
+func test_starter_is_left_in_to_soak_innings_when_the_game_is_out_of_reach() -> void:
+	var starter: PSPlayerSeasonRecord = _pitcher(813, "Mopup Starter", 0.0)
+	var usage: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_STARTER)
+	usage["pitches"] = 60
+	usage["outs"] = 9
+
+	# 接戦 (2点ビハインド) なら7失点で交代。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, usage, 4, 7, -2)).is_true()
+	# 大差で負けていれば続投。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(
+		starter, usage, 4, 7, -PSPitcherUsageModel.STARTER_MOPUP_DEFICIT
+	)).is_false()
+	# 大差でリードしている側は対象外 (失点は相手が返している最中なので通常どおり交代)。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(
+		starter, usage, 4, 7, PSPitcherUsageModel.STARTER_MOPUP_DEFICIT
+	)).is_true()
+
+	# イニング途中も同じ。走者を置いて7失点でも大差なら替えない。
+	var two_on: Array = [_pitcher(904, "R1", 0.0), _pitcher(905, "R2", 0.0), null]
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(
+		starter, usage, 4, 1, two_on, 7, -2
+	)).is_true()
+	assert_bool(PSPitcherUsageModel.should_pull_after_plate_appearance(
+		starter, usage, 4, 1, two_on, 7, -PSPitcherUsageModel.STARTER_MOPUP_DEFICIT
+	)).is_false()
+
+	# ただしスタミナが尽きていれば大差でも降ろす。
+	usage["pitches"] = PSPitcherUsageModel.starter_stamina_limit_pitches(starter) + 10
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(
+		starter, usage, 4, 7, -PSPitcherUsageModel.STARTER_MOPUP_DEFICIT
+	)).is_true()
+
+
 # 回またぎで許される球数は終盤ほど増える (6回 ≤ 7回 ≤ 8回)。
 # 2026-08-28 の回帰: 疲労下限が 6回0.74 → 7回0.58 → 8回0.62 と非単調で、さらに TTO hook risk が
 # 8回頭でちょうど上限に張り付いたため、8回に上がれる球数だけが7回より少なくなっていた。
@@ -1996,8 +2031,13 @@ func test_starter_hook_tolerance_gives_top_rotation_arms_more_rope() -> void:
 	# 4回4失点で5回へ: 4番手以降は交代、上位3人は続投。
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, back, 5, 4)).is_true()
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 5, 4)).is_false()
-	# 5失点まで行けば上位でも交代する。
-	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 5, 5)).is_true()
+	# 5回頭のゲートは格の猶予を倍にしてある (NPB は5失点時の平均投球回が A 5.79回 / C 4.43回)。
+	# 4番手以降は5失点で交代、上位3人は6失点まで引っ張る。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, back, 5, 5)).is_true()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 5, 5)).is_false()
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 5, 6)).is_true()
+	# 終盤まで来れば上位でも5失点で交代する。
+	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(starter, ace, 7, 5)).is_true()
 
 	# イニング途中の緊急降板も同じだけずれる (6回5失点・走者1人)。
 	var one_on: Array = [_pitcher(903, "R1", 0.0), null, null]

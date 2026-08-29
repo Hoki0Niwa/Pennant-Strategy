@@ -39,6 +39,14 @@ const STARTER_TTO_HOOK_RISK_MAX: float = 0.12
 # 41位以下 4.62、5失点時は 5.79 / 5.15 / 4.43。序列外 (スポット先発) は猶予なし。
 const STARTER_HOOK_TOLERANCE_TOP_RANKS: int = 3
 const STARTER_HOOK_TOLERANCE_RUNS: int = 1
+# 5回頭の失点ゲートだけは格の猶予を倍にする。NPB は 5失点したときの平均投球回が
+# IP上位15人 5.79 / 41位以下 4.43 と**この局面で格差が最大**になる (2016-19 実測)。
+# 1点ぶんの猶予だと上位先発も5回頭で降ろされ、実測 5.18 回と1イニング近く浅くなる。
+const STARTER_EARLY_HOOK_TOLERANCE_MULTIPLIER: int = 2
+# この点差で負けている試合は「敗戦処理」として失点を理由に代えず、イニングを稼がせる
+# (ブルペン温存)。NPB 2016-19 実測では 8失点以上した先発の平均投球回が 3.8〜4.6 回で、
+# **7失点時より短くならない**。失点が増えるほど機械的に早く降ろすと 2.8〜3.2 回まで沈む。
+const STARTER_MOPUP_DEFICIT: int = 6
 
 const TROUBLE_ALERT: float = 4.0
 const MELTDOWN_THRESHOLD: float = 6.5
@@ -407,7 +415,13 @@ static func finish_half_inning(usage: Dictionary) -> void:
 	usage["consecutive_reached"] = 0
 
 
-static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dictionary, inning: int, runs_allowed: int) -> bool:
+static func should_pull_for_next_half(
+	record: PSPlayerSeasonRecord,
+	usage: Dictionary,
+	inning: int,
+	runs_allowed: int,
+	defense_lead: int = 0
+) -> bool:
 	if record == null or usage.is_empty():
 		return false
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
@@ -426,6 +440,9 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 			return true
 		if _starter_next_inning_would_exhaust(record, usage, inning, runs_allowed) and not complete_game_chase:
 			return true
+		# 大差で負けている試合は失点を理由に代えない (敗戦処理)。降板はスタミナ側の判断だけに任せる。
+		if defense_lead <= -STARTER_MOPUP_DEFICIT:
+			return false
 		if inning >= 5 and trouble >= MELTDOWN_THRESHOLD:
 			return true
 		# 失点による回またぎ降板。3失点では降ろさず、4回4失点や終盤4失点から段階的に替える。
@@ -433,9 +450,9 @@ static func should_pull_for_next_half(record: PSPlayerSeasonRecord, usage: Dicti
 		var tolerance: int = _hook_tolerance(usage)
 		if runs_allowed >= 6 + tolerance:
 			return true
-		if inning >= 4 and runs_allowed >= 5 + tolerance:
+		if inning >= 5 and runs_allowed >= 5 + tolerance:
 			return true
-		if inning == 5 and runs_allowed >= 4 + tolerance:
+		if inning == 5 and runs_allowed >= 4 + tolerance * STARTER_EARLY_HOOK_TOLERANCE_MULTIPLIER:
 			return true
 		if inning >= 7 and runs_allowed >= 4 + tolerance:
 			return true
@@ -477,6 +494,9 @@ static func should_pull_after_plate_appearance(
 		var complete_game_chase: bool = _starter_can_chase_complete_game(record, usage, inning, runs_allowed)
 		if PSFatigueCalculator.factor_for_outing(record, usage, pitches) <= STARTER_MID_INNING_FATIGUE_FLOOR and not complete_game_chase:
 			return true
+		# 敗戦処理は回またぎと同じくイニングを稼がせる (スタミナ切れの上段だけ残す)。
+		if defense_lead <= -STARTER_MOPUP_DEFICIT:
+			return false
 		if inning <= 4:
 			# 序盤は5〜6失点級の炎上が続くときだけ即交代。2回3失点程度では降ろさない。
 			if runs_allowed >= 6 + tolerance and runners_on >= 1:
@@ -515,15 +535,21 @@ static func should_pull_after_plate_appearance(
 	return false
 
 
-static func should_pull_when_pitcher_spot_bats(record: PSPlayerSeasonRecord, usage: Dictionary, next_defensive_inning: int, runs_allowed: int) -> bool:
+static func should_pull_when_pitcher_spot_bats(
+	record: PSPlayerSeasonRecord,
+	usage: Dictionary,
+	next_defensive_inning: int,
+	runs_allowed: int,
+	defense_lead: int = 0
+) -> bool:
 	if record == null or usage.is_empty():
 		return false
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
 	if role != ROLE_STARTER:
 		return true
 	if next_defensive_inning < 5:
-		return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed) and float(usage.get("trouble_score", 0.0)) >= MELTDOWN_THRESHOLD
-	return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed)
+		return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed, defense_lead) 			and float(usage.get("trouble_score", 0.0)) >= MELTDOWN_THRESHOLD
+	return should_pull_for_next_half(record, usage, next_defensive_inning, runs_allowed, defense_lead)
 
 
 static func starter_projected_fatigue_factor(record: PSPlayerSeasonRecord, usage: Dictionary, extra_pitches: float) -> float:

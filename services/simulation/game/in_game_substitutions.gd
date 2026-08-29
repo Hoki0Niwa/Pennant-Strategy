@@ -92,7 +92,7 @@ static func maybe_select_pitcher_spot_pinch_hitter(
 		current_half_runs
 	)
 	var should_hit_for_pitcher: bool = already_relieved
-	should_hit_for_pitcher = should_hit_for_pitcher or starter_should_be_relieved_for_next_defense(setup, next_defensive_inning)
+	should_hit_for_pitcher = should_hit_for_pitcher or starter_should_be_relieved_for_next_defense(setup, next_defensive_inning, game_result)
 	should_hit_for_pitcher = should_hit_for_pitcher or starter_should_be_hit_for_in_scoring_chance(
 		setup,
 		next_defensive_inning,
@@ -145,7 +145,9 @@ static func is_pitcher_batting_spot(setup: Dictionary, batter: PSPlayerSeasonRec
 	return starter != null and batter.player_id == starter.player_id
 
 
-static func starter_should_be_relieved_for_next_defense(setup: Dictionary, inning: int) -> bool:
+static func starter_should_be_relieved_for_next_defense(
+	setup: Dictionary, inning: int, game_result: Dictionary = {}
+) -> bool:
 	if bool(setup.get("starter_relieved", false)):
 		return false
 	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", null) as PSPlayerSeasonRecord
@@ -153,7 +155,13 @@ static func starter_should_be_relieved_for_next_defense(setup: Dictionary, innin
 	if starter == null or current != starter:
 		return false
 	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(setup, starter, PSPitcherUsageModel.ROLE_STARTER)
-	return PSPitcherUsageModel.should_pull_when_pitcher_spot_bats(starter, usage, inning, int(setup.get("game_runs_allowed", 0)))
+	return PSPitcherUsageModel.should_pull_when_pitcher_spot_bats(
+		starter,
+		usage,
+		inning,
+		int(setup.get("game_runs_allowed", 0)),
+		PSBullpenManager.score_margin_for_setup(setup, game_result)
+	)
 
 
 static func starter_should_be_hit_for_in_scoring_chance(

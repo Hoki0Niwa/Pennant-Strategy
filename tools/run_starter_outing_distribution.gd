@@ -24,16 +24,22 @@ func _ready() -> void:
 		RecordStore.clear_records()
 		var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, start_year + season_index, {})
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
-		for game_index in range(season.schedule.size()):
-			var game_result: Dictionary = GameSimulator.simulate_game_at_index(season, game_index, false)
-			if not bool(game_result.get("ok", false)):
+		# 実プレイと同じ日次フック (谷間昇格・週次入替・二軍戦) を通す。`simulate_game_at_index`
+		# を直に回すとどちらも走らず、**先発の顔ぶれとローテの固定度が実際と別物になる**
+		# (2026-08-28: 先発起用が 15.3人/球団 → 8.6人/球団 に化けていた)。
+		var ctx: Dictionary = {"user_team_id": 0, "include_user_team": true}
+		while _has_unplayed_game(season):
+			var day: int = season.current_day
+			var day_result: Dictionary = GameSimulator.simulate_current_day(season, false, ctx)
+			if not bool(day_result.get("ok", false)):
 				errors.append({
 					"season_index": season_index,
-					"game_index": game_index,
-					"message": str(game_result.get("message", "game simulation failed")),
+					"day": day,
+					"message": str(day_result.get("message", "day simulation failed")),
 				})
-				continue
-			_collect_starter_outings(game_result.get("result", {}) as Dictionary, rows)
+				break
+			for result_value in day_result.get("results", []) as Array:
+				_collect_starter_outings((result_value as Dictionary).get("result", {}) as Dictionary, rows)
 
 	RecordStore.load_from_dict(original_records)
 	RecordStore.resume_persistence()
@@ -54,6 +60,13 @@ func _ready() -> void:
 			file.close()
 	print(JSON.stringify(report, "\t"))
 	get_tree().quit(0 if errors.is_empty() else 1)
+
+
+func _has_unplayed_game(season: PSSeason) -> bool:
+	for game_value in season.schedule:
+		if not bool((game_value as Dictionary).get("played", false)):
+			return true
+	return false
 
 
 func _collect_starter_outings(result: Dictionary, rows: Array) -> void:

@@ -51,7 +51,11 @@ func _ready() -> void:
 
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, selected_team_id, start_year, {"league1": true, "league2": true})
 	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
-	var sim_result: Dictionary = GameSimulator.simulate_remaining_season(season, false)
+	# 実プレイと同じ日次フック (週次の一軍/二軍入替) を通す。空 ctx だとローテと一軍登録が
+	# 固定されたまま1年進み、戦力外の判断材料になる出場機会が実際と別物になる。
+	var sim_result: Dictionary = GameSimulator.simulate_remaining_season(
+		season, false, {"user_team_id": selected_team_id, "include_user_team": true}
+	)
 	var ok: bool = bool(sim_result.get("ok", false))
 	var report: Dictionary = _build_report(season, seed_value, start_year) if ok else {
 		"ok": false,
