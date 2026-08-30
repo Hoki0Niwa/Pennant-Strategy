@@ -47,6 +47,8 @@ const STARTER_EARLY_HOOK_TOLERANCE_MULTIPLIER: int = 2
 # (ブルペン温存)。NPB 2016-19 実測では 8失点以上した先発の平均投球回が 3.8〜4.6 回で、
 # **7失点時より短くならない**。失点が増えるほど機械的に早く降ろすと 2.8〜3.2 回まで沈む。
 const STARTER_MOPUP_DEFICIT: int = 6
+# 登板前に想定する「その登板で投げる球数 / workload」。expected_post_game_fatigue_gain 用。
+const EXPECTED_OUTING_PITCH_RATIO: float = 0.85
 
 const TROUBLE_ALERT: float = 4.0
 const MELTDOWN_THRESHOLD: float = 6.5
@@ -643,6 +645,23 @@ static func _starter_can_chase_complete_game(record: PSPlayerSeasonRecord, usage
 	if projected_pitches > float(starter_complete_game_pitch_limit(record)):
 		return false
 	return PSFatigueCalculator.factor_for_outing(record, usage, int(round(projected_pitches))) >= STARTER_COMPLETE_GAME_FATIGUE_FLOOR
+
+
+# 登板前に「この登板でどれだけ疲労が増えるか」を見積もる。**故障判定を登板開始時に行うため**に要る
+# (試合後まで待つと、当たっても途中交代させられない)。実測の平均的な使われ方として、想定球数を
+# workload の EXPECTED_OUTING_PITCH_RATIO 倍と置き、stress は 0 として post_game_fatigue_gain と
+# 同じ係数を通す。実登板の増分と概ね一致するので、故障の発生確率は試合後判定と同水準に保たれる。
+static func expected_post_game_fatigue_gain(record: PSPlayerSeasonRecord, role: String) -> int:
+	if record == null:
+		return 0
+	var resolved_role: String = _normalized_role(role)
+	var workload: float = float(max(1, outing_workload_pitches(record, resolved_role)))
+	var pitches: float = workload * EXPECTED_OUTING_PITCH_RATIO
+	if resolved_role == ROLE_STARTER:
+		return int(clamp(round(pitches * (100.0 / workload)), 18.0, 165.0))
+	if resolved_role == ROLE_LONG_RELIEF:
+		return int(clamp(round(pitches * (60.0 / workload) * 1.04), 12.0, 100.0))
+	return int(clamp(round(pitches * (22.0 / workload) * 0.96), 6.0, 52.0))
 
 
 static func post_game_fatigue_gain(record: PSPlayerSeasonRecord, usage: Dictionary) -> int:

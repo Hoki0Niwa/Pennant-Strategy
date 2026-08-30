@@ -464,6 +464,9 @@ static func simulate_half_inning(
 			runs
 		)
 		set_last_play_score_and_lead(game_result, inning, half, offense, defense, runs_before, runs, pitcher, go_ahead_pitcher_id)
+		apply_in_game_injuries_after_plate(
+			offense, defense, game_result, inning, half, batter, outcome, outs, bases, runs
+		)
 		if half_inning_run_limit_reached(runs, run_limit):
 			break
 		PSBullpenManager.record_upcoming_batters(defense, offense)
@@ -474,6 +477,14 @@ static func simulate_half_inning(
 	pitcher_usage = PSBullpenManager.pitcher_usage_for(defense, pitcher)
 	update_active_pitcher_outing_end(defense, game_result, inning, half, runs)
 	PSPitcherUsageModel.finish_half_inning(pitcher_usage)
+	# 発火しないまま終盤まで残った負傷退場を回の切れ目で処理する (守備側=そのチームの setup)。
+	_log_defensive_subs(
+		game_result,
+		PSInGameInjuries.flush_pending_exits(defense, inning),
+		inning,
+		half,
+		int(defense.get("team_id", 0))
+	)
 	defense["game_outs"] = int(defense.get("game_outs", 0)) + outs
 	defense["game_runs_allowed"] = int(defense.get("game_runs_allowed", 0)) + runs
 	return runs
@@ -647,6 +658,48 @@ static func finish_active_pitcher_outing(
 		outings[active_index] = outing
 		game_result["pitcher_outings"] = outings
 	defense["active_pitcher_outing_index"] = -1
+
+
+# 打席直後の負傷退場。予約済みの選手が「その発生機序の場面」を迎えたときに交代させる。
+# 打者/野手は控えと入れ替え、投手は継投の判断を通さず強制降板させる。
+static func apply_in_game_injuries_after_plate(
+	offense: Dictionary,
+	defense: Dictionary,
+	game_result: Dictionary,
+	inning: int,
+	half: String,
+	batter: PSPlayerSeasonRecord,
+	outcome: Dictionary,
+	outs: int,
+	bases: Array,
+	runs: int
+) -> void:
+	var hit_by_pitch: bool = str(outcome.get("category", "")) == "hit_by_pitch"
+	var batter_exit: Dictionary = PSInGameInjuries.maybe_replace_after_plate_appearance(
+		offense, batter, hit_by_pitch
+	)
+	if not batter_exit.is_empty():
+		_log_defensive_subs(game_result, [batter_exit], inning, half, int(offense.get("team_id", 0)))
+	var fielder_exit: Dictionary = PSInGameInjuries.maybe_replace_fielder_after_play(
+		defense, int(outcome.get("fielder_position", 0))
+	)
+	if not fielder_exit.is_empty():
+		_log_defensive_subs(game_result, [fielder_exit], inning, half, int(defense.get("team_id", 0)))
+
+	var pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
+	if pitcher == null or outs >= 3:
+		return
+	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(defense, pitcher)
+	if not PSInGameInjuries.pitcher_must_leave(defense, pitcher, usage):
+		return
+	PSInGameInjuries.take_pitcher_exit(defense, pitcher)
+	if PSBullpenManager.force_pitcher_change_for_injury(defense, inning, game_result):
+		var new_pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
+		_record_substitution(
+			game_result, inning, half, int(defense.get("team_id", 0)), "pitching",
+			pitcher.player_id, 0 if new_pitcher == null else new_pitcher.player_id, 1, -1
+		)
+		update_active_pitcher_outing_end(defense, game_result, inning, half, runs)
 
 
 static func maybe_change_pitcher_after_pa(

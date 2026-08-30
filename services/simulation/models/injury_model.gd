@@ -41,6 +41,38 @@ const FATIGUE_MULT_PITCHER: float = 0.00016
 const FATIGUE_MULT_BATTER: float = 0.00022
 const EXPOSURE_MAX: float = 2.0
 
+# --- 試合中に起きて即交代になる「急性」故障 (tunable) ---
+# **総量は変えない。** 1試合1回の発生判定が当たったとき、そのうち何割を「試合中に起きた」
+# 扱いにして途中交代させるかを決めるだけなので、シーズンの故障件数・離脱日数は不変。
+# 出典 (MLB HITS / AJSM のシーズン中の試合内故障): 発生機序は 投球・送球 20% / 走塁 19% /
+# スライディング 13% / 打球直撃 10% で、残りが打撃動作・死球・交錯。
+# 死球による故障は 1打席あたり 1/2554、スライディング中の故障は 1スライディングあたり 1/336。
+# 実 NPB 側の裏取り: 先発が4回未満で降板した登板のうち **3失点以下が33%** (2016-19 パ)。
+# 打たれて降りたのではない早期降板が一定数あり、その主因が試合中の故障と考えられる。
+const IN_GAME_EXIT_SHARE_PITCHER: float = 0.30
+const IN_GAME_EXIT_SHARE_BATTER: float = 0.42
+
+# 野手の試合中故障の発生機序。上の実測シェアを「走塁+スライディング / 打撃動作 / 打球直撃 /
+# 死球」の4つへ畳んだもの (合計 1.0)。守備は打球処理の場面で、それ以外は打席で発火する。
+const CAUSE_RUNNING: String = "running"
+const CAUSE_BATTING: String = "batting"
+const CAUSE_FIELDING: String = "fielding"
+const CAUSE_HIT_BY_PITCH: String = "hit_by_pitch"
+const CAUSE_PITCHING: String = "pitching"
+const IN_GAME_CAUSE_WEIGHTS_BATTER := {
+	CAUSE_RUNNING: 0.50,
+	CAUSE_BATTING: 0.22,
+	CAUSE_FIELDING: 0.20,
+	CAUSE_HIT_BY_PITCH: 0.08,
+}
+const IN_GAME_CAUSE_LABELS := {
+	CAUSE_RUNNING: "走塁中",
+	CAUSE_BATTING: "打撃中",
+	CAUSE_FIELDING: "守備中",
+	CAUSE_HIT_BY_PITCH: "死球",
+	CAUSE_PITCHING: "投球中",
+}
+
 # --- ティア抽選の重み (内部で正規化)。大半は軽傷、長期離脱は希少。 ---
 # **投手と野手で分ける。** 実 NPB の平均離脱期間は投手が肩 64日 / 肘 59日 と長く、野手は
 # 太もも 39.8日 / ひざ 55.5日。野手の故障者リストは「数試合で戻る軽傷」を載せないので、
@@ -170,6 +202,30 @@ static func maybe_injure(record: PSPlayerSeasonRecord, is_pitcher: bool, exposur
 	if Rng.roll_float() >= (base_chance + fatigue_chance) * exposure_scale:
 		return {}
 	return apply_injury(record, is_pitcher, _roll_tier(is_pitcher))
+
+
+# その故障が「試合中に起きて即交代」になるか。発生判定とは独立に引く
+# (当たった故障の内訳を決めるだけなので、総量には影響しない)。
+static func rolls_in_game_exit(is_pitcher: bool) -> bool:
+	var share: float = IN_GAME_EXIT_SHARE_PITCHER if is_pitcher else IN_GAME_EXIT_SHARE_BATTER
+	return Rng.roll_float() < share
+
+
+# 試合中故障の発生機序を引く。投手は投球動作に一本化し、野手は実測シェアで振る。
+static func roll_in_game_cause(is_pitcher: bool) -> String:
+	if is_pitcher:
+		return CAUSE_PITCHING
+	var roll: float = Rng.roll_float()
+	var cumulative: float = 0.0
+	for cause in IN_GAME_CAUSE_WEIGHTS_BATTER.keys():
+		cumulative += float(IN_GAME_CAUSE_WEIGHTS_BATTER[cause])
+		if roll < cumulative:
+			return str(cause)
+	return CAUSE_RUNNING
+
+
+static func in_game_cause_label(cause: String) -> String:
+	return str(IN_GAME_CAUSE_LABELS.get(cause, ""))
 
 
 # 指定ティアの怪我を record に適用する (smoke からも直接呼べるよう public)。

@@ -56,7 +56,8 @@ static func mark_games_started(setup: Dictionary) -> void:
 	pitcher.pitcher_stats.games += 1
 	pitcher.pitcher_stats.starts += 1
 	mark_pitcher_used(setup, pitcher)
-	pitcher_usage_for(setup, pitcher, PSPitcherUsageModel.ROLE_STARTER)
+	var starter_usage: Dictionary = pitcher_usage_for(setup, pitcher, PSPitcherUsageModel.ROLE_STARTER)
+	roll_outing_injury(setup, pitcher, starter_usage)
 	var fielder_ids: Dictionary = _fielder_ids_for_setup(setup)
 	var batters: Array = setup["batters"] as Array
 	for batter_row in batters:
@@ -68,7 +69,9 @@ static func mark_games_started(setup: Dictionary) -> void:
 		var fatigue_gain: int = GameSimulator.FIELDER_START_FATIGUE_GAIN if is_fielder else GameSimulator.DH_START_FATIGUE_GAIN
 		var exposure: float = 1.0 if is_fielder else 0.65
 		batter.fatigue = int(min(GameSimulator.FATIGUE_MAX, batter.fatigue + fatigue_gain))
-		PSScoringHelpers.maybe_injure_for_setup(setup, batter, false, exposure)
+		var batter_injury: Dictionary = PSScoringHelpers.maybe_injure_for_setup(setup, batter, false, exposure)
+		# 当たった故障の一部を「試合中に起きた」扱いにして途中交代させる (総量は変わらない)。
+		PSInGameInjuries.schedule_if_in_game(setup, batter, false, batter_injury)
 
 
 # イニング間の継投。usage と inning から続投可否を判定し、必要なら文脈に合うリリーフへ差し替える。
@@ -104,6 +107,27 @@ static func substitute_reliever(setup: Dictionary, inning: int, game_result: Dic
 	setup["pitcher"] = reliever
 	var role: String = _outing_role_for_reliever(setup, reliever, prefer_long)
 	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
+
+
+# 負傷による強制降板。継投の判断を通さず、その場で救援へ渡す。ブルペンが尽きていて
+# 誰も出せないときだけ false (そのまま投げ続ける — 実際の試合でも投手が居なければ続行する)。
+static func force_pitcher_change_for_injury(
+	setup: Dictionary, inning: int, game_result: Dictionary = {}
+) -> bool:
+	var current: PSPlayerSeasonRecord = setup.get("pitcher", null) as PSPlayerSeasonRecord
+	if current == null:
+		return false
+	var starter: PSPlayerSeasonRecord = setup.get("starter_pitcher", null) as PSPlayerSeasonRecord
+	var prefer_long: bool = current == starter and should_prefer_long_relief_for_starter_exit(inning)
+	var reliever: PSPlayerSeasonRecord = pick_reliever_for_context(setup, inning, game_result, prefer_long)
+	if reliever == null or reliever == current:
+		return false
+	if starter != null and current == starter:
+		mark_starter_relieved(setup)
+	setup["pitcher"] = reliever
+	var role: String = _outing_role_for_reliever(setup, reliever, prefer_long)
+	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
+	return true
 
 
 # 打席終了直後のイニング途中継投。現在イニングの失点と塁状況を加味して、
@@ -163,6 +187,7 @@ static func mark_reliever_appeared(setup: Dictionary, reliever: PSPlayerSeasonRe
 	mark_pitcher_used(setup, reliever)
 	var usage: Dictionary = pitcher_usage_for(setup, reliever, role)
 	usage["consecutive_count"] = consecutive_count
+	roll_outing_injury(setup, reliever, usage)
 
 
 # 使用済み投手と登板不可投手を除外し、残り候補を文脈スコアで並べて最上位を返す。
@@ -613,7 +638,24 @@ static func finalize_pitcher_usage(setup: Dictionary) -> void:
 		if fatigue_gain <= 0:
 			continue
 		pitcher.fatigue = int(min(GameSimulator.FATIGUE_MAX, pitcher.fatigue + fatigue_gain))
-		PSScoringHelpers.maybe_injure_for_setup(setup, pitcher, true)
+
+
+# 登板の故障判定。**試合後ではなく登板開始時に引く** — 当たったぶんの一部を試合中の
+# 負傷降板にするため、投げ終わってからでは間に合わない。疲労項はこの登板で増える見込みを
+# 足した値を使うので、発生確率は試合後に引いていた頃と同水準になる
+# (詳細 docs/agent_memory/project_injury_system.md)。
+static func roll_outing_injury(setup: Dictionary, pitcher: PSPlayerSeasonRecord, usage: Dictionary) -> void:
+	if pitcher == null or pitcher.injury_days > 0:
+		return
+	var role: String = str(usage.get("role", PSPitcherUsageModel.ROLE_STARTER))
+	var restore_fatigue: int = pitcher.fatigue
+	pitcher.fatigue = int(min(
+		GameSimulator.FATIGUE_MAX,
+		pitcher.fatigue + PSPitcherUsageModel.expected_post_game_fatigue_gain(pitcher, role)
+	))
+	var injury: Dictionary = PSScoringHelpers.maybe_injure_for_setup(setup, pitcher, true)
+	pitcher.fatigue = restore_fatigue
+	PSInGameInjuries.schedule_if_in_game(setup, pitcher, true, injury, usage)
 
 
 # 先発が降板した時点のアウト数と失点を固定する。

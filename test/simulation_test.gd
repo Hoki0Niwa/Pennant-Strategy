@@ -1943,6 +1943,91 @@ func test_starter_complete_game_chase_is_late_low_run_only() -> void:
 	assert_bool(PSPitcherUsageModel.should_pull_for_next_half(workhorse, usage, 9, 2)).is_true()
 
 
+# 試合中の負傷交代。故障判定そのものは1試合1回のまま (総量は変えず)、当たった故障の一部を
+# 「試合中に起きた」扱いにして途中交代させる。発生機序ごとに発火する場面が違う。
+func test_in_game_injury_replaces_the_fielder_who_was_hurt() -> void:
+	var hurt: PSPlayerSeasonRecord = _fielder(921, "負傷した一塁手", 0.5)
+	var bench_bat: PSPlayerSeasonRecord = _fielder(922, "控え一塁手", 0.2)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"batters": [hurt],
+		"fielders": [{"record": hurt, "position": 3}],
+		"bench": [bench_bat],
+	}
+	PSInGameInjuries.schedule_if_in_game(setup, hurt, false, {"label": "右手首の打撲"})
+	if not PSInGameInjuries.has_pending_exit(setup, hurt.player_id):
+		# 試合中扱いになるかは確率なので、テストでは予約を直接置いて交代の側だけを見る。
+		setup[PSInGameInjuries.EXITS_KEY] = {
+			hurt.player_id: {"cause": PSInjuryModel.CAUSE_BATTING, "is_pitcher": false, "label": "右手首の打撲"}
+		}
+
+	var applied: Dictionary = PSInGameInjuries.maybe_replace_after_plate_appearance(setup, hurt, false)
+
+	assert_bool(applied.is_empty()).is_false()
+	assert_int((applied.get("replacement", null) as PSPlayerSeasonRecord).player_id).is_equal(bench_bat.player_id)
+	assert_int((setup["batters"][0] as PSPlayerSeasonRecord).player_id).is_equal(bench_bat.player_id)
+	assert_int(((setup["fielders"][0] as Dictionary)["record"] as PSPlayerSeasonRecord).player_id).is_equal(bench_bat.player_id)
+	# 予約は使い切る (同じ試合で二重に交代しない)。
+	assert_bool(PSInGameInjuries.has_pending_exit(setup, hurt.player_id)).is_false()
+
+
+# 死球を受けた打者は、予約された発生機序に関係なくその場で退く。
+func test_hit_by_pitch_takes_the_scheduled_batter_out_immediately() -> void:
+	var hurt: PSPlayerSeasonRecord = _fielder(923, "死球の打者", 0.5)
+	var bench_bat: PSPlayerSeasonRecord = _fielder(924, "控え", 0.2)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"batters": [hurt],
+		"fielders": [{"record": hurt, "position": 3}],
+		"bench": [bench_bat],
+		PSInGameInjuries.EXITS_KEY: {
+			# 守備中の予約でも、死球を受けたらその場で発火する。
+			hurt.player_id: {"cause": PSInjuryModel.CAUSE_FIELDING, "is_pitcher": false, "label": "左手の骨折"}
+		},
+	}
+
+	assert_bool(PSInGameInjuries.maybe_replace_after_plate_appearance(setup, hurt, false).is_empty()).is_true()
+	var applied: Dictionary = PSInGameInjuries.maybe_replace_after_plate_appearance(setup, hurt, true)
+	assert_bool(applied.is_empty()).is_false()
+	assert_str(str(applied.get("injury_cause", ""))).is_equal(PSInjuryModel.CAUSE_HIT_BY_PITCH)
+
+
+# 控えが居ないときは交代せずそのまま出続ける (予約だけ消える)。
+func test_in_game_injury_keeps_playing_when_the_bench_is_empty() -> void:
+	var hurt: PSPlayerSeasonRecord = _fielder(925, "控え無しの選手", 0.5)
+	var setup: Dictionary = {
+		"team_id": 1,
+		"batters": [hurt],
+		"fielders": [{"record": hurt, "position": 3}],
+		"bench": [],
+		PSInGameInjuries.EXITS_KEY: {
+			hurt.player_id: {"cause": PSInjuryModel.CAUSE_BATTING, "is_pitcher": false, "label": "右足の張り"}
+		},
+	}
+
+	assert_bool(PSInGameInjuries.maybe_replace_after_plate_appearance(setup, hurt, false).is_empty()).is_true()
+	assert_int((setup["batters"][0] as PSPlayerSeasonRecord).player_id).is_equal(hurt.player_id)
+
+
+# 投手は予約した球数を超えた時点で降板対象になる。
+func test_in_game_injury_pulls_the_pitcher_once_the_scheduled_pitch_count_is_reached() -> void:
+	var pitcher: PSPlayerSeasonRecord = _pitcher(926, "負傷した先発", 0.5)
+	var usage: Dictionary = PSPitcherUsageModel.create_outing(pitcher, PSPitcherUsageModel.ROLE_STARTER)
+	var setup: Dictionary = {
+		"team_id": 1,
+		PSInGameInjuries.EXITS_KEY: {
+			pitcher.player_id: {"cause": PSInjuryModel.CAUSE_PITCHING, "is_pitcher": true, "at_pitches": 40},
+		},
+	}
+
+	usage["pitches"] = 39
+	assert_bool(PSInGameInjuries.pitcher_must_leave(setup, pitcher, usage)).is_false()
+	usage["pitches"] = 40
+	assert_bool(PSInGameInjuries.pitcher_must_leave(setup, pitcher, usage)).is_true()
+	assert_bool(PSInGameInjuries.take_pitcher_exit(setup, pitcher).is_empty()).is_false()
+	assert_bool(PSInGameInjuries.pitcher_must_leave(setup, pitcher, usage)).is_false()
+
+
 # 大差で負けている試合は失点を理由に代えず、イニングを稼がせる (敗戦処理でブルペン温存)。
 # NPB 2016-19 実測では 8失点以上した先発の平均投球回が 3.8〜4.6 回あり、7失点時より短くならない。
 func test_starter_is_left_in_to_soak_innings_when_the_game_is_out_of_reach() -> void:

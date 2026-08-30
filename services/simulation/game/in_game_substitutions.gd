@@ -736,6 +736,88 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 	return best_option
 
 
+# 負傷退場の交代先。守備固め (defensive_replacement_option) と違い**必ず退く選手が決まっている**ので、
+# 守備が上がるかどうかのゲートは掛けず、その場を埋められる控えの中で最も守備が良い案を採る。
+# DH は守備に就いていないので打順だけ差し替える。控えが居なければ空を返す (交代せず続行)。
+static func injury_replacement_option(setup: Dictionary, outgoing: PSPlayerSeasonRecord) -> Dictionary:
+	if outgoing == null:
+		return {}
+	var lineup_slot: int = lineup_slot_for_player(setup, outgoing.player_id)
+	if lineup_slot < 0:
+		return {}
+	var position: int = fielding_position_for_player(setup, outgoing.player_id)
+	var bench: Array = setup.get("bench", []) as Array
+	var best: Dictionary = {}
+	var best_value: int = -999999
+	for bench_row in bench:
+		var candidate: PSPlayerSeasonRecord = bench_row as PSPlayerSeasonRecord
+		if candidate == null or candidate.injury_days > 0 or candidate.is_pitcher():
+			continue
+		if position < 2 or position > 9:
+			# DH (守備なし)。打てる控えを優先する。
+			var dh_value: int = pinch_hit_batting_score(candidate)
+			if best.is_empty() or dh_value > best_value:
+				best_value = dh_value
+				best = {
+					"outgoing": outgoing,
+					"replacement": candidate,
+					"position": position,
+					"lineup_slot": lineup_slot,
+					"mover": null,
+					"mover_from_position": 0,
+				}
+			continue
+		var outgoing_defense: int = defense_only_score(outgoing, position)
+		var direct_value: int = -999999
+		if can_trust_fielder_for_position(candidate, position):
+			direct_value = defense_only_score(candidate, position)
+		var shuffle: Dictionary = _shuffle_option_for_replacement(
+			setup, outgoing, position, candidate, outgoing_defense
+		)
+		var shuffle_value: int = -999999
+		if not shuffle.is_empty():
+			# 玉突き案は「2枠合計の増減」で返ってくるので、直接案と比べられる絶対値へ戻す。
+			shuffle_value = int(shuffle.get("defense_gain", -999999)) + outgoing_defense
+		var value: int = direct_value
+		if shuffle_value > direct_value:
+			value = shuffle_value
+		else:
+			shuffle = {}
+		if value <= -999999:
+			continue
+		if best.is_empty() or value > best_value:
+			best_value = value
+			best = {
+				"outgoing": outgoing,
+				"replacement": candidate,
+				"position": position,
+				"lineup_slot": lineup_slot,
+				"mover": shuffle.get("mover", null),
+				"mover_from_position": int(shuffle.get("mover_from_position", 0)),
+			}
+	if not best.is_empty():
+		return best
+	# **適性で妥協する最終手段。** 負傷退場は「代わりを立てない」選択肢が無いので、その守備位置を
+	# 守れる控えが1人も居なければ、残っている控えの中で最も打てる選手をそのまま入れる
+	# (実際の試合でも外野手が一塁に入るような不慣れな配置で埋める)。
+	for bench_row in bench:
+		var fallback: PSPlayerSeasonRecord = bench_row as PSPlayerSeasonRecord
+		if fallback == null or fallback.injury_days > 0 or fallback.is_pitcher():
+			continue
+		var fallback_value: int = pinch_hit_batting_score(fallback)
+		if best.is_empty() or fallback_value > best_value:
+			best_value = fallback_value
+			best = {
+				"outgoing": outgoing,
+				"replacement": fallback,
+				"position": position,
+				"lineup_slot": lineup_slot,
+				"mover": null,
+				"mover_from_position": 0,
+			}
+	return best
+
+
 # 守備位置変更 (玉突き) の相手を探す。**控えがその守備位置を守れなくても、今守っている選手を
 # そこへ動かし、空いた守備位置に控えを入れれば交代が成立する。** 実 NPB は 1試合あたり 0.85 回
 # この配置転換をしていて、これが無いと交代の自由度が控えの守備適性で頭打ちになる
@@ -781,13 +863,20 @@ static func apply_defensive_replacement(setup: Dictionary, option: Dictionary) -
 	var replacement: PSPlayerSeasonRecord = option.get("replacement", null) as PSPlayerSeasonRecord
 	var position: int = int(option.get("position", 0))
 	var lineup_slot: int = int(option.get("lineup_slot", -1))
-	if outgoing == null or replacement == null or position < 2 or position > 9:
+	if outgoing == null or replacement == null:
+		return
+	var on_defense: bool = position >= 2 and position <= 9
+	# 守備に就いていない枠 (DH) の交代もここを通る (負傷退場)。打順だけ差し替える。
+	if not on_defense and lineup_slot < 0:
 		return
 	remove_from_bench(setup, replacement)
 	var batters: Array = setup.get("batters", []) as Array
 	if lineup_slot >= 0 and lineup_slot < batters.size():
 		batters[lineup_slot] = replacement
 		setup["batters"] = batters
+	if not on_defense:
+		mark_substitute_appeared(setup, replacement)
+		return
 	var mover: PSPlayerSeasonRecord = option.get("mover", null) as PSPlayerSeasonRecord
 	var mover_from: int = int(option.get("mover_from_position", 0))
 	if mover != null and mover_from >= 2 and mover_from <= 9:
