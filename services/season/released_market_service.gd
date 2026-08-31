@@ -367,6 +367,8 @@ static func _candidate_entry(player: PSPlayer, record: PSPlayerSeasonRecord, fro
 		"role": player.role,
 		"from_team": from_team,
 		"foreign_player": player.foreign_player,
+		# 獲得球団の外国人枠を1人ぶん埋めるか。日本人扱いの外国人は枠を消費しない。
+		"foreign_slot": player.counts_toward_foreign_slot(),
 		"salary": _released_contract_salary(player.salary),
 		"value": value,
 		"war": snapped(war, 0.01),
@@ -511,7 +513,7 @@ static func _controlled_track_limit_reached(state: Dictionary, team_id: int, ent
 
 
 static func _can_team_accept_candidate(players: Array, team_id: int, entry: Dictionary = {}) -> bool:
-	if bool(entry.get("foreign_player", false)):
+	if bool(entry.get("foreign_slot", entry.get("foreign_player", false))):
 		if _foreign_count_for_team(players, team_id) >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM:
 			return false
 	# 育成track は支配下枠(CONTROLLED_LIMIT)も獲得人数上限も消費しない。
@@ -535,7 +537,7 @@ static func _can_team_afford_release(players: Array, teams: Array, team_id: int,
 # 戦力外市場のAIは、今回の年俸に加えて後続のFA・外国人補強費も残す。
 static func _can_ai_afford_release(players: Array, teams: Array, team_id: int, entry: Dictionary) -> bool:
 	var team: PSTeam = _find_team_by_id(teams, team_id)
-	var incoming_foreign: int = 1 if bool(entry.get("foreign_player", false)) else 0
+	var incoming_foreign: int = 1 if bool(entry.get("foreign_slot", entry.get("foreign_player", false))) else 0
 	var reserve: int = TeamFinance.ai_offseason_budget_reserve(players, team_id, true, true, incoming_foreign)
 	return TeamFinance.can_afford_ai_addition(players, team, int(entry.get("salary", 0)), reserve)
 
@@ -647,7 +649,7 @@ static func _active_count_for_team(players: Array, team_id: int) -> int:
 
 
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:
-	return TeamFinance.foreign_player_count(players, team_id)
+	return TeamFinance.foreign_slot_count(players, team_id)
 
 
 static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:

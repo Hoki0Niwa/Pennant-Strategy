@@ -477,6 +477,154 @@ func test_released_market_respects_foreign_held_cap() -> void:
 	assert_int((capped_team_players[capped_team_players.size() - 1] as PSPlayer).team_id).is_equal(0)
 
 
+# --- 外国人の日本人扱い (一軍登録日数8年で外国人枠から外れる) -----------------
+
+func test_foreign_slot_exemption_needs_eight_years_of_active_roster_days() -> void:
+	var full_days: int = PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	var almost: PSPlayer = _foreign_with_service_days(1, 1, full_days - 1)
+	assert_bool(almost.is_foreign_slot_exempt()).is_false()
+	assert_bool(almost.counts_toward_foreign_slot()).is_true()
+
+	var exempt: PSPlayer = _foreign_with_service_days(2, 1, full_days)
+	assert_bool(exempt.is_foreign_slot_exempt()).is_true()
+	assert_bool(exempt.counts_toward_foreign_slot()).is_false()
+
+	# 二軍暮らしが長い外国人は在籍年数だけでは枠を外れない (登録日数が積み上がらないため)。
+	var farm_bound: PSPlayer = _foreign_with_service_days(3, 1, 4 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
+	farm_bound.years = 15
+	assert_bool(farm_bound.is_foreign_slot_exempt()).is_false()
+
+	# 日数台帳を持たない選手 (初期シード) は在籍年数×145日で補完する。
+	var seeded: PSPlayer = _player({
+		"id": 4, "team_id": 1, "foreign_player": true,
+		"years": PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS,
+	})
+	assert_bool(seeded.is_foreign_slot_exempt()).is_true()
+
+	# 日本人選手は何年在籍しても枠の判定に関わらない。
+	var domestic: PSPlayer = _player({"id": 5, "team_id": 1, "years": 15})
+	assert_bool(domestic.is_foreign_slot_exempt()).is_false()
+	assert_bool(domestic.counts_toward_foreign_slot()).is_false()
+
+	# シーズン記録側も同じ判定になる (source_data はシーズン開始時のスナップショット)。
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(exempt, 2026, 1)
+	assert_bool(record.is_foreign_slot_exempt()).is_true()
+	assert_bool(record.counts_toward_foreign_slot()).is_false()
+
+
+func test_active_roster_foreign_limits_ignore_japanese_treated_foreigners() -> void:
+	var counts: Dictionary = ForeignActiveRosterRules.empty_counts()
+	for i in range(ForeignActiveRosterRules.TOTAL_MAX):
+		var slot_player: PSPlayer = _player({
+			"id": 600 + i, "team_id": 1, "foreign_player": true,
+			"position": 1 if i < 2 else 3,
+			"role": "reliever" if i < 2 else "fielder",
+		})
+		ForeignActiveRosterRules.add_record(counts, PSPlayerSeasonRecord.from_player(slot_player, 2026, 1))
+	assert_int(int(counts.get("foreigners", 0))).is_equal(ForeignActiveRosterRules.TOTAL_MAX)
+
+	# 枠が埋まっていても、日本人扱いの外国人は登録できて枠を消費しない。
+	var exempt_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_foreign_with_service_days(610, 1, PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR),
+		2026, 1
+	)
+	assert_bool(ForeignActiveRosterRules.can_add_record(counts, exempt_record)).is_true()
+	assert_str(ForeignActiveRosterRules.add_block_message(counts, exempt_record)).is_empty()
+	ForeignActiveRosterRules.add_record(counts, exempt_record)
+	assert_int(int(counts.get("foreigners", 0))).is_equal(ForeignActiveRosterRules.TOTAL_MAX)
+	assert_bool(ForeignActiveRosterRules.is_within_limits(counts)).is_true()
+
+	# 枠を消費する外国人は満枠で弾かれる。
+	var slot_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(
+		_player({"id": 611, "team_id": 1, "foreign_player": true}), 2026, 1
+	)
+	assert_bool(ForeignActiveRosterRules.can_add_record(counts, slot_record)).is_false()
+
+
+func test_foreign_held_cap_ignores_japanese_treated_foreigners() -> void:
+	var players: Array = _support_players(1, 10)
+	for i in range(TeamFinance.FOREIGN_HELD_TARGET):
+		players.append(_player({"id": 700 + i, "team_id": 1, "foreign_player": true}))
+	assert_int(TeamFinance.foreign_slot_count(players, 1)).is_equal(TeamFinance.FOREIGN_HELD_TARGET)
+	assert_bool(ForeignPlayerService._can_team_sign_foreign(players, {}, 1)).is_false()
+
+	# 4人のうち1人が日本人扱いになると、その枠が空いて新外国人を迎えられる。
+	var exempt: PSPlayer = players[players.size() - 1] as PSPlayer
+	exempt.source_data = {"fa_nissuu": PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR}
+	assert_int(TeamFinance.foreign_player_count(players, 1)).is_equal(TeamFinance.FOREIGN_HELD_TARGET)
+	assert_int(TeamFinance.foreign_slot_count(players, 1)).is_equal(TeamFinance.FOREIGN_HELD_TARGET - 1)
+	assert_bool(ForeignPlayerService._can_team_sign_foreign(players, {}, 1)).is_true()
+
+
+func test_domestic_roster_count_includes_japanese_treated_foreigners() -> void:
+	var players: Array = _support_players(1, 3)
+	players.append(_player({"id": 800, "team_id": 1, "foreign_player": true}))
+	assert_int(Offseason._domestic_roster_count(players, 1)).is_equal(3)
+
+	# 枠を外れた外国人は日本人と同じ席を占めるので、放出計画の母数に入る。
+	players.append(_foreign_with_service_days(
+		801, 1, PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	))
+	assert_int(Offseason._domestic_roster_count(players, 1)).is_equal(4)
+	assert_int(TeamFinance.foreign_player_count(players, 1)).is_equal(2)
+	assert_int(TeamFinance.foreign_slot_count(players, 1)).is_equal(1)
+
+
+# 外国人枠の判定に使う1軍登録日数は、放出計画より前 (FA宣言ステップ) で締められる。
+# 締めが戦力外より後に回ると、閾値をまたぐ年だけ枠が二重に確保され (放出計画は枠内、
+# 外国人契約市場は枠外として数える)、その球団の支配下総数が開幕目標を1人超える。
+func test_foreign_slot_exemption_is_settled_before_the_release_step() -> void:
+	var order: Array = AppState.OFFSEASON_STEP_ORDER
+	assert_int(order.find(AppState.OFFSEASON_STEP_FA_DECLARATION)).is_less(
+		order.find(AppState.OFFSEASON_STEP_RELEASE_EDIT)
+	)
+
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.calendar_start_date = "2099-03-27"
+	season.current_day = 1
+	# 前年終了時点で7年ぶん。今季を一軍で完走して8年目に到達する外国人。
+	var player: PSPlayer = _foreign_with_service_days(
+		1, 1, (PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS - 1) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	)
+	player.years = PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS
+	var players: Array = [player]
+	season.set_active_roster(1, {"player_ids": [1]})
+	season.current_day = 200
+	assert_bool(player.counts_toward_foreign_slot()).is_true()
+
+	Offseason.accrue_fa_days_and_update_status(players, [_team(1)], season)
+
+	# 締めた直後 = 戦力外ステップに入る時点で、もう枠を消費していない。
+	assert_int(player.fa_service_days()).is_equal(
+		PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	)
+	assert_bool(player.is_foreign_slot_exempt()).is_true()
+	assert_int(TeamFinance.foreign_slot_count(players, 1)).is_equal(0)
+	# 放出計画の母数が枠外選手を数える = 外国人ぶんの席が二重に確保されない。
+	assert_int(Offseason._domestic_roster_count(players, 1)).is_equal(1)
+
+
+func test_released_market_foreign_cap_ignores_japanese_treated_foreigners() -> void:
+	var players: Array = _released_market_foreign_cap_players(TeamFinance.FOREIGN_HELD_TARGET)
+	# 保有4人のうち1人を日本人扱いにすると枠が1つ空き、外国人を獲得できる。
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.team_id == 2 and player.foreign_player:
+			player.source_data = {"fa_nissuu": PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR}
+			break
+	var result: Dictionary = ReleasedMarket.process_released_market(
+		players,
+		[_team(1), _team(2)],
+		null,
+		{"released": [{"player_id": 9100, "team_id": 1}]},
+		0
+	)
+	assert_int(int(result.get("signed_count", 0))).is_equal(1)
+	assert_int((players[players.size() - 1] as PSPlayer).team_id).is_equal(2)
+
+
 func test_released_market_development_track_chance_rises_with_age_and_falls_with_value() -> void:
 	# 年齢が上がるほど育成寄りになり、能力(value)が高いほど支配下側に戻る。
 	var young: float = ReleasedMarket._development_track_chance(24, 55)
@@ -3205,6 +3353,17 @@ func _player_with_z(id: int, team_id: int, position: int, dev: bool, z_value: fl
 
 
 # team_id の支配下選手を count 人作る (id は 1000 番台)。
+# 一軍登録日数 (fa_nissuu) を指定した外国人。日本人扱いの境界を直接作るために使う。
+func _foreign_with_service_days(player_id: int, team_id: int, service_days: int) -> PSPlayer:
+	return _player({
+		"id": player_id,
+		"team_id": team_id,
+		"foreign_player": true,
+		"years": PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS + 2,
+		"source_data": {"fa_nissuu": service_days},
+	})
+
+
 func _support_players(team_id: int, count: int) -> Array:
 	var players: Array = []
 	for i in range(count):

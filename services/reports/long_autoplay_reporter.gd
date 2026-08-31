@@ -1165,6 +1165,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	var controlled_players: int = 0
 	var development_players: int = 0
 	var foreign_players: int = 0
+	var foreign_slot_exempt_players: int = 0
 	var talent_outliers: int = 0
 	var draft_generated_players: int = 0
 	var seed_cohort_players: int = 0
@@ -1233,7 +1234,12 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 			by_team_controlled[str(player.team_id)] = int(by_team_controlled.get(str(player.team_id), 0)) + 1
 		if player.foreign_player:
 			foreign_players += 1
-			by_team_foreign[str(player.team_id)] = int(by_team_foreign.get(str(player.team_id), 0)) + 1
+			# by_team_foreign は外国人枠の消費数 (health の team_foreign_max 上限4はこれに掛かる)。
+			# 日本人扱いになった外国人は枠を空けるので、総数と別に数える。
+			if player.counts_toward_foreign_slot():
+				by_team_foreign[str(player.team_id)] = int(by_team_foreign.get(str(player.team_id), 0)) + 1
+			else:
+				foreign_slot_exempt_players += 1
 		if bool(player.source_data.get("talent_outlier", false)):
 			talent_outliers += 1
 		if player.injury_days > 0:
@@ -1293,6 +1299,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		"controlled_players": controlled_players,
 		"development_players": development_players,
 		"foreign_players": foreign_players,
+		"foreign_slot_exempt_players": foreign_slot_exempt_players,
 		"talent_outliers": talent_outliers,
 		"draft_generated_active_players": draft_generated_players,
 		"non_draft_active_players": active_players - draft_generated_players,

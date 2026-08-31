@@ -486,6 +486,31 @@ func test_headless_create_resolves_first_round_silently() -> void:
 	assert_int(_round_pick_count(state, 1)).is_greater(0)
 
 
+# 日本人扱いになった外国人は外国人枠を空けるので、その球団は空いた枠ぶんを新外国人用に予約する
+# (= 指名枠が縮む)。保有人数は同じでも、枠を消費している人数だけが予約に効く。
+func test_draft_foreign_reserve_ignores_japanese_treated_foreigners() -> void:
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
+	var roster: int = 62  # hard 空き8。予約後の capacity が指名枠 (6〜7) を下回る帯で比較する。
+	var players: Array = []
+	for tid in [1, 2]:
+		_fill_team(players, tid, roster)
+		_mark_foreign(players, tid, DraftService.FOREIGN_ROSTER_RESERVE_TARGET)
+	# team2 は4人保有のままだが、うち3人が枠を消費しない。
+	_mark_japanese_treated(players, 2, 3)
+
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0)
+	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
+
+	assert_int(int(targets.get("1", 0))).is_between(
+		DraftService.MAIN_DRAFT_TARGET_MIN, DraftService.MAIN_DRAFT_TARGET_MAX
+	)
+	assert_int(int(targets.get("2", 0))).is_equal(maxi(
+		DraftService.MAIN_DRAFT_MIN_PICKS,
+		(DraftService.ROSTER_LIMIT - roster) - 3
+	))
+	assert_int(int(targets.get("1", 0))).is_greater(int(targets.get("2", 0)))
+
+
 # 指名枠は固定なので、**育成の昇格見込みがあっても指名数は変わらない**。
 # 人数の帳尻は戦力外側が余りで合わせる。
 func test_draft_target_ignores_development_promotions() -> void:
@@ -557,6 +582,19 @@ func _fill_team(players: Array, team_id: int, count: int) -> void:
 			"z_abilities": {},
 			"raw_abilities": {},
 		}))
+
+
+# 既に外国人になっている選手のうち先頭 count 人を日本人扱い (外国人枠を消費しない) にする。
+func _mark_japanese_treated(players: Array, team_id: int, count: int) -> void:
+	var marked: int = 0
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.team_id != team_id or not player.foreign_player or marked >= count:
+			continue
+		player.source_data = {
+			"fa_nissuu": PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR,
+		}
+		marked += 1
 
 
 func _mark_foreign(players: Array, team_id: int, count: int) -> void:

@@ -863,7 +863,7 @@ func _record_row(record: PSPlayerSeasonRecord) -> Dictionary:
 		"war_str": "%0.1f" % war,
 		"has_war": true,
 		"eval": PlayerValueEvaluator.overall_score(record),
-		"note": _note_for(record.foreign_player, record.injury_days),
+		"note": _note_for(record.foreign_player, record.injury_days, record.counts_toward_foreign_slot()),
 	}
 
 
@@ -881,15 +881,16 @@ func _dev_row(player: PSPlayer) -> Dictionary:
 		"war_str": "-",
 		"has_war": false,
 		"eval": int(Offseason.player_value_score(player)),
-		"note": _note_for(player.foreign_player, player.injury_days),
+		"note": _note_for(player.foreign_player, player.injury_days, player.counts_toward_foreign_slot()),
 	}
 
 
-func _note_for(foreign: bool, injury_days: int) -> String:
+func _note_for(foreign: bool, injury_days: int, foreign_slot: bool = true) -> String:
 	if injury_days > 0:
 		return "怪我%d日" % injury_days
 	if foreign:
-		return "外"
+		# 日本人扱い (外国人枠を消費しない) の外国人は、枠の計数と表示を分けて示す。
+		return "外" if foreign_slot else "外(枠外)"
 	return ""
 
 

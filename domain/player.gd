@@ -19,6 +19,9 @@ const POSITION_NAMES = {
 const FA_ELIGIBLE_YEARS_HIGH_SCHOOL: int = 8
 const FA_ELIGIBLE_YEARS_OTHER: int = 7
 const FA_SERVICE_DAYS_PER_YEAR: int = 145
+# 外国人が「日本人扱い」になる (外国人枠を消費しなくなる) 1軍登録年数。
+# 145日×この年数を満たすと、一軍登録枠・支配下の保有上限のどちらからも外れる。
+const FOREIGN_SLOT_EXEMPT_YEARS: int = 8
 # 高卒のデビュー年齢 (これ以下なら高卒出身と推定)。初期シード選手は draft_source 列が無いため。
 const HIGH_SCHOOL_DEBUT_AGE: int = 18
 
@@ -318,9 +321,31 @@ func fa_service_days_required() -> int:
 
 
 func fa_service_days() -> int:
-	if source_data.has("fa_nissuu"):
-		return maxi(0, int(source_data.get("fa_nissuu", 0)))
-	return maxi(0, years) * FA_SERVICE_DAYS_PER_YEAR
+	return fa_service_days_from(source_data, years)
+
+
+# 1軍登録日数の台帳 (source_data["fa_nissuu"])。台帳が無い選手 (初期シード/入団直後) は
+# 在籍年数×145日で補完する。PSPlayerSeasonRecord からも再利用する static 版。
+static func fa_service_days_from(src_data: Dictionary, service_years: int) -> int:
+	if src_data.has("fa_nissuu"):
+		return maxi(0, int(src_data.get("fa_nissuu", 0)))
+	return maxi(0, service_years) * FA_SERVICE_DAYS_PER_YEAR
+
+
+# 外国人枠の対象外 (日本人扱い) か。1軍登録日数が 145日×FOREIGN_SLOT_EXEMPT_YEARS に達した
+# 外国人だけが true。日本人選手は常に false (枠の概念を持たないため)。
+static func foreign_slot_exempt(is_foreign: bool, service_days: int) -> bool:
+	return is_foreign and service_days >= FOREIGN_SLOT_EXEMPT_YEARS * FA_SERVICE_DAYS_PER_YEAR
+
+
+func is_foreign_slot_exempt() -> bool:
+	return foreign_slot_exempt(foreign_player, fa_service_days())
+
+
+# 外国人枠を1人ぶん消費するか。日本人選手と、日本人扱いになった外国人は消費しない。
+# 一軍登録枠・支配下の外国人保有上限・ドラフトの枠予約は全てこの判定で数える。
+func counts_toward_foreign_slot() -> bool:
+	return foreign_player and not is_foreign_slot_exempt()
 
 
 static func fielding_ability_category_for_position(position_id: int) -> String:

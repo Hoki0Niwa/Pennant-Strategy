@@ -114,7 +114,8 @@ static func team_payroll(players: Array, team_id: int) -> int:
 	return total
 
 
-# チームが保有する非引退外国人数。支配下/育成のどちらも保有枠として数える。
+# チームが保有する非引退外国人数。支配下/育成のどちらも数える。日本人扱いの外国人も含む
+# 「国籍としての外国人数」なので、保有枠の空きを見るときは foreign_slot_count を使う。
 static func foreign_player_count(players: Array, team_id: int) -> int:
 	var count: int = 0
 	for player_row in players:
@@ -124,6 +125,20 @@ static func foreign_player_count(players: Array, team_id: int) -> int:
 		if player.is_retired():
 			continue
 		if player.foreign_player:
+			count += 1
+	return count
+
+
+# 外国人枠 (FOREIGN_HELD_TARGET) を消費している保有数。日本人扱いになった外国人は数えない。
+static func foreign_slot_count(players: Array, team_id: int) -> int:
+	var count: int = 0
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.team_id != team_id:
+			continue
+		if player.is_retired():
+			continue
+		if player.counts_toward_foreign_slot():
 			count += 1
 	return count
 
@@ -233,7 +248,7 @@ static func ai_offseason_budget_reserve(
 ) -> int:
 	var reserve: int = AI_FA_BUDGET_RESERVE if reserve_fa else 0
 	if reserve_foreign:
-		var held_after_addition: int = foreign_player_count(players, team_id) + maxi(0, additional_foreign)
+		var held_after_addition: int = foreign_slot_count(players, team_id) + maxi(0, additional_foreign)
 		var open_slots: int = maxi(0, FOREIGN_HELD_TARGET - held_after_addition)
 		reserve += open_slots * AI_FOREIGN_BUDGET_RESERVE_PER_SLOT
 	return reserve

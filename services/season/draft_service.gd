@@ -1081,6 +1081,8 @@ static func _main_draft_capacity(current_controlled: int, profile: Dictionary) -
 # 本指名で埋め切らずに残す hard 枠。**外国人の不足分だけ**を予約する — 外国人4人保有は編成の前提で
 # 枠を確保しないと成立しないため。FA/戦力外獲得のための一般予約は置かない — 誰も獲らない年が
 # 普通なので、常設の予約は指名枠と戦力外数の両方を押し下げてしまう。
+# profile["foreign"] は外国人枠を消費している保有数 (日本人扱いの外国人は含まない) なので、
+# 枠を外れた外国人がいる球団はその分だけ新たな外国人を迎える余地を予約する。
 static func _main_draft_signing_reserve(profile: Dictionary) -> int:
 	var foreign_count: int = int(profile.get("foreign", 0))
 	return max(0, FOREIGN_ROSTER_RESERVE_TARGET - foreign_count)
@@ -1128,7 +1130,7 @@ static func _build_team_profiles(players: Array, teams: Array) -> Dictionary:
 		profile["total"] = int(profile.get("total", 0)) + 1
 		profile["initial_total"] = int(profile.get("initial_total", 0)) + 1
 		profile[group] = int(profile.get(group, 0)) + 1
-		if player.foreign_player:
+		if player.counts_toward_foreign_slot():
 			profile["foreign"] = int(profile.get("foreign", 0)) + 1
 		if not player.is_pitcher():
 			var holders: Dictionary = profile["position_holders"] as Dictionary

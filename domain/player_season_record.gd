@@ -328,9 +328,18 @@ func fa_service_days_required() -> int:
 
 
 func fa_service_days() -> int:
-	if source_data.has("fa_nissuu"):
-		return maxi(0, int(source_data.get("fa_nissuu", 0)))
-	return maxi(0, years) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	return PSPlayer.fa_service_days_from(source_data, years)
+
+
+# 外国人枠の対象外 (日本人扱い) か。source_data はシーズン開始時のスナップショットなので、
+# 判定はシーズン中を通して固定される (オフの日数加算で翌年から切り替わる)。
+func is_foreign_slot_exempt() -> bool:
+	return PSPlayer.foreign_slot_exempt(foreign_player, fa_service_days())
+
+
+# 外国人枠を1人ぶん消費するか。一軍登録枠の計数はこの判定で行う。
+func counts_toward_foreign_slot() -> bool:
+	return foreign_player and not is_foreign_slot_exempt()
 
 
 # File 2 §5: z-score 内部能力値の読み取り（リーグ平均=0.0）

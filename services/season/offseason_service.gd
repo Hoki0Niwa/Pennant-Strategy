@@ -571,14 +571,17 @@ static func _release_expected_inflow(players: Array, team_id: int) -> int:
 	return RELEASE_PLAN_DRAFT_ESTIMATE + mini(promo_ready, RELEASE_PLAN_PROMO_CAP)
 
 
-# 支配下 (非外国人・非育成・非引退) の在籍数。放出計画・スロット予算はすべてこれを母数にする。
+# 支配下 (外国人枠を消費しない・非育成・非引退) の在籍数。放出計画・スロット予算はすべて
+# これを母数にする。日本人扱いの外国人はここに入る — DOMESTIC_ROSTER_TARGET は
+# 「開幕目標 − 外国人枠4」なので、枠を外れた外国人を除いたままだと外国人ぶんの席が
+# 二重に確保され、球団の支配下総数が開幕目標を超える。
 static func _domestic_roster_count(players: Array, team_id: int) -> int:
 	var count: int = 0
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id:
 			continue
-		if player.is_retired() or player.development_player or player.foreign_player:
+		if player.is_retired() or player.development_player or player.counts_toward_foreign_slot():
 			continue
 		count += 1
 	return count
@@ -588,13 +591,14 @@ static func _domestic_roster_count(players: Array, team_id: int) -> int:
 # **役割バケツ (fielder:N / pitcher:starter|reliever) は外国人選手も一緒に数える**
 # (release_depth_chart_evaluations が foreign_player を除外せずグループ化するため、
 # 外国人投手も domestic の投手と同じ "pitcher:starter" 枠を奪い合う)。よって post_target は
-# 「支配下の放出後見込み (DOMESTIC_ROSTER_TARGET 基準、外国人非依存)」に**現在の外国人保有数**を
-# 足し戻した総人数にする — ここを外国人抜きのままにすると、外国人を多く抱える球団ほど
+# 「支配下の放出後見込み (DOMESTIC_ROSTER_TARGET 基準、外国人非依存)」に**外国人枠を消費している
+# 保有数**を足し戻した総人数にする — ここを外国人抜きのままにすると、外国人を多く抱える球団ほど
 # バケツ内の実際の枠消費 (外国人ぶん) を budget が見込まなくなり、支配下選手が余分に
-# 「余剰」判定されて過剰放出される。
+# 「余剰」判定されて過剰放出される。日本人扱いの外国人は _domestic_roster_count 側に
+# 数えられているので、ここで足すと二重になる。
 static func _release_slot_budgets(players: Array, team_id: int) -> Dictionary:
 	var domestic_post_target: int = DOMESTIC_ROSTER_TARGET - _release_expected_inflow(players, team_id)
-	var post_target: int = maxi(1, domestic_post_target + TeamFinance.foreign_player_count(players, team_id))
+	var post_target: int = maxi(1, domestic_post_target + TeamFinance.foreign_slot_count(players, team_id))
 	var scale: float = float(post_target) / RELEASE_COMFORT_TOTAL
 	var budgets: Dictionary = {}
 	for position_v in RELEASE_POSITION_COMFORT.keys():

@@ -573,13 +573,15 @@ static func _build_contract_offers(entry: Dictionary, players: Array, teams: Arr
 	var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
 	if player != null:
 		var max_years: int = int(entry.get("max_years", 1))
+		# 日本人扱いの外国人は移籍先の外国人枠を埋めないので、枠が満杯の球団も引き抜ける。
+		var needs_slot: bool = player.counts_toward_foreign_slot()
 		for team_row in teams:
 			var team: PSTeam = team_row as PSTeam
 			if team == null or team.id == home_team_id or team.id == user_offer_team:
 				continue
 			if int(poach_counts.get(team.id, 0)) >= CPU_FOREIGN_POACH_MAX_PER_TEAM:
 				continue
-			if _foreign_count_for_team(players, team.id) >= MAX_FOREIGN_HELD_PER_TEAM:
+			if needs_slot and _foreign_count_for_team(players, team.id) >= MAX_FOREIGN_HELD_PER_TEAM:
 				continue
 			if Rng.roll_float() > CPU_FOREIGN_POACH_CHANCE:
 				continue
@@ -623,7 +625,7 @@ static func _apply_best_contract_offer(players: Array, teams: Array, entry: Dict
 			if not TeamFinance.can_afford_addition(players, team, delta):
 				continue
 		else:
-			if not _can_team_sign_foreign(players, {}, team_id):
+			if not _can_team_sign_foreign(players, {}, team_id, player.counts_toward_foreign_slot()):
 				continue
 			if not TeamFinance.can_afford_addition(players, team, salary):
 				continue
@@ -732,8 +734,11 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 		return {"ok": false, "message": "その選手の契約市場は既に解決済みです。", "state": state}
 	var home_team_id: int = int(entry.get("from_team_id", 0))
 	var is_home: bool = home_team_id == user_team_id
+	var target_player: PSPlayer = _find_player_by_id(players, player_id)
 	if not is_home:
-		if _foreign_count_for_team(players, user_team_id) >= MAX_FOREIGN_HELD_PER_TEAM:
+		# 日本人扱いの外国人は外国人枠を埋めないので、枠が満杯でも引き抜ける (支配下70枠は消費する)。
+		var needs_slot: bool = target_player == null or target_player.counts_toward_foreign_slot()
+		if needs_slot and _foreign_count_for_team(players, user_team_id) >= MAX_FOREIGN_HELD_PER_TEAM:
 			return {"ok": false, "message": "外国人保有枠が不足しています。", "state": state}
 		if _active_count_for_team(players, user_team_id) >= TeamFinance.CONTROLLED_LIMIT:
 			return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
@@ -746,8 +751,7 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 	var team: PSTeam = _find_team_by_id(teams, user_team_id)
 	var cost: int = salary
 	if is_home:
-		var player: PSPlayer = _find_player_by_id(players, player_id)
-		cost = maxi(0, salary - (player.salary if player != null else 0))
+		cost = maxi(0, salary - (target_player.salary if target_player != null else 0))
 	if not TeamFinance.can_afford_addition(players, team, cost):
 		return {"ok": false, "message": "予算が不足しているため提示できません。", "state": state}
 	entry["user_offer"] = {"team_id": user_team_id, "years": clamped_years, "salary": salary, "is_home": is_home}
@@ -762,13 +766,17 @@ static func withdraw_user_contract_offer(state: Dictionary, player_id: int) -> D
 	return {"ok": true, "state": state}
 
 
-static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: int) -> bool:
+# needs_foreign_slot=false は日本人扱いの外国人を迎えるとき。外国人枠は消費しないが、
+# 支配下70枠は日本人と同じように消費する。
+static func _can_team_sign_foreign(players: Array, _state: Dictionary, team_id: int, needs_foreign_slot: bool = true) -> bool:
 	if team_id <= 0:
 		return false
 	var active: int = _active_count_for_team(players, team_id)
 	# ドラフトが後段補強用に残した hard 枠を使う。70枠はここで保証する。
 	if active >= TeamFinance.CONTROLLED_LIMIT:
 		return false
+	if not needs_foreign_slot:
+		return true
 	var foreign_total: int = _foreign_count_for_team(players, team_id)
 	return foreign_total < MAX_FOREIGN_HELD_PER_TEAM
 
@@ -1203,16 +1211,18 @@ static func _active_count_for_team(players: Array, team_id: int) -> int:
 	return TeamFinance.controlled_count(players, team_id)
 
 
+# 外国人枠を消費している保有数。日本人扱いの外国人は枠を空けるので数えない。
 static func _foreign_count_for_team(players: Array, team_id: int) -> int:
-	return TeamFinance.foreign_player_count(players, team_id)
+	return TeamFinance.foreign_slot_count(players, team_id)
 
 
+# 枠を消費している外国人の投手/野手内訳。一軍の種別上限 (TYPE_MAX) 側と数え方を揃える。
 static func _foreign_type_counts_for_team(players: Array, team_id: int) -> Dictionary:
 	var pitchers: int = 0
 	var fielders: int = 0
 	for player_value in players:
 		var player: PSPlayer = player_value as PSPlayer
-		if player == null or player.team_id != team_id or player.is_retired() or not player.foreign_player:
+		if player == null or player.team_id != team_id or player.is_retired() or not player.counts_toward_foreign_slot():
 			continue
 		if player.is_pitcher():
 			pitchers += 1

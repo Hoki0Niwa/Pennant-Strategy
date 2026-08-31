@@ -1,6 +1,8 @@
 extends RefCounted
 
 # 一軍の外国人登録枠。合計枠に加え、投手・野手の一方だけで全枠を占めることはできない。
+# 枠を消費するのは PSPlayerSeasonRecord.counts_toward_foreign_slot() が true の外国人だけで、
+# 一軍登録日数が 145日×PSPlayer.FOREIGN_SLOT_EXEMPT_YEARS に達した外国人 (日本人扱い) は数えない。
 const TOTAL_MAX: int = 4
 const TYPE_MAX: int = TOTAL_MAX - 1
 
@@ -14,7 +16,7 @@ static func empty_counts() -> Dictionary:
 
 
 static func add_record(counts: Dictionary, record: PSPlayerSeasonRecord) -> void:
-	if record == null or not record.foreign_player:
+	if record == null or not record.counts_toward_foreign_slot():
 		return
 	counts["foreigners"] = int(counts.get("foreigners", 0)) + 1
 	var key: String = "foreign_pitchers" if record.is_pitcher() else "foreign_fielders"
@@ -37,7 +39,7 @@ static func counts_from_active_set(active_set: Dictionary, record_by_id: Diction
 
 
 static func can_add_record(counts: Dictionary, record: PSPlayerSeasonRecord) -> bool:
-	if record == null or not record.foreign_player:
+	if record == null or not record.counts_toward_foreign_slot():
 		return true
 	if int(counts.get("foreigners", 0)) >= TOTAL_MAX:
 		return false
@@ -65,7 +67,7 @@ static func violation_message(counts: Dictionary) -> String:
 
 
 static func add_block_message(counts: Dictionary, record: PSPlayerSeasonRecord) -> String:
-	if record == null or not record.foreign_player:
+	if record == null or not record.counts_toward_foreign_slot():
 		return ""
 	if int(counts.get("foreigners", 0)) >= TOTAL_MAX:
 		return "外国人枠は最大%d人です" % TOTAL_MAX

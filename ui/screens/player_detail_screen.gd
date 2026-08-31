@@ -164,8 +164,13 @@ func _draw_identity() -> void:
 		_text(jersey, Vector2(x, ID_Y + 8), 18, MUTED)
 		x += _measure(jersey, 18) + 14.0
 	if _record.foreign_player:
-		_chip(Rect2(x, ID_Y - 11, 48, 22), "外国人", VIOLET)
-		x += 58.0
+		# 一軍登録日数が規定に達した外国人は外国人枠を消費しない (日本人扱い)。
+		if _record.is_foreign_slot_exempt():
+			_chip(Rect2(x, ID_Y - 11, 92, 22), "外国人(枠外)", VIOLET)
+			x += 102.0
+		else:
+			_chip(Rect2(x, ID_Y - 11, 48, 22), "外国人", VIOLET)
+			x += 58.0
 
 	# 区切り + インライン メタ (プロ年数 / 年齢 / 投打)。
 	_line(Vector2(x, ID_Y - 13), Vector2(x, ID_Y + 13), BORDER, 1.0)
