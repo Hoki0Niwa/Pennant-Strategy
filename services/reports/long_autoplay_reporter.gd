@@ -824,6 +824,10 @@ func _teams_without_released_signing(released_market_result: Dictionary) -> int:
 
 
 # 「30歳以上・当季出場ゼロ・入団3年目以降」で支配下に残った日本人選手の一覧。
+# **出場は一軍・二軍の両方を見る。** 二軍で稼働している選手は「放出AIの取りこぼし」ではなく
+# NPB でも普通にいる控え層なので、一軍出場だけで数えると支配下の 85% が二軍に出ている現状では
+# 指標が「一軍に定着していない30代の数」に化けてしまう。ここが数えたいのは
+# **どの階層でも1試合も使われなかったのに残った選手**。
 # 各行に `block_reason` (複数年契約中/FA宣言済み等、契約上そもそも通告できない理由) を持たせ、
 # 集計 (`noshow_thirties_survivors`) は **block_reason が無い = 切れたのに切らなかった選手だけ**を
 # 数える。契約で守られている選手を混ぜると「放出AIの取りこぼし」を測る指標として意味を失う
@@ -841,7 +845,8 @@ func _noshow_thirties_survivor_rows(season: PSSeason) -> Array:
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		if record != null:
 			var games: int = record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
-			if games > 0:
+			var farm_games: int = record.farm_pitcher_stats.games if record.is_pitcher() else record.farm_batter_stats.games
+			if games + farm_games > 0:
 				continue
 			if record.season_injury_days >= ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS:
 				continue
@@ -1162,6 +1167,7 @@ func _format_leader_value(metric: String, value: float, is_pitcher: bool) -> Str
 
 func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary = {}) -> Dictionary:
 	var active_players: int = 0
+	var farm_club_players: int = 0
 	var controlled_players: int = 0
 	var development_players: int = 0
 	var foreign_players: int = 0
@@ -1213,6 +1219,14 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null:
+			continue
+		# ファーム専用球団の選手は 12球団の編成経済の外側にいる供給プールで、ロスターも
+		# farm_club_service が別ロジックで作る。ここの集計は「12球団のロスター健全性」を測るものなので
+		# 混ぜない。混ぜると average_overall / age_bands / draft_generated_ratio が専用球団の
+		# 低能力・元NPB層で希釈され、health の帯が母集団違いで意味を失う。人数は farm_club_players で持つ。
+		if PSFarmLeague.is_farm_club_id(player.team_id):
+			if _is_active_roster_player(player):
+				farm_club_players += 1
 			continue
 		if player.team_id <= 0 and not player.is_retired():
 			if bool(player.source_data.get("free_agent", false)):
@@ -1296,6 +1310,8 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	return {
 		"player_rows_total": players.size(),
 		"active_players": active_players,
+		# 上の active_players からは除外してある専用球団 (13/14) の在籍数。bounded かの監視用。
+		"farm_club_players": farm_club_players,
 		"controlled_players": controlled_players,
 		"development_players": development_players,
 		"foreign_players": foreign_players,

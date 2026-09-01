@@ -42,6 +42,34 @@ func test_long_health_released_per_year_band_matches_npb() -> void:
 	assert_str(_released_status(145.0)).is_equal("fail")
 
 
+# ベテランの積み上がりはシェアで見る。平均年齢だけだと若手の増減で相殺されて動かず、
+# 15年かけた高齢化が素通りする (旧 last10_average_age の帯 25-30 がまさにそれだった)。
+# 帯は NPB 全登録の 35歳以上 5.1% を基準に、warn 8% / fail 10%。
+func test_long_health_age_35_plus_share_band_tracks_npb() -> void:
+	assert_str(_age_35_plus_share_status(900.0, 50.0)).is_equal("pass")
+	assert_str(_age_35_plus_share_status(900.0, 80.0)).is_equal("warn")
+	assert_str(_age_35_plus_share_status(900.0, 95.0)).is_equal("fail")
+
+
+# active_players が 0 の (= 世界が空の) レポートでもゼロ除算せず pass 側に倒れること。
+func test_long_health_age_35_plus_share_handles_empty_roster() -> void:
+	assert_str(_age_35_plus_share_status(0.0, 0.0)).is_equal("pass")
+
+
+func _age_35_plus_share_status(active_players: float, age_35_plus: float) -> String:
+	var health: Dictionary = ReportHealth.long_health({
+		"window_summaries": {"last_10_years": {
+			"active_players": active_players,
+			"age_35_plus": age_35_plus,
+		}},
+	})
+	for check_value in health.get("checks", []) as Array:
+		var check: Dictionary = check_value as Dictionary
+		if str(check.get("id", "")) == "last10_age_35_plus_share":
+			return str(check.get("status", ""))
+	return ""
+
+
 func _yearly_row(released: int, demoted: int) -> Dictionary:
 	return {
 		"offseason": {

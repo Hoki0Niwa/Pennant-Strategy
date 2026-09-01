@@ -259,8 +259,12 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_equal_check(checks, "completed_seasons", completed, requested, "all requested seasons completed")
 	_add_max_check(checks, "simulation_errors", errors.size(), 0.0, 0.0, "simulation errors should be absent")
 	_add_max_check(checks, "team_controlled_max", _max_nested(roster_dist, "team_controlled_max", final_roster.get("team_controlled_max", 0)), 70.0, 70.0, "hard 70-man controlled cap")
-	_add_max_check(checks, "team_roster_max", _max_nested(roster_dist, "team_roster_max", final_roster.get("team_roster_max", 0)), 90.0, 110.0, "total roster including development")
-	_add_max_check(checks, "team_development_max", _max_nested(roster_dist, "team_development_max", final_roster.get("team_development_max", 0)), 20.0, 35.0, "development roster growth")
+	# 支配下70 + 育成 の合計。NPB の全登録は 1球団 90人前後 (2026-07-23 の公式一覧で支配下829/育成246)
+	# なので、95 を超えたら育成が膨らみすぎ、110 で異常とする。
+	_add_max_check(checks, "team_roster_max", _max_nested(roster_dist, "team_roster_max", final_roster.get("team_roster_max", 0)), 95.0, 110.0, "total roster including development")
+	# 育成の球団最大。NPB は読売36人・ソフトバンク51人が外れ値で、残り10球団は 9〜32人 (平均15.6)。
+	# 25 までは実勢の範囲、35 を超えたら二軍の枠を育成で埋めすぎ。
+	_add_max_check(checks, "team_development_max", _max_nested(roster_dist, "team_development_max", final_roster.get("team_development_max", 0)), 25.0, 35.0, "development roster growth")
 	_add_max_check(checks, "team_foreign_max", _max_nested(roster_dist, "team_foreign_max", final_roster.get("team_foreign_max", 0)), 4.0, 4.0, "foreign player held cap")
 	_add_max_check(checks, "teamless_active_players", int(final_roster.get("teamless_active_players", 0)), 0.0, 0.0, "teamless active players")
 	_add_max_check(checks, "free_agent_orphans", int(final_roster.get("free_agent_orphans", 0)), 0.0, 0.0, "unresolved FA pool players")
@@ -283,7 +287,11 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "released_fielders_per_pitcher", float(last_10.get("released_fielders_per_pitcher", 0.0)), 0.8, 1.3, 0.5, 1.8, "release-notice pitcher-to-fielder composition (fielder count per pitcher)")
 	_add_range_check(checks, "released_average_age", float(last_10.get("released_average_age", 0.0)), 26.0, 31.0, 23.0, 35.0, "weighted average age of domestic release notices")
 	_add_max_check(checks, "noshow_thirties_survivors_per_year", float(last_10.get("noshow_thirties_survivors_per_year", 0.0)), 1.0, 4.0, "zero-appearance 30+ players surviving the release phase")
-	_add_min_check(checks, "post_team_controlled_min", _dist_value(post_roster_dist, "team_controlled_min", "min"), 66.0, 64.0, "every team should finish the offseason with at least 66 controlled players")
+	# 「全球団・全年の最小/最大」= 極値統計なので、1球団が1年だけ触れた値でも出る。
+	# 支配下の上限は 70 (別途 team_controlled_max で hard cap を見ている) で、下限側は
+	# 育成へ降格させた枠を翌年のドラフトで埋め戻す都合上、単年で数人へこむのが正常。
+	# 平常運転の帯 (66-68) を warn、そこから 2人以上外れたら fail とする。
+	_add_min_check(checks, "post_team_controlled_min", _dist_value(post_roster_dist, "team_controlled_min", "min"), 66.0, 62.0, "every team should finish the offseason with at least 66 controlled players")
 	_add_max_check(checks, "post_team_controlled_max", _dist_value(post_roster_dist, "team_controlled_max", "max"), 68.0, 70.0, "every team should finish the offseason with at most 68 controlled players")
 	# 選手流動の沈黙/過熱検知。これが無いと「FA宣言が15年間全ゼロ」でも health が pass になる。
 	# 平均0 (完全停止) は warn 側に倒して可視化する (初期データのFA日数過少による立ち上がり遅れは許容)。
@@ -295,7 +303,17 @@ static func long_health(report: Dictionary) -> Dictionary:
 	_add_range_check(checks, "last10_batter_strikeout_rate", float(last_10.get("strikeout_rate", 0.0)), 0.175, 0.210, 0.150, 0.235, "last-10-year batter K%")
 	_add_range_check(checks, "last10_pitcher_walks_per_nine", float(last_10.get("walks_per_nine", 0.0)), 2.70, 3.60, 2.30, 4.00, "last-10-year pitcher BB/9")
 	_add_range_check(checks, "last10_pitcher_strikeouts_per_nine", float(last_10.get("strikeouts_per_nine", 0.0)), 6.80, 8.00, 6.20, 8.60, "last-10-year pitcher K/9")
-	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.0, 30.0, 23.0, 32.0, "last-10-year average age")
+	# NPB の全登録 (支配下+育成) は平均 25.93歳 (2026-07-23 の公式一覧)。長期オートプレイは 26.6 前後で
+	# 回ってきたので、そこから 1歳ずれたら warn、2歳で fail とする。旧帯 (25-30/23-32) は広すぎて
+	# 15年かけた高齢化がまるごと素通りしていた。
+	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.5, 27.5, 24.5, 28.5, "last-10-year average age")
+	# 平均年齢は若手の増減で相殺されるので、ベテランの積み上がりはシェアで直接見る。
+	# NPB 全登録の 35歳以上は 5.1% (同上)。長期オートプレイの実績が 6% 台なので 8% を warn、10% を fail。
+	var last10_active_players: float = float(last_10.get("active_players", 0.0))
+	var age_35_plus_share: float = 0.0
+	if last10_active_players > 0.0:
+		age_35_plus_share = float(last_10.get("age_35_plus", 0.0)) / last10_active_players
+	_add_max_check(checks, "last10_age_35_plus_share", age_35_plus_share, 0.08, 0.10, "last-10-year share of players aged 35+ (NPB registered: 5.1%)")
 	_add_range_check(checks, "last10_average_overall", float(last_10.get("average_overall", 0.0)), 66.0, 75.0, 62.0, 80.0, "last-10-year average overall")
 	_add_range_check(checks, "qualified_batters_mean", _dist_value(player_dist, "qualified_batters", "mean"), 48.0, 70.0, 36.0, 82.0, "qualified batters per year (NPB 2015-23: 48-61)")
 	_add_range_check(checks, "qualified_batter_average_p10_mean", _dist_value(player_dist, "batter_average_p10", "mean"), 0.225, 0.255, 0.200, 0.275, "yearly qualified-batter AVG p10")
