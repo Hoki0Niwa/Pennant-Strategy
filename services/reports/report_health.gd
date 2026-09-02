@@ -308,12 +308,10 @@ static func long_health(report: Dictionary) -> Dictionary:
 	# 15年かけた高齢化がまるごと素通りしていた。
 	_add_range_check(checks, "last10_average_age", float(last_10.get("average_age", 0.0)), 25.5, 27.5, 24.5, 28.5, "last-10-year average age")
 	# 平均年齢は若手の増減で相殺されるので、ベテランの積み上がりはシェアで直接見る。
-	# NPB 全登録の 35歳以上は 5.1% (同上)。長期オートプレイの実績が 6% 台なので 8% を warn、10% を fail。
-	var last10_active_players: float = float(last_10.get("active_players", 0.0))
-	var age_35_plus_share: float = 0.0
-	if last10_active_players > 0.0:
-		age_35_plus_share = float(last_10.get("age_35_plus", 0.0)) / last10_active_players
-	_add_max_check(checks, "last10_age_35_plus_share", age_35_plus_share, 0.08, 0.10, "last-10-year share of players aged 35+ (NPB registered: 5.1%)")
+	# **分母は支配下のみ**。本作の育成は 1球団 10人前後で NPB (全12球団 246人) の半分しかないため、
+	# 育成込みで比べると分母の差だけでシェアが動いて比較にならない。NPB 支配下の 35歳以上は 6.6%
+	# (2026-07-23 の公式一覧)。そこから +2pt を warn、+4pt を fail とする。
+	_add_max_check(checks, "last10_age_35_plus_share", float(last_10.get("controlled_age_35_plus_share", 0.0)), 0.085, 0.105, "last-10-year share of controlled players aged 35+ (NPB controlled roster: 6.6%)")
 	_add_range_check(checks, "last10_average_overall", float(last_10.get("average_overall", 0.0)), 66.0, 75.0, 62.0, 80.0, "last-10-year average overall")
 	_add_range_check(checks, "qualified_batters_mean", _dist_value(player_dist, "qualified_batters", "mean"), 48.0, 70.0, 36.0, 82.0, "qualified batters per year (NPB 2015-23: 48-61)")
 	_add_range_check(checks, "qualified_batter_average_p10_mean", _dist_value(player_dist, "batter_average_p10", "mean"), 0.225, 0.255, 0.200, 0.275, "yearly qualified-batter AVG p10")

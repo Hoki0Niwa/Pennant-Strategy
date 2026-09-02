@@ -44,24 +44,28 @@ func test_long_health_released_per_year_band_matches_npb() -> void:
 
 # ベテランの積み上がりはシェアで見る。平均年齢だけだと若手の増減で相殺されて動かず、
 # 15年かけた高齢化が素通りする (旧 last10_average_age の帯 25-30 がまさにそれだった)。
-# 帯は NPB 全登録の 35歳以上 5.1% を基準に、warn 8% / fail 10%。
+# 分母は**支配下のみ** (育成の人数が NPB と倍違うので全登録では比較にならない)。
+# 帯は NPB 支配下の 35歳以上 6.6% を基準に、warn 8.5% / fail 10.5%。
 func test_long_health_age_35_plus_share_band_tracks_npb() -> void:
-	assert_str(_age_35_plus_share_status(900.0, 50.0)).is_equal("pass")
-	assert_str(_age_35_plus_share_status(900.0, 80.0)).is_equal("warn")
-	assert_str(_age_35_plus_share_status(900.0, 95.0)).is_equal("fail")
+	assert_str(_age_35_plus_share_status(0.066)).is_equal("pass")
+	assert_str(_age_35_plus_share_status(0.097)).is_equal("warn")
+	assert_str(_age_35_plus_share_status(0.120)).is_equal("fail")
 
 
-# active_players が 0 の (= 世界が空の) レポートでもゼロ除算せず pass 側に倒れること。
+# 集計キーが無い (= 世界が空の) レポートでも例外を出さず pass 側に倒れること。
 func test_long_health_age_35_plus_share_handles_empty_roster() -> void:
-	assert_str(_age_35_plus_share_status(0.0, 0.0)).is_equal("pass")
+	var health: Dictionary = ReportHealth.long_health({"window_summaries": {"last_10_years": {}}})
+	for check_value in health.get("checks", []) as Array:
+		var check: Dictionary = check_value as Dictionary
+		if str(check.get("id", "")) == "last10_age_35_plus_share":
+			assert_str(str(check.get("status", ""))).is_equal("pass")
+			return
+	fail("last10_age_35_plus_share check missing")
 
 
-func _age_35_plus_share_status(active_players: float, age_35_plus: float) -> String:
+func _age_35_plus_share_status(share: float) -> String:
 	var health: Dictionary = ReportHealth.long_health({
-		"window_summaries": {"last_10_years": {
-			"active_players": active_players,
-			"age_35_plus": age_35_plus,
-		}},
+		"window_summaries": {"last_10_years": {"controlled_age_35_plus_share": share}},
 	})
 	for check_value in health.get("checks", []) as Array:
 		var check: Dictionary = check_value as Dictionary

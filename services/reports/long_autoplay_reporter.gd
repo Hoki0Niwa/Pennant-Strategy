@@ -1199,6 +1199,7 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	}
 	var veteran_regular_30s: int = 0
 	var veteran_bench_35_plus: int = 0
+	var controlled_age_35_plus: int = 0
 	var by_team: Dictionary = {}
 	var by_team_controlled: Dictionary = {}
 	var by_team_development: Dictionary = {}
@@ -1276,6 +1277,11 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 			age_bands["age_30_34"] = int(age_bands["age_30_34"]) + 1
 		else:
 			age_bands["age_35_plus"] = int(age_bands["age_35_plus"]) + 1
+		# 支配下だけの 35歳以上。年齢構成を NPB と比べるときは**支配下同士で比べる** —
+		# 本作の育成は 1球団 10人前後で NPB (全12球団 246人) の半分しかなく、育成を分母に混ぜると
+		# 若年層のぶんだけ機械的にシェアが変わって比較にならない。NPB 支配下の 35歳以上は 6.6%。
+		if not player.development_player and player.age >= 35:
+			controlled_age_35_plus += 1
 		if player.age >= 30 and player.age <= 39 and overall >= 60:
 			veteran_regular_30s += 1
 		if player.age >= 35 and overall >= 45 and overall < 60:
@@ -1361,6 +1367,9 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		"age_bands": age_bands,
 		"veteran_regular_30s": veteran_regular_30s,
 		"veteran_bench_35_plus": veteran_bench_35_plus,
+		# NPB 支配下 (6.6%) と直接比べるための、育成を除いた 35歳以上の人数とシェア。
+		"controlled_age_35_plus": controlled_age_35_plus,
+		"controlled_age_35_plus_share": _round_float(_safe_div(controlled_age_35_plus, controlled_players), 4),
 		"ability_averages": {
 			"batters": _finalize_ability_accumulator(batter_abilities),
 			"pitchers": _finalize_ability_accumulator(pitcher_abilities),
@@ -1468,6 +1477,8 @@ func _summarize_rows(rows: Array) -> Dictionary:
 		"age_35_plus": _round_float(_mean_nested(rows, ["roster_before_season", "age_bands", "age_35_plus"]), 2),
 		"veteran_regular_30s": _round_float(_mean_nested(rows, ["roster_before_season", "veteran_regular_30s"]), 2),
 		"veteran_bench_35_plus": _round_float(_mean_nested(rows, ["roster_before_season", "veteran_bench_35_plus"]), 2),
+		"controlled_age_35_plus": _round_float(_mean_nested(rows, ["roster_before_season", "controlled_age_35_plus"]), 2),
+		"controlled_age_35_plus_share": _round_float(_mean_nested(rows, ["roster_before_season", "controlled_age_35_plus_share"]), 4),
 		"average_overall": _round_float(_mean_nested(rows, ["roster_before_season", "average_overall"]), 2),
 		"average_batter_overall": _round_float(_mean_nested(rows, ["roster_before_season", "average_batter_overall"]), 2),
 		"average_pitcher_overall": _round_float(_mean_nested(rows, ["roster_before_season", "average_pitcher_overall"]), 2),

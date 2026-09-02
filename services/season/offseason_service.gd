@@ -537,16 +537,21 @@ static func _release_role_key(player: PSPlayer) -> String:
 	return "fielder:%d" % (player.position if player != null else 0)
 
 
-# 役割スロットは来季も実際に担える根拠のある選手だけが占有する。30歳以上で当季出場ゼロなら
+# 役割スロットは来季も実際に担える根拠のある選手だけが占有する。30歳以上で当季の稼働が
+# 少出場ライン (SLOT_CLAIM_USAGE_SATURATION = 20試合 / 3.25先発 / 7.5救援登板 相当) に届かないなら、
 # projected_value の高低にかかわらず depth chart 上は surplus とするが、放出には代替水準未満も必要。
 # シーズンの過半を怪我で欠場した場合と成績レコード欠損時は、誤判定を避けてスロット資格を残す。
+#
+# **一軍の起用量に依存しない比率で見る。** 「1試合でも出ていれば占有」だと、一軍出場者数が
+# 増えた局面 (故障の実NPB較正と二軍からの昇降格で 33.4 → 58.0人/球団) で30代が軒並み
+# スロット保持者になり、放出が若手へ逃げる。実測では放出セットの平均年齢が、価値順で切った場合の
+# 34.21歳に対し 28.93歳まで下がり、35歳以上の在籍が NPB 比 2倍に積み上がっていた。
 static func _can_claim_release_slot(player: PSPlayer, record: PSPlayerSeasonRecord) -> bool:
 	if player == null or player.age < 30 or record == null:
 		return true
 	if record.season_injury_days >= ReleaseValueProjector.INJURY_EXCUSE_FULL_DAYS:
 		return true
-	var games: int = record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
-	return games > 0
+	return ReleaseValueProjector.usage_saturation(record) >= ReleaseValueProjector.SLOT_CLAIM_USAGE_SATURATION
 
 
 # **支配下 (国内・非外国人) 限定の開幕目標**。外国人の去就は戦力外通告ではなく外国人契約市場が
@@ -1151,7 +1156,7 @@ static func expected_development_score_bonus(age: int, horizon: int = 6, _positi
 
 
 # その年齢の1オフシーズンで期待される評価スコアの増減 (value 単位)。成長種別の確率 (%) に
-# 種別ごとの score 影響量を掛けた期待値。目安: 25歳以下 +1.6 / 30歳 ±0 / 35歳 -2.0 / 40歳以上 -3.3。
+# 種別ごとの score 影響量を掛けた期待値。目安: 25歳以下 +1.6 / 30歳 -0.3 / 35歳 -2.7 / 40歳以上 -4.0。
 static func _growth_year_score_delta(age: int) -> float:
 	var probabilities: Dictionary = _growth_kind_probabilities(age)
 	var year_bonus: float = 0.0
@@ -1671,38 +1676,44 @@ static func _growth_curve_age(age: int) -> int:
 	return 19 if age <= 18 else age
 
 
+# 30歳以降の衰えの配分。停滞を削って劣化・大幅劣化へ寄せてある。
+# **較正の根拠**: 30→35歳の累積は z で -0.47σ (overall 換算 約 -5点)。1キーあたりの期待 z は
+# 劣化 -0.081 / 大幅劣化 -0.198 (`_growth_delta_z` の分布) に `GROWTH_DELTA_SCALE` を掛けた値。
+# これより緩いと 35歳以上が一軍レギュラーを張り続け、支配下の 35歳以上シェアが NPB (6.6%) の
+# 1.5倍まで積み上がる ([[project_long_autoplay_r3_r4_baseline]])。
+# 各年齢で 覚醒+成長+停滞+劣化+大幅劣化 = 100 になるよう、4つの関数をセットで直すこと。
 static func _major_decline_chance(age: int) -> float:
 	if age >= 40:
-		return 35.0
+		return 52.0
 	match age:
 		29:
 			return 1.0
 		30:
-			return 3.0
-		31:
 			return 5.0
-		32:
+		31:
 			return 8.0
+		32:
+			return 12.0
 		33:
-			return 13.0
-		34:
-			return 15.0
-		35:
 			return 18.0
-		36:
-			return 20.0
-		37:
+		34:
 			return 23.0
+		35:
+			return 28.0
+		36:
+			return 33.0
+		37:
+			return 38.0
 		38:
-			return 27.0
+			return 42.0
 		39:
-			return 30.0
+			return 47.0
 	return 0.0
 
 
 static func _decline_chance(age: int) -> float:
 	if age >= 40:
-		return 60.0
+		return 45.0
 	match age:
 		27:
 			return 5.0
@@ -1711,25 +1722,31 @@ static func _decline_chance(age: int) -> float:
 		29:
 			return 19.0
 		30:
-			return 24.0
+			return 28.0
 		31:
-			return 31.0
+			return 36.0
 		32:
-			return 37.0
-		33:
 			return 42.0
+		33:
+			return 48.0
 		34:
-			return 47.0
+			return 51.0
 		35:
+			return 53.0
+		36:
+			return 57.0
+		37:
+			return 55.0
+		38:
+			return 53.0
+		39:
 			return 50.0
-		36, 37, 38, 39:
-			return 65.0
 	return 0.0
 
 
 static func _stagnation_chance(age: int) -> float:
 	if age >= 40:
-		return 5.0
+		return 3.0
 	match age:
 		23, 24, 25:
 			return 39.0
@@ -1737,26 +1754,28 @@ static func _stagnation_chance(age: int) -> float:
 			return 45.0
 		28:
 			return 49.0
-		29, 30:
+		29:
 			return 50.0
+		30:
+			return 47.0
 		31:
-			return 49.0
+			return 44.0
 		32:
-			return 45.0
+			return 38.0
 		33:
-			return 40.0
-		34:
-			return 35.0
-		35:
 			return 30.0
+		34:
+			return 24.0
+		35:
+			return 18.0
 		36:
-			return 14.0
+			return 10.0
 		37:
-			return 12.0
+			return 7.0
 		38:
-			return 8.0
-		39:
 			return 5.0
+		39:
+			return 3.0
 	return 40.0
 
 
@@ -1773,20 +1792,18 @@ static func _growth_chance(age: int) -> float:
 		29:
 			return 29.0
 		30:
-			return 23.0
+			return 20.0
 		31:
-			return 15.0
+			return 12.0
 		32:
-			return 10.0
+			return 8.0
 		33:
-			return 5.0
+			return 4.0
 		34:
-			return 3.0
-		35:
 			return 2.0
-		36:
+		35:
 			return 1.0
-		37, 38, 39:
+		36, 37, 38, 39:
 			return 0.0
 	return 59.0
 

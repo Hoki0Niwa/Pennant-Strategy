@@ -44,6 +44,14 @@ const SALARY_COST_WEIGHT: float = 0.4
 # を 1.0 とする比率なので、0.75 は 60試合 / 10先発 / 23登板 相当)。役割スロットの第1パス資格に使う。
 # 下げるとベンチ層までレギュラー扱いになり、上げると準レギュラーが将来価値順のパスへ落ちる。
 const REGULAR_USAGE_SATURATION: float = 0.75
+# 「来季もその役割を担える根拠がある」とみなす最低稼働 (`_can_claim_release_slot` の30歳以上判定)。
+# 0.25 は 20試合 / 3.25先発 / 7.5救援登板 相当で、`OffseasonService` の少出場引退ライン
+# (RETIREMENT_LOW_FIELDER_MAX=20 / STARTER=3 / RELIEVER=10) と同じ水準に合わせてある。
+# **絶対試合数ではなく飽和比で持つ理由**: 一軍の起用量そのものが可変で、実際に
+# 一軍出場者が 33.4 → 58.0人/球団へ増えたときに「1試合でも出れば占有」だと
+# 30代が軒並みスロット保持者になり、放出が若手へ逃げた ([[project_release_value_projector]])。
+# 上げると30代の放出が増え、下げると控えベテランが残りやすくなる。
+const SLOT_CLAIM_USAGE_SATURATION: float = 0.25
 
 
 # {"current","growth","usage_evidence","injury_penalty","salary_penalty","total"} を返す。
