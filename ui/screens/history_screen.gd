@@ -628,7 +628,8 @@ func _draw_post_card(card: Rect2, row: Variant) -> void:
 # カード下部に各試合のスコアチップを中央寄せで並べる (top 視点、勝=緑/敗=赤/分=灰)。
 func _draw_breakdown(card: Rect2, top_id: int, games: Array, advantage: int) -> void:
 	var chips: Array = []
-	if advantage > 0:
+	# アドバンテージは 1勝 = 1チップ (2026年規定では最大2勝ぶん並ぶ)。
+	for _i in range(advantage):
 		chips.append({"label": "AD", "col": AMBER})
 	for game_value in games:
 		var g: Dictionary = game_value as Dictionary

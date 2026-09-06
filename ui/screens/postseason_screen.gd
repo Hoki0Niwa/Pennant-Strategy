@@ -177,6 +177,10 @@ func _draw_series_card(rect: Rect2, stage_key: String, post: PSPostseasonResult)
 	var note: String = "%d勝先取" % win_target
 	if advantage > 0:
 		note += "   上位 +%d勝ｱﾄﾞﾊﾞﾝﾃｰｼﾞ" % advantage
+	# 2026年規定で2勝アドバンテージへ引き上げられた場合は、その条件 (ゲーム差/勝率) を添える。
+	var advantage_reason: String = str(series.get("advantage_reason", ""))
+	if bool(series.get("advantage_extended", false)) and not advantage_reason.is_empty():
+		note += " (%s)" % advantage_reason
 	_text(note, Vector2(rect.position.x + 16, ty + 84.0), 11, FAINT, rect.size.x - 28)
 
 	_draw_series_game_chips(rect, series, top_id)
@@ -206,13 +210,14 @@ func _draw_series_game_chips(rect: Rect2, series: Dictionary, top_id: int) -> vo
 	var gy: float = rect.end.y - 34.0
 	var gx: float = rect.position.x + 14.0
 	var avail: float = rect.size.x - 28.0
-	var count: int = games.size() + (1 if advantage > 0 else 0)
+	# アドバンテージは 1勝 = 1チップ (2026年規定では最大2勝ぶん並ぶ)。
+	var count: int = games.size() + advantage
 	if count <= 0:
 		_text("未消化", Vector2(gx, gy + 18.0), 11, MUTED)
 		return
 	var chip_w: float = clampf(avail / float(count) - 3.0, 28.0, 44.0)
 	var cx: float = gx
-	if advantage > 0:
+	for _i in range(advantage):
 		_round(Rect2(cx, gy, chip_w, 24.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.16), Color(BLUE.r, BLUE.g, BLUE.b, 0.4), 5)
 		_text("AD", Vector2(cx, gy + 17.0), 11, BLUE, chip_w, HORIZONTAL_ALIGNMENT_CENTER)
 		cx += chip_w + 3.0

@@ -1723,12 +1723,107 @@ func test_postseason_tie_break_advances_higher_seed() -> void:
 	assert_int(int(chal_series.get("winner_id", 0))).is_equal(20)
 
 
+# ポストシーズン: 残り試合で下位が上位を上回れなくなった時点で、規定試合数を残していても終了する。
+func test_postseason_series_ends_once_the_higher_seed_cannot_be_caught() -> void:
+	# CSファースト (規定3試合)。2試合目まで 1勝0敗1分 → 残り1試合で挑戦者は最大1勝 = 同勝数どまり。
+	var clinched: Dictionary = {
+		"top_id": 10, "challenger_id": 20, "win_target": 2, "advantage_wins": 0,
+		"games": [{"game_num": 1}, {"game_num": 2}], "top_wins": 1, "challenger_wins": 0, "completed": false,
+	}
+	PostseasonService.play_series_game(null, clinched, 1)
+	assert_bool(bool(clinched.get("completed", false))).is_true()
+	assert_int(int(clinched.get("winner_id", 0))).is_equal(10)
+	assert_int((clinched.get("games", []) as Array).size()).is_equal(2)
+
+	# 同じ 1勝0敗でも1試合目終了時点なら、挑戦者が残り2試合で上回れるので続行する。
+	var open_series: Dictionary = {
+		"top_id": 10, "challenger_id": 20, "win_target": 2, "advantage_wins": 0,
+		"games": [{"game_num": 1}], "top_wins": 1, "challenger_wins": 0, "completed": false,
+	}
+	assert_bool(PostseasonService._series_decided(open_series, 1, 0, 1)).is_false()
+
+	# 日本シリーズ (extension) は同勝数での勝ち抜けがないので、この打ち切りをしない。
+	var js_series: Dictionary = {
+		"top_id": 10, "challenger_id": 20, "win_target": 4, "advantage_wins": 0, "extension": true,
+		"games": [], "top_wins": 3, "challenger_wins": 0, "completed": false,
+	}
+	assert_bool(PostseasonService._series_decided(js_series, 3, 0, 6)).is_false()
+
+
+# CSファイナルのアドバンテージ規定 (2026年改定)。ゲーム差10以上または挑戦者の勝率5割未満で
+# 2勝アドバンテージ・5勝先取 (7試合) へ引き上がる。旧規定オプションでは常に1勝・4勝先取。
+func test_cs_final_advantage_follows_the_2026_rule() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var top_id: int = (GameDb.teams[0] as PSTeam).id
+	var challenger_id: int = (GameDb.teams[1] as PSTeam).id
+	var top_stats: PSStats = season.standings[top_id] as PSStats
+	var challenger_stats: PSStats = season.standings[challenger_id] as PSStats
+
+	# 通常 (ゲーム差5.0 / 挑戦者は勝率5割超) → 1勝アドバンテージ・4勝先取。
+	top_stats.games = 143
+	top_stats.wins = 80
+	top_stats.losses = 60
+	top_stats.draws = 3
+	challenger_stats.games = 143
+	challenger_stats.wins = 75
+	challenger_stats.losses = 65
+	challenger_stats.draws = 3
+	var standard: Dictionary = PostseasonService.cs_final_terms(season, top_id, challenger_id, PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026)
+	assert_float(PostseasonService.cs_final_game_gap(top_stats, challenger_stats)).is_equal_approx(5.0, 0.001)
+	assert_int(int(standard["win_target"])).is_equal(PostseasonService.CS2_WIN_TARGET)
+	assert_int(int(standard["advantage_wins"])).is_equal(PostseasonService.CS2_ADVANTAGE)
+	assert_bool(bool(standard["extended"])).is_false()
+
+	# ゲーム差10.0 (勝率は5割超) → 2勝アドバンテージ・5勝先取。
+	challenger_stats.wins = 70
+	challenger_stats.losses = 70
+	var by_gap: Dictionary = PostseasonService.cs_final_terms(season, top_id, challenger_id, PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026)
+	assert_int(int(by_gap["win_target"])).is_equal(PostseasonService.CS2_EXTENDED_WIN_TARGET)
+	assert_int(int(by_gap["advantage_wins"])).is_equal(PostseasonService.CS2_EXTENDED_ADVANTAGE)
+	assert_bool(bool(by_gap["extended"])).is_true()
+
+	# ゲーム差が10未満 (5.0) でも、挑戦者が勝率5割未満 (借金あり) なら引き上げる。
+	top_stats.wins = 74
+	top_stats.losses = 66
+	challenger_stats.wins = 69
+	challenger_stats.losses = 71
+	assert_float(PostseasonService.cs_final_game_gap(top_stats, challenger_stats)).is_equal_approx(5.0, 0.001)
+	var by_rate: Dictionary = PostseasonService.cs_final_terms(season, top_id, challenger_id, PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026)
+	assert_int(int(by_rate["advantage_wins"])).is_equal(PostseasonService.CS2_EXTENDED_ADVANTAGE)
+	assert_bool(bool(by_rate["extended"])).is_true()
+
+	# 旧規定オプションでは同じ条件でも 1勝アドバンテージ・4勝先取のまま。
+	var legacy: Dictionary = PostseasonService.cs_final_terms(season, top_id, challenger_id, PSPostseasonResult.CS_ADVANTAGE_RULE_LEGACY)
+	assert_int(int(legacy["win_target"])).is_equal(PostseasonService.CS2_WIN_TARGET)
+	assert_int(int(legacy["advantage_wins"])).is_equal(PostseasonService.CS2_ADVANTAGE)
+	assert_bool(bool(legacy["extended"])).is_false()
+
+	# 挑戦者が確定した時点でシリーズへ反映され、消化前の top_wins もアドバンテージ分になる。
+	var post: PSPostseasonResult = PostseasonService.build_initial_state(season, GameDb.teams, PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026)
+	var final_series: Dictionary = post.cs2_league1
+	final_series["top_id"] = top_id
+	final_series["challenger_id"] = challenger_id
+	PostseasonService._ensure_series_ready(post, "cs2_league1", final_series, season)
+	assert_int(int(final_series.get("win_target", 0))).is_equal(PostseasonService.CS2_EXTENDED_WIN_TARGET)
+	assert_int(int(final_series.get("advantage_wins", 0))).is_equal(PostseasonService.CS2_EXTENDED_ADVANTAGE)
+	assert_int(int(final_series.get("top_wins", 0))).is_equal(PostseasonService.CS2_EXTENDED_ADVANTAGE)
+	# 規定試合数は 2*5-2-1 = 7 (通常規定なら 2*4-1-1 = 6)。7試合目の日程枠も用意されている。
+	assert_int(PostseasonService.series_max_games(final_series)).is_equal(7)
+	assert_int(PostseasonService.series_max_games(post.cs2_league2)).is_equal(6)
+	assert_int(PostseasonService._series_next_game_day(final_series, season, 7)).is_greater(0)
+
+	# 規定は保存/復元をまたいで保持される。
+	var restored: PSPostseasonResult = PSPostseasonResult.from_dict(post.to_dict())
+	assert_str(restored.cs_advantage_rule).is_equal(PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026)
+
+
 func test_postseason_calendar_slots_are_scheduled() -> void:
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	var post: PSPostseasonResult = PostseasonService.build_initial_state(season, GameDb.teams)
 
 	assert_array(post.cs1_league1.get("scheduled_dates", []) as Array).is_equal(["2026-10-10", "2026-10-11", "2026-10-12"])
-	assert_array(post.cs2_league1.get("scheduled_dates", []) as Array).is_equal(["2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"])
+	# CSファイナルの枠は常に最大試合数 (2勝アドバンテージ時の7試合) ぶん確保する。
+	assert_array(post.cs2_league1.get("scheduled_dates", []) as Array).is_equal(["2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19", "2026-10-20"])
 	assert_array(post.japan_series.get("scheduled_dates", []) as Array).is_equal(["2026-10-24", "2026-10-25", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-31", "2026-11-01"])
 	assert_str(str(post.japan_series.get("first_home_league", ""))).is_equal(PostseasonService.FIRST_LEAGUE)
 	assert_array(post.japan_series.get("home_sides", []) as Array).is_equal([

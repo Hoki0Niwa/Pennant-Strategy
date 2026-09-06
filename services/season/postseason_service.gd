@@ -6,10 +6,20 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 const CS1_WIN_TARGET: int = 2  # 3戦先勝(2勝)
 const CS2_WIN_TARGET: int = 4  # 6戦中4勝(1位は1勝アドバンテージ)
 const CS2_ADVANTAGE: int = 1
+# 2026年規定の加算アドバンテージ。1位とファースト勝者のゲーム差が CS2_EXTENDED_GAME_GAP 以上、
+# またはファースト勝者の勝率が CS2_EXTENDED_WIN_RATE 未満のとき、CSファイナルは
+# 7戦中5勝 (1位に2勝アドバンテージ) になる。
+const CS2_EXTENDED_WIN_TARGET: int = 5
+const CS2_EXTENDED_ADVANTAGE: int = 2
+const CS2_EXTENDED_GAME_GAP: float = 10.0
+const CS2_EXTENDED_WIN_RATE: float = 0.5
+# CSファイナルの日程枠は常に最大試合数 (2勝アドバンテージ時の7) を確保する。
+# 1勝アドバンテージなら規定6試合で打ち切られ、7枠目は使われない。
+const CS2_SCHEDULE_SLOTS: int = 7
 const JS_WIN_TARGET: int = 4   # BO7
 const MAX_SAFETY_GAMES: int = 15  # 引き分け連続でも無限ループ防止
 const POSTSEASON_STATS_VERSION: int = 1
-const POSTSEASON_SCHEDULE_VERSION: int = 1
+const POSTSEASON_SCHEDULE_VERSION: int = 2
 const POSTSEASON_MONTH: int = 10
 const WEEKDAY_WEDNESDAY: int = 3
 const WEEKDAY_SATURDAY: int = 6
@@ -19,10 +29,11 @@ const HOME_SIDE_TOP: String = "top"
 const HOME_SIDE_CHALLENGER: String = "challenger"
 
 
-static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonResult:
+static func build_initial_state(season: PSSeason, teams: Array, cs_advantage_rule: String = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026) -> PSPostseasonResult:
 	var result: PSPostseasonResult = PSPostseasonResult.new()
 	result.year = season.year
 	result.season_number = season.season_number
+	result.cs_advantage_rule = PSPostseasonResult.normalize_cs_advantage_rule(cs_advantage_rule)
 
 	var by_league: Dictionary = _league_standings(season, teams)
 	var league1_ranked: Array = by_league.get("league1", []) as Array
@@ -36,6 +47,8 @@ static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonR
 		var p2: PSTeam = league2_ranked[1] as PSTeam
 		var p3: PSTeam = league2_ranked[2] as PSTeam
 		result.cs1_league2 = PSPostseasonResult.make_pending_series(p2.id, p3.id, CS1_WIN_TARGET, 0)
+	# CSファイナルの勝敗条件は挑戦者 (ファースト勝者) が決まってから確定する。ここでは通常規定
+	# (1勝アドバンテージ/4勝先取) で作り、_apply_cs_final_terms が充填時に上書きする。
 	if league1_ranked.size() >= 1:
 		var c1: PSTeam = league1_ranked[0] as PSTeam
 		result.cs2_league1 = PSPostseasonResult.make_pending_series(c1.id, 0, CS2_WIN_TARGET, CS2_ADVANTAGE)
@@ -48,6 +61,75 @@ static func build_initial_state(season: PSSeason, teams: Array) -> PSPostseasonR
 	result.japan_series = japan_series
 	_apply_postseason_schedule(result, season)
 	return result
+
+
+# ============================================================ CSファイナルのアドバンテージ規定
+#
+# 2026年規定 (npb2026): 通常は1勝アドバンテージ・6試合・4勝先取。ただし
+#   (a) リーグ1位とファースト勝者のゲーム差が10以上、または
+#   (b) ファースト勝者のレギュラーシーズン勝率が5割未満
+# のいずれかなら 2勝アドバンテージ・7試合・5勝先取へ引き上げる。
+# 旧規定 (legacy): 条件によらず常に1勝アドバンテージ・6試合・4勝先取。
+# 判定はレギュラーシーズンの成績 (season.standings) で行うため、CSファースト勝者が
+# 確定した時点で一度だけ評価すればよい。
+static func cs_final_terms(season: PSSeason, top_id: int, challenger_id: int, rule: String) -> Dictionary:
+	var standard: Dictionary = {
+		"win_target": CS2_WIN_TARGET,
+		"advantage_wins": CS2_ADVANTAGE,
+		"extended": false,
+		"reason": "",
+	}
+	if PSPostseasonResult.normalize_cs_advantage_rule(rule) != PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026:
+		return standard
+	if season == null or top_id <= 0 or challenger_id <= 0:
+		return standard
+	var top_stats: PSStats = season.standings.get(top_id, null) as PSStats
+	var challenger_stats: PSStats = season.standings.get(challenger_id, null) as PSStats
+	if top_stats == null or challenger_stats == null:
+		return standard
+
+	var extended: Dictionary = {
+		"win_target": CS2_EXTENDED_WIN_TARGET,
+		"advantage_wins": CS2_EXTENDED_ADVANTAGE,
+		"extended": true,
+		"reason": "",
+	}
+	var game_gap: float = cs_final_game_gap(top_stats, challenger_stats)
+	if game_gap >= CS2_EXTENDED_GAME_GAP:
+		extended["reason"] = "ゲーム差%.1f" % game_gap
+		return extended
+	var challenger_win_rate: float = challenger_stats.win_rate()
+	if challenger_win_rate < CS2_EXTENDED_WIN_RATE:
+		extended["reason"] = "挑戦者の勝率%.3f" % challenger_win_rate
+		return extended
+	return standard
+
+
+# ゲーム差 = ((上位の勝 - 下位の勝) + (下位の負 - 上位の負)) / 2。順位表の「差」列と同じ式。
+static func cs_final_game_gap(top_stats: PSStats, challenger_stats: PSStats) -> float:
+	if top_stats == null or challenger_stats == null:
+		return 0.0
+	return float((top_stats.wins - challenger_stats.wins) + (challenger_stats.losses - top_stats.losses)) / 2.0
+
+
+# 挑戦者が確定した CSファイナルへ規定を適用する。まだ1試合も消化していない前提で、
+# アドバンテージ分を top_wins の初期値に入れ直す。
+static func _apply_cs_final_terms(postseason: PSPostseasonResult, series: Dictionary, season: PSSeason) -> void:
+	if series.is_empty() or bool(series.get("cs_terms_applied", false)):
+		return
+	var top_id: int = int(series.get("top_id", 0))
+	var challenger_id: int = int(series.get("challenger_id", 0))
+	if top_id <= 0 or challenger_id <= 0:
+		return
+	var rule: String = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026 if postseason == null else postseason.cs_advantage_rule
+	var terms: Dictionary = cs_final_terms(season, top_id, challenger_id, rule)
+	series["win_target"] = int(terms["win_target"])
+	series["advantage_wins"] = int(terms["advantage_wins"])
+	series["advantage_extended"] = bool(terms["extended"])
+	series["advantage_reason"] = str(terms["reason"])
+	series["cs_terms_applied"] = true
+	if (series.get("games", []) as Array).is_empty():
+		series["top_wins"] = int(terms["advantage_wins"])
 
 
 static func advance_stage(postseason: PSPostseasonResult, stage_key: String, season: PSSeason) -> Dictionary:
@@ -63,11 +145,13 @@ static func advance_stage(postseason: PSPostseasonResult, stage_key: String, sea
 		if w == 0:
 			return {"ok": false, "message": "CS1 第1リーグが未消化です"}
 		s["challenger_id"] = w
+		_apply_cs_final_terms(postseason, s, season)
 	elif stage_key == "cs2_league2":
 		var w2: int = int(postseason.cs1_league2.get("winner_id", 0))
 		if w2 == 0:
 			return {"ok": false, "message": "CS1 第2リーグが未消化です"}
 		s["challenger_id"] = w2
+		_apply_cs_final_terms(postseason, s, season)
 	elif stage_key == "japan_series":
 		var c: int = int(postseason.cs2_league1.get("winner_id", 0))
 		var p: int = int(postseason.cs2_league2.get("winner_id", 0))
@@ -138,6 +222,9 @@ static func _ensure_postseason_schedule(postseason: PSPostseasonResult, season: 
 		if not series.has("scheduled_days") or (series.get("scheduled_days", []) as Array).is_empty():
 			_apply_postseason_schedule(postseason, season)
 			return
+		if int(series.get("schedule_version", 0)) != POSTSEASON_SCHEDULE_VERSION:
+			_apply_postseason_schedule(postseason, season)
+			return
 
 
 static func _apply_postseason_schedule(postseason: PSPostseasonResult, season: PSSeason) -> void:
@@ -161,18 +248,15 @@ static func _apply_postseason_schedule(postseason: PSPostseasonResult, season: P
 		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
 		season
 	)
-	_set_series_schedule(
-		postseason.cs2_league1,
-		_dates_from_offsets(cs2_start, [0, 1, 2, 3, 4, 5]),
-		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
-		season
-	)
-	_set_series_schedule(
-		postseason.cs2_league2,
-		_dates_from_offsets(cs2_start, [0, 1, 2, 3, 4, 5]),
-		[HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP, HOME_SIDE_TOP],
-		season
-	)
+	# CSファイナルは全試合が1位球団の本拠地開催。枠は常に7試合分用意し、規定試合数を超えた
+	# 分は消化されない (1勝アドバンテージなら6試合で打ち切り)。
+	var cs2_offsets: Array = []
+	var cs2_home_sides: Array = []
+	for i in range(CS2_SCHEDULE_SLOTS):
+		cs2_offsets.append(i)
+		cs2_home_sides.append(HOME_SIDE_TOP)
+	_set_series_schedule(postseason.cs2_league1, _dates_from_offsets(cs2_start, cs2_offsets), cs2_home_sides, season)
+	_set_series_schedule(postseason.cs2_league2, _dates_from_offsets(cs2_start, cs2_offsets), cs2_home_sides, season)
 	_set_series_schedule(
 		postseason.japan_series,
 		_dates_from_offsets(js_start, [0, 1, 3, 4, 5, 7, 8]),
@@ -221,7 +305,7 @@ static func _next_scheduled_day(postseason: PSPostseasonResult, season: PSSeason
 		var series: Dictionary = postseason.stage_dict(stage_key)
 		if series.is_empty() or bool(series.get("completed", false)):
 			continue
-		if not _ensure_series_ready(postseason, stage_key, series):
+		if not _ensure_series_ready(postseason, stage_key, series, season):
 			continue
 		postseason.set_stage(stage_key, series)
 		var game_num: int = (series.get("games", []) as Array).size() + 1
@@ -356,7 +440,7 @@ static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, pe
 		var s: Dictionary = postseason.stage_dict(stage_key)
 		if s.is_empty() or bool(s.get("completed", false)):
 			continue
-		if not _ensure_series_ready(postseason, stage_key, s):
+		if not _ensure_series_ready(postseason, stage_key, s, season):
 			continue
 		var next_game_day: int = _series_next_game_day(s, season, int((s.get("games", []) as Array).size()) + 1)
 		if next_game_day != target_day:
@@ -385,14 +469,17 @@ static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, pe
 
 
 # CS2 / 日本シリーズの対戦カードを前段の勝者で充填する。両者が確定したら true。
-static func _ensure_series_ready(postseason: PSPostseasonResult, stage_key: String, s: Dictionary) -> bool:
+# CSファイナルは挑戦者が入った時点でアドバンテージ規定 (勝敗条件) も確定させる。
+static func _ensure_series_ready(postseason: PSPostseasonResult, stage_key: String, s: Dictionary, season: PSSeason = null) -> bool:
 	match stage_key:
 		"cs2_league1":
 			if int(s.get("challenger_id", 0)) == 0:
 				s["challenger_id"] = int(postseason.cs1_league1.get("winner_id", 0))
+			_apply_cs_final_terms(postseason, s, season)
 		"cs2_league2":
 			if int(s.get("challenger_id", 0)) == 0:
 				s["challenger_id"] = int(postseason.cs1_league2.get("winner_id", 0))
+			_apply_cs_final_terms(postseason, s, season)
 		"japan_series":
 			var league1_winner: int = int(postseason.cs2_league1.get("winner_id", 0))
 			var league2_winner: int = int(postseason.cs2_league2.get("winner_id", 0))
@@ -416,16 +503,11 @@ static func play_series_game(season: PSSeason, series: Dictionary, day: int, tea
 	var challenger_id: int = int(series.get("challenger_id", 0))
 	if top_id <= 0 or challenger_id <= 0:
 		return {"ok": false, "message": "対戦カードが未確定です"}
-	var win_target: int = int(series.get("win_target", 4))
 	var advantage: int = int(series.get("advantage_wins", 0))
 	var top_wins: int = int(series.get("top_wins", advantage))
 	var challenger_wins: int = int(series.get("challenger_wins", 0))
 	var games: Array = series.get("games", []) as Array
-	# 規定試合数 = 必要試合数。引き分けが絡んで先勝に届かなくても、ここで打ち切る。
-	#   CSファースト: 2*2-0-1=3 / CSファイナル: 2*4-1-1=6。
-	# 日本シリーズ (extension=true) は打ち切らず決着まで延長戦。MAX_SAFETY_GAMES は無限ループ防止の保険。
-	var max_games: int = MAX_SAFETY_GAMES if bool(series.get("extension", false)) else (2 * win_target - advantage - 1)
-	if top_wins >= win_target or challenger_wins >= win_target or games.size() >= max_games:
+	if _series_decided(series, top_wins, challenger_wins, games.size()):
 		_finalize_series(series, top_id, challenger_id, top_wins, challenger_wins)
 		return {"ok": false, "completed": true}
 	var postseason_stats: Dictionary = _normalized_postseason_stats(series.get("postseason_stats", {}) as Dictionary)
@@ -464,10 +546,35 @@ static func play_series_game(season: PSSeason, series: Dictionary, day: int, tea
 	series["challenger_wins"] = challenger_wins
 	series["postseason_stats"] = postseason_stats
 
-	var completed: bool = top_wins >= win_target or challenger_wins >= win_target or games.size() >= max_games
+	var completed: bool = _series_decided(series, top_wins, challenger_wins, games.size())
 	if completed:
 		_finalize_series(series, top_id, challenger_id, top_wins, challenger_wins)
 	return {"ok": true, "completed": completed, "game": game_entry}
+
+
+# シリーズの規定試合数 (= 最大試合数)。アドバンテージ分だけ試合数が減る。
+#   CSファースト: 2*2-0-1=3 / CSファイナル: 2*4-1-1=6 (2勝アドバンテージなら 2*5-2-1=7)。
+# 日本シリーズ (extension=true) は打ち切らず決着まで延長戦。MAX_SAFETY_GAMES は無限ループ防止の保険。
+static func series_max_games(series: Dictionary) -> int:
+	if bool(series.get("extension", false)):
+		return MAX_SAFETY_GAMES
+	return 2 * int(series.get("win_target", 4)) - int(series.get("advantage_wins", 0)) - 1
+
+
+# シリーズの勝ち抜けが確定したか。先勝到達・規定試合数消化に加え、引き分けを挟んで
+# 残り試合では結果が覆らなくなった時点でも終了する (同勝数なら上位が勝ち抜けるため、
+# 下位が上位を「上回れない」ことが確定した時点で残り試合は行わない)。
+# 日本シリーズ (extension=true) は同勝数での勝ち抜けがないのでこの判定を行わない。
+static func _series_decided(series: Dictionary, top_wins: int, challenger_wins: int, games_played: int) -> bool:
+	var win_target: int = int(series.get("win_target", 4))
+	if top_wins >= win_target or challenger_wins >= win_target:
+		return true
+	if bool(series.get("extension", false)):
+		return false
+	var remaining: int = series_max_games(series) - games_played
+	if remaining <= 0:
+		return true
+	return challenger_wins + remaining <= top_wins or challenger_wins > top_wins + remaining
 
 
 # シリーズを完了扱いにし、勝者を確定する。先勝に届いていないイーブン時 (引き分けで規定試合数に到達)は

@@ -3,6 +3,15 @@ class_name PSPostseasonResult
 
 const STAGE_KEYS: Array = ["cs1_league1", "cs1_league2", "cs2_league1", "cs2_league2", "japan_series"]
 
+# CS ファイナルのアドバンテージ規定。ポストシーズン生成時に確定して以後このシリーズ全体で使う
+# (途中でオプションを変えても進行中のポストシーズンには影響しない)。
+#   npb2026 = 2026年規定。通常は1勝アドバンテージ/4勝先取だが、1位とファースト勝者の
+#             ゲーム差が10以上、またはファースト勝者が勝率5割未満なら2勝/5勝先取になる。
+#   legacy  = 旧規定。条件によらず常に1勝アドバンテージ/4勝先取。
+const CS_ADVANTAGE_RULE_NPB2026: String = "npb2026"
+const CS_ADVANTAGE_RULE_LEGACY: String = "legacy"
+const CS_ADVANTAGE_RULES: Array = [CS_ADVANTAGE_RULE_NPB2026, CS_ADVANTAGE_RULE_LEGACY]
+
 # 同時並行で進むステージのまとまり (1日に各グループ内の全シリーズを1試合ずつ消化する)。
 # CS ファースト (第1/第2リーグ) → CS ファイナル (第1/第2リーグ) → 日本シリーズ の順。
 const STAGE_GROUPS: Array = [
@@ -29,6 +38,8 @@ var japan_series: Dictionary = {}
 var champion_team_id: int = 0
 # 日単位消化のカウンタ。1日進めるごとに +1 し、その日に消化した試合へ付与する。
 var current_day: int = 0
+# このポストシーズンに適用する CS アドバンテージ規定 (CS_ADVANTAGE_RULE_*)。
+var cs_advantage_rule: String = CS_ADVANTAGE_RULE_NPB2026
 
 
 static func make_pending_series(top_id: int, challenger_id: int, win_target: int, advantage_wins: int) -> Dictionary:
@@ -89,6 +100,7 @@ func to_dict() -> Dictionary:
 		"japan_series": _slim_series(japan_series),
 		"champion_team_id": champion_team_id,
 		"current_day": current_day,
+		"cs_advantage_rule": cs_advantage_rule,
 	}
 
 
@@ -124,4 +136,10 @@ static func from_dict(data: Dictionary) -> PSPostseasonResult:
 	result.japan_series = (data.get("japan_series", {}) as Dictionary).duplicate(true)
 	result.champion_team_id = int(data.get("champion_team_id", 0))
 	result.current_day = int(data.get("current_day", 0))
+	result.cs_advantage_rule = normalize_cs_advantage_rule(data.get("cs_advantage_rule", CS_ADVANTAGE_RULE_NPB2026))
 	return result
+
+
+static func normalize_cs_advantage_rule(value: Variant) -> String:
+	var rule: String = str(value)
+	return rule if CS_ADVANTAGE_RULES.has(rule) else CS_ADVANTAGE_RULE_NPB2026

@@ -137,6 +137,9 @@ var auto_trade_for_user_team: bool = false
 # ドラフト完全ウェーバー制。ON のとき1巡目の入札・抽選を行わず、本指名の全巡を
 # 前年下位球団から順 (スネークなし) に指名する。次回のドラフト生成から適用。
 var draft_full_waiver: bool = false
+# CS ファイナルのアドバンテージ規定 (PSPostseasonResult.CS_ADVANTAGE_RULE_*)。オプション画面から操作。
+# 既定は 2026年規定 (条件付きで2勝アドバンテージ/5勝先取)。次回のポストシーズン生成から適用する。
+var cs_advantage_rule: String = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026
 # 進行消失を避けるため、新規ゲームの自動セーブは既定で有効。
 const DEFAULT_AUTO_SAVE_ENABLED: bool = true
 var auto_save_enabled: bool = DEFAULT_AUTO_SAVE_ENABLED
@@ -462,7 +465,7 @@ func start_postseason() -> Dictionary:
 	if current_postseason != null and PostseasonService.is_complete(current_postseason):
 		return {"ok": false, "message": "ポストシーズンは既に完了しています"}
 	if current_postseason == null:
-		current_postseason = PostseasonService.build_initial_state(current_season, GameDb.teams)
+		current_postseason = PostseasonService.build_initial_state(current_season, GameDb.teams, cs_advantage_rule)
 	# 表彰はレギュラーシーズン成績で計算するため、ポストシーズン開始時にスナップショットする。
 	if current_awards == null:
 		current_awards = AwardsService.calculate(current_season, GameDb.teams)
@@ -2018,6 +2021,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	auto_roster_swap_during_skip = bool(data.get("auto_roster_swap_during_skip", true))
 	auto_trade_for_user_team = bool(data.get("auto_trade_for_user_team", false))
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
+	cs_advantage_rule = PSPostseasonResult.normalize_cs_advantage_rule(data.get("cs_advantage_rule", PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026))
 	auto_save_enabled = bool(data.get("auto_save_enabled", DEFAULT_AUTO_SAVE_ENABLED))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
 	league_dh_enabled = {

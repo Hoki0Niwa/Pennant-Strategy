@@ -96,9 +96,9 @@ func _layout_rects() -> Dictionary:
 	var right_w: float = INNER_R - right_x
 
 	var save_panel: Rect2 = Rect2(left_x, CONTENT_TOP, left_w, 150.0)
-	# 高さはトグル行数 x 標準行高を基準にした目安 (自動トレード行・ドラフト完全ウェーバー制行は
-	# 説明が長く2行分になる分を加味)。
-	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 480.0)
+	# 高さはトグル行数 x 標準行高を基準にした目安 (自動トレード行・ドラフト完全ウェーバー制行・
+	# CSアドバンテージ行は説明が長く2行分になる分を加味)。
+	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 560.0)
 
 	var rects: Dictionary = {
 		"save_panel": save_panel,
@@ -170,6 +170,7 @@ func _toggle_rows() -> Array:
 		{"id": "dh1", "label": "第1リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("league1")},
 		{"id": "dh2", "label": "第2リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("league2")},
 		{"id": "draftwaiver", "label": "ドラフト完全ウェーバー制", "desc": "1巡目の入札・抽選を行わず、全巡とも前年下位球団から順に指名する(次回ドラフトから適用)。", "on": AppState.draft_full_waiver},
+		{"id": "csadvantage", "label": "CSアドバンテージ 2026年規定", "desc": "ゲーム差10以上、またはファースト勝者が勝率5割未満なら、CSファイナルを2勝アドバンテージ・7試合・5勝先取にする。無効時は旧規定(常に1勝・6試合・4勝先取)。次回のポストシーズンから適用。", "on": AppState.cs_advantage_rule == PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026},
 	]
 
 
@@ -437,6 +438,10 @@ func _on_toggle(id: String) -> void:
 		"draftwaiver":
 			AppState.draft_full_waiver = not AppState.draft_full_waiver
 			_save_and_status("ドラフト完全ウェーバー制設定を保存しました。")
+		"csadvantage":
+			var use_2026: bool = AppState.cs_advantage_rule != PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026
+			AppState.cs_advantage_rule = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026 if use_2026 else PSPostseasonResult.CS_ADVANTAGE_RULE_LEGACY
+			_save_and_status("CSアドバンテージ規定を保存しました。")
 	# チップの ON/OFF 表示とスタイルを更新するため、ボタンを作り直す。
 	_build_buttons()
 	queue_redraw()
