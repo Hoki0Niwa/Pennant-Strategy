@@ -22,6 +22,7 @@ const OFFSEASON_STEP_DRAFT_DEVELOPMENT: String = "draft_development"
 const OFFSEASON_STEP_RELEASED_MARKET: String = "released_market"
 const OFFSEASON_STEP_GENEKI_DRAFT: String = "geneki_draft"
 const OFFSEASON_STEP_FA_MARKET: String = "fa_market"
+const OFFSEASON_STEP_COMPENSATION: String = "compensation"
 const OFFSEASON_STEP_CONTRACT_YEARS: String = "contract_years"
 const OFFSEASON_STEP_FOREIGN_MARKET: String = "foreign_market"
 const OFFSEASON_STEP_CAMP: String = "camp"
@@ -42,6 +43,9 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	# 翌季を予算超過で開始することになる。
 	OFFSEASON_STEP_CONTRACT_RENEWAL,
 	OFFSEASON_STEP_FA_MARKET,
+	# 人的補償は FA市場の直後。プロテクト提出も指名もこのステップ内で完結させ、
+	# FA市場の state machine (1人ずつの交渉) には混ぜない。
+	OFFSEASON_STEP_COMPENSATION,
 	OFFSEASON_STEP_CONTRACT_YEARS,
 	OFFSEASON_STEP_FOREIGN_MARKET,
 	OFFSEASON_STEP_CAMP,
@@ -58,6 +62,8 @@ const OFFSEASON_PANEL_DRAFT: String = "draft"
 const OFFSEASON_PANEL_RELEASED_MARKET: String = "released_market"
 const OFFSEASON_PANEL_GENEKI_DRAFT: String = "geneki_draft"
 const OFFSEASON_PANEL_FA: String = "fa"
+const OFFSEASON_PANEL_COMPENSATION_PROTECT: String = "compensation_protect"
+const OFFSEASON_PANEL_COMPENSATION_PICK: String = "compensation_pick"
 const OFFSEASON_PANEL_FOREIGN: String = "foreign"
 const OFFSEASON_PANEL_FOREIGN_CONTRACT: String = "foreign_contract"
 const OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT: String = "foreign_contract_result"
@@ -101,6 +107,7 @@ var draft_state: Dictionary = {}
 var released_market_state: Dictionary = {}
 var geneki_draft_state: Dictionary = {}
 var fa_state: Dictionary = {}
+var compensation_state: Dictionary = {}
 var foreign_state: Dictionary = {}
 var camp_state: Dictionary = {}
 var contract_years_state: Dictionary = {}
@@ -301,6 +308,16 @@ func get_offseason_view_state() -> Dictionary:
 				active_panel = OFFSEASON_PANEL_FA
 				title = "FA市場"
 				interactive = true
+		OFFSEASON_STEP_COMPENSATION:
+			if not compensation_state.is_empty() and not bool(compensation_state.get("complete", false)):
+				match str(compensation_state.get("phase", "")):
+					"protect":
+						active_panel = OFFSEASON_PANEL_COMPENSATION_PROTECT
+						title = "人的補償: プロテクト"
+					_:
+						active_panel = OFFSEASON_PANEL_COMPENSATION_PICK
+						title = "人的補償: 補償選手の選択"
+				interactive = true
 		OFFSEASON_STEP_FOREIGN_MARKET:
 			if not foreign_state.is_empty() and not bool(foreign_state.get("complete", false)):
 				match str(foreign_state.get("phase", "scout")):
@@ -368,6 +385,7 @@ func start_new_season() -> bool:
 	released_market_state = {}
 	geneki_draft_state = {}
 	fa_state = {}
+	compensation_state = {}
 	foreign_state = {}
 	camp_state = {}
 	contract_years_state = {}
@@ -402,6 +420,7 @@ func start_next_season() -> bool:
 	released_market_state = {}
 	geneki_draft_state = {}
 	fa_state = {}
+	compensation_state = {}
 	foreign_state = {}
 	camp_state = {}
 	contract_years_state = {}
@@ -618,6 +637,7 @@ func start_offseason() -> Dictionary:
 	released_market_state = {}
 	geneki_draft_state = {}
 	fa_state = {}
+	compensation_state = {}
 	foreign_state = {}
 	camp_state = {}
 	contract_years_state = {}
@@ -704,6 +724,8 @@ func advance_offseason() -> Dictionary:
 		return {"ok": false, "message": "現役ドラフトが進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_FA_MARKET and not _is_fa_complete():
 		return {"ok": false, "message": "FA市場が進行中です。先に完了してください"}
+	if offseason_step == OFFSEASON_STEP_COMPENSATION and not _is_compensation_complete():
+		return {"ok": false, "message": "人的補償が進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_FOREIGN_MARKET and not _is_foreign_complete():
 		return {"ok": false, "message": "外国人補強が進行中です。先に完了してください"}
 	if offseason_step == OFFSEASON_STEP_CAMP and not _is_camp_complete():
@@ -777,6 +799,13 @@ func advance_offseason() -> Dictionary:
 			else:
 				step_result = {"title": "FA市場", "fa_in_progress": true}
 				GameDb.rebuild_player_indices()
+		OFFSEASON_STEP_COMPENSATION:
+			compensation_state = CompensationService.create_compensation_state(GameDb.players, GameDb.teams, current_season, fa_state, selected_team_id)
+			if _is_compensation_complete():
+				step_result = _finalize_compensation_if_complete()
+			else:
+				step_result = {"title": "人的補償", "compensation_in_progress": true}
+			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_FOREIGN_MARKET:
 			foreign_state = ForeignPlayerService.create_foreign_market_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
 			if _is_foreign_complete():
@@ -1204,6 +1233,76 @@ func _finalize_fa_if_complete() -> Dictionary:
 	result["title"] = "FA市場"
 	offseason_results[OFFSEASON_STEP_FA_MARKET] = result
 	last_status_message = "FA市場"
+	return result
+
+
+# ============================================================ 人的補償
+
+func submit_compensation_protect_list(player_ids: Array) -> Dictionary:
+	return _apply_compensation_action(func() -> Dictionary:
+		return CompensationService.submit_protect_list(compensation_state, GameDb.players, GameDb.teams, current_season, player_ids)
+	)
+
+
+func submit_compensation_pick(player_id: int) -> Dictionary:
+	return _apply_compensation_action(func() -> Dictionary:
+		return CompensationService.submit_pick(compensation_state, GameDb.players, GameDb.teams, current_season, player_id)
+	)
+
+
+func submit_compensation_money_only() -> Dictionary:
+	return _apply_compensation_action(func() -> Dictionary:
+		return CompensationService.submit_money_only(compensation_state, GameDb.players, GameDb.teams, current_season)
+	)
+
+
+func auto_compensation_current_case() -> Dictionary:
+	return _apply_compensation_action(func() -> Dictionary:
+		return CompensationService.auto_current_case(compensation_state, GameDb.players, GameDb.teams, current_season)
+	)
+
+
+func complete_compensation_automatically() -> Dictionary:
+	return _apply_compensation_action(func() -> Dictionary:
+		return CompensationService.complete_automatically(compensation_state, GameDb.players, GameDb.teams, current_season)
+	)
+
+
+func compensation_recommended_protect_ids() -> Array:
+	if compensation_state.is_empty():
+		return []
+	return CompensationService.recommended_protect_ids(compensation_state, GameDb.players)
+
+
+# 人的補償のユーザー操作は「呼ぶサービス関数」だけが違うので、前後のガードと後処理を共通化する。
+func _apply_compensation_action(action: Callable) -> Dictionary:
+	if not offseason_active or offseason_step != OFFSEASON_STEP_COMPENSATION:
+		return {"ok": false, "message": "人的補償は現在有効ではありません"}
+	if compensation_state.is_empty():
+		return {"ok": false, "message": "人的補償が初期化されていません"}
+	var result: Dictionary = action.call() as Dictionary
+	compensation_state = result.get("state", compensation_state) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	if _is_compensation_complete():
+		_finalize_compensation_if_complete()
+	GameDb.rebuild_player_indices()
+	_save_if_enabled()
+	return {"ok": true, "state": compensation_state}
+
+
+func _is_compensation_complete() -> bool:
+	return not compensation_state.is_empty() and bool(compensation_state.get("complete", false))
+
+
+func _finalize_compensation_if_complete() -> Dictionary:
+	if not _is_compensation_complete():
+		return {"title": "人的補償", "compensation_in_progress": true}
+	var result: Dictionary = CompensationService.finalize_compensation(compensation_state)
+	GameDb.rebuild_player_indices()
+	result["title"] = "人的補償"
+	offseason_results[OFFSEASON_STEP_COMPENSATION] = result
+	last_status_message = "人的補償"
 	return result
 
 
@@ -1909,6 +2008,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	released_market_state = (data.get("released_market_state", {}) as Dictionary).duplicate(true)
 	geneki_draft_state = (data.get("geneki_draft_state", {}) as Dictionary).duplicate(true)
 	fa_state = (data.get("fa_state", {}) as Dictionary).duplicate(true)
+	compensation_state = (data.get("compensation_state", {}) as Dictionary).duplicate(true)
 	foreign_state = (data.get("foreign_state", {}) as Dictionary).duplicate(true)
 	camp_state = (data.get("camp_state", {}) as Dictionary).duplicate(true)
 	contract_years_state = (data.get("contract_years_state", {}) as Dictionary).duplicate(true)

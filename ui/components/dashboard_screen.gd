@@ -45,6 +45,17 @@ const FS_CELL: int = 14
 const FS_SECTION: int = 17
 const FS_VALUE: int = 30
 
+# 選択グリッド (_draw_select_grid) の寸法。列数は自動フィットで GRID_DEFAULT_COLS から増える。
+const GRID_PAD: float = 14.0
+const GRID_GAP_X: float = 6.0
+const GRID_GAP_Y: float = 5.0
+const GRID_SECTION_H: float = 24.0
+const GRID_SECTION_GAP: float = 6.0
+const GRID_DEFAULT_COLS: int = 7
+const GRID_MAX_COLS: int = 10
+const GRID_DEFAULT_CELL_H: float = 44.0
+const GRID_MIN_CELL_H: float = 32.0
+
 # --- レイアウト基準 (base 座標) ---
 const SIDEBAR_W: float = 240.0
 const HEADER_H: float = 86.0
@@ -887,6 +898,131 @@ func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, 
 		cx += w
 	if selectable:
 		hits.append({"rect": Rect2(rect.position.x + 8.0, ry, rect.size.x - 16.0, row_h), "kind": sel_kind, "meta": meta})
+
+
+# ============================================================ 選択グリッド
+
+# 「多数の中から N 人を選ぶ」ための一覧。行テーブル (_draw_data_table / _draw_player_record_table)
+# は 1 人あたり 1 行を使うので、60 人超から 28 人を選ぶ人的補償のプロテクトのような用途では
+# スクロールしないと全体像が掴めない。ここはセルを格子に並べ、**全員を一画面に収める**ことを優先する
+# (成績を見るための表ではないので、セルは名前 + 年齢 / 総合の 2 行だけに絞る)。
+#
+# sections: [{label: String, note: String, cells: Array}] — セクション見出し + セル配列。
+#   cell: {id:int, name:String, sub:String, pos:int, state:"on"|"off"|"locked", note:String}
+#     state "locked" = 選べない (自動保護など)。クリック判定を積まず、色も沈める。
+# opts:
+#   title / right_label … 見出しと右肩の補足 (残り人数など)。right_color で右肩の色を変えられる
+#   sel_kind / hits … クリック判定。hits へ {rect, kind, meta=cell.id} を積む
+#   cols / cell_h … 列数と行高の初期値。収まらない場合は列を増やし、それでも溢れたら行高を詰める
+#   empty_text … セルが 1 つも無いときの文言
+func _draw_select_grid(rect: Rect2, sections: Array, opts: Dictionary = {}) -> void:
+	if bool(opts.get("panel", true)):
+		_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
+	var title: String = str(opts.get("title", ""))
+	if not title.is_empty():
+		_round(Rect2(rect.position.x + 18.0, rect.position.y + 19.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+		_text(title, Vector2(rect.position.x + 27.0, rect.position.y + 32.0), FS_SECTION, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var right_label: String = str(opts.get("right_label", ""))
+	if not right_label.is_empty():
+		_text_right(right_label, rect.end.x - 18.0, rect.position.y + 32.0, 15,
+			opts.get("right_color", MUTED) as Color, 420.0, true)
+
+	var total_cells: int = 0
+	for section_value in sections:
+		total_cells += ((section_value as Dictionary).get("cells", []) as Array).size()
+	var inner_x: float = rect.position.x + GRID_PAD
+	var usable: float = rect.size.x - GRID_PAD * 2.0
+	var top: float = rect.position.y + 58.0
+	var avail: float = rect.end.y - top - 10.0
+	if total_cells <= 0:
+		var empty_text: String = str(opts.get("empty_text", ""))
+		if not empty_text.is_empty():
+			_text(empty_text, Vector2(inner_x + 4.0, top + 24.0), 14, MUTED)
+		return
+
+	# 全セルを 1 画面に収めるための自動フィット。まず列を増やし、限界まで来たら行高を詰める。
+	var cols: int = maxi(1, int(opts.get("cols", GRID_DEFAULT_COLS)))
+	var cell_h: float = float(opts.get("cell_h", GRID_DEFAULT_CELL_H))
+	while cols < GRID_MAX_COLS and _select_grid_height(sections, cols, cell_h) > avail:
+		cols += 1
+	var needed: float = _select_grid_height(sections, cols, cell_h)
+	if needed > avail:
+		cell_h = maxf(GRID_MIN_CELL_H, cell_h - (needed - avail) / float(_select_grid_rows(sections, cols)))
+	var cell_w: float = (usable - float(cols - 1) * GRID_GAP_X) / float(cols)
+
+	var sel_kind: String = str(opts.get("sel_kind", ""))
+	var hits: Array = opts.get("hits", []) as Array
+	var y: float = top
+	for section_value in sections:
+		var section: Dictionary = section_value as Dictionary
+		var cells: Array = section.get("cells", []) as Array
+		if cells.is_empty():
+			continue
+		_text(str(section.get("label", "")), Vector2(inner_x, y + 11.0), 12, MUTED, 200.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		var section_note: String = str(section.get("note", ""))
+		if not section_note.is_empty():
+			_text(section_note, Vector2(inner_x + 92.0, y + 11.0), 11, FAINT, 300.0)
+		_line(Vector2(inner_x, y + 16.0), Vector2(inner_x + usable, y + 16.0), HAIRLINE, 1.0)
+		y += GRID_SECTION_H
+		for i in range(cells.size()):
+			var cell: Dictionary = cells[i] as Dictionary
+			var cx: float = inner_x + float(i % cols) * (cell_w + GRID_GAP_X)
+			var cy: float = y + float(i / cols) * (cell_h + GRID_GAP_Y)
+			var cell_rect: Rect2 = Rect2(cx, cy, cell_w, cell_h)
+			_draw_select_grid_cell(cell_rect, cell)
+			if not sel_kind.is_empty() and str(cell.get("state", "off")) != "locked":
+				hits.append({"rect": cell_rect, "kind": sel_kind, "meta": int(cell.get("id", 0))})
+		var rows: int = int(ceil(float(cells.size()) / float(cols)))
+		y += float(rows) * (cell_h + GRID_GAP_Y) + GRID_SECTION_GAP
+
+
+func _draw_select_grid_cell(cell_rect: Rect2, cell: Dictionary) -> void:
+	var state: String = str(cell.get("state", "off"))
+	var accent: Color = _pos_color(int(cell.get("pos", 0)))
+	var name_color: Color = TEXT
+	var sub_color: Color = MUTED
+	match state:
+		"on":
+			_round(cell_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.20), Color(BLUE.r, BLUE.g, BLUE.b, 0.75), 6, 1)
+		"locked":
+			_round(cell_rect, Color(PANEL_2.r, PANEL_2.g, PANEL_2.b, 0.55), BORDER_SOFT, 6, 1)
+			name_color = FAINT
+			sub_color = FAINT
+			accent = Color(accent.r, accent.g, accent.b, 0.35)
+		_:
+			_round(cell_rect, PANEL_2, BORDER_SOFT, 6, 1)
+	# 左端の縦バーで守備位置を示す (セル内に位置ラベルを置かずに済ませるため)。
+	_round(Rect2(cell_rect.position.x + 4.0, cell_rect.position.y + 6.0, 3.0, cell_rect.size.y - 12.0), accent, Color.TRANSPARENT, 2, 0)
+	var text_x: float = cell_rect.position.x + 13.0
+	var text_w: float = cell_rect.size.x - 20.0
+	_text(str(cell.get("name", "")), Vector2(text_x, cell_rect.position.y + cell_rect.size.y * 0.44), 13, name_color, text_w)
+	_text(str(cell.get("sub", "")), Vector2(text_x, cell_rect.position.y + cell_rect.size.y * 0.86), 11, sub_color, text_w)
+	var note: String = str(cell.get("note", ""))
+	if not note.is_empty():
+		_text_right(note, cell_rect.end.x - 6.0, cell_rect.position.y + cell_rect.size.y * 0.86, 10, FAINT, 76.0)
+	if state == "on":
+		_dot(Vector2(cell_rect.end.x - 11.0, cell_rect.position.y + cell_rect.size.y * 0.36), 3.5, BLUE)
+
+
+func _select_grid_rows(sections: Array, cols: int) -> int:
+	var rows: int = 0
+	for section_value in sections:
+		var cells: Array = (section_value as Dictionary).get("cells", []) as Array
+		if cells.is_empty():
+			continue
+		rows += int(ceil(float(cells.size()) / float(cols)))
+	return maxi(1, rows)
+
+
+func _select_grid_height(sections: Array, cols: int, cell_h: float) -> float:
+	var height: float = 0.0
+	for section_value in sections:
+		var cells: Array = (section_value as Dictionary).get("cells", []) as Array
+		if cells.is_empty():
+			continue
+		var rows: int = int(ceil(float(cells.size()) / float(cols)))
+		height += GRID_SECTION_H + float(rows) * (cell_h + GRID_GAP_Y) + GRID_SECTION_GAP
+	return height
 
 
 # ============================================================ 列ヘッダの対話ソート

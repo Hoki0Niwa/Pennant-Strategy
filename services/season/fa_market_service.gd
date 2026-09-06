@@ -761,6 +761,9 @@ static func _apply_signing(state: Dictionary, players: Array, teams: Array, seas
 		"fa_rank": str(entry.get("fa_rank", "C")),
 		"offer_salary": player.salary,
 		"compensation_money": int(entry.get("compensation_money", 0)),
+		# 補償金の算定基準になった移籍前年俸。人的補償ステップが減額後の額を出すのに使う
+		# (salary は移籍後の新年俸なので基準にできない)。
+		"former_salary": int(entry.get("salary", 0)),
 		"value": int(entry.get("value", 0)),
 		"war": float(entry.get("war", 0.0)),
 		"method": method,

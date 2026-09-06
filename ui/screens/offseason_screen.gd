@@ -184,6 +184,28 @@ const FGC_HOME_RECT: Rect2 = Rect2(262, 284, 1638, 196)
 const FGC_AWAY_RECT: Rect2 = Rect2(262, 492, 1638, 568)
 # 契約年数: ステータス行のぶんだけ BODY を下げた1表。
 const CY_BODY_RECT: Rect2 = Rect2(262, 284, 1638, 776)
+
+# プロテクトグリッドの並び替えキー。既定の向きは「総合=高い順 / 年齢=若い順」で、
+# どちらも一覧の先頭に守りたい選手が来る向きにしてある (同じチップを再度押すと逆順)。
+const COMP_SORT_OVERALL: String = "overall"
+const COMP_SORT_AGE: String = "age"
+const COMP_SORT_OPTIONS: Array = [
+	{"id": COMP_SORT_OVERALL, "label": "総合順"},
+	{"id": COMP_SORT_AGE, "label": "年齢順"},
+]
+
+# 人的補償の結果: 上段にケース一覧 (FA移籍ごとの選択)、下段に移った補償選手の選手表。
+const COMP_CASES_RECT: Rect2 = Rect2(262, 284, 1638, 300)
+const COMP_MOVES_RECT: Rect2 = Rect2(262, 596, 1638, 464)
+const COMP_CASE_COLUMNS: Array = [
+	{"key": "fa_name", "title": "FA選手", "w": 150, "fmt": "string", "strong": true},
+	{"key": "rank", "title": "ランク", "w": 56, "fmt": "string", "align": "center"},
+	{"key": "to_team", "title": "移籍先", "w": 110, "fmt": "team"},
+	{"key": "from_team", "title": "補償を受ける球団", "w": 130, "fmt": "team"},
+	{"key": "decision", "title": "選択", "w": 160, "fmt": "string"},
+	{"key": "picked", "title": "補償選手", "w": 150, "fmt": "string", "strong": true},
+	{"key": "money", "title": "補償金", "w": 110, "fmt": "string", "align": "right"},
+]
 # キャンプ: 上段=候補ボード(全幅) / 下段=特別練習メニュー・成功率・成功時獲得適性の3パネル。
 const CAMP_BOARD: Rect2 = Rect2(262, 324, 1638, 512)
 const CAMP_MENU: Rect2 = Rect2(262, 850, 654, 210)
@@ -281,6 +303,24 @@ var _fa_can_submit: bool = false
 var _fa_can_auto: bool = false
 # 交渉する契約年数。0 = 候補の既定値 (CPU提示年数) をそのまま使う。年齢上限は fa_offer_max_years。
 var selected_fa_offer_years: int = 0
+
+# --- 人的補償 ---
+# プロテクトは選択グリッド (_draw_select_grid)、補償選手の指名は成績が要るので従来の選手レコード表。
+var _comp_case: Dictionary = {}
+var _comp_sections: Array = []           # 選択グリッドのセクション (投手/捕手/内野手/外野手)
+var _comp_status_text: String = ""
+var _comp_headline: String = ""
+var _comp_counter_text: String = ""
+var _comp_required_protect: int = 0
+# プロテクトグリッドの並び順 (セクション内)。既定は総合の高い順で、年齢順にも切り替えられる。
+var _comp_protect_sort: String = COMP_SORT_OVERALL
+var _comp_protect_sort_desc: bool = true
+var selected_comp_protect_ids: Dictionary = {}
+# ケースが切り替わったら選択を作り直すためのキー ("年_FA選手id")。
+var _comp_protect_seeded_key: String = ""
+var _comp_pick_rows: Array = []
+var _comp_pick_tab: String = PLAYER_TAB_PITCHER
+var selected_comp_pick_id: int = 0
 
 # 外国人契約市場 (step7 前段)。自軍・他球団とも選手レコード表 (投手/野手タブ、_fgc_tab共通) で
 # 表示し、投手/野手タブは両表を同時に絞り込む。他球団のみ現球団列を持つ (team_mode "fgc_market_away")。
@@ -380,6 +420,10 @@ func _refresh() -> void:
 				_populate_geneki()
 			AppState.OFFSEASON_PANEL_FA:
 				_populate_fa()
+			AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT:
+				_populate_compensation_protect()
+			AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
+				_populate_compensation_pick()
 			AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 				_populate_foreign_contract()
 			AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
@@ -536,6 +580,23 @@ func _build_buttons() -> void:
 			var fa_counts: Dictionary = _player_row_pitcher_fielder_counts(_fa_player_rows)
 			_build_player_tabs("fa_market", _fa_tab, int(fa_counts.get(PLAYER_TAB_PITCHER, 0)), int(fa_counts.get(PLAYER_TAB_FIELDER, 0)), _set_fa_tab)
 			_build_fa_year_chips()
+		AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT:
+			_action_row([
+				{"id": "cp_submit", "label": "プロテクトを確定", "cb": _on_compensation_protect_submit_pressed, "kind": "primary", "w": 170,
+					"disabled": selected_comp_protect_ids.size() != _comp_required_protect},
+				{"id": "cp_reco", "label": "推奨リストに戻す", "cb": _on_compensation_protect_recommended_pressed, "kind": "action", "w": 170},
+				{"id": "cp_ai", "label": "すべてAIに任せる", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 170},
+			])
+			_build_comp_protect_sort_chips()
+		AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
+			_action_row([
+				{"id": "cpk_pick", "label": "この選手を獲得", "cb": _on_compensation_pick_pressed, "kind": "primary", "w": 160, "disabled": selected_comp_pick_id <= 0},
+				{"id": "cpk_money", "label": "金銭補償のみ", "cb": _on_compensation_money_pressed, "kind": "action", "w": 140},
+				{"id": "cpk_auto", "label": "この判断を自動", "cb": _on_compensation_auto_case_pressed, "kind": "action", "w": 150},
+				{"id": "cpk_ai", "label": "残りを自動進行", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 150},
+			])
+			var comp_counts: Dictionary = _player_row_pitcher_fielder_counts(_comp_pick_rows)
+			_build_player_tabs("comp_pick", _comp_pick_tab, int(comp_counts.get(PLAYER_TAB_PITCHER, 0)), int(comp_counts.get(PLAYER_TAB_FIELDER, 0)), _set_comp_pick_tab)
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 			var fgc_entry: Dictionary = _fgc_by_id.get(selected_fgc_player_id, {}) as Dictionary
 			var fgc_has_offer: bool = not (fgc_entry.get("user_offer", {}) as Dictionary).is_empty()
@@ -668,6 +729,16 @@ func _build_step_result_tabs() -> void:
 		var years_rows: Array = _result_signing_player_rows(years_result.get("multi_year_signings", []) as Array)
 		var years_counts: Dictionary = _player_row_pitcher_fielder_counts(years_rows)
 		_build_player_tabs("result_years", _result_people_tab, int(years_counts.get(PLAYER_TAB_PITCHER, 0)), int(years_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
+	elif step == AppState.OFFSEASON_STEP_COMPENSATION:
+		var comp_result: Dictionary = _view.get("result", {}) as Dictionary
+		var comp_rows: Array = _result_signing_player_rows(comp_result.get("moves", []) as Array)
+		var comp_counts: Dictionary = _player_row_pitcher_fielder_counts(comp_rows)
+		# 補償選手は年に数人なので片方のタブが空になりやすい。行のある側を初期表示にする
+		# (投手固定のままだと「移籍した補償選手はいません」と出て結果が見えない)。
+		_result_people_tab = _player_tab_with_rows(comp_rows, _result_people_tab)
+		# 補償の結果は上段がケース一覧なので、タブは下段 (補償選手の表) の見出し位置へ下げる。
+		_build_player_tabs("result_comp", _result_people_tab, int(comp_counts.get(PLAYER_TAB_PITCHER, 0)), int(comp_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab,
+			COMP_MOVES_RECT.position.y + 14.0 - (BODY.position.y + 16.0))
 	elif step == AppState.OFFSEASON_STEP_GENEKI_DRAFT:
 		var geneki_result: Dictionary = _view.get("result", {}) as Dictionary
 		var move_rows: Array = _result_signing_player_rows(geneki_result.get("moves", []) as Array)
@@ -951,6 +1022,18 @@ func _on_row_clicked(kind: String, meta: int) -> void:
 			selected_geneki_pick_id = meta
 			_build_buttons()
 			queue_redraw()
+		"comp_protect":
+			if selected_comp_protect_ids.has(meta):
+				selected_comp_protect_ids.erase(meta)
+			else:
+				selected_comp_protect_ids[meta] = true
+			_comp_refresh_protect_status()
+			_build_buttons()
+			queue_redraw()
+		"comp_pick":
+			selected_comp_pick_id = meta
+			_build_buttons()
+			queue_redraw()
 		"fa":
 			selected_fa_candidate_id = meta
 			selected_fa_offer_years = 0
@@ -1136,6 +1219,10 @@ func _draw() -> void:
 			# FA一覧は戦力外獲得と同じ選手レコード表 (投手/野手タブ・候補詳細なし) + 提示年数列。
 			_draw_player_record_table(BODY, _fa_status_text, _fa_player_rows, _fa_tab == PLAYER_TAB_PITCHER,
 				"fa", "fa_market_%s" % _fa_tab, "fa", selected_fa_candidate_id, "該当するFA候補がいません。", true, false, "", true, true)
+		AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT:
+			_draw_compensation_protect_panel()
+		AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
+			_draw_compensation_pick_panel()
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 			_draw_foreign_contract_panel()
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
@@ -1184,6 +1271,8 @@ func _step_name(step: String) -> String:
 			return "現役ドラフト"
 		AppState.OFFSEASON_STEP_FA_MARKET:
 			return "FA市場"
+		AppState.OFFSEASON_STEP_COMPENSATION:
+			return "人的補償"
 		AppState.OFFSEASON_STEP_CONTRACT_YEARS:
 			return "契約年数"
 		AppState.OFFSEASON_STEP_FOREIGN_MARKET:
@@ -1830,6 +1919,8 @@ func _draw_results(rect: Rect2) -> void:
 			_draw_geneki_result(rect, result)
 		AppState.OFFSEASON_STEP_FA_MARKET:
 			_draw_fa_result(rect, result)
+		AppState.OFFSEASON_STEP_COMPENSATION:
+			_draw_compensation_result(rect, result)
 		AppState.OFFSEASON_STEP_FOREIGN_MARKET:
 			_draw_foreign_result(rect, result)
 		AppState.OFFSEASON_STEP_CAMP:
@@ -3872,6 +3963,317 @@ func _on_fa_auto_all_pressed() -> void:
 	_refresh()
 
 
+# ============================================================ populate: 人的補償
+
+# プロテクト提出 (自軍が FA 選手を獲得した側)。60人超から28人を選ぶので、行テーブルではなく
+# 選択グリッド (_draw_select_grid) を使い全員を一画面に出す。自動保護の選手も locked セルとして
+# 並べる — 「なぜ選べないのか」を一覧の中で示すため (別枠に隔離すると人数感が掴めない)。
+func _populate_compensation_protect() -> void:
+	var state: Dictionary = AppState.compensation_state
+	_comp_case = CompensationService.current_case(state)
+	if _comp_case.is_empty():
+		_comp_sections = []
+		_comp_status_text = "対象の補償がありません。"
+		return
+	var year: int = int(state.get("year", 0))
+	_comp_required_protect = CompensationService.required_protect_size(_comp_case)
+	# ケースが変わったら選択を作り直す (初期値は AI 推奨)。同じケースの再描画では手動選択を保持。
+	var seed_key: String = "%d_%d_%d" % [year, int(state.get("index", 0)), int(_comp_case.get("player_id", 0))]
+	if _comp_protect_seeded_key != seed_key:
+		_comp_protect_seeded_key = seed_key
+		_reset_compensation_protect_to_recommended()
+
+	var groups: Dictionary = {"p": [], "c": [], "if": [], "of": [], "other": []}
+	for id_value in _comp_case.get("eligible_ids", []) as Array:
+		_append_compensation_grid_cell(groups, int(id_value), year, false)
+	for id_value in _comp_case.get("locked_ids", []) as Array:
+		_append_compensation_grid_cell(groups, int(id_value), year, true)
+	var sort_key: String = "__age" if _comp_protect_sort == COMP_SORT_AGE else "__overall"
+	var sort_desc: bool = _comp_protect_sort_desc
+	for key in groups.keys():
+		var cells: Array = groups[key] as Array
+		cells.sort_custom(func(a: Variant, b: Variant) -> bool:
+			var av: int = int((a as Dictionary).get(sort_key, 0))
+			var bv: int = int((b as Dictionary).get(sort_key, 0))
+			# 同年齢が並ぶので、タイブレークは常に総合の高い順 (並びが毎回変わって見えないように)。
+			if av == bv:
+				return int((a as Dictionary).get("__overall", 0)) > int((b as Dictionary).get("__overall", 0))
+			return av > bv if sort_desc else av < bv
+		)
+	_comp_sections = [
+		{"label": "投手", "cells": groups["p"]},
+		{"label": "捕手", "cells": groups["c"]},
+		{"label": "内野手", "cells": groups["if"]},
+		{"label": "外野手", "cells": groups["of"]},
+		{"label": "その他", "cells": groups["other"]},
+	]
+	var locked_count: int = (_comp_case.get("locked_ids", []) as Array).size()
+	_comp_headline = "%s (%sランク) の人的補償 — %s へプロテクトリストを提出" % [
+		str(_comp_case.get("name", "")), str(_comp_case.get("fa_rank", "")),
+		_team_name(int(_comp_case.get("from_team", 0))),
+	]
+	_comp_status_text = "自動保護%d人 (外国人・新人・今オフFA加入) はプロテクト枠を消費しません。選ばなかった選手から1人を持っていかれます。" % locked_count
+	_comp_refresh_protect_status()
+
+
+func _append_compensation_grid_cell(groups: Dictionary, pid: int, year: int, locked: bool) -> void:
+	var player: PSPlayer = GameDb.get_player(pid)
+	if player == null:
+		return
+	var record: PSPlayerSeasonRecord = _record_for_people_entry({"player_id": pid})
+	var overall: int = int(PlayerValueEvaluator.overall_score(record)) if record != null else 0
+	var head: String = _role_char(_resolved_pitcher_role(player.role, {})) if player.is_pitcher() else _position_char(player.position)
+	var cell_state: String = "off"
+	if locked:
+		cell_state = "locked"
+	elif selected_comp_protect_ids.has(pid):
+		cell_state = "on"
+	var cell: Dictionary = {
+		"id": pid,
+		"name": "%s %s" % [head, player.name],
+		"sub": "%d歳 / %d" % [player.age, overall],
+		"pos": player.position,
+		"state": cell_state,
+		"note": CompensationService.auto_protected_reason(player, year) if locked else "",
+		"__overall": overall,
+		"__age": player.age,
+	}
+	var key: String = "other"
+	match player.position:
+		1:
+			key = "p"
+		2:
+			key = "c"
+		3, 4, 5, 6:
+			key = "if"
+		7, 8, 9:
+			key = "of"
+	(groups[key] as Array).append(cell)
+
+
+# 並び替えチップ。操作ボタンは右寄せ (_action_row) なので、空いている左端に置く。
+func _build_comp_protect_sort_chips() -> void:
+	var x: float = INNER_L + 66.0
+	for option_value in COMP_SORT_OPTIONS:
+		var option: Dictionary = option_value as Dictionary
+		var id: String = str(option.get("id", ""))
+		var active: bool = id == _comp_protect_sort
+		var label: String = str(option.get("label", ""))
+		if active:
+			label += " ▼" if _comp_protect_sort_desc else " ▲"
+		var w: float = 20.0 + _measure(label, 13) + 20.0
+		_add_button("cp_sort_%s" % id, label, Rect2(x, ACTION_Y + 4.0, w, 32.0),
+			func(value: String = id) -> void: _select_comp_protect_sort(value),
+			"chip_active" if active else "chip")
+		x += w + 8.0
+
+
+# 別のキーを押したらそのキーの既定の向きへ、同じキーを押したら昇降を反転する。
+func _select_comp_protect_sort(sort_id: String) -> void:
+	if _comp_protect_sort == sort_id:
+		_comp_protect_sort_desc = not _comp_protect_sort_desc
+	else:
+		_comp_protect_sort = sort_id
+		_comp_protect_sort_desc = sort_id == COMP_SORT_OVERALL
+	_refresh()
+
+
+func _reset_compensation_protect_to_recommended() -> void:
+	selected_comp_protect_ids = {}
+	for pid_value in AppState.compensation_recommended_protect_ids():
+		selected_comp_protect_ids[int(pid_value)] = true
+
+
+func _comp_refresh_protect_status() -> void:
+	_comp_counter_text = "プロテクト %d / %d人" % [selected_comp_protect_ids.size(), _comp_required_protect]
+	# セルの選択状態は _comp_sections が保持しているので、選択が動いたらここで塗り直す。
+	# ポジションの偏りを見ながら選べるよう、セクション見出しに選択数も出す。
+	for section_value in _comp_sections:
+		var section: Dictionary = section_value as Dictionary
+		var cells: Array = section.get("cells", []) as Array
+		var chosen: int = 0
+		var selectable: int = 0
+		for cell_value in cells:
+			var cell: Dictionary = cell_value as Dictionary
+			if str(cell.get("state", "off")) == "locked":
+				continue
+			selectable += 1
+			var on: bool = selected_comp_protect_ids.has(int(cell.get("id", 0)))
+			cell["state"] = "on" if on else "off"
+			if on:
+				chosen += 1
+		# 分母は選べる選手だけ (自動保護は枠を消費しないので数に入れない)。
+		section["note"] = "選択 %d / %d人" % [chosen, selectable]
+
+
+# 補償選手の指名 (自軍が FA 選手を出した側)。ここは能力と成績で選ぶ場面なので従来の選手レコード表。
+func _populate_compensation_pick() -> void:
+	var state: Dictionary = AppState.compensation_state
+	_comp_case = CompensationService.current_case(state)
+	_comp_pick_rows = []
+	if _comp_case.is_empty():
+		_comp_status_text = "対象の補償がありません。"
+		return
+	for id_value in CompensationService.exposed_ids(_comp_case):
+		var pid: int = int(id_value)
+		var record: PSPlayerSeasonRecord = _record_for_people_entry({"player_id": pid})
+		if record == null:
+			continue
+		_comp_pick_rows.append({
+			"record": record,
+			"player": GameDb.get_player(pid),
+			"entry": {
+				"player_id": pid,
+				"team_id": int(_comp_case.get("to_team", 0)),
+				"position": record.position,
+				"role": record.role,
+			},
+		})
+	_comp_pick_tab = _player_tab_with_rows(_comp_pick_rows, _comp_pick_tab)
+	selected_comp_pick_id = _player_first_visible_id(_comp_pick_rows, _comp_pick_tab, selected_comp_pick_id)
+	_comp_headline = "%s (%sランク) の人的補償 — %s の非プロテクト選手" % [
+		str(_comp_case.get("name", "")), str(_comp_case.get("fa_rank", "")),
+		_team_name(int(_comp_case.get("to_team", 0))),
+	]
+	_comp_status_text = "人的補償: 選手1人 + %s / 金銭補償のみ: %s" % [
+		_format_money(int(_comp_case.get("money_with_player", 0))),
+		_format_money(int(_comp_case.get("money_only", 0))),
+	]
+
+
+func _set_comp_pick_tab(tab_id: String) -> void:
+	if tab_id != PLAYER_TAB_PITCHER and tab_id != PLAYER_TAB_FIELDER:
+		return
+	if _comp_pick_tab == tab_id:
+		return
+	_comp_pick_tab = tab_id
+	selected_comp_pick_id = _player_first_visible_id(_comp_pick_rows, _comp_pick_tab, selected_comp_pick_id)
+	_build_buttons()
+	queue_redraw()
+
+
+func _draw_compensation_protect_panel() -> void:
+	var complete: bool = selected_comp_protect_ids.size() == _comp_required_protect
+	_draw_select_grid(BODY, _comp_sections, {
+		"title": _comp_headline,
+		"right_label": _comp_counter_text,
+		"right_color": GREEN if complete else AMBER,
+		"sel_kind": "comp_protect",
+		"hits": _row_hits,
+		"empty_text": "プロテクト対象の選手がいません。",
+	})
+	_text(_comp_status_text, Vector2(BODY.position.x + 27.0, BODY.position.y + 50.0), 12, MUTED, BODY.size.x - 54.0)
+	# 並び替えチップ (_build_comp_protect_sort_chips) の見出し。チップはボタンなので、
+	# ラベルだけこちらで描く (x は チップ開始位置 INNER_L+66 に合わせてある)。
+	_text("並び順", Vector2(INNER_L, ACTION_Y + 25.0), 12, MUTED, 60.0)
+
+
+func _draw_compensation_pick_panel() -> void:
+	_draw_player_record_table(BODY, "%s  —  %s" % [_comp_headline, _comp_status_text], _comp_pick_rows,
+		_comp_pick_tab == PLAYER_TAB_PITCHER, "comp_pick", "comp_pick_%s" % _comp_pick_tab, "",
+		selected_comp_pick_id, "指名できる選手がいません (全員プロテクトされています)。", true, false, "", true)
+
+
+func _draw_compensation_result(rect: Rect2, result: Dictionary) -> void:
+	var cases: Array = result.get("cases", []) as Array
+	if cases.is_empty():
+		_text("今オフはA・Bランクの FA 移籍がなく、人的補償は発生しませんでした。",
+			Vector2(rect.position.x + 18.0, rect.position.y + 34.0), 15, MUTED)
+		return
+	var heading: String = "人的補償 %d件中%d件で選手が移動 (金銭のみ%d件)" % [
+		int(result.get("case_count", 0)), int(result.get("moved_count", 0)), int(result.get("money_only_count", 0)),
+	]
+	# 上段にケース一覧 (どのFA移籍でどちらを選んだか)、下段に実際に移った補償選手。
+	var case_rows: Array = []
+	for case_value in cases:
+		var case: Dictionary = case_value as Dictionary
+		var is_player: bool = str(case.get("decision", "")) == "player"
+		var decision: String = "人的補償" if is_player else "金銭補償のみ"
+		if not is_player and not str(case.get("forced_reason", "")).is_empty():
+			decision = "金銭補償のみ (対象者なし)"
+		var from_team: PSTeam = GameDb.get_team(int(case.get("from_team", 0)))
+		var to_team: PSTeam = GameDb.get_team(int(case.get("to_team", 0)))
+		case_rows.append({
+			"fa_name": str(case.get("name", "")),
+			"rank": str(case.get("fa_rank", "")),
+			"from_team": from_team.name if from_team != null else "-",
+			"from_team_color": from_team.color if from_team != null else MUTED,
+			"to_team": to_team.name if to_team != null else "-",
+			"to_team_color": to_team.color if to_team != null else MUTED,
+			"decision": decision,
+			"decision_color": BLUE if is_player else MUTED,
+			"picked": str(case.get("picked_name", "")) if is_player else "-",
+			"money": _format_money(int(case.get("compensation_money", 0))),
+		})
+	_draw_data_table(COMP_CASES_RECT, COMP_CASE_COLUMNS, case_rows, {"title": heading, "row_h_max": 30.0})
+	_draw_player_record_table(COMP_MOVES_RECT, "移籍した補償選手 %d人" % int(result.get("moved_count", 0)),
+		_result_signing_player_rows(result.get("moves", []) as Array),
+		_result_people_tab == PLAYER_TAB_PITCHER, "", "result_comp_%s" % _result_people_tab, "", 0,
+		"人的補償で移籍した選手はいません。", true, false, "move", true)
+
+
+func _on_compensation_protect_submit_pressed() -> void:
+	var ids: Array = []
+	for pid in selected_comp_protect_ids.keys():
+		ids.append(int(pid))
+	var result: Dictionary = AppState.submit_compensation_protect_list(ids)
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "プロテクトリストの提出に失敗しました。")), RED)
+		return
+	_comp_protect_seeded_key = ""
+	_refresh()
+
+
+func _on_compensation_protect_recommended_pressed() -> void:
+	_reset_compensation_protect_to_recommended()
+	_comp_refresh_protect_status()
+	_build_buttons()
+	queue_redraw()
+
+
+func _on_compensation_pick_pressed() -> void:
+	if selected_comp_pick_id <= 0:
+		_set_status("獲得する選手を選択してください。", RED)
+		return
+	var result: Dictionary = AppState.submit_compensation_pick(selected_comp_pick_id)
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "人的補償の指名に失敗しました。")), RED)
+		return
+	selected_comp_pick_id = 0
+	_comp_protect_seeded_key = ""
+	_refresh()
+
+
+func _on_compensation_money_pressed() -> void:
+	var result: Dictionary = AppState.submit_compensation_money_only()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "金銭補償の選択に失敗しました。")), RED)
+		return
+	selected_comp_pick_id = 0
+	_comp_protect_seeded_key = ""
+	_refresh()
+
+
+func _on_compensation_auto_case_pressed() -> void:
+	var result: Dictionary = AppState.auto_compensation_current_case()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "人的補償の自動判断に失敗しました。")), RED)
+		return
+	selected_comp_pick_id = 0
+	_comp_protect_seeded_key = ""
+	_refresh()
+
+
+func _on_compensation_ai_all_pressed() -> void:
+	var result: Dictionary = AppState.complete_compensation_automatically()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", "人的補償の自動進行に失敗しました。")), RED)
+		return
+	selected_comp_pick_id = 0
+	_comp_protect_seeded_key = ""
+	_refresh()
+
+
 # ============================================================ populate: 外国人契約市場
 
 # AppState.foreign_state.contract_entries (value降順) を自軍/他球団の一覧行へ変換する。
@@ -5435,6 +5837,12 @@ func _league_label(league: String) -> String:
 	if league == "league2":
 		return "第2"
 	return league
+
+
+# 見出し用の球団名 (フル)。略称は1〜2文字のことがあるので、文中で球団を指すときはこちらを使う。
+func _team_name(team_id: int) -> String:
+	var team: PSTeam = GameDb.get_team(team_id)
+	return team.name if team != null else "-"
 
 
 func _team_short(team_id: int) -> String:

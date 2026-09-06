@@ -12,6 +12,7 @@ const KEY: String = "career_log"
 const TYPE_DRAFT: String = "draft"
 const TYPE_TRADE: String = "trade"
 const TYPE_GENEKI_DRAFT: String = "geneki_draft"
+const TYPE_COMPENSATION: String = "compensation"
 const TYPE_FA_MOVE: String = "fa_move"
 const TYPE_FA_STAY: String = "fa_stay"
 const TYPE_RELEASED: String = "released"
@@ -58,6 +59,10 @@ static func log_trade(player: PSPlayer, year: int, from_team: int, to_team: int)
 
 static func log_geneki_draft(player: PSPlayer, year: int, from_team: int, to_team: int) -> void:
 	append(player, {"y": year, "t": TYPE_GENEKI_DRAFT, "f": from_team, "o": to_team})
+
+
+static func log_compensation(player: PSPlayer, year: int, from_team: int, to_team: int) -> void:
+	append(player, {"y": year, "t": TYPE_COMPENSATION, "f": from_team, "o": to_team})
 
 
 static func log_fa_move(player: PSPlayer, year: int, from_team: int, to_team: int, salary: int) -> void:
@@ -138,6 +143,8 @@ static func describe(entry: Dictionary) -> Dictionary:
 			return {"year": year_text, "label": "トレード移籍", "detail": "%s → %s" % [from_name, to_name]}
 		TYPE_GENEKI_DRAFT:
 			return {"year": year_text, "label": "現役ドラフト移籍", "detail": "%s → %s" % [from_name, to_name]}
+		TYPE_COMPENSATION:
+			return {"year": year_text, "label": "人的補償移籍", "detail": "%s → %s" % [from_name, to_name]}
 		TYPE_FA_MOVE:
 			return {"year": year_text, "label": "FA移籍", "detail": "%s → %s (%s)" % [from_name, to_name, _money(value)]}
 		TYPE_FA_STAY:

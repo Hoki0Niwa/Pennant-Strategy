@@ -3549,3 +3549,338 @@ func test_past_season_pitcher_form_cache_matches_uncached_value() -> void:
 
 	RecordStore.clear_records()
 	PSPerformanceReference.reset_cache()
+
+
+# --- 人的補償 (FAプロテクト28人) --------------------------------------------
+#
+# 補償は FA市場の直後の独立ステップ。ケースごとに「獲得球団がプロテクト28人を出す →
+# 元球団が非プロテクトを見て人的補償か金銭のみを選ぶ」の順で進む。
+
+# 獲得球団のロスターを count 人作る (id は 7000 番台)。
+func _compensation_roster(team_id: int, count: int) -> Array:
+	return _compensation_roster_at(team_id, count, 7000)
+
+
+# 複数球団ぶんを同時に作るとき用に id の起点を指定できる版。
+func _compensation_roster_at(team_id: int, count: int, base_id: int) -> Array:
+	var players: Array = []
+	for i in range(count):
+		players.append(_player({
+			"id": base_id + i,
+			"team_id": team_id,
+			"position": 1 if i % 3 == 0 else 2 + (i % 8),
+			"role": "starter" if i % 3 == 0 else "fielder",
+			"age": 22 + (i % 12),
+		}))
+	return players
+
+
+func _compensation_fa_state(from_team: int, to_team: int, rank: String, former_salary: int, money_only: int) -> Dictionary:
+	return {"signings": [{
+		"player_id": 6001,
+		"name": "FA選手",
+		"fa_rank": rank,
+		"from_team": from_team,
+		"to_team": to_team,
+		"former_salary": former_salary,
+		"compensation_money": money_only,
+	}]}
+
+
+func test_compensation_pool_auto_protects_foreign_rookie_and_new_fa() -> void:
+	var year: int = 2100
+	var players: Array = _compensation_roster(2, 5)
+	players.append(_player({"id": 7101, "team_id": 2, "foreign_player": true}))
+	players.append(_player({"id": 7102, "team_id": 2, "source_data": {"draft_year": year}}))
+	players.append(_player({"id": 7103, "team_id": 2, "source_data": {"fa_signed_year": year}}))
+	players.append(_player({"id": 7104, "team_id": 2, "development_player": true}))
+	players.append(_player({"id": 7105, "team_id": 3}))
+
+	var pool: Dictionary = CompensationService.protectable_pool(players, 2, year)
+	var eligible: Array = pool.get("eligible_ids", []) as Array
+	var locked: Array = pool.get("locked_ids", []) as Array
+	assert_int(eligible.size()).is_equal(5)
+	assert_array(locked).contains([7101, 7102, 7103])
+	# 育成は支配下枠外なのでどちらにも入らない。他球団の選手も対象外。
+	assert_array(locked).not_contains([7104, 7105])
+	assert_array(eligible).not_contains([7104, 7105])
+
+
+func test_compensation_state_only_covers_ab_rank_transfers() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2)]
+	var fa_state: Dictionary = {"signings": [
+		{"player_id": 1, "fa_rank": "A", "from_team": 1, "to_team": 2, "former_salary": 10000, "compensation_money": 8000},
+		{"player_id": 2, "fa_rank": "C", "from_team": 1, "to_team": 2, "former_salary": 5000, "compensation_money": 0},
+		{"player_id": 3, "fa_rank": "B", "from_team": 2, "to_team": 2, "former_salary": 8000, "compensation_money": 4800},
+	]}
+	var state: Dictionary = CompensationService.create_compensation_state(players, teams, null, fa_state, 0)
+	var cases: Array = state.get("cases", []) as Array
+	assert_int(cases.size()).is_equal(1)
+	assert_str(str((cases[0] as Dictionary).get("fa_rank", ""))).is_equal("A")
+
+
+func test_compensation_forces_money_when_pool_within_protect_size() -> void:
+	var players: Array = _compensation_roster(2, CompensationService.PROTECT_SIZE)
+	var teams: Array = [_team(1), _team(2)]
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, null, _compensation_fa_state(1, 2, "A", 10000, 8000), 0
+	)
+	var case: Dictionary = (state.get("cases", []) as Array)[0] as Dictionary
+	assert_str(str(case.get("forced_reason", ""))).is_equal("protect_covers_all")
+	assert_str(str(case.get("decision", ""))).is_equal("money")
+	assert_int(int(case.get("compensation_money", 0))).is_equal(8000)
+
+
+func test_compensation_user_protect_list_requires_exact_size() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2)]
+	# user_team_id=2 (獲得球団) なのでプロテクト提出でユーザー待ちになる。
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, null, _compensation_fa_state(1, 2, "A", 10000, 8000), 2
+	)
+	assert_str(str(state.get("phase", ""))).is_equal("protect")
+	assert_bool(bool(state.get("waiting_user", false))).is_true()
+
+	var case: Dictionary = CompensationService.current_case(state)
+	var eligible: Array = case.get("eligible_ids", []) as Array
+	assert_int(CompensationService.required_protect_size(case)).is_equal(CompensationService.PROTECT_SIZE)
+
+	var short_list: Array = eligible.slice(0, CompensationService.PROTECT_SIZE - 1)
+	assert_bool(bool(CompensationService.submit_protect_list(state, players, teams, null, short_list).get("ok", true))).is_false()
+	assert_bool(bool(CompensationService.submit_protect_list(state, players, teams, null, [999999]).get("ok", true))).is_false()
+
+	var ok_list: Array = eligible.slice(0, CompensationService.PROTECT_SIZE)
+	var result: Dictionary = CompensationService.submit_protect_list(state, players, teams, null, ok_list)
+	assert_bool(bool(result.get("ok", false))).is_true()
+	# 提出後は元球団 (CPU) が判断し、ケースが1件だけなので完了する。
+	assert_bool(bool(state.get("complete", false))).is_true()
+
+
+func test_compensation_pick_moves_player_and_refunds_money_difference() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2)]
+	var former: PSTeam = teams[0] as PSTeam
+	var signing: PSTeam = teams[1] as PSTeam
+	var former_funds: int = former.funds
+	var signing_funds: int = signing.funds
+	# user_team_id=1 (元球団) なので、CPU がプロテクトを出したあと指名でユーザー待ちになる。
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, null, _compensation_fa_state(1, 2, "A", 10000, 8000), 1
+	)
+	assert_str(str(state.get("phase", ""))).is_equal("pick")
+
+	var case: Dictionary = CompensationService.current_case(state)
+	var exposed: Array = CompensationService.exposed_ids(case)
+	assert_bool(exposed.is_empty()).is_false()
+	# プロテクト済みの選手は指名できない。
+	var protected_id: int = int((case.get("protect_ids", []) as Array)[0])
+	assert_bool(bool(CompensationService.submit_pick(state, players, teams, null, protected_id).get("ok", true))).is_false()
+
+	var target_id: int = int(exposed[0])
+	assert_bool(bool(CompensationService.submit_pick(state, players, teams, null, target_id).get("ok", false))).is_true()
+
+	var moved: PSPlayer = null
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player.id == target_id:
+			moved = player
+	assert_int(moved.team_id).is_equal(1)
+	# A ランクは金銭のみ80% → 人的併用50%。差額 3000 が獲得球団へ戻る。
+	assert_int(int(case.get("compensation_money", 0))).is_equal(5000)
+	assert_int(signing.funds).is_equal(signing_funds + 3000)
+	assert_int(former.funds).is_equal(former_funds - 3000)
+
+	var final_result: Dictionary = CompensationService.finalize_compensation(state)
+	assert_int(int(final_result.get("moved_count", 0))).is_equal(1)
+	assert_int(int(final_result.get("money_only_count", 0))).is_equal(0)
+
+
+func test_compensation_money_only_keeps_full_amount() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2)]
+	var signing: PSTeam = teams[1] as PSTeam
+	var signing_funds: int = signing.funds
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, null, _compensation_fa_state(1, 2, "B", 10000, 6000), 1
+	)
+	assert_bool(bool(CompensationService.submit_money_only(state, players, teams, null).get("ok", false))).is_true()
+	var case: Dictionary = ((state.get("cases", []) as Array)[0]) as Dictionary
+	assert_str(str(case.get("decision", ""))).is_equal("money")
+	assert_int(int(case.get("compensation_money", 0))).is_equal(6000)
+	# 金銭のみなら FA成立時に動かした額のままで、資金は追加で動かない。
+	assert_int(signing.funds).is_equal(signing_funds)
+
+
+# 複数年契約中の選手も人的補償の対象にする (NPB実準拠)。他経路の複数年ロックはここには効かない。
+func test_compensation_includes_multi_year_locked_players() -> void:
+	var year: int = 2100
+	var players: Array = _compensation_roster(2, 40)
+	var locked_player: PSPlayer = players[0] as PSPlayer
+	locked_player.source_data["contract_end_year"] = year + 2
+	assert_bool(locked_player.is_multi_year_locked_offseason(year)).is_true()
+
+	var pool: Dictionary = CompensationService.protectable_pool(players, 2, year)
+	assert_array(pool.get("eligible_ids", []) as Array).contains([locked_player.id])
+
+
+func test_compensation_cpu_protect_keeps_top_value_and_catcher_floor() -> void:
+	var players: Array = []
+	# 能力の高い野手30人 (捕手は意図的に低能力にして「値順だけなら漏れる」状況を作る)。
+	for i in range(30):
+		players.append(_player_with_z(7200 + i, 2, 3 + (i % 4), false, 1.4 - float(i) * 0.05))
+	for i in range(3):
+		players.append(_player_with_z(7300 + i, 2, 2, false, -2.0))
+	var case: Dictionary = {"eligible_ids": [], "protect_ids": []}
+	for player_row in players:
+		(case["eligible_ids"] as Array).append((player_row as PSPlayer).id)
+
+	var protect_ids: Array = CompensationService.cpu_protect_ids(players, case)
+	assert_int(protect_ids.size()).is_equal(CompensationService.PROTECT_SIZE)
+	# 最上位の選手は必ず守る。
+	assert_array(protect_ids).contains([7200])
+	var catchers: int = 0
+	for id_value in protect_ids:
+		if int(id_value) >= 7300:
+			catchers += 1
+	assert_int(catchers).is_greater_equal(CompensationService.PROTECT_CATCHER_MIN)
+
+
+# --- 人的補償: 1オフに複数ケースが絡む形 ------------------------------------
+#
+# FA は 1球団あたり最大 MAX_DECLARE_PER_TEAM 人が宣言し、最大 MAX_SIGNINGS_PER_TEAM 人を獲得できる
+# ので、「同じ球団が2人出す」「同じ球団が2人取る」はどちらも起こる。ケースのプールは
+# **自分の番になってから**組む (_ensure_case_pool) 設計なので、先行ケースでロースターが動いても
+# 後続ケースは最新の在籍で組み直される — その不変条件をここで固定する。
+
+func _compensation_signing(player_id: int, from_team: int, to_team: int, rank: String, former_salary: int, money_only: int) -> Dictionary:
+	return {
+		"player_id": player_id,
+		"name": "FA選手%d" % player_id,
+		"fa_rank": rank,
+		"from_team": from_team,
+		"to_team": to_team,
+		"former_salary": former_salary,
+		"compensation_money": money_only,
+	}
+
+
+func _find_test_player(players: Array, player_id: int) -> PSPlayer:
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player != null and player.id == player_id:
+			return player
+	return null
+
+
+# 同一球団から2人が別々の球団へ移籍 → 元球団は2球団それぞれから1人ずつ指名できる。
+func test_compensation_former_team_takes_from_two_signing_teams() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	players.append_array(_compensation_roster_at(3, 40, 7500))
+	var teams: Array = [_team(1), _team(2), _team(3)]
+	var former: PSTeam = teams[0] as PSTeam
+	var former_funds: int = former.funds
+	# user_team_id=1 (元球団) なので、両ケースとも指名でユーザー待ちになる。
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, null, {"signings": [
+			_compensation_signing(6001, 1, 2, "A", 10000, 8000),
+			_compensation_signing(6002, 1, 3, "A", 20000, 16000),
+		]}, 1
+	)
+	assert_int((state.get("cases", []) as Array).size()).is_equal(2)
+
+	# 1件目: 移籍先 team2 の非プロテクトから指名する。
+	assert_str(str(state.get("phase", ""))).is_equal("pick")
+	var case1: Dictionary = CompensationService.current_case(state)
+	assert_int(int(case1.get("to_team", 0))).is_equal(2)
+	var pick1: int = int(CompensationService.exposed_ids(case1)[0])
+	assert_bool(bool(CompensationService.submit_pick(state, players, teams, null, pick1).get("ok", false))).is_true()
+
+	# 2件目: 続けて移籍先 team3 の非プロテクトから指名する (ここで止まらないと2件目を取り逃す)。
+	assert_str(str(state.get("phase", ""))).is_equal("pick")
+	var case2: Dictionary = CompensationService.current_case(state)
+	assert_int(int(case2.get("to_team", 0))).is_equal(3)
+	var pick2: int = int(CompensationService.exposed_ids(case2)[0])
+	assert_bool(bool(CompensationService.submit_pick(state, players, teams, null, pick2).get("ok", false))).is_true()
+	assert_bool(bool(state.get("complete", false))).is_true()
+
+	# 2人とも元球団へ移り、補償金の払い戻しも2件ぶん効く。
+	# A ランクは金銭のみ80% → 人的併用50% なので、差額は旧年俸の30%: 10000→3000 と 20000→6000。
+	assert_int(_find_test_player(players, pick1).team_id).is_equal(1)
+	assert_int(_find_test_player(players, pick2).team_id).is_equal(1)
+	assert_int(former.funds).is_equal(former_funds - 3000 - 6000)
+	var result: Dictionary = CompensationService.finalize_compensation(state)
+	assert_int(int(result.get("moved_count", 0))).is_equal(2)
+	assert_int(int(result.get("case_count", 0))).is_equal(2)
+
+
+# 同じ球団が2人の補償対象選手を獲得 → その球団は2回プロテクトを出す。
+# 2件目のプールは1件目で取られた選手を含まない (自分の番になってから組み直すため)。
+func test_compensation_signing_team_exposed_twice_rebuilds_pool() -> void:
+	var year: int = 2100
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2), _team(3)]
+	var season: PSSeason = PSSeason.new()
+	season.year = year
+	# user_team_id=1 は1件目の元球団。2件目 (team3 が補償を受ける) は CPU が処理する。
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, season, {"signings": [
+			_compensation_signing(6001, 1, 2, "A", 10000, 8000),
+			_compensation_signing(6002, 3, 2, "A", 10000, 8000),
+		]}, 1
+	)
+	var cases: Array = state.get("cases", []) as Array
+	assert_int(cases.size()).is_equal(2)
+	# 2件目のプールは自分の番までは組まれていない。
+	assert_bool(bool((cases[1] as Dictionary).get("pool_built", false))).is_false()
+	assert_int(((cases[1] as Dictionary).get("eligible_ids", []) as Array).size()).is_equal(0)
+
+	var case1: Dictionary = CompensationService.current_case(state)
+	var case1_pool: int = (case1.get("eligible_ids", []) as Array).size()
+	var pick1: int = int(CompensationService.exposed_ids(case1)[0])
+	assert_bool(bool(CompensationService.submit_pick(state, players, teams, season, pick1).get("ok", false))).is_true()
+
+	# 2件目は同じ team2 が晒す側。1件目で抜けた選手はプールから消えている。
+	var case2: Dictionary = cases[1] as Dictionary
+	assert_bool(bool(case2.get("pool_built", false))).is_true()
+	assert_int(int(case2.get("to_team", 0))).is_equal(2)
+	assert_array(case2.get("eligible_ids", []) as Array).not_contains([pick1])
+	assert_int((case2.get("eligible_ids", []) as Array).size()).is_equal(case1_pool - 1)
+	# プールは「今 team2 に在籍している非自動保護」と一致する (スナップショットのずれが無い)。
+	var live_pool: Array = CompensationService.protectable_pool(players, 2, year).get("eligible_ids", []) as Array
+	assert_int((case2.get("eligible_ids", []) as Array).size()).is_equal(live_pool.size())
+	# 1件目で取った選手を2件目でもう一度取ることはできない。
+	assert_array(CompensationService.exposed_ids(case2)).not_contains([pick1])
+
+
+# 同じ球団が2人の補償対象選手を獲得し、その球団が自軍の場合 → プロテクトを2回提出させる。
+func test_compensation_signing_team_submits_two_protect_lists() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2), _team(3)]
+	var season: PSSeason = PSSeason.new()
+	season.year = 2100
+	# user_team_id=2 (両ケースの獲得球団)。
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, season, {"signings": [
+			_compensation_signing(6001, 1, 2, "A", 10000, 8000),
+			_compensation_signing(6002, 3, 2, "A", 10000, 8000),
+		]}, 2
+	)
+	assert_str(str(state.get("phase", ""))).is_equal("protect")
+	var case1: Dictionary = CompensationService.current_case(state)
+	var list1: Array = (case1.get("eligible_ids", []) as Array).slice(0, CompensationService.required_protect_size(case1))
+	assert_bool(bool(CompensationService.submit_protect_list(state, players, teams, season, list1).get("ok", false))).is_true()
+
+	# 1件目の指名 (CPU) が終わったら、2件目のプロテクト提出でもう一度止まる。
+	assert_str(str(state.get("phase", ""))).is_equal("protect")
+	assert_int(int(state.get("index", 0))).is_equal(1)
+	var case2: Dictionary = CompensationService.current_case(state)
+	assert_int(int(case2.get("to_team", 0))).is_equal(2)
+	# 2件目の必要人数は、1件目で選手が抜けていれば減ったプールに追従する。
+	var live_pool: int = (CompensationService.protectable_pool(players, 2, 2100).get("eligible_ids", []) as Array).size()
+	assert_int((case2.get("eligible_ids", []) as Array).size()).is_equal(live_pool)
+
+	var list2: Array = (case2.get("eligible_ids", []) as Array).slice(0, CompensationService.required_protect_size(case2))
+	assert_bool(bool(CompensationService.submit_protect_list(state, players, teams, season, list2).get("ok", false))).is_true()
+	assert_bool(bool(state.get("complete", false))).is_true()
+	assert_int(int(CompensationService.finalize_compensation(state).get("case_count", 0))).is_equal(2)
