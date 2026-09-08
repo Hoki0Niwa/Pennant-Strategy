@@ -1392,6 +1392,10 @@ func _display_ability_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	var ratings: Array = result.get("display_ratings", result.get("ratings", [])) as Array
 	for item_value in ratings:
 		var item: Dictionary = item_value as Dictionary
+		# 倍率表示 (対逆) は整数の表示能力ではないので float のまま入れる。
+		if item.has("text"):
+			row[str(item.get("key", ""))] = float(item.get("value", 0.0))
+			continue
 		row[str(item.get("key", ""))] = int(item.get("display_value", item.get("value", 0)))
 	return row
 

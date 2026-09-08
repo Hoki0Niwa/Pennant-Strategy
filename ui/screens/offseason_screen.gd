@@ -4816,6 +4816,9 @@ func _foreign_ability_range_text(candidate: Dictionary) -> String:
 	var parts: Array = []
 	for rating_value in result.get("display_ratings", []) as Array:
 		var rating: Dictionary = rating_value as Dictionary
+		# 倍率表示 (対逆) はスカウトの推定幅 (表示能力点) の枠に載らないので出さない。
+		if rating.has("text"):
+			continue
 		var value: int = int(rating.get("display_value", 0))
 		var suffix: String = str(rating.get("suffix", ""))
 		var downside: int = int(ceil(float(estimate_downside) / 2.0)) if suffix == "km/h" else estimate_downside

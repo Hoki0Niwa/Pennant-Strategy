@@ -13,7 +13,8 @@ class_name PSDefenseAlignmentService
 # 保存した usage には ai_generated が付かないため、手動配置は上書きしない。
 #
 # プラトーン起用: AI 管理チームでは、相手先発の利き腕 (opponent_hand) に対して相性の良い候補が
-# 同じ枠に居て、評価差が PSPlatoonMatchup.RATING_BONUS 以内なら、その日の担当を入れ替える。
+# 同じ枠に居て、評価差が入れ替えの余裕 (PSPlatoonMatchup.RATING_BONUS を 2 人の左右差の
+# 大きさで伸縮させた値) 以内なら、その日の担当を入れ替える。
 # 出場シェアが決める「何試合出るか」はそのままに、「どの試合で出るか」だけを相性で寄せる。
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
@@ -170,7 +171,12 @@ static func _platoon_ordered_candidate_ids(
 		if candidate == null or not PSPlatoonMatchup.has_advantage(candidate.batting_side, opponent_hand):
 			continue
 		var score: int = _platoon_candidate_score(candidate, position, batting_cache)
-		if float(score) + PSPlatoonMatchup.RATING_BONUS <= float(due_score):
+		# 入れ替えの余裕は 2 人の左右差の平均で決まる。どちらも母集団平均なら RATING_BONUS
+		# ちょうどで、左右差の小さい者どうしの枠ほど入れ替えが起きにくい。
+		var margin: float = PSPlatoonMatchup.RATING_BONUS * 0.5 * (
+			PSPlatoonMatchup.usage_scale_for(candidate) + PSPlatoonMatchup.usage_scale_for(due)
+		)
+		if float(score) + margin <= float(due_score):
 			continue
 		if best_index < 0 or score > best_score:
 			best_index = index

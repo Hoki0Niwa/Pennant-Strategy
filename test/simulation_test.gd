@@ -3187,16 +3187,17 @@ func test_assign_types_movement_lean_keeps_moving_fastball() -> void:
 	assert_int(with_moving).is_greater(6)
 
 
-# 左右の相性は打者の質能力そのものへ一律に載る。逆の利き腕の投手なら有利・同じなら不利で、
-# 有利と不利の差はシフト量のちょうど 2 倍になる。スイッチヒッターは常に有利側、
+# 左右の相性は打者の質能力そのものへ載る。逆の利き腕の投手なら有利・同じなら不利で、
+# 有利と不利の差はその打者のシフト量のちょうど 2 倍になる。スイッチヒッターは常に有利側、
 # 利き腕が分からない相手には補正しない。
 func test_platoon_shifts_batter_ability_by_opponent_hand() -> void:
-	var shift: float = ModManager.rule_float(
+	var base_shift: float = ModManager.rule_float(
 		"simulation.plate_appearance.platoon_ability_shift_z", PSPlatoonMatchup.ABILITY_SHIFT_Z
 	)
-	assert_float(shift).is_greater(0.0)
+	assert_float(base_shift).is_greater(0.0)
 	var left_batter: PSPlayerSeasonRecord = _fielder(8300, "Left Batter", 0.0)
 	left_batter.batting_side = PSPlatoonMatchup.HAND_LEFT
+	var shift: float = PSPlatoonMatchup.batter_shift_z(left_batter, base_shift)
 	var right_pitcher: PSPlayerSeasonRecord = _pitcher(8301, "Right Pitcher", 0.0)
 	right_pitcher.throwing_hand = PSPlatoonMatchup.HAND_RIGHT
 	var left_pitcher: PSPlayerSeasonRecord = _pitcher(8302, "Left Pitcher", 0.0)
@@ -3233,6 +3234,156 @@ func test_platoon_shifts_batter_ability_by_opponent_hand() -> void:
 	var neutral_z: Dictionary = neutral.get("batter_z", {}) as Dictionary
 	for key in PSPlatoonMatchup.SHIFT_KEYS:
 		assert_float(float(neutral_z.get(key, 0.0))).is_equal_approx(0.0, 0.0001)
+
+
+# 左右差の大きさは打者ごとに違う。Bat_Platoon (左右対応) が高いほど小さく、左打者ほど大きい。
+# 起用 AI の加減点も同じ倍率で伸縮するので、シムと起用の強弱が食い違わない。
+func test_platoon_shift_scales_with_batter_platoon_ability() -> void:
+	var average_batter: PSPlayerSeasonRecord = _fielder(8310, "Average", 0.0)
+	average_batter.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	average_batter.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER
+	# 母集団平均の右打者はちょうど基準シフト量。
+	assert_float(PSPlatoonMatchup.batter_shift_z(average_batter)) 		.is_equal_approx(PSPlatoonMatchup.ABILITY_SHIFT_Z, 0.0001)
+	assert_float(PSPlatoonMatchup.usage_scale_for(average_batter)).is_equal_approx(1.0, 0.0001)
+
+	# 左右対応が高いほどシフトが小さい。
+	var strong_batter: PSPlayerSeasonRecord = _fielder(8311, "Strong Platoon", 0.0)
+	strong_batter.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	strong_batter.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER + 1.0
+	var weak_batter: PSPlayerSeasonRecord = _fielder(8312, "Weak Platoon", 0.0)
+	weak_batter.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	weak_batter.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER - 1.0
+	assert_float(PSPlatoonMatchup.batter_shift_z(strong_batter)) 		.is_less(PSPlatoonMatchup.batter_shift_z(average_batter))
+	assert_float(PSPlatoonMatchup.batter_shift_z(average_batter)) 		.is_less(PSPlatoonMatchup.batter_shift_z(weak_batter))
+
+	# 左打者は同じ左右対応でも左右差が大きい。
+	var left_batter: PSPlayerSeasonRecord = _fielder(8313, "Left", 0.0)
+	left_batter.batting_side = PSPlatoonMatchup.HAND_LEFT
+	left_batter.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER
+	assert_float(PSPlatoonMatchup.batter_shift_z(left_batter)) 		.is_equal_approx(PSPlatoonMatchup.ABILITY_SHIFT_Z * PSPlatoonMatchup.LEFT_BATTER_SHIFT_RATIO, 0.0001)
+
+	# 極端に左右対応が高い打者はわずかな逆スプリットになり、倍率は下限で止まる。
+	var reverse_batter: PSPlayerSeasonRecord = _fielder(8314, "Reverse", 0.0)
+	reverse_batter.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	reverse_batter.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER + 10.0
+	assert_float(PSPlatoonMatchup.batter_shift_z(reverse_batter)).is_less(0.0)
+	assert_float(PSPlatoonMatchup.batter_shift_scale(reverse_batter)) 		.is_equal_approx(PSPlatoonMatchup.SHIFT_SCALE_MIN, 0.0001)
+
+	# Bat_Platoon を持たない記録は母集団平均の打者として扱う (倍率 1.0)。
+	var blank_batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	blank_batter.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	assert_float(PSPlatoonMatchup.batter_shift_scale(blank_batter)).is_equal_approx(1.0, 0.0001)
+
+	# 起用 AI の加減点も同じ比で伸縮する (符号は相性、大きさは打者ごと)。
+	var right_pitcher_hand: String = PSPlatoonMatchup.HAND_RIGHT
+	var weak_bonus: float = PSPlatoonMatchup.rating_bonus_for(weak_batter, right_pitcher_hand)
+	var strong_bonus: float = PSPlatoonMatchup.rating_bonus_for(strong_batter, right_pitcher_hand)
+	assert_float(weak_bonus).is_less(0.0)
+	assert_float(strong_bonus).is_less(0.0)
+	assert_float(absf(weak_bonus)).is_greater(absf(strong_bonus))
+	assert_float(PSPlatoonMatchup.order_bonus_for(weak_batter, PSPlatoonMatchup.HAND_LEFT)) 		.is_greater(PSPlatoonMatchup.order_bonus_for(strong_batter, PSPlatoonMatchup.HAND_LEFT))
+
+	# 打席シムの差も打者ごとに変わる (左右対応の低い打者のほうが有利・不利の落差が大きい)。
+	var right_pitcher: PSPlayerSeasonRecord = _pitcher(8315, "Right Pitcher", 0.0)
+	right_pitcher.throwing_hand = PSPlatoonMatchup.HAND_RIGHT
+	var left_pitcher: PSPlayerSeasonRecord = _pitcher(8316, "Left Pitcher", 0.0)
+	left_pitcher.throwing_hand = PSPlatoonMatchup.HAND_LEFT
+	assert_float(_platoon_ability_gap(weak_batter, left_pitcher, right_pitcher)) 		.is_greater(_platoon_ability_gap(strong_batter, left_pitcher, right_pitcher))
+
+
+# 表示能力「対逆」は**逆の利き腕の投手に対する OPS の上がり幅**を、リーグ平均の左右差 = 1.0 と
+# した比で出したもの。左右差が無ければ 0.0、負なら逆スプリット。
+# 分母がリーグ固定なので打力の高低には依らない。
+func test_vs_opposite_hand_rating_is_a_platoon_multiplier() -> void:
+	var right_wide: PSPlayerSeasonRecord = _fielder(8320, "Right Wide", 0.0)
+	right_wide.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	right_wide.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER - 1.0
+	var right_narrow: PSPlayerSeasonRecord = _fielder(8321, "Right Narrow", 0.0)
+	right_narrow.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	right_narrow.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER + 1.0
+	var left_wide: PSPlayerSeasonRecord = _fielder(8322, "Left Wide", 0.0)
+	left_wide.batting_side = PSPlatoonMatchup.HAND_LEFT
+	left_wide.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER - 1.0
+
+	# 左右差が大きいほど倍率が高い。打席左右に依らず 1 が基準。
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(right_wide)) 		.is_greater(PSPlayerVisibleRatings.fielder_vs_opposite(right_narrow))
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(right_wide)).is_greater(0.0)
+	# 左打者は同じ左右対応でも左右差が大きい (1.30 倍) ぶん倍率が高い。
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(left_wide)) 		.is_greater(PSPlayerVisibleRatings.fielder_vs_opposite(right_wide))
+
+	# 左右差が無い打者はちょうど 0.0 (リーグ平均の左右差が 1.0 なので)。
+	var flat: PSPlayerSeasonRecord = _fielder(8325, "Flat", 0.0)
+	flat.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	flat.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER 		+ 1.0 / PSPlatoonMatchup.PLATOON_SHIFT_PER_Z
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(flat)).is_equal_approx(0.0, 0.0001)
+
+	# 逆スプリット (左右対応が極端に高い) は 0 を下回る。
+	var reverse: PSPlayerSeasonRecord = _fielder(8326, "Reverse", 0.0)
+	reverse.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	reverse.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER + 10.0
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(reverse)).is_less(0.0)
+
+	# 打力が違っても左右差が同じなら同じ倍率 (分母がリーグ平均で固定されているため)。
+	var strong_bat: PSPlayerSeasonRecord = _fielder(8327, "Strong Bat", 1.0)
+	strong_bat.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	strong_bat.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER - 1.0
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(strong_bat)) 		.is_equal_approx(PSPlayerVisibleRatings.fielder_vs_opposite(right_wide), 0.0001)
+
+	# 表示値から OPS の変動幅が読める: 値 × リーグ平均の左右差 = 有利側 - 不利側 の OPS 差。
+	assert_float(PSPlayerVisibleRatings.fielder_vs_opposite(right_wide) 		* PSPlayerVisibleRatings.VS_OPPOSITE_LEAGUE_SPLIT_OPS) 		.is_equal_approx(PSPlatoonMatchup.expected_split_ops(right_wide), 0.0001)
+
+	# 表示行は 1-100 の能力値ではなく整形済みの text とバー用 factor を持つ (ラベルは常に対逆)。
+	var row: Dictionary = PSPlayerVisibleRatings.vs_opposite_row(right_wide)
+	assert_str(str(row.get("label", ""))).is_equal("対逆")
+	assert_bool(row.has("text")).is_true()
+	assert_bool(row.has("display_value")).is_false()
+	assert_float(float(row.get("factor", -1.0))).is_between(0.0, 1.0)
+	var labels: Array = []
+	for row_value in (PSPlayerVisibleRatings.fielder_ratings(left_wide).get("display_ratings", []) as Array):
+		labels.append(str((row_value as Dictionary).get("label", "")))
+	assert_array(labels).contains(["対逆"])
+
+
+# 左右差は「その日の相手」だけでなく**シーズン通算の打力評価**にも効く。
+# 対戦の約 8 割が右投手なので、左右差が大きい右打者は打撃評価が下がり、左打者は上がる。
+func test_platoon_shifts_season_batting_value() -> void:
+	var right_wide: PSPlayerSeasonRecord = _fielder(8330, "Right Wide", 0.0)
+	right_wide.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	right_wide.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER - 1.0
+	var right_narrow: PSPlayerSeasonRecord = _fielder(8331, "Right Narrow", 0.0)
+	right_narrow.batting_side = PSPlatoonMatchup.HAND_RIGHT
+	right_narrow.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER + 1.0
+	var left_wide: PSPlayerSeasonRecord = _fielder(8332, "Left Wide", 0.0)
+	left_wide.batting_side = PSPlatoonMatchup.HAND_LEFT
+	left_wide.z_abilities_snapshot["Bat_Platoon"] = PSPlatoonMatchup.PLATOON_Z_CENTER - 1.0
+
+	# 期待符号: 右打者は不利寄り (負)、左打者は有利寄り (正)、スイッチは常に有利。
+	assert_float(PSPlatoonMatchup.expected_sign_for(PSPlatoonMatchup.HAND_RIGHT)).is_less(0.0)
+	assert_float(PSPlatoonMatchup.expected_sign_for(PSPlatoonMatchup.HAND_LEFT)).is_greater(0.0)
+	assert_float(PSPlatoonMatchup.expected_sign_for(PSPlatoonMatchup.HAND_SWITCH)) 		.is_equal_approx(PSPlatoonMatchup.ADVANTAGE, 0.0001)
+
+	# 左右差の大きい右打者は、同じ能力で左右差の小さい右打者より打撃評価が低い。
+	assert_int(PSPlayerValueEvaluator.batting_score(right_wide)) 		.is_less(PSPlayerValueEvaluator.batting_score(right_narrow))
+	# 左打者は逆に、左右差が大きいほど通算では得をする。
+	assert_int(PSPlayerValueEvaluator.batting_score(left_wide)) 		.is_greater(PSPlayerValueEvaluator.batting_score(right_wide))
+	# スタメン枠の評価にも同じ差が伝わる (打撃スコアを土台にしているため)。
+	assert_int(PSPlayerValueEvaluator.starter_assignment_score(right_wide, 3, true)) 		.is_less(PSPlayerValueEvaluator.starter_assignment_score(right_narrow, 3, true))
+
+
+# 打者の質能力が「有利な投手 - 不利な投手」でどれだけ動くか (SHIFT_KEYS の 1 本で見る)。
+func _platoon_ability_gap(
+	batter: PSPlayerSeasonRecord,
+	advantage_pitcher: PSPlayerSeasonRecord,
+	disadvantage_pitcher: PSPlayerSeasonRecord
+) -> float:
+	var key: String = PSPlatoonMatchup.SHIFT_KEYS[0]
+	var advantage: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		batter, advantage_pitcher, {}, {}, false
+	).get("batter_z", {}) as Dictionary
+	var disadvantage: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+		batter, disadvantage_pitcher, {}, {}, false
+	).get("batter_z", {}) as Dictionary
+	return float(advantage.get(key, 0.0)) - float(disadvantage.get(key, 0.0))
 
 
 # AI (auto_lineup) は相手先発の左右でスタメン・DH・打順を組み替える。

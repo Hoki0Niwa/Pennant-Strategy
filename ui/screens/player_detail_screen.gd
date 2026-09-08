@@ -238,6 +238,12 @@ func _draw_ability(rect: Rect2) -> void:
 		var row: Dictionary = ratings[i] as Dictionary
 		var suffix: String = str(row.get("suffix", ""))
 		var value: int = int(row.get("display_value", row.get("value", 0)))
+		# 倍率表示 (対逆) の行は 1-100 の能力値ではないので、整形済み text と factor をそのまま使い、
+		# 段階色 ([[feedback_ui_color_conventions]]) も付けない (優劣の尺度が他の能力と違うため)。
+		if row.has("text"):
+			_draw_bar(x, bar_top + float(i) * ABILITY_BAR_H, w, label_w, value_box,
+				str(row.get("label", "")), str(row["text"]), float(row.get("factor", 0.0)), MUTED)
+			continue
 		var factor: float = clampf((float(value) - 120.0) / 45.0, 0.0, 1.0) if suffix == "km/h" else clampf(float(value) / 100.0, 0.0, 1.0)
 		_draw_bar(x, bar_top + float(i) * ABILITY_BAR_H, w, label_w, value_box,
 			str(row.get("label", "")), "%d%s" % [value, suffix], factor, _rating_color(value, suffix))

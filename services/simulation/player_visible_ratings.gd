@@ -39,6 +39,7 @@ static func fielder_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 		{"key": "defense", "label": "守備", "display_value": fielder_defense(record)},
 		{"key": "arm", "label": "肩力", "display_value": fielder_arm(record)},
 		{"key": "discipline", "label": "選球", "display_value": fielder_discipline(record)},
+		vs_opposite_row(record),
 	])
 
 
@@ -67,6 +68,10 @@ static func summary_line_from_result(result: Dictionary) -> String:
 	var parts: Array = []
 	for row_value in ratings:
 		var row: Dictionary = row_value as Dictionary
+		# 倍率表示 (対逆) など、1-100 の能力値でない行は整形済みの text を持つ。
+		if row.has("text"):
+			parts.append("%s %s" % [str(row.get("label", "")), str(row["text"])])
+			continue
 		var suffix: String = str(row.get("suffix", ""))
 		var display_value: int = int(row.get("display_value", row.get("value", 0)))
 		parts.append("%s %d%s" % [str(row.get("label", "")), display_value, suffix])
@@ -186,6 +191,50 @@ static func fielder_discipline(record: PSPlayerSeasonRecord) -> int:
 			"Bat_Aggression": -0.10,
 		})
 	return record.z_display("Bat_BBCreate")
+
+
+# 「対逆」表示。**逆の利き腕 (その打者が有利になる側) の投手が相手だと OPS がどれだけ上がるか**を、
+# リーグ平均の左右差を 1.00 とした比で出す。**リーグ中央の打者がちょうど 1.0、左右差が無ければ 0.0**、
+# 負なら逆スプリット (同じ利き腕のほうが打てる)。0.1 刻みで表示する。
+#
+#   対逆 = (有利側 - 不利側 の OPS 差) / VS_OPPOSITE_LEAGUE_SPLIT_OPS
+#
+# **読み方: OPS の変動幅 = 値 × 0.08。** 1.0 なら有利側と不利側で OPS が約 .08、2.0 なら約 .15 違う。
+# wOBA 倍率で読んでもほぼ同じ値になる (水準もスプリットも同じ係数で縮むため、差は 0.002 以下)。
+#
+# ⚠️ **打者自身の打力は入らない。** 分母がリーグ固定なので、左右差が同じなら打力が違っても同値。
+# (自分の OPS を分母にすると、素 OPS .55 で 1.093 / .90 で 1.056 と打力の低さを測ってしまう)
+# 初期ワールドの一軍スタメンは 0.1〜2.0、中央 1.0 (MLB 実測の分布に合わせてある)。
+#
+# ⚠️ **他の表示能力と違って 1-100 の能力値ではない。** 打力そのものは巧打/長打/選球が持つ。
+# 相性の量と OPS への換算は PSPlatoonMatchup が単一ソース ([[project_platoon_usage]])。
+const VS_OPPOSITE_LABEL: String = "対逆"
+# 1.0 の基準にするリーグの左右差 (OPS 差)。一軍スタメンの見込みスプリットの中央値。
+# ⚠️ **左右差の係数やテール圧縮を触ると中央が 1.0 からずれる。** そのときは測り直してここを更新する。
+const VS_OPPOSITE_LEAGUE_SPLIT_OPS: float = 0.077
+const VS_OPPOSITE_LEAGUE_AVERAGE: float = 1.0
+# バー表示の上端 (0 〜 この値を 0-100% に写す)。
+const VS_OPPOSITE_BAR_MAX: float = 2.0
+
+
+static func fielder_vs_opposite(record: PSPlayerSeasonRecord) -> float:
+	if record == null:
+		return VS_OPPOSITE_LEAGUE_AVERAGE
+	return PSPlatoonMatchup.expected_split_ops(record) / VS_OPPOSITE_LEAGUE_SPLIT_OPS
+
+
+# 表示能力セットへ入れる行。**倍率なので display_value ではなく text を持つ** —
+# 1-100 の能力値として描かれないよう、描画側は text があればそれを優先する。
+static func vs_opposite_row(record: PSPlayerSeasonRecord) -> Dictionary:
+	# 表示桁で丸めてから +0.0 する。-0.04 のような微小な負が "-0.0" と出るのを防ぐ。
+	var multiplier: float = snappedf(fielder_vs_opposite(record), 0.1) + 0.0
+	return {
+		"key": "vs_opposite",
+		"label": VS_OPPOSITE_LABEL,
+		"value": multiplier,
+		"text": "%.1f" % multiplier,
+		"factor": clampf(multiplier / VS_OPPOSITE_BAR_MAX, 0.02, 1.0),
+	}
 
 
 static func pitcher_velocity(record: PSPlayerSeasonRecord) -> int:

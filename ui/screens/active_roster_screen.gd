@@ -428,6 +428,10 @@ func _draw_player_detail() -> void:
 		var val: int = int(rr.get("display_value", 0))
 		var suffix: String = str(rr.get("suffix", ""))
 		_text(str(rr.get("label", "")), Vector2(cx, ry), 12, FAINT)
+		# 倍率表示 (対逆) は 1-100 の能力値ではないので段階色を付けず、整形済み text をそのまま出す。
+		if rr.has("text"):
+			_text(str(rr["text"]), Vector2(cx, ry + 30), 20, TEXT)
+			continue
 		_text("%d%s" % [val, suffix], Vector2(cx, ry + 30), 20, _eval_color(val) if suffix.is_empty() else TEXT)
 
 	# プロフィール行 (捕手能力など z しか持たない内部値は UI に出さない)。

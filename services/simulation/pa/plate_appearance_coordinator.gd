@@ -757,12 +757,20 @@ static func _build_batter_z_view(
 	platoon_sign: float
 ) -> Dictionary:
 	var view: Dictionary = PSZAbilityAdapter.batter_view(record)
+	# ⚠️ 順序が重要: **テール圧縮を先に掛け、左右のシフトは後から足す。**
+	# 圧縮は「その打者の能力がどこで頭打ちになるか」の較正で、左右の相性は対戦ごとの
+	# マッチアップ効果なので、圧縮の対象にすると
+	#   ① 名目の 2 割が削られ、入力を上げても出力が増えない (飽和する)
+	#   ② 能力の高い打者ほど左右差が小さくなる — MLB 実測では左打者はむしろ**逆**
+	#      (打力四分位ごとの平均スプリット .057 → .096 → .111 → .119)
+	# の 2 つが起きる。2026-09-08 に後入れへ変更した ([[project_platoon_usage]])。
+	_apply_batter_tail_limits(view, rules)
 	PSPlatoonMatchup.apply_batter_shift(
 		view,
+		record,
 		platoon_sign,
 		_rule_float(rules, "platoon_ability_shift_z", PSPlatoonMatchup.ABILITY_SHIFT_Z)
 	)
-	_apply_batter_tail_limits(view, rules)
 	return view
 
 

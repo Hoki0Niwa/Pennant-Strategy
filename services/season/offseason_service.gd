@@ -178,6 +178,25 @@ const RAW_MAX_VELOCITY_MAX: int = 165
 const GEN_MAX_VELOCITY_MIN: int = 140
 const GEN_MAX_VELOCITY_MAX: int = 160
 
+# Bat_Platoon (左右対応) の生成レンジ。他のスタイル軸と違い ability_variance に連動させない。
+# この軸は左右差の**大きさ**を決める実効ノブ (PSPlatoonMatchup.PLATOON_SHIFT_PER_Z) なので、
+# 素材の質や volatility で幅が変わると、育成枠・専用球団・低評価ドラフト組だけ左右差が均質になり、
+# 世代が入れ替わるたびにリーグの左右差の分布が動いてしまう。
+# 中心 56 は z+0.48 = PSPlatoonMatchup.PLATOON_Z_CENTER と一致させてある
+# (= 生成された打者の平均がちょうど基準シフト量になる)。
+# ⚠️ **初期データでは Bat_Platoon と打撃の質に相関がある** (r=+0.23) ため、一軍スタメンだけ
+# 見ると母集団平均 +0.28σ より高い +0.46σ になる。生成側は相関を作らない (左右差の大きさが
+# 打力と相関する現実的な理由が無い) ので、**生成打者の一軍平均は中心そのもの**。
+# だから中心を「初期データの母集団平均」ではなく「初期データの一軍平均」に合わせる。
+# ここを 50 のままにすると世代交代でリーグ平均の左右差が 3 割ほど広がる。
+#
+# ⚠️ **この軸だけ一様抽選ではなく正規抽選**を使う (`_rand_z_normal`)。
+# 他の能力と同じ一様抽選だと裾が出ず、**逆スプリットの打者も極端に左右差の大きい打者も
+# 1 人も生まれない**。MLB 実測 (2018-2025) では前者が約 1%、後者 (.11 以上) が約 2 割居る。
+# SD 7 表示点 = 0.55σ は初期データの野手の実測 SD に合わせてある。
+const PLATOON_GEN_CENTER: int = 56
+const PLATOON_GEN_SD: int = 7
+
 
 # 戦力外/育成降格にできない選手 (空文字=可能)。ユーザーの手動選択 (戦力外エディタ) は
 # compute_release_candidates_for_team を経由しないため、確定時点でここを単独のガード地点にする。
@@ -1269,7 +1288,7 @@ static func generated_z_abilities(position: int, center: int, max_display: int =
 	z["Bat_Barrel"] = _rand_z(batting_center, core_variance, 25, max_display)
 	z["Bat_Spray"] = _rand_z(batting_center, secondary_variance, 25, max_display)
 	z["Bat_Aggression"] = _rand_z(50, style_variance, 25, max_display)
-	z["Bat_Platoon"] = _rand_z(50, style_variance, 25, max_display)
+	z["Bat_Platoon"] = _rand_z_normal(PLATOON_GEN_CENTER, PLATOON_GEN_SD, 25, max_display)
 
 	z["Run_Speed"] = _rand_z(batting_center + 5, core_variance, 25, max_display)
 	z["Run_Judgment"] = _rand_z(batting_center, core_variance, 25, max_display)
@@ -1506,6 +1525,9 @@ static func _capture_display_ratings(player: PSPlayer) -> Dictionary:
 	var map: Dictionary = {}
 	for row_value in result.get("display_ratings", []) as Array:
 		var row: Dictionary = row_value as Dictionary
+		# 倍率表示 (対逆) は 1-100 の能力値ではないので、増減の一覧には出さない。
+		if row.has("text"):
+			continue
 		map[str(row.get("key", ""))] = {
 			"label": str(row.get("label", "")),
 			"suffix": str(row.get("suffix", "")),
@@ -2533,6 +2555,16 @@ static func _compute_new_salary(player: PSPlayer, record: PSPlayerSeasonRecord, 
 # _compute_new_salary と共通で、外国人契約市場はこれをベース年俸として複数年プレミアムを乗せる。
 static func foreign_market_salary(player: PSPlayer, record: PSPlayerSeasonRecord, war: float) -> int:
 	return _compute_new_salary(player, record, war)
+
+
+# 正規分布の抽選 (Box-Muller)。裾の要る軸だけに使う — 一様抽選の _rand_z と違い、
+# まれに ±3σ 近くまで出る。sd は 1-100 の talent authoring 単位 (12.5 = 1σ)。
+static func _rand_z_normal(center: int, sd: int, min_value: int = 25, max_value: int = 88) -> float:
+	var u1: float = max(0.000001, Rng.roll_float())
+	var u2: float = Rng.roll_float()
+	var gauss: float = clampf(sqrt(-2.0 * log(u1)) * cos(TAU * u2), -3.0, 3.0)
+	var value_z: float = PSAbilityScale.display_to_z(center) + gauss * float(sd) / PSAbilityScale.DISPLAY_STDEV
+	return clampf(value_z, PSAbilityScale.display_to_z(min_value), PSAbilityScale.display_to_z(max_value))
 
 
 static func _rand_z(center: int, variance: int = 12, min_value: int = 25, max_value: int = 88) -> float:

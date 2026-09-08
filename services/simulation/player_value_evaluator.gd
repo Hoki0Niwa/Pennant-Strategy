@@ -145,6 +145,11 @@ static func _batting_score(record: PSPlayerSeasonRecord, apply_fatigue_penalty: 
 	score += gap_curve * 7.0
 	score += home_run_curve * 12.0
 	score += speed_curve * 4.0
+	# 左右差のシーズン期待値。対戦の約 8 割が右投手なので、左右差が大きい右打者は通算で損をし、
+	# 左打者は得をする。相手の左右が決まっていない場面 (スタメン枠・DH・代打の下限・査定) は
+	# この値で序列が動き、1 試合単位の相性は PSPlatoonMatchup.rating_bonus_for が別に足す。
+	# 実効幅は概ね -1.4 〜 +1.9 点。
+	score += PSPlatoonMatchup.season_value_shift_z(record) * PSPlatoonMatchup.RATING_POINTS_PER_SIGMA
 	if record.is_pitcher():
 		score -= 18.0
 	return _visible_score(score)

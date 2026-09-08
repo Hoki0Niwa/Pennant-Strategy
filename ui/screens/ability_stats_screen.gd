@@ -217,6 +217,10 @@ func _columns_for_current() -> Array:
 					{"title": "守備", "key": "defense", "w": 50, "align": "c", "fmt": "int"},
 					{"title": "肩力", "key": "arm", "w": 50, "align": "c", "fmt": "int"},
 					{"title": "選球", "key": "discipline", "w": 50, "align": "c", "fmt": "int"},
+					# 対逆 = 逆の利き腕に対する OPS の上がり幅 (リーグ平均の左右差 = 1.0 / 変動幅は 値×0.05)。
+					# どちらの左右が有利側かは打席 (打) 列で読む。
+					{"title": "打", "key": "bats", "w": 30, "align": "c", "fmt": "str"},
+					{"title": "対逆", "key": "vs_opposite", "w": 50, "align": "c", "fmt": "f1"},
 				])
 				for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
 					cols.append({"title": str(POS_SHORT.get(pos, "?")), "key": "apt_%d" % pos, "w": 36, "align": "c", "fmt": "int"})
@@ -734,10 +738,17 @@ func _ability_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	for rating_value in ratings:
 		var rating: Dictionary = rating_value as Dictionary
 		var key: String = str(rating.get("key", ""))
+		# 倍率表示 (対逆) は 1-100 の能力値ではないので、float のまま入れて段階色も付けない。
+		if rating.has("text"):
+			row[key] = snappedf(float(rating.get("value", 0.0)), 0.1) + 0.0
+			continue
 		var value: int = int(rating.get("display_value", rating.get("value", 0)))
 		var suffix: String = str(rating.get("suffix", ""))
 		row[key] = value
 		row["%s_color" % key] = _rating_color(value, suffix)
+	# 対逆がどちらの左右を見た値かを読めるように、打席左右を添える。
+	if not record.is_pitcher():
+		row["bats"] = _batting_side_short(record.batting_side)
 	var overall: int = PlayerValueEvaluator.overall_score(record)
 	row["overall"] = overall
 	row["overall_color"] = _eval_color(overall)
@@ -974,6 +985,18 @@ func _team_name(team_id: int) -> String:
 # 疲労を 0〜100% へ正規化 (active_roster と同じ FATIGUE_MAX 基準)。
 func _fatigue_pct(record: PSPlayerSeasonRecord) -> int:
 	return clampi(int(round(float(record.fatigue) * 100.0 / float(GameSimulator.FATIGUE_MAX))), 0, 100)
+
+
+# 打席左右の 1 文字表示。対逆がどちらの利き腕を見た値かを読むための添え字。
+func _batting_side_short(batting_side: String) -> String:
+	match batting_side.to_upper():
+		PSPlatoonMatchup.HAND_RIGHT:
+			return "右"
+		PSPlatoonMatchup.HAND_LEFT:
+			return "左"
+		PSPlatoonMatchup.HAND_SWITCH:
+			return "両"
+	return "-"
 
 
 # 疲労は高いほど悪い (能力段階色とは逆)。低い間は控えめ、高くなると警告色。
