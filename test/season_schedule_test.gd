@@ -755,3 +755,203 @@ func test_pennant_race_counts_remaining_games_from_schedule() -> void:
 	assert_int(int((head_to_head[1] as Dictionary).get(2, 0))).is_equal(1)
 	assert_int(int((head_to_head[2] as Dictionary).get(1, 0))).is_equal(1)
 	assert_int(int((head_to_head[3] as Dictionary).get(1, 0))).is_equal(1)
+
+
+# --- 雨天中止・順延 ([[project_rainout_postpone]]) ---
+
+func test_rainout_never_hits_dome_home_games() -> void:
+	# 球場属性は屋根の有無だけで、ドーム主催は絶対に流れない。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var dome_home_games: int = 0
+	var postponed_dome: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+		if home == null or not home.has_dome():
+			continue
+		dome_home_games += 1
+		assert_float(PSRainoutService.cancel_probability(game)).is_equal(0.0)
+		if PSRainoutService.will_be_postponed(season, game):
+			postponed_dome += 1
+	# 12球団のうち6球団がドーム = ホーム試合はおよそ 429 試合。
+	assert_int(dome_home_games).is_greater(400)
+	assert_int(postponed_dome).is_equal(0)
+
+
+func test_rainout_count_stays_in_the_intended_band() -> void:
+	# FEEL_SCALE=0.5 の水準 (実 NPB 年 20〜30 の約半分) から外れたら気付けるようにする。
+	# 中止率そのものを変えたときは、ここと tools/run_rainout_probe.tscn を併せて見直すこと。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var postponed: int = 0
+	for game_value in season.schedule:
+		if PSRainoutService.will_be_postponed(season, game_value as Dictionary):
+			postponed += 1
+	assert_int(postponed).is_greater(5)
+	assert_int(postponed).is_less(32)
+
+
+func test_rainout_decision_is_stable_and_does_not_touch_the_global_rng() -> void:
+	# 予報を先読みできるのは、判定がグローバル Rng を消費しない純粋関数だから。
+	# ここが崩れると並列/逐次の決定性 (game_day_parallel_test) も同時に壊れる。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var game: Dictionary = season.schedule[0] as Dictionary
+	var first: bool = PSRainoutService.will_be_postponed(season, game)
+	var state_before: int = Rng.generator.state
+	for _i in range(20):
+		assert_bool(PSRainoutService.will_be_postponed(season, game)).is_equal(first)
+		PSRainoutService.forecast(season, game)
+	assert_int(Rng.generator.state).is_equal(state_before)
+
+
+func test_forecast_announces_the_cancellation_on_the_game_day() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var checked_postponed: int = 0
+	var checked_played: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+		if home == null:
+			continue
+		season.current_day = int(game.get("day", 0))
+		var forecast: Dictionary = PSRainoutService.forecast(season, game)
+		if home.has_dome():
+			assert_str(str(forecast.get("kind", ""))).is_equal("roof")
+			continue
+		assert_str(str(forecast.get("kind", ""))).is_equal("rain")
+		assert_bool(bool(forecast.get("certain", false))).is_true()
+		if PSRainoutService.will_be_postponed(season, game):
+			# 当日は主催球団が中止を発表する日なので、予報は 100% で確定する。
+			assert_int(int(forecast.get("chance", 0))).is_equal(100)
+			checked_postponed += 1
+		else:
+			assert_int(int(forecast.get("chance", 0))).is_less_equal(int(PSRainoutService.FORECAST_PLAY_MAX_PCT))
+			checked_played += 1
+	assert_int(checked_postponed).is_greater(0)
+	assert_int(checked_played).is_greater(0)
+
+
+func test_forecast_is_hidden_beyond_the_weekly_range() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var game: Dictionary = _first_open_air_game(season)
+	season.current_day = int(game.get("day", 0)) - PSRainoutService.FORECAST_MAX_LEAD_DAYS
+	assert_str(str(PSRainoutService.forecast(season, game).get("kind", ""))).is_equal("rain")
+	season.current_day -= 1
+	assert_str(str(PSRainoutService.forecast(season, game).get("kind", ""))).is_equal("none")
+
+
+func test_postponed_games_keep_every_pennant_invariant() -> void:
+	# 実際の中止率より遥かに多く順延させても、143試合 / 同日2試合なし / day 昇順が保たれること。
+	# 「振替先が枯渇して日程が壊れる」という最悪ケースの回帰テスト。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var targets: Array = []
+	for index in range(season.schedule.size()):
+		if index % 12 == 0:
+			targets.append(season.schedule[index] as Dictionary)
+	for game_value in targets:
+		PSRescheduleService.postpone(season, game_value as Dictionary)
+	assert_int(season.rainouts.size()).is_equal(targets.size())
+
+	var validation: Dictionary = PSSchedule.validate_schedule(season.schedule, GameDb.teams)
+	assert_bool(bool(validation.get("ok", false))).override_failure_message(
+		"schedule broke after %d postponements: %s" % [targets.size(), str(validation.get("message", ""))]
+	).is_true()
+
+	var prev_day: int = 0
+	for game_value in season.schedule:
+		var day: int = int((game_value as Dictionary).get("day", 0))
+		assert_int(day).is_greater_equal(prev_day)
+		prev_day = day
+
+
+func test_postponed_game_can_land_on_a_travel_monday() -> void:
+	# 実 NPB の第一候補は 3 連戦翌日の月曜 (移動日)。validate_schedule の月曜禁止は
+	# 順延した試合だけ除外してあるので、ここが通らなくなったら例外指定が消えている。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var monday_makeups: int = 0
+	for index in range(season.schedule.size()):
+		if index % 12 != 0:
+			continue
+		var game: Dictionary = season.schedule[index] as Dictionary
+		var entry: Dictionary = PSRescheduleService.postpone(season, game)
+		if entry.is_empty():
+			continue
+		var makeup_date: String = str(entry.get("makeup_date", ""))
+		if SeasonCalendar.weekday_for_date(makeup_date) == 1 and not JapaneseHolidays.is_holiday(makeup_date):
+			monday_makeups += 1
+	assert_int(monday_makeups).is_greater(0)
+	assert_bool(bool(PSSchedule.validate_schedule(season.schedule, GameDb.teams).get("ok", false))).is_true()
+
+
+func test_makeup_day_avoids_league_wide_breaks() -> void:
+	# オールスター休みと交流戦後の休養カード (試合の無い日が3日以上続く区間) には振り替えない。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var break_days: Dictionary = _league_break_days(season)
+	assert_int(break_days.size()).is_greater(0)
+	for index in range(season.schedule.size()):
+		if index % 12 != 0:
+			continue
+		var entry: Dictionary = PSRescheduleService.postpone(season, season.schedule[index] as Dictionary)
+		if entry.is_empty():
+			continue
+		assert_bool(break_days.has(int(entry.get("makeup_day", 0)))).override_failure_message(
+			"makeup landed inside a league-wide break: day %d" % int(entry.get("makeup_day", 0))
+		).is_false()
+
+
+func test_postponing_does_not_move_played_game_indices() -> void:
+	# 詳細ログは schedule の index をファイル名にしている (game_logs/g<index>.json) ため、
+	# 順延の再整列で**消化済み試合の index が動くと過去の試合ログが別の試合に化ける**。
+	# (day, series_id, series_game_no) が一意なので整列は決定的、という前提の回帰テスト。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var cutoff_day: int = 40
+	var played_order: Array = []
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) >= cutoff_day:
+			continue
+		game["played"] = true
+		played_order.append(game)
+
+	var postponed: int = 0
+	for index in range(season.schedule.size()):
+		var game: Dictionary = season.schedule[index] as Dictionary
+		if bool(game.get("played", false)) or int(game.get("day", 0)) != cutoff_day:
+			continue
+		if not PSRescheduleService.postpone(season, game).is_empty():
+			postponed += 1
+	assert_int(postponed).is_greater(0)
+
+	for index in range(played_order.size()):
+		assert_bool(is_same(season.schedule[index], played_order[index])).override_failure_message(
+			"played game index %d moved after postponing" % index
+		).is_true()
+
+
+func _first_open_air_game(season: PSSeason) -> Dictionary:
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+		if home != null and not home.has_dome() and int(game.get("day", 0)) > PSRainoutService.FORECAST_MAX_LEAD_DAYS + 1:
+			return game
+	return {}
+
+
+# 生成直後の日程で「リーグ全体が3日以上続けて試合をしない」日の集合。
+func _league_break_days(season: PSSeason) -> Dictionary:
+	var has_game: Dictionary = {}
+	var last_day: int = 0
+	for game_value in season.schedule:
+		var day: int = int((game_value as Dictionary).get("day", 0))
+		has_game[day] = true
+		last_day = max(last_day, day)
+	var breaks: Dictionary = {}
+	var run: Array = []
+	for day in range(1, last_day + 1):
+		if has_game.has(day):
+			if run.size() >= 3:
+				for empty_day in run:
+					breaks[empty_day] = true
+			run = []
+			continue
+		run.append(day)
+	return breaks

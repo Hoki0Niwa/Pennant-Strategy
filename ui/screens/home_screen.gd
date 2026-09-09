@@ -35,8 +35,14 @@ const LEGEND: Array = [
 	{"label": "敗戦", "color": TEXT, "mark": "●"},
 	{"label": "引分", "color": AMBER, "mark": "△"},
 	{"label": "未消化", "color": BLUE, "mark": ""},
+	{"label": "雨天中止", "color": RED, "mark": ""},
 	{"label": "休養・移動日", "color": FAINT, "mark": ""},
 ]
+
+# 降水確率の表示色。**能力の段階色 (青=優秀…) とは別系統**で、天気らしい
+# 灰 → 黄 → 赤 の警戒ランプにする ([[feedback_ui_color_conventions]] の段階色と混同しないため)。
+const RAIN_WARN_PCT: int = 40
+const RAIN_ALERT_PCT: int = 70
 
 var _calendar_year: int = 0
 var _calendar_month: int = 0
@@ -187,15 +193,25 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 			num_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.85)
 	_text(str(day_number), Vector2(rect.position.x + 9, rect.position.y + 21), 14, num_color)
 
+	# 中止した試合は振替日へ移動するので、元の日付には schedule 上なにも残らない。
+	# カレンダーで「この日は流れた」と分かるよう、台帳 (season.rainouts) から別途拾う。
+	var rainouts: Array = _rainouts_on_date(date_text, season, team_id)
+
 	# バッジは上段に置き、セル本文 (対戦カード) と重ねない。
 	var badge_x: float = rect.end.x - 44
 	if is_today:
 		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), "本日", BLUE)
 		badge_x -= 38
+	if not rainouts.is_empty():
+		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), "中止", RED)
+		badge_x -= 38
 	if has_dh:
 		_chip(Rect2(badge_x, rect.position.y + 7, 30, 18), "DH", BLUE_SOFT)
 
 	if games.is_empty():
+		# 中止バッジが出ている日を「休養」と書くと矛盾するので、ラベルは出さない。
+		if not rainouts.is_empty():
+			return
 		if _calendar_filter == "team" or _calendar_filter == "all":
 			var label: String = "休養" if _is_within_season_schedule_range(date_text, season) else "オフシーズン"
 			_text(label, Vector2(rect.position.x + 10, rect.position.y + 54), 12, FAINT)
@@ -325,11 +341,19 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_team_badge(Rect2(hx, row_y, 34, 34), home)
 	_text(home.name, Vector2(hx + 44, row_y + 23), 16, TEXT, 176)
 
-	# 会場 (球場データは無いため主催チームで代替) + DH
+	# 会場 (球場データは屋根の有無だけなので主催チームで代替) + 天気予報 + DH
 	var host_label: String = "%s 主催（%s）" % [home.name, "ホーム" if home.id == team_id else "ビジター"]
 	_text(host_label, Vector2(ox, rect.position.y + 110), 13, MUTED)
+	var forecast_label: String = _forecast_label(season, game)
+	if not forecast_label.is_empty():
+		_text(forecast_label, Vector2(ox + _measure(host_label, 13) + 16, rect.position.y + 110), 13, _forecast_color(season, game))
+	var chip_x: float = rect.end.x - 52
 	if bool(game.get("dh_enabled", false)):
-		_chip(Rect2(rect.end.x - 52, rect.position.y + 98, 34, 18), "DH", BLUE_SOFT)
+		_chip(Rect2(chip_x, rect.position.y + 98, 34, 18), "DH", BLUE_SOFT)
+		chip_x -= 48
+	# 雨天中止から組み直された試合。元の日付はカレンダー側に「中止」バッジで出る。
+	if int(game.get("postponed_count", 0)) > 0:
+		_chip(Rect2(chip_x, rect.position.y + 98, 44, 18), "振替", AMBER)
 
 	# 予告先発
 	_text("予告先発  %s  %s" % [away.short_name, _pitcher_line(_probable_pitcher(away.id, season))], Vector2(ox, rect.position.y + 138), 13, TEXT)
@@ -517,6 +541,18 @@ func _draw_upcoming(rect: Rect2, team_id: int, season: PSSeason) -> void:
 			continue
 		_text(SeasonCalendar.compact_label_for_game(game, season), Vector2(rect.position.x + 18, y), 13, TEXT if count == 0 else MUTED)
 		_text(_matchup_for_team(game, team_id), Vector2(rect.position.x + 110, y), 13, TEXT if count == 0 else MUTED, rect.size.x - 124)
+		# 週間予報。日付と対戦カードの間の余白に短縮形で置く (対戦カードの幅は削らない)。
+		# ドームと予報期間外は何も出さない = 空欄が「気にしなくてよい」の合図。
+		var forecast_short: String = _forecast_short_label(season, game)
+		if not forecast_short.is_empty():
+			_text(
+				forecast_short,
+				Vector2(rect.position.x + 68, y),
+				12,
+				_forecast_color(season, game),
+				38,
+				HORIZONTAL_ALIGNMENT_RIGHT
+			)
 		y += 30
 		count += 1
 	if count == 0:
@@ -824,6 +860,63 @@ func _games_on_day(day: int, season: PSSeason) -> Array:
 		if int(game.get("day", 0)) == day:
 			games.append(game)
 	return games
+
+
+# 天気予報の表示文字列。ドームは「ドーム」、予報の範囲外は空文字 (=何も描かない)。
+# 当日ぶんは確定しているので、100% はそのまま「中止」と出す。
+func _forecast_label(season: PSSeason, game: Dictionary) -> String:
+	var forecast: Dictionary = PSRainoutService.forecast(season, game)
+	match str(forecast.get("kind", "none")):
+		"roof":
+			return "ドーム"
+		"rain":
+			var chance: int = int(forecast.get("chance", 0))
+			if bool(forecast.get("certain", false)) and chance >= 100:
+				return "中止"
+			return "降水 %d%%" % chance
+		_:
+			return ""
+
+
+# 一覧用の短縮形。ドームは省く (毎行「ドーム」が並んでも情報量が無い)。
+func _forecast_short_label(season: PSSeason, game: Dictionary) -> String:
+	var forecast: Dictionary = PSRainoutService.forecast(season, game)
+	if str(forecast.get("kind", "none")) != "rain":
+		return ""
+	var chance: int = int(forecast.get("chance", 0))
+	if bool(forecast.get("certain", false)) and chance >= 100:
+		return "中止"
+	return "%d%%" % chance
+
+
+func _forecast_color(season: PSSeason, game: Dictionary) -> Color:
+	var forecast: Dictionary = PSRainoutService.forecast(season, game)
+	if str(forecast.get("kind", "none")) != "rain":
+		return FAINT
+	var chance: int = int(forecast.get("chance", 0))
+	if chance >= RAIN_ALERT_PCT:
+		return RED
+	if chance >= RAIN_WARN_PCT:
+		return AMBER
+	return MUTED
+
+
+# その日に雨天中止になった試合の台帳エントリ。カレンダーのフィルタと同じ範囲で絞る。
+func _rainouts_on_date(date_text: String, season: PSSeason, team_id: int) -> Array:
+	var user_team: PSTeam = GameDb.get_team(team_id)
+	var league: String = user_team.league if user_team != null else ""
+	var entries: Array = []
+	for entry_value in season.rainouts:
+		var entry: Dictionary = entry_value as Dictionary
+		if str(entry.get("date", "")) != date_text:
+			continue
+		if _calendar_filter == "all":
+			if not _game_in_league(entry, league):
+				continue
+		elif not _is_team_game(entry, team_id):
+			continue
+		entries.append(entry)
+	return entries
 
 
 func _filtered_games_on_date(date_text: String, season: PSSeason, team_id: int) -> Array:

@@ -1,6 +1,11 @@
 extends RefCounted
 class_name PSTeam
 
+# 本拠地球場の屋根。雨天中止の判定に使う唯一の球場属性で、ドームは中止しない
+# ([[project_rainout_postpone]])。球場サイズ (park factor) は別系統の mod 係数で、ここには持たない。
+const ROOF_OPEN: String = "open"
+const ROOF_DOME: String = "dome"
+
 var id: int
 var name: String
 var short_name: String
@@ -16,6 +21,8 @@ var auto_lineup: bool = true
 # いずれの対象にもならず、二軍戦にだけ参加する。`GameDb.teams` には載らず
 # `GameDb.farm_clubs` 側に持つ ([[project_farm_system_design]])。
 var farm_only: bool = false
+# 本拠地球場の屋根 (ROOF_OPEN / ROOF_DOME)。ファーム専用球団は二軍球場しか持たないため常に屋外。
+var home_park_roof: String = ROOF_OPEN
 
 
 static func from_dict(data: Dictionary) -> PSTeam:
@@ -35,6 +42,11 @@ func apply_dict(data: Dictionary) -> void:
 	ratings = (data.get("ratings", {}) as Dictionary).duplicate(true)
 	auto_lineup = bool(data.get("auto_lineup", true))
 	farm_only = bool(data.get("farm_only", false))
+	home_park_roof = ROOF_DOME if str(data.get("home_park_roof", ROOF_OPEN)) == ROOF_DOME else ROOF_OPEN
+
+
+func has_dome() -> bool:
+	return home_park_roof == ROOF_DOME
 
 
 func overall() -> int:
@@ -63,4 +75,5 @@ func to_dict() -> Dictionary:
 		"ratings": ratings,
 		"auto_lineup": auto_lineup,
 		"farm_only": farm_only,
+		"home_park_roof": home_park_roof,
 	}

@@ -143,16 +143,14 @@ static func simulate_next_unplayed_game(season: PSSeason, persist: bool = true, 
 # (セ・パ各3試合=6試合)ため、通常はチームが完全に排反な複数試合を WorkerThreadPool で並列計算する。
 static func simulate_current_day(season: PSSeason, persist: bool = true, auto_swap_ctx: Dictionary = {}, force_sequential: bool = false) -> Dictionary:
 	var day: int = season.current_day
-	var today_indices: Array = []
-	for index in range(season.schedule.size()):
-		var game: Dictionary = season.schedule[index] as Dictionary
-		if bool(game.get("played", false)):
-			continue
-		if int(game.get("day", 0)) != day:
-			continue
-		today_indices.append(index)
+	# 雨天中止は試合の計算より前。中止分は振替日へ移され schedule が再整列されるので、
+	# 当日の index は判定の**後**で作る (先に作ると振替で index がずれる)。
+	var postponed: Array = PSRainoutService.apply_to_day(season, day).get("postponed", []) as Array
+	var today_indices: Array = _unplayed_indices_on_day(season, day)
 
 	if today_indices.is_empty():
+		if not postponed.is_empty():
+			return _finish_all_postponed_day(season, day, postponed, persist, auto_swap_ctx, force_sequential)
 		var single_result: Dictionary = simulate_next_unplayed_game(season, false, {})
 		if not bool(single_result.get("ok", false)):
 			return single_result
@@ -160,6 +158,7 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 		return {
 			"ok": true,
 			"results": [single_result],
+			"postponed": postponed,
 			"message": str(single_result.get("message", "")),
 		}
 
@@ -185,10 +184,61 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 	return {
 		"ok": true,
 		"results": results,
-		"message": "%s の%d試合を消化しました。%s" % [
-			SeasonCalendar.day_status_label(season, day), results.size(), str(last_result.get("message", ""))
+		"postponed": postponed,
+		"message": "%s の%d試合を消化しました。%s%s" % [
+			SeasonCalendar.day_status_label(season, day),
+			results.size(),
+			_postponed_note(postponed),
+			str(last_result.get("message", "")),
 		],
 	}
+
+
+# 指定日の未消化試合の index。雨天中止で schedule が再整列された後に呼び直す前提。
+static func _unplayed_indices_on_day(season: PSSeason, day: int) -> Array:
+	var indices: Array = []
+	for index in range(season.schedule.size()):
+		var game: Dictionary = season.schedule[index] as Dictionary
+		if bool(game.get("played", false)):
+			continue
+		if int(game.get("day", 0)) != day:
+			continue
+		indices.append(index)
+	return indices
+
+
+# 当日の一軍戦が全部流れた日。試合の反映が無いので `advance_current_day` を自分で呼び、
+# 日が止まらないようにする (`simulate_days` 等は current_day が動かないとループを抜ける)。
+# 二軍戦は別球場なので通常どおり消化する。
+static func _finish_all_postponed_day(
+	season: PSSeason,
+	day: int,
+	postponed: Array,
+	persist: bool,
+	auto_swap_ctx: Dictionary,
+	force_sequential: bool
+) -> Dictionary:
+	# 試合が無くても順序は通常日と同じ (スポット昇格 → 二軍戦)。昇格側は「今日試合が無い球団は
+	# 何もしない」ので中止球団は上げず、登板を終えたスポット昇格の抹消だけが通常どおり進む。
+	_run_spot_starter_callups(season, day, auto_swap_ctx)
+	_simulate_farm_day(season, day, force_sequential)
+	PSGameDecisions.advance_current_day(season)
+	if not auto_swap_ctx.is_empty():
+		_run_periodic_roster_swap_hook(season, day, auto_swap_ctx)
+	if persist:
+		_persist_simulation_outputs(season)
+	return {
+		"ok": true,
+		"results": [],
+		"postponed": postponed,
+		"message": "%s は全%d試合が雨天中止になりました。" % [
+			SeasonCalendar.day_status_label(season, day), postponed.size()
+		],
+	}
+
+
+static func _postponed_note(postponed: Array) -> String:
+	return "" if postponed.is_empty() else "%d試合が雨天中止。" % postponed.size()
 
 
 # 谷間の先発 (二軍から1試合限定の昇格) と、登板を終えたスポット昇格の抹消。
@@ -325,6 +375,7 @@ static func simulate_days(season: PSSeason, days: int, persist: bool = true, aut
 	var start_day: int = season.current_day
 	var target_day: int = start_day + days
 	var simulated_games: int = 0
+	var postponed_games: int = 0
 	var last_result: Dictionary = {}
 	var guard: int = season.schedule.size() + 1
 	while guard > 0:
@@ -341,11 +392,13 @@ static func simulate_days(season: PSSeason, days: int, persist: bool = true, aut
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
+		postponed_games += (day_result.get("postponed", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
 		_persist_simulation_outputs(season)
-	if simulated_games == 0:
+	# 全試合が雨天中止だった日も「進行した」— 0 試合でも日付は進んでいる。
+	if simulated_games == 0 and postponed_games == 0:
 		return {"ok": false, "message": "進行できる試合がありません"}
 	return {
 		"ok": true,
@@ -365,6 +418,7 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 		return {"ok": false, "message": "チームが指定されていません"}
 	var start_day: int = season.current_day
 	var simulated_games: int = 0
+	var postponed_games: int = 0
 	var last_result: Dictionary = {}
 	var guard: int = season.schedule.size() + 1
 	while guard > 0:
@@ -381,11 +435,12 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
+		postponed_games += (day_result.get("postponed", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
 		_persist_simulation_outputs(season)
-	if simulated_games == 0:
+	if simulated_games == 0 and postponed_games == 0:
 		return {"ok": false, "message": "次の自軍試合は本日です。または未消化試合がありません"}
 	return {
 		"ok": true,
@@ -482,7 +537,8 @@ static func simulate_remaining_season(
 			return day_result
 		last_result = day_result
 		var day_results: Array = day_result.get("results", []) as Array
-		if day_results.is_empty():
+		# 全試合が雨天中止の日は結果が 0 件でも正常 (日付は進んでいる)。
+		if day_results.is_empty() and (day_result.get("postponed", []) as Array).is_empty():
 			if simulated_count > 0 and persist:
 				_persist_simulation_outputs(season)
 			return {"ok": false, "message": "試合日の消化結果が空です"}
@@ -530,14 +586,9 @@ static func simulate_current_day_async(
 	if _is_cancelled(cancel_token):
 		return {"ok": false, "cancelled": true, "message": "シミュレーションはキャンセルされました"}
 	var day: int = season.current_day
-	var today_indices: Array = []
-	for index in range(season.schedule.size()):
-		var game: Dictionary = season.schedule[index] as Dictionary
-		if bool(game.get("played", false)):
-			continue
-		if int(game.get("day", 0)) != day:
-			continue
-		today_indices.append(index)
+	# 同期版と同じ位置で雨天中止を判定する (片方だけだと同期/非同期で日程が食い違う)。
+	var postponed: Array = PSRainoutService.apply_to_day(season, day).get("postponed", []) as Array
+	var today_indices: Array = _unplayed_indices_on_day(season, day)
 
 	# 計算フェーズをWorkerThreadPoolで並列起動し、完了をポーリングしながらUIのフレームを解放する。
 	# 計算中に選手成績・疲労・怪我も更新されるため、開始済みの日は全試合を必ず状態へ反映する。
@@ -578,6 +629,14 @@ static func simulate_current_day_async(
 	if results.is_empty():
 		if _is_cancelled(cancel_token):
 			return {"ok": false, "cancelled": true, "message": "シミュレーションはキャンセルされました"}
+		if not postponed.is_empty():
+			var all_postponed: Dictionary = _finish_all_postponed_day(
+				season, day, postponed, persist, auto_swap_ctx, false
+			)
+			all_postponed["cancelled"] = _is_cancelled(cancel_token)
+			if tree != null:
+				await tree.process_frame
+			return all_postponed
 		var single_result: Dictionary = simulate_next_unplayed_game(season, false, {})
 		if not bool(single_result.get("ok", false)):
 			return single_result
@@ -590,6 +649,7 @@ static func simulate_current_day_async(
 		return {
 			"ok": true,
 			"results": results,
+			"postponed": postponed,
 			"cancelled": _is_cancelled(cancel_token),
 			"message": str(single_result.get("message", "")),
 		}
@@ -603,9 +663,13 @@ static func simulate_current_day_async(
 	return {
 		"ok": true,
 		"results": results,
+		"postponed": postponed,
 		"cancelled": _is_cancelled(cancel_token),
-		"message": "%s の%d試合を消化しました。%s" % [
-			SeasonCalendar.day_status_label(season, day), results.size(), str(last_result.get("message", ""))
+		"message": "%s の%d試合を消化しました。%s%s" % [
+			SeasonCalendar.day_status_label(season, day),
+			results.size(),
+			_postponed_note(postponed),
+			str(last_result.get("message", "")),
 		],
 	}
 
@@ -639,7 +703,8 @@ static func simulate_remaining_season_async(
 			return day_result
 		last_result = day_result
 		var day_results: Array = day_result.get("results", []) as Array
-		if day_results.is_empty():
+		# 全試合が雨天中止の日は結果が 0 件でも正常 (日付は進んでいる)。
+		if day_results.is_empty() and (day_result.get("postponed", []) as Array).is_empty():
 			if simulated_count > 0 and persist:
 				_persist_simulation_outputs(season)
 			return {"ok": false, "cancelled": _is_cancelled(cancel_token), "message": "試合日の消化結果が空です"}
@@ -682,6 +747,7 @@ static func simulate_days_async(
 	var start_day: int = season.current_day
 	var target_day: int = start_day + days
 	var simulated_games: int = 0
+	var postponed_games: int = 0
 	var last_result: Dictionary = {}
 	var guard: int = season.schedule.size() + 1
 	var total_games: int = 0
@@ -711,12 +777,13 @@ static func simulate_days_async(
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
+		postponed_games += (day_result.get("postponed", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
 		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
-	if simulated_games == 0:
+	if simulated_games == 0 and postponed_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "進行できる試合がありません"}
 	var elapsed_days: int = min(days, season.current_day - start_day)
 	var prefix: String = "%d日分、%d試合を消化しました" % [elapsed_days, simulated_games]
@@ -748,6 +815,7 @@ static func simulate_until_team_game_async(
 		return {"ok": false, "message": "チームが指定されていません"}
 	var start_day: int = season.current_day
 	var simulated_games: int = 0
+	var postponed_games: int = 0
 	var last_result: Dictionary = {}
 	var guard: int = season.schedule.size() + 1
 	var total_games: int = _count_unplayed_games(season)
@@ -770,12 +838,13 @@ static func simulate_until_team_game_async(
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
+		postponed_games += (day_result.get("postponed", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
 		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
-	if simulated_games == 0:
+	if simulated_games == 0 and postponed_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "次の自軍試合は本日です。または未消化試合がありません"}
 	var prefix: String = "自軍試合日(%s)まで進めました" % SeasonCalendar.day_status_label(season, season.current_day)
 	if cancelled:

@@ -18,6 +18,10 @@ var calendar_start_date: String = ""
 var schedule_template_id: String = ""
 var schedule_bucket_seed: int = 0
 var schedule: Array = []
+# 雨天中止の台帳。中止した試合は schedule から消えず振替日へ移動するので、**元の日付には何も
+# 残らない** — カレンダーに「中止」を出すにはこの記録が要る ([[project_rainout_postpone]])。
+# 1 件 = { "day", "date", "away_team_id", "home_team_id", "makeup_day", "makeup_date" }。
+var rainouts: Array = []
 var standings: Dictionary = {}
 # 二軍 (ファーム) の日程と順位。一軍とは**別配列**で持つ — `schedule` に混ぜると
 # advance_current_day / games_remaining / 順位表 / マジックナンバー / カレンダーUI /
@@ -716,6 +720,7 @@ func to_dict(include_history: bool = true) -> Dictionary:
 		"schedule_template_id": schedule_template_id,
 		"schedule_bucket_seed": schedule_bucket_seed,
 		"schedule": _schedule_for_save(),
+		"rainouts": rainouts,
 		"standings": standings_data,
 		"farm_schedule": _games_for_save(farm_schedule),
 		"farm_standings": farm_standings_data,
@@ -767,6 +772,7 @@ static func from_dict(data: Dictionary) -> PSSeason:
 	season.schedule_template_id = str(data.get("schedule_template_id", ""))
 	season.schedule_bucket_seed = int(data.get("schedule_bucket_seed", 0))
 	season.schedule = data.get("schedule", []) as Array
+	season.rainouts = data.get("rainouts", []) as Array
 	# day 順に並んでいない日程はシミュレータに飛ばされてしまう (交流戦ブロックが配列末尾に
 	# 積まれたセーブなど) ので、読込時に day 順へ整列し直す。
 	PSSchedule.sort_by_day(season.schedule)

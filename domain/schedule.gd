@@ -147,7 +147,12 @@ static func validate_schedule(games: Array, teams: Array) -> Dictionary:
 		var date_text: String = str(game.get("date", ""))
 		if date_text.is_empty():
 			return {"ok": false, "message": "missing date on day %d" % day}
-		if SeasonCalendar.weekday_for_date(date_text) == WEEKDAY_MONDAY and not JapaneseHolidays.is_holiday(date_text):
+		# 平日の月曜は移動日なので試合を置かない。ただし**雨天中止の振替はここが第一候補**
+		# (実 NPB も 3 連戦の翌日=月曜へ振り替えるのが最も一般的) なので、順延した試合は除外する。
+		var is_postponed: bool = int(game.get("postponed_count", 0)) > 0
+		if not is_postponed \
+				and SeasonCalendar.weekday_for_date(date_text) == WEEKDAY_MONDAY \
+				and not JapaneseHolidays.is_holiday(date_text):
 			return {"ok": false, "message": "game scheduled on non-holiday Monday: %s" % date_text}
 		if away_id == home_id or not team_ids.has(away_id) or not team_ids.has(home_id):
 			return {"ok": false, "message": "invalid teams on day %d" % day}
