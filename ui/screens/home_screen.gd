@@ -35,7 +35,7 @@ const LEGEND: Array = [
 	{"label": "敗戦", "color": TEXT, "mark": "●"},
 	{"label": "引分", "color": AMBER, "mark": "△"},
 	{"label": "未消化", "color": BLUE, "mark": ""},
-	{"label": "雨天中止", "color": RED, "mark": ""},
+	{"label": "中止・ノーゲーム", "color": RED, "mark": ""},
 	{"label": "休養・移動日", "color": FAINT, "mark": ""},
 ]
 
@@ -203,8 +203,15 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), "本日", BLUE)
 		badge_x -= 38
 	if not rainouts.is_empty():
-		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), "中止", RED)
-		badge_x -= 38
+		# ノーゲームは「試合はしたが記録ごと無効」なので中止と区別して出す。
+		var has_no_game: bool = false
+		for entry_value in rainouts:
+			if str((entry_value as Dictionary).get("kind", "")) == PSRainoutService.OUTCOME_NO_GAME:
+				has_no_game = true
+		var badge_w: float = 52.0 if has_no_game else 36.0
+		badge_x -= badge_w - 36.0
+		_chip(Rect2(badge_x, rect.position.y + 7, badge_w, 18), "ノーゲーム" if has_no_game else "中止", RED)
+		badge_x -= badge_w + 2.0
 	if has_dh:
 		_chip(Rect2(badge_x, rect.position.y + 7, 30, 18), "DH", BLUE_SOFT)
 
@@ -354,6 +361,11 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	# 雨天中止から組み直された試合。元の日付はカレンダー側に「中止」バッジで出る。
 	if int(game.get("postponed_count", 0)) > 0:
 		_chip(Rect2(chip_x, rect.position.y + 98, 44, 18), "振替", AMBER)
+		chip_x -= 48
+	# 降雨コールドで成立した試合 (成績も勝敗も通常どおり、回数だけ短い)。
+	var called_after: int = int(game.get("called_after_inning", 0))
+	if called_after > 0:
+		_chip(Rect2(chip_x, rect.position.y + 98, 62, 18), "%d回コールド" % called_after, RED)
 
 	# 予告先発
 	_text("予告先発  %s  %s" % [away.short_name, _pitcher_line(_probable_pitcher(away.id, season))], Vector2(ox, rect.position.y + 138), 13, TEXT)

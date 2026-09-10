@@ -4643,3 +4643,111 @@ func _report_advanced_record(
 		"uzr_by_position": {position_key: 0.08},
 		"drs_by_position": {position_key: 0.08},
 	}
+
+
+# 降雨コールドとノーゲーム ([[project_rainout_postpone]])。
+# ノーゲームは NPB では全記録が無効になり後日初回から再試合になるので、
+# **打撃/投球成績が試合前へ戻り、日程が振替日へ移り、試合数が減らない**ことを確認する。
+# 疲労は戻さない (NPB もノーゲームで投球数は記録する) 点も併せて見る。
+func test_no_game_voids_stats_and_reschedules_the_game() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var original_seed: int = Rng.current_seed
+	var original_state: int = Rng.generator.state
+	RecordStore.suspend_persistence()
+	Rng.set_seed_value(20260910)
+
+	# ノーゲームは 1 シーズンに 1 件前後しか出ないので、出る年度を探して使う。
+	var season: PSSeason = null
+	var target: Dictionary = {}
+	for year in range(2026, 2040):
+		var candidate: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, year, {})
+		for game_value in candidate.schedule:
+			var game: Dictionary = game_value as Dictionary
+			var kind: String = str(PSRainoutService.rain_outcome(candidate, game).get("kind", ""))
+			if kind == PSRainoutService.OUTCOME_NO_GAME:
+				season = candidate
+				target = game
+				break
+		if season != null:
+			break
+	assert_object(season).is_not_null()
+
+	RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
+	var target_day: int = int(target.get("day", 0))
+	var away_id: int = int(target.get("away_team_id", 0))
+	var home_id: int = int(target.get("home_team_id", 0))
+	# 対象日まで実際に回さずに済ませる (試合数と成績の不変条件だけを見るテストなので、
+	# それ以前の試合は消化済み扱いで飛ばす)。
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if int(game.get("day", 0)) < target_day:
+			game["played"] = true
+	season.current_day = target_day
+
+	var before: Dictionary = _team_stat_totals(season, [away_id, home_id])
+	var day_result: Dictionary = GameSimulator.simulate_current_day(season, false)
+	assert_bool(bool(day_result.get("ok", false))).is_true()
+
+	# 成績は 1 打席も増えていない。
+	var after: Dictionary = _team_stat_totals(season, [away_id, home_id])
+	assert_int(int(after["plate_appearances"])).is_equal(int(before["plate_appearances"]))
+	assert_int(int(after["outs_pitched"])).is_equal(int(before["outs_pitched"]))
+	assert_int(int(after["batter_games"])).is_equal(int(before["batter_games"]))
+	# 疲労は戻さない = 試合は実際に行われている。
+	assert_int(int(after["fatigue"])).is_greater(int(before["fatigue"]))
+
+	# 台帳にノーゲームとして残り、試合は後日へ移り、未消化のまま。
+	var entries: Array = []
+	for entry_value in season.rainouts:
+		var entry: Dictionary = entry_value as Dictionary
+		if str(entry.get("kind", "")) == PSRainoutService.OUTCOME_NO_GAME:
+			entries.append(entry)
+	assert_int(entries.size()).is_greater(0)
+	assert_bool(bool(target.get("played", false))).is_false()
+	assert_int(int(target.get("day", 0))).is_greater(target_day)
+	assert_int(int(target.get("postponed_count", 0))).is_equal(1)
+
+	# 143 試合は減らない。
+	var games_by_team: Dictionary = {}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		for team_id in [int(game.get("away_team_id", 0)), int(game.get("home_team_id", 0))]:
+			games_by_team[team_id] = int(games_by_team.get(team_id, 0)) + 1
+	for team_row in GameDb.teams:
+		assert_int(int(games_by_team.get((team_row as PSTeam).id, 0))).is_equal(PSSchedule.PENNANT_GAMES_PER_TEAM)
+
+	RecordStore.load_from_dict(original_records)
+	RecordStore.resume_persistence()
+	Rng.current_seed = original_seed
+	Rng.generator.seed = original_seed
+	Rng.generator.state = original_state
+
+
+func _team_stat_totals(season: PSSeason, team_ids: Array) -> Dictionary:
+	var totals: Dictionary = {
+		"plate_appearances": 0, "outs_pitched": 0, "batter_games": 0, "fatigue": 0
+	}
+	for team_id in team_ids:
+		for record_row in RecordStore.get_team_player_records(int(team_id), season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			totals["plate_appearances"] = int(totals["plate_appearances"]) + record.batter_stats.plate_appearances
+			totals["outs_pitched"] = int(totals["outs_pitched"]) + record.pitcher_stats.outs_pitched
+			totals["batter_games"] = int(totals["batter_games"]) + record.batter_stats.games
+			totals["fatigue"] = int(totals["fatigue"]) + record.fatigue
+	return totals
+
+
+# 降雨コールドで成立した試合は、記録も勝敗も通常どおり残る。
+func test_called_game_counts_as_played_with_fewer_innings() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var found: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var outcome: Dictionary = PSRainoutService.rain_outcome(season, game)
+		if str(outcome.get("kind", "")) != PSRainoutService.OUTCOME_CALLED:
+			continue
+		found += 1
+		# 成立するのは 5 回以上。9 回まで行くならコールドではない。
+		assert_int(int(outcome.get("innings", 0))).is_greater_equal(PSRainoutService.OFFICIAL_GAME_INNINGS)
+		assert_int(int(outcome.get("innings", 0))).is_less(9)
+	assert_int(found).is_greater(0)

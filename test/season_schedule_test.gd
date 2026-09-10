@@ -770,24 +770,51 @@ func test_rainout_never_hits_dome_home_games() -> void:
 		if home == null or not home.has_dome():
 			continue
 		dome_home_games += 1
-		assert_float(PSRainoutService.cancel_probability(game)).is_equal(0.0)
-		if PSRainoutService.will_be_postponed(season, game):
+		assert_float(PSRainoutService.rain_probability(game)).is_equal(0.0)
+		if str(PSRainoutService.rain_outcome(season, game).get("kind", "")) != PSRainoutService.OUTCOME_NONE:
 			postponed_dome += 1
 	# 12球団のうち6球団がドーム = ホーム試合はおよそ 429 試合。
 	assert_int(dome_home_games).is_greater(400)
 	assert_int(postponed_dome).is_equal(0)
 
 
-func test_rainout_count_stays_in_the_intended_band() -> void:
-	# FEEL_SCALE=0.5 の水準 (実 NPB 年 20〜30 の約半分) から外れたら気付けるようにする。
-	# 中止率そのものを変えたときは、ここと tools/run_rainout_probe.tscn を併せて見直すこと。
+func test_rain_outcome_counts_stay_in_the_intended_bands() -> void:
+	# FEEL_SCALE=0.5 の水準から外れたら気付けるようにする。実 NPB は 2023-2025 の実測で
+	# 中止 26.7 / コールド 5.7 / ノーゲーム 2.0 per season (公式ボックススコア集計)。
+	# 率を変えたときは tools/run_rainout_probe.tscn も併せて見直すこと。
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
-	var postponed: int = 0
+	var counts: Dictionary = {}
 	for game_value in season.schedule:
-		if PSRainoutService.will_be_postponed(season, game_value as Dictionary):
-			postponed += 1
-	assert_int(postponed).is_greater(5)
-	assert_int(postponed).is_less(32)
+		var kind: String = str(PSRainoutService.rain_outcome(season, game_value as Dictionary).get("kind", ""))
+		counts[kind] = int(counts.get(kind, 0)) + 1
+	var cancelled: int = int(counts.get(PSRainoutService.OUTCOME_CANCEL, 0))
+	var called: int = int(counts.get(PSRainoutService.OUTCOME_CALLED, 0))
+	var no_game: int = int(counts.get(PSRainoutService.OUTCOME_NO_GAME, 0))
+	assert_int(cancelled).is_greater(4)
+	assert_int(cancelled).is_less(26)
+	assert_int(called).is_greater(0)
+	assert_int(called).is_less(12)
+	assert_int(no_game).is_less(6)
+	# 試合前中止が大半を占める (実測 75%)。ここが逆転していたら分岐の向きが壊れている。
+	assert_int(cancelled).is_greater(called + no_game)
+
+
+func test_interruption_innings_never_land_on_the_empty_bucket() -> void:
+	# 実測では中断回が 1 回と 4 回に 1 件も無い (2〜3回で見切るか、成立する5回まで粘るかの二択)。
+	# 一様分布に置き換えるとこの特徴が消えるので、分布テーブルの見張りとして固定する。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var seen: Dictionary = {}
+	for game_value in season.schedule:
+		var innings: int = PSRainoutService.called_after_inning(season, game_value as Dictionary)
+		if innings > 0:
+			seen[innings] = int(seen.get(innings, 0)) + 1
+	assert_bool(seen.is_empty()).is_false()
+	for innings in seen.keys():
+		assert_bool(PSRainoutService.INTERRUPTION_INNINGS.has(int(innings))).override_failure_message(
+			"unexpected interruption inning %d" % int(innings)
+		).is_true()
+	assert_bool(seen.has(1)).is_false()
+	assert_bool(seen.has(4)).is_false()
 
 
 func test_rainout_decision_is_stable_and_does_not_touch_the_global_rng() -> void:
@@ -795,10 +822,12 @@ func test_rainout_decision_is_stable_and_does_not_touch_the_global_rng() -> void
 	# ここが崩れると並列/逐次の決定性 (game_day_parallel_test) も同時に壊れる。
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	var game: Dictionary = season.schedule[0] as Dictionary
-	var first: bool = PSRainoutService.will_be_postponed(season, game)
+	var first: Dictionary = PSRainoutService.rain_outcome(season, game)
 	var state_before: int = Rng.generator.state
 	for _i in range(20):
-		assert_bool(PSRainoutService.will_be_postponed(season, game)).is_equal(first)
+		var again: Dictionary = PSRainoutService.rain_outcome(season, game)
+		assert_str(str(again.get("kind", ""))).is_equal(str(first.get("kind", "")))
+		assert_int(int(again.get("innings", 0))).is_equal(int(first.get("innings", 0)))
 		PSRainoutService.forecast(season, game)
 	assert_int(Rng.generator.state).is_equal(state_before)
 
@@ -819,13 +848,17 @@ func test_forecast_announces_the_cancellation_on_the_game_day() -> void:
 			continue
 		assert_str(str(forecast.get("kind", ""))).is_equal("rain")
 		assert_bool(bool(forecast.get("certain", false))).is_true()
-		if PSRainoutService.will_be_postponed(season, game):
+		var kind: String = str(PSRainoutService.rain_outcome(season, game).get("kind", ""))
+		if kind == PSRainoutService.OUTCOME_CANCEL:
 			# 当日は主催球団が中止を発表する日なので、予報は 100% で確定する。
 			assert_int(int(forecast.get("chance", 0))).is_equal(100)
 			checked_postponed += 1
-		else:
-			assert_int(int(forecast.get("chance", 0))).is_less_equal(int(PSRainoutService.FORECAST_PLAY_MAX_PCT))
+		elif kind == PSRainoutService.OUTCOME_NONE:
+			assert_int(int(forecast.get("chance", 0))).is_less_equal(int(PSRainoutService.FORECAST_MISS_MAX_PCT))
 			checked_played += 1
+		else:
+			# コールド / ノーゲームは試合が始まってから降られるので「確定」ではない。
+			assert_int(int(forecast.get("chance", 0))).is_equal(int(PSRainoutService.FORECAST_TODAY_INTERRUPT_PCT))
 	assert_int(checked_postponed).is_greater(0)
 	assert_int(checked_played).is_greater(0)
 

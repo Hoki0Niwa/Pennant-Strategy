@@ -522,8 +522,13 @@ static func finalize_pitcher_stats(setup: Dictionary, _result: Dictionary) -> vo
 	# 完投 = 一度も救援を仰がず試合を終えたこと。アウト数だけで判定すると
 	# 「8回を投げ切って9回頭に降板した先発」(24アウト)が全て完投扱いになり完投率が桁違いに膨らむ。
 	# 24アウト下限は、ビジター先発が8回完了で終わる完投負け(本物の完投)を含めるための保険。
+	# **下限は試合の長さに追随させる** — 9回なら 24 で従来どおり、5回の降雨コールドなら 12 になり、
+	# 短縮試合を投げ切った先発も完投になる (NPB も 5 回コールドの完投を認める)。
+	# 延長で下限が上がると本物の完投を落としかねないので 24 を上限に留める。
+	var innings_played: int = (_result.get("innings", []) as Array).size()
+	var min_complete_outs: int = 24 if innings_played <= 0 else min(24, 3 * max(1, innings_played - 1))
 	var starter_finished: bool = not bool(setup.get("starter_relieved", false))
-	if starter_finished and starter_outs >= 24:
+	if starter_finished and starter_outs >= min_complete_outs:
 		starter.pitcher_stats.complete_games += 1
 		if starter_runs == 0:
 			starter.pitcher_stats.shutouts += 1

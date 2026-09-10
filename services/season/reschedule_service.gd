@@ -36,8 +36,10 @@ const LEAGUE_BREAK_MIN_DAYS: int = 3
 
 
 # 1 試合を振替に回す。`game` は `season.schedule` の要素そのもの (Dictionary は参照なので直接書き換わる)。
+# `kind` は台帳に残す理由 (`PSRainoutService.OUTCOME_CANCEL` = 試合前の中止 /
+# `OUTCOME_NO_GAME` = 5 回未満で打ち切られて記録ごと無効になった試合)。UI の表示分けに使う。
 # 戻り値は台帳に積んだ記録。振替先が見つからなければ空 Dictionary を返し、日程は変更しない。
-static func postpone(season: PSSeason, game: Dictionary) -> Dictionary:
+static func postpone(season: PSSeason, game: Dictionary, kind: String = "cancel") -> Dictionary:
 	if season == null or game.is_empty() or bool(game.get("played", false)):
 		return {}
 	var from_day: int = int(game.get("day", 0))
@@ -51,6 +53,7 @@ static func postpone(season: PSSeason, game: Dictionary) -> Dictionary:
 	var entry: Dictionary = {
 		"day": from_day,
 		"date": from_date,
+		"kind": kind,
 		"away_team_id": int(game.get("away_team_id", 0)),
 		"home_team_id": int(game.get("home_team_id", 0)),
 		"makeup_day": makeup_day,

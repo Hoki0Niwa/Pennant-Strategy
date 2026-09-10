@@ -174,6 +174,12 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 	if not bool(day_result.get("ok", false)):
 		return day_result
 	var results: Array = day_result.get("results", []) as Array
+	postponed.append_array(day_result.get("postponed", []) as Array)
+
+	# 当日の一軍戦が全部ノーゲームだった日。反映が無く advance_current_day が呼ばれていないので
+	# 自分で進める (スポット昇格と二軍戦は既に走っている)。
+	if results.is_empty():
+		return _finish_dayless(season, day, postponed, persist, auto_swap_ctx)
 
 	if not auto_swap_ctx.is_empty():
 		_run_periodic_roster_swap_hook(season, day, auto_swap_ctx)
@@ -222,6 +228,19 @@ static func _finish_all_postponed_day(
 	# 何もしない」ので中止球団は上げず、登板を終えたスポット昇格の抹消だけが通常どおり進む。
 	_run_spot_starter_callups(season, day, auto_swap_ctx)
 	_simulate_farm_day(season, day, force_sequential)
+	return _finish_dayless(season, day, postponed, persist, auto_swap_ctx)
+
+
+# 一軍の結果が 1 件も出なかった日の締め。`advance_current_day` は試合の反映から呼ばれるので、
+# ここで呼ばないと日付が止まり `simulate_days` 等がループを抜けてしまう。
+# 二軍戦とスポット昇格は呼び出し側で済ませてから入ること。
+static func _finish_dayless(
+	season: PSSeason,
+	day: int,
+	postponed: Array,
+	persist: bool,
+	auto_swap_ctx: Dictionary
+) -> Dictionary:
 	PSGameDecisions.advance_current_day(season)
 	if not auto_swap_ctx.is_empty():
 		_run_periodic_roster_swap_hook(season, day, auto_swap_ctx)
@@ -231,14 +250,27 @@ static func _finish_all_postponed_day(
 		"ok": true,
 		"results": [],
 		"postponed": postponed,
-		"message": "%s は全%d試合が雨天中止になりました。" % [
-			SeasonCalendar.day_status_label(season, day), postponed.size()
+		"message": "%s は一軍の試合が成立しませんでした。%s" % [
+			SeasonCalendar.day_status_label(season, day), _postponed_note(postponed)
 		],
 	}
 
 
+# 「N試合が雨天中止・M試合がノーゲーム。」の一文。どちらも 0 なら空文字。
 static func _postponed_note(postponed: Array) -> String:
-	return "" if postponed.is_empty() else "%d試合が雨天中止。" % postponed.size()
+	var cancelled: int = 0
+	var no_games: int = 0
+	for entry_row in postponed:
+		if str((entry_row as Dictionary).get("kind", "")) == PSRainoutService.OUTCOME_NO_GAME:
+			no_games += 1
+		else:
+			cancelled += 1
+	var parts: Array = []
+	if cancelled > 0:
+		parts.append("%d試合が雨天中止" % cancelled)
+	if no_games > 0:
+		parts.append("%d試合がノーゲーム" % no_games)
+	return "" if parts.is_empty() else "%s。" % "・".join(parts)
 
 
 # 谷間の先発 (二軍から1試合限定の昇格) と、登板を終えたスポット昇格の抹消。
@@ -294,14 +326,32 @@ static func _simulate_day_games(season: PSSeason, today_indices: Array, persist:
 		PSPerformanceReference.set_frozen(false)
 
 	var applied_results: Array = []
+	var no_game_rows: Array = []
 	for local_index in range(today_indices.size()):
 		var calc: Dictionary = calc_results[local_index] as Dictionary
 		if not bool(calc.get("ok", false)):
 			if not applied_results.is_empty() and persist:
 				_persist_simulation_outputs(season)
 			return {"ok": false, "message": str(calc.get("message", ""))}
+		# ノーゲームは反映しない (成績は計算フェーズで試合前へ戻してある)。振替は当日の反映が
+		# 全部済んでから — ここで sort_by_day が走ると残りの today_indices がずれる。
+		if str(calc.get("rain_kind", "")) == PSRainoutService.OUTCOME_NO_GAME:
+			no_game_rows.append(calc.get("game", {}) as Dictionary)
+			continue
 		applied_results.append(_apply_game_result(season, calc, false))
-	return {"ok": true, "results": applied_results}
+	return {"ok": true, "results": applied_results, "postponed": _postpone_no_games(season, no_game_rows)}
+
+
+# ノーゲームになった試合を振替へ回す。当日の全試合を反映し終えてから呼ぶこと。
+static func _postpone_no_games(season: PSSeason, no_game_rows: Array) -> Array:
+	var postponed: Array = []
+	for game_row in no_game_rows:
+		var entry: Dictionary = PSRescheduleService.postpone(
+			season, game_row as Dictionary, PSRainoutService.OUTCOME_NO_GAME
+		)
+		if not entry.is_empty():
+			postponed.append(entry)
+	return postponed
 
 
 # WorkerThreadPool.add_group_task のコールバック本体。local_index がそのままレーンIDになる
@@ -614,15 +664,21 @@ static func simulate_current_day_async(
 		WorkerThreadPool.wait_for_group_task_completion(group_id)
 		PSPerformanceReference.set_frozen(false)
 
+		var no_game_rows: Array = []
 		for local_index in range(today_indices.size()):
 			var calc: Dictionary = calc_results[local_index] as Dictionary
 			if not bool(calc.get("ok", false)):
 				if not results.is_empty() and persist:
 					_persist_simulation_outputs(season)
 				return calc
+			# 同期版と同じく、ノーゲームは反映せず当日の反映が済んでから振替へ回す。
+			if str(calc.get("rain_kind", "")) == PSRainoutService.OUTCOME_NO_GAME:
+				no_game_rows.append(calc.get("game", {}) as Dictionary)
+				continue
 			results.append(_apply_game_result(season, calc, false))
 			if progress_cb.is_valid():
 				progress_cb.call(progress_baseline + results.size(), progress_total, SeasonCalendar.day_status_label(season, day))
+		postponed.append_array(_postpone_no_games(season, no_game_rows))
 		if tree != null:
 			await tree.process_frame
 
@@ -630,9 +686,13 @@ static func simulate_current_day_async(
 		if _is_cancelled(cancel_token):
 			return {"ok": false, "cancelled": true, "message": "シミュレーションはキャンセルされました"}
 		if not postponed.is_empty():
-			var all_postponed: Dictionary = _finish_all_postponed_day(
-				season, day, postponed, persist, auto_swap_ctx, false
-			)
+			# 当日の一軍戦が 1 つも成立しなかった日。二軍戦とスポット昇格を済ませたかどうかで
+			# 締め方が変わる (today_indices が空なら未実行なのでここで走らせる)。
+			var all_postponed: Dictionary
+			if today_indices.is_empty():
+				all_postponed = _finish_all_postponed_day(season, day, postponed, persist, auto_swap_ctx, false)
+			else:
+				all_postponed = _finish_dayless(season, day, postponed, persist, auto_swap_ctx)
 			all_postponed["cancelled"] = _is_cancelled(cancel_token)
 			if tree != null:
 				await tree.process_frame
@@ -1014,13 +1074,28 @@ static func _simulate_game_calculation(
 		_profile_add("snapshot", now_snapshot - profile_start)
 		profile_start = now_snapshot
 
-	var result: Dictionary = PSGameLoop.simulate_game(away_setup, home_setup, rule_groups)
+	# 降雨コールド / ノーゲームは「何回で打ち切るか」を試合前に引き、その回数だけ回す。
+	# NPB は打ち切られた回のスコアを無効にして直前の完了イニングへ戻すので、**完全イニング境界で
+	# 切った状態が公式のスコアそのもの**になる (2024-04-21 広島-巨人の 5 回 0-0 で実際に確認)。
+	# だから試合ループを途中で止める機構は要らない。
+	var rain: Dictionary = PSRainoutService.rain_outcome(season, game)
+	var rain_kind: String = str(rain.get("kind", PSRainoutService.OUTCOME_NONE))
+	var max_innings: int = MAX_INNINGS
+	if rain_kind == PSRainoutService.OUTCOME_CALLED or rain_kind == PSRainoutService.OUTCOME_NO_GAME:
+		max_innings = int(rain.get("innings", MAX_INNINGS))
+
+	var result: Dictionary = PSGameLoop.simulate_game(away_setup, home_setup, rule_groups, max_innings)
 	if _profile_enabled:
 		var now_loop: int = Time.get_ticks_usec()
 		_profile_add("loop", now_loop - profile_start)
 
 	if lane_id >= 0:
 		Rng.end_game_stream()
+
+	# ノーゲームは全記録が無効。ここで試合前の成績へ戻す (排他所有のレコードだけを触るので
+	# worker スレッドから安全)。**疲労・故障は戻さない** — NPB もノーゲームで投球数は記録する。
+	if rain_kind == PSRainoutService.OUTCOME_NO_GAME:
+		_restore_player_record_stats(away_setup, home_setup, pre_player_stats)
 
 	return {
 		"ok": true,
@@ -1032,6 +1107,8 @@ static func _simulate_game_calculation(
 		"home_setup": home_setup,
 		"result": result,
 		"pre_player_stats": pre_player_stats,
+		"rain_kind": rain_kind,
+		"rain_innings": int(rain.get("innings", 0)),
 	}
 
 
@@ -1052,6 +1129,9 @@ static func _apply_game_result(season: PSSeason, calc: Dictionary, persist: bool
 	game["home_score"] = int(result.get("home_score", 0))
 	game["played"] = true
 	game["result"] = result
+	# 降雨コールドで成立した試合。成績も勝敗も通常どおりで、何回で切れたかだけ残す。
+	if str(calc.get("rain_kind", "")) == PSRainoutService.OUTCOME_CALLED:
+		game["called_after_inning"] = (result.get("innings", []) as Array).size()
 	season.schedule[game_index] = game
 
 	PSGameDecisions.apply_game_decisions(season, away_team_id, home_team_id, result)
@@ -1170,6 +1250,44 @@ static func _snapshot_setup_player_stats(out: Dictionary, setup: Dictionary) -> 
 	for assignment_value in (setup.get("fielders", []) as Array):
 		var assignment: Dictionary = assignment_value as Dictionary
 		_snapshot_player_record_stats(out, assignment.get("record", null) as PSPlayerSeasonRecord, team_id)
+
+
+# ノーゲーム用の巻き戻し。`_snapshot_game_player_stats` が撮った試合前の打撃/投球成績を
+# そのままレコードへ書き戻す ([[PSFarmGameRunner]] の snapshot-diff と同じ方式)。
+# 疲労・故障・恒久的な能力低下は戻さない — 試合は実際に行われているので。
+static func _restore_player_record_stats(
+	away_setup: Dictionary, home_setup: Dictionary, pre_player_stats: Dictionary
+) -> void:
+	for setup in [away_setup, home_setup]:
+		for record_row in _setup_stat_records(setup as Dictionary):
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			var snapshot: Dictionary = pre_player_stats.get(str(record.player_id), {}) as Dictionary
+			if snapshot.is_empty():
+				continue
+			record.batter_stats = snapshot.get("batter", record.batter_stats) as PSBatterStats
+			record.pitcher_stats = snapshot.get("pitcher", record.pitcher_stats) as PSPitcherStats
+
+
+# setup が抱える成績レコード。`_snapshot_setup_player_stats` と同じ範囲を辿る
+# (ここがズレるとノーゲームで一部の成績だけ残る)。
+static func _setup_stat_records(setup: Dictionary) -> Array:
+	var records: Array = []
+	if setup.is_empty():
+		return records
+	for key in ["pitcher", "starter_pitcher"]:
+		var pitcher: PSPlayerSeasonRecord = setup.get(key, null) as PSPlayerSeasonRecord
+		if pitcher != null:
+			records.append(pitcher)
+	for key in ["batters", "bench", "relievers"]:
+		for record_value in (setup.get(key, []) as Array):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record != null:
+				records.append(record)
+	for assignment_value in (setup.get("fielders", []) as Array):
+		var fielder: PSPlayerSeasonRecord = (assignment_value as Dictionary).get("record", null) as PSPlayerSeasonRecord
+		if fielder != null:
+			records.append(fielder)
+	return records
 
 
 static func _snapshot_player_record_stats(out: Dictionary, record: PSPlayerSeasonRecord, team_id: int) -> void:
