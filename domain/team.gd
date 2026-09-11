@@ -1,8 +1,9 @@
 extends RefCounted
 class_name PSTeam
 
-# 本拠地球場の屋根。雨天中止の判定に使う唯一の球場属性で、ドームは中止しない
-# ([[project_rainout_postpone]])。球場サイズ (park factor) は別系統の mod 係数で、ここには持たない。
+# 本拠地の属性は屋根と地方の 2 つで、どちらも雨天の判定に使う — ドームは中止せず、同じ地方の球場は
+# 同じ日に同じ天気になる ([[project_rainout_postpone]])。球場サイズ (park factor) は別系統の mod 係数で、
+# ここには持たない。
 const ROOF_OPEN: String = "open"
 const ROOF_DOME: String = "dome"
 
@@ -23,6 +24,9 @@ var auto_lineup: bool = true
 var farm_only: bool = false
 # 本拠地球場の屋根 (ROOF_OPEN / ROOF_DOME)。ファーム専用球団は二軍球場しか持たないため常に屋外。
 var home_park_roof: String = ROOF_OPEN
+# 本拠地の地方 (気象庁の地方予報区の id。表示名は `PSRainoutService.REGION_LABELS`)。
+# 同じ地方の球場は同じ日に同じ天気になる。空なら球団ごとに独立した地方として扱う。
+var home_region: String = ""
 
 
 static func from_dict(data: Dictionary) -> PSTeam:
@@ -43,6 +47,7 @@ func apply_dict(data: Dictionary) -> void:
 	auto_lineup = bool(data.get("auto_lineup", true))
 	farm_only = bool(data.get("farm_only", false))
 	home_park_roof = ROOF_DOME if str(data.get("home_park_roof", ROOF_OPEN)) == ROOF_DOME else ROOF_OPEN
+	home_region = str(data.get("home_region", "")).strip_edges()
 
 
 func has_dome() -> bool:
@@ -76,4 +81,5 @@ func to_dict() -> Dictionary:
 		"auto_lineup": auto_lineup,
 		"farm_only": farm_only,
 		"home_park_roof": home_park_roof,
+		"home_region": home_region,
 	}

@@ -194,7 +194,7 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 		"message": "%s の%d試合を消化しました。%s%s" % [
 			SeasonCalendar.day_status_label(season, day),
 			results.size(),
-			_postponed_note(postponed),
+			_postponed_note(season, day, postponed),
 			str(last_result.get("message", "")),
 		],
 	}
@@ -251,13 +251,14 @@ static func _finish_dayless(
 		"results": [],
 		"postponed": postponed,
 		"message": "%s は一軍の試合が成立しませんでした。%s" % [
-			SeasonCalendar.day_status_label(season, day), _postponed_note(postponed)
+			SeasonCalendar.day_status_label(season, day), _postponed_note(season, day, postponed)
 		],
 	}
 
 
 # 「N試合が雨天中止・M試合がノーゲーム。」の一文。どちらも 0 なら空文字。
-static func _postponed_note(postponed: Array) -> String:
+# 全国的な雨の日は、まとめて流れた理由として「（全国的な雨）」を添える。
+static func _postponed_note(season: PSSeason, day: int, postponed: Array) -> String:
 	var cancelled: int = 0
 	var no_games: int = 0
 	for entry_row in postponed:
@@ -270,7 +271,10 @@ static func _postponed_note(postponed: Array) -> String:
 		parts.append("%d試合が雨天中止" % cancelled)
 	if no_games > 0:
 		parts.append("%d試合がノーゲーム" % no_games)
-	return "" if parts.is_empty() else "%s。" % "・".join(parts)
+	if parts.is_empty():
+		return ""
+	var scope: String = "（全国的な雨）" if PSRainoutService.national_rain_on(season, day) else ""
+	return "%s%s。" % ["・".join(parts), scope]
 
 
 # 谷間の先発 (二軍から1試合限定の昇格) と、登板を終えたスポット昇格の抹消。
@@ -728,7 +732,7 @@ static func simulate_current_day_async(
 		"message": "%s の%d試合を消化しました。%s%s" % [
 			SeasonCalendar.day_status_label(season, day),
 			results.size(),
-			_postponed_note(postponed),
+			_postponed_note(season, day, postponed),
 			str(last_result.get("message", "")),
 		],
 	}

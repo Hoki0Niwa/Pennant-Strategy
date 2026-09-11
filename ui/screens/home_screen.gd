@@ -353,7 +353,10 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_text(host_label, Vector2(ox, rect.position.y + 110), 13, MUTED)
 	var forecast_label: String = _forecast_label(season, game)
 	if not forecast_label.is_empty():
-		_text(forecast_label, Vector2(ox + _measure(host_label, 13) + 16, rect.position.y + 110), 13, _forecast_color(season, game))
+		var forecast_x: float = ox + _measure(host_label, 13) + 16
+		# 右端のチップ (DH / 振替 / コールド、最大 3 つ) に重ならない幅で切る。
+		var forecast_width: float = max(40.0, rect.end.x - 160.0 - forecast_x)
+		_text(forecast_label, Vector2(forecast_x, rect.position.y + 110), 13, _forecast_color(season, game), forecast_width)
 	var chip_x: float = rect.end.x - 52
 	if bool(game.get("dh_enabled", false)):
 		_chip(Rect2(chip_x, rect.position.y + 98, 34, 18), "DH", BLUE_SOFT)
@@ -875,7 +878,8 @@ func _games_on_day(day: int, season: PSSeason) -> Array:
 
 
 # 天気予報の表示文字列。ドームは「ドーム」、予報の範囲外は空文字 (=何も描かない)。
-# 当日ぶんは確定しているので、100% はそのまま「中止」と出す。
+# 当日ぶんは確定しているので、100% はそのまま「中止」と出す。雨で流れた / 打ち切られた当日の試合には
+# どの雨だったかを添える (「中止（全国的な雨）」「降水 90%（近畿の雨）」)。
 func _forecast_label(season: PSSeason, game: Dictionary) -> String:
 	var forecast: Dictionary = PSRainoutService.forecast(season, game)
 	match str(forecast.get("kind", "none")):
@@ -883,11 +887,20 @@ func _forecast_label(season: PSSeason, game: Dictionary) -> String:
 			return "ドーム"
 		"rain":
 			var chance: int = int(forecast.get("chance", 0))
-			if bool(forecast.get("certain", false)) and chance >= 100:
-				return "中止"
-			return "降水 %d%%" % chance
+			var label: String = "中止" if bool(forecast.get("certain", false)) and chance >= 100 else "降水 %d%%" % chance
+			return label + _rain_scope_suffix(forecast)
 		_:
 			return ""
+
+
+# 予報に添える雨の範囲。予報がどの雨かを持たない (当日以外 / 流れない試合) なら空文字。
+func _rain_scope_suffix(forecast: Dictionary) -> String:
+	var scope: String = str(forecast.get("scope", ""))
+	if scope == PSRainoutService.WEATHER_NATIONAL:
+		return "（全国的な雨）"
+	if scope == PSRainoutService.WEATHER_REGIONAL:
+		return "（%sの雨）" % str(forecast.get("region_label", ""))
+	return ""
 
 
 # 一覧用の短縮形。ドームは省く (毎行「ドーム」が並んでも情報量が無い)。

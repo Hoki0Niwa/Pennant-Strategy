@@ -39,7 +39,7 @@ const JSON_ARRAY_FIELDS: Array = ["arsenal"]
 
 const TEAM_META_ORDER: Array = [
 	"id", "name", "short_name", "league", "color", "previous_rank", "funds", "auto_lineup",
-	"home_park_roof",
+	"home_park_roof", "home_region",
 ]
 
 

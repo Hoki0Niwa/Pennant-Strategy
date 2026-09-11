@@ -779,8 +779,9 @@ func test_rainout_never_hits_dome_home_games() -> void:
 
 
 func test_rain_outcome_counts_stay_in_the_intended_bands() -> void:
-	# FEEL_SCALE=0.5 の水準から外れたら気付けるようにする。実 NPB は 2023-2025 の実測で
+	# FEEL_SCALE=1.0 (実 NPB 水準) から外れたら気付けるようにする。実 NPB は 2023-2025 の実測で
 	# 中止 26.7 / コールド 5.7 / ノーゲーム 2.0 per season (公式ボックススコア集計)。
+	# 中止の下限は、率が半分 (FEEL_SCALE=0.5) に落ちたら割り込む位置に置いてある。
 	# 率を変えたときは tools/run_rainout_probe.tscn も併せて見直すこと。
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	var counts: Dictionary = {}
@@ -790,11 +791,11 @@ func test_rain_outcome_counts_stay_in_the_intended_bands() -> void:
 	var cancelled: int = int(counts.get(PSRainoutService.OUTCOME_CANCEL, 0))
 	var called: int = int(counts.get(PSRainoutService.OUTCOME_CALLED, 0))
 	var no_game: int = int(counts.get(PSRainoutService.OUTCOME_NO_GAME, 0))
-	assert_int(cancelled).is_greater(4)
-	assert_int(cancelled).is_less(26)
+	assert_int(cancelled).is_greater(15)
+	assert_int(cancelled).is_less(40)
 	assert_int(called).is_greater(0)
-	assert_int(called).is_less(12)
-	assert_int(no_game).is_less(6)
+	assert_int(called).is_less(16)
+	assert_int(no_game).is_less(9)
 	# 試合前中止が大半を占める (実測 75%)。ここが逆転していたら分岐の向きが壊れている。
 	assert_int(cancelled).is_greater(called + no_game)
 
@@ -872,6 +873,148 @@ func test_forecast_is_hidden_beyond_the_weekly_range() -> void:
 	assert_str(str(PSRainoutService.forecast(season, game).get("kind", ""))).is_equal("none")
 
 
+func test_seed_teams_have_known_home_regions() -> void:
+	# 地方は同じ日に同じ天気を引く単位。表に無い id だと表示名が出ず、空だと球団ごとに独立した地方になる。
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		assert_bool(PSRainoutService.REGION_LABELS.has(team.home_region)).override_failure_message(
+			"team %d has unknown home_region '%s'" % [team.id, team.home_region]
+		).is_true()
+
+
+func test_weather_is_decided_per_day_and_region() -> void:
+	# 天気は試合ではなく (日, 地方) で決まる: 全国的な雨の日は全地方が雨、それ以外の日は地方ごとに別々に降る。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		assert_str(PSRainoutService.weather_for_game(season, game)).is_equal(
+			PSRainoutService.weather_on(season, int(game.get("day", 0)), PSRainoutService.region_of_game(game))
+		)
+	var last_day: int = int((season.schedule[season.schedule.size() - 1] as Dictionary).get("day", 0))
+	var national_days: int = 0
+	var split_days: int = 0
+	for day in range(1, last_day + 1):
+		var kanto: String = PSRainoutService.weather_on(season, day, "kanto_koshin")
+		var tohoku: String = PSRainoutService.weather_on(season, day, "tohoku")
+		if PSRainoutService.national_rain_on(season, day):
+			national_days += 1
+			assert_str(kanto).is_equal(PSRainoutService.WEATHER_NATIONAL)
+			assert_str(tohoku).is_equal(PSRainoutService.WEATHER_NATIONAL)
+		elif kanto != tohoku:
+			split_days += 1
+	assert_int(national_days).is_greater(0)
+	assert_int(split_days).is_greater(0)
+
+
+func test_nationwide_rain_days_wash_out_most_open_air_games() -> void:
+	# 全国的な雨の日は屋外球場の試合がまとめて流れ、それ以外の日はまばらに流れる。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var national_games: int = 0
+	var national_hits: int = 0
+	var other_games: int = 0
+	var other_hits: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+		if home == null or home.has_dome():
+			continue
+		var hit: int = 1 if str(PSRainoutService.rain_outcome(season, game).get("kind", "")) != PSRainoutService.OUTCOME_NONE else 0
+		if PSRainoutService.national_rain_on(season, int(game.get("day", 0))):
+			national_games += 1
+			national_hits += hit
+		else:
+			other_games += 1
+			other_hits += hit
+	assert_int(national_games).is_greater(0)
+	# 全国的な雨の日は NATIONAL_RAIN_HIT 前後が流れ、それ以外の日は 1 割に満たない。
+	assert_float(float(national_hits) / float(national_games)).is_greater(0.4)
+	assert_float(float(other_hits) / float(max(1, other_games))).is_less(0.1)
+
+
+func test_same_day_rain_clusters_across_regions_like_npb() -> void:
+	# 実 NPB (2023-2025 の屋外球場) は、別の地方の球場どうしでも同じ日に流れる組が、月別の率で
+	# 独立に抽選した場合の 3.9 倍ある。試合ごとの独立な抽選に戻ると 1 倍前後まで落ちる。
+	var observed_pairs: int = 0
+	var expected_pairs: float = 0.0
+	for year in [2026, 2027, 2028]:
+		var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, int(year), {})
+		var games_by_day: Dictionary = {}
+		var hits_by_day: Dictionary = {}
+		var month_by_day: Dictionary = {}
+		var games_by_month: Dictionary = {}
+		var hits_by_month: Dictionary = {}
+		for game_value in season.schedule:
+			var game: Dictionary = game_value as Dictionary
+			var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+			if home == null or home.has_dome():
+				continue
+			var day: int = int(game.get("day", 0))
+			var month: int = int(str(game.get("date", "")).substr(5, 2))
+			month_by_day[day] = month
+			games_by_day[day] = int(games_by_day.get(day, 0)) + 1
+			games_by_month[month] = int(games_by_month.get(month, 0)) + 1
+			if str(PSRainoutService.rain_outcome(season, game).get("kind", "")) != PSRainoutService.OUTCOME_NONE:
+				hits_by_day[day] = int(hits_by_day.get(day, 0)) + 1
+				hits_by_month[month] = int(hits_by_month.get(month, 0)) + 1
+		for day in games_by_day.keys():
+			var games: int = int(games_by_day[day])
+			var hits: int = int(hits_by_day.get(day, 0))
+			var month: int = int(month_by_day[day])
+			var rate: float = float(hits_by_month.get(month, 0)) / float(int(games_by_month[month]))
+			@warning_ignore("integer_division")
+			observed_pairs += hits * (hits - 1) / 2
+			expected_pairs += float(games * (games - 1)) / 2.0 * rate * rate
+	assert_float(expected_pairs).is_greater(0.0)
+	assert_float(float(observed_pairs) / expected_pairs).is_between(2.0, 8.0)
+
+
+func test_forecast_names_the_rain_only_on_the_day_it_washes_out_the_game() -> void:
+	# 当日に流れる / 打ち切られる試合だけが「どの雨か」を持つ。前日に持たせると、全国的な雨の日が
+	# 降水確率より先に割れてしまう。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var named: int = 0
+	var checked_day_before: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var day: int = int(game.get("day", 0))
+		var kind: String = str(PSRainoutService.rain_outcome(season, game).get("kind", ""))
+		season.current_day = day
+		var today: Dictionary = PSRainoutService.forecast(season, game)
+		if str(today.get("kind", "")) != "rain" or kind == PSRainoutService.OUTCOME_NONE:
+			assert_bool(today.has("scope")).is_false()
+			continue
+		assert_str(str(today.get("scope", ""))).is_equal(PSRainoutService.weather_for_game(season, game))
+		assert_str(str(today.get("scope", ""))).is_not_equal(PSRainoutService.WEATHER_NONE)
+		assert_str(str(today.get("region_label", ""))).is_not_empty()
+		named += 1
+		if day > 1:
+			season.current_day = day - 1
+			assert_bool(PSRainoutService.forecast(season, game).has("scope")).is_false()
+			checked_day_before += 1
+	assert_int(named).is_greater(0)
+	assert_int(checked_day_before).is_greater(0)
+
+
+func test_postponement_note_names_nationwide_rain() -> void:
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var national_day: int = 0
+	var other_day: int = 0
+	for day in range(1, 186):
+		if PSRainoutService.national_rain_on(season, day):
+			if national_day == 0:
+				national_day = day
+		elif other_day == 0:
+			other_day = day
+	assert_int(national_day).is_greater(0)
+	var entries: Array = [
+		{"kind": PSRainoutService.OUTCOME_CANCEL},
+		{"kind": PSRainoutService.OUTCOME_CANCEL},
+	]
+	assert_str(GameSimulator._postponed_note(season, national_day, entries)).is_equal("2試合が雨天中止（全国的な雨）。")
+	assert_str(GameSimulator._postponed_note(season, other_day, entries)).is_equal("2試合が雨天中止。")
+	assert_str(GameSimulator._postponed_note(season, national_day, [])).is_equal("")
+
+
 func test_postponed_games_keep_every_pennant_invariant() -> void:
 	# 実際の中止率より遥かに多く順延させても、143試合 / 同日2試合なし / day 昇順が保たれること。
 	# 「振替先が枯渇して日程が壊れる」という最悪ケースの回帰テスト。
@@ -897,8 +1040,9 @@ func test_postponed_games_keep_every_pennant_invariant() -> void:
 
 
 func test_postponed_game_can_land_on_a_travel_monday() -> void:
-	# 実 NPB の第一候補は 3 連戦翌日の月曜 (移動日)。validate_schedule の月曜禁止は
-	# 順延した試合だけ除外してあるので、ここが通らなくなったら例外指定が消えている。
+	# 振替は平日の月曜 (移動日) にも乗る — 交流戦の振替と、終盤の追加日程の月曜。
+	# validate_schedule の月曜禁止は順延した試合だけ除外してあるので、ここが通らなくなったら
+	# 例外指定が消えている。
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	var monday_makeups: int = 0
 	for index in range(season.schedule.size()):
@@ -931,6 +1075,61 @@ func test_makeup_day_avoids_league_wide_breaks() -> void:
 		).is_false()
 
 
+func test_league_makeups_wait_for_the_end_of_season_window() -> void:
+	# リーグ戦の中止は終盤の追加日程へ回る。消化が持ち越されるので、中止の多い球団ほど
+	# 消化試合数が遅れる。交流戦は期間が固定なので直後の空き日で消化する。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var window_start: int = PSRescheduleService.late_window_start_day(season)
+	var league_game: Dictionary = _first_game_of_kind(season, false)
+	var interleague_game: Dictionary = _first_game_of_kind(season, true)
+	var interleague_from: int = int(interleague_game.get("day", 0))
+
+	var league_entry: Dictionary = PSRescheduleService.postpone(season, league_game)
+	assert_int(int(league_entry.get("makeup_day", 0))).is_greater_equal(window_start)
+	assert_int(int(league_entry.get("makeup_day", 0))).is_less_equal(PSRescheduleService.latest_makeup_day(season))
+
+	var interleague_entry: Dictionary = PSRescheduleService.postpone(season, interleague_game)
+	assert_int(int(interleague_entry.get("makeup_day", 0))).is_less(window_start)
+	assert_int(int(interleague_entry.get("makeup_day", 0)) - interleague_from).is_less_equal(7)
+
+
+func test_makeups_stay_clear_of_the_postseason() -> void:
+	# 追加日程がクライマックスシリーズに食い込むと、CS の日付がレギュラーシーズンの最終戦より
+	# 前になる。1 球団に中止を 20 試合集めて終盤の窓を溢れさせ、溢れた分が CS の手前で止まって
+	# シーズン中の空き日へ戻ることを見る。
+	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
+	var cap_day: int = PSRescheduleService.latest_makeup_day(season)
+	var window_start: int = PSRescheduleService.late_window_start_day(season)
+	var cs_day: int = SeasonCalendar.season_day_for_date(season, PostseasonService.cs1_start_date(season.year))
+	assert_int(cap_day).is_less(cs_day)
+
+	var team_id: int = int((season.schedule[0] as Dictionary).get("home_team_id", 0))
+	var targets: Array = []
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("is_interleague", false)):
+			continue
+		if int(game.get("home_team_id", 0)) == team_id or int(game.get("away_team_id", 0)) == team_id:
+			targets.append(game)
+		if targets.size() >= 20:
+			break
+
+	var to_late_window: int = 0
+	var back_in_season: int = 0
+	for game_value in targets:
+		var entry: Dictionary = PSRescheduleService.postpone(season, game_value as Dictionary)
+		assert_bool(entry.is_empty()).is_false()
+		var makeup_day: int = int(entry.get("makeup_day", 0))
+		assert_int(makeup_day).is_less_equal(cap_day)
+		if makeup_day >= window_start:
+			to_late_window += 1
+		else:
+			back_in_season += 1
+	assert_int(to_late_window).is_greater(0)
+	assert_int(back_in_season).is_greater(0)
+	assert_bool(bool(PSSchedule.validate_schedule(season.schedule, GameDb.teams).get("ok", false))).is_true()
+
+
 func test_postponing_does_not_move_played_game_indices() -> void:
 	# 詳細ログは schedule の index をファイル名にしている (game_logs/g<index>.json) ため、
 	# 順延の再整列で**消化済み試合の index が動くと過去の試合ログが別の試合に化ける**。
@@ -958,6 +1157,14 @@ func test_postponing_does_not_move_played_game_indices() -> void:
 		assert_bool(is_same(season.schedule[index], played_order[index])).override_failure_message(
 			"played game index %d moved after postponing" % index
 		).is_true()
+
+
+func _first_game_of_kind(season: PSSeason, is_interleague: bool) -> Dictionary:
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("is_interleague", false)) == is_interleague:
+			return game
+	return {}
 
 
 func _first_open_air_game(season: PSSeason) -> Dictionary:

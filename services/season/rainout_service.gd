@@ -1,9 +1,10 @@
 extends RefCounted
 class_name PSRainoutService
 
-# 一軍の雨天。**気象はモデル化せず、雨が試合に影響するかどうかを 1 回の確率抽選で決める**
-# ([[project_rainout_postpone]])。プレイヤーが観測できるのは結果だけで、ゲームに効くのは
-# ①ローテのやりくり ②消化試合数の不均衡 ③終盤の過密日程 の 3 点だから。
+# 一軍の雨天。**気象はモデル化せず、その日の天気 (全国的な雨 / 地方の雨 / 雨なし) と、雨の日に
+# 試合が影響を受けるかどうかを確率抽選で決める** ([[project_rainout_postpone]])。プレイヤーが
+# 観測できるのは結果だけで、ゲームに効くのは ①ローテのやりくり ②消化試合数の不均衡
+# ③終盤の過密日程 の 3 点だから。
 #
 # 結末は 3 つ。振替は [[PSRescheduleService]] が持つ。
 #   cancel   … 試合前に中止。振替日へ回す
@@ -11,7 +12,7 @@ class_name PSRainoutService
 #   no_game  … 5 回未満で打ち切り = ノーゲーム。**全記録が無効**になり後日初回から再試合
 #
 # ## 抽選が Rng レーンを使わない理由
-# 判定は `RandomNumberGenerator` をこの場で作り、試合の同一性から導いたシードで引く。
+# 判定は `RandomNumberGenerator` をこの場で作り、試合の同一性 (天気は日と地方) から導いたシードで引く。
 # グローバル `Rng` のストリームを一切消費しないため、
 # - 並列 (レーンごとに独立 seed) と逐次で結果が変わらない ([[project_game_day_parallelization]])。
 # - **未来の試合の結果を先に問い合わせられる** = 予報を日程画面から引ける。
@@ -23,6 +24,8 @@ class_name PSRainoutService
 #   中止 26.7 / コールド 5.7 / ノーゲーム 2.0 (いずれも 1 シーズンあたり、リーグ全体)
 #   屋外球場は 1,337 試合中 68 中止 (5.1%)、ドームは 1,276 試合中 12 (0.94%)
 #   ※ ドームが 0 でないのは地方球場開催があるため。本作は地方開催を持たないのでドーム 0 で整合する。
+
+const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 # 雨が試合に影響する確率 (屋外球場・1 試合あたり)。実測の月別中止率を
 # PRE_GAME_CANCEL_SHARE で割り戻した値 = 「中止 + 試合中の中断」の合計。
@@ -41,13 +44,48 @@ const MONTHLY_RAIN_RATE: Dictionary = {
 }
 const DEFAULT_RAIN_RATE: float = 0.064
 
-# 体感の調整ノブ。1.0 で実 NPB 水準 (中止 22 / コールド 5.5 / ノーゲーム 1.9 per season。
+# 量の調整ノブ。1.0 で実 NPB 水準 (中止 22 / コールド 5.5 / ノーゲーム 1.9 per season。
 # 中止が実測 26.7 に届かないのは地方球場開催を持たないぶん)。
-# **0.5 = 「中止は体感少なめ」というユーザー方針。**
-const FEEL_SCALE: float = 0.5
+# 下げると中止が減り、終盤へ持ち越す振替も減るので、リーグ内の消化試合数の差が縮む
+# (0.5 で差は実 NPB のおよそ 2/3 になる)。
+const FEEL_SCALE: float = 1.0
 
 # 雨に影響された試合のうち、試合開始前に中止が決まる割合。実測 68 / (68 + 23) = 0.747。
 const PRE_GAME_CANCEL_SHARE: float = 0.747
+
+# 雨の広がり。実 NPB (2023-2025、屋外球場 1,408 試合) では中止の 52% が「同じ日に 2 試合以上中止」の
+# 日に起きていて、別の地方の球場どうしでも、同じ日に流れる組が独立に抽選した場合の 3.9 倍ある。
+# これを「全国的な雨の日」と「地方ごとの雨の日」の 2 段で作る。どちらも月別の率 (上) を内訳へ
+# 割り振るだけなので、1 試合あたりの率と年間の件数は変わらない。下の値で、同じ日に流れる組の比は
+# 3.9 倍、2 件以上の日に起きる割合は 49% になる (`run_rainout_probe -- --same_day_only --seasons=30`)。
+#
+# 雨の影響のうち、全国的な雨の日に起きる割合。上げると同じ日にまとめて流れる試合が増え、
+# その地方だけの雨が減る。0 にすると地方ごとの独立な雨だけになる。
+const NATIONAL_RAIN_SHARE: float = 0.6
+# 全国的な雨の日に、屋外球場の試合が雨の影響を受ける確率。上げると全国的な雨の日そのものは減り、
+# 1 日にまとめて流れる試合が増える。
+const NATIONAL_RAIN_HIT: float = 0.8
+# 地方の雨の日に、その地方の屋外球場の試合が雨の影響を受ける確率 (1 未満 = 降っても試合ができる日がある)。
+const REGIONAL_RAIN_HIT: float = 0.8
+
+const WEATHER_NONE: String = "none"
+const WEATHER_NATIONAL: String = "national"
+const WEATHER_REGIONAL: String = "regional"
+
+# 地方の表示名 (気象庁の地方予報区)。`PSTeam.home_region` の id で引き、表に無い id はそのまま出す。
+const REGION_LABELS: Dictionary = {
+	"hokkaido": "北海道",
+	"tohoku": "東北",
+	"kanto_koshin": "関東甲信",
+	"hokuriku": "北陸",
+	"tokai": "東海",
+	"kinki": "近畿",
+	"chugoku": "中国",
+	"shikoku": "四国",
+	"kyushu_north": "九州北部",
+	"kyushu_south": "九州南部",
+	"okinawa": "沖縄",
+}
 
 # 試合中に打ち切られたときの「成立イニング数」の分布 (2023-2025 の実測 23 件)。
 # **4 回がゼロなのは偶然ではない** — 2〜3 回で見切るか、あと 1 回で成立する 5 回まで粘るかの
@@ -96,6 +134,8 @@ const SALT_RAIN: int = 0x5261696E
 const SALT_SPLIT: int = 0x53706C74
 const SALT_INNING: int = 0x496E6E67
 const SALT_FORECAST: int = 0x466F7265
+const SALT_NATIONAL: int = 0x4E617469
+const SALT_REGIONAL: int = 0x52656769
 
 # 雨天の影響を丸ごと止めるスイッチ。**調査/較正ツールとテスト専用**で、通常プレイでは常に true。
 # 日程が動くと試合のレーン割当が変わり、既存の逐次比較や成績ベースラインと突き合わせられなくなる。
@@ -103,23 +143,22 @@ const SALT_FORECAST: int = 0x466F7265
 static var enabled: bool = true
 
 
-# この試合が雨にやられる確率 (0.0〜1.0)。中止・コールド・ノーゲームの合計。ドームは 0。
+# この試合が雨にやられる平均の確率 (0.0〜1.0)。その日の天気を引く前の値で、中止・コールド・
+# ノーゲームの合計。ドームは 0。全国的な雨と地方の雨の内訳を足し合わせるとこの値になる。
 static func rain_probability(game: Dictionary) -> float:
 	if not _is_open_air(game):
 		return 0.0
-	var month: int = _month_of(game)
-	return float(MONTHLY_RAIN_RATE.get(month, DEFAULT_RAIN_RATE)) * FEEL_SCALE
+	return _monthly_rate(_month_of(game))
 
 
 # この試合の結末。純粋関数 — 同じ試合・同じ順延回数なら常に同じ答えを返す。
+# 主催球場のその日の天気 (weather_for_game) で雨の影響を受ける確率が決まり、雨の無い日は流れない。
 #   { "kind": OUTCOME_*, "innings": int }  innings は called / no_game のときの成立回。
 static func rain_outcome(season: PSSeason, game: Dictionary) -> Dictionary:
-	if not enabled or season == null or game.is_empty():
+	if not enabled or season == null or game.is_empty() or not _is_open_air(game):
 		return {"kind": OUTCOME_NONE, "innings": 0}
-	var probability: float = rain_probability(game)
-	if probability <= 0.0:
-		return {"kind": OUTCOME_NONE, "innings": 0}
-	if _roll(season, game, SALT_RAIN) >= probability:
+	var hit_chance: float = _hit_chance(weather_for_game(season, game))
+	if hit_chance <= 0.0 or _roll(season, game, SALT_RAIN) >= hit_chance:
 		return {"kind": OUTCOME_NONE, "innings": 0}
 	if _roll(season, game, SALT_SPLIT) < PRE_GAME_CANCEL_SHARE:
 		return {"kind": OUTCOME_CANCEL, "innings": 0}
@@ -142,10 +181,48 @@ static func called_after_inning(season: PSSeason, game: Dictionary) -> int:
 	return 0
 
 
+# その日・その地方の天気 (WEATHER_*)。(シーズン, 日, 地方) だけで決まるので、同じ日の同じ地方は
+# 必ず同じ天気になり、全国的な雨の日は全地方が雨になる。ドームかどうかは見ない (試合が流れないだけ)。
+static func weather_on(season: PSSeason, day: int, region: String) -> String:
+	if not enabled or season == null:
+		return WEATHER_NONE
+	return _weather(season, day, _month_of_date(SeasonCalendar.date_for_season_day(season, day)), region)
+
+
+# 試合の主催球場のその日の天気。
+static func weather_for_game(season: PSSeason, game: Dictionary) -> String:
+	if not enabled or season == null or game.is_empty():
+		return WEATHER_NONE
+	return _weather(season, int(game.get("day", 0)), _month_of(game), region_of_game(game))
+
+
+# その日が全国的な雨か。まとめて流れた日の知らせに理由を添えるのに使う。
+static func national_rain_on(season: PSSeason, day: int) -> bool:
+	if not enabled or season == null:
+		return false
+	var month: int = _month_of_date(SeasonCalendar.date_for_season_day(season, day))
+	return _is_national_rain(season, day, _monthly_rate(month))
+
+
+# 試合の主催球場の地方 id。地方を持たない球団は、球団ごとに独立した地方として扱う。
+static func region_of_game(game: Dictionary) -> String:
+	var home_id: int = int(game.get("home_team_id", 0))
+	var home: PSTeam = GameDb.get_team(home_id)
+	if home == null or home.home_region.is_empty():
+		return "team_%d" % home_id
+	return home.home_region
+
+
+static func region_label(region: String) -> String:
+	return str(REGION_LABELS.get(region, region))
+
+
 # 予報 1 件。UI はこれだけを見ればよい。
 #   kind = "roof"  … ドームなので雨に左右されない (chance は使わない)
 #   kind = "none"  … 予報の対象外 (遠すぎる / 日程が無い)
-#   kind = "rain"  … chance = 降水確率 (%、10刻み)、certain = 当日ぶんで確定しているか
+#   kind = "rain"  … chance = 降水確率 (%、10刻み)、certain = 当日ぶんで確定しているか。
+#                    当日に雨で流れる / 打ち切られる試合は、scope (WEATHER_NATIONAL / WEATHER_REGIONAL)
+#                    と region_label も持つ
 static func forecast(season: PSSeason, game: Dictionary) -> Dictionary:
 	if season == null or game.is_empty():
 		return {"kind": "none", "chance": 0, "certain": false}
@@ -170,11 +247,16 @@ static func forecast(season: PSSeason, game: Dictionary) -> Dictionary:
 	# 遠い日ほど平年値へ寄せる = やられる試合も無事な試合も似た数字になり、当てられなくなる。
 	var climatology: float = float(CLIMATOLOGY_RAIN_PCT.get(_month_of(game), DEFAULT_CLIMATOLOGY_PCT))
 	var pct: float = lerpf(climatology, outcome_pct, confidence)
-	return {
+	var result: Dictionary = {
 		"kind": "rain",
 		"chance": int(round(clampf(pct, 0.0, 100.0) / 10.0) * 10),
 		"certain": lead_days == 0,
 	}
+	# どの雨にやられたかは当日だけ添える。先の日に出すと、全国的な雨の日が降水確率より先に割れてしまう。
+	if lead_days == 0 and kind != OUTCOME_NONE:
+		result["scope"] = weather_for_game(season, game)
+		result["region_label"] = region_label(region_of_game(game))
+	return result
 
 
 # 指定日の未消化試合のうち**試合前に中止するもの**を振替へ回す。
@@ -242,7 +324,72 @@ static func _is_open_air(game: Dictionary) -> bool:
 
 
 static func _month_of(game: Dictionary) -> int:
-	var date_text: String = str(game.get("date", ""))
+	return _month_of_date(str(game.get("date", "")))
+
+
+static func _month_of_date(date_text: String) -> int:
 	if date_text.length() < 7:
 		return 0
 	return int(date_text.substr(5, 2))
+
+
+# 屋外球場 1 試合あたりの「雨が影響する率」(月別の実測 × FEEL_SCALE)。
+static func _monthly_rate(month: int) -> float:
+	return float(MONTHLY_RAIN_RATE.get(month, DEFAULT_RAIN_RATE)) * FEEL_SCALE
+
+
+# 全国的な雨の日 → それ以外の日に地方の雨、の順に引く。どちらの確率も月別の率から割り戻してあり、
+# 試合 1 つあたりで見ると n * NATIONAL_RAIN_HIT + (1 - n) * r * REGIONAL_RAIN_HIT = rate になる。
+static func _weather(season: PSSeason, day: int, month: int, region: String) -> String:
+	var rate: float = _monthly_rate(month)
+	if rate <= 0.0:
+		return WEATHER_NONE
+	if _is_national_rain(season, day, rate):
+		return WEATHER_NATIONAL
+	if _day_roll(season, day, region, SALT_REGIONAL) < _regional_rain_chance(rate):
+		return WEATHER_REGIONAL
+	return WEATHER_NONE
+
+
+static func _is_national_rain(season: PSSeason, day: int, rate: float) -> bool:
+	return _day_roll(season, day, "", SALT_NATIONAL) < _national_rain_chance(rate)
+
+
+# 全国的な雨の日になる確率 n。NATIONAL_RAIN_SHARE ぶんの雨を、1 日で NATIONAL_RAIN_HIT の割合の試合に効かせる。
+static func _national_rain_chance(rate: float) -> float:
+	return clampf(NATIONAL_RAIN_SHARE * rate / NATIONAL_RAIN_HIT, 0.0, 1.0)
+
+
+# 全国的な雨でない日に、その地方が雨になる確率 r。残りの (1 - NATIONAL_RAIN_SHARE) ぶんを受け持つ。
+# 全国的な雨の日を除いた条件付きの値なので (1 - n) で割り戻す。
+static func _regional_rain_chance(rate: float) -> float:
+	var national_chance: float = _national_rain_chance(rate)
+	if national_chance >= 1.0:
+		return 0.0
+	return clampf((1.0 - NATIONAL_RAIN_SHARE) * rate / ((1.0 - national_chance) * REGIONAL_RAIN_HIT), 0.0, 1.0)
+
+
+# その天気の日に、屋外球場の試合が雨の影響を受ける確率。
+static func _hit_chance(weather: String) -> float:
+	if weather == WEATHER_NATIONAL:
+		return NATIONAL_RAIN_HIT
+	if weather == WEATHER_REGIONAL:
+		return REGIONAL_RAIN_HIT
+	return 0.0
+
+
+# 日 (と地方) から決まるシード。試合の同一性を混ぜないので、同じ日の同じ地方は同じ値を引く。
+# 全国的な雨は地方を空文字にして引く。
+static func _day_seed(season: PSSeason, day: int, region: String, salt: int) -> int:
+	var key: int = int(season.schedule_bucket_seed)
+	key = key * 1000003 + season.year
+	key = key * 31 + season.season_number
+	key = key * 1000033 + day
+	key = key * 131 + region.hash()
+	return key ^ salt
+
+
+static func _day_roll(season: PSSeason, day: int, region: String, salt: int) -> float:
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = _day_seed(season, day, region, salt)
+	return rng.randf()

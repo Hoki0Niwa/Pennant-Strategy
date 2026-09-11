@@ -227,10 +227,16 @@ static func _ensure_postseason_schedule(postseason: PSPostseasonResult, season: 
 			return
 
 
+# クライマックスシリーズ ファーストステージの開幕日 (10 月の第 2 土曜)。レギュラーシーズンの
+# 追加日程はこの手前で打ち止めになる ([[PSRescheduleService]])。
+static func cs1_start_date(year: int) -> String:
+	return SeasonCalendar.nth_weekday_of_month(year, POSTSEASON_MONTH, WEEKDAY_SATURDAY, 2)
+
+
 static func _apply_postseason_schedule(postseason: PSPostseasonResult, season: PSSeason) -> void:
 	if postseason == null or season == null:
 		return
-	var cs1_start: String = SeasonCalendar.nth_weekday_of_month(season.year, POSTSEASON_MONTH, WEEKDAY_SATURDAY, 2)
+	var cs1_start: String = cs1_start_date(season.year)
 	var cs2_start: String = SeasonCalendar.first_weekday_on_or_after(SeasonCalendar.add_days(cs1_start, 3), WEEKDAY_WEDNESDAY)
 	var js_start: String = SeasonCalendar.add_days(cs2_start, 10)
 	var first_home_league: String = _japan_series_first_home_league(season.season_number)
