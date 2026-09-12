@@ -20,6 +20,10 @@ const ROUNDS_PER_CYCLE: int = 5
 # ちょうど25試合に揃える。詳細は _intraleague_cycle_plans を参照。
 const INTRALEAGUE_CYCLES: int = 9
 const INTRALEAGUE_BLOCK_COUNT: int = INTRALEAGUE_CYCLES * ROUNDS_PER_CYCLE
+# 2連戦を置く巡を、シーズンの前半(または後半)に寄せるカードの割合。0 にすると全カードが9巡から
+# 一様に選ぶため、球団ごとの「まだ消化していない試合」が打ち消し合って当初日程の消化試合数の差が縮む。
+# 上げるほど差が大きくなる(実NPBの当初日程は同じ日付で平均3.8試合差)。
+const SHORTENED_SERIES_HALF_BIAS: float = 0.5
 const INTERLEAGUE_THREE_GAME_BLOCKS: int = 6
 const GAMES_PER_SERIES: int = 3
 const WEEKDAY_SUNDAY: int = 0
@@ -407,79 +411,21 @@ static func _generated_template_rows(year: int, season_number: int) -> Array:
 	var league1_is_september: Array = _is_september_or_later_by_round_index(league1_round_orders, intra_days, target_opening)
 	var league2_is_september: Array = _is_september_or_later_by_round_index(league2_round_orders, intra_days, target_opening)
 
-	var league1_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league1_round_orders, cycle_length_seed + 88001, league1_protected_cycles, same_week_as_next, league1_is_september)
-	var league2_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league2_round_orders, cycle_length_seed + 271828, league2_protected_cycles, same_week_as_next, league2_is_september)
+	var league1_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league1_round_orders, league1_rounds, cycle_length_seed + 88001, league1_protected_cycles, same_week_as_next, league1_is_september)
+	var league2_cycle_plans: Array = _intraleague_cycle_plans(cycles_count, league2_round_orders, league2_rounds, cycle_length_seed + 271828, league2_protected_cycles, same_week_as_next, league2_is_september)
 	# 単独1試合は実際には「他の対戦カードがその窓の残り日へ相乗りする」ことが多い
 	# (実データで単独戦に見えるものの多くは、木曜が移動日になっただけの2連戦)。
 	# 相乗り元(ドナー)は同じ9月以降のどこかの巡にある別 round_index の length=3 を
 	# 1試合分だけ2に短縮して提供する(ドナー自身の総試合数は変わらない)。
-	var league1_companions: Dictionary = _assign_single_game_companions(league1_cycle_plans, league1_round_orders, league1_protected_cycles, league1_is_september, same_week_as_next, cycle_length_seed + 313111)
-	var league2_companions: Dictionary = _assign_single_game_companions(league2_cycle_plans, league2_round_orders, league2_protected_cycles, league2_is_september, same_week_as_next, cycle_length_seed + 707909)
+	var league1_companions: Dictionary = _assign_single_game_companions(league1_cycle_plans, league1_round_orders, league1_rounds, league1_protected_cycles, league1_is_september, same_week_as_next, cycle_length_seed + 313111)
+	var league2_companions: Dictionary = _assign_single_game_companions(league2_cycle_plans, league2_round_orders, league2_rounds, league2_protected_cycles, league2_is_september, same_week_as_next, cycle_length_seed + 707909)
 
 	for block_index in range(INTRALEAGUE_BLOCK_COUNT):
-		var position_in_cycle: int = block_index % ROUNDS_PER_CYCLE
-		@warning_ignore("integer_division")
-		var cycle_index: int = block_index / ROUNDS_PER_CYCLE
-		var cycle_number: int = cycle_index + 1
-
-		var league1_round_index: int = int((league1_round_orders[cycle_index] as Array)[position_in_cycle])
-		var league1_plan: Dictionary = league1_cycle_plans[league1_round_index] as Dictionary
-		var league1_length: int = int((league1_plan.get("lengths", []) as Array)[cycle_index])
-		var league1_designated_home: bool = bool((league1_plan.get("designated_home", []) as Array)[cycle_index])
 		var league1_specs: Array = []
-		if league1_companions.has(block_index):
-			var league1_companion: Dictionary = league1_companions[block_index] as Dictionary
-			series_id = _append_intraleague_series_specs_with_day_offset(
-				league1_specs, league1_rounds[league1_round_index] as Array, cycle_number, series_id,
-				league1_designated_home, int(league1_companion.get("recipient_day_offset", 0))
-			)
-			var league1_donor_round_index: int = int(league1_companion.get("donor_round_index", 0))
-			var league1_donor_plan: Dictionary = league1_cycle_plans[league1_donor_round_index] as Dictionary
-			var league1_donor_cycle_index: int = int(league1_companion.get("donor_cycle_index", cycle_index))
-			var league1_donor_designated_home: bool = bool((league1_donor_plan.get("designated_home", []) as Array)[league1_donor_cycle_index])
-			series_id = _append_intraleague_series_specs_with_day_offset(
-				league1_specs, league1_rounds[league1_donor_round_index] as Array, cycle_number, series_id,
-				league1_donor_designated_home, int(league1_companion.get("companion_day_offset", 1))
-			)
-		else:
-			series_id = _append_intraleague_series_specs(
-				league1_specs,
-				league1_rounds[league1_round_index] as Array,
-				cycle_number,
-				series_id,
-				league1_length,
-				league1_designated_home
-			)
+		series_id = _append_league_block_specs(league1_specs, league1_rounds, league1_round_orders, league1_cycle_plans, league1_companions, block_index, series_id)
 		_append_series_rows(rows, int(intra_days[block_index]), league1_specs, target_opening)
-
-		var league2_round_index: int = int((league2_round_orders[cycle_index] as Array)[position_in_cycle])
-		var league2_plan: Dictionary = league2_cycle_plans[league2_round_index] as Dictionary
-		var league2_length: int = int((league2_plan.get("lengths", []) as Array)[cycle_index])
-		var league2_designated_home: bool = bool((league2_plan.get("designated_home", []) as Array)[cycle_index])
 		var league2_specs: Array = []
-		if league2_companions.has(block_index):
-			var league2_companion: Dictionary = league2_companions[block_index] as Dictionary
-			series_id = _append_intraleague_series_specs_with_day_offset(
-				league2_specs, league2_rounds[league2_round_index] as Array, cycle_number, series_id,
-				league2_designated_home, int(league2_companion.get("recipient_day_offset", 0))
-			)
-			var league2_donor_round_index: int = int(league2_companion.get("donor_round_index", 0))
-			var league2_donor_plan: Dictionary = league2_cycle_plans[league2_donor_round_index] as Dictionary
-			var league2_donor_cycle_index: int = int(league2_companion.get("donor_cycle_index", cycle_index))
-			var league2_donor_designated_home: bool = bool((league2_donor_plan.get("designated_home", []) as Array)[league2_donor_cycle_index])
-			series_id = _append_intraleague_series_specs_with_day_offset(
-				league2_specs, league2_rounds[league2_donor_round_index] as Array, cycle_number, series_id,
-				league2_donor_designated_home, int(league2_companion.get("companion_day_offset", 1))
-			)
-		else:
-			series_id = _append_intraleague_series_specs(
-				league2_specs,
-				league2_rounds[league2_round_index] as Array,
-				cycle_number,
-				series_id,
-				league2_length,
-				league2_designated_home
-			)
+		series_id = _append_league_block_specs(league2_specs, league2_rounds, league2_round_orders, league2_cycle_plans, league2_companions, block_index, series_id)
 		_append_series_rows(rows, int(intra_days[block_index]), league2_specs, target_opening)
 
 	for card_index in range(interleague_days.size()):
@@ -663,10 +609,39 @@ static func _template_date_in_range(date_text: String, start_date: String, end_d
 	return SeasonCalendar.days_between(start_date, date_text) >= 0 and SeasonCalendar.days_between(date_text, end_date) >= 0
 
 
-static func _append_intraleague_series_specs(specs: Array, pairs: Array, cycle_number: int, start_series_id: int, length: int, designated_home: bool) -> int:
+# 1 枠 (固定週間隔カレンダーの 1 ブロック) ぶんのリーグ内カードを specs に積み、次の series_id を返す。
+# 巡の 3 カードはそれぞれ自分の計画 (_intraleague_cycle_plans) の長さで組むので、同じ枠でも
+# 「このカードだけ 2 連戦」が起きる。単独戦の相乗り枠 (companions) だけは、単独戦の 3 カードと
+# 相乗りする別の巡の 3 カードを、窓内の決まった日に 1 試合ずつ置く。
+static func _append_league_block_specs(specs: Array, rounds: Array, round_orders: Array, cycle_plans: Array, companions: Dictionary, block_index: int, start_series_id: int) -> int:
+	@warning_ignore("integer_division")
+	var cycle_index: int = block_index / ROUNDS_PER_CYCLE
+	var cycle_number: int = cycle_index + 1
+	var round_index: int = int((round_orders[cycle_index] as Array)[block_index % ROUNDS_PER_CYCLE])
+	var pairs: Array = rounds[round_index] as Array
+	var pair_plans: Array = cycle_plans[round_index] as Array
+	if not companions.has(block_index):
+		return _append_intraleague_series_specs(specs, pairs, pair_plans, cycle_index, cycle_number, start_series_id)
+	var companion: Dictionary = companions[block_index] as Dictionary
+	var series_id: int = _append_intraleague_series_specs_with_day_offset(
+		specs, pairs, pair_plans, cycle_index, cycle_number, start_series_id, int(companion.get("recipient_day_offset", 0))
+	)
+	# ドナーのホーム側は、ドナー自身の巡 (donor_cycle_index) の計画に従う (相乗り先でもホーム数が変わらない)。
+	var donor_round_index: int = int(companion.get("donor_round_index", 0))
+	return _append_intraleague_series_specs_with_day_offset(
+		specs, rounds[donor_round_index] as Array, cycle_plans[donor_round_index] as Array,
+		int(companion.get("donor_cycle_index", cycle_index)), cycle_number, series_id, int(companion.get("companion_day_offset", 1))
+	)
+
+
+# 巡の 3 カードを、それぞれのカードの計画 (cycle_index 巡目の長さとホーム側) で積む。
+static func _append_intraleague_series_specs(specs: Array, pairs: Array, pair_plans: Array, cycle_index: int, cycle_number: int, start_series_id: int) -> int:
 	var series_id: int = start_series_id
-	for pair_value in pairs:
-		var pair: Array = pair_value as Array
+	for pair_index in range(pairs.size()):
+		var pair: Array = pairs[pair_index] as Array
+		var plan: Dictionary = pair_plans[pair_index] as Dictionary
+		var length: int = int((plan.get("lengths", []) as Array)[cycle_index])
+		var designated_home: bool = bool((plan.get("designated_home", []) as Array)[cycle_index])
 		var ha: Array = _intraleague_home_pair(str(pair[0]), str(pair[1]), designated_home)
 		specs.append(_series_spec(str(ha[1]), str(ha[0]), false, series_id, cycle_number, length))
 		series_id += 1
@@ -675,11 +650,12 @@ static func _append_intraleague_series_specs(specs: Array, pairs: Array, cycle_n
 
 # _assign_single_game_companions が相乗りを割り当てたブロック用: 窓内の特定の1日
 # (day_offset)だけを使う単独戦カードを追加する(_append_intraleague_series_specs の
-# day_offset 指定版)。
-static func _append_intraleague_series_specs_with_day_offset(specs: Array, pairs: Array, cycle_number: int, start_series_id: int, designated_home: bool, day_offset: int) -> int:
+# day_offset 指定版)。ホーム側は各カードの計画の cycle_index 巡目に従う。
+static func _append_intraleague_series_specs_with_day_offset(specs: Array, pairs: Array, pair_plans: Array, cycle_index: int, cycle_number: int, start_series_id: int, day_offset: int) -> int:
 	var series_id: int = start_series_id
-	for pair_value in pairs:
-		var pair: Array = pair_value as Array
+	for pair_index in range(pairs.size()):
+		var pair: Array = pairs[pair_index] as Array
+		var designated_home: bool = bool(((pair_plans[pair_index] as Dictionary).get("designated_home", []) as Array)[cycle_index])
 		var ha: Array = _intraleague_home_pair(str(pair[0]), str(pair[1]), designated_home)
 		specs.append(_series_spec(str(ha[1]), str(ha[0]), false, series_id, cycle_number, 1, day_offset))
 		series_id += 1
@@ -696,7 +672,7 @@ static func _append_intraleague_series_specs_with_day_offset(specs: Array, pairs
 # 休養は常に1日以内に収まる(2つの週境界のうち、火→金は間隔0日で無バッファ、金→翌週火は
 # 月曜移動日で1日分のバッファがあるため、後ろ寄せ/前寄せの選び方は非対称: 火曜カードは
 # 月曜バッファ側=前を詰めずに残し、金曜カードは月曜バッファ側=後ろを詰めずに残す)。
-# 同じ週の両カードを同時に短縮しない制約は _intraleague_cycle_plans の same_week_as_next で
+# 同じ球団の同じ週の両カードを同時に短縮しない制約は _intraleague_cycle_plans の same_week_as_next で
 # 担保する。単独1試合(2日休む)は「日曜のみ」だと直前が祝日月曜カード(水曜終わり、通常の
 # 木曜終わりより1日早い)の場合に休養3日になる罠がある(2100年で実際に発生した回帰)ため、
 # 「土曜のみ」に固定し前後とも休養2日以内に収める(火曜カードの単独1試合は前後とも
@@ -755,10 +731,9 @@ static func _series_spec(away_bucket: String, home_bucket: String, is_interleagu
 	}
 
 
-# designated_home は _intraleague_cycle_plans が決定的に確定させた「この巡は
-# 13試合側(_extra_home_bucket が決めた球団)がホームか」のフラグ。カードごとに
-# どちらが13側かは _extra_home_bucket が固定するので、ここでは渡された巡単位の
-# フラグに従うだけでよい。
+# designated_home は _intraleague_cycle_plans がカード・巡ごとに決定的に確定させた
+# 「13試合側(_extra_home_bucket が決めた球団)がホームか」のフラグ。どちらが13側かは
+# _extra_home_bucket が固定するので、ここでは渡されたフラグに従うだけでよい。
 static func _intraleague_home_pair(team_a: String, team_b: String, designated_home: bool) -> Array:
 	var designated: String = _extra_home_bucket(team_a, team_b)
 	var other: String = team_b if designated == team_a else team_a
@@ -825,174 +800,254 @@ static func _round_orders_for_cycles(cycles_count: int, seed: int) -> Array:
 	return orders
 
 
-# round_index(0..ROUNDS_PER_CYCLE-1)ごとに、INTRALEAGUE_CYCLES 回の巡での試合数
-# (通常 GAMES_PER_SERIES=3、一部だけ短縮)と、どちらのホーム/ビジターが「多い方(13試合)」に
-# なるかを同時に決定的に決める。
+# round_index(0..ROUNDS_PER_CYCLE-1)ごとに、巡の 3 カードそれぞれの計画 — INTRALEAGUE_CYCLES 回の
+# 巡での試合数 (通常 GAMES_PER_SERIES=3、一部だけ短縮) と、どちらが「多い方(13試合)」のホームに
+# なるか — を決定的に決める。戻り値は round_index ごとに、_round_robin_rounds の pairs と同じ順の
+# {"lengths": [...], "designated_home": [...]} の配列。
 # 実際のNPBは同一カードの全25試合を「8×3連戦+単独1試合」のような単一ルールでは組んでおらず、
 # 「7×3連戦+2連戦×2」等も同程度の頻度で混在する(2026年公式日程を12球団分検証して確認、
-# docs/agent_memory 参照)。9巡×3試合=27は25試合を2試合超過するため、
-# 60%の確率で2巡を2連戦に短縮(7×3+2×2=25)、40%の確率で1巡を単独1試合に短縮(8×3+1=25)する。
-# どの巡が短縮されるかは _round_orders_for_cycles 由来のシャッフル済み並びに乗るだけなので、
-# 終盤に固めず自然にシーズン中へ散らばる。
+# docs/agent_memory 参照)。9巡×3試合=27は25試合を2試合超過するため、1リーグにつき1巡(3カード)だけを
+# 単独1試合に短縮(8×3+1=25)し、残り4巡(12カード)は2連戦×2に短縮(7×3+2×2=25)する。
+# これでカードの18%が2連戦、単独戦は毎シーズン必ず3カード分だけ出る(実NPBは4〜8月でカードの23%が2連戦、
+# 単独戦はリーグあたり年2〜4カード)。
+# - **2連戦はカードごとに別の巡を選ぶ。** 同じ枠の 3 カードのうち一部だけが 2連戦になり、その 2 球団
+#   だけ 1 試合少ない週ができる (実 NPB の 4〜8 月は、同じ枠で 3 カードの長さが揃わないのが 30%)。
+#   巡の 3 カードを揃えて短縮すると全球団が同じだけ減るので、消化試合数に差が付かない。
+# - **単独1試合は巡の 3 カードで揃える** (実 NPB も単独戦の枠は全カードが単独戦)。
+# どの巡が短縮されるかはシャッフル済みの並びに乗るだけなので、終盤に固めず自然にシーズン中へ散らばる。
 #
 # ホーム試合数は「13側(_extra_home_bucket が決めた球団)」「12側」にきっちり分けたい。
 # どちらのパターンでも "12側が3連戦(通常長)を4本ホームにし、13側が残り(短縮分含む)全てを
 # ホームにする" と必ず 12/13 に割れる (8×3+1: 12側4本×3=12、13側4本×3+1=13。
-# 7×3+2×2: 12側4本×3=12、13側3本×3+2×2=13)。巡の長さや配置に関わらず必ず成立する
-# 決定的な式なので、乱数の収束に頼るバランサ(かつて実装して71-72に収まらず失敗した)より
-# 安定する。
+# 7×3+2×2: 12側4本×3=12、13側3本×3+2×2=13)。カードの長さや配置に関わらず必ず成立する
+# 決定的な式なので、乱数の収束に頼るバランサより安定する (長さが 1/2/3 と不揃いなので、
+# 累積ホーム数で釣り合わせる方式は 71-72 に収まらない)。
 #
 # protected_cycles_by_round は round_index ごとに cycles_count 個の bool 配列を持ち、
 # true の巡(ゴールデンウィークに重なる巡・祝日月曜始まりの巡・開幕戦/交流戦明け/
 # オールスター明けの巡)は短縮対象から除外する。
 #
-# round_orders(巡ごとのカード順シャッフル)と same_week_as_next(_same_week_as_next_flags、
-# 火カード→直後の金カードが同じ週かどうか)を渡すことで、「同じ週の火水木カードと金土日
-# カードを両方短縮しない」制約を round_index をまたいで守る。両方短縮すると、火水木側は
-# 木曜を休み・金土日側は金曜を休むため、木・金と2日連続の休養日になってしまう。
-# round_index を 0..4 の順に処理し、既に他の round_index が
-# 短縮済みのブロックと同じ週なら候補から除外する形でこの制約を保証する。
-# フォールバックの優先順位: 候補が尽きた場合、週制約より先に protected_cycles_by_round を
-# 無視する(=まれに保護対象が短縮される方が、休養3日以上という深刻な回帰より軽微なため)。
+# 同じ球団について、同じ週の火水木カードと金土日カードを両方短縮しない。両方短縮すると、火水木側は
+# 木曜を休み・金土日側は金曜を休むため、木・金と2日連続の休養日になってしまう。短縮を決めるたびに
+# reduced_team_blocks へ球団ごとに記録し、same_week_as_next (火カード→直後の金カードが同じ週か) で
+# 週の相方の枠を引いて確かめる (_pick_reduced_cycles)。
 #
 # is_september_or_later は round_index ごとに cycles_count 個の bool 配列を持ち、単独1試合
 # (length=1、use_two_reductions==false のパターン)はこれが true の巡にしか割り当てない
 # (単独戦は9月以降に限定する)。2連戦(length=2)にはこの制約は
 # 適用しない(実データで4-9月に渡って分散していることを確認済みのため)。
-static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, seed: int, protected_cycles_by_round: Array, same_week_as_next: Array, is_september_or_later: Array) -> Array:
-	var reduced_blocks: Dictionary = {}
+static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, rounds: Array, seed: int, protected_cycles_by_round: Array, same_week_as_next: Array, is_september_or_later: Array) -> Array:
+	var reduced_team_blocks: Dictionary = {}
+	var cycle_indices: Array = []
+	for i in range(cycles_count):
+		cycle_indices.append(i)
 	var result: Array = []
-	for round_index in range(ROUNDS_PER_CYCLE):
-		var protected_cycles: Array = protected_cycles_by_round[round_index] as Array
-		var september_flags: Array = is_september_or_later[round_index] as Array
-		var block_index_for_cycle: Array = []
-		for cycle_index in range(cycles_count):
-			var order: Array = round_orders[cycle_index] as Array
-			var position: int = order.find(round_index)
-			block_index_for_cycle.append(cycle_index * ROUNDS_PER_CYCLE + position)
-		var lengths: Array = []
-		for i in range(cycles_count):
-			lengths.append(GAMES_PER_SERIES)
-		var indices: Array = []
-		for i in range(cycles_count):
-			indices.append(i)
-		var shuffled: Array = _deterministic_shuffle(indices, seed + round_index * 7919)
-		var use_two_reductions: bool = (int(shuffled[shuffled.size() - 1]) % 5) < 3
-		var is_single_game_pattern: bool = not use_two_reductions
-		var reduced: Dictionary = {}
-		var reductions_needed: int = 2 if use_two_reductions else 1
-		for idx_value in shuffled:
-			var idx: int = int(idx_value)
-			if reductions_needed <= 0:
-				break
-			if bool(protected_cycles[idx]):
+	result.resize(ROUNDS_PER_CYCLE)
+	# 単独戦の巡 (巡の 6 球団全員が同じ枠で休む) を先に置く。2連戦を先にカードごとに散らすと、
+	# 9 月の枠の週の相方にどこかの 2連戦が入っていて、単独戦が 9 月から押し出される。
+	var single_game_round_index: int = _single_game_round_index(cycle_indices, seed)
+	for place_two_game_rounds in [false, true]:
+		for round_index in range(ROUNDS_PER_CYCLE):
+			var use_two_reductions: bool = round_index != single_game_round_index
+			if use_two_reductions != place_two_game_rounds:
 				continue
-			if is_single_game_pattern and not bool(september_flags[idx]):
-				continue
-			if _week_partner_already_reduced(int(block_index_for_cycle[idx]), same_week_as_next, reduced_blocks):
-				continue
-			reduced[idx] = true
-			reduced_blocks[int(block_index_for_cycle[idx])] = true
-			reductions_needed -= 1
-		# 保護巡・週の相方短縮済みだけで埋まってしまう(GW保護に加えて祝日月曜・開幕/交流戦明け/
-		# オールスター明けの保護も乗るため、稀に起きうる)ケースへのフォールバック: 週制約
-		# (同じ週の二重短縮=木・金と2日連続休養)は絶対に破らず、まず保護の方を先に無視する。
-		# 週制約を破ると「休養3日以上」という、より深刻な形が出てしまうため。
-		# 9月限定制約(単独1試合のみ)は、週制約より後・保護より先には緩めない
-		# (単独戦を9月以降に限ること自体が要件なので、週制約の次に守る)。
-		if reductions_needed > 0:
-			for idx_value in shuffled:
-				var idx: int = int(idx_value)
-				if reductions_needed <= 0:
-					break
-				if reduced.has(idx):
-					continue
-				if is_single_game_pattern and not bool(september_flags[idx]):
-					continue
-				if _week_partner_already_reduced(int(block_index_for_cycle[idx]), same_week_as_next, reduced_blocks):
-					continue
-				reduced[idx] = true
-				reduced_blocks[int(block_index_for_cycle[idx])] = true
-				reductions_needed -= 1
-		# それでも埋まらない場合、9月限定制約も緩める(保護は既にtier2で緩めている。週制約は維持)。
-		if reductions_needed > 0:
-			for idx_value in shuffled:
-				var idx: int = int(idx_value)
-				if reductions_needed <= 0:
-					break
-				if reduced.has(idx):
-					continue
-				if _week_partner_already_reduced(int(block_index_for_cycle[idx]), same_week_as_next, reduced_blocks):
-					continue
-				reduced[idx] = true
-				reduced_blocks[int(block_index_for_cycle[idx])] = true
-				reductions_needed -= 1
-		# それでも埋まらない(保護・9月限定を無視しても週制約だけで9巡全滅する)場合のみ、
-		# 最後の手段として週制約も無視する。
-		if reductions_needed > 0:
-			for idx_value in shuffled:
-				var idx: int = int(idx_value)
-				if reductions_needed <= 0:
-					break
-				if reduced.has(idx):
-					continue
-				reduced[idx] = true
-				reduced_blocks[int(block_index_for_cycle[idx])] = true
-				reductions_needed -= 1
-		for idx in reduced.keys():
-			lengths[idx] = 2 if use_two_reductions else 1
-
-		var designated_home: Array = []
-		for i in range(cycles_count):
-			designated_home.append(true)
-		var other_home_remaining: int = 4
-		for idx_value in shuffled:
-			var idx: int = int(idx_value)
-			if other_home_remaining <= 0:
-				break
-			if not reduced.has(idx):
-				designated_home[idx] = false
-				other_home_remaining -= 1
-
-		result.append({"lengths": lengths, "designated_home": designated_home})
+			var shuffled: Array = _deterministic_shuffle(cycle_indices, seed + round_index * 7919)
+			var protected_cycles: Array = protected_cycles_by_round[round_index] as Array
+			var september_flags: Array = is_september_or_later[round_index] as Array
+			var block_index_for_cycle: Array = _block_indices_for_round(round_index, round_orders)
+			var pairs: Array = rounds[round_index] as Array
+			var pair_plans: Array = []
+			if use_two_reductions:
+				for pair_index in range(pairs.size()):
+					var pair_order: Array = _shortened_cycle_order(cycle_indices, seed + round_index * 7919 + (pair_index + 1) * 104723)
+					var pair_reduced: Dictionary = _pick_reduced_cycles(
+						pair_order, 2, pairs[pair_index] as Array, block_index_for_cycle, protected_cycles, september_flags,
+						false, same_week_as_next, reduced_team_blocks
+					)
+					pair_plans.append(_pair_cycle_plan(cycles_count, pair_reduced, 2, pair_order))
+			else:
+				var round_reduced: Dictionary = _pick_reduced_cycles(
+					shuffled, 1, _teams_of_pairs(pairs), block_index_for_cycle, protected_cycles, september_flags,
+					true, same_week_as_next, reduced_team_blocks
+				)
+				for _pair_index in range(pairs.size()):
+					pair_plans.append(_pair_cycle_plan(cycles_count, round_reduced, 1, shuffled))
+			result[round_index] = pair_plans
 	return result
 
 
-# block_index の週の相方(直前 or 直後で same_week_as_next が true のブロック)が
-# 既に(他の round_index によって)短縮済みかどうかを調べる。
-static func _week_partner_already_reduced(block_index: int, same_week_as_next: Array, reduced_blocks: Dictionary) -> bool:
-	if block_index > 0 and bool(same_week_as_next[block_index - 1]) and reduced_blocks.has(block_index - 1):
-		return true
-	if block_index < same_week_as_next.size() and bool(same_week_as_next[block_index]) and reduced_blocks.has(block_index + 1):
-		return true
+# 単独戦にする巡。1 リーグにつき 1 巡だけで、巡ごとのシャッフル末尾の値が最小の巡を選ぶ
+# (毎シーズン必ず 1 巡 = 3 カードが単独戦になる)。
+static func _single_game_round_index(cycle_indices: Array, seed: int) -> int:
+	var best_round: int = 0
+	var best_key: int = -1
+	for round_index in range(ROUNDS_PER_CYCLE):
+		var shuffled: Array = _deterministic_shuffle(cycle_indices, seed + round_index * 7919)
+		var key: int = int(shuffled[shuffled.size() - 1]) * ROUNDS_PER_CYCLE + round_index
+		if best_key < 0 or key < best_key:
+			best_key = key
+			best_round = round_index
+	return best_round
+
+
+# カードが 2連戦を置く巡の候補順。SHORTENED_SERIES_HALF_BIAS の割合のカードは 2 本ともシーズンの
+# 前半 (または後半) へ寄せ、残りのカードは 9 巡から一様に選ぶ。
+static func _shortened_cycle_order(cycle_indices: Array, seed: int) -> Array:
+	var order: Array = _deterministic_shuffle(cycle_indices, seed)
+	var roll_values: Array = []
+	for i in range(10):
+		roll_values.append(i)
+	var roll: int = int(_deterministic_shuffle(roll_values, seed + 61)[0])
+	if roll >= int(round(SHORTENED_SERIES_HALF_BIAS * 10.0)):
+		return order
+	# 寄せ先は序盤 3 巡か終盤 3 巡。前半/後半の 2 分割にすると 8 月の差が、2 巡ずつに狭めると 7〜8 月の差が
+	# それぞれ実 NPB より小さくなる (3 巡ずつが最も近い)。
+	@warning_ignore("integer_division")
+	var edge: int = max(1, cycle_indices.size() / 3)
+	var early: Array = []
+	var middle: Array = []
+	var late: Array = []
+	for value in order:
+		if int(value) < edge:
+			early.append(value)
+		elif int(value) >= cycle_indices.size() - edge:
+			late.append(value)
+		else:
+			middle.append(value)
+	var biased: Array = []
+	# 寄せるカードの 2/3 は終盤側。半々にすると差の山が 7〜8 月に来るが、実 NPB の差は 9 月にかけて
+	# 大きくなる (終盤に短縮を残している球団が多いほど、終盤まで差が開いたままになる)。
+	var prefers_late: bool = roll % 3 != 0
+	biased.append_array(late if prefers_late else early)
+	biased.append_array(middle)
+	biased.append_array(early if prefers_late else late)
+	return biased
+
+
+# 1 カードの計画。reduced の巡を short_length に短縮し、12側のホームを「order の先頭から見て
+# 短縮していない巡を 4 本」に決める (残りは全て 13 側のホーム)。
+static func _pair_cycle_plan(cycles_count: int, reduced: Dictionary, short_length: int, order: Array) -> Dictionary:
+	var lengths: Array = []
+	var designated_home: Array = []
+	for i in range(cycles_count):
+		lengths.append(short_length if reduced.has(i) else GAMES_PER_SERIES)
+		designated_home.append(true)
+	var other_home_remaining: int = 4
+	for idx_value in order:
+		var idx: int = int(idx_value)
+		if other_home_remaining <= 0:
+			break
+		if not reduced.has(idx):
+			designated_home[idx] = false
+			other_home_remaining -= 1
+	return {"lengths": lengths, "designated_home": designated_home}
+
+
+# order の順に巡を見て needed 本を短縮対象に選ぶ。teams はその巡で短縮されるカードに出る球団
+# (2連戦なら 2 球団、単独戦なら巡の 6 球団全員) で、選んだ枠は reduced_team_blocks に球団ごとに記録する。
+# 候補が尽きたら 保護 → 9月限定 → 週の制約 の順に緩める (tier 0 は全て守る)。保護が先なのは、
+# まれに保護対象が短縮される方が、週の制約を破って休養 3 日以上になるより軽いから。9月限定は
+# 単独戦の要件そのものなので、週の制約の次まで守る。
+static func _pick_reduced_cycles(order: Array, needed: int, teams: Array, block_index_for_cycle: Array, protected_cycles: Array, september_flags: Array, september_only: bool, same_week_as_next: Array, reduced_team_blocks: Dictionary) -> Dictionary:
+	var reduced: Dictionary = {}
+	for tier in range(4):
+		for idx_value in order:
+			if reduced.size() >= needed:
+				return reduced
+			var idx: int = int(idx_value)
+			if reduced.has(idx):
+				continue
+			if tier < 1 and bool(protected_cycles[idx]):
+				continue
+			if tier < 2 and september_only and not bool(september_flags[idx]):
+				continue
+			var block_index: int = int(block_index_for_cycle[idx])
+			if tier < 3 and _week_partner_reduced_for_teams(block_index, teams, same_week_as_next, reduced_team_blocks):
+				continue
+			reduced[idx] = true
+			_mark_reduced_teams(reduced_team_blocks, block_index, teams)
+	return reduced
+
+
+# block_index と同じ週のもう一方の枠 (直前 or 直後で same_week_as_next が true の枠) で、
+# teams の誰かのカードが既に短縮されているか。
+static func _week_partner_reduced_for_teams(block_index: int, teams: Array, same_week_as_next: Array, reduced_team_blocks: Dictionary) -> bool:
+	var partners: Array = []
+	if block_index > 0 and bool(same_week_as_next[block_index - 1]):
+		partners.append(block_index - 1)
+	if block_index < same_week_as_next.size() and bool(same_week_as_next[block_index]):
+		partners.append(block_index + 1)
+	for partner in partners:
+		for team in teams:
+			if reduced_team_blocks.has(_team_block_key(int(partner), str(team))):
+				return true
 	return false
+
+
+static func _mark_reduced_teams(reduced_team_blocks: Dictionary, block_index: int, teams: Array) -> void:
+	for team in teams:
+		reduced_team_blocks[_team_block_key(block_index, str(team))] = true
+
+
+static func _team_block_key(block_index: int, team: String) -> String:
+	return "%d:%s" % [block_index, team]
+
+
+# round_index の巡が各 cycle_index 巡目にどの枠 (block_index) に来るか。
+static func _block_indices_for_round(round_index: int, round_orders: Array) -> Array:
+	var result: Array = []
+	for cycle_index in range(round_orders.size()):
+		var order: Array = round_orders[cycle_index] as Array
+		result.append(cycle_index * ROUNDS_PER_CYCLE + order.find(round_index))
+	return result
+
+
+static func _teams_of_pairs(pairs: Array) -> Array:
+	var teams: Array = []
+	for pair_value in pairs:
+		for team in pair_value as Array:
+			teams.append(str(team))
+	return teams
+
+
+static func _cycle_length(pair_plan: Variant, cycle_index: int) -> int:
+	return int(((pair_plan as Dictionary).get("lengths", []) as Array)[cycle_index])
+
+
+static func _all_cards_full_length(pair_plans: Array, cycle_index: int) -> bool:
+	for plan_value in pair_plans:
+		if _cycle_length(plan_value, cycle_index) != GAMES_PER_SERIES:
+			return false
+	return true
 
 
 # 単独1試合(length=1、9月以降限定)は、実際には「その1試合だけで火水木/金土日の残り2日を
 # 空けたまま待つ」のではなく、他の対戦カード(別の round_index)がその窓の空いた1日へ
 # 相乗りすることが多い(実データで単独戦に見えるものの多くは、木曜が移動日になっただけの
 # 2連戦)。相乗り元(ドナー)は同じ9月以降の
-# どこかの巡で length=3 の別 round_index を1試合分だけ 2 に短縮して提供する(ドナー自身の
-# 総試合数=25は変わらず、ドナー自身の窓では通常の2連戦としてそのまま処理される。相乗り分は
-# ドナーの本来の窓とは別の暦日=単独戦側の窓に「テレポート」して1試合だけ行われる)。
+# どこかの巡で 3 カードとも length=3 の別 round_index を、3 カードとも1試合分だけ 2 に短縮して
+# 提供する(ドナー自身の総試合数=25は変わらず、ドナー自身の窓では通常の2連戦としてそのまま処理される。
+# 相乗り分はドナーの本来の窓とは別の暦日=単独戦側の窓に「テレポート」して1試合だけ行われる)。
 # 相乗りが成立するかどうか、どちらが先の日になるか(火水/火木/水木の3パターン)は
 # 決定的シードでランダムに決め、成立しないケースも残す(本当に1試合だけで終わる単独戦)。
+# 週の制約 (同じ球団の同じ週の両カードを短縮しない) は球団ごとに確かめる。
 # 戻り値は recipient 側の block_index -> {"donor_round_index", "donor_cycle_index",
 # "recipient_day_offset", "companion_day_offset"} の Dictionary。
-static func _assign_single_game_companions(cycle_plans: Array, round_orders: Array, protected_cycles_by_round: Array, is_september_or_later: Array, same_week_as_next: Array, seed: int) -> Dictionary:
+static func _assign_single_game_companions(cycle_plans: Array, round_orders: Array, rounds: Array, protected_cycles_by_round: Array, is_september_or_later: Array, same_week_as_next: Array, seed: int) -> Dictionary:
 	var cycles_count: int = round_orders.size()
-	var reduced_blocks: Dictionary = {}
+	var reduced_team_blocks: Dictionary = {}
 	var recipients: Array = []
 	for round_index in range(ROUNDS_PER_CYCLE):
-		var plan: Dictionary = cycle_plans[round_index] as Dictionary
-		var lengths: Array = plan.get("lengths", []) as Array
+		var pairs: Array = rounds[round_index] as Array
+		var pair_plans: Array = cycle_plans[round_index] as Array
+		var block_index_for_cycle: Array = _block_indices_for_round(round_index, round_orders)
 		for cycle_index in range(cycles_count):
-			var order: Array = round_orders[cycle_index] as Array
-			var position: int = order.find(round_index)
-			var block_index: int = cycle_index * ROUNDS_PER_CYCLE + position
-			if int(lengths[cycle_index]) < GAMES_PER_SERIES:
-				reduced_blocks[block_index] = true
-			if int(lengths[cycle_index]) == 1:
+			var block_index: int = int(block_index_for_cycle[cycle_index])
+			for pair_index in range(pairs.size()):
+				if _cycle_length(pair_plans[pair_index], cycle_index) < GAMES_PER_SERIES:
+					_mark_reduced_teams(reduced_team_blocks, block_index, pairs[pair_index] as Array)
+			# 単独戦は巡の 3 カードが揃って組まれるので、先頭のカードで判定すれば足りる。
+			if _cycle_length(pair_plans[0], cycle_index) == 1:
 				recipients.append({"round_index": round_index, "cycle_index": cycle_index, "block_index": block_index})
 
 	var day_patterns: Array = [[0, 1], [0, 2], [1, 2]]
@@ -1019,30 +1074,30 @@ static func _assign_single_game_companions(cycle_plans: Array, round_orders: Arr
 			var donor_round: int = int(donor_round_value)
 			if donor_round == r_round:
 				continue
-			var donor_plan: Dictionary = cycle_plans[donor_round] as Dictionary
-			var donor_lengths: Array = donor_plan.get("lengths", []) as Array
+			var donor_pair_plans: Array = cycle_plans[donor_round] as Array
+			var donor_teams: Array = _teams_of_pairs(rounds[donor_round] as Array)
 			var donor_protected: Array = protected_cycles_by_round[donor_round] as Array
 			var donor_september: Array = is_september_or_later[donor_round] as Array
+			var donor_block_for_cycle: Array = _block_indices_for_round(donor_round, round_orders)
 			var donor_cycle_indices: Array = []
 			for i in range(cycles_count):
 				donor_cycle_indices.append(i)
 			var shuffled_donor_cycles: Array = _deterministic_shuffle(donor_cycle_indices, donor_seed + donor_round * 293)
 			for donor_cycle_value in shuffled_donor_cycles:
 				var donor_cycle: int = int(donor_cycle_value)
-				if int(donor_lengths[donor_cycle]) != GAMES_PER_SERIES:
+				if not _all_cards_full_length(donor_pair_plans, donor_cycle):
 					continue
 				if bool(donor_protected[donor_cycle]):
 					continue
 				if not bool(donor_september[donor_cycle]):
 					continue
-				var donor_order: Array = round_orders[donor_cycle] as Array
-				var donor_position: int = int(donor_order.find(donor_round))
-				var donor_block: int = donor_cycle * ROUNDS_PER_CYCLE + donor_position
-				if _week_partner_already_reduced(donor_block, same_week_as_next, reduced_blocks):
+				var donor_block: int = int(donor_block_for_cycle[donor_cycle])
+				if _week_partner_reduced_for_teams(donor_block, donor_teams, same_week_as_next, reduced_team_blocks):
 					continue
-				# ドナー確定: 自身の窓では通常の2連戦として2に短縮する(総試合数は変わらない)。
-				donor_lengths[donor_cycle] = 2
-				reduced_blocks[donor_block] = true
+				# ドナー確定: 自身の窓では 3 カードとも通常の2連戦として2に短縮する(総試合数は変わらない)。
+				for plan_value in donor_pair_plans:
+					((plan_value as Dictionary).get("lengths", []) as Array)[donor_cycle] = 2
+				_mark_reduced_teams(reduced_team_blocks, donor_block, donor_teams)
 				var pattern: Array = (_deterministic_shuffle(day_patterns, roll_seed + 17)[0]) as Array
 				var recipient_first: bool = int(_deterministic_shuffle([0, 1], roll_seed + 29)[0]) == 0
 				companions[r_block] = {

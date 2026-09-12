@@ -510,9 +510,12 @@ func test_round_orders_for_cycles_shuffle_without_boundary_repeats() -> void:
 
 
 func test_intraleague_cycle_plans_always_sum_to_25_with_valid_lengths() -> void:
-	# _intraleague_cycle_plans 本体を直接検証する: 各 round_index の長さ合計が必ず25、
+	# _intraleague_cycle_plans 本体を直接検証する: 各カードの長さ合計が必ず25、
 	# 長さは1/2/3のみ、かつ「12側」(designated_home=false)の合計が必ず12になること
-	# (=designated側は必ず13になる)を、複数シードで確認する。
+	# (=designated側は必ず13になる)を、複数シードで確認する。単独戦の巡は 3 カードが揃い、
+	# 2連戦の巡はカードごとに別の巡が短縮される (揃うと全球団の消化試合数が揃ってしまう)。
+	var rounds: Array = PSSchedule._round_robin_rounds(["C1", "C2", "C3", "C4", "C5", "C6"])
+	var saw_split_round: bool = false
 	var no_protected_cycles_by_round: Array = []
 	for round_index in range(PSSchedule.ROUNDS_PER_CYCLE):
 		var flags: Array = []
@@ -530,27 +533,104 @@ func test_intraleague_cycle_plans_always_sum_to_25_with_valid_lengths() -> void:
 		all_september.append(flags)
 	for seed in [88001, 271828, 424242, 999983]:
 		var round_orders: Array = PSSchedule._round_orders_for_cycles(PSSchedule.INTRALEAGUE_CYCLES, seed)
-		var plans: Array = PSSchedule._intraleague_cycle_plans(PSSchedule.INTRALEAGUE_CYCLES, round_orders, seed, no_protected_cycles_by_round, no_same_week_as_next, all_september)
+		var plans: Array = PSSchedule._intraleague_cycle_plans(PSSchedule.INTRALEAGUE_CYCLES, round_orders, rounds, seed, no_protected_cycles_by_round, no_same_week_as_next, all_september)
 		assert_int(plans.size()).is_equal(PSSchedule.ROUNDS_PER_CYCLE)
-		for plan_value in plans:
-			var plan: Dictionary = plan_value as Dictionary
-			var lengths: Array = plan.get("lengths", []) as Array
-			var designated_home: Array = plan.get("designated_home", []) as Array
-			assert_int(lengths.size()).is_equal(PSSchedule.INTRALEAGUE_CYCLES)
-			assert_int(designated_home.size()).is_equal(PSSchedule.INTRALEAGUE_CYCLES)
+		for pair_plans_value in plans:
+			var pair_plans: Array = pair_plans_value as Array
+			assert_int(pair_plans.size()).is_equal(3)
+			var first_lengths: Array = (pair_plans[0] as Dictionary).get("lengths", []) as Array
+			var identical: bool = true
+			for plan_value in pair_plans:
+				var plan: Dictionary = plan_value as Dictionary
+				var lengths: Array = plan.get("lengths", []) as Array
+				var designated_home: Array = plan.get("designated_home", []) as Array
+				assert_int(lengths.size()).is_equal(PSSchedule.INTRALEAGUE_CYCLES)
+				assert_int(designated_home.size()).is_equal(PSSchedule.INTRALEAGUE_CYCLES)
+				if lengths != first_lengths:
+					identical = false
 
-			var total: int = 0
-			var other_total: int = 0
-			for i in range(lengths.size()):
-				var length: int = int(lengths[i])
-				assert_bool(length == 1 or length == 2 or length == 3).override_failure_message(
-					"Unexpected cycle length %d" % length
-				).is_true()
-				total += length
-				if not bool(designated_home[i]):
-					other_total += length
-			assert_int(total).override_failure_message("Cycle lengths for round should sum to 25").is_equal(25)
-			assert_int(other_total).override_failure_message("Non-designated side should total exactly 12 games").is_equal(12)
+				var total: int = 0
+				var other_total: int = 0
+				for i in range(lengths.size()):
+					var length: int = int(lengths[i])
+					assert_bool(length == 1 or length == 2 or length == 3).override_failure_message(
+						"Unexpected cycle length %d" % length
+					).is_true()
+					total += length
+					if not bool(designated_home[i]):
+						other_total += length
+				assert_int(total).override_failure_message("Cycle lengths for a card should sum to 25").is_equal(25)
+				assert_int(other_total).override_failure_message("Non-designated side should total exactly 12 games").is_equal(12)
+			if first_lengths.has(1):
+				assert_bool(identical).override_failure_message("Single-game cycles should be shared by all 3 cards of a round").is_true()
+			elif not identical:
+				saw_split_round = true
+	assert_bool(saw_split_round).is_true()
+
+
+func test_some_windows_shorten_only_some_of_the_cards() -> void:
+	# 2連戦はカードごとに別の巡へ散らすので、同じ枠 (月〜木 / 金〜日) の 3 カードの長さが揃わない週がある
+	# (実 NPB の 4〜8 月は 30%)。巡の 3 カードを揃えて短縮すると 0% になり、雨が無い限り全球団の
+	# 消化試合数が揃ってしまう。
+	var mixed: int = 0
+	var windows: int = 0
+	for year in [2026, 2027, 2028]:
+		var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, int(year), int(year) - 2025)
+		var cards_by_window: Dictionary = {}
+		for game_value in schedule:
+			var game: Dictionary = game_value as Dictionary
+			if bool(game.get("is_interleague", false)):
+				continue
+			var date_text: String = str(game.get("date", ""))
+			var month: int = int(date_text.substr(5, 2))
+			if month < 4 or month > 8:
+				continue
+			var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+			var weekday: int = SeasonCalendar.weekday_for_date(date_text)
+			var week_start: String = SeasonCalendar.add_days(date_text, -posmod(weekday - 1, 7))
+			var window: String = "A" if weekday >= 1 and weekday <= 4 else "B"
+			var key: String = "%s|%s|%s" % [home.league, week_start, window]
+			if not cards_by_window.has(key):
+				cards_by_window[key] = {}
+			var cards: Dictionary = cards_by_window[key] as Dictionary
+			var series_id: int = int(game.get("series_id", 0))
+			cards[series_id] = int(cards.get(series_id, 0)) + 1
+		for cards_value in cards_by_window.values():
+			var lengths: Array = (cards_value as Dictionary).values()
+			if lengths.size() != 3:
+				continue
+			windows += 1
+			if not (int(lengths[0]) == int(lengths[1]) and int(lengths[1]) == int(lengths[2])):
+				mixed += 1
+	assert_int(windows).is_greater(0)
+	assert_float(float(mixed) / float(windows)).is_between(0.15, 0.5)
+
+
+func test_schedule_alone_spreads_games_played_within_a_league() -> void:
+	# 雨が無くても、2連戦の時期がカードごとに違うので、同じ日付までの消化試合数に差が付く
+	# (実 NPB の当初日程は同じ日付で平均 3.8 試合差)。
+	var schedule: Array = PSSchedule.generate_pennant_schedule(GameDb.teams, PSSchedule.PENNANT_GAMES_PER_TEAM, {}, 2026, 1)
+	var widest: int = 0
+	for checkpoint in ["2026-07-01", "2026-08-01", "2026-09-01"]:
+		var played_by_team: Dictionary = {}
+		for game_value in schedule:
+			var game: Dictionary = game_value as Dictionary
+			if str(game.get("date", "")) >= str(checkpoint):
+				continue
+			for team_id in [int(game.get("away_team_id", 0)), int(game.get("home_team_id", 0))]:
+				played_by_team[team_id] = int(played_by_team.get(team_id, 0)) + 1
+		for league in ["league1", "league2"]:
+			var fewest: int = 999
+			var most: int = 0
+			for team_row in GameDb.teams:
+				var team: PSTeam = team_row as PSTeam
+				if team.league != league:
+					continue
+				var played: int = int(played_by_team.get(team.id, 0))
+				fewest = min(fewest, played)
+				most = max(most, played)
+			widest = max(widest, most - fewest)
+	assert_int(widest).is_greater_equal(2)
 
 
 func _append_opponent_entry(log_by_team: Dictionary, team_id: int, day: int, opponent_id: int) -> void:
@@ -779,9 +859,9 @@ func test_rainout_never_hits_dome_home_games() -> void:
 
 
 func test_rain_outcome_counts_stay_in_the_intended_bands() -> void:
-	# FEEL_SCALE=1.0 (実 NPB 水準) から外れたら気付けるようにする。実 NPB は 2023-2025 の実測で
-	# 中止 26.7 / コールド 5.7 / ノーゲーム 2.0 per season (公式ボックススコア集計)。
-	# 中止の下限は、率が半分 (FEEL_SCALE=0.5) に落ちたら割り込む位置に置いてある。
+	# FEEL_SCALE=0.6 の水準から外れたら気付けるようにする。実 NPB は 2023-2025 の実測で
+	# 中止 26.7 / コールド 5.7 / ノーゲーム 2.0 per season (公式ボックススコア集計) で、本作はその 6 割。
+	# 帯は、率が実 NPB 水準 (1.0) まで上がるか、半分 (0.3) に落ちたら外れる位置に置いてある。
 	# 率を変えたときは tools/run_rainout_probe.tscn も併せて見直すこと。
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026, {})
 	var counts: Dictionary = {}
@@ -791,11 +871,11 @@ func test_rain_outcome_counts_stay_in_the_intended_bands() -> void:
 	var cancelled: int = int(counts.get(PSRainoutService.OUTCOME_CANCEL, 0))
 	var called: int = int(counts.get(PSRainoutService.OUTCOME_CALLED, 0))
 	var no_game: int = int(counts.get(PSRainoutService.OUTCOME_NO_GAME, 0))
-	assert_int(cancelled).is_greater(15)
-	assert_int(cancelled).is_less(40)
+	assert_int(cancelled).is_greater(8)
+	assert_int(cancelled).is_less(24)
 	assert_int(called).is_greater(0)
-	assert_int(called).is_less(16)
-	assert_int(no_game).is_less(9)
+	assert_int(called).is_less(12)
+	assert_int(no_game).is_less(7)
 	# 試合前中止が大半を占める (実測 75%)。ここが逆転していたら分岐の向きが壊れている。
 	assert_int(cancelled).is_greater(called + no_game)
 

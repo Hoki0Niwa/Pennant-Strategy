@@ -9,15 +9,17 @@ extends Node
 #   - コールドの成立回の分布 … 実測は 5回 8 / 6回 5 / 7回 3 / 8回 1、**4回はゼロ**。
 #   - 振替先の内訳 … 移動日 (シーズン中) / 予備日 (最終試合日より後) の比率と、遅延日数。
 #   - 全143試合を消化し切れているか (振替先の枯渇が無いか)。
-#   - 消化試合数のばらつき (game_spread) … リーグ内の最多-最少と、最終戦の日付の差。
 #   - 同じ日に流れる試合の重なり (same_day) … 実測は 2 件以上の日に起きた割合 52%、同じ日に 2 か所
 #     流れる組が独立の場合の 4.9 倍 (別の地方どうしは 3.9 倍。本作の屋外球場は全て別の地方)。
 #   - リーグ内の消化試合数のばらつき (game_spread) … NPB 公式の試合結果 (2023-2025、リーグ平均) は
 #     7/1・8/1・9/1・9/15 時点の最多-最少が 3.8 / 4.5 / 4.8 / 4.3 試合、最初と最後の球団の最終戦が
-#     3.8 日差、最初の球団が終えた時点で他球団の残りが最大 3.0 試合。中止を足し戻した当初の日程でも
-#     3.8 試合ばらついていて、本作の日程生成は全球団共通のカード枠なのでこの成分がほぼ 0。
+#     3.8 日差、最初の球団が終えた時点で他球団の残りが最大 3.0 試合。
+#   - 当初日程の消化試合数の差 (original_spread) … 雨を入れる前の日程だけで付く差。実 NPB は中止を
+#     足し戻した当初の日程でも 3.8 試合ばらつく (カードの長さや休養日が球団ごとに揃っていない)。
+#   - 同じ枠の 3 カードの長さの組み合わせ (window_patterns) … 実 NPB の 4〜8 月 (当初日程) は
+#     3-3-3 59% / 3-3-2 19% / 3-2-2 12% / 2-2-2 9% / 1-1-1 2%、長さが揃わない枠 30%。
 # 実行: godot --headless res://tools/run_rainout_probe.tscn -- --seasons=3
-#       雨の重なりだけなら試合を回さず速い: -- --same_day_only --seasons=30
+#       日程の形と雨の重なりだけなら試合を回さず速い: -- --no_games --seasons=30
 
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 const JapaneseHolidays = preload("res://services/season/japanese_holidays.gd")
@@ -32,9 +34,9 @@ func _ready() -> void:
 	var seasons: int = int(max(1, int(args.get("seasons", 1))))
 	var start_year: int = int(args.get("start_year", 2026))
 	var output_path: String = str(args.get("output", ""))
-	# 雨の重なり (same_day) だけを数えて試合は回さない。判定は純粋関数なので日程を作るだけで足り、
-	# NATIONAL_RAIN_* の較正を多シーズンで速く回せる。
-	var same_day_only: bool = args.has("same_day_only")
+	# 試合を回さず、日程生成直後の日程と雨の判定だけで数える (same_day / window_patterns /
+	# original_spread)。どれも日程を作るだけで決まるので、多シーズンを速く回せる。
+	var no_games: bool = args.has("no_games")
 
 	if GameDb.teams.is_empty() or GameDb.players.is_empty():
 		GameDb.load_initial_data()
@@ -52,10 +54,14 @@ func _ready() -> void:
 		var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, start_year + season_index, {})
 		RecordStore.ensure_season_records(season, GameDb.teams, GameDb.players, false)
 		var scheduled_last_day: int = _last_scheduled_day(season)
-		# 雨の重なりは試合を回す前の日程で数える (回すと振替で日付が動く)。
-		var same_day: Dictionary = _same_day_clustering(season)
-		if same_day_only:
-			season_reports.append({"same_day": same_day})
+		# 日程の形と雨の重なりは試合を回す前の日程で数える (回すと振替で日付が動く)。
+		var schedule_shape: Dictionary = {
+			"same_day": _same_day_clustering(season),
+			"window_patterns": _window_patterns(season),
+			"original_spread": _game_count_spread(season),
+		}
+		if no_games:
+			season_reports.append(schedule_shape)
 			continue
 		var ctx: Dictionary = {"user_team_id": 0, "include_user_team": true}
 		while _has_unplayed_game(season):
@@ -69,7 +75,7 @@ func _ready() -> void:
 				})
 				break
 		var season_report: Dictionary = _summarize_season(season, season_index, scheduled_last_day)
-		season_report["same_day"] = same_day
+		season_report.merge(schedule_shape)
 		season_reports.append(season_report)
 
 	RecordStore.load_from_dict(original_records)
@@ -78,7 +84,7 @@ func _ready() -> void:
 	Rng.generator.seed = original_seed
 	Rng.generator.state = original_state
 
-	var report: Dictionary = {"same_day": _aggregate_same_day(season_reports)} if same_day_only else _aggregate(season_reports)
+	var report: Dictionary = _aggregate_schedule_shape(season_reports) if no_games else _aggregate(season_reports)
 	report["seed"] = seed_value
 	report["seasons"] = seasons
 	report["feel_scale"] = PSRainoutService.FEEL_SCALE
@@ -240,8 +246,7 @@ func _aggregate(season_reports: Array) -> Dictionary:
 		"games_per_team_max": max_games,
 		"worst_unplayed_games": worst_unplayed,
 		"game_spread": _aggregate_spread(season_reports),
-		"same_day": _aggregate_same_day(season_reports),
-	}
+	}.merged(_aggregate_schedule_shape(season_reports))
 
 
 # リーグ内の消化試合数のばらつき。全試合を消化し終えた日程 (振替後の日付) から後付けで数える。
@@ -340,8 +345,9 @@ func _latest_date(dates: Array) -> String:
 	return latest
 
 
-# 消化試合数のばらつきをシーズン × リーグで平均する。
-func _aggregate_spread(season_reports: Array) -> Dictionary:
+# 消化試合数のばらつきをシーズン × リーグで平均する。key は game_spread (試合を回した後) か
+# original_spread (日程生成直後)。
+func _aggregate_spread(season_reports: Array, key: String = "game_spread") -> Dictionary:
 	var spread_totals: Dictionary = {}
 	var finish_days_total: int = 0
 	var remaining_total: int = 0
@@ -349,7 +355,7 @@ func _aggregate_spread(season_reports: Array) -> Dictionary:
 	var monday_total: int = 0
 	var samples: int = 0
 	for report_value in season_reports:
-		var spread: Dictionary = (report_value as Dictionary).get("game_spread", {}) as Dictionary
+		var spread: Dictionary = (report_value as Dictionary).get(key, {}) as Dictionary
 		monday_total += int(spread.get("weekday_monday_games", 0))
 		for league_value in (spread.get("by_league", {}) as Dictionary).values():
 			var league: Dictionary = league_value as Dictionary
@@ -447,6 +453,71 @@ func _aggregate_same_day(season_reports: Array) -> Dictionary:
 		"days_by_count": days_by_count,
 		"share_on_multi_days": snappedf(float(on_multi) / float(max(1, washed)), 0.01),
 		"pair_ratio": snappedf(float(observed) / expected, 0.1) if expected > 0.0 else 0.0,
+	}
+
+
+# 同じ枠 (月〜木 / 金〜日) に並ぶリーグ内 3 カードの長さの組み合わせ ("3-3-2" など、長い順)。
+# 日程生成直後の日程の 4〜8 月だけを数える (9 月以降は単独戦と相乗りで枠の形が崩れるため、
+# 実 NPB の当初日程の集計と同じ切り方にしてある)。3 カード揃っていない枠は数えない。
+func _window_patterns(season: PSSeason) -> Dictionary:
+	var cards_by_window: Dictionary = {}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("is_interleague", false)):
+			continue
+		var date_text: String = str(game.get("date", ""))
+		var month: int = int(date_text.substr(5, 2))
+		if month < 4 or month > 8:
+			continue
+		var home: PSTeam = GameDb.get_team(int(game.get("home_team_id", 0)))
+		if home == null:
+			continue
+		var weekday: int = SeasonCalendar.weekday_for_date(date_text)
+		var week_start: String = SeasonCalendar.add_days(date_text, -posmod(weekday - 1, 7))
+		var window: String = "A" if weekday >= 1 and weekday <= 4 else "B"
+		var key: String = "%s|%s|%s" % [home.league, week_start, window]
+		if not cards_by_window.has(key):
+			cards_by_window[key] = {}
+		var cards: Dictionary = cards_by_window[key] as Dictionary
+		var series_id: int = int(game.get("series_id", 0))
+		cards[series_id] = int(cards.get(series_id, 0)) + 1
+	var patterns: Dictionary = {}
+	for cards_value in cards_by_window.values():
+		var lengths: Array = (cards_value as Dictionary).values()
+		if lengths.size() != 3:
+			continue
+		lengths.sort()
+		lengths.reverse()
+		var pattern: String = "%d-%d-%d" % [int(lengths[0]), int(lengths[1]), int(lengths[2])]
+		patterns[pattern] = int(patterns.get(pattern, 0)) + 1
+	return patterns
+
+
+func _aggregate_window_patterns(season_reports: Array) -> Dictionary:
+	var patterns: Dictionary = {}
+	var total: int = 0
+	var mixed: int = 0
+	for report_value in season_reports:
+		var counts: Dictionary = (report_value as Dictionary).get("window_patterns", {}) as Dictionary
+		for pattern in counts.keys():
+			var count: int = int(counts[pattern])
+			patterns[pattern] = int(patterns.get(pattern, 0)) + count
+			total += count
+			var parts: PackedStringArray = str(pattern).split("-")
+			if not (parts[0] == parts[1] and parts[1] == parts[2]):
+				mixed += count
+	var shares: Dictionary = {}
+	for pattern in patterns.keys():
+		shares[pattern] = snappedf(float(patterns[pattern]) / float(max(1, total)), 0.01)
+	return {"shares": shares, "mixed_share": snappedf(float(mixed) / float(max(1, total)), 0.01), "windows": total}
+
+
+# 日程の形 (試合を回さずに決まる指標) の集計。--no_games のときはこれだけを出す。
+func _aggregate_schedule_shape(season_reports: Array) -> Dictionary:
+	return {
+		"same_day": _aggregate_same_day(season_reports),
+		"window_patterns": _aggregate_window_patterns(season_reports),
+		"original_spread": _aggregate_spread(season_reports, "original_spread"),
 	}
 
 
