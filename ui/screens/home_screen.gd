@@ -507,19 +507,24 @@ func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
 	# ミニ順位表も共通テーブルの体裁 (bold ヘッダ + 太めルール + 行ヘアライン + 自軍のアクセントバー)。
+	# 球団はチームカラーのバッジで示す (略称はバッジの中に入るので、別に略称列は置かない)。
 	var hy: float = rect.position.y + 56
 	_text("順", Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("チーム", Vector2(rect.position.x + 50, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("勝", rect.position.x + 268, hy, 11, MUTED, 80.0, true)
-	_text_right("敗", rect.position.x + 318, hy, 11, MUTED, 80.0, true)
-	_text_right("分", rect.position.x + 366, hy, 11, MUTED, 80.0, true)
-	_text_right("勝率", rect.position.x + 446, hy, 11, MUTED, 80.0, true)
-	_text_right("GB", rect.position.x + 512, hy, 11, MUTED, 80.0, true)
+	_text("球団", Vector2(rect.position.x + 42, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right("試合", rect.position.x + 150, hy, 11, MUTED, 80.0, true)
+	_text_right("勝", rect.position.x + 206, hy, 11, MUTED, 80.0, true)
+	_text_right("敗", rect.position.x + 256, hy, 11, MUTED, 80.0, true)
+	_text_right("分", rect.position.x + 304, hy, 11, MUTED, 80.0, true)
+	_text_right("勝率", rect.position.x + 380, hy, 11, MUTED, 80.0, true)
+	_text_right("GB", rect.position.x + 440, hy, 11, MUTED, 80.0, true)
+	_text_right("残", rect.position.x + 492, hy, 11, MUTED, 80.0, true)
 	_text_right("防御率", rect.end.x - 18, hy, 11, MUTED, 80.0, true)
 	_line(Vector2(rect.position.x + 14, hy + 8), Vector2(rect.end.x - 14, hy + 8), BORDER, 1.5)
 
 	var entries: Array = _league_entries(league_key, season)
 	var leader: PSStats = (entries[0] as Dictionary).get("stats") as PSStats if not entries.is_empty() else null
+	# 残り試合は日程 1 走査で全球団ぶんまとめて数える (行ごとに数え直さない)。
+	var remaining_by_team: Dictionary = PSPennantRace.remaining_by_team(season)
 	var y: float = rect.position.y + 80
 	var rank: int = 1
 	for entry_value in entries:
@@ -532,12 +537,14 @@ func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 			_round(Rect2(rect.position.x + 8, y - 17, 3, 24), BLUE, Color.TRANSPARENT, 0, 0)
 		var color: Color = TEXT
 		_text(str(rank), Vector2(rect.position.x + 18, y), 13, color)
-		_text(row_team.short_name, Vector2(rect.position.x + 50, y), 13, color, -1.0, HORIZONTAL_ALIGNMENT_LEFT, is_self)
-		_text_right(str(stats.wins), rect.position.x + 268, y, 13, color)
-		_text_right(str(stats.losses), rect.position.x + 318, y, 13, color)
-		_text_right(str(stats.draws), rect.position.x + 366, y, 13, color)
-		_text_right(_rate_short(stats.win_rate()), rect.position.x + 446, y, 13, color)
-		_text_right("-" if leader == null or rank == 1 else _float1(_game_back(leader, stats)), rect.position.x + 512, y, 13, color)
+		_team_badge(Rect2(rect.position.x + 42, y - 16, 26, 22), row_team)
+		_text_right(str(stats.games), rect.position.x + 150, y, 13, color)
+		_text_right(str(stats.wins), rect.position.x + 206, y, 13, color)
+		_text_right(str(stats.losses), rect.position.x + 256, y, 13, color)
+		_text_right(str(stats.draws), rect.position.x + 304, y, 13, color)
+		_text_right(_rate_short(stats.win_rate()), rect.position.x + 380, y, 13, color)
+		_text_right("-" if leader == null or rank == 1 else _float1(_game_back(leader, stats)), rect.position.x + 440, y, 13, color)
+		_text_right(str(int(remaining_by_team.get(row_team.id, 0))), rect.position.x + 492, y, 13, color)
 		_text_right(_era_str_for(row_team.id), rect.end.x - 18, y, 13, color)
 		_line(Vector2(rect.position.x + 14, y + 7), Vector2(rect.end.x - 14, y + 7), HAIRLINE, 1.0)
 		y += 25

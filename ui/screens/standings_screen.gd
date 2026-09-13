@@ -3,7 +3,9 @@ extends "res://ui/components/dashboard_screen.gd"
 # 順位表画面。現在シーズンのリーグ順位、貯金推移、交流戦順位を同時に表示する。
 # - 上段: 第1/第2リーグの順位表 (チーム成績の総合指標つき、全幅)。「差」列は 2 位以下がゲーム差、
 #   首位は優勝マジック / 優勝決定表示を兼ねる (計算は PSPennantRace)。
-# - 下段左: 貯金・借金の推移グラフ (各球団の wins-losses を試合数軸で折れ線描画)。
+# - 下段左: 貯金・借金の推移グラフ (各球団の wins-losses を日付軸で折れ線描画)。グラフ上にカーソルを
+#   置くと、その日付に縦線とマーカーを引き、日付は見出し横・各球団の貯金は凡例行に出す
+#   (折れ線を隠さないよう、数値はプロット領域の外に置く)。
 # - 下段右: 交流戦順位表 (is_interleague 試合のみ集計、全12球団の混合順位)。
 # 重い集計 (チーム指標 / 貯金時系列 / 交流戦) は _refresh で1度だけ行いキャッシュ、_draw は描画専念。
 
@@ -18,6 +20,10 @@ const TABLE_A: Rect2 = Rect2(262, 124, 1638, 256)
 const TABLE_B: Rect2 = Rect2(262, 394, 1638, 256)
 const CHART_RECT: Rect2 = Rect2(262, 664, 956, 394)
 const INTER_RECT: Rect2 = Rect2(1234, 664, 666, 394)
+
+# 貯金グラフの凡例に空けておく数値欄の幅。ホバー時だけ値を描くが、幅は常に確保して
+# 値の出入りで凡例が横にずれないようにする。
+const CHART_LEGEND_VALUE_W: float = 34.0
 
 # 列幅は実データ幅基準で詰める (余白は球団名列へ寄せ、数値列が間延びしないように)。
 # sep_before で「勝敗 / 勝率・差・残 / 得失点 / 打撃 / 投手」のブロック境界に縦ヘアラインを引く。
@@ -63,8 +69,9 @@ var _remaining_by_team: Dictionary = {}    # {team_id: 残り試合数}
 var _head_to_head: Dictionary = {}         # {team_id: {opponent_id: 残り直接対決数}}
 var _interleague_rows: Array = []          # 交流戦 行 Dictionary (順位つき)
 var _interleague_played: bool = false
-var _balance_by_team: Dictionary = {}      # {team_id: PackedVector2Array(game_no, balance)}
+var _balance_by_team: Dictionary = {}      # {team_id: PackedVector2Array(season day, balance)}
 var _chart_league: String = "league1"
+var _chart_hover_day: int = -1             # ホバー中の season day (-1 = グラフ外)
 var _last_skip_refresh_day: int = -1
 var _skip_ui_active: bool = false
 var _skip_ui_cancel_pending: bool = false
@@ -74,6 +81,8 @@ func _ready() -> void:
 	_init_chrome()
 	AppState.season_skip_progress.connect(_on_season_skip_progress)
 	AppState.season_skip_finished.connect(_on_season_skip_finished)
+	# ウィンドウ外やボタン上へ抜けると以降マウス移動が届かないので、離脱時にホバーを解除する。
+	mouse_exited.connect(_on_mouse_exited)
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	_chart_league = team.league if team != null else "league1"
 	_last_skip_refresh_day = AppState.current_season.current_day if AppState.current_season != null else -1
@@ -82,6 +91,43 @@ func _ready() -> void:
 	_refresh()
 	_build_buttons()
 	queue_redraw()
+
+
+# ============================================================ input
+
+func _gui_input(event: InputEvent) -> void:
+	if not (event is InputEventMouseMotion):
+		return
+	_update_transform()
+	var day: int = _chart_day_at(_to_base((event as InputEventMouseMotion).position))
+	if day != _chart_hover_day:
+		_chart_hover_day = day
+		queue_redraw()
+
+
+func _on_mouse_exited() -> void:
+	if _chart_hover_day < 0:
+		return
+	_chart_hover_day = -1
+	queue_redraw()
+
+
+func _to_base(pos: Vector2) -> Vector2:
+	if _scale_f <= 0.0:
+		return pos
+	return (pos - _offset) / _scale_f
+
+
+# カーソル位置 → 貯金グラフの season day (-1 = プロット領域外)。縦方向は線に乗っていなくても
+# 拾えるようプロット領域全体を対象にする。
+func _chart_day_at(base_pos: Vector2) -> int:
+	var geo: Dictionary = _chart_geometry()
+	var plot: Rect2 = geo["plot"] as Rect2
+	if not plot.grow(8.0).has_point(base_pos):
+		return -1
+	var max_day: int = int(geo["max_day"])
+	var day: int = int(round((base_pos.x - plot.position.x) / plot.size.x * float(max_day)))
+	return clampi(day, 1, max_day)
 
 
 # ============================================================ draw
@@ -120,30 +166,40 @@ func _draw_table(rect: Rect2, title: String, right_label: String, columns: Array
 
 func _draw_balance_chart(rect: Rect2) -> void:
 	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
-	_round(Rect2(rect.position.x + 18, rect.position.y + 19, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
-	_text("貯金・借金の推移", Vector2(rect.position.x + 27, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	var teams: Array = _league_team_order(_chart_league)
 
-	# 凡例 (球団色ドット + 略称)
+	# プロット領域とスケール (ホバー判定と同じ幾何を使うため _chart_geometry に集約)。
+	var geo: Dictionary = _chart_geometry()
+	var plot: Rect2 = geo["plot"] as Rect2
+	var max_day: int = int(geo["max_day"])
+	var max_abs: int = int(geo["max_abs"])
+	var hover_day: int = clampi(_chart_hover_day, 1, max_day) if _chart_hover_day >= 0 else -1
+
+	# 見出し + ホバー中の日付 (ヘッダと同じ「区切り線 → 日付」の並び)。
+	var title: String = "貯金・借金の推移"
+	_round(Rect2(rect.position.x + 18, rect.position.y + 19, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(title, Vector2(rect.position.x + 27, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	if hover_day > 0:
+		# bold は _measure (body 基準) より僅かに広いので 6% 見ておく。
+		var dx: float = rect.position.x + 27.0 + _measure(title, 17) * 1.06 + 18.0
+		_line(Vector2(dx, rect.position.y + 18), Vector2(dx, rect.position.y + 38), BORDER, 1.0)
+		_text(SeasonCalendar.label_for_date(SeasonCalendar.date_for_season_day(AppState.current_season, hover_day)),
+			Vector2(dx + 12.0, rect.position.y + 32), 14, TEXT)
+
+	# 凡例 (球団色ドット + 略称)。ホバー中はその日の貯金をここに出す (グラフへ重ねない)。
 	var lx: float = rect.position.x + 18.0
 	var ly: float = rect.position.y + 56.0
 	for team_value in teams:
 		var team: PSTeam = team_value as PSTeam
 		_dot(Vector2(lx + 5.0, ly - 4.0), 5.0, _chart_color(team.color))
 		_text(team.short_name, Vector2(lx + 14.0, ly), 11, MUTED)
-		lx += 14.0 + _measure(team.short_name, 11) + 18.0
-
-	# プロット領域
-	var plot: Rect2 = Rect2(rect.position.x + 48.0, rect.position.y + 74.0, rect.size.x - 48.0 - 18.0, rect.size.y - 74.0 - 28.0)
-
-	var max_games: int = 6
-	var max_abs: int = 5
-	for team_value in teams:
-		var series: PackedVector2Array = _balance_by_team.get((team_value as PSTeam).id, PackedVector2Array()) as PackedVector2Array
-		for p in series:
-			max_games = max(max_games, int(p.x))
-			max_abs = max(max_abs, int(ceil(abs(p.y))))
+		lx += 14.0 + _measure(team.short_name, 11)
+		if hover_day > 0:
+			var balance: int = _balance_at_day(team.id, hover_day)
+			_text("±0" if balance == 0 else "%+d" % balance, Vector2(lx + 6.0, ly), 12,
+				_pm_color(float(balance)), CHART_LEGEND_VALUE_W - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		lx += CHART_LEGEND_VALUE_W + 18.0
 
 	var y0: float = plot.position.y + plot.size.y * 0.5
 	# 横グリッド + y ラベル (+N / +N/2 / 0 / -N/2 / -N)
@@ -153,12 +209,13 @@ func _draw_balance_chart(rect: Rect2) -> void:
 		var n: int = int(round(float(frac) * float(max_abs)))
 		_text_right("0" if n == 0 else "%+d" % n, plot.position.x - 6.0, yy + 4.0, 10, FAINT, 42)
 
-	# x 軸ラベル (試合数)。右端は最大値と単位を1つのラベルに結合し、番号と文字の重なりを避ける。
+	# x 軸ラベル (日付)。左端は開幕日、右端は最新の試合日。
+	var season: PSSeason = AppState.current_season
 	for gx in [0.0, 0.5]:
 		var px: float = plot.position.x + float(gx) * plot.size.x
-		var gnum: int = int(round(float(gx) * float(max_games)))
-		_text(str(gnum), Vector2(px - 8.0, plot.end.y + 18.0), 10, FAINT)
-	_text_right("%d試合" % max_games, plot.end.x, plot.end.y + 18.0, 10, FAINT, 60)
+		var label_day: int = max(1, int(round(float(gx) * float(max_day))))
+		_text(_axis_date_label(season, label_day), Vector2(px - 8.0, plot.end.y + 18.0), 10, FAINT)
+	_text_right(_axis_date_label(season, max_day), plot.end.x, plot.end.y + 18.0, 10, FAINT, 60)
 
 	# 折れ線 (自軍は最後に太線で重ねる)
 	var self_id: int = AppState.selected_team_id
@@ -172,18 +229,69 @@ func _draw_balance_chart(rect: Rect2) -> void:
 				continue
 			var pts: PackedVector2Array = PackedVector2Array()
 			for p in series:
-				var bx: float = plot.position.x + (p.x / float(max_games)) * plot.size.x
+				var bx: float = plot.position.x + (p.x / float(max_day)) * plot.size.x
 				var by: float = y0 - (p.y / float(max_abs)) * (plot.size.y * 0.5)
 				pts.append(_p(Vector2(bx, by)))
 			var width: float = max(1.5, (3.4 if team.id == self_id else 2.0) * _scale_f)
 			draw_polyline(pts, _chart_color(team.color), width, true)
-			# 終端マーカー + 自軍は略称ラベル
+			# 終端マーカー (最新試合日の位置)
 			draw_circle(pts[pts.size() - 1], max(2.0, width * 0.9), _chart_color(team.color))
+
+	if hover_day > 0:
+		_draw_balance_hover(plot, teams, hover_day, max_day, max_abs, y0)
+
+
+# プロット領域と軸スケール。描画とホバー判定で同じ値を使う (どちらかだけ直すとズレる)。
+func _chart_geometry() -> Dictionary:
+	var plot: Rect2 = Rect2(
+		CHART_RECT.position.x + 48.0, CHART_RECT.position.y + 74.0,
+		CHART_RECT.size.x - 48.0 - 18.0, CHART_RECT.size.y - 74.0 - 28.0
+	)
+	var max_day: int = 7
+	var max_abs: int = 5
+	for team_value in _league_team_order(_chart_league):
+		var series: PackedVector2Array = _balance_by_team.get((team_value as PSTeam).id, PackedVector2Array()) as PackedVector2Array
+		for p in series:
+			max_day = max(max_day, int(p.x))
+			max_abs = max(max_abs, int(ceil(abs(p.y))))
+	return {"plot": plot, "max_day": max_day, "max_abs": max_abs}
+
+
+# ホバー中の日付を指す縦線と、その日の各球団の位置を示すマーカー。
+# 日付と貯金の数値はプロット領域の外 (見出し横と凡例行) に出し、ここでは折れ線を隠さない。
+func _draw_balance_hover(plot: Rect2, teams: Array, day: int, max_day: int, max_abs: int, y0: float) -> void:
+	var hx: float = plot.position.x + (float(day) / float(max_day)) * plot.size.x
+	_line(Vector2(hx, plot.position.y), Vector2(hx, plot.end.y), BORDER, 1.0)
+	for team_value in teams:
+		var team: PSTeam = team_value as PSTeam
+		var balance: int = _balance_at_day(team.id, day)
+		_dot(Vector2(hx, y0 - (float(balance) / float(max_abs)) * (plot.size.y * 0.5)), 4.0, _chart_color(team.color))
+
+
+# その日までに消化した試合の貯金 (= 直近の点の y)。series は day 昇順前提。
+func _balance_at_day(team_id: int, day: int) -> int:
+	var series: PackedVector2Array = _balance_by_team.get(team_id, PackedVector2Array()) as PackedVector2Array
+	var balance: int = 0
+	for p in series:
+		if int(p.x) > day:
+			break
+		balance = int(p.y)
+	return balance
 
 
 # 暗背景でも見えるよう球団色を少し明るくする。
 func _chart_color(c: Color) -> Color:
 	return c.lerp(Color(1, 1, 1), 0.12)
+
+
+# x 軸の日付ラベル ("M/D")。曜日は軸では邪魔なので付けない。
+func _axis_date_label(season: PSSeason, day: int) -> String:
+	if season == null:
+		return ""
+	var parts: PackedStringArray = SeasonCalendar.date_for_season_day(season, day).split("-")
+	if parts.size() != 3:
+		return ""
+	return "%d/%d" % [int(parts[1]), int(parts[2])]
 
 
 func _league_team_order(league_key: String) -> Array:
@@ -387,32 +495,41 @@ func _magic_input(entries: Array) -> Array:
 	return out
 
 
-# 各球団の貯金(=勝-敗)を試合消化順に積み上げた時系列を作る。schedule は day 昇順前提。
+# 各球団の貯金(=勝-敗)を日付順に積み上げた時系列を作る。x は season day で、消化試合数が球団ごとに
+# 違っても同じ x が同じ日付を指す (試合数軸だと、同じ x が球団ごとに別の日付になる)。
+# 点は開幕前(0)から最終試合日まで**全球団ぶん毎日**打ち、試合が無かった日は前日の貯金を引き継ぐ。
+# 試合のあった日だけ点を打つと、その日休みだった球団の折れ線が手前で止まって見える。
 func _build_balance_series(season: PSSeason) -> void:
-	var counters: Dictionary = {}   # team_id: {bal, g}
-	for team_id in season.standings.keys():
-		_balance_by_team[int(team_id)] = PackedVector2Array([Vector2(0, 0)])
-		counters[int(team_id)] = {"bal": 0, "g": 0}
-
+	# まず日付ごとの増減を集計する (引き分けは貯金が動かないが、最終試合日には効かせる)。
+	var deltas: Dictionary = {}   # day: {team_id: その日の増減}
+	var last_day: int = 0
 	for game_value in season.schedule:
 		var game: Dictionary = game_value as Dictionary
 		if not bool(game.get("played", false)):
 			continue
+		var day: int = int(game.get("day", 0))
+		last_day = max(last_day, day)
 		var result: Dictionary = game.get("result", {}) as Dictionary
-		var draw_game: bool = bool(result.get("draw", false))
+		if bool(result.get("draw", false)):
+			continue
 		var winner: int = int(result.get("winning_team_id", 0))
+		var day_deltas: Dictionary = deltas.get(day, {}) as Dictionary
 		for tid in [int(game.get("away_team_id", 0)), int(game.get("home_team_id", 0))]:
-			if not counters.has(tid):
+			if not season.standings.has(tid):
 				continue
-			var c: Dictionary = counters[tid] as Dictionary
-			c["g"] = int(c["g"]) + 1
-			if not draw_game:
-				c["bal"] = int(c["bal"]) + (1 if winner == tid else -1)
-			counters[tid] = c
-			# PackedVector2Array は CoW なのでローカルへ取り出して append し書き戻す。
-			var series: PackedVector2Array = _balance_by_team[tid] as PackedVector2Array
-			series.append(Vector2(float(c["g"]), float(c["bal"])))
-			_balance_by_team[tid] = series
+			day_deltas[tid] = int(day_deltas.get(tid, 0)) + (1 if winner == tid else -1)
+		deltas[day] = day_deltas
+
+	for team_id in season.standings.keys():
+		var tid: int = int(team_id)
+		var series: PackedVector2Array = PackedVector2Array()
+		series.resize(last_day + 1)
+		series[0] = Vector2(0, 0)
+		var balance: int = 0
+		for day in range(1, last_day + 1):
+			balance += int((deltas.get(day, {}) as Dictionary).get(tid, 0))
+			series[day] = Vector2(float(day), float(balance))
+		_balance_by_team[tid] = series
 
 
 func _build_interleague_rows(season: PSSeason) -> void:

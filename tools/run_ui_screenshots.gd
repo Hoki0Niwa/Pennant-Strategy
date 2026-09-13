@@ -12,7 +12,7 @@ extends Node
 #
 # 状態別撮影モード: -- --states
 #   通常の画面単位撮影とは別に、選手詳細/能力・成績一覧/チーム詳細のタブ・絞り込み違いや、
-#   シーズン履歴の4ビュー切替(年度別/歴代記録/タイトル履歴/スタメン履歴)、
+#   シーズン履歴の4ビュー切替(年度別/歴代記録/タイトル履歴/スタメン履歴)、順位表の貯金グラフのホバー、
 #   シーズン終了後〜ポストシーズン〜表彰〜オフシーズン各ステップまで、これまで撮っていなかった
 #   UI 状態を reports/ui_shots/states/ へ撮影する (崩れ調査用)。--simdays 未指定なら
 #   STATES_DEFAULT_SIMDAYS 日分を内部で自動進行する (全ゼロ表を避けるため)。
@@ -46,6 +46,7 @@ const PLAYER_DETAIL_SCRIPT: String = "res://ui/screens/player_detail_screen.gd"
 const ABILITY_STATS_SCRIPT: String = "res://ui/screens/ability_stats_screen.gd"
 const TEAM_DETAIL_SCRIPT: String = "res://ui/screens/team_detail_screen.gd"
 const HISTORY_SCRIPT: String = "res://ui/screens/history_screen.gd"
+const STANDINGS_SCRIPT: String = "res://ui/screens/standings_screen.gd"
 const FARM_SCRIPT: String = "res://ui/screens/farm_screen.gd"
 
 # シーズン履歴: 右上チップで切り替える4ビュー (画面側 VIEW_CHIPS の key と一致させる)。
@@ -234,6 +235,7 @@ func _run_state_capture() -> void:
 	await _capture_farm_views(STATES_DIR)
 	await _capture_team_detail(STATES_DIR)
 	await _capture_history_views(STATES_DIR)
+	await _capture_standings_hover(STATES_DIR)
 	await _capture_season_progression(STATES_DIR)
 
 	print("[state] 撮影完了: %d 枚" % _state_manifest.size())
@@ -378,6 +380,26 @@ func _capture_history_views(states_dir: String) -> void:
 		hs.call("_set_view", view_key)
 		await _wait_frames()
 		_shot(states_dir, "history_%s" % view_key)
+
+
+# --- 4b. 順位表 (貯金グラフのホバー) ---
+
+# 貯金グラフのツールチップはマウス移動でしか出ないので、ホバー中の日付を直接入れて描かせる。
+func _capture_standings_hover(states_dir: String) -> void:
+	AppState.request_screen("standings")
+	await _wait_frames()
+	var st: Node = _find_screen_node(_main_node, STANDINGS_SCRIPT)
+	if st == null:
+		print("[state] standings 画面ノードが見つかりません。スキップします")
+		return
+	var geo: Dictionary = st.call("_chart_geometry") as Dictionary
+	st.set("_chart_hover_day", max(1, int(float(geo.get("max_day", 7)) * 0.6)))
+	st.call("queue_redraw")
+	await _wait_frames()
+	_shot(states_dir, "standings_balance_hover")
+	st.set("_chart_hover_day", -1)
+	st.call("queue_redraw")
+	await _wait_frames()
 
 
 # --- 5. シーズン終了 -> ポストシーズン -> 表彰 -> オフシーズン ---

@@ -2255,6 +2255,74 @@ func test_lineup_editor_share_slider_and_numeric_input() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+# 順位表の貯金グラフ: カーソル位置 → 日付、その日付 → 各球団の貯金 の対応が取れていること
+# (ツールチップの中身はこの2つの写像だけで決まる)。
+func test_balance_chart_hover_maps_cursor_to_date_and_balance() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.simulate_days(12)
+
+	var standings_script: GDScript = load("res://ui/screens/standings_screen.gd") as GDScript
+	var screen: Control = standings_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var geo: Dictionary = screen.call("_chart_geometry") as Dictionary
+	var plot: Rect2 = geo["plot"] as Rect2
+	var max_day: int = int(geo["max_day"])
+	assert_int(max_day).is_greater(1)
+
+	# プロット領域の外 (パネル見出しのあたり) では日付を拾わない。
+	assert_int(int(screen.call("_chart_day_at", Vector2(plot.position.x + 10.0, plot.position.y - 40.0)))).is_equal(-1)
+	# 左端 = 開幕日、右端 = 最新の試合日、中央 = その中間。
+	assert_int(int(screen.call("_chart_day_at", plot.position + Vector2(1.0, 10.0)))).is_equal(1)
+	assert_int(int(screen.call("_chart_day_at", Vector2(plot.end.x - 1.0, plot.position.y + 10.0)))).is_equal(max_day)
+	var mid_day: int = int(screen.call("_chart_day_at", Vector2(plot.get_center().x, plot.get_center().y)))
+	assert_int(mid_day).is_between(max_day / 2 - 1, max_day / 2 + 1)
+
+	# 開幕前は全球団ゼロ、最新日は順位表の勝-敗と一致する (max_day はグラフ表示中のリーグ基準なので、
+	# 対象もそのリーグの球団に揃える)。
+	var season: PSSeason = AppState.current_season
+	var chart_league: String = str(screen.get("_chart_league"))
+	var series_by_team: Dictionary = screen.get("_balance_by_team") as Dictionary
+	for team_id in season.standings.keys():
+		var row_team: PSTeam = GameDb.get_team(int(team_id))
+		if row_team == null or row_team.league != chart_league:
+			continue
+		var stats: PSStats = season.standings[team_id] as PSStats
+		assert_int(int(screen.call("_balance_at_day", int(team_id), 0))).is_equal(0)
+		assert_int(int(screen.call("_balance_at_day", int(team_id), max_day))).is_equal(stats.wins - stats.losses)
+		# 試合が無かった日も点を打つので、消化試合数が違っても折れ線は全球団が同じ日付まで伸びる。
+		var series: PackedVector2Array = series_by_team.get(int(team_id), PackedVector2Array()) as PackedVector2Array
+		assert_int(series.size()).is_equal(max_day + 1)
+		assert_int(int(series[series.size() - 1].x)).is_equal(max_day)
+
+	screen.queue_free()
+	await get_tree().process_frame
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 # シーズン開始前の入口画面 (セーブもシーズンも無い状態で開かれる)。
 func test_entry_screens_build_without_active_season() -> void:
 	var old_screen: String = AppState.current_screen
