@@ -4,8 +4,8 @@ class_name PSGameLoop
 
 # max_innings は延長の上限。既定は一軍の 12 回で、二軍 (ファーム) だけ 10 回で打ち切る。
 # lightweight は成績・投手責任・怪我・高度指標を維持し、表示用の詳細プレーだけを保持しない。
-# 各 play_event は生成直後に reducer へ流して破棄するため、OAA / wRAA 等を残したまま
-# play_events・lineups・substitutions のメモリ/シリアライズ負荷を避けられる。
+# 軽量出力では解決済みのプレーから直接集計し、OAA / wRAA 等を残したまま
+# 表示用の play_events・lineups・substitutions の生成を省く。
 static func simulate_game(
 	away_setup: Dictionary,
 	home_setup: Dictionary,
@@ -356,7 +356,8 @@ static func simulate_half_inning(
 			bases_before,
 			outs_before
 		)
-		outcome["runner_intents"] = deferred_steal_intents.duplicate(true)
+		if not _is_lightweight_result(game_result):
+			outcome["runner_intents"] = deferred_steal_intents.duplicate(true)
 		var pitch_summary: Dictionary = outcome.get("pitch_summary", {}) as Dictionary
 		if pitch_summary.is_empty():
 			pitch_summary = PSPlayEventBuilder.pitch_summary_for_play(event_index, batter, pitcher, outcome)
@@ -1389,6 +1390,11 @@ static func append_runner_event_play(
 	if runner_events.is_empty():
 		return
 	var event_index: int = consume_play_event_index(game_result)
+	if _is_lightweight_result(game_result):
+		PSAdvancedStatReducer.apply_resolved_runner_play(
+			game_result["advanced_stats"] as Dictionary, defense, outs_after - outs_before, runner_events
+		)
+		return
 	var play_event: Dictionary = PSPlayEventBuilder.build_runner_event_play(
 		event_index,
 		inning,
@@ -1405,9 +1411,6 @@ static func append_runner_event_play(
 		runner_events,
 		play_phase
 	)
-	if _is_lightweight_result(game_result):
-		PSAdvancedStatReducer.apply_play_event(game_result["advanced_stats"] as Dictionary, play_event)
-		return
 	var play_events: Array = game_result.get("play_events", []) as Array
 	play_events.append(play_event)
 	game_result["play_events"] = play_events
@@ -1433,6 +1436,12 @@ static func append_play_event(
 	if game_result.is_empty():
 		return
 	var event_index: int = consume_play_event_index(game_result)
+	if _is_lightweight_result(game_result):
+		PSAdvancedStatReducer.apply_resolved_play(
+			game_result["advanced_stats"] as Dictionary, batter, pitcher, defense, outcome,
+			bases_before, outs_before, bases_after, outs_after, runs_scored, runner_events
+		)
+		return
 	var play_event: Dictionary = PSPlayEventBuilder.build_play_event(
 		event_index,
 		inning,
@@ -1450,9 +1459,6 @@ static func append_play_event(
 		runner_events,
 		pitch_summary
 	)
-	if _is_lightweight_result(game_result):
-		PSAdvancedStatReducer.apply_play_event(game_result["advanced_stats"] as Dictionary, play_event)
-		return
 	var play_events: Array = game_result.get("play_events", []) as Array
 	play_events.append(play_event)
 	game_result["play_events"] = play_events

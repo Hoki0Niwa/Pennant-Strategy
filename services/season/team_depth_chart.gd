@@ -89,18 +89,20 @@ static func comfort_for(slot_key: String) -> int:
 # リーグ全球団のデプスチャートを1度に構築する ({team_id: chart})。
 # need はリーグ平均との差で決まるため、**必ずリーグ単位で作る** (1球団だけでは need が出せない)。
 # 支配下のみを数える (育成は別枠。[[project_development_player_system]])。
-static func build_league(players: Array, teams: Array) -> Dictionary:
+# include_future=false は現在戦力だけを使う呼び出し用。将来側の選手一覧・予測値は作らない。
+# current_value_memo は呼び出し中だけ共有する現在能力の評価値 (PSPlayer → int)。
+static func build_league(players: Array, teams: Array, include_future: bool = true, current_value_memo: Dictionary = {}) -> Dictionary:
 	var charts: Dictionary = {}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue
-		charts[team.id] = _build_team_slots(players, team.id)
+		charts[team.id] = _build_team_slots(players, team.id, include_future, current_value_memo)
 	_apply_league_baselines(charts)
 	return charts
 
 
-static func _build_team_slots(players: Array, team_id: int) -> Dictionary:
+static func _build_team_slots(players: Array, team_id: int, include_future: bool = true, current_value_memo: Dictionary = {}) -> Dictionary:
 	var holders_by_slot: Dictionary = {}
 	var future_by_slot: Dictionary = {}
 	for slot_key in all_slot_keys():
@@ -113,19 +115,24 @@ static func _build_team_slots(players: Array, team_id: int) -> Dictionary:
 		var slot_key: String = slot_key_for(player)
 		if not holders_by_slot.has(slot_key):
 			continue
+		if not include_future and player.development_player:
+			continue
 		# 将来側は**育成も含む全員**が母数 (数年後には支配下に上がっているため)。
 		# holders (現在値・支配下のみ) とは別配列に積む — 混ぜると first_team_line / depth_value が
 		# 動いて補強AIの較正済み閾値が全系統ずれる。
 		# `value` は並べ替えに使う軸 (将来側は予測値)、`overall` は**現在の総合評価**で共通。
 		# 表示側が主力と有望株を同じ形で出せるよう、どちらの配列も同じキーを持たせる。
-		var overall: float = float(OffseasonService.player_value_score(player))
-		(future_by_slot[slot_key] as Array).append({
-			"player_id": player.id,
-			"value": OffseasonService.projected_value_after(player, FUTURE_HORIZON_YEARS),
-			"overall": overall,
-			"age": player.age,
-			"development": player.development_player,
-		})
+		if not current_value_memo.has(player):
+			current_value_memo[player] = OffseasonService.player_value_score(player)
+		var overall: float = float(current_value_memo[player])
+		if include_future:
+			(future_by_slot[slot_key] as Array).append({
+				"player_id": player.id,
+				"value": OffseasonService.projected_value_after(player, FUTURE_HORIZON_YEARS),
+				"overall": overall,
+				"age": player.age,
+				"development": player.development_player,
+			})
 		if player.development_player:
 			continue
 		(holders_by_slot[slot_key] as Array).append({

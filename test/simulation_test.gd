@@ -4751,3 +4751,654 @@ func test_called_game_counts_as_played_with_fewer_innings() -> void:
 		assert_int(int(outcome.get("innings", 0))).is_greater_equal(PSRainoutService.OFFICIAL_GAME_INNINGS)
 		assert_int(int(outcome.get("innings", 0))).is_less(9)
 	assert_int(found).is_greater(0)
+
+
+# 打席結果を伴うプレーの フルパス(PSPlayEventBuilder.build_play_event → apply_play_event)と
+# 二軍の軽量パス(PSAdvancedStatReducer.apply_resolved_play)が同じ高度指標に集計されることを検証する。
+# outcome/runner_events は複製してそれぞれのパスへ渡し、片方の内部処理が他方の入力に混ざらないようにする。
+# 戻り値はフルパス側の to_dict_container 結果で、呼び出し元がケース固有の事実を追加検証できるようにする。
+func _assert_resolved_play_matches(
+	case_name: String,
+	offense: Dictionary,
+	defense: Dictionary,
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	bases_before: Array,
+	outs_before: int,
+	outcome: Dictionary,
+	bases_after: Array,
+	outs_after: int,
+	runs_scored: int,
+	runner_events: Array
+) -> Dictionary:
+	var full_outcome: Dictionary = outcome.duplicate(true)
+	full_outcome["runner_intents"] = []
+	var play_event: Dictionary = PSPlayEventBuilder.build_play_event(
+		1, 1, "top", offense, defense, batter, pitcher,
+		bases_before, outs_before, full_outcome, bases_after, outs_after, runs_scored,
+		runner_events.duplicate(true), {"pitches": 4}
+	)
+	var full_stats: Dictionary = PSAdvancedStatReducer.empty_advanced_stats()
+	PSAdvancedStatReducer.apply_play_event(full_stats, play_event)
+
+	var light_stats: Dictionary = PSAdvancedStatReducer.empty_advanced_stats()
+	PSAdvancedStatReducer.apply_resolved_play(
+		light_stats, batter, pitcher, defense, outcome.duplicate(true),
+		bases_before, outs_before, bases_after, outs_after, runs_scored, runner_events.duplicate(true)
+	)
+
+	var full_dict: Dictionary = PSAdvancedStatReducer.to_dict_container(full_stats)
+	var light_dict: Dictionary = PSAdvancedStatReducer.to_dict_container(light_stats)
+	assert_str(JSON.stringify(light_dict, "", true, true)).override_failure_message(
+		"軽量パスとフルパスの高度指標が一致しない: %s" % case_name
+	).is_equal(JSON.stringify(full_dict, "", true, true))
+	return full_dict
+
+
+# 走者のみのプレーの フルパス(PSPlayEventBuilder.build_runner_event_play → apply_play_event)と
+# 二軍の軽量パス(PSAdvancedStatReducer.apply_resolved_runner_play)が同じ高度指標に集計されることを検証する。
+func _assert_resolved_runner_play_matches(
+	case_name: String,
+	offense: Dictionary,
+	defense: Dictionary,
+	bases_before: Array,
+	outs_before: int,
+	bases_after: Array,
+	outs_after: int,
+	runs_scored: int,
+	runner_events: Array
+) -> Dictionary:
+	var play_event: Dictionary = PSPlayEventBuilder.build_runner_event_play(
+		1, 1, "top", offense, defense, null, null,
+		bases_before, outs_before, bases_after, outs_after, runs_scored,
+		runner_events.duplicate(true)
+	)
+	var full_stats: Dictionary = PSAdvancedStatReducer.empty_advanced_stats()
+	PSAdvancedStatReducer.apply_play_event(full_stats, play_event)
+
+	var light_stats: Dictionary = PSAdvancedStatReducer.empty_advanced_stats()
+	PSAdvancedStatReducer.apply_resolved_runner_play(
+		light_stats, defense, outs_after - outs_before, runner_events.duplicate(true)
+	)
+
+	var full_dict: Dictionary = PSAdvancedStatReducer.to_dict_container(full_stats)
+	var light_dict: Dictionary = PSAdvancedStatReducer.to_dict_container(light_stats)
+	assert_str(JSON.stringify(light_dict, "", true, true)).override_failure_message(
+		"軽量パスとフルパスの高度指標が一致しない: %s" % case_name
+	).is_equal(JSON.stringify(full_dict, "", true, true))
+	return full_dict
+
+
+# 二軍(ライトウェイト経路)は表示用 play_event を作らず、解決済みプレーから直接 wOBA/xwOBA/RE24・BsR・
+# OAA/UZR 系・守備アウトを集計する。ここでは一軍相当の PSPlayEventBuilder→PSAdvancedStatReducer 経路と、
+# 二軍の apply_resolved_play/apply_resolved_runner_play が、代表的な打席・走塁・守備配置パターンについて
+# 常に同じ集計結果になることを確認する。ケースごとに outcome/defense を作り直し、
+# _assert_resolved_play_matches / _assert_resolved_runner_play_matches が両パスの JSON 表現を比較する。
+# 各ケースは自己完結させるため、変数はケースごとのローカル関数(ラムダ)の中で作る。
+func test_resolved_play_stats_match_play_event_reducer() -> void:
+	# 1: 四球。xwOBA は打球が無いので実 wOBA ウェイト(四球)を使う。
+	var case_walk := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96101, "C1 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96102, "C1 Pitcher", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": []}
+		var outcome: Dictionary = {"category": "walk", "result": "walk", "bases": 0}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [batter, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"1_walk", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 0, 0, []
+		)
+		var record: Dictionary = (full_dict["players"] as Dictionary)[str(batter.player_id)] as Dictionary
+		assert_float(float(record["xwoba_numerator"])).override_failure_message(
+			"四球の xwOBA 分子が四球の wOBA ウェイトと一致しない"
+		).is_equal_approx(0.69, 0.001)
+	case_walk.call()
+
+	# 2: 死球。四球と同様に xwOBA は実 wOBA ウェイト(死球)を使う。
+	var case_hit_by_pitch := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96201, "C2 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96202, "C2 Pitcher", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": []}
+		var outcome: Dictionary = {"category": "hit_by_pitch", "result": "hit_by_pitch", "bases": 0}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [batter, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"2_hit_by_pitch", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 0, 0, []
+		)
+		var record: Dictionary = (full_dict["players"] as Dictionary)[str(batter.player_id)] as Dictionary
+		assert_float(float(record["xwoba_numerator"])).override_failure_message(
+			"死球の xwOBA 分子が死球の wOBA ウェイトと一致しない"
+		).is_equal_approx(0.72, 0.001)
+	case_hit_by_pitch.call()
+
+	# 3: 三振。打球が無いので batted_ball は作られず wOBA/xwOBA は0。
+	# outs_before→outs_after の1アウトは守備配置全員(投手含む)に守備アウトとして計上される。
+	var case_strikeout := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96301, "C3 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96302, "C3 Pitcher", 0.0)
+		var catcher: PSPlayerSeasonRecord = _catcher(96303, "C3 Catcher", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 2, "record": catcher}]}
+		var outcome: Dictionary = {"category": "strikeout", "result": "strikeout_swinging", "bases": 0}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"3_strikeout", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 0, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		var batter_record: Dictionary = players[str(batter.player_id)] as Dictionary
+		assert_float(float(batter_record["woba_numerator"])).override_failure_message(
+			"三振の woba 分子が0でない"
+		).is_equal_approx(0.0, 0.0001)
+		assert_float(float(batter_record["xwoba_numerator"])).override_failure_message(
+			"打球の無い三振で xwoba 分子が0でない"
+		).is_equal_approx(0.0, 0.0001)
+		var pitcher_record: Dictionary = players[str(pitcher.player_id)] as Dictionary
+		var pitcher_outs: Dictionary = pitcher_record["defensive_outs_by_position"] as Dictionary
+		assert_int(int(pitcher_outs.get("1", 0))).override_failure_message(
+			"打球の無い三振で投手に守備アウトが計上されていない"
+		).is_equal(1)
+	case_strikeout.call()
+
+	# 4: 打球のある単打。physical_traits に trajectory_bucket/EV/LA/distance/fielder_position を持たせ、
+	# catch_probability_neutral が存在する(=難度は物理量から再計算されない)ケース。
+	var case_single := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96401, "C4 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96402, "C4 Pitcher", 0.0)
+		var center_fielder: PSPlayerSeasonRecord = _defender(96403, "C4 CF", 8, {}, 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 8, "record": center_fielder}]}
+		var outcome: Dictionary = {
+			"category": "hit",
+			"result": "single_center",
+			"bases": 1,
+			"fielder_position": 8,
+			"catch_probability_neutral": 0.62,
+			"catch_probability_used": 0.58,
+			"physical_traits": {
+				"trajectory_bucket": "liner",
+				"exit_velocity": 95.0,
+				"launch_angle": 12.0,
+				"distance": 250.0,
+				"fielder_position": 8,
+			},
+		}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [batter, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"4_single_with_physical_traits", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 0, 0, []
+		)
+		var record: Dictionary = (full_dict["players"] as Dictionary)[str(center_fielder.player_id)] as Dictionary
+		assert_int(int(record["fielding_chances"])).override_failure_message(
+			"単打を追った外野手に打球機会が記録されていない"
+		).is_equal(1)
+		assert_float(float(record["oaa"])).override_failure_message(
+			"catch_probability_neutral を使った OAA が想定値と一致しない"
+		).is_equal_approx(-0.228, 0.001)
+	case_single.call()
+
+	# 5: 本塁打。_is_ratable_fielding_play が home_run を除外するため OAA は0だが、
+	# 打球方向の野手には打球機会(fielding_chances)が1つ記録される。
+	var case_home_run := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96501, "C5 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96502, "C5 Pitcher", 0.0)
+		var center_fielder: PSPlayerSeasonRecord = _defender(96503, "C5 CF", 8, {}, 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 8, "record": center_fielder}]}
+		var outcome: Dictionary = {
+			"category": "hit",
+			"result": "home_run_center",
+			"bases": 4,
+			"fielder_position": 8,
+			"physical_traits": {
+				"trajectory_bucket": "fly",
+				"exit_velocity": 103.0,
+				"launch_angle": 28.0,
+				"distance": 400.0,
+			},
+		}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"5_home_run", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 0, 1, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		var batter_record: Dictionary = players[str(batter.player_id)] as Dictionary
+		assert_float(float(batter_record["woba_numerator"])).override_failure_message(
+			"本塁打の woba 分子が本塁打ウェイトと一致しない"
+		).is_equal_approx(2.031, 0.001)
+		var fielder_record: Dictionary = players[str(center_fielder.player_id)] as Dictionary
+		assert_int(int(fielder_record["fielding_chances"])).override_failure_message(
+			"本塁打でも打球方向の野手に打球機会が記録されていない"
+		).is_equal(1)
+		assert_int(int(fielder_record["fielding_outs"])).override_failure_message(
+			"本塁打なのに守備アウトが記録されている"
+		).is_equal(0)
+		assert_float(float(fielder_record["oaa"])).override_failure_message(
+			"本塁打は評価対象外なので OAA は0のはず"
+		).is_equal_approx(0.0, 0.0001)
+	case_home_run.call()
+
+	# 6: 犠打(バント)。physical_traits を持たない簡略経路で、EV/LA/distance はビルダーと同じく0既定になる。
+	# 犠打は wOBA 分母から除外される(sacrifice_fly とは異なる)。
+	var case_sacrifice_bunt := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96601, "C6 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96602, "C6 Pitcher", 0.0)
+		var third_baseman: PSPlayerSeasonRecord = _defender(96603, "C6 3B", 5, {}, 0.0)
+		var runner_first: PSPlayerSeasonRecord = _fielder(96604, "C6 Runner1", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 5, "record": third_baseman}]}
+		var outcome: Dictionary = {
+			"category": "sacrifice",
+			"result": "sacrifice_bunt_third",
+			"bases": 0,
+			"fielder_position": 5,
+			"runner_strategy": "sacrifice_bunt",
+		}
+		var bases_before: Array = [runner_first, null, null]
+		var bases_after: Array = [null, runner_first, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"6_sacrifice_bunt_no_physical_traits", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 0, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		var batter_record: Dictionary = players[str(batter.player_id)] as Dictionary
+		assert_int(int(batter_record["woba_denominator"])).override_failure_message(
+			"犠打が wOBA 分母から除外されていない"
+		).is_equal(0)
+		assert_int(int(batter_record["plate_appearances"])).override_failure_message(
+			"犠打で打席数が加算されていない"
+		).is_equal(1)
+		var fielder_record: Dictionary = players[str(third_baseman.player_id)] as Dictionary
+		assert_int(int(fielder_record["fielding_outs"])).override_failure_message(
+			"physical_traits が無い犠打で守備アウトが記録できていない"
+		).is_equal(1)
+	case_sacrifice_bunt.call()
+
+	# 7: 犠飛。三塁走者が生還する(runs_scored=1, outs+1)。sacrifice_fly は sacrifice と異なり
+	# wOBA 分母に含まれる。RE24 は「無死三塁」→「1死・塁上なし」+1点の遷移で計算される。
+	var case_sacrifice_fly := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96701, "C7 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96702, "C7 Pitcher", 0.0)
+		var center_fielder: PSPlayerSeasonRecord = _defender(96703, "C7 CF", 8, {}, 0.0)
+		var runner_third: PSPlayerSeasonRecord = _fielder(96704, "C7 Runner3", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 8, "record": center_fielder}]}
+		var outcome: Dictionary = {
+			"category": "sacrifice_fly",
+			"result": "sacrifice_fly_center",
+			"bases": 0,
+			"fielder_position": 8,
+			"catch_attempt_position": 8,
+			"catch_probability_neutral": 0.85,
+			"physical_traits": {
+				"trajectory_bucket": "fly",
+				"exit_velocity": 90.0,
+				"launch_angle": 35.0,
+				"distance": 110.0,
+			},
+		}
+		var bases_before: Array = [null, null, runner_third]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"7_sacrifice_fly_runner_scores", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 1, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		var batter_record: Dictionary = players[str(batter.player_id)] as Dictionary
+		assert_int(int(batter_record["woba_denominator"])).override_failure_message(
+			"犠飛は sacrifice と違い wOBA 分母に含まれるはず"
+		).is_equal(1)
+		assert_float(float(batter_record["re24"])).override_failure_message(
+			"無死三塁から1死塁上なし+1点への RE24 が想定値と一致しない"
+		).is_equal_approx(-0.034, 0.001)
+		var fielder_record: Dictionary = players[str(center_fielder.player_id)] as Dictionary
+		assert_int(int(fielder_record["fielding_outs"])).override_failure_message(
+			"犠飛で外野手に守備アウトが記録されていない"
+		).is_equal(1)
+	case_sacrifice_fly.call()
+
+	# 8: 併殺(ダブルプレー)。無死一塁から2死塁上なしへ、DPR は double_play_probability から
+	# 計算される。outs+2 は守備配置全員(投手含む)に守備アウトとして計上される。
+	var case_double_play := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96801, "C8 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96802, "C8 Pitcher", 0.0)
+		var shortstop: PSPlayerSeasonRecord = _defender(96803, "C8 SS", 6, {}, 0.0)
+		var runner_first: PSPlayerSeasonRecord = _fielder(96804, "C8 Runner1", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 6, "record": shortstop}]}
+		var outcome: Dictionary = {
+			"category": "double_play",
+			"result": "double_play_shortstop",
+			"bases": 0,
+			"fielder_position": 6,
+			"catch_attempt_position": 6,
+			"catch_probability_neutral": 0.55,
+			"double_play_opportunity": true,
+			"double_play_probability": 0.4,
+			"physical_traits": {
+				"trajectory_bucket": "grounder",
+				"exit_velocity": 92.0,
+				"launch_angle": 2.0,
+				"distance": 50.0,
+			},
+		}
+		var bases_before: Array = [runner_first, null, null]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"8_double_play", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 2, 0, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		var pitcher_outs: Dictionary = (players[str(pitcher.player_id)] as Dictionary)["defensive_outs_by_position"] as Dictionary
+		assert_int(int(pitcher_outs.get("1", 0))).override_failure_message(
+			"併殺の2アウトが投手に計上されていない"
+		).is_equal(2)
+		var fielder_record: Dictionary = players[str(shortstop.player_id)] as Dictionary
+		assert_float(float(fielder_record["dpr"])).override_failure_message(
+			"double_play_probability から計算される DPR が想定値と一致しない"
+		).is_equal_approx(0.174, 0.001)
+	case_double_play.call()
+
+	# 9: 失策で生きる。error_type="throwing" の下限確率がOAA/ErrRを支配し、woba ウェイトは0
+	# (安打扱いされない)。
+	var case_reached_on_error := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(96901, "C9 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(96902, "C9 Pitcher", 0.0)
+		var third_baseman: PSPlayerSeasonRecord = _defender(96903, "C9 3B", 5, {}, 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 5, "record": third_baseman}]}
+		var outcome: Dictionary = {
+			"category": "error",
+			"result": "throwing_error_third",
+			"bases": 1,
+			"fielder_position": 5,
+			"error_type": "throwing",
+			"physical_traits": {
+				"trajectory_bucket": "grounder",
+				"exit_velocity": 90.0,
+				"launch_angle": 5.0,
+				"distance": 60.0,
+			},
+		}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [batter, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"9_reached_on_error", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 0, 0, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		var batter_record: Dictionary = players[str(batter.player_id)] as Dictionary
+		assert_float(float(batter_record["woba_numerator"])).override_failure_message(
+			"失策出塁は安打扱いされないので woba 分子は0のはず"
+		).is_equal_approx(0.0, 0.0001)
+		var fielder_record: Dictionary = players[str(third_baseman.player_id)] as Dictionary
+		assert_int(int(fielder_record["fielding_chances"])).override_failure_message(
+			"失策でも野手に打球機会が記録されていない"
+		).is_equal(1)
+		assert_float(float(fielder_record["errr"])).override_failure_message(
+			"error_type=throwing の下限確率から計算される ErrR が想定値と一致しない"
+		).is_equal_approx(-0.238, 0.001)
+	case_reached_on_error.call()
+
+	# 10: catch_probability_neutral/used を持たない打球アウト。難度は物理量(popup=固定0.08)から
+	# 再計算される。フルパスは diagnostics=true で常に難度を計算するが、軽量パスは
+	# catch_probability 系が無いときだけ計算するので、この経路が両パスで揃うことを確認する。
+	var case_batted_ball_out_without_neutral_probability := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(97001, "C10 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(97002, "C10 Pitcher", 0.0)
+		var shortstop: PSPlayerSeasonRecord = _defender(97003, "C10 SS", 6, {}, 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 6, "record": shortstop}]}
+		var outcome: Dictionary = {
+			"category": "out",
+			"result": "infield_fly_shortstop",
+			"bases": 0,
+			"fielder_position": 6,
+			"physical_traits": {
+				"trajectory_bucket": "popup",
+				"exit_velocity": 70.0,
+				"launch_angle": 60.0,
+				"distance": 40.0,
+			},
+		}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"10_batted_ball_out_without_neutral_probability", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 0, []
+		)
+		var record: Dictionary = (full_dict["players"] as Dictionary)[str(shortstop.player_id)] as Dictionary
+		assert_int(int(record["fielding_outs"])).override_failure_message(
+			"popup の打球アウトが守備アウトとして記録されていない"
+		).is_equal(1)
+		assert_float(float(record["oaa"])).override_failure_message(
+			"物理量から再計算された難度で OAA が正の値にならない"
+		).is_greater(0.0)
+	case_batted_ball_out_without_neutral_probability.call()
+
+	# 11: fielders に該当ポジションが無く、batters リストへのフォールバックで野手が解決される。
+	# フルパス・軽量パスとも FieldingModel._fielder_record を共有しているが、
+	# 両呼び出し元が defense を同じ形で渡していることをここで確認する。
+	var case_fielder_fallback_to_batters := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(97101, "C11 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(97102, "C11 Pitcher", 0.0)
+		var catcher: PSPlayerSeasonRecord = _catcher(97103, "C11 Catcher", 0.0)
+		var left_fielder: PSPlayerSeasonRecord = _defender(97104, "C11 LF", 7, {}, 0.0)
+		var defense: Dictionary = {
+			"team_id": 2,
+			"pitcher": pitcher,
+			"fielders": [{"position": 2, "record": catcher}],
+			"batters": [left_fielder],
+		}
+		var outcome: Dictionary = {
+			"category": "out",
+			"result": "lineout_left",
+			"bases": 0,
+			"fielder_position": 7,
+			"catch_probability_neutral": 0.9,
+			"physical_traits": {
+				"trajectory_bucket": "liner",
+				"exit_velocity": 85.0,
+				"launch_angle": 10.0,
+				"distance": 90.0,
+			},
+		}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"11_fielder_fallback_to_batters", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 0, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		assert_bool(players.has(str(left_fielder.player_id))).override_failure_message(
+			"fielders に無いポジションの野手が batters フォールバックで解決されていない"
+		).is_true()
+		var record: Dictionary = players[str(left_fielder.player_id)] as Dictionary
+		assert_int(int(record["fielding_chances"])).override_failure_message(
+			"batters フォールバックで解決された野手に打球機会が記録されていない"
+		).is_equal(1)
+	case_fielder_fallback_to_batters.call()
+
+	# 12: 打席プレー(三振)に付随する runner_events に、捕手の送球失策(is_fielding_error)と
+	# 盗塁成功を両方含める。BsR は走者ごとに、ErrR は失策位置の捕手に計上される。
+	var case_plate_play_runner_error_and_steal := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(97201, "C12 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(97202, "C12 Pitcher", 0.0)
+		var catcher: PSPlayerSeasonRecord = _catcher(97203, "C12 Catcher", 0.0)
+		var stealing_runner: PSPlayerSeasonRecord = _fielder(97204, "C12 Runner A", 0.0)
+		var scoring_runner: PSPlayerSeasonRecord = _fielder(97205, "C12 Runner B", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 2, "record": catcher}]}
+		var outcome: Dictionary = {"category": "strikeout", "result": "strikeout_swinging", "bases": 0}
+		var bases_before: Array = [stealing_runner, null, scoring_runner]
+		var bases_after: Array = [null, stealing_runner, null]
+		var runner_events: Array = [
+			{"runner_id": stealing_runner.player_id, "is_steal_attempt": true, "is_stolen_base": true, "result": "stolen_base"},
+			{"runner_id": scoring_runner.player_id, "is_fielding_error": true, "error_position": 2, "throw_out_probability": 0.7, "result": "advance_on_throw"},
+		]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"12_plate_play_runner_error_and_steal", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 1, runner_events
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		assert_float(float((players[str(stealing_runner.player_id)] as Dictionary)["bsr"])).override_failure_message(
+			"盗塁成功の BsR が加算されていない"
+		).is_equal_approx(0.20, 0.001)
+		assert_float(float((players[str(scoring_runner.player_id)] as Dictionary)["bsr"])).override_failure_message(
+			"送球失策で進塁した走者の BsR が加算されていない"
+		).is_equal_approx(0.10, 0.001)
+		assert_float(float((players[str(catcher.player_id)] as Dictionary)["errr"])).override_failure_message(
+			"捕手の送球失策 ErrR が throw_out_probability から想定される値と一致しない"
+		).is_equal_approx(-0.184, 0.001)
+	case_plate_play_runner_error_and_steal.call()
+
+	# 13: 走者のみのプレー(build_runner_event_play / apply_resolved_runner_play)。
+	# 盗塁死で1アウト増えるので守備配置全員(投手・捕手・遊撃手)に守備アウトが付き、
+	# 同じプレーに含めた捕手の送球失策で別走者が生還する。
+	var case_runner_only_caught_stealing_and_throwing_error := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var pitcher: PSPlayerSeasonRecord = _pitcher(97302, "C13 Pitcher", 0.0)
+		var catcher: PSPlayerSeasonRecord = _catcher(97303, "C13 Catcher", 0.0)
+		var shortstop: PSPlayerSeasonRecord = _defender(97304, "C13 SS", 6, {}, 0.0)
+		var second_baseman: PSPlayerSeasonRecord = _defender(97305, "C13 2B", 4, {}, 0.0)
+		var caught_runner: PSPlayerSeasonRecord = _fielder(97306, "C13 Runner A", 0.0)
+		var scoring_runner: PSPlayerSeasonRecord = _fielder(97307, "C13 Runner B", 0.0)
+		var defense: Dictionary = {
+			"team_id": 2,
+			"pitcher": pitcher,
+			"fielders": [
+				{"position": 2, "record": catcher},
+				{"position": 6, "record": shortstop},
+				{"position": 4, "record": second_baseman},
+			],
+		}
+		var bases_before: Array = [caught_runner, null, scoring_runner]
+		var bases_after: Array = [null, null, null]
+		var runner_events: Array = [
+			{"runner_id": caught_runner.player_id, "is_steal_attempt": true, "is_caught_stealing": true, "result": "caught_stealing"},
+			{"runner_id": scoring_runner.player_id, "is_fielding_error": true, "error_position": 2, "throw_out_probability": 0.65, "result": "advance_on_throw"},
+		]
+		var full_dict: Dictionary = _assert_resolved_runner_play_matches(
+			"13_runner_only_caught_stealing_and_throwing_error", offense, defense,
+			bases_before, 0, bases_after, 1, 1, runner_events
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		assert_float(float((players[str(caught_runner.player_id)] as Dictionary)["bsr"])).override_failure_message(
+			"盗塁死の BsR が加算されていない"
+		).is_equal_approx(-0.45, 0.001)
+		assert_float(float((players[str(scoring_runner.player_id)] as Dictionary)["bsr"])).override_failure_message(
+			"送球失策で生還した走者の BsR が加算されていない"
+		).is_equal_approx(0.10, 0.001)
+		assert_float(float((players[str(catcher.player_id)] as Dictionary)["errr"])).override_failure_message(
+			"捕手の送球失策 ErrR が throw_out_probability から想定される値と一致しない"
+		).is_equal_approx(-0.171, 0.001)
+		assert_int(int((((players[str(catcher.player_id)] as Dictionary)["defensive_outs_by_position"]) as Dictionary).get("2", 0))).override_failure_message(
+			"盗塁死の守備アウトが捕手に付いていない"
+		).is_equal(1)
+		assert_int(int((((players[str(pitcher.player_id)] as Dictionary)["defensive_outs_by_position"]) as Dictionary).get("1", 0))).override_failure_message(
+			"盗塁死の守備アウトが投手に付いていない"
+		).is_equal(1)
+		assert_int(int((((players[str(shortstop.player_id)] as Dictionary)["defensive_outs_by_position"]) as Dictionary).get("6", 0))).override_failure_message(
+			"盗塁死の守備アウトが遊撃手に付いていない"
+		).is_equal(1)
+	case_runner_only_caught_stealing_and_throwing_error.call()
+
+	# 14: 守備配置の重複・欠落パターン。投手が fielders にも重複登場、同一選手が2スロットに
+	# 登場(先着優先)、record が null のスロット、position が0のスロット、守備交代(交代後の選手
+	# だけが defense に載る)を1つの打球アウトの中に混在させる。
+	var case_defense_alignment_edge_cases := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(97400, "C14 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(97401, "C14 Pitcher", 0.0)
+		var first_baseman: PSPlayerSeasonRecord = _fielder(97402, "C14 F3", 0.0)
+		var never_credited: PSPlayerSeasonRecord = _fielder(97403, "C14 Fzero", 0.0)
+		var substitute_left_fielder: PSPlayerSeasonRecord = _fielder(97404, "C14 Fsub", 0.0)
+		var replaced_left_fielder: PSPlayerSeasonRecord = _fielder(97405, "C14 Ford", 0.0)
+		var center_fielder: PSPlayerSeasonRecord = _fielder(97406, "C14 F8", 0.0)
+		var defense: Dictionary = {
+			"team_id": 2,
+			"pitcher": pitcher,
+			"fielders": [
+				{"position": 1, "record": pitcher},
+				{"position": 3, "record": first_baseman},
+				{"position": 4, "record": first_baseman},
+				{"position": 5, "record": null},
+				{"position": 0, "record": never_credited},
+				{"position": 7, "record": substitute_left_fielder},
+				{"position": 8, "record": center_fielder},
+			],
+		}
+		var outcome: Dictionary = {
+			"category": "out",
+			"result": "flyout_center",
+			"bases": 0,
+			"fielder_position": 8,
+			"catch_probability_neutral": 0.9,
+		}
+		var bases_before: Array = [null, null, null]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"14_defense_alignment_edge_cases", offense, defense, batter, pitcher, bases_before, 0,
+			outcome, bases_after, 1, 0, []
+		)
+		var players: Dictionary = full_dict["players"] as Dictionary
+		assert_int(int(((players[str(pitcher.player_id)] as Dictionary)["defensive_outs_by_position"] as Dictionary).get("1", 0))).override_failure_message(
+			"投手が fielders にも重複登場して守備アウトが二重計上された"
+		).is_equal(1)
+		var first_baseman_outs: Dictionary = (players[str(first_baseman.player_id)] as Dictionary)["defensive_outs_by_position"] as Dictionary
+		assert_int(int(first_baseman_outs.get("3", 0))).override_failure_message(
+			"同一選手の最初のスロット(一塁)に守備アウトが付いていない"
+		).is_equal(1)
+		assert_bool(first_baseman_outs.has("4")).override_failure_message(
+			"同一選手の2つ目のスロット(二塁)にも守備アウトが付いてしまった"
+		).is_false()
+		assert_bool(players.has(str(never_credited.player_id))).override_failure_message(
+			"position が0のスロットの選手に何らかの記録が付いてしまった"
+		).is_false()
+		assert_bool(players.has(str(replaced_left_fielder.player_id))).override_failure_message(
+			"defense に登場しない交代前の選手に記録が付いてしまった"
+		).is_false()
+		var substitute_outs: Dictionary = (players[str(substitute_left_fielder.player_id)] as Dictionary)["defensive_outs_by_position"] as Dictionary
+		assert_int(int(substitute_outs.get("7", 0))).override_failure_message(
+			"守備交代後の選手に守備アウトが付いていない"
+		).is_equal(1)
+		var center_fielder_record: Dictionary = players[str(center_fielder.player_id)] as Dictionary
+		assert_int(int(center_fielder_record["fielding_chances"])).override_failure_message(
+			"実際に打球を処理した中堅手に打球機会が記録されていない"
+		).is_equal(1)
+		assert_int(int((center_fielder_record["defensive_outs_by_position"] as Dictionary).get("8", 0))).override_failure_message(
+			"実際に打球を処理した中堅手に守備アウトが記録されていない"
+		).is_equal(1)
+	case_defense_alignment_edge_cases.call()
+
+	# 15: 満塁2死から3アウト目。3アウト後の得点期待値は0固定になるため、bases_after の内容に
+	# 関係なく RE24 = 得点 + 0 - 満塁2死の得点期待値になることを確認する。
+	var case_re24_three_outs := func() -> void:
+		var offense: Dictionary = {"team_id": 1}
+		var batter: PSPlayerSeasonRecord = _fielder(97501, "C15 Batter", 0.0)
+		var pitcher: PSPlayerSeasonRecord = _pitcher(97502, "C15 Pitcher", 0.0)
+		var center_fielder: PSPlayerSeasonRecord = _defender(97503, "C15 CF", 8, {}, 0.0)
+		var runner_first: PSPlayerSeasonRecord = _fielder(97504, "C15 Runner1", 0.0)
+		var runner_second: PSPlayerSeasonRecord = _fielder(97505, "C15 Runner2", 0.0)
+		var runner_third: PSPlayerSeasonRecord = _fielder(97506, "C15 Runner3", 0.0)
+		var defense: Dictionary = {"team_id": 2, "pitcher": pitcher, "fielders": [{"position": 8, "record": center_fielder}]}
+		var outcome: Dictionary = {"category": "out", "result": "flyout_center", "bases": 0, "fielder_position": 8}
+		var bases_before: Array = [runner_first, runner_second, runner_third]
+		var bases_after: Array = [null, null, null]
+		var full_dict: Dictionary = _assert_resolved_play_matches(
+			"15_re24_three_outs", offense, defense, batter, pitcher, bases_before, 2,
+			outcome, bases_after, 3, 0, []
+		)
+		var record: Dictionary = (full_dict["players"] as Dictionary)[str(batter.player_id)] as Dictionary
+		assert_float(float(record["re24"])).override_failure_message(
+			"3アウト目後の得点期待値が0として計算されていない"
+		).is_equal_approx(-0.736, 0.001)
+	case_re24_three_outs.call()

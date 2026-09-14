@@ -199,8 +199,8 @@ static func need_fit(player: PSPlayer, team_need: Dictionary) -> float:
 # **実体は [[TeamDepthChart]]**。ここで need を数え直さず、チャートの `first_team_need`
 # (= 一軍枠の質のリーグ差) をそのまま使う。
 # 先発/救援の枠数はチャート側の FIRST_TEAM_SLOTS (先発5/救援6) が単一ソースになる。
-static func build_team_needs(players: Array, teams: Array) -> Dictionary:
-	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
+static func build_team_needs(players: Array, teams: Array, current_value_memo: Dictionary = {}) -> Dictionary:
+	var charts: Dictionary = TeamDepthChart.build_league(players, teams, false, current_value_memo)
 	var need: Dictionary = {}
 	for team_id in charts.keys():
 		var chart: Dictionary = charts[team_id] as Dictionary
@@ -214,7 +214,7 @@ static func build_team_needs(players: Array, teams: Array) -> Dictionary:
 
 
 # 出せる駒 (余剰) の一覧。本職の上位 SURPLUS_KEEP_* 人は残す。
-static func build_surplus_candidates(players: Array, team_id: int, season_year: int = 0) -> Array:
+static func build_surplus_candidates(players: Array, team_id: int, season_year: int = 0, current_value_memo: Dictionary = {}) -> Array:
 	var fielders_by_pos: Dictionary = {}
 	var starters: Array = []
 	var relievers: Array = []
@@ -235,16 +235,16 @@ static func build_surplus_candidates(players: Array, team_id: int, season_year: 
 	var surplus: Array = []
 	for pos in fielders_by_pos.keys():
 		var pos_list: Array = fielders_by_pos[pos] as Array
-		pos_list.sort_custom(_by_value_desc)
+		_sort_by_current_value(pos_list, current_value_memo)
 		var keep: int = SURPLUS_KEEP_CATCHERS if int(pos) == 2 else SURPLUS_KEEP_FIELDERS
 		for i in range(keep, pos_list.size()):
 			if is_tradeable(pos_list[i] as PSPlayer, season_year):
 				surplus.append(pos_list[i])
-	starters.sort_custom(_by_value_desc)
+	_sort_by_current_value(starters, current_value_memo)
 	for i in range(SURPLUS_KEEP_STARTERS, starters.size()):
 		if is_tradeable(starters[i] as PSPlayer, season_year):
 			surplus.append(starters[i])
-	relievers.sort_custom(_by_value_desc)
+	_sort_by_current_value(relievers, current_value_memo)
 	for i in range(SURPLUS_KEEP_RELIEVERS, relievers.size()):
 		if is_tradeable(relievers[i] as PSPlayer, season_year):
 			surplus.append(relievers[i])
@@ -255,7 +255,10 @@ static func build_surplus_candidates(players: Array, team_id: int, season_year: 
 
 # 全 CPU 球団ペアから最良の 1:1 交換を探す。見つからなければ {}。
 static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array, user_team_id: int) -> Dictionary:
-	var need: Dictionary = build_team_needs(players, teams)
+	# 評価値はこの探索内だけ共有する。成立後に提案を作る場合は、新しい所属と需要で別に探索する。
+	var current_value_memo: Dictionary = {}
+	var trade_value_memo: Dictionary = {}
+	var need: Dictionary = build_team_needs(players, teams, current_value_memo)
 	var surplus_by_team: Dictionary = {}
 	var team_ids: Array = []
 	for team_row in teams:
@@ -265,7 +268,7 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 		if trades_count_for_team(season, team.id) >= MAX_TRADES_PER_TEAM:
 			continue
 		team_ids.append(team.id)
-		surplus_by_team[team.id] = build_surplus_candidates(players, team.id, season.year)
+		surplus_by_team[team.id] = build_surplus_candidates(players, team.id, season.year, current_value_memo)
 
 	var best: Dictionary = {}
 	var best_score: float = 0.0
@@ -275,7 +278,8 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 			var team_b: int = int(team_ids[j])
 			var candidate: Dictionary = _best_pair_between(
 				surplus_by_team[team_a] as Array, surplus_by_team[team_b] as Array,
-				need.get(team_a, {}) as Dictionary, need.get(team_b, {}) as Dictionary
+				need.get(team_a, {}) as Dictionary, need.get(team_b, {}) as Dictionary,
+				trade_value_memo
 			)
 			if candidate.is_empty():
 				continue
@@ -292,7 +296,7 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 
 
 # A の余剰×B の余剰から、双方の需要フィットが最低値以上かつ価値差が許容内の最良ペア。
-static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary) -> Dictionary:
+static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary, trade_value_memo: Dictionary = {}) -> Dictionary:
 	var best: Dictionary = {}
 	var best_score: float = 0.0
 	for a_row in surplus_a:
@@ -300,13 +304,13 @@ static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dicti
 		var fit_for_b: float = need_fit(player_a, need_b)
 		if fit_for_b < MIN_NEED_FIT:
 			continue
-		var value_a: float = trade_value(player_a)
+		var value_a: float = _cached_trade_value(player_a, trade_value_memo)
 		for b_row in surplus_b:
 			var player_b: PSPlayer = b_row as PSPlayer
 			var fit_for_a: float = need_fit(player_b, need_a)
 			if fit_for_a < MIN_NEED_FIT:
 				continue
-			var value_diff: float = absf(value_a - trade_value(player_b))
+			var value_diff: float = absf(value_a - _cached_trade_value(player_b, trade_value_memo))
 			if value_diff > VALUE_DIFF_TOLERANCE:
 				continue
 			var score: float = fit_for_a + fit_for_b - value_diff * VALUE_DIFF_SCORE_PENALTY
@@ -320,8 +324,10 @@ static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dicti
 
 # CPU 球団が自軍の余剰を欲しがり、自軍の需要に合う駒を差し出す 1:1 提案を生成して保存する。
 static func _generate_user_offer(season: PSSeason, players: Array, teams: Array, user_team_id: int, day: int) -> Dictionary:
-	var need: Dictionary = build_team_needs(players, teams)
-	var user_surplus: Array = build_surplus_candidates(players, user_team_id, season.year)
+	var current_value_memo: Dictionary = {}
+	var trade_value_memo: Dictionary = {}
+	var need: Dictionary = build_team_needs(players, teams, current_value_memo)
+	var user_surplus: Array = build_surplus_candidates(players, user_team_id, season.year, current_value_memo)
 	if user_surplus.is_empty():
 		return {}
 	var user_need: Dictionary = need.get(user_team_id, {}) as Dictionary
@@ -336,8 +342,8 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 		if trades_count_for_team(season, team.id) >= MAX_TRADES_PER_TEAM:
 			continue
 		var candidate: Dictionary = _best_pair_between(
-			build_surplus_candidates(players, team.id, season.year), user_surplus,
-			need.get(team.id, {}) as Dictionary, user_need
+			build_surplus_candidates(players, team.id, season.year, current_value_memo), user_surplus,
+			need.get(team.id, {}) as Dictionary, user_need, trade_value_memo
 		)
 		if candidate.is_empty():
 			continue
@@ -539,7 +545,7 @@ static func _swap_active_roster_members(season: PSSeason, team_id: int, out_ids:
 		if not out_ids.has(int(id_value)) and not out_ids.has(id_value):
 			ids.append(int(id_value))
 	var sorted_incoming: Array = incoming_players.duplicate()
-	sorted_incoming.sort_custom(_by_value_desc)
+	_sort_by_current_value(sorted_incoming, {})
 	for player_row in sorted_incoming:
 		var player: PSPlayer = player_row as PSPlayer
 		if ids.size() >= TeamAutoAI.TARGET_TOTAL:
@@ -643,8 +649,23 @@ static func _names_of(moving: Array) -> Array:
 	return names
 
 
-static func _by_value_desc(a, b) -> bool:
-	return OffseasonService.player_value_score(a as PSPlayer) > OffseasonService.player_value_score(b as PSPlayer)
+# 余剰の保護順位は現在能力で決め、交換価値 (将来性・年俸込み) と混ぜない。
+static func _sort_by_current_value(players: Array, current_value_memo: Dictionary) -> void:
+	if players.size() < 2:
+		return
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if not current_value_memo.has(player):
+			current_value_memo[player] = OffseasonService.player_value_score(player)
+	players.sort_custom(func(a, b) -> bool:
+		return int(current_value_memo[a]) > int(current_value_memo[b])
+	)
+
+
+static func _cached_trade_value(player: PSPlayer, trade_value_memo: Dictionary) -> float:
+	if not trade_value_memo.has(player):
+		trade_value_memo[player] = trade_value(player)
+	return float(trade_value_memo[player])
 
 
 static func _top_average(values: Array, count: int) -> float:

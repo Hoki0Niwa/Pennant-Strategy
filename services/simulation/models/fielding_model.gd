@@ -52,8 +52,21 @@ static func fielding_events_for_play(
 	outcome: Dictionary,
 	batted_ball_event: Dictionary
 ) -> Array:
+	var event: Dictionary = _build_fielding_result(defense, outcome, batted_ball_event, true, event_index)
+	return [] if event.is_empty() else [event]
+
+
+# 表示用の能力評価・ラベルを作らず、高度指標に必要な値だけを返す。
+static func fielding_stats_for_play(defense: Dictionary, outcome: Dictionary, batted_ball: Dictionary) -> Dictionary:
+	return _build_fielding_result(defense, outcome, batted_ball, false)
+
+
+static func _build_fielding_result(
+	defense: Dictionary, outcome: Dictionary, batted_ball_event: Dictionary,
+	diagnostics: bool, event_index: int = 0
+) -> Dictionary:
 	if batted_ball_event.is_empty():
-		return []
+		return {}
 
 	var result: String = str(outcome.get("result", batted_ball_event.get("actual_result", "")))
 	var category: String = str(outcome.get("category", "out"))
@@ -61,16 +74,14 @@ static func fielding_events_for_play(
 	if position <= 0:
 		position = _infer_position_from_result(result)
 	if position <= 0:
-		return []
+		return {}
 
 	var fielder: PSPlayerSeasonRecord = _fielder_record(defense, position)
-	var ability_score: float = _fielding_score(fielder, position)
 	var fielding_outs: int = _fielding_outs_added(category, result, outcome)
 	var actual_out: bool = fielding_outs > 0
-	var batter_out: bool = _batter_out_on_play(category, result, outcome)
-	var runner_outs: int = _runner_outs_from_outcome(outcome, category, fielding_outs, batter_out)
-	var difficulty: float = _opportunity_difficulty(batted_ball_event, category, result)
-	var opportunity_weight: float = _opportunity_weight(batted_ball_event, category, result, difficulty)
+	var difficulty: float = 0.0
+	if diagnostics or not (outcome.has("catch_probability_neutral") or outcome.has("catch_probability_used")):
+		difficulty = _opportunity_difficulty(batted_ball_event, category, result)
 	var catch_probability: float = _average_out_probability(outcome, actual_out, difficulty, category)
 	var metric_scale: float = METRIC_OPPORTUNITY_SCALE * _metric_zone_scale(position)
 
@@ -96,7 +107,24 @@ static func fielding_events_for_play(
 	var rounded_uzr: float = _round_float(rounded_rngr + rounded_errr + rounded_dpr, 3)
 	var rounded_drs: float = rounded_uzr
 
-	return [{
+	if not diagnostics:
+		return {
+			"fielder_id": 0 if fielder == null else fielder.player_id,
+			"position": position,
+			"oaa_zone": _oaa_zone(position),
+			"fielding_outs": fielding_outs,
+			"oaa": rounded_oaa,
+			"rngr": rounded_rngr,
+			"errr": rounded_errr,
+			"dpr": rounded_dpr,
+			"uzr": rounded_uzr,
+			"drs": rounded_drs,
+		}
+	var ability_score: float = _fielding_score(fielder, position)
+	var batter_out: bool = _batter_out_on_play(category, result, outcome)
+	var runner_outs: int = _runner_outs_from_outcome(outcome, category, fielding_outs, batter_out)
+	var opportunity_weight: float = _opportunity_weight(batted_ball_event, category, result, difficulty)
+	return {
 		"event_type": EVENT_TYPE_FIELDING,
 		"event_index": event_index,
 		"fielder_id": 0 if fielder == null else fielder.player_id,
@@ -128,7 +156,7 @@ static func fielding_events_for_play(
 		"uzr": rounded_uzr,
 		"drs": rounded_drs,
 		"run_value": rounded_drs,
-	}]
+	}
 
 
 static func _fielder_record(defense: Dictionary, position: int) -> PSPlayerSeasonRecord:

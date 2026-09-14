@@ -309,6 +309,76 @@ func test_surplus_keeps_position_leaders() -> void:
 	assert_int((surplus[0] as PSPlayer).id).is_equal(13)
 
 
+func test_trade_needs_match_full_depth_chart_current_values() -> void:
+	var teams: Array = [_team(3), _team(1), _team(2), _team(4)]
+	var players: Array = []
+	for team_id in [1, 2, 3]:
+		for position in range(2, 10):
+			players.append(_player_with_z(team_id * 100 + position, team_id, position, false, float(team_id - 2)))
+		for index in range(8):
+			players.append(_player({
+				"id": team_id * 100 + 20 + index,
+				"team_id": team_id,
+				"position": 1,
+				"role": "starter" if index < team_id + 1 else "reliever",
+				"z_abilities": {"Pit_KCreate": float(index) / 3.0, "Pit_BBPrevent": float(team_id)},
+			}))
+	var prospect: PSPlayer = _player_with_z(500, 1, 3, true, 3.0)
+	players.append(prospect)
+	var retired: PSPlayer = _player_with_z(501, 2, 3, false, 4.0)
+	retired.source_data["retired"] = true
+	players.append(retired)
+	var full_charts: Dictionary = TeamDepthChart.build_league(players, teams)
+	var expected: Dictionary = {}
+	for team in teams:
+		var team_need: Dictionary = {}
+		for position in range(2, 10):
+			team_need[position] = TeamDepthChart.slot_need(full_charts[team.id], TeamDepthChart.fielder_slot_key(position))
+		team_need[TradeService.SLOT_STARTER] = TeamDepthChart.slot_need(full_charts[team.id], TeamDepthChart.SLOT_STARTER)
+		team_need[TradeService.SLOT_RELIEVER] = TeamDepthChart.slot_need(full_charts[team.id], TeamDepthChart.SLOT_RELIEVER)
+		expected[team.id] = team_need
+	assert_dict(TradeService.build_team_needs(players, teams)).is_equal(expected)
+	assert_float(float((expected[4] as Dictionary)[3])).is_greater(0.0)
+	# 次の探索では、移籍後の所属で需要を測る。
+	(players[0] as PSPlayer).team_id = 4
+	assert_dict(TradeService.build_team_needs(players, teams)).is_not_equal(expected)
+
+
+func test_surplus_protects_current_leaders_before_tradeability_filter() -> void:
+	var foreign_leader: PSPlayer = _player_with_z(11, 1, 3, false, 2.0)
+	foreign_leader.foreign_player = true
+	var expensive_leader: PSPlayer = _player_with_z(12, 1, 3, false, 1.0)
+	expensive_leader.salary = 100000
+	var cheap_reserve: PSPlayer = _player_with_z(13, 1, 3, false, 0.0)
+	cheap_reserve.salary = 1000
+	var players: Array = [foreign_leader, expensive_leader, cheap_reserve]
+	assert_float(TradeService.trade_value(cheap_reserve)).is_greater(TradeService.trade_value(expensive_leader))
+	assert_array(TradeService.build_surplus_candidates(players, 1)).is_equal([cheap_reserve])
+	# 能力が変わった後の呼び出しに、前回の保護順位を持ち越さない。
+	for key in ALL_Z_KEYS:
+		cheap_reserve.z_abilities[key] = 3.0
+	assert_array(TradeService.build_surplus_candidates(players, 1)).is_equal([expensive_leader])
+
+
+func test_trade_pair_keeps_first_tie_and_rechecks_values_between_searches() -> void:
+	var first_a: PSPlayer = _player_with_z(12, 1, 3, false, 1.0)
+	var next_a: PSPlayer = _player_with_z(11, 1, 3, false, 1.0)
+	var first_b: PSPlayer = _player_with_z(22, 2, 3, false, 1.0)
+	var next_b: PSPlayer = _player_with_z(21, 2, 3, false, 1.0)
+	var surplus_a: Array = [first_a, next_a]
+	var surplus_b: Array = [first_b, next_b]
+	var need: Dictionary = {3: 5.0}
+	var pair: Dictionary = TradeService._best_pair_between(surplus_a, surplus_b, need, need)
+	assert_object(pair.get("player_a")).is_same(first_a)
+	assert_object(pair.get("player_b")).is_same(first_b)
+	assert_float(float(pair.get("score", 0.0))).is_equal(10.0)
+	first_b.salary = 100000
+	var next_pair: Dictionary = TradeService._best_pair_between(surplus_a, surplus_b, need, need)
+	assert_object(next_pair.get("player_b")).is_same(next_b)
+	next_b.salary = 100000
+	assert_dict(TradeService._best_pair_between(surplus_a, surplus_b, need, need)).is_empty()
+
+
 # ---- helpers -------------------------------------------------------------------
 
 func _season(day: int) -> PSSeason:

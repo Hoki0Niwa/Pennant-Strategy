@@ -1225,6 +1225,54 @@ func test_farm_game_loop_uses_lightweight_output() -> void:
 	assert_int(total_advanced_pa).is_greater(0)
 
 
+func test_farm_lightweight_matches_full_game_stats_and_random_stream() -> void:
+	for game_seed in [7319, 424242]:
+		var full: Dictionary = _farm_output_snapshot(false, game_seed)
+		var light: Dictionary = _farm_output_snapshot(true, game_seed)
+		assert_int(int(light["rng_state"])).is_equal(int(full["rng_state"]))
+		for key in ["result", "records", "players"]:
+			assert_bool(light[key] == full[key]).override_failure_message(
+				"full/light mismatch: seed=%d section=%s" % [game_seed, key]
+			).is_true()
+
+
+func _farm_output_snapshot(lightweight: bool, game_seed: int) -> Dictionary:
+	var season: PSSeason = _fresh_season_with_records()
+	var game: Dictionary = season.farm_schedule[0] as Dictionary
+	var away: Dictionary = PSTeamSetupBuilder.build_team_setup(
+		season, int(game["away_team_id"]), bool(game.get("dh_enabled", true)), false, PSTeamSetupBuilder.LEVEL_FARM
+	)
+	var home: Dictionary = PSTeamSetupBuilder.build_team_setup(
+		season, int(game["home_team_id"]), bool(game.get("dh_enabled", true)), false, PSTeamSetupBuilder.LEVEL_FARM
+	)
+	assert_bool(bool(away.get("ok", false))).is_true()
+	assert_bool(bool(home.get("ok", false))).is_true()
+	Rng.set_seed_value(game_seed)
+	var result: Dictionary = PSGameLoop.simulate_game(
+		away, home, ModManager.hot_rule_groups_snapshot(), PSFarmSchedule.MAX_INNINGS, lightweight
+	)
+	assert_int(int(result.get("next_play_event_index", 0))).is_greater(40)
+	if lightweight:
+		assert_bool(result.has("play_events")).is_false()
+	else:
+		assert_int((result.get("play_events", []) as Array).size()).is_greater(40)
+	# ログ専用の出力だけを除き、投手責任・交代に伴う登板記録・怪我・全高度指標を比較する。
+	for key in ["play_events", "lineups", "substitutions", "runner_event_counts"]:
+		result.erase(key)
+	var records: Array = []
+	for value in RecordStore.player_records.values():
+		records.append((value as PSPlayerSeasonRecord).to_dict())
+	var players: Array = []
+	for value in GameDb.players:
+		players.append((value as PSPlayer).to_dict())
+	return {
+		"result": JSON.stringify(result, "", true, true),
+		"records": JSON.stringify(records, "", true, true),
+		"players": JSON.stringify(players, "", true, true),
+		"rng_state": Rng.generator.state,
+	}
+
+
 func test_farm_league_produces_a_plausible_stat_line() -> void:
 	# 二軍成績は「一軍と同じ PA シムを素通しで使えば、投打の質差から自然に一軍より低く出る」
 	# という前提で作っている。別式を持たない代わりに、その前提が崩れていないかを見る。

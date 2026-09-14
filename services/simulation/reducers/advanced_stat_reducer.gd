@@ -91,54 +91,128 @@ static func apply_play_event(advanced_stats: Dictionary, play_event: Dictionary)
 	_ensure_shape(advanced_stats)
 	var plate_event: Dictionary = play_event.get("plate_event", {}) as Dictionary
 	if not plate_event.is_empty():
-		var batter_id: int = int(plate_event.get("batter_id", 0))
-		var pitcher_id: int = int(plate_event.get("pitcher_id", 0))
-		var woba_weight: float = _woba_weight(plate_event)
-		var denominator_delta: int = _woba_denominator_delta(plate_event)
-		var xwoba_weight: float = _xwoba_weight(plate_event, play_event.get("batted_ball_event", {}) as Dictionary)
-		var re24_delta: float = re24_for_play(play_event)
-		if batter_id != 0:
-			var batter_stats = _record_for(advanced_stats, BUCKET_PLAYERS, batter_id)
-			batter_stats.add_plate_result(woba_weight, denominator_delta, xwoba_weight, denominator_delta, re24_delta)
-			_store_record(advanced_stats, BUCKET_PLAYERS, batter_stats)
-		if pitcher_id != 0:
-			var pitcher_stats = _record_for(advanced_stats, BUCKET_PITCHERS, pitcher_id)
-			pitcher_stats.add_plate_result(woba_weight, denominator_delta, xwoba_weight, denominator_delta, re24_delta)
-			_store_record(advanced_stats, BUCKET_PITCHERS, pitcher_stats)
+		_apply_plate_result(
+			advanced_stats, int(plate_event.get("batter_id", 0)), int(plate_event.get("pitcher_id", 0)),
+			plate_event, play_event.get("batted_ball_event", {}) as Dictionary, re24_for_play(play_event)
+		)
 
 	var runner_events: Array = play_event.get("runner_events", []) as Array
 	for runner_event_value in runner_events:
 		var runner_event: Dictionary = runner_event_value as Dictionary
-		var runner_id: int = int(runner_event.get("runner_id", 0))
-		if runner_id != 0:
-			var bsr_value: float = _bsr_value(runner_event)
-			if not is_zero_approx(bsr_value):
-				var runner_stats = _record_for(advanced_stats, BUCKET_PLAYERS, runner_id)
-				runner_stats.add_baserunning(bsr_value)
-				_store_record(advanced_stats, BUCKET_PLAYERS, runner_stats)
+		_apply_baserunning_event(advanced_stats, runner_event)
 		_apply_runner_fielding_error(advanced_stats, play_event, runner_event)
 
 	_apply_defensive_alignment(advanced_stats, play_event)
 
 	var fielding_events: Array = play_event.get("fielding_events", []) as Array
 	for fielding_event_value in fielding_events:
-		var fielding_event: Dictionary = fielding_event_value as Dictionary
-		var fielder_id: int = int(fielding_event.get("fielder_id", 0))
-		if fielder_id == 0:
+		_apply_fielding_event(advanced_stats, fielding_event_value as Dictionary)
+
+
+# 解決済みプレーを直接集計する。表示用イベントを作らず、数式と加算順序はログ経路と共用する。
+static func apply_resolved_play(
+	advanced_stats: Dictionary,
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	outcome: Dictionary,
+	bases_before: Array,
+	outs_before: int,
+	bases_after: Array,
+	outs_after: int,
+	runs_scored: int,
+	runner_events: Array
+) -> void:
+	_ensure_shape(advanced_stats)
+	var batted_ball: Dictionary = {}
+	var category: String = str(outcome.get("category", "out"))
+	if category != "walk" and category != "hit_by_pitch" and category != "strikeout":
+		batted_ball = PSPlayEventBuilder.batted_ball_for_stats(outcome)
+	_apply_plate_result(
+		advanced_stats, 0 if batter == null else batter.player_id, 0 if pitcher == null else pitcher.player_id,
+		outcome, batted_ball,
+		_re24_for_masks(_record_base_mask(bases_before), outs_before, _record_base_mask(bases_after), outs_after, runs_scored)
+	)
+	apply_resolved_runner_play(advanced_stats, defense, outs_after - outs_before, runner_events)
+	if not batted_ball.is_empty():
+		_apply_fielding_event(advanced_stats, FieldingModel.fielding_stats_for_play(defense, outcome, batted_ball))
+
+
+static func apply_resolved_runner_play(
+	advanced_stats: Dictionary, defense: Dictionary, outs_added: int, runner_events: Array
+) -> void:
+	_ensure_shape(advanced_stats)
+	for event_value in runner_events:
+		var event: Dictionary = event_value as Dictionary
+		_apply_baserunning_event(advanced_stats, event)
+		if bool(event.get("is_fielding_error", false)):
+			var position: int = int(event.get("error_position", event.get("fielder_position", 0)))
+			_apply_runner_fielding_error_for_player(
+				advanced_stats, event, _defensive_player_id(defense, position), position, ""
+			)
+	if outs_added <= 0:
+		return
+	# 投手を先に計上し、兼任や不正な重複スロットもログの守備配置と同じく一度だけ数える。
+	var seen: Dictionary = {}
+	var pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
+	if pitcher != null and pitcher.player_id != 0:
+		_apply_defensive_outs(advanced_stats, pitcher.player_id, 1, outs_added, "")
+		seen[pitcher.player_id] = true
+	for slot_value in defense.get("fielders", []) as Array:
+		var slot: Dictionary = slot_value as Dictionary
+		var record: PSPlayerSeasonRecord = slot.get("record", null) as PSPlayerSeasonRecord
+		var position: int = int(slot.get("position", 0))
+		if record == null or record.player_id == 0 or position <= 0 or seen.has(record.player_id):
 			continue
-		var fielder_stats = _record_for(advanced_stats, BUCKET_PLAYERS, fielder_id)
-		fielder_stats.add_fielding(
-			float(fielding_event.get("oaa", 0.0)),
-			float(fielding_event.get("uzr", 0.0)),
-			float(fielding_event.get("drs", 0.0)),
-			float(fielding_event.get("rngr", 0.0)),
-			float(fielding_event.get("errr", 0.0)),
-			float(fielding_event.get("dpr", 0.0)),
-			int(fielding_event.get("uzr_position", fielding_event.get("position", 0))),
-			str(fielding_event.get("oaa_zone", "")),
-			int(fielding_event.get("fielding_outs", 1 if bool(fielding_event.get("actual_out", false)) else 0))
-		)
-		_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
+		_apply_defensive_outs(advanced_stats, record.player_id, position, outs_added, "")
+		seen[record.player_id] = true
+
+
+static func _apply_plate_result(
+	advanced_stats: Dictionary, batter_id: int, pitcher_id: int,
+	outcome: Dictionary, batted_ball: Dictionary, re24_delta: float
+) -> void:
+	var woba_weight: float = _woba_weight(outcome)
+	var denominator_delta: int = _woba_denominator_delta(outcome)
+	var xwoba_weight: float = _xwoba_weight(outcome, batted_ball)
+	if batter_id != 0:
+		var batter_stats = _record_for(advanced_stats, BUCKET_PLAYERS, batter_id)
+		batter_stats.add_plate_result(woba_weight, denominator_delta, xwoba_weight, denominator_delta, re24_delta)
+		_store_record(advanced_stats, BUCKET_PLAYERS, batter_stats)
+	if pitcher_id != 0:
+		var pitcher_stats = _record_for(advanced_stats, BUCKET_PITCHERS, pitcher_id)
+		pitcher_stats.add_plate_result(woba_weight, denominator_delta, xwoba_weight, denominator_delta, re24_delta)
+		_store_record(advanced_stats, BUCKET_PITCHERS, pitcher_stats)
+
+
+static func _apply_baserunning_event(advanced_stats: Dictionary, runner_event: Dictionary) -> void:
+	var runner_id: int = int(runner_event.get("runner_id", 0))
+	if runner_id == 0:
+		return
+	var bsr_value: float = _bsr_value(runner_event)
+	if not is_zero_approx(bsr_value):
+		var runner_stats = _record_for(advanced_stats, BUCKET_PLAYERS, runner_id)
+		runner_stats.add_baserunning(bsr_value)
+		_store_record(advanced_stats, BUCKET_PLAYERS, runner_stats)
+
+
+static func _apply_fielding_event(advanced_stats: Dictionary, fielding_event: Dictionary) -> void:
+	var fielder_id: int = int(fielding_event.get("fielder_id", 0))
+	if fielder_id == 0:
+		return
+	var fielder_stats = _record_for(advanced_stats, BUCKET_PLAYERS, fielder_id)
+	fielder_stats.add_fielding(
+		float(fielding_event.get("oaa", 0.0)),
+		float(fielding_event.get("uzr", 0.0)),
+		float(fielding_event.get("drs", 0.0)),
+		float(fielding_event.get("rngr", 0.0)),
+		float(fielding_event.get("errr", 0.0)),
+		float(fielding_event.get("dpr", 0.0)),
+		int(fielding_event.get("uzr_position", fielding_event.get("position", 0))),
+		str(fielding_event.get("oaa_zone", "")),
+		int(fielding_event.get("fielding_outs", 1 if bool(fielding_event.get("actual_out", false)) else 0))
+	)
+	_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
 # RE24 = 得点 + プレイ後の得点期待値 - プレイ前の得点期待値。
@@ -149,8 +223,12 @@ static func re24_for_play(play_event: Dictionary) -> float:
 	var bases_before: Array = play_event.get("bases_before", []) as Array
 	var bases_after: Array = play_event.get("bases_after", []) as Array
 	var runs_scored: int = int(play_event.get("runs_scored", 0))
-	var before_expectancy: float = _run_expectancy(bases_before, outs_before)
-	var after_expectancy: float = 0.0 if outs_after >= 3 else _run_expectancy(bases_after, outs_after)
+	return _re24_for_masks(_base_mask(bases_before), outs_before, _base_mask(bases_after), outs_after, runs_scored)
+
+
+static func _re24_for_masks(before_mask: int, outs_before: int, after_mask: int, outs_after: int, runs_scored: int) -> float:
+	var before_expectancy: float = _run_expectancy_for_mask(before_mask, outs_before)
+	var after_expectancy: float = 0.0 if outs_after >= 3 else _run_expectancy_for_mask(after_mask, outs_after)
 	return float(runs_scored) + after_expectancy - before_expectancy
 
 
@@ -167,9 +245,13 @@ static func _apply_defensive_alignment(advanced_stats: Dictionary, play_event: D
 		var position: int = int(slot.get("position", 0))
 		if player_id == 0 or position <= 0:
 			continue
-		var fielder_stats = _record_for(advanced_stats, BUCKET_PLAYERS, player_id)
-		fielder_stats.add_defensive_outs(position, outs_added, str(slot.get("oaa_zone", "")))
-		_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
+		_apply_defensive_outs(advanced_stats, player_id, position, outs_added, str(slot.get("oaa_zone", "")))
+
+
+static func _apply_defensive_outs(advanced_stats: Dictionary, player_id: int, position: int, outs_added: int, zone: String) -> void:
+	var fielder_stats = _record_for(advanced_stats, BUCKET_PLAYERS, player_id)
+	fielder_stats.add_defensive_outs(position, outs_added, zone)
+	_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
 # 盗塁送球ミスなど runner_event 側にだけ出る失策を守備指標へ変換する。
@@ -182,7 +264,13 @@ static func _apply_runner_fielding_error(advanced_stats: Dictionary, play_event:
 		return
 	var slot: Dictionary = _defensive_slot_for_position(play_event, position)
 	var fielder_id: int = int(slot.get("player_id", 0))
-	if fielder_id == 0:
+	_apply_runner_fielding_error_for_player(advanced_stats, runner_event, fielder_id, position, str(slot.get("oaa_zone", "")))
+
+
+static func _apply_runner_fielding_error_for_player(
+	advanced_stats: Dictionary, runner_event: Dictionary, fielder_id: int, position: int, zone: String
+) -> void:
+	if fielder_id == 0 or position <= 0:
 		return
 	var errr_value: float = _runner_fielding_error_run_value(runner_event)
 	if is_zero_approx(errr_value):
@@ -196,7 +284,7 @@ static func _apply_runner_fielding_error(advanced_stats: Dictionary, play_event:
 		errr_value,
 		0.0,
 		position,
-		_oaa_zone_for_position(position, str(slot.get("oaa_zone", ""))),
+		_oaa_zone_for_position(position, zone),
 		0
 	)
 	_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
@@ -209,6 +297,27 @@ static func _defensive_slot_for_position(play_event: Dictionary, position: int) 
 		if int(slot.get("position", 0)) == position:
 			return slot
 	return {}
+
+
+static func _defensive_player_id(defense: Dictionary, position: int) -> int:
+	if position <= 0:
+		return 0
+	var seen: Dictionary = {}
+	var pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
+	if pitcher != null and pitcher.player_id != 0:
+		if position == 1:
+			return pitcher.player_id
+		seen[pitcher.player_id] = true
+	for slot_value in defense.get("fielders", []) as Array:
+		var slot: Dictionary = slot_value as Dictionary
+		var record: PSPlayerSeasonRecord = slot.get("record", null) as PSPlayerSeasonRecord
+		var slot_position: int = int(slot.get("position", 0))
+		if record == null or record.player_id == 0 or slot_position <= 0 or seen.has(record.player_id):
+			continue
+		if slot_position == position:
+			return record.player_id
+		seen[record.player_id] = true
+	return 0
 
 
 # 走者イベント失策の失点価値。刺殺期待が高い送球ミスほど大きく減点する。
@@ -344,10 +453,9 @@ static func _xwoba_weight(plate_event: Dictionary, batted_ball_event: Dictionary
 	return 0.0
 
 
-static func _run_expectancy(bases: Array, outs: int) -> float:
+static func _run_expectancy_for_mask(mask: int, outs: int) -> float:
 	if outs < 0 or outs > 2:
 		return 0.0
-	var mask: int = _base_mask(bases)
 	var row: Dictionary = RE24_TABLE.get(outs, {}) as Dictionary
 	return float(row.get(mask, 0.0))
 
@@ -356,6 +464,15 @@ static func _base_mask(bases: Array) -> int:
 	var mask: int = 0
 	for index in range(min(3, bases.size())):
 		if int(bases[index]) != 0:
+			mask |= 1 << index
+	return mask
+
+
+static func _record_base_mask(bases: Array) -> int:
+	var mask: int = 0
+	for index in range(min(3, bases.size())):
+		var record: PSPlayerSeasonRecord = bases[index] as PSPlayerSeasonRecord
+		if record != null and record.player_id != 0:
 			mask |= 1 << index
 	return mask
 

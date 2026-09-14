@@ -259,6 +259,25 @@ static func _batted_ball_event(
 	return event
 
 
+# 集計に必要な物理値だけを揃える。バント等の物理値がない結果も、表示イベントと同じ既定値で扱う。
+static func batted_ball_for_stats(outcome: Dictionary) -> Dictionary:
+	var result: String = str(outcome.get("result", "out"))
+	var physical_traits: Dictionary = outcome.get("physical_traits", {}) as Dictionary
+	var ball_type: String = _infer_batted_ball_type(result)
+	if physical_traits.has("trajectory_bucket"):
+		ball_type = _batted_ball_type_from_physics(str(physical_traits["trajectory_bucket"]))
+	else:
+		ball_type = str(physical_traits.get("batted_ball_type", ball_type))
+	return {
+		"actual_result": physical_traits.get("actual_result", result),
+		"fielder_position": physical_traits.get("fielder_position", int(outcome.get("fielder_position", 0))),
+		"batted_ball_type": ball_type,
+		"exit_velocity": physical_traits.get("exit_velocity", 0.0),
+		"launch_angle": physical_traits.get("launch_angle", 0.0),
+		"distance": physical_traits.get("distance", 0.0),
+	}
+
+
 static func _pitch_summary(
 	event_index: int,
 	batter: PSPlayerSeasonRecord,
