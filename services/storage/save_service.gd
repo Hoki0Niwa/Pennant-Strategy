@@ -134,32 +134,12 @@ static func load_state() -> Dictionary:
 static func _persist_season_history(season: PSSeason) -> bool:
 	if not SQLiteStoreService.is_available():
 		return false
-	var game_days: Dictionary = _group_history_by_day(season.player_game_history)
-	if not SQLiteStoreService.save_season_history(season.year, season.season_number, "game", game_days, season.current_day):
+	if not SQLiteStoreService.save_season_history(season.year, season.season_number, "game", season.player_game_history, season.current_day):
 		return false
-	var stat_days: Dictionary = _group_history_by_day(season.player_stat_history)
 	var retention_cutoff: int = season.current_day - PSSeason.SNAPSHOT_RETENTION_DAYS
-	if not SQLiteStoreService.save_season_history(season.year, season.season_number, "stat", stat_days, season.current_day, retention_cutoff):
+	if not SQLiteStoreService.save_season_history(season.year, season.season_number, "stat", season.player_stat_history, season.current_day, retention_cutoff):
 		return false
 	return SQLiteStoreService.save_team_lineup_history(season.year, season.season_number, season.team_lineup_history, season.current_day)
-
-
-# {player_id_str: [entries]} を {day:int → {player_id_str: [その日のentries]}} へ変換する。
-# 各エントリは "day" キーを持つ (append_player_game_log / append_player_stat_snapshot が付与)。
-static func _group_history_by_day(history: Dictionary) -> Dictionary:
-	var out: Dictionary = {}
-	for player_key in history.keys():
-		var entries: Array = history[player_key] as Array
-		for entry_value in entries:
-			var entry: Dictionary = entry_value as Dictionary
-			var day: int = int(entry.get("day", 0))
-			if not out.has(day):
-				out[day] = {}
-			var day_bucket: Dictionary = out[day] as Dictionary
-			if not day_bucket.has(player_key):
-				day_bucket[player_key] = []
-			(day_bucket[player_key] as Array).append(entry)
-	return out
 
 
 # season_history テーブルから履歴を復元して season へ直接代入する

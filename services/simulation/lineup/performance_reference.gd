@@ -7,8 +7,9 @@ class_name PSPerformanceReference
 #
 # 基準は 2 系統:
 # - ratings = そのシーズンの支配下野手の表示能力分布。能力スナップショットはシーズン中ほぼ動かない。
-# - stats   = 規定到達打者の率成績分布。**進行中のシーズンは母集団が育っていない**ので、
-#             十分な標本が集まっている直近の過去シーズンまで遡って使う。
+# - stats   = 規定到達打者の率成績分布。**進行中のシーズンの成績は使わず**、直近の完了シーズンから測る
+#             (標本が足りなければさらに遡り、どこにも無ければ既定値)。シーズン中は基準を作り直さないので、
+#             本日を終了で 1 日ずつ進めてもスキップでまとめて進めても同じ物差しになる。
 #
 # ## alignment: 2 つのスケールのゼロ点を揃える
 # ratings の母集団 (支配下野手全体) と stats の母集団 (規定到達打者) は同じではない。
@@ -162,19 +163,46 @@ static func pitcher_stats_for_level(record: PSPlayerSeasonRecord, level: int) ->
 # 成績分布のゼロ点を「二軍のレギュラーが共通能力スケールのどこに居るか」へ合わせるので、
 # 「二軍で能力なりに打っている」が delta 0 になる。
 static func for_season(year: int, season_number: int, level: int = LEVEL_FIRST) -> Dictionary:
-	var key: String = "%d_%d_%d" % [year, season_number, level]
+	var key: String = _cache_key(year, season_number, level)
 	if _cache.has(key):
 		return _cache[key] as Dictionary
-	# 能力分布は常に一軍母集団から測る (共通の物差し)。
-	var records: Array = _season_records(year, season_number)
-	var ratings: Dictionary = _measure_ratings(records)
-	var pitcher_ratings: Dictionary = _measure_pitcher_ratings(records)
+	var measured: Dictionary = _measure_season(year, season_number, level, {})
+	if not _frozen:
+		_cache[key] = measured
+	return measured
+
+
+static func _cache_key(year: int, season_number: int, level: int) -> String:
+	return "%d_%d_%d" % [year, season_number, level]
+
+
+# ability_source に「同じシーズンを同じ時点で測ったばかりの一軍の基準」を渡すと、能力由来の分布
+# (ratings / regulars / scores / pitcher_ratings) はそこから写して測り直さない。能力分布は常に
+# 一軍母集団から測るので、二軍の基準でも値は同じになる。
+static func _measure_season(year: int, season_number: int, level: int, ability_source: Dictionary) -> Dictionary:
+	var records: Array = []
+	var ratings: Dictionary
+	var pitcher_ratings: Dictionary
+	var regulars: Dictionary
+	var scores: Dictionary
+	if ability_source.is_empty() or level == LEVEL_FIRST:
+		# 能力分布は常に一軍母集団から測る (共通の物差し)。
+		records = _season_records(year, season_number)
+		ratings = _measure_ratings(records)
+		pitcher_ratings = _measure_pitcher_ratings(records)
+		regulars = _measure_regulars(records, ratings)
+		scores = _measure_scores(records)
+	else:
+		ratings = (ability_source["ratings"] as Dictionary).duplicate(true)
+		pitcher_ratings = (ability_source["pitcher_ratings"] as Dictionary).duplicate(true)
+		regulars = (ability_source["regulars"] as Dictionary).duplicate(true)
+		scores = (ability_source["scores"] as Dictionary).duplicate(true)
 	var stat_records: Array = records if level == LEVEL_FIRST else _season_records(year, season_number, level)
-	var measured: Dictionary = {
+	return {
 		"ratings": ratings,
-		"regulars": _measure_regulars(records, ratings),
+		"regulars": regulars,
 		"stats": _resolve_stats(year, season_number, ratings, stat_records, level),
-		"scores": _measure_scores(records),
+		"scores": scores,
 		"pitcher_ratings": pitcher_ratings,
 		"pitcher_stats": {
 			PITCHER_ROLE_STARTER: _resolve_pitcher_stats(
@@ -185,9 +213,6 @@ static func for_season(year: int, season_number: int, level: int = LEVEL_FIRST) 
 			),
 		},
 	}
-	if not _frozen:
-		_cache[key] = measured
-	return measured
 
 
 # シーズン開始時・セーブロード時・試合日の worker 起動前にメインスレッドで呼ぶ。
@@ -201,10 +226,40 @@ static func prewarm(year: int, season_number: int, lookback: int = -1) -> void:
 	for k in range(depth + 1):
 		if season_number - k <= 0:
 			break
-		for_season(year - k, season_number - k)
+		var past_year: int = year - k
+		var past_season_number: int = season_number - k
+		var fresh_first: Dictionary = {}
+		if not _cache.has(_cache_key(past_year, past_season_number, LEVEL_FIRST)):
+			fresh_first = for_season(past_year, past_season_number)
 		# 二軍基準も同時に温める。一二軍入替の評価が worker 中に未キャッシュの二軍基準へ
 		# 落ちると、静的 Dictionary への遅延書き込みでレースになる (一軍と同じ制約)。
-		for_season(year - k, season_number - k, LEVEL_FARM)
+		# 一軍をいま測ったときだけ、能力由来の分布をそこから写す (別の時点の一軍基準は写さない)。
+		var farm_key: String = _cache_key(past_year, past_season_number, LEVEL_FARM)
+		if not _cache.has(farm_key):
+			var farm: Dictionary = _measure_season(past_year, past_season_number, LEVEL_FARM, fresh_first)
+			if not _frozen:
+				_cache[farm_key] = farm
+
+
+# 進行中のシーズン ("year_season"、無ければ空)。このシーズンの成績は成績分布の母集団に使わない。
+# 進行中のシーズンの成績を物差しに混ぜると、試合日ごとに基準を作り直さないと古くなり、作り直すと
+# スキップが試合日ごとに遅くなる。作り直す時機がずれれば本日を終了とスキップで評価も変わる。
+# 完了したシーズンだけで測れば、シーズン中は作り直さなくてよく、どの進め方でも同じ物差しになる。
+static var _in_progress_season: String = ""
+
+
+# RecordStore.ensure_season_records が呼ぶ。進行中かどうかが変わったら基準を作り直す
+# (新しいシーズンの開始時と、全試合を消化してポストシーズン/オフへ入ったとき)。
+static func set_in_progress_season(year: int, season_number: int, in_progress: bool) -> void:
+	var key: String = ("%d_%d" % [year, season_number]) if in_progress else ""
+	if key == _in_progress_season:
+		return
+	_in_progress_season = key
+	reset_cache()
+
+
+static func _is_in_progress_season(year: int, season_number: int) -> bool:
+	return _in_progress_season == "%d_%d" % [year, season_number]
 
 
 # 打者/投手それぞれの出場判断・編成判断ノブのうち、最も長く遡るもの。
@@ -345,13 +400,14 @@ static func _mean_of(values: Array) -> float:
 	return total / float(values.size())
 
 
-# 進行中のシーズンは規定到達打者がまだ居ないので、標本が揃う直近の過去シーズンまで遡る。
+# 進行中のシーズンは自分の成績を使わず、直近の完了シーズンから測る (_in_progress_season)。
+# 標本が足りなければさらに遡り、どこにも無ければ既定値。
 # alignment は **参照元シーズンの母集団**を、**呼び出し側が使う ratings_reference** で測る
 # (ゼロ点を揃える相手は、これから評価される選手の能力指標なので)。
 static func _resolve_stats(
 	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, level: int = LEVEL_FIRST
 ) -> Dictionary:
-	for k in range(STAT_REFERENCE_LOOKBACK + 1):
+	for k in range(1 if _is_in_progress_season(year, season_number) else 0, STAT_REFERENCE_LOOKBACK + 1):
 		if season_number - k <= 0:
 			break
 		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k, level)
@@ -397,11 +453,15 @@ static func _default_stats_with_alignment(records: Array, ratings_reference: Dic
 		batters.append(record)
 	if batters.is_empty():
 		return DEFAULT_STAT_REFERENCE.duplicate(true)
-	batters.sort_custom(func(a, b) -> bool:
-		var index_a: Dictionary = ability_indexes(a as PSPlayerSeasonRecord, ratings_reference)
-		var index_b: Dictionary = ability_indexes(b as PSPlayerSeasonRecord, ratings_reference)
-		return float(index_a["total"]) > float(index_b["total"])
-	)
+	# 能力総合は 1 人 1 回だけ求めてから並べる (比較のたびに計算し直さない。比較結果は同じ)。
+	var decorated: Array = []
+	for batter_value in batters:
+		var batter: PSPlayerSeasonRecord = batter_value as PSPlayerSeasonRecord
+		decorated.append([ability_total_index(batter, ratings_reference), batter])
+	decorated.sort_custom(func(a, b) -> bool: return float(a[0]) > float(b[0]))
+	batters.clear()
+	for entry in decorated:
+		batters.append(entry[1])
 	var regular_count: int = mini(batters.size(), maxi(GameDb.teams.size(), 1) * REGULARS_PER_TEAM)
 	return _with_alignment(
 		DEFAULT_STAT_REFERENCE.duplicate(true), batters.slice(0, regular_count), ratings_reference
@@ -533,7 +593,8 @@ static func _resolve_pitcher_stats(
 	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, role: String,
 	level: int = LEVEL_FIRST
 ) -> Dictionary:
-	for k in range(STAT_REFERENCE_LOOKBACK + 1):
+	# 打者側 (_resolve_stats) と同じく、進行中のシーズンは自分の成績を飛ばす。
+	for k in range(1 if _is_in_progress_season(year, season_number) else 0, STAT_REFERENCE_LOOKBACK + 1):
 		if season_number - k <= 0:
 			break
 		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k, level)
@@ -576,11 +637,15 @@ static func _default_pitcher_stats_with_alignment(
 		pitchers.append(record)
 	if pitchers.is_empty():
 		return DEFAULT_PITCHER_STAT_REFERENCE.duplicate(true)
-	pitchers.sort_custom(func(a, b) -> bool:
-		var index_a: Dictionary = pitcher_ability_indexes(a as PSPlayerSeasonRecord, ratings_reference)
-		var index_b: Dictionary = pitcher_ability_indexes(b as PSPlayerSeasonRecord, ratings_reference)
-		return float(index_a["total"]) > float(index_b["total"])
-	)
+	# 能力総合は 1 人 1 回だけ求めてから並べる (比較のたびに計算し直さない。比較結果は同じ)。
+	var decorated: Array = []
+	for pitcher_value in pitchers:
+		var pitcher: PSPlayerSeasonRecord = pitcher_value as PSPlayerSeasonRecord
+		decorated.append([pitcher_ability_total_index(pitcher, ratings_reference), pitcher])
+	decorated.sort_custom(func(a, b) -> bool: return float(a[0]) > float(b[0]))
+	pitchers.clear()
+	for entry in decorated:
+		pitchers.append(entry[1])
 	# 「実際に投げる面々」= 1 球団あたり先発 6 / 救援 8 相当を基準にする。
 	var per_team: int = 6 if role == PITCHER_ROLE_STARTER else 8
 	var count: int = mini(pitchers.size(), maxi(GameDb.teams.size(), 1) * per_team)

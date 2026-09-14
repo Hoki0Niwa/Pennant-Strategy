@@ -795,16 +795,20 @@ func test_season_history_split_saves_incrementally_and_round_trips() -> void:
 		var game: Dictionary = game_value as Dictionary
 		if int(game.get("day", 0)) < 3:
 			game["played"] = true
+	# 前回保存の最終日 (day 2) に後から増えた分も書き直される (書き込みを省くのは最終日より前だけ)。
+	season.append_player_game_log(pid, {"game_index": 7, "day": 2, "batter": {"hits": 4}})
 	season.append_player_game_log(pid, {"game_index": 12, "day": 3, "batter": {"hits": 3}})
 	assert_bool(SaveService.save_state(AppState)).is_true()
 
 	var reloaded: Dictionary = SaveService.load_state()
 	assert_bool(AppState.restore_from_save(reloaded)).is_true()
 	var logs: Array = AppState.current_season.get_player_game_logs(pid)
-	assert_int(logs.size()).is_equal(3)
+	assert_int(logs.size()).is_equal(4)
 	assert_int(int((logs[0] as Dictionary).get("day", 0))).is_equal(1)
-	assert_int(int((logs[2] as Dictionary).get("day", 0))).is_equal(3)
-	assert_int(int(((logs[2] as Dictionary).get("batter", {}) as Dictionary).get("hits", 0))).is_equal(3)
+	assert_int(int((logs[2] as Dictionary).get("game_index", 0))).is_equal(7)
+	assert_int(int(((logs[2] as Dictionary).get("batter", {}) as Dictionary).get("hits", 0))).is_equal(4)
+	assert_int(int((logs[3] as Dictionary).get("day", 0))).is_equal(3)
+	assert_int(int(((logs[3] as Dictionary).get("batter", {}) as Dictionary).get("hits", 0))).is_equal(3)
 	var snapshots: Array = AppState.current_season.player_stat_history.get(str(pid), []) as Array
 	assert_int(snapshots.size()).is_equal(1)
 	assert_int(int((snapshots[0] as Dictionary).get("day", 0))).is_equal(1)
@@ -884,6 +888,71 @@ func test_team_lineup_history_round_trips_and_preserves_other_seasons() -> void:
 	assert_int(SQLiteStoreService.load_team_lineup_history(season.year, season.season_number, 1).size()).is_equal(2)
 	assert_bool(SQLiteStoreService.save_team_lineup_history(season.year, season.season_number, [], season.current_day)).is_true()
 	assert_int(SQLiteStoreService.load_team_lineup_history(season.year, season.season_number, 1).size()).is_equal(1)
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_record_store_writes_only_changed_tables() -> void:
+	# 内容が変わった選手でも、書き込むのは中身が変わったテーブル (本体行 / 一軍・二軍の打撃・投手成績) だけ。
+	# 書かなかったテーブルも DB 上は前回の内容のままなので、読み直すと全部揃っている。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	var season: PSSeason = AppState.current_season
+
+	var target: PSPlayerSeasonRecord = null
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record.year == season.year and record.season_number == season.season_number and not record.is_pitcher():
+			target = record
+			break
+	assert_object(target).is_not_null()
+	# start_new_season の初回セーブで全テーブルを書き、テーブルごとの内容を覚えている。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(0)
+
+	target.farm_batter_stats.hits = 5
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_upsert_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+
+	target.fatigue = 37
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+
+	target.batter_stats.hits = 9
+	target.fatigue = 12
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_upsert_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(2)
+
+	# 本体行の JSON 列 (能力スナップショット) だけが変わっても書くのは本体行 1 テーブルで、読み直すと今の値。
+	assert_bool(target.z_abilities_snapshot.is_empty()).is_false()
+	var z_key: String = str(target.z_abilities_snapshot.keys()[0])
+	target.z_abilities_snapshot[z_key] = 2.25
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+
+	var player_id: int = target.player_id
+	RecordStore.load_records()
+	var reloaded: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
+	assert_object(reloaded).is_not_null()
+	assert_int(reloaded.farm_batter_stats.hits).is_equal(5)
+	assert_int(reloaded.fatigue).is_equal(12)
+	assert_int(reloaded.batter_stats.hits).is_equal(9)
+	assert_float(float(reloaded.z_abilities_snapshot.get(z_key, 0.0))).is_equal(2.25)
+
+	# ロード直後はテーブルごとの内容を覚えていないので、変わった選手は全テーブルを書いてから覚える。
+	reloaded.fatigue = 13
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1 + SQLiteStoreService.RECORD_STATS_KEYS.size())
+	reloaded.fatigue = 14
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
 
 	_restore_app_state(old_state, test_save_id)
 

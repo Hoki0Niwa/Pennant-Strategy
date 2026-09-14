@@ -1714,18 +1714,16 @@ func simulate_current_day_async(
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	var persist_progress: bool = auto_save_enabled
-	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
+	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, auto_save_enabled)
+	# 試合ログと成績は直後の _save_if_enabled がまとめて書くので、シミュレーション側では永続化しない
+	# (成績の全件書き出しが 1 日に 2 回走らないように)。呼び出し元のホーム画面は自分で再描画する。
 	var result: Dictionary = await GameSimulator.simulate_current_day_async(
-		current_season, persist_progress, _build_auto_swap_ctx(during_skip),
+		current_season, false, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
 	last_status_message = str(result.get("message", ""))
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
-	# キャンセル時はユーザを現画面に留め、途中経過を確認できるようにする
-	if not bool(result.get("cancelled", false)):
-		request_screen("home")
 	return result
 
 

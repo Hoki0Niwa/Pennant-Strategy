@@ -402,6 +402,70 @@ func test_seven_day_skip_runs_inline_without_progress_dialog() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_today_button_runs_inline_without_progress_dialog() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	var start_day: int = AppState.current_season.current_day
+	# ホームに居る状態から押す (別画面だと消化中の画面移動ブロックで再構築の要求自体が握り潰され、検証にならない)。
+	AppState.current_screen = "home"
+	var screen_changes: Array = []
+	var on_screen_change: Callable = func(screen_name: String) -> void: screen_changes.append(screen_name)
+	AppState.screen_change_requested.connect(on_screen_change)
+
+	var home_script: GDScript = load("res://ui/screens/home_screen.gd") as GDScript
+	var screen: Control = home_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+	screen.call("_simulate_current_day")
+	# 消化中は画面移動を受け付けない (7日スキップと同じ)。
+	assert_bool(AppState.short_skip_active).is_true()
+	assert_bool(AppState.go_back()).is_false()
+
+	var observed_inline_status: bool = false
+	var observed_progress_dialog: bool = false
+	var guard: int = 600
+	while bool(screen.get("_inline_skip_active")) and guard > 0:
+		guard -= 1
+		observed_inline_status = observed_inline_status \
+			or str(screen.get("_status_text")).contains("本日の試合を消化中")
+		for child in screen.get_children():
+			if child is ProgressOverlay:
+				observed_progress_dialog = true
+		await get_tree().process_frame
+	AppState.screen_change_requested.disconnect(on_screen_change)
+
+	assert_int(guard).is_greater(0)
+	assert_bool(observed_inline_status).is_true()
+	assert_bool(observed_progress_dialog).is_false()
+	assert_bool(AppState.short_skip_active).is_false()
+	# ホーム画面を作り直さず、その場で再描画する。
+	assert_array(screen_changes).is_empty()
+	assert_int(AppState.current_season.current_day).is_greater(start_day)
+
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_trade_screen_builds_with_active_season() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season

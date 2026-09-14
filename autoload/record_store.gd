@@ -102,7 +102,14 @@ func ensure_season_records(season: PSSeason, teams: Array, players: Array, persi
 			save_records()
 		records_changed.emit()
 
-	PSPerformanceReference.reset_cache()
+	# 基準分布は、進行中のシーズンでは作り直さない。本日を終了は押すたびにここを通り、スキップは
+	# 開始時しか通らないので、ここで作り直すと進め方で評価がずれる (今季の成績は物差しに使わないので、
+	# シーズン開始時またはロード時の能力で測った基準をシーズン中ずっと使う)。
+	# レコードの顔ぶれが変わったときと、全試合を消化した後 (ポストシーズン/オフの各ステップ) は毎回作り直す。
+	var in_progress: bool = not season.is_finished()
+	PSPerformanceReference.set_in_progress_season(season.year, season.season_number, in_progress)
+	if changed or not in_progress:
+		PSPerformanceReference.reset_cache()
 	PSPerformanceReference.prewarm(season.year, season.season_number)
 	_warn_missing_z_abilities(season)
 

@@ -21,9 +21,18 @@ static var _schema_ensured_path: String = ""
 # 正しさには影響せず、書き込みが増えるだけ。
 static var _record_fingerprints: Dictionary = {}
 static var _fingerprint_db_path: String = ""
+# 同じキーで、本体行と成績 4 テーブルそれぞれの内容ハッシュ ([本体, RECORD_STATS_KEYS の順])。
+# 内容が変わった選手でも、書き込むのはハッシュが変わったテーブルだけにする
+# (日送りで変わるのは大半が本体行の疲労・故障と、その日出場した側の成績 1 テーブル)。
+# キーが無い選手 (ロード直後など) は全テーブルを書いてから覚える。
+static var _record_part_fingerprints: Dictionary = {}
 
-# 直近の save_record_store_and_normalized で実際に upsert した選手レコード数 (診断/テスト用)。
+# 直近の save_record_store_and_normalized で書き込んだ選手レコード数 / テーブル行数 (診断/テスト用)。
 static var last_record_upsert_count: int = 0
+static var last_record_table_write_count: int = 0
+
+# 選手年度レコードのうち、本体行とは別テーブルへ正規化する成績。キー名 = テーブル名。
+const RECORD_STATS_KEYS: Array = ["batter_stats", "pitcher_stats", "farm_batter_stats", "farm_pitcher_stats"]
 
 
 static func is_available() -> bool:
@@ -203,6 +212,9 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 					_execute(db, "ROLLBACK")
 					return false
 
+	var upserted_records: int = 0
+	var table_writes: int = 0
+	var pending_parts: Dictionary = {}
 	for record_value in player_records:
 		var record: Dictionary = record_value as Dictionary
 		var player_id: int = int(record.get("player_id", 0))
@@ -213,26 +225,22 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 		var fingerprint: int = record.hash()
 		if cache_valid and int(_record_fingerprints.get(record_key, 0)) == fingerprint:
 			continue
-		if not _upsert_player_season_record(db, record):
-			_execute(db, "ROLLBACK")
-			return false
-		var batter_stats: Dictionary = record.get("batter_stats", {}) as Dictionary
-		if not _upsert_batter_stats(db, player_id, year, season_number, batter_stats):
-			_execute(db, "ROLLBACK")
-			return false
-		var pitcher_stats: Dictionary = record.get("pitcher_stats", {}) as Dictionary
-		if not _upsert_pitcher_stats(db, player_id, year, season_number, pitcher_stats):
-			_execute(db, "ROLLBACK")
-			return false
-		var farm_batter_stats: Dictionary = record.get("farm_batter_stats", {}) as Dictionary
-		if not _upsert_batter_stats(db, player_id, year, season_number, farm_batter_stats, "farm_batter_stats"):
-			_execute(db, "ROLLBACK")
-			return false
-		var farm_pitcher_stats: Dictionary = record.get("farm_pitcher_stats", {}) as Dictionary
-		if not _upsert_pitcher_stats(db, player_id, year, season_number, farm_pitcher_stats, "farm_pitcher_stats"):
-			_execute(db, "ROLLBACK")
-			return false
+		# 変わった選手でも、書くのは前回からハッシュが変わったテーブルだけ。前回を覚えていなければ全テーブル。
+		var parts: Array = _record_part_hashes(record)
+		var saved_parts: Array = (_record_part_fingerprints.get(record_key, []) as Array) if cache_valid else []
+		var wrote_any: bool = false
+		for part_index in range(parts.size()):
+			if saved_parts.size() == parts.size() and int(saved_parts[part_index]) == int(parts[part_index]):
+				continue
+			if not _upsert_record_part(db, record, part_index):
+				_execute(db, "ROLLBACK")
+				return false
+			table_writes += 1
+			wrote_any = true
+		if wrote_any:
+			upserted_records += 1
 		pending_fingerprints[record_key] = fingerprint
+		pending_parts[record_key] = parts
 
 	# キャッシュ有効時の削除反映: メモリから消えたレコード (前回キャッシュに居るが今回不在) を
 	# キー単位で DELETE する (ensure_season_records の非アクティブ選手 erase 等)。
@@ -257,21 +265,22 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 	if not _execute(db, "COMMIT"):
 		return false
 
-	last_record_upsert_count = pending_fingerprints.size()
+	last_record_upsert_count = upserted_records
+	last_record_table_write_count = table_writes
 	# COMMIT 成功後にのみキャッシュへ反映する (ROLLBACK 時に「書いたつもり」を残さない)。
 	if not cache_valid:
-		_record_fingerprints.clear()
+		# キャッシュ無効時は全レコードの全テーブルを書いたので、今回のハッシュがそのまま DB の内容。
+		_record_fingerprints = pending_fingerprints
+		_record_part_fingerprints = pending_parts
 		_fingerprint_db_path = runtime_db_path()
-		for record_value in player_records:
-			var record: Dictionary = record_value as Dictionary
-			var record_key: String = "%d:%d:%d" % [int(record.get("player_id", 0)), int(record.get("year", 0)), int(record.get("season_number", 0))]
-			_record_fingerprints[record_key] = record.hash()
 	else:
 		for pending_key in pending_fingerprints.keys():
 			_record_fingerprints[pending_key] = pending_fingerprints[pending_key]
+			_record_part_fingerprints[pending_key] = pending_parts[pending_key]
 		for cached_key_value in _record_fingerprints.keys():
 			if not seen_keys.has(str(cached_key_value)):
 				_record_fingerprints.erase(cached_key_value)
+				_record_part_fingerprints.erase(cached_key_value)
 	return true
 
 
@@ -279,17 +288,46 @@ static func _fingerprint_cache_valid() -> bool:
 	return not _record_fingerprints.is_empty() and _fingerprint_db_path == runtime_db_path()
 
 
+# 本体行と成績 4 テーブルそれぞれの内容ハッシュ ([本体, RECORD_STATS_KEYS の順])。
+# 本体行は成績を除いた残りのキー全体で取る (本体行の列はすべてそこから作られる)。
+static func _record_part_hashes(record: Dictionary) -> Array:
+	var body: Dictionary = record.duplicate()
+	for stats_key in RECORD_STATS_KEYS:
+		body.erase(stats_key)
+	var parts: Array = [body.hash()]
+	for stats_key in RECORD_STATS_KEYS:
+		parts.append((record.get(stats_key, {}) as Dictionary).hash())
+	return parts
+
+
+# _record_part_hashes と同じ添字で 1 テーブルぶんを書く (0 = 本体行)。
+static func _upsert_record_part(db: Object, record: Dictionary, part_index: int) -> bool:
+	if part_index == 0:
+		return _upsert_player_season_record(db, record)
+	var stats_key: String = str(RECORD_STATS_KEYS[part_index - 1])
+	var columns: Array = BATTER_STATS_COLUMNS if stats_key.ends_with("batter_stats") else PITCHER_STATS_COLUMNS
+	return _upsert_stats(
+		db, stats_key, columns,
+		int(record.get("player_id", 0)), int(record.get("year", 0)), int(record.get("season_number", 0)),
+		record.get(stats_key, {}) as Dictionary
+	)
+
+
 # 新規ゲーム開始やレコード再ロードでメモリ側が丸ごと入れ替わったとき、
 # 「前回永続化した内容」の前提が崩れるためキャッシュを破棄する。
 static func reset_record_fingerprints() -> void:
 	_record_fingerprints.clear()
+	_record_part_fingerprints.clear()
 	_fingerprint_db_path = ""
 
 
 # 正規化テーブルから hydrate した直後に RecordStore が呼ぶ。DB とメモリが一致している
 # 時点のハッシュを登録し、セッション初回 save の全行書き込みを不要にする。
+# テーブルごとのハッシュは持たないので、その後に変わった選手は一度だけ全テーブルを書く
+# (過去年度のように変わらないレコードのぶんをロード時に計算しない)。
 static func seed_record_fingerprints(fingerprints: Dictionary) -> void:
 	_record_fingerprints = fingerprints.duplicate()
+	_record_part_fingerprints.clear()
 	_fingerprint_db_path = runtime_db_path()
 
 
@@ -311,11 +349,12 @@ static func load_all_player_season_record_dicts() -> Array:
 # シーズン内選手履歴 (season_history): 日単位の増分永続化
 # -----------------------------------------------------------------------------
 
-# days_payload = {day:int → {player_id_str: [entries...]}} を、既永続の最終日以降だけ upsert する。
+# history = {player_id_str: [entries...]} (PSSeason.player_game_history / player_stat_history) を、
+# 既永続の最終日以降だけ日単位で upsert する。
 # 併せて当該シーズン以外の行・現在日より未来の行 (blob 保存失敗時などの残骸)・
 # retention_cutoff より古い行 (stat スナップショットの trim をミラー) を掃除する。
 # 全体を 1 トランザクションで行い、部分成功を残さない。
-static func save_season_history(year: int, season_number: int, kind: String, days_payload: Dictionary, current_day: int, retention_cutoff: int = 0) -> bool:
+static func save_season_history(year: int, season_number: int, kind: String, history: Dictionary, current_day: int, retention_cutoff: int = 0) -> bool:
 	var db: Object = _open_runtime_db()
 	if db == null:
 		return false
@@ -341,10 +380,9 @@ static func save_season_history(year: int, season_number: int, kind: String, day
 	if ok:
 		# 最終永続日は同日中の再セーブ (1試合ずつ進行など) で内容が増えうるため書き直す。
 		# それより前の日は append-only なのでスキップできる。
+		var days_payload: Dictionary = _group_history_from_day(history, last_day)
 		for day_value in days_payload.keys():
 			var day: int = int(day_value)
-			if day < last_day:
-				continue
 			var day_json: String = JSON.stringify(days_payload[day_value])
 			if not _query_with_bindings(db, "INSERT OR REPLACE INTO season_history (year, season_number, kind, day, payload_json) VALUES (?, ?, ?, ?, ?)", [year, season_number, kind, day, day_json]):
 				ok = false
@@ -356,6 +394,29 @@ static func save_season_history(year: int, season_number: int, kind: String, day
 		_execute(db, "ROLLBACK")
 	_close(db)
 	return ok
+
+
+# history = {player_id_str: [entries]} のうち day >= from_day のエントリを {day → {player_id_str: [entries]}} へまとめる。
+# 各選手の配列は day 昇順 (PSSeason の append が保証する) なので、末尾から from_day より前に当たるまで
+# 遡るだけで済み、保存済みの過去日を毎回なめない。選手の並びと各日のエントリの並びは、
+# 配列を先頭から全部見たときと同じになる (= 書き込む JSON も同じ)。
+static func _group_history_from_day(history: Dictionary, from_day: int) -> Dictionary:
+	var out: Dictionary = {}
+	for player_key in history.keys():
+		var entries: Array = history[player_key] as Array
+		var start: int = entries.size()
+		while start > 0 and int((entries[start - 1] as Dictionary).get("day", 0)) >= from_day:
+			start -= 1
+		for index in range(start, entries.size()):
+			var entry: Dictionary = entries[index] as Dictionary
+			var day: int = int(entry.get("day", 0))
+			if not out.has(day):
+				out[day] = {}
+			var day_bucket: Dictionary = out[day] as Dictionary
+			if not day_bucket.has(player_key):
+				day_bucket[player_key] = []
+			(day_bucket[player_key] as Array).append(entry)
+	return out
 
 
 # 当該シーズン・kind の履歴を {player_id_str: [entries...]} (day 昇順) へ再構成する。
@@ -690,14 +751,6 @@ static func _upsert_player_season_record(db: Object, record: Dictionary) -> bool
 	for column_value in PLAYER_SEASON_COLUMNS:
 		bindings.append(_player_season_value(record, str(column_value)))
 	return _query_with_bindings(db, sql, bindings)
-
-
-static func _upsert_batter_stats(db: Object, player_id: int, year: int, season_number: int, stats: Dictionary, table_name: String = "batter_stats") -> bool:
-	return _upsert_stats(db, table_name, BATTER_STATS_COLUMNS, player_id, year, season_number, stats)
-
-
-static func _upsert_pitcher_stats(db: Object, player_id: int, year: int, season_number: int, stats: Dictionary, table_name: String = "pitcher_stats") -> bool:
-	return _upsert_stats(db, table_name, PITCHER_STATS_COLUMNS, player_id, year, season_number, stats)
 
 
 # 一軍と二軍 (farm_*) の成績テーブルは列構成が同一なので、テーブル名だけ差し替えて共有する。

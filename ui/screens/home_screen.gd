@@ -4,8 +4,6 @@ extends "res://ui/components/dashboard_screen.gd"
 # 本ファイルはチームサマリー、月間カレンダー、右カラムの進行アクションだけを描画・操作する。
 # カレンダーは SeasonCalendar の日付情報と schedule を突き合わせ、試合状態ごとにフィルタ表示する。
 
-const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
-
 # --- ホーム固有レイアウト基準 (base 座標) ---
 const STAT_Y: float = 104.0
 const STAT_H: float = 84.0
@@ -660,10 +658,19 @@ func _build_buttons() -> void:
 
 # ============================================================ actions
 
+# 本日を終了。7日スキップと同じく画面を塞がず、消化中はボタンと画面移動だけ止めてステータス行に出す
+# (1日ぶんの消化は途中で止められないので、キャンセル付きの進捗ダイアログは出さない)。
 func _simulate_current_day() -> void:
-	var ov: Dictionary = _show_progress_overlay("本日の試合を消化中…")
-	var result: Dictionary = await AppState.simulate_current_day_async(get_tree(), ov["callback"], ov["cancel_token"], false)
-	_hide_progress_overlay(ov)
+	if _inline_skip_active:
+		return
+	_inline_skip_active = true
+	AppState.short_skip_active = true
+	_status_text = "本日の試合を消化中…"
+	_build_buttons()
+	queue_redraw()
+	var result: Dictionary = await AppState.simulate_current_day_async(get_tree(), Callable(), {"cancelled": false}, false)
+	_inline_skip_active = false
+	AppState.short_skip_active = false
 	_status_text = str(result.get("message", ""))
 	_sync_calendar_to_current()
 	queue_redraw()
@@ -830,25 +837,6 @@ func _on_offseason_pressed() -> void:
 	if not bool(result.get("ok", false)):
 		_status_text = str(result.get("message", ""))
 	queue_redraw()
-
-
-func _show_progress_overlay(title: String) -> Dictionary:
-	var overlay: ProgressOverlay = ProgressOverlayScript.new()
-	add_child(overlay)
-	var cancel_token: Dictionary = {"cancelled": false}
-	overlay.cancel_requested.connect(func() -> void: cancel_token["cancelled"] = true)
-	overlay.show_progress(title)
-	var update_cb: Callable = func(done: int, total: int, sub: String) -> void:
-		if overlay != null:
-			overlay.update_progress(done, total, sub)
-	return {"overlay": overlay, "cancel_token": cancel_token, "callback": update_cb}
-
-
-func _hide_progress_overlay(ov: Dictionary) -> void:
-	var overlay: ProgressOverlay = ov.get("overlay") as ProgressOverlay
-	if overlay != null:
-		overlay.hide_progress()
-		overlay.queue_free()
 
 
 # ============================================================ data helpers
