@@ -101,6 +101,21 @@ const CACHE_PLATE_RULES: String = "plate_appearance_rules"
 const CACHE_PROBABILITY_RULES: String = "pa_probability_rules"
 const CACHE_CONTACT_RULES: String = "contact_quality_rules"
 const CACHE_PLAY_RULES: String = "play_resolver_rules"
+const CACHE_PLATE_RULE_VALUES: String = "plate_rule_values"
+const CACHE_PROBABILITY_RULE_VALUES: String = "pa_probability_rule_values"
+const CACHE_CONTACT_RULE_VALUES: String = "contact_quality_rule_values"
+
+
+# 1試合の間は変わらない打席ルールの数値。_plate_rule_values() が同じルール辞書のあいだ使い回す。
+class PlateRuleValues:
+	var rules: Dictionary = {}
+	var pitcher_output_tail_pivot: float = 0.0
+	var pitcher_output_tail_span: float = 0.0
+	var pitcher_stuff_tail_pivot: float = 0.0
+	var pitcher_stuff_tail_span: float = 0.0
+	var batter_hr_tail_pivot: float = 0.0
+	var batter_hr_tail_span: float = 0.0
+	var relief_output_bonus_z: float = 0.0
 
 
 # 1試合の全打席で共有する読み取り専用データと、選手ID別の能力ビューを保持する。
@@ -127,6 +142,7 @@ static func _rule_group_view(rule_groups: Array[Dictionary], index: int) -> Dict
 	return rule_groups[index]
 
 
+# pitching_context は PSPitcherUsageModel.plate_context() 形式の辞書 (キーが無ければ既定値)。
 static func resolve(
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
@@ -138,6 +154,31 @@ static func resolve(
 	batting_context: Dictionary = {},
 	game_cache: Dictionary = {}
 ) -> Dictionary:
+	return resolve_with_context(
+		batter,
+		pitcher,
+		defense,
+		bases,
+		outs,
+		is_reliever,
+		PSPitcherUsageModel.PlateContext.from_dict(pitching_context),
+		batting_context,
+		game_cache
+	)
+
+
+# 投手状態を型付きの PlateContext で受け取る版。試合ループは辞書を作らずにこちらを呼ぶ。
+static func resolve_with_context(
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	bases: Array,
+	outs: int,
+	is_reliever: bool,
+	context: PSPitcherUsageModel.PlateContext,
+	batting_context: Dictionary = {},
+	game_cache: Dictionary = {}
+) -> Dictionary:
 	var hit_and_run: bool = _has_hit_and_run_intent(batting_context)
 	var plate_rules: Dictionary = game_cache.get(CACHE_PLATE_RULES, {}) as Dictionary
 	# 敬遠とバントは打席シーケンスに入らず早期判定する
@@ -146,18 +187,20 @@ static func resolve(
 	if not hit_and_run and _should_bunt(batter, bases, outs, plate_rules, batting_context):
 		return _resolve_bunt(batter, bases)
 
-	var precomp: Dictionary = _build_precomp(
+	var precomp: Dictionary = _build_precomp_with_context(
 		batter,
 		pitcher,
 		defense,
-		pitching_context,
+		context,
 		is_reliever,
 		game_cache,
 		plate_rules
 	)
 
 	# 1) K/BB/HBP/BIP softmax 抽選
-	var weights: Dictionary = PSPaProbabilityCalculator.build_weights(precomp)
+	var weights: Dictionary = PSPaProbabilityCalculator.build_weights_with_rule_values(
+		precomp, _pa_probability_rule_values(game_cache)
+	)
 	if hit_and_run:
 		_apply_hit_and_run_weights(weights)
 	var category_key: String = PSPaProbabilityCalculator.pick(weights)
@@ -174,7 +217,9 @@ static func resolve(
 		PSPaProbabilityCalculator.OUTCOME_HIT_BY_PITCH:
 			return _terminal_hbp_outcome(pitch_summary)
 		_:  # BIP: 既存 ContactQualityModel → PhysicsResolver → PlayResolver を流用
-			var bip_outcome: Dictionary = _resolve_bip(batter, pitcher, defense, bases, outs, precomp, pitch_summary)
+			var bip_outcome: Dictionary = _resolve_bip(
+				batter, pitcher, defense, bases, outs, precomp, pitch_summary, _contact_quality_rule_values(game_cache)
+			)
 			if hit_and_run:
 				bip_outcome["batting_strategy"] = "hit_and_run"
 			return bip_outcome
@@ -202,13 +247,15 @@ static func _resolve_bip(
 	bases: Array,
 	outs: int,
 	precomp: Dictionary,
-	pitch_summary: Dictionary
+	pitch_summary: Dictionary,
+	contact_rule_values: PSContactQualityModel.RuleValues
 ) -> Dictionary:
 	# pitch_outcome は ContactQualityModel が in_zone/location_height/two_strike を読むので
 	# 集計から spawn する代替値を渡す。
 	var pitch_outcome: Dictionary = _synthesize_contact_pitch_outcome(precomp, pitch_summary)
-	var state: Dictionary = {}
-	var quality: Dictionary = PSContactQualityModel.generate(batter, pitcher, pitch_outcome, state, precomp)
+	var quality: Dictionary = PSContactQualityModel.generate_with_rule_values(
+		batter, pitcher, pitch_outcome, precomp, contact_rule_values
+	)
 	var physics: Dictionary = PSBattedBallPhysicsResolver.compute(quality)
 	var play_rules: Dictionary = precomp.get("_play_resolver_rules", {}) as Dictionary
 	var result: Dictionary = PSPlayResolver.resolve(
@@ -536,6 +583,7 @@ static func _runner_speed(bases: Array, base_index: int) -> float:
 # z_abilities ソースの precomp を構築する。
 # ContactQualityModel へは z 値 (batter_contact_z/gap_z/hr_z/avoid_k_z, pitcher_stuff_z) を
 # 直接渡し、curve はモデル内で ability_curve_z が算出する（表示 1-100 点は経由しない）。
+# pitching_context は PSPitcherUsageModel.plate_context() 形式の辞書 (キーが無ければ既定値)。
 static func _build_precomp(
 	batter: PSPlayerSeasonRecord,
 	pitcher: PSPlayerSeasonRecord,
@@ -545,27 +593,48 @@ static func _build_precomp(
 	game_cache: Dictionary = {},
 	plate_rules: Dictionary = {}
 ) -> Dictionary:
+	return _build_precomp_with_context(
+		batter,
+		pitcher,
+		defense,
+		PSPitcherUsageModel.PlateContext.from_dict(pitching_context),
+		is_reliever,
+		game_cache,
+		plate_rules
+	)
+
+
+static func _build_precomp_with_context(
+	batter: PSPlayerSeasonRecord,
+	pitcher: PSPlayerSeasonRecord,
+	defense: Dictionary,
+	context: PSPitcherUsageModel.PlateContext,
+	is_reliever: bool,
+	game_cache: Dictionary = {},
+	plate_rules: Dictionary = {}
+) -> Dictionary:
 	if plate_rules.is_empty() and game_cache.has(CACHE_PLATE_RULES):
 		plate_rules = game_cache.get(CACHE_PLATE_RULES, {}) as Dictionary
+	var rule_values: PlateRuleValues = _plate_rule_values(game_cache, plate_rules)
 	# z 視点ビュー。打者能力は左右の相性 (同じ利き腕なら不利、逆なら有利) を織り込んだ値になる。
 	var platoon_sign: float = PSPlatoonMatchup.sign_for_records(batter, pitcher)
 	var batter_z: Dictionary = _batter_z_view(batter, game_cache, plate_rules, platoon_sign)
 	var pitcher_z_raw: Dictionary = _pitcher_z_view(pitcher, game_cache)
 	var catcher_z: Dictionary = _catcher_z_view(_catcher_record(defense), game_cache)
 
-	# pitching_context を z 空間へ翻訳
-	var usage_penalty: int = int(pitching_context.get("pitcher_usage_penalty", 0))
-	var tto_round: int = int(pitching_context.get("pitcher_tto_round", 0))
-	var tto_penalty: int = int(pitching_context.get("pitcher_tto_penalty", 0))
-	var arsenal_bonus: int = int(pitching_context.get("pitcher_arsenal_bonus", 0))
-	var command_leak: float = float(pitching_context.get("pitcher_command_leak", 0.0)) * 0.60
-	var contact_damage: float = float(pitching_context.get("pitcher_contact_damage", 0.0)) * 0.55
-	var pitcher_role: String = str(pitching_context.get("pitcher_role", ""))
-	var outing_ratio: float = float(pitching_context.get("pitcher_fatigue_ratio", 0.0))
+	# 投手状態を z 空間へ翻訳
+	var usage_penalty: int = context.usage_penalty
+	var tto_round: int = context.tto_round
+	var tto_penalty: int = context.tto_penalty
+	var arsenal_bonus: int = context.arsenal_bonus
+	var command_leak: float = context.command_leak * 0.60
+	var contact_damage: float = context.contact_damage * 0.55
+	var pitcher_role: String = context.role
+	var outing_ratio: float = context.fatigue_ratio
 	# 球種傾向(微差): K寄り/ゴロ寄り/被弾の集計スカラー。
-	var arsenal_k_bias: float = float(pitching_context.get("pitcher_arsenal_k_bias", 0.0))
-	var arsenal_gb_bias: float = float(pitching_context.get("pitcher_arsenal_gb_bias", 0.0))
-	var arsenal_hr_bias: float = float(pitching_context.get("pitcher_arsenal_hr_bias", 0.0))
+	var arsenal_k_bias: float = context.arsenal_k_bias
+	var arsenal_gb_bias: float = context.arsenal_gb_bias
+	var arsenal_hr_bias: float = context.arsenal_hr_bias
 	var tto_array: Array = TTO_PENALTY_PER_ROUND
 	var tto_round_weight: float = 0.0
 	if tto_penalty > 0:
@@ -578,30 +647,34 @@ static func _build_precomp(
 	pitcher_z["Pit_BBPrevent"] = float(pitcher_z.get("Pit_BBPrevent", 0.0)) - float(usage_penalty) * 0.04 - command_leak * 0.10
 	pitcher_z["Pit_EdgeRate"] = float(pitcher_z.get("Pit_EdgeRate", 0.0)) + float(arsenal_bonus) * 0.08
 
-	# 疲労 (球数ベース): 当試合の outing pitches を pitching_context から取り出す。
-	var outing_pitches: int = int(pitching_context.get("pitcher_outing_pitches", 0))
+	# 疲労 (球数ベース): 疲労係数を持たない投手状態は、当試合の球数から求める。
+	var outing_pitches: int = context.outing_pitches
 	var fatigue_factor: float
-	if pitching_context.has("pitcher_fatigue_factor"):
-		fatigue_factor = float(pitching_context.get("pitcher_fatigue_factor", 1.0))
+	if context.has_fatigue_factor:
+		fatigue_factor = context.fatigue_factor
 	else:
 		fatigue_factor = PSFatigueCalculator.factor_for_pitcher(pitcher, is_reliever, outing_pitches)
 	PSFatigueCalculator.apply_drops_in_place(pitcher_z, fatigue_factor)
 	if is_reliever:
-		_apply_relief_output_bonus(pitcher_z, pitcher_role, outing_ratio, plate_rules)
+		_apply_relief_output_bonus_z(pitcher_z, pitcher_role, outing_ratio, rule_values.relief_output_bonus_z)
 
 	var framing_strikes: float = float(catcher_z.get("C_Framing", 0.0)) * FRAMING_SCALE
 	var game_call_z: float = float(catcher_z.get("C_GameCall", 0.0))
 	pitcher_z["Pit_ImpactLimit"] = float(pitcher_z.get("Pit_ImpactLimit", 0.0)) + game_call_z * GAMECALL_CONTACT_COEF
 	pitcher_z["Pit_BarrelDeny"] = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + game_call_z * GAMECALL_CONTACT_COEF
 
-	_apply_pitcher_tail_limits(pitcher_z, plate_rules)
+	_apply_pitcher_tail_limits(pitcher_z, rule_values.pitcher_output_tail_pivot, rule_values.pitcher_output_tail_span)
 
 	# ContactQualityModel 用の z 派生。
 	var batter_contact_z: float = float(batter_z.get("Bat_Barrel", 0.0))
 	var batter_gap_z: float = float(batter_z.get("Bat_Impact", 0.0))
-	var batter_hr_z: float = _limited_batter_hr_z(batter_z, plate_rules)
+	var batter_hr_z: float = _limited_batter_hr_z(
+		batter_z, rule_values.batter_hr_tail_pivot, rule_values.batter_hr_tail_span
+	)
 	var batter_avoid_k_z: float = float(batter_z.get("Bat_KAvoid", 0.0))
-	var pitcher_stuff_z: float = _limited_pitcher_stuff_z(pitcher_z, plate_rules)
+	var pitcher_stuff_z: float = _limited_pitcher_stuff_z(
+		pitcher_z, rule_values.pitcher_stuff_tail_pivot, rule_values.pitcher_stuff_tail_span
+	)
 
 	# pitcher 派生情報。pitch_velocity は ContactQualityModel の EV 補正で使う球速 proxy(km/h)。
 	var pitch_velocity_proxy: int = 142 + int(round(float(pitcher_z.get("Pit_EdgeRate", 0.0)) * 4.0))
@@ -624,10 +697,10 @@ static func _build_precomp(
 		# pitcher 派生（合成 pitch_outcome / ContactQualityModel が読む）
 		"pitch_velocity_proxy": pitch_velocity_proxy,
 		"pitcher_contact_damage": contact_damage,
-		"pitcher_trouble_score": float(pitching_context.get("pitcher_trouble_score", 0.0)),
-		"pitcher_meltdown": bool(pitching_context.get("pitcher_meltdown", false)),
+		"pitcher_trouble_score": context.trouble_score,
+		"pitcher_meltdown": context.meltdown,
 		# 識別子（aggregate simulator の決定論ロールで使う）
-		"event_index": int(pitching_context.get("event_index", 0)),
+		"event_index": context.event_index,
 		"batter_id": 0 if batter == null else batter.player_id,
 		"pitcher_id": 0 if pitcher == null else pitcher.player_id,
 		# ContactQualityModel が読む z 値（curve は ContactQualityModel 内で ability_curve_z 算出）
@@ -650,11 +723,23 @@ static func _apply_relief_output_bonus(
 	outing_ratio: float,
 	rules: Dictionary = {}
 ) -> void:
+	_apply_relief_output_bonus_z(
+		pitcher_z, role, outing_ratio, _rule_float(rules, "relief_output_bonus_z", RELIEF_OUTPUT_BONUS_Z)
+	)
+
+
+# bonus_z は relief_output_bonus_z ルールの値。
+static func _apply_relief_output_bonus_z(
+	pitcher_z: Dictionary,
+	role: String,
+	outing_ratio: float,
+	bonus_z: float
+) -> void:
 	var fade: float = clamp(1.0 - max(0.0, outing_ratio) / RELIEF_OUTPUT_FADE_RATIO, 0.0, 1.0)
 	if fade <= 0.0:
 		return
 	var multiplier: float = LONG_RELIEF_OUTPUT_MULTIPLIER if role == PSPitcherUsageModel.ROLE_LONG_RELIEF else 1.0
-	var bonus: float = _rule_float(rules, "relief_output_bonus_z", RELIEF_OUTPUT_BONUS_Z) * fade * multiplier
+	var bonus: float = bonus_z * fade * multiplier
 	pitcher_z["Pit_KCreate"] = float(pitcher_z.get("Pit_KCreate", 0.0)) + bonus
 	pitcher_z["Pit_BBPrevent"] = float(pitcher_z.get("Pit_BBPrevent", 0.0)) + bonus * 0.5
 	pitcher_z["Pit_EdgeRate"] = float(pitcher_z.get("Pit_EdgeRate", 0.0)) + bonus * 0.625
@@ -685,35 +770,73 @@ static func _apply_batter_tail_limits(batter_z: Dictionary, rules: Dictionary) -
 	)
 
 
-static func _apply_pitcher_tail_limits(pitcher_z: Dictionary, rules: Dictionary) -> void:
+static func _apply_pitcher_tail_limits(pitcher_z: Dictionary, pivot: float, span: float) -> void:
 	pitcher_z["Pit_KCreate"] = PSBalanceProfile.compress_z_tail(
-		float(pitcher_z.get("Pit_KCreate", 0.0)),
-		_rule_float(rules, "pitcher_output_tail_pivot", PITCHER_OUTPUT_TAIL_PIVOT),
-		_rule_float(rules, "pitcher_output_tail_span", PITCHER_OUTPUT_TAIL_SPAN)
+		float(pitcher_z.get("Pit_KCreate", 0.0)), pivot, span
 	)
 	pitcher_z["Pit_BBPrevent"] = PSBalanceProfile.compress_z_tail(
-		float(pitcher_z.get("Pit_BBPrevent", 0.0)),
-		_rule_float(rules, "pitcher_output_tail_pivot", PITCHER_OUTPUT_TAIL_PIVOT),
-		_rule_float(rules, "pitcher_output_tail_span", PITCHER_OUTPUT_TAIL_SPAN)
+		float(pitcher_z.get("Pit_BBPrevent", 0.0)), pivot, span
 	)
 
 
-static func _limited_batter_hr_z(batter_z: Dictionary, rules: Dictionary = {}) -> float:
+static func _limited_batter_hr_z(batter_z: Dictionary, pivot: float, span: float) -> float:
 	var raw: float = float(batter_z.get("Bat_Impact", 0.0)) + 0.5 * float(batter_z.get("Bat_Loft", 0.0))
-	return PSBalanceProfile.compress_z_tail(
-		raw,
-		_rule_float(rules, "batter_hr_tail_pivot", BATTER_HR_TAIL_PIVOT),
-		_rule_float(rules, "batter_hr_tail_span", BATTER_HR_TAIL_SPAN)
-	)
+	return PSBalanceProfile.compress_z_tail(raw, pivot, span)
 
 
-static func _limited_pitcher_stuff_z(pitcher_z: Dictionary, rules: Dictionary = {}) -> float:
+static func _limited_pitcher_stuff_z(pitcher_z: Dictionary, pivot: float, span: float) -> float:
 	var raw: float = float(pitcher_z.get("Pit_BarrelDeny", 0.0)) + 0.5 * float(pitcher_z.get("Pit_ImpactLimit", 0.0))
-	return PSBalanceProfile.compress_z_tail(
-		raw,
-		_rule_float(rules, "pitcher_stuff_tail_pivot", PITCHER_STUFF_TAIL_PIVOT),
-		_rule_float(rules, "pitcher_stuff_tail_span", PITCHER_STUFF_TAIL_SPAN)
-	)
+	return PSBalanceProfile.compress_z_tail(raw, pivot, span)
+
+
+# 打席ルールの数値を読む。試合キャッシュがあり同じルール辞書を使っている間は、前回読んだ値を返す。
+# ルール辞書が空のときは ModManager の現在値を読むので、キャッシュへ保存しない。
+static func _plate_rule_values(game_cache: Dictionary, rules: Dictionary) -> PlateRuleValues:
+	var cacheable: bool = not game_cache.is_empty() and not rules.is_empty()
+	if cacheable:
+		var cached: PlateRuleValues = game_cache.get(CACHE_PLATE_RULE_VALUES, null) as PlateRuleValues
+		if cached != null and is_same(cached.rules, rules):
+			return cached
+	var values: PlateRuleValues = PlateRuleValues.new()
+	values.rules = rules
+	values.pitcher_output_tail_pivot = _rule_float(rules, "pitcher_output_tail_pivot", PITCHER_OUTPUT_TAIL_PIVOT)
+	values.pitcher_output_tail_span = _rule_float(rules, "pitcher_output_tail_span", PITCHER_OUTPUT_TAIL_SPAN)
+	values.pitcher_stuff_tail_pivot = _rule_float(rules, "pitcher_stuff_tail_pivot", PITCHER_STUFF_TAIL_PIVOT)
+	values.pitcher_stuff_tail_span = _rule_float(rules, "pitcher_stuff_tail_span", PITCHER_STUFF_TAIL_SPAN)
+	values.batter_hr_tail_pivot = _rule_float(rules, "batter_hr_tail_pivot", BATTER_HR_TAIL_PIVOT)
+	values.batter_hr_tail_span = _rule_float(rules, "batter_hr_tail_span", BATTER_HR_TAIL_SPAN)
+	values.relief_output_bonus_z = _rule_float(rules, "relief_output_bonus_z", RELIEF_OUTPUT_BONUS_Z)
+	if cacheable:
+		game_cache[CACHE_PLATE_RULE_VALUES] = values
+	return values
+
+
+# 打席確率の係数を読む。保持する条件と、ルール辞書が替わったら読み直す点は _plate_rule_values() と同じ。
+static func _pa_probability_rule_values(game_cache: Dictionary) -> PSPaProbabilityCalculator.RuleValues:
+	var rules: Dictionary = game_cache.get(CACHE_PROBABILITY_RULES, {}) as Dictionary
+	var cacheable: bool = not game_cache.is_empty() and not rules.is_empty()
+	if cacheable:
+		var cached: PSPaProbabilityCalculator.RuleValues = game_cache.get(CACHE_PROBABILITY_RULE_VALUES, null) as PSPaProbabilityCalculator.RuleValues
+		if cached != null and is_same(cached.rules, rules):
+			return cached
+	var values: PSPaProbabilityCalculator.RuleValues = PSPaProbabilityCalculator.rule_values(rules)
+	if cacheable:
+		game_cache[CACHE_PROBABILITY_RULE_VALUES] = values
+	return values
+
+
+# 打球品質の係数を読む。保持する条件と、ルール辞書が替わったら読み直す点は _plate_rule_values() と同じ。
+static func _contact_quality_rule_values(game_cache: Dictionary) -> PSContactQualityModel.RuleValues:
+	var rules: Dictionary = game_cache.get(CACHE_CONTACT_RULES, {}) as Dictionary
+	var cacheable: bool = not game_cache.is_empty() and not rules.is_empty()
+	if cacheable:
+		var cached: PSContactQualityModel.RuleValues = game_cache.get(CACHE_CONTACT_RULE_VALUES, null) as PSContactQualityModel.RuleValues
+		if cached != null and is_same(cached.rules, rules):
+			return cached
+	var values: PSContactQualityModel.RuleValues = PSContactQualityModel.rule_values(rules)
+	if cacheable:
+		game_cache[CACHE_CONTACT_RULE_VALUES] = values
+	return values
 
 
 static func _catcher_record(defense: Dictionary) -> PSPlayerSeasonRecord:

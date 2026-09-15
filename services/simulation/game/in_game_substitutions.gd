@@ -1,6 +1,30 @@
 extends RefCounted
 class_name PSInGameSubstitutions
 
+
+# 評価結果は判断1回の間だけ共有し、試合中の負傷による能力・適性の変化は次の判断で反映する。
+class DefenseEvaluation:
+
+	var _scores: Dictionary = {}
+	var _trusted: Dictionary = {}
+
+	func score(record: PSPlayerSeasonRecord, position: int) -> int:
+		if not _scores.has(record):
+			_scores[record] = {}
+		var by_position: Dictionary = _scores[record]
+		if not by_position.has(position):
+			by_position[position] = PSInGameSubstitutions.defense_only_score(record, position)
+		return int(by_position[position])
+
+	func can_trust(record: PSPlayerSeasonRecord, position: int) -> bool:
+		if not _trusted.has(record):
+			_trusted[record] = {}
+		var by_position: Dictionary = _trusted[record]
+		if not by_position.has(position):
+			by_position[position] = PSInGameSubstitutions.can_trust_fielder_for_position(record, position, self)
+		return bool(by_position[position])
+
+
 # 代打の比較はすべて「今マウンドに居る投手に対して」行う。相手投手の利き腕は GameLoop が
 # 打席ごとに setup["opposing_pitcher_hand"] へ書き込み、打者・控えの双方に同じ相性補正が乗る
 # (PSPlatoonMatchup.RATING_BONUS)。左右が分からない場合は補正 0 になり、打力だけで決まる。
@@ -265,8 +289,8 @@ static func position_player_pinch_hit_option(
 		return {}
 	var score_context: Dictionary = offensive_score_context(setup, game_result, half, current_half_runs)
 	var deficit: int = int(score_context.get("defense_score", 0)) - int(score_context.get("offense_score", 0))
-	var chance_score: int = offensive_chance_score(setup, game_result, inning, half, bases, outs, current_half_runs)
-	var important_chance: bool = is_important_pinch_hit_chance(setup, game_result, inning, half, bases, outs, current_half_runs)
+	var chance_score: int = _offensive_chance_score(inning, deficit, bases, outs)
+	var important_chance: bool = _is_important_pinch_hit_chance(deficit, chance_score)
 	var final_chance: bool = is_final_low_bat_pinch_hit_chance(inning, deficit)
 	# 走者が居なくても、終盤に打線の穴が回ってくれば代打を送る (実勢の代打はこの形が多い)。
 	# 得点機 (important) / 最終回 (final) だけに限ると、8回先頭の弱打者に一度も代打が出ない。
@@ -669,6 +693,7 @@ static func maybe_apply_defensive_replacements(setup: Dictionary, inning: int, h
 static func defensive_replacement_option(setup: Dictionary, expected_plate_appearances: int) -> Dictionary:
 	var fielders: Array = setup.get("fielders", []) as Array
 	var bench: Array = setup.get("bench", []) as Array
+	var evaluation: DefenseEvaluation = DefenseEvaluation.new()
 	var best_option: Dictionary = {}
 	var best_value: float = -999999.0
 	for assignment_row in fielders:
@@ -676,6 +701,11 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		var outgoing: PSPlayerSeasonRecord = assignment.get("record", null) as PSPlayerSeasonRecord
 		var position: int = int(assignment.get("position", 0))
 		if outgoing == null or position < 2 or position > 9:
+			continue
+		var lineup_slot: int = lineup_slot_for_player(setup, outgoing.player_id)
+		if lineup_slot < 0:
+			continue
+		if plate_appearance_distance_to_slot(setup, lineup_slot) <= expected_plate_appearances:
 			continue
 		# 守備固めの対象は「守備が弱い」ことだけで決める。**年齢/経験年数では絞らない** —
 		# 実際の 守備固め は守備難のある若い強打者にも出るので、年齢や経験年数でゲートしない。
@@ -686,12 +716,7 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 			outgoing, GameSimulator.SOLID_BATTER_SIGMA, GameSimulator.SOLID_BATTER_SCORE
 		):
 			continue
-		var lineup_slot: int = lineup_slot_for_player(setup, outgoing.player_id)
-		if lineup_slot < 0:
-			continue
-		if plate_appearance_distance_to_slot(setup, lineup_slot) <= expected_plate_appearances:
-			continue
-		var outgoing_defense: int = defense_only_score(outgoing, position)
+		var outgoing_defense: int = evaluation.score(outgoing, position)
 		# **退く選手の守備力に絶対の上限は置かない。** スタメンは守備込みで組まれるので
 		# 「一定水準を超える守備なら対象外」にすると大半のスタメンが除外され、控えに明確な
 		# 上位互換 (一軍控えの 44% は 22点以上の上積みを持つ) が居ても交代が成立しない。
@@ -706,10 +731,10 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 			# 直接その守備位置へ入れる案と、**玉突きの配置転換**の案を両方見て良い方を採る。
 			# (控えがその位置を守れないときの代替ではなく、守備が良くなる方の選択肢として扱う。)
 			var direct_gain: int = -999999
-			if can_trust_fielder_for_position(candidate, position):
-				direct_gain = defense_only_score(candidate, position) - outgoing_defense
+			if evaluation.can_trust(candidate, position):
+				direct_gain = evaluation.score(candidate, position) - outgoing_defense
 			var shuffle: Dictionary = _shuffle_option_for_replacement(
-				setup, outgoing, position, candidate, outgoing_defense
+				setup, outgoing, position, candidate, outgoing_defense, evaluation
 			)
 			var shuffle_gain: int = int(shuffle.get("defense_gain", -999999))
 			var defense_gain: int = direct_gain
@@ -828,8 +853,11 @@ static func _shuffle_option_for_replacement(
 	outgoing: PSPlayerSeasonRecord,
 	position: int,
 	candidate: PSPlayerSeasonRecord,
-	outgoing_defense: int
+	outgoing_defense: int,
+	evaluation: DefenseEvaluation = null
 ) -> Dictionary:
+	if evaluation == null:
+		evaluation = DefenseEvaluation.new()
 	var best_mover: PSPlayerSeasonRecord = null
 	var best_from: int = 0
 	var best_gain: int = -999999
@@ -841,13 +869,13 @@ static func _shuffle_option_for_replacement(
 			continue
 		if mover.player_id == outgoing.player_id:
 			continue
-		if not can_trust_fielder_for_position(mover, position):
+		if not evaluation.can_trust(mover, position):
 			continue
-		if not can_trust_fielder_for_position(candidate, from_position):
+		if not evaluation.can_trust(candidate, from_position):
 			continue
 		var gain: int = (
-			defense_only_score(mover, position) - outgoing_defense
-			+ defense_only_score(candidate, from_position) - defense_only_score(mover, from_position)
+			evaluation.score(mover, position) - outgoing_defense
+			+ evaluation.score(candidate, from_position) - evaluation.score(mover, from_position)
 		)
 		if best_mover == null or gain > best_gain:
 			best_gain = gain
@@ -925,6 +953,10 @@ static func offensive_chance_score(
 	var offense_score: int = int(score_context.get("offense_score", 0))
 	var defense_score: int = int(score_context.get("defense_score", 0))
 	var deficit: int = defense_score - offense_score
+	return _offensive_chance_score(inning, deficit, bases, outs)
+
+
+static func _offensive_chance_score(inning: int, deficit: int, bases: Array, outs: int) -> int:
 	var chance_score: int = 0
 	if inning >= 7:
 		chance_score += 2
@@ -1036,7 +1068,11 @@ static func is_important_pinch_hit_chance(
 	var deficit: int = int(score_context.get("defense_score", 0)) - int(score_context.get("offense_score", 0))
 	if deficit < -1 or deficit > 4:
 		return false
-	return offensive_chance_score(setup, game_result, inning, half, bases, outs, current_half_runs) >= GameSimulator.IMPORTANT_PINCH_HIT_CHANCE_SCORE
+	return _is_important_pinch_hit_chance(deficit, _offensive_chance_score(inning, deficit, bases, outs))
+
+
+static func _is_important_pinch_hit_chance(deficit: int, chance_score: int) -> bool:
+	return deficit >= -1 and deficit <= 4 and chance_score >= GameSimulator.IMPORTANT_PINCH_HIT_CHANCE_SCORE
 
 
 static func is_final_low_bat_pinch_hit_chance(inning: int, deficit: int) -> bool:
@@ -1077,7 +1113,9 @@ static func fielding_position_for_player(setup: Dictionary, player_id: int) -> i
 	return 0
 
 
-static func can_trust_fielder_for_position(record: PSPlayerSeasonRecord, position: int) -> bool:
+static func can_trust_fielder_for_position(
+	record: PSPlayerSeasonRecord, position: int, evaluation: DefenseEvaluation = null
+) -> bool:
 	if record == null or record.injury_days > 0:
 		return false
 	var aptitude: int = PSTeamSetupBuilder.position_aptitude(record, position)
@@ -1085,7 +1123,8 @@ static func can_trust_fielder_for_position(record: PSPlayerSeasonRecord, positio
 		return false
 	if (position == 2 or position == 6 or position == 8) and aptitude < 40:
 		return false
-	return defense_only_score(record, position) >= minimum_trusted_defense_score(position)
+	var score: int = defense_only_score(record, position) if evaluation == null else evaluation.score(record, position)
+	return score >= minimum_trusted_defense_score(position)
 
 
 static func defense_only_score(record: PSPlayerSeasonRecord, position: int) -> int:

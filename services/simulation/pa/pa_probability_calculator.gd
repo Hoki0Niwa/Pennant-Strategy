@@ -65,6 +65,66 @@ const MATCHUP_LOGIT_PIVOT: float = 0.55
 const MATCHUP_LOGIT_SPAN: float = 0.35
 
 
+# 1試合の間は変わらない係数。rule_values() がルール辞書から読み、試合キャッシュ
+# (PSPlateAppearanceCoordinator) は同じルール辞書を使っている間これを使い回す。
+# フィールド名はルールのキー名と同じ。
+class RuleValues:
+	var rules: Dictionary = {}
+	var matchup_logit_pivot: float = 0.0
+	var matchup_logit_span: float = 0.0
+	var k_create_weight: float = 0.0
+	var k_avoid_weight: float = 0.0
+	var arsenal_k_bonus_weight: float = 0.0
+	var arsenal_tendency_k_weight: float = 0.0
+	var k_matchup_center: float = 0.0
+	var k_logit_base: float = 0.0
+	var framing_k_coef: float = 0.0
+	var gamecall_k_coef: float = 0.0
+	var tto_k_drop: float = 0.0
+	var bb_create_weight: float = 0.0
+	var bb_prevent_weight: float = 0.0
+	var bb_matchup_center: float = 0.0
+	var bb_logit_base: float = 0.0
+	var framing_bb_coef: float = 0.0
+	var gamecall_bb_coef: float = 0.0
+	var tto_bb_drop: float = 0.0
+	var command_leak_bb_weight: float = 0.0
+	var hbp_logit_base: float = 0.0
+	var hbp_bb_prevent_weight: float = 0.0
+	var command_leak_hbp_weight: float = 0.0
+	var league_bip_base: float = 0.0
+
+
+# ルール辞書から係数を読む。キーが無ければ既定値、辞書が空なら ModManager の現在値を読む。
+static func rule_values(rules: Dictionary) -> RuleValues:
+	var values: RuleValues = RuleValues.new()
+	values.rules = rules
+	values.matchup_logit_pivot = _rule_float(rules, "matchup_logit_pivot", MATCHUP_LOGIT_PIVOT)
+	values.matchup_logit_span = _rule_float(rules, "matchup_logit_span", MATCHUP_LOGIT_SPAN)
+	values.k_create_weight = _rule_float(rules, "k_create_weight", K_CREATE_WEIGHT)
+	values.k_avoid_weight = _rule_float(rules, "k_avoid_weight", K_AVOID_WEIGHT)
+	values.arsenal_k_bonus_weight = _rule_float(rules, "arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
+	values.arsenal_tendency_k_weight = _rule_float(rules, "arsenal_tendency_k_weight", ARSENAL_TENDENCY_K_WEIGHT)
+	values.k_matchup_center = _rule_float(rules, "k_matchup_center", K_MATCHUP_CENTER)
+	values.k_logit_base = _rule_float(rules, "k_logit_base", K_LOGIT_BASE)
+	values.framing_k_coef = _rule_float(rules, "framing_k_coef", FRAMING_K_COEF)
+	values.gamecall_k_coef = _rule_float(rules, "gamecall_k_coef", GAMECALL_K_COEF)
+	values.tto_k_drop = _rule_float(rules, "tto_k_drop", TTO_K_DROP)
+	values.bb_create_weight = _rule_float(rules, "bb_create_weight", BB_CREATE_WEIGHT)
+	values.bb_prevent_weight = _rule_float(rules, "bb_prevent_weight", BB_PREVENT_WEIGHT)
+	values.bb_matchup_center = _rule_float(rules, "bb_matchup_center", BB_MATCHUP_CENTER)
+	values.bb_logit_base = _rule_float(rules, "bb_logit_base", BB_LOGIT_BASE)
+	values.framing_bb_coef = _rule_float(rules, "framing_bb_coef", FRAMING_BB_COEF)
+	values.gamecall_bb_coef = _rule_float(rules, "gamecall_bb_coef", GAMECALL_BB_COEF)
+	values.tto_bb_drop = _rule_float(rules, "tto_bb_drop", TTO_BB_DROP)
+	values.command_leak_bb_weight = _rule_float(rules, "command_leak_bb_weight", 0.10)
+	values.hbp_logit_base = _rule_float(rules, "hbp_logit_base", HBP_LOGIT_BASE)
+	values.hbp_bb_prevent_weight = _rule_float(rules, "hbp_bb_prevent_weight", 0.30)
+	values.command_leak_hbp_weight = _rule_float(rules, "command_leak_hbp_weight", 0.06)
+	values.league_bip_base = _rule_float(rules, "league_bip_base", LEAGUE_BIP_BASE)
+	return values
+
+
 # {k: logit, bb: logit, hbp: logit, bip: logit} を返す。
 # precomp は以下のキーを持つ想定（PlateAppearanceCoordinator が組み立てる）:
 #   batter_z: Dictionary{Bat_KAvoid, Bat_BBCreate, ...} (左右の相性を織り込み済み)
@@ -72,8 +132,16 @@ const MATCHUP_LOGIT_SPAN: float = 0.35
 #   catcher_z: Dictionary{C_Framing, ...}
 #   tto_round_weight: float (coordinator の TTO_PENALTY_PER_ROUND[round])
 #   framing_strikes: float (C_Framing * coordinator の FRAMING_SCALE)
+#   _pa_probability_rules: Dictionary (係数のルール辞書。呼び出しのたびに読む)
+# 同じ係数で繰り返し呼ぶ試合ループは、試合キャッシュの RuleValues を build_weights_with_rule_values() へ渡す。
 static func build_weights(precomp: Dictionary) -> Dictionary:
-	var rules: Dictionary = precomp.get("_pa_probability_rules", {}) as Dictionary
+	return build_weights_with_rule_values(
+		precomp, rule_values(precomp.get("_pa_probability_rules", {}) as Dictionary)
+	)
+
+
+# 係数を RuleValues で受け取る版。precomp の _pa_probability_rules は読まない。
+static func build_weights_with_rule_values(precomp: Dictionary, values: RuleValues) -> Dictionary:
 	var batter_z: Dictionary = precomp.get("batter_z", {}) as Dictionary
 	var pitcher_z: Dictionary = precomp.get("pitcher_z", {}) as Dictionary
 	var tto_round_weight: float = float(precomp.get("tto_round_weight", 0.0))
@@ -89,39 +157,39 @@ static func build_weights(precomp: Dictionary) -> Dictionary:
 	var pit_edge_rate: float = float(pitcher_z.get("Pit_EdgeRate", 0.0))
 	var c_game_call: float = float(catcher_z.get("C_GameCall", 0.0))
 
-	var matchup_pivot: float = _rule_float(rules, "matchup_logit_pivot", MATCHUP_LOGIT_PIVOT)
-	var matchup_span: float = _rule_float(rules, "matchup_logit_span", MATCHUP_LOGIT_SPAN)
+	var matchup_pivot: float = values.matchup_logit_pivot
+	var matchup_span: float = values.matchup_logit_span
 
 	# 能力差由来の項だけを先に積んでから飽和させ、そのあとで状況項 (フレーミング/配球/巡目) を
 	# 足す。状況項は対戦の能力差ではないので圧縮の対象にしない。
-	var k_ability: float = pit_k_create * _rule_float(rules, "k_create_weight", K_CREATE_WEIGHT)
-	k_ability -= bat_k_avoid * _rule_float(rules, "k_avoid_weight", K_AVOID_WEIGHT)
-	k_ability += pit_edge_rate * _rule_float(rules, "arsenal_k_bonus_weight", ARSENAL_K_BONUS_WEIGHT)
-	k_ability += arsenal_k_bias * _rule_float(rules, "arsenal_tendency_k_weight", ARSENAL_TENDENCY_K_WEIGHT)  # 球種構成のK寄り傾向(微差)。
-	var k_center: float = _rule_float(rules, "k_matchup_center", K_MATCHUP_CENTER)
+	var k_ability: float = pit_k_create * values.k_create_weight
+	k_ability -= bat_k_avoid * values.k_avoid_weight
+	k_ability += pit_edge_rate * values.arsenal_k_bonus_weight
+	k_ability += arsenal_k_bias * values.arsenal_tendency_k_weight  # 球種構成のK寄り傾向(微差)。
+	var k_center: float = values.k_matchup_center
 	k_ability = k_center + PSBalanceProfile.compress_matchup_advantage(k_ability - k_center, matchup_pivot, matchup_span)
 
-	var k_logit: float = _rule_float(rules, "k_logit_base", K_LOGIT_BASE) + k_ability
-	k_logit += framing_strikes * _rule_float(rules, "framing_k_coef", FRAMING_K_COEF)
-	k_logit += c_game_call * _rule_float(rules, "gamecall_k_coef", GAMECALL_K_COEF)
-	k_logit -= tto_round_weight * _rule_float(rules, "tto_k_drop", TTO_K_DROP)
+	var k_logit: float = values.k_logit_base + k_ability
+	k_logit += framing_strikes * values.framing_k_coef
+	k_logit += c_game_call * values.gamecall_k_coef
+	k_logit -= tto_round_weight * values.tto_k_drop
 
-	var bb_ability: float = bat_bb_create * _rule_float(rules, "bb_create_weight", BB_CREATE_WEIGHT)
-	bb_ability -= pit_bb_prevent * _rule_float(rules, "bb_prevent_weight", BB_PREVENT_WEIGHT)
-	var bb_center: float = _rule_float(rules, "bb_matchup_center", BB_MATCHUP_CENTER)
+	var bb_ability: float = bat_bb_create * values.bb_create_weight
+	bb_ability -= pit_bb_prevent * values.bb_prevent_weight
+	var bb_center: float = values.bb_matchup_center
 	bb_ability = bb_center + PSBalanceProfile.compress_matchup_advantage(bb_ability - bb_center, matchup_pivot, matchup_span)
 
-	var bb_logit: float = _rule_float(rules, "bb_logit_base", BB_LOGIT_BASE) + bb_ability
-	bb_logit -= framing_strikes * _rule_float(rules, "framing_bb_coef", FRAMING_BB_COEF)
-	bb_logit -= c_game_call * _rule_float(rules, "gamecall_bb_coef", GAMECALL_BB_COEF)
-	bb_logit += tto_round_weight * _rule_float(rules, "tto_bb_drop", TTO_BB_DROP)
-	bb_logit += command_leak * _rule_float(rules, "command_leak_bb_weight", 0.10)
+	var bb_logit: float = values.bb_logit_base + bb_ability
+	bb_logit -= framing_strikes * values.framing_bb_coef
+	bb_logit -= c_game_call * values.gamecall_bb_coef
+	bb_logit += tto_round_weight * values.tto_bb_drop
+	bb_logit += command_leak * values.command_leak_bb_weight
 
-	var hbp_logit: float = _rule_float(rules, "hbp_logit_base", HBP_LOGIT_BASE)
-	hbp_logit -= pit_bb_prevent * _rule_float(rules, "hbp_bb_prevent_weight", 0.30)
-	hbp_logit += command_leak * _rule_float(rules, "command_leak_hbp_weight", 0.06)
+	var hbp_logit: float = values.hbp_logit_base
+	hbp_logit -= pit_bb_prevent * values.hbp_bb_prevent_weight
+	hbp_logit += command_leak * values.command_leak_hbp_weight
 
-	var bip_logit: float = PSBalanceProfile.logit(_rule_float(rules, "league_bip_base", LEAGUE_BIP_BASE))
+	var bip_logit: float = PSBalanceProfile.logit(values.league_bip_base)
 
 	return {
 		OUTCOME_STRIKEOUT: k_logit,

@@ -233,9 +233,57 @@ static func outing_workload_pitches(record: PSPlayerSeasonRecord, role: String) 
 			return short_relief_target_pitches(record)
 
 
-static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Dictionary:
+# 打席ごとの投手状態。plate_context() の辞書と同じ値を型付きで持つ。試合ループはこれを
+# PSPlateAppearanceCoordinator へ直接渡し、辞書の組み立てと読み出しを省く。
+# 既定値は、キーの無い辞書を from_dict() で読んだときの値と同じ。
+class PlateContext:
+	var role: String = ""
+	var outing_pitches: int = 0
+	var fatigue_ratio: float = 0.0
+	# false のとき fatigue_factor は使わず、precomp 側が球数から疲労係数を求める。
+	var has_fatigue_factor: bool = false
+	var fatigue_factor: float = 1.0
+	var usage_penalty: int = 0
+	var tto_round: int = 0
+	var tto_penalty: int = 0
+	var arsenal_bonus: int = 0
+	var command_leak: float = 0.0
+	var contact_damage: float = 0.0
+	var trouble_score: float = 0.0
+	var meltdown: bool = false
+	var arsenal_k_bias: float = 0.0
+	var arsenal_gb_bias: float = 0.0
+	var arsenal_hr_bias: float = 0.0
+	var event_index: int = 0
+
+	# plate_context() 形式の辞書を読み替える。テストや調査ツールが一部のキーだけで組んだ辞書も受け付ける。
+	static func from_dict(context: Dictionary) -> PlateContext:
+		var values: PlateContext = PlateContext.new()
+		values.role = str(context.get("pitcher_role", ""))
+		values.outing_pitches = int(context.get("pitcher_outing_pitches", 0))
+		values.fatigue_ratio = float(context.get("pitcher_fatigue_ratio", 0.0))
+		values.has_fatigue_factor = context.has("pitcher_fatigue_factor")
+		values.fatigue_factor = float(context.get("pitcher_fatigue_factor", 1.0))
+		values.usage_penalty = int(context.get("pitcher_usage_penalty", 0))
+		values.tto_round = int(context.get("pitcher_tto_round", 0))
+		values.tto_penalty = int(context.get("pitcher_tto_penalty", 0))
+		values.arsenal_bonus = int(context.get("pitcher_arsenal_bonus", 0))
+		values.command_leak = float(context.get("pitcher_command_leak", 0.0))
+		values.contact_damage = float(context.get("pitcher_contact_damage", 0.0))
+		values.trouble_score = float(context.get("pitcher_trouble_score", 0.0))
+		values.meltdown = bool(context.get("pitcher_meltdown", false))
+		values.arsenal_k_bias = float(context.get("pitcher_arsenal_k_bias", 0.0))
+		values.arsenal_gb_bias = float(context.get("pitcher_arsenal_gb_bias", 0.0))
+		values.arsenal_hr_bias = float(context.get("pitcher_arsenal_hr_bias", 0.0))
+		values.event_index = int(context.get("event_index", 0))
+		return values
+
+
+# plate_context() と同じ値を、辞書を作らずに返す。record が無いか usage が空なら null。
+# 球種サマリと球種傾向は初回に usage へ保持し、同じ登板の次の打席から使い回す。
+static func plate_context_values(record: PSPlayerSeasonRecord, usage: Dictionary) -> PlateContext:
 	if record == null or usage.is_empty():
-		return {}
+		return null
 	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
 	var arsenal: Dictionary = _arsenal_summary_for_usage(record, usage)
 	var ratio: float = outing_ratio(record, usage)
@@ -247,34 +295,53 @@ static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Di
 		else max(0.0, ratio - 0.82)
 	)
 	var trouble: float = float(usage.get("trouble_score", 0.0))
-	var usage_penalty: int = _in_game_usage_penalty(role, ratio, trouble, fatigue_load)
-	var tto_penalty: int = times_through_order_penalty(record, usage, arsenal)
-	var arsenal_bonus: int = role_arsenal_bonus(role, arsenal)
+	var values: PlateContext = PlateContext.new()
+	values.role = role
+	values.outing_pitches = outing_pitches
+	values.fatigue_ratio = ratio
+	values.has_fatigue_factor = true
+	values.fatigue_factor = fatigue_factor
+	values.usage_penalty = _in_game_usage_penalty(role, ratio, trouble, fatigue_load)
+	values.tto_penalty = times_through_order_penalty(record, usage, arsenal, role)
+	values.arsenal_bonus = role_arsenal_bonus(role, arsenal)
 	# 球種構成の傾向(微差)。type 別 K寄り/ゴロ寄り/被弾を mastery 加重で集計し中心化済み。
 	var arsenal_biases: Dictionary = _arsenal_biases_for_usage(usage, arsenal)
 	var stamina_pressure: float = fatigue_load if role == ROLE_STARTER else max(0.0, ratio - 0.92)
-	var command_leak: float = clamp(max(0.0, trouble - 3.0) * 0.55 + stamina_pressure * 2.4, 0.0, 5.0)
-	var contact_damage: float = clamp(max(0.0, trouble - 3.5) * 0.48 + max(0.0, stamina_pressure - 0.15) * 3.0, 0.0, 5.0)
+	values.command_leak = clamp(max(0.0, trouble - 3.0) * 0.55 + stamina_pressure * 2.4, 0.0, 5.0)
+	values.contact_damage = clamp(max(0.0, trouble - 3.5) * 0.48 + max(0.0, stamina_pressure - 0.15) * 3.0, 0.0, 5.0)
+	values.trouble_score = trouble
+	values.meltdown = trouble >= MELTDOWN_THRESHOLD
+	values.arsenal_k_bias = float(arsenal_biases.get("k_bias", 0.0))
+	values.arsenal_gb_bias = float(arsenal_biases.get("gb_bias", 0.0))
+	values.arsenal_hr_bias = float(arsenal_biases.get("hr_bias", 0.0))
+	return values
+
+
+static func plate_context(record: PSPlayerSeasonRecord, usage: Dictionary) -> Dictionary:
+	var values: PlateContext = plate_context_values(record, usage)
+	if values == null:
+		return {}
+	var arsenal: Dictionary = _arsenal_summary_for_usage(record, usage)
 	return {
-		"pitcher_role": role,
-		"pitcher_outing_pitches": outing_pitches,
-		"pitcher_outing_workload": _usage_workload_pitches(record, usage, role),
-		"pitcher_fatigue_ratio": ratio,
-		"pitcher_fatigue_factor": fatigue_factor,
-		"pitcher_usage_penalty": usage_penalty,
-		"pitcher_tto_penalty": tto_penalty,
-		"pitcher_arsenal_bonus": arsenal_bonus,
-		"pitcher_command_leak": command_leak,
-		"pitcher_contact_damage": contact_damage,
-		"pitcher_trouble_score": trouble,
-		"pitcher_meltdown": trouble >= MELTDOWN_THRESHOLD,
+		"pitcher_role": values.role,
+		"pitcher_outing_pitches": values.outing_pitches,
+		"pitcher_outing_workload": _usage_workload_pitches(record, usage, values.role),
+		"pitcher_fatigue_ratio": values.fatigue_ratio,
+		"pitcher_fatigue_factor": values.fatigue_factor,
+		"pitcher_usage_penalty": values.usage_penalty,
+		"pitcher_tto_penalty": values.tto_penalty,
+		"pitcher_arsenal_bonus": values.arsenal_bonus,
+		"pitcher_command_leak": values.command_leak,
+		"pitcher_contact_damage": values.contact_damage,
+		"pitcher_trouble_score": values.trouble_score,
+		"pitcher_meltdown": values.meltdown,
 		"pitcher_arsenal_pitch_count": int(arsenal.get("pitch_count", 0)),
 		"pitcher_arsenal_effective_count": int(arsenal.get("effective_pitch_count", 0)),
 		"pitcher_arsenal_top_two": float(arsenal.get("top_two_average", 0.0)),
 		"pitcher_arsenal_third": int(arsenal.get("third_pitch", 0)),
-		"pitcher_arsenal_k_bias": float(arsenal_biases.get("k_bias", 0.0)),
-		"pitcher_arsenal_gb_bias": float(arsenal_biases.get("gb_bias", 0.0)),
-		"pitcher_arsenal_hr_bias": float(arsenal_biases.get("hr_bias", 0.0)),
+		"pitcher_arsenal_k_bias": values.arsenal_k_bias,
+		"pitcher_arsenal_gb_bias": values.arsenal_gb_bias,
+		"pitcher_arsenal_hr_bias": values.arsenal_hr_bias,
 	}
 
 
@@ -305,15 +372,21 @@ static func _in_game_usage_penalty(
 	return int(clamp(round(penalty), 0.0, 42.0))
 
 
+# role は _normalized_role 済みの登板役割。空なら usage (無ければ record) から求める。
 static func times_through_order_penalty(
 	record: PSPlayerSeasonRecord,
 	usage: Dictionary,
-	arsenal: Dictionary = {}
+	arsenal: Dictionary = {},
+	role: String = ""
 ) -> int:
 	if record == null or usage.is_empty():
 		return 0
-	var role: String = _normalized_role(str(usage.get("role", _role_from_record(record))))
-	if role != ROLE_STARTER:
+	var resolved_role: String = (
+		role
+		if not role.is_empty()
+		else _normalized_role(str(usage.get("role", _role_from_record(record))))
+	)
+	if resolved_role != ROLE_STARTER:
 		return 0
 	var times_seen: int = int(floor(float(usage.get("batters_faced", 0)) / 9.0))
 	if times_seen <= 0:

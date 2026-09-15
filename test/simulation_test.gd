@@ -1498,6 +1498,182 @@ func test_pa_game_cache_reuses_static_views_and_keeps_pitcher_adjustment_local()
 	assert_bool(is_same(defense.get("catcher", null), catcher)).is_true()
 
 
+# 試合ループは投手状態を型付きの PlateContext で precomp へ渡す。plate_context() の辞書を経由する経路と
+# 全精度で同じ precomp になることを、立ち上がりの先発 / 3巡目で疲労と炎上が重なった先発 /
+# 登板途中のロング / 走者を背負ったショートで確かめる。2回目は試合キャッシュのルール値を使い回す。
+func test_plate_context_values_build_same_precomp_as_context_dictionary() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(816, "Context Batter", 0.7)
+	var catcher: PSPlayerSeasonRecord = _catcher(817, "Context Catcher", 0.5)
+	var defense: Dictionary = {"fielders": [{"record": catcher, "position": 2}]}
+	var starter: PSPlayerSeasonRecord = _pitcher(806, "Context Starter", 0.9)
+	starter.role = "starter"
+	var reliever: PSPlayerSeasonRecord = _pitcher(807, "Context Reliever", 1.2)
+
+	var fresh_start: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_STARTER)
+	var late_start: Dictionary = PSPitcherUsageModel.create_outing(starter, PSPitcherUsageModel.ROLE_STARTER)
+	late_start["batters_faced"] = 21
+	late_start["pitches"] = 104
+	late_start["trouble_score"] = 7.0
+	var long_relief: Dictionary = PSPitcherUsageModel.create_outing(reliever, PSPitcherUsageModel.ROLE_LONG_RELIEF)
+	long_relief["pitches"] = 22
+	var short_relief: Dictionary = PSPitcherUsageModel.create_outing(reliever, PSPitcherUsageModel.ROLE_SHORT_RELIEF)
+	short_relief["pitches"] = 30
+	short_relief["trouble_score"] = 4.5
+	var cases: Array = [
+		["fresh_start", starter, fresh_start],
+		["late_start", starter, late_start],
+		["long_relief", reliever, long_relief],
+		["short_relief", reliever, short_relief],
+	]
+	for row_value in cases:
+		var row: Array = row_value as Array
+		var case_name: String = str(row[0])
+		var pitcher: PSPlayerSeasonRecord = row[1] as PSPlayerSeasonRecord
+		var usage: Dictionary = row[2] as Dictionary
+		var context: Dictionary = PSPitcherUsageModel.plate_context(pitcher, usage)
+		var values: PSPitcherUsageModel.PlateContext = PSPitcherUsageModel.plate_context_values(pitcher, usage)
+		var is_reliever: bool = values.role != PSPitcherUsageModel.ROLE_STARTER
+		var expected: Dictionary = PSPlateAppearanceCoordinator._build_precomp(
+			batter, pitcher, defense, context, is_reliever, PSPlateAppearanceCoordinator.create_game_cache()
+		)
+		var cache: Dictionary = PSPlateAppearanceCoordinator.create_game_cache()
+		for pass_index in range(2):
+			var actual: Dictionary = PSPlateAppearanceCoordinator._build_precomp_with_context(
+				batter, pitcher, defense, values, is_reliever, cache
+			)
+			assert_str(JSON.stringify(actual, "", true, true)).override_failure_message(
+				"型付きの投手状態から作った precomp が辞書経由と一致しない: %s (%d回目)" % [case_name, pass_index + 1]
+			).is_equal(JSON.stringify(expected, "", true, true))
+	# 各ケースが別の分岐を通っていること。
+	var late_values: PSPitcherUsageModel.PlateContext = PSPitcherUsageModel.plate_context_values(starter, late_start)
+	assert_int(late_values.tto_penalty).is_greater(0)
+	assert_int(late_values.usage_penalty).is_greater(0)
+	assert_bool(late_values.meltdown).is_true()
+	assert_float(late_values.fatigue_factor).is_less(1.0)
+	assert_str(PSPitcherUsageModel.plate_context_values(reliever, long_relief).role).is_equal(
+		PSPitcherUsageModel.ROLE_LONG_RELIEF
+	)
+	assert_float(PSPitcherUsageModel.plate_context_values(reliever, short_relief).command_leak).is_greater(0.0)
+
+
+# 打席ルールの数値は試合キャッシュに保持するが、ルール辞書が替われば新しい値で計算し直す。
+func test_plate_rule_values_follow_rules_dictionary() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(818, "Rule Batter", 3.5)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(808, "Rule Pitcher", 3.5)
+	var context: PSPitcherUsageModel.PlateContext = PSPitcherUsageModel.PlateContext.new()
+	var cache: Dictionary = PSPlateAppearanceCoordinator.create_game_cache()
+	var loose_rules: Dictionary = {
+		"pitcher_output_tail_pivot": 10.0,
+		"pitcher_output_tail_span": 1.0,
+		"batter_hr_tail_pivot": 10.0,
+		"batter_hr_tail_span": 1.0,
+	}
+	var tight_rules: Dictionary = {
+		"pitcher_output_tail_pivot": 0.5,
+		"pitcher_output_tail_span": 0.2,
+		"batter_hr_tail_pivot": 0.5,
+		"batter_hr_tail_span": 0.2,
+	}
+	var loose: Dictionary = PSPlateAppearanceCoordinator._build_precomp_with_context(
+		batter, pitcher, {}, context, false, cache, loose_rules
+	)
+	var tight: Dictionary = PSPlateAppearanceCoordinator._build_precomp_with_context(
+		batter, pitcher, {}, context, false, cache, tight_rules
+	)
+	assert_float(float((tight["pitcher_z"] as Dictionary)["Pit_KCreate"])).override_failure_message(
+		"ルール辞書を替えても投手のテール圧縮が前の値のまま"
+	).is_less(float((loose["pitcher_z"] as Dictionary)["Pit_KCreate"]) - 1.0)
+	assert_float(float(tight["batter_hr_z"])).override_failure_message(
+		"ルール辞書を替えても打者の本塁打 z のテール圧縮が前の値のまま"
+	).is_less(float(loose["batter_hr_z"]) - 1.0)
+
+
+# 打席確率と打球品質の係数は、フィールドと同じ名前のルールキーから読む。
+func test_pa_rule_values_read_each_coefficient_from_same_named_rule() -> void:
+	var probability_rules: Dictionary = _distinct_rules_for_fields(PSPaProbabilityCalculator.RuleValues.new(), 1.0)
+	var contact_rules: Dictionary = _distinct_rules_for_fields(PSContactQualityModel.RuleValues.new(), 2.0)
+	assert_int(probability_rules.size()).is_greater(0)
+	assert_int(contact_rules.size()).is_greater(0)
+	_assert_rule_values_read_rules(PSPaProbabilityCalculator.rule_values(probability_rules), probability_rules, "打席確率")
+	_assert_rule_values_read_rules(PSContactQualityModel.rule_values(contact_rules), contact_rules, "打球品質")
+
+
+# 打席確率と打球品質の係数は試合キャッシュに保持し、ルール辞書が替われば読み直す。
+# ルール辞書が空のときは ModManager の現在値を読むので保持しない。
+func test_pa_rule_values_follow_rules_dictionary_in_game_cache() -> void:
+	var cache: Dictionary = PSPlateAppearanceCoordinator.create_game_cache()
+	var first_probability: PSPaProbabilityCalculator.RuleValues = PSPlateAppearanceCoordinator._pa_probability_rule_values(cache)
+	var first_contact: PSContactQualityModel.RuleValues = PSPlateAppearanceCoordinator._contact_quality_rule_values(cache)
+	assert_bool(is_same(first_probability, PSPlateAppearanceCoordinator._pa_probability_rule_values(cache))).is_true()
+	assert_bool(is_same(first_contact, PSPlateAppearanceCoordinator._contact_quality_rule_values(cache))).is_true()
+
+	cache[PSPlateAppearanceCoordinator.CACHE_PROBABILITY_RULES] = {"k_logit_base": -2.5}
+	cache[PSPlateAppearanceCoordinator.CACHE_CONTACT_RULES] = {"ev_base": 80.0}
+	var probability: PSPaProbabilityCalculator.RuleValues = PSPlateAppearanceCoordinator._pa_probability_rule_values(cache)
+	var contact: PSContactQualityModel.RuleValues = PSPlateAppearanceCoordinator._contact_quality_rule_values(cache)
+	assert_float(probability.k_logit_base).override_failure_message(
+		"試合キャッシュのルール辞書を替えても打席確率の係数が前の値のまま"
+	).is_equal(-2.5)
+	assert_float(contact.ev_base).override_failure_message(
+		"試合キャッシュのルール辞書を替えても打球品質の係数が前の値のまま"
+	).is_equal(80.0)
+	# 辞書に無いキーは既定値になる。
+	assert_float(probability.bb_logit_base).is_equal(PSPaProbabilityCalculator.BB_LOGIT_BASE)
+	assert_float(contact.la_base).is_equal(PSContactQualityModel.LA_BASE)
+
+	var without_cache: Dictionary = {}
+	PSPlateAppearanceCoordinator._pa_probability_rule_values(without_cache)
+	PSPlateAppearanceCoordinator._contact_quality_rule_values(without_cache)
+	assert_bool(without_cache.is_empty()).override_failure_message(
+		"試合キャッシュが無い呼び出しで係数を保存した"
+	).is_true()
+
+
+# 試合ループの打席は、試合キャッシュにあるルール辞書の係数で結果カテゴリを抽選する。
+func test_resolve_with_context_draws_category_with_game_cache_rules() -> void:
+	var batter: PSPlayerSeasonRecord = _fielder(819, "Rule Cache Batter", 0.5)
+	var pitcher: PSPlayerSeasonRecord = _pitcher(809, "Rule Cache Pitcher", 0.5)
+	var context: PSPitcherUsageModel.PlateContext = PSPitcherUsageModel.PlateContext.new()
+	var cache: Dictionary = PSPlateAppearanceCoordinator.create_game_cache()
+	cache[PSPlateAppearanceCoordinator.CACHE_PROBABILITY_RULES] = {"bb_logit_base": 30.0}
+	var old_seed: int = Rng.current_seed
+	var old_state: int = Rng.generator.state
+	Rng.set_seed_value(13579)
+	var results: Dictionary = {}
+	for _i in range(20):
+		var outcome: Dictionary = PSPlateAppearanceCoordinator.resolve_with_context(
+			batter, pitcher, {}, [null, null, null], 0, false, context, {}, cache
+		)
+		results[str(outcome.get("result", ""))] = true
+	Rng.current_seed = old_seed
+	Rng.generator.seed = old_seed
+	Rng.generator.state = old_state
+	assert_array(results.keys()).override_failure_message(
+		"試合キャッシュのルール辞書を四球しか出ない係数にしても、別の結果が出た: %s" % str(results.keys())
+	).contains_exactly([PSPlateAppearanceCoordinator.RESULT_WALK])
+
+
+# RuleValues の float フィールドごとに、他と重ならない値を同じ名前のキーで持つルール辞書を作る。
+func _distinct_rules_for_fields(values: Object, offset: float) -> Dictionary:
+	var rules: Dictionary = {}
+	for property_value in values.get_property_list():
+		var property: Dictionary = property_value as Dictionary
+		if (int(property.get("usage", 0)) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0:
+			continue
+		if int(property.get("type", TYPE_NIL)) != TYPE_FLOAT:
+			continue
+		rules[str(property.get("name", ""))] = offset + float(rules.size() + 1) * 0.001
+	return rules
+
+
+func _assert_rule_values_read_rules(values: Object, rules: Dictionary, label: String) -> void:
+	for key in rules.keys():
+		assert_float(float(values.get(str(key)))).override_failure_message(
+			"%s の係数 %s が同じ名前のルールキーから読まれていない" % [label, key]
+		).is_equal(float(rules[key]))
+	assert_bool(is_same(values.get("rules"), rules)).is_true()
+
+
 func test_contact_quality_preserves_matchup_balance_when_both_levels_drop() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state
@@ -2331,6 +2507,77 @@ func test_defensive_replacement_can_shuffle_an_existing_fielder_to_cover_the_pos
 	# 打順は退いた選手の枠を控えが引き継ぐ (動いた選手の打順は変わらない)。
 	assert_int(((setup["batters"] as Array)[0] as PSPlayerSeasonRecord).player_id).is_equal(bench_glove.player_id)
 	assert_bool((setup["bench"] as Array).has(bench_glove)).is_false()
+
+
+func test_defensive_replacement_rechecks_ability_injury_and_batting_distance() -> void:
+	var outgoing: PSPlayerSeasonRecord = _defender(921, "Hitter", 6, {"shortstop": 60}, 0.0)
+	for key in ["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Spray"]:
+		outgoing.z_abilities_snapshot[key] = 2.0
+	var mover: PSPlayerSeasonRecord = _defender(922, "Mover", 3, {"shortstop": 95, "first": 100}, 2.4)
+	var glove: PSPlayerSeasonRecord = _defender(923, "Glove", 3, {"first": 100}, 2.6)
+	var setup: Dictionary = {
+		"batters": [outgoing, mover], "batting_index": 0, "bench": [glove],
+		"fielders": [{"record": outgoing, "position": 6}, {"record": mover, "position": 3}],
+	}
+	var rng_state: int = Rng.generator.state
+	var option: Dictionary = PSInGameSubstitutions.defensive_replacement_option(setup, 0)
+	assert_object(option.get("outgoing")).is_same(outgoing)
+	assert_object(option.get("replacement")).is_same(glove)
+	assert_object(option.get("mover")).is_same(mover)
+	assert_int(int(option.get("mover_from_position", 0))).is_equal(3)
+	assert_bool(PSInGameSubstitutions.defensive_replacement_option(setup, 1).is_empty()).is_true()
+	setup["batting_index"] = 1
+	assert_bool(PSInGameSubstitutions.defensive_replacement_option(setup, 1).is_empty()).is_false()
+	mover.injury_days = 5
+	assert_bool(PSInGameSubstitutions.defensive_replacement_option(setup, 0).is_empty()).is_true()
+	mover.injury_days = 0
+	mover.position_aptitudes_snapshot["shortstop"] = 0
+	assert_bool(PSInGameSubstitutions.defensive_replacement_option(setup, 0).is_empty()).is_true()
+	mover.position_aptitudes_snapshot["shortstop"] = 95
+	var abilities: Dictionary = mover.z_abilities_snapshot.duplicate()
+	for key in mover.z_abilities_snapshot:
+		mover.z_abilities_snapshot[key] = -3.0
+	assert_bool(PSInGameSubstitutions.defensive_replacement_option(setup, 0).is_empty()).is_true()
+	mover.z_abilities_snapshot = abilities
+	assert_bool(PSInGameSubstitutions.defensive_replacement_option(setup, 0).is_empty()).is_false()
+	assert_int(Rng.generator.state).is_equal(rng_state)
+
+
+func test_defensive_replacement_prefers_direct_gain_and_keeps_bench_ties_in_order() -> void:
+	var outgoing: PSPlayerSeasonRecord = _fielder(931, "Hitter", 2.0)
+	outgoing.position_aptitudes_snapshot = {"shortstop": 60}
+	var mover: PSPlayerSeasonRecord = _defender(932, "Mover", 3, {"shortstop": 95, "first": 100}, 2.4)
+	var glove: PSPlayerSeasonRecord = _defender(933, "Glove", 3, {"first": 100}, 2.6)
+	var direct: PSPlayerSeasonRecord = _defender(934, "Direct", 6, {"shortstop": 100}, 5.0)
+	var tied: PSPlayerSeasonRecord = _defender(935, "Tied", 6, {"shortstop": 100}, 5.0)
+	var setup: Dictionary = {
+		"batters": [outgoing, mover], "bench": [glove, direct, tied],
+		"fielders": [{"record": outgoing, "position": 6}, {"record": mover, "position": 3}],
+	}
+	var option: Dictionary = PSInGameSubstitutions.defensive_replacement_option(setup, 0)
+	assert_object(option.get("replacement")).is_same(direct)
+	assert_object(option.get("mover")).is_null()
+	setup["bench"] = [glove, tied, direct]
+	option = PSInGameSubstitutions.defensive_replacement_option(setup, 0)
+	assert_object(option.get("replacement")).is_same(tied)
+	assert_object(option.get("mover")).is_null()
+
+
+func test_important_pinch_hit_chance_uses_current_half_runs_and_score_boundaries() -> void:
+	var runner: PSPlayerSeasonRecord = _fielder(941, "Runner", 0.0)
+	var game: Dictionary = {"away_team_id": 1, "home_team_id": 2, "away_score": 2, "home_score": 7}
+	for half in ["top", "bottom"]:
+		var setup: Dictionary = {"team_id": 1 if half == "top" else 2}
+		game["away_score"] = 2 if half == "top" else 7
+		game["home_score"] = 7 if half == "top" else 2
+		for runs in [0, 1, 5, 6, 7]:
+			var important: bool = PSInGameSubstitutions.is_important_pinch_hit_chance(
+				setup, game, 8, half, [runner, runner, runner], 0, runs
+			)
+			assert_bool(important).is_equal(runs >= 1 and runs <= 6)
+		assert_bool(PSInGameSubstitutions.is_important_pinch_hit_chance(
+			setup, game, 7, half, [null, null, null], 2, 1
+		)).is_false()
 
 
 # 継承走者の生還は降板済み投手の失点として付き、ホールド判定に使う exit_lead も動く。

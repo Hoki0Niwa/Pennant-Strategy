@@ -1478,16 +1478,19 @@ static func resolve_plate_outcome(
 	pa_cache: Dictionary = {}
 ) -> Dictionary:
 	var usage: Dictionary = PSBullpenManager.pitcher_usage_for(defense, pitcher)
-	var pitching_context: Dictionary = PSPitcherUsageModel.plate_context(pitcher, usage)
-	var is_reliever: bool = str(pitching_context.get("pitcher_role", PSPitcherUsageModel.ROLE_SHORT_RELIEF)) != PSPitcherUsageModel.ROLE_STARTER
-	return PSPlateAppearanceCoordinator.resolve(
+	var context: PSPitcherUsageModel.PlateContext = PSPitcherUsageModel.plate_context_values(pitcher, usage)
+	# 投手状態が作れない (投手不在・登板記録が空) ときは救援扱いにし、状態は既定値で計算する。
+	var is_reliever: bool = context == null or context.role != PSPitcherUsageModel.ROLE_STARTER
+	if context == null:
+		context = PSPitcherUsageModel.PlateContext.new()
+	return PSPlateAppearanceCoordinator.resolve_with_context(
 		batter,
 		pitcher,
 		defense,
 		bases,
 		outs,
 		is_reliever,
-		pitching_context,
+		context,
 		batting_context,
 		pa_cache
 	)
