@@ -347,14 +347,14 @@ func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, 
 
 	var row0: float = panel.position.y + 88
 	var bottom: float = panel.end.y - 12 - reserve_bottom
-	var visible: int = int((bottom - row0) / ROW_H)
-	var max_scroll: int = max(0, rows.size() - visible)
+	var visible_count: int = int((bottom - row0) / ROW_H)
+	var max_scroll: int = max(0, rows.size() - visible_count)
 	if int(_scroll[list_key]) > max_scroll:
 		_scroll[list_key] = max_scroll
 	var start: int = int(_scroll[list_key])
 
 	var y: float = row0
-	for i in range(start, min(start + visible, rows.size())):
+	for i in range(start, min(start + visible_count, rows.size())):
 		var row: Dictionary = rows[i] as Dictionary
 		var id: int = int(row["id"])
 		var row_rect: Rect2 = Rect2(x + 12, y - 18, w - 24, ROW_H)
@@ -370,7 +370,7 @@ func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, 
 	if rows.is_empty():
 		_text("該当する選手がいません", Vector2(x + 16, row0 + 6), 13, MUTED)
 	elif max_scroll > 0:
-		_text("▲▼ ホイールでスクロール (%d/%d)" % [min(start + visible, rows.size()), rows.size()],
+		_text("▲▼ ホイールでスクロール (%d/%d)" % [min(start + visible_count, rows.size()), rows.size()],
 			Vector2(x + 16, bottom + 6), 10, FAINT)
 
 
@@ -915,14 +915,14 @@ func _load_rotation_classification(season: PSSeason) -> void:
 
 # 区分チップ + ソート順を一括算出。投手は 先発/中継 の2区分のみ (クローザーは中継扱い)。
 # order: 先発0→中継1→捕3→一4→…→右10 (= ポジション番号順)。
-func _classify(pid: int, is_pitcher: bool, role: String, position: int, is_active: bool) -> Dictionary:
+func _classify(pid: int, is_pitcher: bool, role: String, pos: int, is_active: bool) -> Dictionary:
 	if is_pitcher:
 		if _pitcher_group(pid, role, is_active) == 0:
 			return {"text": "先発", "color": PINK, "order": 0}
 		return {"text": "中継", "color": RED, "order": 1}
-	var order: int = position + 1 if position >= 2 and position <= 9 else 11
+	var order: int = pos + 1 if pos >= 2 and pos <= 9 else 11
 	# 守備位置の色は共有基底 _pos_color に統一 (捕=BLUE / 内野=AMBER / 外野=GREEN)。
-	return {"text": _pos_short(position), "color": _pos_color(position), "order": order}
+	return {"text": _pos_short(pos), "color": _pos_color(pos), "order": order}
 
 
 # 0=先発 / 1=中継。1軍は保存ローテ入り=先発・それ以外=中継 (クローザーも中継)。
@@ -937,8 +937,8 @@ func _pitcher_group(pid: int, role: String, is_active: bool) -> int:
 	return 0
 
 
-func _pos_short(position: int) -> String:
-	match position:
+func _pos_short(pos: int) -> String:
+	match pos:
 		2: return "捕"
 		3: return "一"
 		4: return "二"

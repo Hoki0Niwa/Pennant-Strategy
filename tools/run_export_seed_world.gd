@@ -24,15 +24,15 @@ func _ready() -> void:
 		return
 
 	var seasons: int = int(options.get("seasons", 40))
-	var seed: int = int(options.get("seed", 20260528))
+	var seed_value: int = int(options.get("seed", 20260528))
 	var players_path: String = str(options.get("players", DEFAULT_PLAYERS_PATH))
 	var teams_path: String = str(options.get("teams", DEFAULT_TEAMS_PATH))
 
-	print("Export seed world: evolving %d seasons (seed=%d) ..." % [seasons, seed])
+	print("Export seed world: evolving %d seasons (seed=%d) ..." % [seasons, seed_value])
 	var reporter: Object = ReporterScript.new()
 	var report: Dictionary = reporter.run({
 		"seasons": seasons,
-		"seed": seed,
+		"seed": seed_value,
 		"keep_world": true,
 	})
 

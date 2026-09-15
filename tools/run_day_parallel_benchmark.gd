@@ -114,10 +114,13 @@ func _seed_history_stats(record: PSPlayerSeasonRecord, year_offset: int) -> void
 		record.pitcher_stats.relief_appearances = 0 if starter else 48
 		record.pitcher_stats.outs_pitched = (450 if starter else 165) + variation
 		record.pitcher_stats.batters_faced = (620 if starter else 235) + variation * 2
+		@warning_ignore("integer_division")
 		record.pitcher_stats.earned_runs = (58 if starter else 22) + variation / 3
 		record.pitcher_stats.runs_allowed = record.pitcher_stats.earned_runs + 4
 		record.pitcher_stats.hits_allowed = (135 if starter else 48) + variation
+		@warning_ignore("integer_division")
 		record.pitcher_stats.home_runs_allowed = (16 if starter else 6) + variation / 5
+		@warning_ignore("integer_division")
 		record.pitcher_stats.walks = (42 if starter else 17) + variation / 4
 		record.pitcher_stats.hit_batters = 3
 		record.pitcher_stats.strikeouts = (140 if starter else 55) + variation * 2
@@ -126,8 +129,10 @@ func _seed_history_stats(record: PSPlayerSeasonRecord, year_offset: int) -> void
 	record.batter_stats.plate_appearances = 480 + variation
 	record.batter_stats.at_bats = 420 + variation
 	record.batter_stats.hits = 105 + variation
+	@warning_ignore("integer_division")
 	record.batter_stats.doubles = 20 + variation / 3
 	record.batter_stats.triples = variation % 4
+	@warning_ignore("integer_division")
 	record.batter_stats.home_runs = 8 + variation / 2
 	record.batter_stats.walks = 42
 	record.batter_stats.hit_by_pitches = 5

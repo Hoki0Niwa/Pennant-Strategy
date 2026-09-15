@@ -936,14 +936,14 @@ func _set_camp_tab(tab_id: String) -> void:
 	if _camp_tab == tab_id:
 		return
 	_camp_tab = tab_id
-	var visible: Array = _candidate_rows_for_tab(_camp_candidate_rows, _camp_tab)
+	var visible_rows: Array = _candidate_rows_for_tab(_camp_candidate_rows, _camp_tab)
 	var still_visible: bool = false
-	for row_value in visible:
+	for row_value in visible_rows:
 		if int((row_value as Dictionary).get("candidate_id", 0)) == selected_camp_player_id:
 			still_visible = true
 			break
 	if not still_visible:
-		selected_camp_player_id = int((visible[0] as Dictionary).get("candidate_id", 0)) if not visible.is_empty() else 0
+		selected_camp_player_id = int((visible_rows[0] as Dictionary).get("candidate_id", 0)) if not visible_rows.is_empty() else 0
 		selected_camp_training_type = ""
 		selected_camp_target_position = 0
 	_refresh()
@@ -1125,14 +1125,14 @@ func _set_draft_tab(tab_id: String) -> void:
 		return
 	_draft_tab = tab_id
 	# 選択中の候補が新タブで見えなければ、先頭の候補へ移す。
-	var visible: Array = _candidate_rows_for_tab(_draft_candidate_rows, _draft_tab)
+	var visible_rows: Array = _candidate_rows_for_tab(_draft_candidate_rows, _draft_tab)
 	var still_visible: bool = false
-	for row_value in visible:
+	for row_value in visible_rows:
 		if int((row_value as Dictionary).get("candidate_id", 0)) == selected_draft_candidate_id:
 			still_visible = true
 			break
 	if not still_visible:
-		selected_draft_candidate_id = int((visible[0] as Dictionary).get("candidate_id", 0)) if not visible.is_empty() else 0
+		selected_draft_candidate_id = int((visible_rows[0] as Dictionary).get("candidate_id", 0)) if not visible_rows.is_empty() else 0
 	_build_buttons()
 	queue_redraw()
 
@@ -1333,6 +1333,7 @@ func _draw_summary_panel() -> void:
 # _format_money_compact (概算・億丸め) と使い分ける。
 func _format_money_exact(man_value: int) -> String:
 	var a: int = absi(man_value)
+	@warning_ignore("integer_division")
 	var oku: int = a / 10000
 	var man: int = a % 10000
 	if oku > 0 and man > 0:
@@ -1435,6 +1436,7 @@ func _draw_draft_reveal_cards_panel(rect: Rect2, title: String) -> void:
 	for i in range(_draft_reveal_cards.size()):
 		var card: Dictionary = _draft_reveal_cards[i] as Dictionary
 		var col: int = i % cols
+		@warning_ignore("integer_division")
 		var row: int = int(i / cols)
 		var cx: float = grid_rect.position.x + float(col) * (card_w + gap)
 		var cy: float = grid_rect.position.y + float(row) * (card_h + gap)
@@ -1500,9 +1502,9 @@ func _draw_candidate_board(rect: Rect2, rows: Array, tab: String, selected_id: i
 	var row_h: float = 27.0
 	var row_top: float = rect.position.y + 50.0
 	var bottom: float = rect.end.y - 12.0
-	var visible: int = max(1, int((bottom - row_top) / row_h))
+	var visible_count: int = max(1, int((bottom - row_top) / row_h))
 	var scroll_key: String = "%s_board_%s" % [sel_kind, tab]
-	var max_scroll: int = max(0, visible_rows.size() - visible)
+	var max_scroll: int = max(0, visible_rows.size() - visible_count)
 	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_scroll)
 	_scroll[scroll_key] = offset
 	if max_scroll > 0:
@@ -1510,7 +1512,7 @@ func _draw_candidate_board(rect: Rect2, rows: Array, tab: String, selected_id: i
 
 	var y: float = row_top + 21.0
 	var drawn: int = 0
-	for i in range(offset, min(offset + visible, visible_rows.size())):
+	for i in range(offset, min(offset + visible_count, visible_rows.size())):
 		var row: Dictionary = visible_rows[i] as Dictionary
 		var cid: int = int(row.get("candidate_id", 0))
 		var row_rect: Rect2 = Rect2(rect.position.x + 10.0, y - 19.0, rect.size.x - 20.0, row_h)
@@ -1536,7 +1538,7 @@ func _draw_candidate_board(rect: Rect2, rows: Array, tab: String, selected_id: i
 		_line(Vector2(sep_x, band_top), Vector2(sep_x, rows_bottom), HAIRLINE, 1.0)
 
 	if max_scroll > 0:
-		_text_right("%d / %d" % [min(offset + visible, visible_rows.size()), visible_rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+		_text_right("%d / %d" % [min(offset + visible_count, visible_rows.size()), visible_rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
 func _draft_table_x(rect: Rect2, pitcher: bool) -> Dictionary:
@@ -1664,7 +1666,7 @@ func _draw_candidate_fielder_header(rect: Rect2, y: float, info1_header: String,
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
-func _draw_candidate_identity(rect: Rect2, xs: Dictionary, row: Dictionary, y: float) -> void:
+func _draw_candidate_identity(_rect: Rect2, xs: Dictionary, row: Dictionary, y: float) -> void:
 	_text_cell("#%d" % int(row.get("rank", 0)), float(xs["rank_r"]), y, 12, FAINT, 40.0)
 	_text(str(row.get("name", "")), Vector2(float(xs["name_x"]), y), 13, TEXT, float(xs["age_r"]) - 46.0 - float(xs["name_x"]), HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_cell(str(int(row.get("age", 0))), float(xs["age_r"]), y, 13, MUTED, 40.0)
@@ -2234,9 +2236,9 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 	# 1巡目 抽選結果も表パネルに (テキスト羅列をやめる)。
 	var lottery_rows: Array = []
 	for log_row in result.get("logs", []) as Array:
-		var log: Dictionary = log_row as Dictionary
-		if str(log.get("type", "")) == "lottery":
-			lottery_rows.append(_lottery_row(log))
+		var log_entry: Dictionary = log_row as Dictionary
+		if str(log_entry.get("type", "")) == "lottery":
+			lottery_rows.append(_lottery_row(log_entry))
 	if not lottery_rows.is_empty():
 		var lottery_h: float = min(64.0 + float(lottery_rows.size()) * 28.0, 220.0)
 		_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, lottery_h), "1巡目 抽選", LOTTERY_COLUMNS, lottery_rows, "draft_result_lottery", "", 0, true, 15, 28.0)
@@ -2326,8 +2328,8 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 	var row_h: float = 27.0
 	var row_top: float = rect.position.y + 94.0 + table_gap
 	var bottom: float = rect.end.y - 12.0
-	var visible: int = max(1, int((bottom - row_top) / row_h))
-	var max_scroll: int = max(0, rows.size() - visible)
+	var visible_count: int = max(1, int((bottom - row_top) / row_h))
+	var max_scroll: int = max(0, rows.size() - visible_count)
 	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_scroll)
 	_scroll[scroll_key] = offset
 	if max_scroll > 0:
@@ -2335,7 +2337,7 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 
 	var y: float = row_top + 21.0
 	var drawn: int = 0
-	for i in range(offset, min(offset + visible, rows.size())):
+	for i in range(offset, min(offset + visible_count, rows.size())):
 		var row: Dictionary = rows[i] as Dictionary
 		var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 		var row_rect: Rect2 = Rect2(rect.position.x + 10.0, y - 19.0, rect.size.x - 20.0, row_h)
@@ -2376,7 +2378,7 @@ func _draw_player_record_table(rect: Rect2, title: String, source_rows: Array, p
 		_line(Vector2(float(sep_x), band_top), Vector2(float(sep_x), rows_bottom), HAIRLINE, 1.0)
 
 	if max_scroll > 0:
-		_text_right("%d / %d" % [min(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+		_text_right("%d / %d" % [min(offset + visible_count, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
 func _draw_people_player_table(rect: Rect2, title: String, people: Array, tab_id: String, career_stats: bool, empty_text: String, scroll_key: String, show_tab_space: bool, show_salary: bool = false) -> void:
@@ -2859,12 +2861,12 @@ func _player_table_sep_xs(xs: Dictionary, pitcher: bool) -> Array:
 # 見出し + テーブル1枚のシンプルな結果レイアウト。
 func _heading_table(rect: Rect2, heading: String, columns: Array, rows: Array, empty_text: String, scroll_key: String) -> void:
 	_text(heading, Vector2(rect.position.x, rect.position.y + 22), 18, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	var tr: Rect2 = Rect2(rect.position.x, rect.position.y + 40.0, rect.size.x, rect.size.y - 40.0)
+	var table_rect: Rect2 = Rect2(rect.position.x, rect.position.y + 40.0, rect.size.x, rect.size.y - 40.0)
 	if rows.is_empty():
 		if not empty_text.is_empty():
 			_text(empty_text, Vector2(rect.position.x + 4, rect.position.y + 72), 14, MUTED)
 		return
-	_draw_table(tr, "", columns, rows, scroll_key, "", 0)
+	_draw_table(table_rect, "", columns, rows, scroll_key, "", 0)
 
 
 # ============================================================ table primitives
@@ -2888,14 +2890,14 @@ func _draw_table_inner(rect: Rect2, title: String, columns: Array, rows: Array, 
 
 
 # 改行区切りテキストを描き、最終 y を返す。空行は半行ぶん送る。
-func _draw_text_lines(x: float, y: float, w: float, text: String, size: int, color: Color) -> float:
-	var line_h: float = float(size) + 9.0
+func _draw_text_lines(x: float, y: float, w: float, text: String, font_size: int, color: Color) -> float:
+	var line_h: float = float(font_size) + 9.0
 	var cy: float = y
 	for line in text.split("\n"):
 		if line == "":
 			cy += line_h * 0.5
 			continue
-		_text(line, Vector2(x, cy + float(size)), size, color, w)
+		_text(line, Vector2(x, cy + float(font_size)), font_size, color, w)
 		cy += line_h
 	return cy
 
@@ -3209,15 +3211,15 @@ func _populate_draft() -> void:
 	if selected_draft_candidate_id > 0 and not _draft_cand_by_id.has(selected_draft_candidate_id):
 		selected_draft_candidate_id = 0
 	if selected_draft_candidate_id <= 0:
-		var visible: Array = _candidate_rows_for_tab(_draft_candidate_rows, _draft_tab)
-		if not visible.is_empty():
-			selected_draft_candidate_id = int((visible[0] as Dictionary).get("candidate_id", 0))
+		var visible_rows: Array = _candidate_rows_for_tab(_draft_candidate_rows, _draft_tab)
+		if not visible_rows.is_empty():
+			selected_draft_candidate_id = int((visible_rows[0] as Dictionary).get("candidate_id", 0))
 
 	_draft_lottery_rows = []
 	for log_row in state.get("logs", []) as Array:
-		var log: Dictionary = log_row as Dictionary
-		if str(log.get("type", "")) == "lottery":
-			_draft_lottery_rows.append(_lottery_row(log))
+		var log_entry: Dictionary = log_row as Dictionary
+		if str(log_entry.get("type", "")) == "lottery":
+			_draft_lottery_rows.append(_lottery_row(log_entry))
 
 	_draft_pick_rows = []
 	for pick_row in state.get("picks", []) as Array:
@@ -3266,7 +3268,7 @@ func _populate_draft() -> void:
 # ドラフト候補1件を候補ボード用モデルに変換。中央2列 (出身/成長) は info1/info2 に入れる。
 func _draft_candidate_row(candidate: Dictionary) -> Dictionary:
 	var template: Dictionary = candidate.get("player_template", {}) as Dictionary
-	var position: int = int(candidate.get("position", 0))
+	var pos: int = int(candidate.get("position", 0))
 	var growth: float = float(candidate.get("growth_expectation", 0.0))
 	return {
 		"candidate_id": int(candidate.get("candidate_id", 0)),
@@ -3277,8 +3279,8 @@ func _draft_candidate_row(candidate: Dictionary) -> Dictionary:
 		"info1": _source_label(str(candidate.get("source_type", ""))),
 		"info2": "%+0.1f" % growth,
 		"info2_color": _draft_growth_color(growth),
-		"is_pitcher": position == 1,
-		"position": position,
+		"is_pitcher": pos == 1,
+		"position": pos,
 		"role": str(template.get("role", "starter")),
 		"aptitudes": template.get("position_aptitudes", {}) as Dictionary,
 		"arsenal": template.get("arsenal", []) as Array,
@@ -3375,11 +3377,11 @@ func _pick_note(pick: Dictionary) -> String:
 
 # 守備位置/役割バッジの表示文字と色。投手は役割色 (先発=PINK / 中継=RED)、野手は守備位置色。
 func _pick_pos_badge(pick: Dictionary) -> Dictionary:
-	var position: int = int(pick.get("position", 0))
-	if position == 1:
+	var pos: int = int(pick.get("position", 0))
+	if pos == 1:
 		var role: String = _resolved_pitcher_role(str(pick.get("role", "")), pick)
 		return {"text": _role_char(role), "color": _role_color(role)}
-	return {"text": _position_char(position), "color": _pos_color(position)}
+	return {"text": _position_char(pos), "color": _pos_color(pos)}
 
 
 # チームカラー (テーブルのカラーアイコン用)。不明チームは MUTED。
@@ -3406,14 +3408,14 @@ func _source_label(source_type: String) -> String:
 			return source_type
 
 
-func _lottery_row(log: Dictionary) -> Dictionary:
+func _lottery_row(log_entry: Dictionary) -> Dictionary:
 	var teams: PackedStringArray = PackedStringArray()
-	for team_id_value in log.get("teams", []) as Array:
+	for team_id_value in log_entry.get("teams", []) as Array:
 		teams.append(_team_short(int(team_id_value)))
-	var winner_id: int = int(log.get("winner_team_id", 0))
+	var winner_id: int = int(log_entry.get("winner_team_id", 0))
 	return {
-		"wave": int(log.get("wave", 0)),
-		"name": str(log.get("candidate_name", "")),
+		"wave": int(log_entry.get("wave", 0)),
+		"name": str(log_entry.get("candidate_name", "")),
 		"teams": ", ".join(teams),
 		"team": _team_short(winner_id),
 		"color": _team_color(winner_id),
@@ -4756,9 +4758,9 @@ func _populate_foreign() -> void:
 	for row in state.get("signings", []) as Array:
 		if int((row as Dictionary).get("to_team", 0)) == AppState.selected_team_id:
 			user_signings += 1
-	var request_ready: bool = not (state.get("user_request", {}) as Dictionary).is_empty()
+	var has_request: bool = not (state.get("user_request", {}) as Dictionary).is_empty()
 	_foreign_status_text = "外国人補強: 現在%d人 / 今オフ獲得%d人 / 上限4 / %s" % [
-		current_foreign, user_signings, "候補%d人" % candidates.size() if request_ready else "条件を選んで候補を検索してください",
+		current_foreign, user_signings, "候補%d人" % candidates.size() if has_request else "条件を選んで候補を検索してください",
 	]
 	# 一覧はドラフトと同じ候補ボード。中央2列は 評価(tier) / 年俸。
 	_foreign_record_cache = {}
@@ -4774,16 +4776,16 @@ func _populate_foreign() -> void:
 	if selected_foreign_candidate_id > 0 and not _foreign_by_id.has(selected_foreign_candidate_id):
 		selected_foreign_candidate_id = 0
 	if selected_foreign_candidate_id <= 0:
-		var visible: Array = _candidate_rows_for_tab(_foreign_candidate_rows, "all")
-		if not visible.is_empty():
-			selected_foreign_candidate_id = int((visible[0] as Dictionary).get("candidate_id", 0))
+		var visible_rows: Array = _candidate_rows_for_tab(_foreign_candidate_rows, "all")
+		if not visible_rows.is_empty():
+			selected_foreign_candidate_id = int((visible_rows[0] as Dictionary).get("candidate_id", 0))
 	_foreign_can_submit = selected_foreign_candidate_id > 0
 
 
 # 外国人候補1件を候補ボード用モデルに変換。中央2列は 評価(tier短縮) / 年俸(万)。
 func _foreign_candidate_row(c: Dictionary, rank: int) -> Dictionary:
 	var template: Dictionary = c.get("display_player_data", c.get("player_data", {})) as Dictionary
-	var position: int = int(c.get("position", 0))
+	var pos: int = int(c.get("position", 0))
 	return {
 		"candidate_id": int(c.get("candidate_id", 0)),
 		"name": str(c.get("name", "")),
@@ -4793,8 +4795,8 @@ func _foreign_candidate_row(c: Dictionary, rank: int) -> Dictionary:
 		"info1": _foreign_archetype_short(str(c.get("archetype", "balanced"))),
 		"info2": str(int(c.get("salary", 0))),
 		"info2_color": TEXT,
-		"is_pitcher": position == 1,
-		"position": position,
+		"is_pitcher": pos == 1,
+		"position": pos,
 		"role": str(template.get("role", "starter")),
 		"aptitudes": template.get("position_aptitudes", {}) as Dictionary,
 		"arsenal": template.get("arsenal", []) as Array,
@@ -4838,14 +4840,14 @@ func _foreign_archetype_short(archetype: String) -> String:
 	return str(labels.get(archetype, archetype))
 
 
-func _select_foreign_position(position: String) -> void:
-	_foreign_request_position = position
-	var pitcher_request: bool = position == "starter" or position == "reliever"
+func _select_foreign_position(request_position: String) -> void:
+	_foreign_request_position = request_position
+	var pitcher_request: bool = request_position == "starter" or request_position == "reliever"
 	var allowed: Array = FOREIGN_PITCHER_TYPES if pitcher_request else FOREIGN_FIELDER_TYPES
 	var allowed_ids: Array = []
 	for option_value in allowed:
 		allowed_ids.append(str((option_value as Dictionary).get("id", "")))
-	if not allowed_ids.has(_foreign_request_archetype) or position == "any":
+	if not allowed_ids.has(_foreign_request_archetype) or request_position == "any":
 		_foreign_request_archetype = "balanced"
 	_build_buttons()
 	queue_redraw()
@@ -4951,9 +4953,9 @@ func _populate_camp() -> void:
 	if selected_camp_player_id > 0 and not roster_ids.has(selected_camp_player_id):
 		selected_camp_player_id = 0
 	if selected_camp_player_id <= 0:
-		var visible: Array = _candidate_rows_for_tab(_camp_candidate_rows, _camp_tab)
-		if not visible.is_empty():
-			selected_camp_player_id = int((visible[0] as Dictionary).get("candidate_id", 0))
+		var visible_rows: Array = _candidate_rows_for_tab(_camp_candidate_rows, _camp_tab)
+		if not visible_rows.is_empty():
+			selected_camp_player_id = int((visible_rows[0] as Dictionary).get("candidate_id", 0))
 
 	_camp_options = []
 	_camp_types = []
@@ -5335,15 +5337,15 @@ func _release_visible_records() -> Array:
 
 
 func _released_visible_player_rows() -> Array:
-	var visible: Array = []
+	var visible_rows: Array = []
 	for row_value in _released_player_rows:
 		var row: Dictionary = _player_row_model(row_value)
 		var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 		if record == null:
 			continue
 		if (record.is_pitcher() and _released_tab == PLAYER_TAB_PITCHER) or (not record.is_pitcher() and _released_tab == PLAYER_TAB_FIELDER):
-			visible.append(row)
-	return visible
+			visible_rows.append(row)
+	return visible_rows
 
 
 func _player_row_pitcher_fielder_counts(rows: Array) -> Dictionary:
@@ -5360,15 +5362,15 @@ func _player_row_pitcher_fielder_counts(rows: Array) -> Dictionary:
 
 # 選手レコード表 (戦力外獲得 / FA) 共通のタブ補助。指定タブで見える行のみを返す。
 func _player_visible_rows_for_tab(rows: Array, tab: String) -> Array:
-	var visible: Array = []
+	var visible_rows: Array = []
 	for row_value in rows:
 		var row: Dictionary = _player_row_model(row_value)
 		var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 		if record == null:
 			continue
 		if (record.is_pitcher() and tab == PLAYER_TAB_PITCHER) or (not record.is_pitcher() and tab == PLAYER_TAB_FIELDER):
-			visible.append(row)
-	return visible
+			visible_rows.append(row)
+	return visible_rows
 
 
 # 現タブが空なら、行のある反対タブへ切り替えた結果のタブ id を返す。
@@ -5382,14 +5384,14 @@ func _player_tab_with_rows(rows: Array, tab: String) -> String:
 
 # 選択中 id が現タブで見えるなら維持、見えなければ先頭行の player_id (なければ 0)。
 func _player_first_visible_id(rows: Array, tab: String, selected_id: int) -> int:
-	var visible: Array = _player_visible_rows_for_tab(rows, tab)
-	for row_value in visible:
+	var visible_rows: Array = _player_visible_rows_for_tab(rows, tab)
+	for row_value in visible_rows:
 		var record: PSPlayerSeasonRecord = (row_value as Dictionary).get("record", null) as PSPlayerSeasonRecord
 		if record != null and record.player_id == selected_id:
 			return selected_id
-	if visible.is_empty():
+	if visible_rows.is_empty():
 		return 0
-	var first: PSPlayerSeasonRecord = (visible[0] as Dictionary).get("record", null) as PSPlayerSeasonRecord
+	var first: PSPlayerSeasonRecord = (visible_rows[0] as Dictionary).get("record", null) as PSPlayerSeasonRecord
 	return first.player_id if first != null else 0
 
 
@@ -5403,18 +5405,18 @@ func _normalize_released_tab() -> void:
 
 
 func _ensure_released_selection_for_tab() -> void:
-	var visible: Array = _released_visible_player_rows()
-	if visible.is_empty():
+	var visible_rows: Array = _released_visible_player_rows()
+	if visible_rows.is_empty():
 		selected_released_candidate_id = 0
 		_released_can_submit = false
 		return
-	for row_value in visible:
+	for row_value in visible_rows:
 		var row: Dictionary = row_value as Dictionary
 		var record: PSPlayerSeasonRecord = row.get("record", null) as PSPlayerSeasonRecord
 		if record != null and record.player_id == selected_released_candidate_id:
 			_released_can_submit = selected_released_candidate_id > 0
 			return
-	var first: Dictionary = visible[0] as Dictionary
+	var first: Dictionary = visible_rows[0] as Dictionary
 	var first_record: PSPlayerSeasonRecord = first.get("record", null) as PSPlayerSeasonRecord
 	selected_released_candidate_id = first_record.player_id if first_record != null else 0
 	_released_can_submit = selected_released_candidate_id > 0
@@ -5512,8 +5514,8 @@ func _people_pitcher_fielder_counts(people: Array) -> Dictionary:
 
 
 func _entry_is_pitcher(entry: Dictionary) -> bool:
-	var position: int = int(entry.get("position", 0))
-	if position == 1:
+	var pos: int = int(entry.get("position", 0))
+	if pos == 1:
 		return true
 	var player: PSPlayer = GameDb.get_player(int(entry.get("player_id", 0)))
 	return player != null and player.is_pitcher()
@@ -5629,8 +5631,8 @@ func _role_color(role: String) -> Color:
 			return RED
 
 
-func _text_cell(text: String, right_x: float, y: float, size: int, color: Color, box: float = 44.0) -> void:
-	_text_right(text, right_x, y, size, color, box)
+func _text_cell(text: String, right_x: float, y: float, font_size: int, color: Color, box: float = 44.0) -> void:
+	_text_right(text, right_x, y, font_size, color, box)
 
 
 func _salary_delta_text(delta: int) -> String:
@@ -5668,6 +5670,7 @@ func _record_injury_days(record: PSPlayerSeasonRecord, player: PSPlayer, _entry:
 func _ip_str(ps: PSPitcherStats) -> String:
 	if ps == null or ps.outs_pitched <= 0:
 		return "0"
+	@warning_ignore("integer_division")
 	return "%d.%d" % [ps.outs_pitched / 3, ps.outs_pitched % 3]
 
 
@@ -5873,10 +5876,10 @@ func _player_role_or_position(player: PSPlayer) -> String:
 	return _position_name(player.position if player != null else 0)
 
 
-func _role_or_position_name(position: int, role: String, data: Dictionary = {}) -> String:
-	if position == 1:
+func _role_or_position_name(pos: int, role: String, data: Dictionary = {}) -> String:
+	if pos == 1:
 		return _role_label(_resolved_pitcher_role(role, data))
-	return _position_name(position)
+	return _position_name(pos)
 
 
 func _resolved_pitcher_role(role: String, data: Dictionary) -> String:

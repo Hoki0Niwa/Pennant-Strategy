@@ -156,11 +156,11 @@ static func batter_shift_scale(record: PSPlayerSeasonRecord) -> float:
 # ⚠️ **テール圧縮の後に呼ぶ。** 前に呼ぶと名目の 2 割が圧縮に食われ、しかも能力の高い打者ほど
 # 左右差が小さくなる (MLB 実測は逆) — 理由は `_build_batter_z_view` のコメント。
 static func apply_batter_shift(
-	batter_z: Dictionary, record: PSPlayerSeasonRecord, sign: float, base_shift_z: float = ABILITY_SHIFT_Z
+	batter_z: Dictionary, record: PSPlayerSeasonRecord, platoon_sign: float, base_shift_z: float = ABILITY_SHIFT_Z
 ) -> void:
-	if is_zero_approx(sign):
+	if is_zero_approx(platoon_sign):
 		return
-	var delta: float = sign * batter_shift_z(record, base_shift_z)
+	var delta: float = platoon_sign * batter_shift_z(record, base_shift_z)
 	if is_zero_approx(delta):
 		return
 	for key in SHIFT_KEYS:

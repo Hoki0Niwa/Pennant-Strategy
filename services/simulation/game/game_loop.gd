@@ -672,7 +672,7 @@ static func apply_in_game_injuries_after_plate(
 	batter: PSPlayerSeasonRecord,
 	outcome: Dictionary,
 	outs: int,
-	bases: Array,
+	_bases: Array,
 	runs: int
 ) -> void:
 	var hit_by_pitch: bool = str(outcome.get("category", "")) == "hit_by_pitch"

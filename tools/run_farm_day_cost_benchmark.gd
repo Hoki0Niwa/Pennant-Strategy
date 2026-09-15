@@ -324,8 +324,8 @@ func _median_of(totals: Dictionary, mode: String, key: String) -> float:
 	return float(values[values.size() >> 1])
 
 
-func _env_int(name: String, fallback: int) -> int:
-	var raw: String = OS.get_environment(name)
+func _env_int(env_name: String, fallback: int) -> int:
+	var raw: String = OS.get_environment(env_name)
 	if raw.is_valid_int():
 		return max(1, int(raw))
 	return fallback

@@ -116,12 +116,12 @@ func rule_float(path: String, fallback: float) -> float:
 
 
 # 打席ループ向け。固定groupのDictionaryから短いkeyだけで読み、dot pathの連結を避ける。
-func rule_group_float(group: int, name: String, fallback: float) -> float:
+func rule_group_float(group: int, key: String, fallback: float) -> float:
 	var groups: Array[Dictionary] = _hot_rule_groups
 	if group < 0 or group >= groups.size():
 		return fallback
 	var values: Dictionary = groups[group]
-	var value: Variant = values.get(name, fallback)
+	var value: Variant = values.get(key, fallback)
 	return float(value) if _is_number_like(value) else fallback
 
 

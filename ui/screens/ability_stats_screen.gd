@@ -845,7 +845,9 @@ func _batter_advanced_dict(record: PSPlayerSeasonRecord, war: Dictionary) -> Dic
 	var chances: int = int(ad_dict.get("fielding_chances", 0))
 	var has_field: bool = chances > 0
 	var field_val: Callable = func(key: String) -> Variant:
+		@warning_ignore("incompatible_ternary")
 		return float(ad_dict.get(key, 0.0)) if has_field else "-"
+	@warning_ignore("incompatible_ternary")
 	return {
 		"pa": ad.plate_appearances if ad != null else 0,
 		"ppa": (float(bs.pitches_seen) / float(bs.plate_appearances)) if bs.plate_appearances > 0 else "-",
@@ -870,6 +872,7 @@ func _pitcher_advanced_dict(record: PSPlayerSeasonRecord, war: Dictionary) -> Di
 	var ps: PSPitcherStats = record.pitcher_stats
 	var has_ip: bool = ps.outs_pitched > 0
 	var ip: float = ps.innings_pitched()
+	@warning_ignore("incompatible_ternary")
 	return {
 		"ip": ip,
 		"fip": float(war.get("fip", 0.0)) if has_ip else "-",

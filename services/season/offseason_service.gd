@@ -3,7 +3,6 @@ class_name OffseasonService
 
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
-const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
 # 引退は「年齢による自然減」と「高齢かつ低稼働」を併用する。
 # 出場機会を維持している選手でも40歳以降は毎年確率が上がり、48歳で必ず引退する。

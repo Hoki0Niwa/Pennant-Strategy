@@ -854,9 +854,9 @@ static func _team_can_pick(state: Dictionary, team_id: int) -> bool:
 		# (team_dev_targets、保有目安との差で決まる) と1球団あたりの上限だけで止める。
 		var dev_counts: Dictionary = state.get("team_dev_pick_counts", {}) as Dictionary
 		var dev_picked: int = int(dev_counts.get(str(team_id), 0))
-		var targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
-		var target: int = int(targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
-		return dev_picked < target and dev_picked < DEV_DRAFT_MAX_PICKS
+		var dev_targets: Dictionary = state.get("team_dev_targets", {}) as Dictionary
+		var dev_target: int = int(dev_targets.get(str(team_id), DEV_DRAFT_MAX_PICKS))
+		return dev_picked < dev_target and dev_picked < DEV_DRAFT_MAX_PICKS
 	# 本指名: 支配下 hard 空き (70 − 在籍支配下) と need-driven 目標 (team_main_targets) で制限。
 	# ドラフトは年1回の主補強なので soft 67 では止めず、3人程度で終わる年を避ける。
 	var counts: Dictionary = state.get("team_pick_counts", {}) as Dictionary

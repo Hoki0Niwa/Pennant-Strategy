@@ -3,8 +3,6 @@ extends GdUnitTestSuite
 # ドラフトの2フェーズ分割 (本指名=支配下 / 育成ドラフト=育成) を検証する。
 # 本指名は6人を基本線に支配下状況で 4〜9 程度、育成は 0〜3。
 
-const DraftService = preload("res://services/season/draft_service.gd")
-
 
 # ドラフト候補の野手位置分布は up-the-middle (遊撃/中堅) 偏重で、一塁/左翼は稀。
 # 内野/外野を一様に振ると 1B/LF が過剰供給になり、リーグ構成が現実と逆転する。

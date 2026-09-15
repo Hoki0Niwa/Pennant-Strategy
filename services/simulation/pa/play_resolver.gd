@@ -390,7 +390,7 @@ static func resolve(
 			var double_play_outcome: Dictionary = _double_play_outcome(position)
 			_apply_double_play_context(double_play_outcome, double_play_opportunity, double_play_probability)
 			return _enrich(double_play_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
-		var fielders_choice_outcome: Dictionary = _maybe_fielders_choice_outcome(
+		var choice_outcome: Dictionary = _maybe_fielders_choice_outcome(
 			batter,
 			bases,
 			outs,
@@ -400,9 +400,9 @@ static func resolve(
 			ability_arm,
 			ability_teamwork
 		)
-		if not fielders_choice_outcome.is_empty():
-			_apply_double_play_context(fielders_choice_outcome, double_play_opportunity, double_play_probability)
-			return _enrich(fielders_choice_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
+		if not choice_outcome.is_empty():
+			_apply_double_play_context(choice_outcome, double_play_opportunity, double_play_probability)
+			return _enrich(choice_outcome, catch_prob_used, catch_prob_neutral, ability_range, ability_accuracy, position)
 		var home_throw_outcome: Dictionary = _maybe_nonforce_home_throw_outcome(
 			batter,
 			bases,

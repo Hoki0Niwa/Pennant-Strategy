@@ -264,11 +264,11 @@ func _print_usage(team_id: int, season: PSSeason) -> void:
 	var batting: PSBatterStats = PSBatterStats.new()
 	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
 		batting.add_from((record_row as PSPlayerSeasonRecord).farm_batter_stats)
-	var stats: PSStats = season.farm_standings.get(team_id) as PSStats
+	var standing: PSStats = season.farm_standings.get(team_id) as PSStats
 	print("%-24s %6d %11d %6d %9.1f %7.1f %6.2f %6.2f %6.2f %5d %5d %6.3f %6.3f" % [
 		_team_label(team_id), used, started, complete_games, innings, float(max_outs) / 3.0,
 		float(walks) * 9.0 / innings, float(strikeouts) * 9.0 / innings, float(earned) * 9.0 / innings,
-		stats.runs_scored if stats != null else 0, stats.runs_allowed if stats != null else 0,
+		standing.runs_scored if standing != null else 0, standing.runs_allowed if standing != null else 0,
 		batting.batting_average(), batting.ops(),
 	])
 

@@ -139,6 +139,7 @@ func _league_card_rect(area_x: float, idx: int, n: int) -> Rect2:
 	var cw: float = (LEAGUE_W - float(COLS - 1) * GAP) / float(COLS)
 	var ch: float = (area_h - float(rows - 1) * GAP) / float(max(rows, 1))
 	var col: int = idx % COLS
+	@warning_ignore("integer_division")
 	var row: int = idx / COLS
 	return Rect2(area_x + float(col) * (cw + GAP), CARD_TOP + float(row) * (ch + GAP), cw, ch)
 
@@ -279,13 +280,13 @@ func _team_defense_score(team_id: int) -> float:
 		if not _is_controlled_fielder(player):
 			continue
 		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
-		for position in range(2, 10):
-			var score: float = float(PlayerValueEvaluator.defensive_score_for_position(record, position))
-			if score > float(best_by_position.get(position, 0.0)):
-				best_by_position[position] = score
+		for pos in range(2, 10):
+			var score: float = float(PlayerValueEvaluator.defensive_score_for_position(record, pos))
+			if score > float(best_by_position.get(pos, 0.0)):
+				best_by_position[pos] = score
 	var total: float = 0.0
-	for position in range(2, 10):
-		total += float(best_by_position.get(position, 0.0))
+	for pos in range(2, 10):
+		total += float(best_by_position.get(pos, 0.0))
 	return total / 8.0
 
 

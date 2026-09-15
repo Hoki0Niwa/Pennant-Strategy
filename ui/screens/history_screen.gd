@@ -851,6 +851,7 @@ func _draw_position_cards(rect: Rect2) -> void:
 	var card_h: float = (view_bottom - view_top - float(rows - 1) * LU_CARD_GAP) / float(rows)
 	for i in range(n):
 		var col: int = i % cols
+		@warning_ignore("integer_division")
 		var row: int = int(i / cols)
 		var cx: float = inner_x + float(col) * (card_w + LU_CARD_GAP)
 		var cy: float = view_top + float(row) * (card_h + LU_CARD_GAP)
@@ -960,9 +961,9 @@ func _draw_position_card_row(card: Rect2, y: float, row: Dictionary, layout: Dic
 		var pos: Dictionary = positions[key] as Dictionary
 		_text_right(_pos_cell_text(key, row), float(pos["right"]), ty, 12, _pos_cell_color(key, row), float(pos["w"]))
 
-	var name: String = str(row.get("name", "-"))
+	var player_name: String = str(row.get("name", "-"))
 	var name_w: float = float(layout["stats_left_x"]) - card.position.x - LU_CARD_PAD_X - 6.0
-	_text(name, Vector2(card.position.x + LU_CARD_PAD_X, ty), 12, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(player_name, Vector2(card.position.x + LU_CARD_PAD_X, ty), 12, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	if pid > 0:
 		_lu_pos_row_hits.append({"rect": row_rect, "pid": pid})
@@ -1184,14 +1185,14 @@ func _draw_games_panel(rect: Rect2) -> void:
 	var row_top: float = line_y + 8.0
 	var row_h: float = 34.0
 	var area_h: float = rect.end.y - row_top - 10.0
-	var visible: int = max(1, int(area_h / row_h))
-	var max_off: int = max(0, _lu_game_rows.size() - visible)
+	var visible_count: int = max(1, int(area_h / row_h))
+	var max_off: int = max(0, _lu_game_rows.size() - visible_count)
 	var offset: int = clampi(int(_lu_scroll.get("games", 0)), 0, max_off)
 	_lu_scroll["games"] = offset
 	if max_off > 0:
 		_lu_scroll_zones.append({"rect": rect, "key": "games", "max": max_off})
 
-	for vi in range(visible):
+	for vi in range(visible_count):
 		var ri: int = offset + vi
 		if ri >= _lu_game_rows.size():
 			break
@@ -1201,7 +1202,7 @@ func _draw_games_panel(rect: Rect2) -> void:
 		_line(Vector2(inner_x, ry + row_h), Vector2(inner_x + usable, ry + row_h), HAIRLINE, 1.0)
 
 	if max_off > 0:
-		_text_right("%d / %d" % [min(offset + visible, _lu_game_rows.size()), _lu_game_rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+		_text_right("%d / %d" % [min(offset + visible_count, _lu_game_rows.size()), _lu_game_rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
 func _draw_game_row(inner_x: float, date_w: float, opp_w: float, result_w: float, slot_w: float, ry: float, row_h: float, row: Dictionary) -> void:

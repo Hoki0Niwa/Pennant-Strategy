@@ -84,8 +84,8 @@ static func indexes(record: PSPlayerSeasonRecord) -> Dictionary:
 static func regular_z(record: PSPlayerSeasonRecord, position: int = 0) -> float:
 	if record == null or record.is_pitcher():
 		return 0.0
-	var reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
-	var regulars: Dictionary = reference.get("regulars", {}) as Dictionary
+	var season_reference: Dictionary = PSPerformanceReference.for_season(record.year, record.season_number)
+	var regulars: Dictionary = season_reference.get("regulars", {}) as Dictionary
 	var spread: float = float(regulars.get("spread", 0.0))
 	if spread <= 0.0:
 		return 0.0

@@ -76,10 +76,9 @@ func _ready() -> void:
 
 
 func _is_contact_pa(plate: Dictionary) -> bool:
-	if bool(plate.get("is_hit", false)) or bool(plate.get("ab_charged", false)):
-		var category: String = str(plate.get("category", ""))
-		return category != "strikeout"
 	var category: String = str(plate.get("category", ""))
+	if bool(plate.get("is_hit", false)) or bool(plate.get("ab_charged", false)):
+		return category != "strikeout"
 	return category in ["hit", "out", "error", "fielders_choice", "sacrifice", "sacrifice_fly"]
 
 

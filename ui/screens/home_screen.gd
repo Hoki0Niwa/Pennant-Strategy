@@ -488,14 +488,14 @@ func _draw_yesterday_game(cell: Rect2, game: Dictionary, team_id: int, font_size
 
 # 「アウェイ-ホーム」ブロック全体がバッジ間の幅予算に収まるフォントサイズを返す (18→最小12)。
 func _fit_score_font_size(away_text: String, home_text: String, max_w: float) -> int:
-	var size: int = 18
-	while size > 12 and _score_block_width(away_text, home_text, size) > max_w:
-		size -= 2
-	return size
+	var font_size: int = 18
+	while font_size > 12 and _score_block_width(away_text, home_text, font_size) > max_w:
+		font_size -= 2
+	return font_size
 
 
-func _score_block_width(away_text: String, home_text: String, size: int) -> float:
-	return _measure(away_text, size) + YESTERDAY_SCORE_PAD + _measure("-", size) + YESTERDAY_SCORE_PAD + _measure(home_text, size)
+func _score_block_width(away_text: String, home_text: String, font_size: int) -> float:
+	return _measure(away_text, font_size) + YESTERDAY_SCORE_PAD + _measure("-", font_size) + YESTERDAY_SCORE_PAD + _measure(home_text, font_size)
 
 
 func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:

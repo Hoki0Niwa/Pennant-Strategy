@@ -538,16 +538,16 @@ func _draw_usage_table(rect: Rect2, title: String, cols: Array, rows: Array, scr
 	var row_top: float = line_y + 6.0
 	var area_h: float = rect.end.y - row_top - 8.0
 	var row_h: float = LOWER_TABLE_ROW_H
-	var visible: int = maxi(1, int(area_h / row_h))
+	var visible_count: int = maxi(1, int(area_h / row_h))
 	var scroll_key: String = _scroll_key_for_tab(scroll_key_suffix)
-	var max_off: int = maxi(0, rows.size() - visible)
+	var max_off: int = maxi(0, rows.size() - visible_count)
 	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_off)
 	_scroll[scroll_key] = offset
 	if max_off > 0:
 		_scroll_zones.append({"rect": rect, "key": scroll_key, "max": max_off})
 
-	var drawn: int = 0
-	for vi in range(visible):
+	var _drawn: int = 0
+	for vi in range(visible_count):
 		var ri: int = offset + vi
 		if ri >= rows.size():
 			break
@@ -575,9 +575,9 @@ func _draw_usage_table(rect: Rect2, title: String, cols: Array, rows: Array, scr
 		var total_color: Color = FAINT if (no_record or total_value <= 0) else base_color
 		_text_right(total_text, ccx + total_w - 6.0, ty, 13, total_color, total_w - 8.0, is_total_row)
 		_line(Vector2(inner_x, ry + row_h), Vector2(inner_x + usable, ry + row_h), HAIRLINE, 1.0)
-		drawn += 1
+		_drawn += 1
 	if max_off > 0:
-		_text_right("%d / %d" % [mini(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+		_text_right("%d / %d" % [mini(offset + visible_count, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
 func _usage_position_columns() -> Array:
@@ -1327,6 +1327,7 @@ func _farm_batter_advanced_fields(ad: PSAdvancedStats) -> Dictionary:
 	var has_pa: bool = ad != null and ad.plate_appearances > 0
 	var ad_dict: Dictionary = ad.to_dict() if ad != null else {}
 	var has_field: bool = int(ad_dict.get("fielding_chances", 0)) > 0
+	@warning_ignore("incompatible_ternary")
 	return {
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
@@ -1349,6 +1350,7 @@ func _farm_pitcher_advanced_fields(ps: PSPitcherStats, ad: PSAdvancedStats) -> D
 	var has_ip: bool = ps != null and ps.outs_pitched > 0
 	var has_bf: bool = ad != null and ad.plate_appearances > 0
 	var ip: float = ps.innings_pitched() if has_ip else 0.0
+	@warning_ignore("incompatible_ternary")
 	return {
 		"k9": ps.strikeouts_per_nine() if has_ip else "-",
 		"bb9": (float(ps.walks) * 9.0 / ip) if has_ip else "-",
@@ -1576,13 +1578,16 @@ func _build_ability_rows() -> void:
 				mastery_by_type[str(entry.get("type", ""))] = float(entry.get("mastery", 0.0))
 			for type_value in _arsenal_types:
 				var type_key: String = str(type_value)
+				@warning_ignore("incompatible_ternary")
 				row["pitch_%s" % type_key] = PSAbilityScale.z_to_display(float(mastery_by_type[type_key])) if mastery_by_type.has(type_key) else "-"
 		else:
 			row["bat_eval"] = PlayerValueEvaluator.batting_score_without_fatigue(record)
+			@warning_ignore("incompatible_ternary")
 			row["def_eval"] = PlayerValueEvaluator.defensive_score_for_position(record, record.position) if (record.position >= 2 and record.position <= 9) else "-"
 			# 守備適性: 全8守備位置。未習得(0)は "-"。
 			for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
 				var apt: int = _position_aptitude(record, pos)
+				@warning_ignore("incompatible_ternary")
 				row["apt_%d" % pos] = apt if apt > 0 else "-"
 		_ability_rows.append(row)
 
@@ -1660,7 +1665,9 @@ func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: f
 	var chances: int = int(ad_dict.get("fielding_chances", 0))
 	var has_field: bool = chances > 0
 	var fv: Callable = func(key: String) -> Variant:
+		@warning_ignore("incompatible_ternary")
 		return float(ad_dict.get(key, 0.0)) if has_field else "-"
+	@warning_ignore("incompatible_ternary")
 	return {
 		"year": "通算", "team": "", "is_total": true,
 		"pa": ad.plate_appearances,
@@ -1681,6 +1688,7 @@ func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: f
 func _pitcher_advanced_career(pit: PSPitcherStats, war_sum: float, fip_weighted: float, fip_weight: float) -> Dictionary:
 	var has_ip: bool = pit.outs_pitched > 0
 	var ip: float = pit.innings_pitched()
+	@warning_ignore("incompatible_ternary")
 	return {
 		"year": "通算", "team": "", "is_total": true,
 		"ip": ip,
@@ -1770,6 +1778,7 @@ func _pitcher_advanced_dict(record: PSPlayerSeasonRecord, war: Dictionary, team:
 	var ps: PSPitcherStats = record.pitcher_stats
 	var has_ip: bool = ps.outs_pitched > 0
 	var ip: float = ps.innings_pitched()
+	@warning_ignore("incompatible_ternary")
 	return {
 		"year": "%d年" % record.year, "team": team,
 		"ip": ip,
@@ -1792,7 +1801,9 @@ func _batter_advanced_dict(record: PSPlayerSeasonRecord, war: Dictionary, team: 
 	var chances: int = int(ad_dict.get("fielding_chances", 0))
 	var has_field: bool = chances > 0
 	var field_val: Callable = func(key: String) -> Variant:
+		@warning_ignore("incompatible_ternary")
 		return float(ad_dict.get(key, 0.0)) if has_field else "-"
+	@warning_ignore("incompatible_ternary")
 	return {
 		"year": "%d年" % record.year, "team": team,
 		"pa": ad.plate_appearances if ad != null else 0,

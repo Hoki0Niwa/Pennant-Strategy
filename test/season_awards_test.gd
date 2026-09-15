@@ -3,7 +3,6 @@ extends GdUnitTestSuite
 # 表彰 (AwardsService / PSAwards) の回帰検証。ベストナイン・ゴールデングラブの選出構造と
 # 直列化を確認する。打撃/投手タイトルや MVP は awards_screen 経由で startup_test が担う。
 
-const GameSimulator = preload("res://services/simulation/game_simulator.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
 
 

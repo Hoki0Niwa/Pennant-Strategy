@@ -466,7 +466,7 @@ static func _participants(state: Dictionary) -> Array:
 	return result
 
 
-static func _begin_round1(state: Dictionary, players: Array, teams: Array) -> void:
+static func _begin_round1(state: Dictionary, _players: Array, teams: Array) -> void:
 	var participants: Array = _participants(state)
 	if participants.size() < 2:
 		_log(state, teams, "参加球団が不足しているため現役ドラフトは実施されませんでした")
@@ -759,7 +759,7 @@ static func _finish_event(state: Dictionary) -> void:
 
 # ============================================================ 確定 (移籍の実適用)
 
-static func finalize_geneki_draft(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+static func finalize_geneki_draft(state: Dictionary, players: Array, _teams: Array, season: PSSeason) -> Dictionary:
 	if bool(state.get("finalized", false)):
 		return state.get("final_result", {"title": "現役ドラフト", "moves": []}) as Dictionary
 	var year: int = season.year if season != null else int(state.get("year", 0))

@@ -168,6 +168,7 @@ static func _inter_round_pairs(
 	inter_index: int
 ) -> Array:
 	var pattern: int = posmod(inter_index, 3)
+	@warning_ignore("integer_division")
 	var offset: int = inter_index / 3
 	match pattern:
 		0:
@@ -198,7 +199,7 @@ static func _cross_pairs(group_a: Array, group_b: Array, offset: int) -> Array:
 static func _cross_with_leftover(
 	odd_group: Array,
 	west: Array,
-	other_odd_group: Array,
+	_other_odd_group: Array,
 	odd_rounds: Array,
 	other_rounds: Array,
 	inter_index: int,

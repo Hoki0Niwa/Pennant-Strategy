@@ -695,11 +695,11 @@ func _rotation_index(player_id: int) -> int:
 
 
 func _rotation_id_set() -> Dictionary:
-	var set: Dictionary = {}
+	var id_set: Dictionary = {}
 	for value in _rotation_ids:
 		if int(value) > 0:
-			set[int(value)] = true
-	return set
+			id_set[int(value)] = true
+	return id_set
 
 
 func _record_by_id(player_id: int) -> PSPlayerSeasonRecord:
@@ -732,6 +732,7 @@ func _era_str(record: PSPlayerSeasonRecord) -> String:
 func _ip_str(ps: PSPitcherStats) -> String:
 	if ps.outs_pitched <= 0:
 		return "0"
+	@warning_ignore("integer_division")
 	return "%d.%d" % [ps.outs_pitched / 3, ps.outs_pitched % 3]
 
 

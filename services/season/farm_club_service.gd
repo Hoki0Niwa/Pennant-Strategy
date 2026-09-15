@@ -559,7 +559,7 @@ static func _fill_to_target(
 		if as_veteran:
 			spread -= slot_count
 		var position: int = int(position_value)
-		var reference: Dictionary = veteran_reference if as_veteran else prospect_reference
+		var reference_pool: Dictionary = veteran_reference if as_veteran else prospect_reference
 		var anchor_group: String = ""
 		if (
 			as_veteran and position == 1
@@ -572,9 +572,9 @@ static func _fill_to_target(
 			anchor_group = "fielder"
 			fielder_anchors_used += 1
 		if not anchor_group.is_empty():
-			reference = veteran_anchor_reference
+			reference_pool = veteran_anchor_reference
 		players.append(_generate_player(
-			next_id, position, club_id, year, as_veteran, reference, anchor_group
+			next_id, position, club_id, year, as_veteran, reference_pool, anchor_group
 		))
 		next_id += 1
 		generated += 1
@@ -755,11 +755,11 @@ static func _band_of(entries: Array, low_pct: float, high_pct: float) -> Array:
 
 
 # 参照帯から1人ぶんの z を引いて複製し、わずかに揺らす。帯が空なら {} (呼び出し側で扱う)。
-static func _sample_z_abilities(reference: Dictionary, position: int) -> Dictionary:
+static func _sample_z_abilities(reference_pool: Dictionary, position: int) -> Dictionary:
 	var fallback_key: int = 1 if position == 1 else 0
-	var band: Array = reference.get(position, []) as Array
+	var band: Array = reference_pool.get(position, []) as Array
 	if band.is_empty():
-		band = reference.get(fallback_key, []) as Array
+		band = reference_pool.get(fallback_key, []) as Array
 	if band.is_empty():
 		return {}
 	var source: Dictionary = band[Rng.range_int(0, band.size() - 1)] as Dictionary
@@ -773,14 +773,14 @@ static func _sample_z_abilities(reference: Dictionary, position: int) -> Diction
 # 指名対象から外れる = 実ルールの「指名歴がある選手はドラフトを経ずに移籍できる」側になる。
 static func _generate_player(
 	player_id: int, position: int, club_id: int, year: int, veteran: bool = false,
-	reference: Dictionary = {}, veteran_anchor_group: String = ""
+	reference_pool: Dictionary = {}, veteran_anchor_group: String = ""
 ) -> PSPlayer:
 	var age: int = (
 		Rng.range_int(VETERAN_MIN_AGE, VETERAN_MAX_AGE) if veteran
 		else Rng.range_int(GENERATED_MIN_AGE, GENERATED_MAX_AGE)
 	)
 	# 能力は**参照母集団の実測**から複製する (固定の center は使わない。上の const ブロック参照)。
-	var z_abilities: Dictionary = _sample_z_abilities(reference, position)
+	var z_abilities: Dictionary = _sample_z_abilities(reference_pool, position)
 	if z_abilities.is_empty():
 		# 参照が空になるのは母集団がまだ存在しない異常系だけ。世界を壊さないための保険として
 		# ドラフト候補の中央値付近で作る (通常経路では通らない)。

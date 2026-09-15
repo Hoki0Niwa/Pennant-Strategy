@@ -6,7 +6,6 @@ const CampServiceRef = preload("res://services/season/camp_service.gd")
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const ReportHealth = preload("res://services/reports/report_health.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
-const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
 const VERSION: int = 2
 const DEFAULT_SEASONS: int = 40

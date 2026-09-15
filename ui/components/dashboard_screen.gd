@@ -491,7 +491,7 @@ func _pm_color(value: float) -> Color:
 
 
 # 簡易ラインアイコン。base 座標の box 内に正規化座標で描く。
-func _icon(name: String, box: Rect2, color: Color) -> void:
+func _icon(icon_name: String, box: Rect2, color: Color) -> void:
 	var r: Rect2 = _r(box)
 	var w: float = max(1.3, 1.9 * _scale_f)
 	var pt: Callable = func(x: float, y: float) -> Vector2: return r.position + Vector2(x * r.size.x, y * r.size.y)
@@ -499,7 +499,7 @@ func _icon(name: String, box: Rect2, color: Color) -> void:
 		draw_line(r.position + Vector2(x0 * r.size.x, y0 * r.size.y), r.position + Vector2(x1 * r.size.x, y1 * r.size.y), color, w, true)
 	var poly: Callable = func(pts: PackedVector2Array) -> void:
 		draw_colored_polygon(pts, color)
-	match name:
+	match icon_name:
 		"home":
 			seg.call(0.12, 0.52, 0.5, 0.16)
 			seg.call(0.5, 0.16, 0.88, 0.52)
@@ -723,12 +723,12 @@ func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary
 	var row_h: float = float(opts.get("row_h", 0.0))
 	var scroll_key: String = str(opts.get("scroll_key", ""))
 	var offset: int = 0
-	var visible: int = rows.size()
+	var visible_count: int = rows.size()
 	if row_h > 0.0:
-		visible = max(1, int(area_h / row_h))
+		visible_count = max(1, int(area_h / row_h))
 		if not scroll_key.is_empty():
 			var scroll: Dictionary = opts.get("scroll", {}) as Dictionary
-			var max_off: int = max(0, rows.size() - visible)
+			var max_off: int = max(0, rows.size() - visible_count)
 			offset = clampi(int(scroll.get(scroll_key, 0)), 0, max_off)
 			scroll[scroll_key] = offset
 			if max_off > 0:
@@ -746,7 +746,7 @@ func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary
 	var cell_size: int = int(opts.get("cell_size", FS_CELL))
 	var hits: Array = opts.get("hits", []) as Array
 	var drawn: int = 0
-	for vi in range(visible):
+	for vi in range(visible_count):
 		var ri: int = offset + vi
 		if ri >= rows.size():
 			break
@@ -762,15 +762,15 @@ func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary
 	for sep_x_value in sep_xs:
 		_line(Vector2(float(sep_x_value), band_top), Vector2(float(sep_x_value), rows_bottom), HAIRLINE, 1.0)
 
-	if not scroll_key.is_empty() and rows.size() > visible:
-		_text_right("%d / %d" % [min(offset + visible, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+	if not scroll_key.is_empty() and rows.size() > visible_count:
+		_text_right("%d / %d" % [min(offset + visible_count, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
 
 # index は行番号 (現状は当たり判定/強調に未使用だが、呼び出し互換のため残す)。
 func _draw_data_row(rect: Rect2, inner_x: float, factor: float, columns: Array, row: Dictionary, ry: float, row_h: float, default_align: String, cell_size: int, sel_kind: String, selected_id: int, _index: int, hits: Array) -> void:
-	var has_meta: bool = row.has("__meta")
-	var meta: int = int(row.get("__meta", 0)) if has_meta else 0
-	var selectable: bool = not sel_kind.is_empty() and has_meta
+	var has_row_meta: bool = row.has("__meta")
+	var meta: int = int(row.get("__meta", 0)) if has_row_meta else 0
+	var selectable: bool = not sel_kind.is_empty() and has_row_meta
 	var is_self: bool = bool(row.get("is_self", false))
 	var is_total: bool = bool(row.get("is_total", false))
 	var is_leader: bool = bool(row.get("is_leader", false))
@@ -967,6 +967,7 @@ func _draw_select_grid(rect: Rect2, sections: Array, opts: Dictionary = {}) -> v
 		for i in range(cells.size()):
 			var cell: Dictionary = cells[i] as Dictionary
 			var cx: float = inner_x + float(i % cols) * (cell_w + GRID_GAP_X)
+			@warning_ignore("integer_division")
 			var cy: float = y + float(i / cols) * (cell_h + GRID_GAP_Y)
 			var cell_rect: Rect2 = Rect2(cx, cy, cell_w, cell_h)
 			_draw_select_grid_cell(cell_rect, cell)

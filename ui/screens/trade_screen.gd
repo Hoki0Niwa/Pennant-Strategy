@@ -663,12 +663,12 @@ func _mine_rows_filtered() -> Array:
 
 func _filter_pass(row: Dictionary) -> bool:
 	var is_pitcher: bool = bool(row.get("is_pitcher", false))
-	var position: int = int(row.get("position", 0))
+	var pos: int = int(row.get("position", 0))
 	match _filter_pos:
 		1: return is_pitcher
-		2: return not is_pitcher and position == 2
-		3: return not is_pitcher and position >= 3 and position <= 6
-		4: return not is_pitcher and position >= 7 and position <= 9
+		2: return not is_pitcher and pos == 2
+		3: return not is_pitcher and pos >= 3 and pos <= 6
+		4: return not is_pitcher and pos >= 7 and pos <= 9
 	return true
 
 

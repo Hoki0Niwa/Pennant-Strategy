@@ -240,8 +240,8 @@ func _draw_texture_fit(base_rect: Rect2, tex: Texture2D) -> void:
 	var tex_size: Vector2 = tex.get_size()
 	if tex_size.x <= 0.0 or tex_size.y <= 0.0:
 		return
-	var scale: float = min(dst.size.x / tex_size.x, dst.size.y / tex_size.y)
-	var draw_size: Vector2 = tex_size * scale
+	var fit_scale: float = min(dst.size.x / tex_size.x, dst.size.y / tex_size.y)
+	var draw_size: Vector2 = tex_size * fit_scale
 	var pos: Vector2 = dst.position + (dst.size - draw_size) * 0.5
 	draw_texture_rect(tex, Rect2(pos, draw_size), false)
 

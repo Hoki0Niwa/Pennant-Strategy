@@ -151,8 +151,8 @@ func _list_row_at(base_pos: Vector2) -> Dictionary:
 
 func _scroll_list(delta: int) -> void:
 	var games: Array = _month_games()
-	var visible: int = _list_visible_rows()
-	var max_scroll: int = max(0, games.size() - visible)
+	var visible_count: int = _list_visible_rows()
+	var max_scroll: int = max(0, games.size() - visible_count)
 	var next: int = clampi(_list_scroll + delta, 0, max_scroll)
 	if next != _list_scroll:
 		_list_scroll = next
@@ -241,11 +241,11 @@ func _draw_game_list(_season: PSSeason) -> void:
 		_text("この月の試合はありません", Vector2(rect.position.x + 16, header_y + 44), 13, MUTED)
 		return
 
-	var visible: int = _list_visible_rows()
+	var visible_count: int = _list_visible_rows()
 	var top: float = header_y + 26.0
 	var ix: float = rect.position.x + 14.0
 	var iw: float = rect.size.x - 28.0
-	for i in range(visible):
+	for i in range(visible_count):
 		var gi: int = _list_scroll + i
 		if gi >= games.size():
 			break
@@ -265,8 +265,8 @@ func _draw_game_list(_season: PSSeason) -> void:
 		_line(Vector2(ix, ry + LIST_ROW_H - 2.0), Vector2(ix + iw, ry + LIST_ROW_H - 2.0), HAIRLINE, 1.0)
 
 	# スクロールインジケータ
-	if games.size() > visible:
-		_text_right("%d–%d / %d" % [_list_scroll + 1, min(_list_scroll + visible, games.size()), games.size()],
+	if games.size() > visible_count:
+		_text_right("%d–%d / %d" % [_list_scroll + 1, min(_list_scroll + visible_count, games.size()), games.size()],
 			rect.end.x - 16, rect.end.y - 14, 11, FAINT, 120)
 
 
@@ -352,7 +352,7 @@ func _draw_line_row(rect: Rect2, team_id: int, is_home: bool, innings: Array, in
 	_text(str(errs), Vector2(tx + tcol_w * 2.0, y), 13, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 
-func _line_score_innings(game: Dictionary, log: Dictionary = {}) -> Array:
+func _line_score_innings(game: Dictionary, game_log: Dictionary = {}) -> Array:
 	var innings: Array = _array_value(game.get("innings", []))
 	if not innings.is_empty():
 		return innings
@@ -360,7 +360,7 @@ func _line_score_innings(game: Dictionary, log: Dictionary = {}) -> Array:
 	innings = _array_value(result.get("innings", []))
 	if not innings.is_empty():
 		return innings
-	return _array_value(log.get("innings", []))
+	return _array_value(game_log.get("innings", []))
 
 
 func _array_value(value: Variant) -> Array:
@@ -500,7 +500,7 @@ func _draw_box_score(rect: Rect2) -> void:
 		_draw_box_row(total_row, ix, fixed_w, inn_w, col_count, ty, ry, row_h, true)
 
 
-func _draw_box_row(row: Dictionary, ix: float, fixed_w: float, inn_w: float, col_count: int, ty: float, ry: float, row_h: float, is_total: bool) -> void:
+func _draw_box_row(row: Dictionary, ix: float, _fixed_w: float, inn_w: float, col_count: int, ty: float, ry: float, row_h: float, is_total: bool) -> void:
 	var col: Color = MUTED.lerp(TEXT, 0.6) if is_total else TEXT
 	var cx: float = ix
 	for c_value in BOX_FIXED:
@@ -906,8 +906,8 @@ func _select_latest_in_month() -> void:
 		_clear_selection()
 		return
 	# 月内の最新試合を選ぶ。スクロールも末尾へ寄せる。
-	var visible: int = _list_visible_rows()
-	_list_scroll = max(0, games.size() - visible)
+	var visible_count: int = _list_visible_rows()
+	_list_scroll = max(0, games.size() - visible_count)
 	_select_game(int((games[games.size() - 1] as Dictionary)["index"]))
 
 

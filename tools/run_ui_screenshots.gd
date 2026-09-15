@@ -217,12 +217,12 @@ func _find_screen_node(node: Node, script_path: String) -> Node:
 	return null
 
 
-func _shot(states_dir: String, name: String) -> void:
+func _shot(states_dir: String, shot_name: String) -> void:
 	var image: Image = get_viewport().get_texture().get_image()
-	var out_path: String = "%s/%s.png" % [states_dir, name]
+	var out_path: String = "%s/%s.png" % [states_dir, shot_name]
 	var err: int = image.save_png(ProjectSettings.globalize_path(out_path))
-	print("[state] %s -> %s (%s)" % [name, out_path, "ok" if err == OK else ("err %d" % err)])
-	_state_manifest.append({"name": name, "file": out_path})
+	print("[state] %s -> %s (%s)" % [shot_name, out_path, "ok" if err == OK else ("err %d" % err)])
+	_state_manifest.append({"name": shot_name, "file": out_path})
 
 
 func _run_state_capture() -> void:

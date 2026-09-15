@@ -275,9 +275,9 @@ static func _bucket_assignment(league1_ids: Array, league2_ids: Array, year: int
 
 
 # Godot のグローバル RNG を汚さない簡易 deterministic shuffle。
-static func _deterministic_shuffle(values: Array, seed: int) -> Array:
+static func _deterministic_shuffle(values: Array, base_seed: int) -> Array:
 	var out: Array = values.duplicate()
-	var state: int = seed & 0x7fffffff
+	var state: int = base_seed & 0x7fffffff
 	for i in range(out.size() - 1, 0, -1):
 		state = int((1103515245 * state + 12345) & 0x7fffffff)
 		var j: int = state % (i + 1)
@@ -780,14 +780,14 @@ static func _round_robin_rounds(team_ids: Array) -> Array:
 # ラウンドロビン(1-factorization)の性質上、同一巡内の5カードは各球団にとって相手が
 # 全て異なるため、巡内で連続対戦になることは無い。巡の変わり目(前巡最後のカード→
 # 次巡最初のカード)だけ同じラウンド番号(=同じ相手の組み合わせ)にならないよう調整する。
-static func _round_orders_for_cycles(cycles_count: int, seed: int) -> Array:
+static func _round_orders_for_cycles(cycles_count: int, base_seed: int) -> Array:
 	var orders: Array = []
 	var previous_last: int = -1
 	for cycle_index in range(cycles_count):
 		var base_indices: Array = []
 		for i in range(ROUNDS_PER_CYCLE):
 			base_indices.append(i)
-		var perm: Array = _deterministic_shuffle(base_indices, seed + cycle_index * 104729)
+		var perm: Array = _deterministic_shuffle(base_indices, base_seed + cycle_index * 104729)
 		if previous_last != -1 and int(perm[0]) == previous_last:
 			for k in range(1, perm.size()):
 				if int(perm[k]) != previous_last:
@@ -836,7 +836,7 @@ static func _round_orders_for_cycles(cycles_count: int, seed: int) -> Array:
 # (length=1、use_two_reductions==false のパターン)はこれが true の巡にしか割り当てない
 # (単独戦は9月以降に限定する)。2連戦(length=2)にはこの制約は
 # 適用しない(実データで4-9月に渡って分散していることを確認済みのため)。
-static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, rounds: Array, seed: int, protected_cycles_by_round: Array, same_week_as_next: Array, is_september_or_later: Array) -> Array:
+static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, rounds: Array, base_seed: int, protected_cycles_by_round: Array, same_week_as_next: Array, is_september_or_later: Array) -> Array:
 	var reduced_team_blocks: Dictionary = {}
 	var cycle_indices: Array = []
 	for i in range(cycles_count):
@@ -845,13 +845,13 @@ static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, rou
 	result.resize(ROUNDS_PER_CYCLE)
 	# 単独戦の巡 (巡の 6 球団全員が同じ枠で休む) を先に置く。2連戦を先にカードごとに散らすと、
 	# 9 月の枠の週の相方にどこかの 2連戦が入っていて、単独戦が 9 月から押し出される。
-	var single_game_round_index: int = _single_game_round_index(cycle_indices, seed)
+	var single_game_round_index: int = _single_game_round_index(cycle_indices, base_seed)
 	for place_two_game_rounds in [false, true]:
 		for round_index in range(ROUNDS_PER_CYCLE):
 			var use_two_reductions: bool = round_index != single_game_round_index
 			if use_two_reductions != place_two_game_rounds:
 				continue
-			var shuffled: Array = _deterministic_shuffle(cycle_indices, seed + round_index * 7919)
+			var shuffled: Array = _deterministic_shuffle(cycle_indices, base_seed + round_index * 7919)
 			var protected_cycles: Array = protected_cycles_by_round[round_index] as Array
 			var september_flags: Array = is_september_or_later[round_index] as Array
 			var block_index_for_cycle: Array = _block_indices_for_round(round_index, round_orders)
@@ -859,7 +859,7 @@ static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, rou
 			var pair_plans: Array = []
 			if use_two_reductions:
 				for pair_index in range(pairs.size()):
-					var pair_order: Array = _shortened_cycle_order(cycle_indices, seed + round_index * 7919 + (pair_index + 1) * 104723)
+					var pair_order: Array = _shortened_cycle_order(cycle_indices, base_seed + round_index * 7919 + (pair_index + 1) * 104723)
 					var pair_reduced: Dictionary = _pick_reduced_cycles(
 						pair_order, 2, pairs[pair_index] as Array, block_index_for_cycle, protected_cycles, september_flags,
 						false, same_week_as_next, reduced_team_blocks
@@ -878,11 +878,11 @@ static func _intraleague_cycle_plans(cycles_count: int, round_orders: Array, rou
 
 # 単独戦にする巡。1 リーグにつき 1 巡だけで、巡ごとのシャッフル末尾の値が最小の巡を選ぶ
 # (毎シーズン必ず 1 巡 = 3 カードが単独戦になる)。
-static func _single_game_round_index(cycle_indices: Array, seed: int) -> int:
+static func _single_game_round_index(cycle_indices: Array, base_seed: int) -> int:
 	var best_round: int = 0
 	var best_key: int = -1
 	for round_index in range(ROUNDS_PER_CYCLE):
-		var shuffled: Array = _deterministic_shuffle(cycle_indices, seed + round_index * 7919)
+		var shuffled: Array = _deterministic_shuffle(cycle_indices, base_seed + round_index * 7919)
 		var key: int = int(shuffled[shuffled.size() - 1]) * ROUNDS_PER_CYCLE + round_index
 		if best_key < 0 or key < best_key:
 			best_key = key
@@ -892,12 +892,12 @@ static func _single_game_round_index(cycle_indices: Array, seed: int) -> int:
 
 # カードが 2連戦を置く巡の候補順。SHORTENED_SERIES_HALF_BIAS の割合のカードは 2 本ともシーズンの
 # 前半 (または後半) へ寄せ、残りのカードは 9 巡から一様に選ぶ。
-static func _shortened_cycle_order(cycle_indices: Array, seed: int) -> Array:
-	var order: Array = _deterministic_shuffle(cycle_indices, seed)
+static func _shortened_cycle_order(cycle_indices: Array, base_seed: int) -> Array:
+	var order: Array = _deterministic_shuffle(cycle_indices, base_seed)
 	var roll_values: Array = []
 	for i in range(10):
 		roll_values.append(i)
-	var roll: int = int(_deterministic_shuffle(roll_values, seed + 61)[0])
+	var roll: int = int(_deterministic_shuffle(roll_values, base_seed + 61)[0])
 	if roll >= int(round(SHORTENED_SERIES_HALF_BIAS * 10.0)):
 		return order
 	# 寄せ先は序盤 3 巡か終盤 3 巡。前半/後半の 2 分割にすると 8 月の差が、2 巡ずつに狭めると 7〜8 月の差が
@@ -1033,7 +1033,7 @@ static func _all_cards_full_length(pair_plans: Array, cycle_index: int) -> bool:
 # 週の制約 (同じ球団の同じ週の両カードを短縮しない) は球団ごとに確かめる。
 # 戻り値は recipient 側の block_index -> {"donor_round_index", "donor_cycle_index",
 # "recipient_day_offset", "companion_day_offset"} の Dictionary。
-static func _assign_single_game_companions(cycle_plans: Array, round_orders: Array, rounds: Array, protected_cycles_by_round: Array, is_september_or_later: Array, same_week_as_next: Array, seed: int) -> Dictionary:
+static func _assign_single_game_companions(cycle_plans: Array, round_orders: Array, rounds: Array, protected_cycles_by_round: Array, is_september_or_later: Array, same_week_as_next: Array, base_seed: int) -> Dictionary:
 	var cycles_count: int = round_orders.size()
 	var reduced_team_blocks: Dictionary = {}
 	var recipients: Array = []
@@ -1058,14 +1058,14 @@ static func _assign_single_game_companions(cycle_plans: Array, round_orders: Arr
 		var r_cycle: int = int(recipient.get("cycle_index", 0))
 		var r_block: int = int(recipient.get("block_index", 0))
 
-		var roll_seed: int = seed + r_round * 131 + r_cycle * 977 + 5
+		var roll_seed: int = base_seed + r_round * 131 + r_cycle * 977 + 5
 		if int(_deterministic_shuffle([0, 1], roll_seed)[0]) != 0:
 			continue # 確率的に相乗りさせない(本当に1試合だけの単独戦のまま)
 
 		var donor_round_indices: Array = []
 		for i in range(ROUNDS_PER_CYCLE):
 			donor_round_indices.append(i)
-		var donor_seed: int = seed + r_round * 5081 + r_cycle * 6151 + 11
+		var donor_seed: int = base_seed + r_round * 5081 + r_cycle * 6151 + 11
 		var shuffled_donor_rounds: Array = _deterministic_shuffle(donor_round_indices, donor_seed)
 		var donor_found: bool = false
 		for donor_round_value in shuffled_donor_rounds:

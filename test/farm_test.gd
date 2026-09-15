@@ -100,6 +100,7 @@ func test_farm_schedule_gives_every_team_the_target_game_count() -> void:
 	# 14球団 × 124試合 / 2 = 868試合。全球団が同数。
 	assert_int(int(validation.get("min_games_per_team", 0))).is_equal(PSFarmSchedule.GAMES_PER_TEAM)
 	assert_int(int(validation.get("max_games_per_team", 0))).is_equal(PSFarmSchedule.GAMES_PER_TEAM)
+	@warning_ignore("integer_division")
 	assert_int((generated["farm"] as Array).size()).is_equal(PSFarmSchedule.GAMES_PER_TEAM * 14 / 2)
 
 
@@ -179,6 +180,7 @@ func test_farm_schedule_generation_is_deterministic() -> void:
 func test_new_season_builds_farm_schedule_and_standings() -> void:
 	var season: PSSeason = SeasonService.create_new_season(GameDb.teams, 1, 2026)
 	assert_int(season.farm_standings.size()).is_equal(14)
+	@warning_ignore("integer_division")
 	assert_int(season.farm_schedule.size()).is_equal(PSFarmSchedule.GAMES_PER_TEAM * 14 / 2)
 	assert_int(season.farm_games_remaining()).is_equal(season.farm_schedule.size())
 	# 二軍が14球団でも、一軍の日程・順位は12球団のまま。
@@ -890,13 +892,13 @@ func test_farm_games_write_farm_stats_and_leave_first_team_stats_untouched() -> 
 	var farm_pa_total: int = 0
 	for record_row in RecordStore.player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		var before: Array = before_first_team[record.player_id] as Array
+		var before_stats: Array = before_first_team[record.player_id] as Array
 		assert_int(record.batter_stats.plate_appearances).override_failure_message(
 			"player %d の一軍打席数が二軍戦で動いた" % record.player_id
-		).is_equal(int(before[0]))
+		).is_equal(int(before_stats[0]))
 		assert_int(record.pitcher_stats.batters_faced).override_failure_message(
 			"player %d の一軍対戦打者数が二軍戦で動いた" % record.player_id
-		).is_equal(int(before[1]))
+		).is_equal(int(before_stats[1]))
 		farm_pa_total += record.farm_batter_stats.plate_appearances
 	# 7試合ぶんの打席が二軍側へ積まれている。
 	assert_int(farm_pa_total).is_greater(300)
@@ -1127,13 +1129,13 @@ func test_farm_rotation_shares_the_rest_ledger_with_the_first_team() -> void:
 	# 二軍の自動序列は登板機会を再配分するため毎試合作り直し、一軍の序列を壊さない。
 	var season: PSSeason = _fresh_season_with_records()
 	var team_id: int = (GameDb.teams[0] as PSTeam).id
-	var before: Dictionary = season.get_rotation(team_id).duplicate(true)
-	var first_team_order: Array = (before.get("pitcher_ids", []) as Array).duplicate()
+	var rotation_before: Dictionary = season.get_rotation(team_id).duplicate(true)
+	var first_team_order: Array = (rotation_before.get("pitcher_ids", []) as Array).duplicate()
 
 	PSFarmGameRunner.simulate_day(season, _first_farm_day(season), ModManager.hot_rule_groups_snapshot(), true)
 
-	var after: Dictionary = season.get_rotation(team_id)
-	assert_array(after.get("pitcher_ids", []) as Array).override_failure_message(
+	var rotation_after: Dictionary = season.get_rotation(team_id)
+	assert_array(rotation_after.get("pitcher_ids", []) as Array).override_failure_message(
 		"二軍戦が一軍のローテ序列を書き換えた"
 	).is_equal(first_team_order)
 	var farm_view: Dictionary = PSRotationPlanner.rotation_state_for_level(
@@ -1141,8 +1143,8 @@ func test_farm_rotation_shares_the_rest_ledger_with_the_first_team() -> void:
 	)
 	assert_array(farm_view.get("pitcher_ids", []) as Array).is_empty()
 	# 台帳は共有 = 二軍の先発が登録されている。
-	var last_starts: Dictionary = after.get("last_start_day_by_pitcher", {}) as Dictionary
-	assert_int(last_starts.size()).is_greater((before.get("last_start_day_by_pitcher", {}) as Dictionary).size())
+	var last_starts: Dictionary = rotation_after.get("last_start_day_by_pitcher", {}) as Dictionary
+	assert_int(last_starts.size()).is_greater((rotation_before.get("last_start_day_by_pitcher", {}) as Dictionary).size())
 
 
 func test_farm_relief_streak_uses_its_own_team_game_ledger() -> void:

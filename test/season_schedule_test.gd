@@ -397,12 +397,12 @@ func test_series_right_after_long_breaks_stay_full_length() -> void:
 		_assert_all_series_on_date_are_full_length(intra_series, post_all_star_date, year, "right after the all-star break")
 
 
-# intra_series のうち start_date > after (after が空なら制約なし) を満たす最も早い start_date を返す。
-func _earliest_start_date(intra_series: Array, after: String) -> String:
+# intra_series のうち start_date > after_date (after_date が空なら制約なし) を満たす最も早い start_date を返す。
+func _earliest_start_date(intra_series: Array, after_date: String) -> String:
 	var earliest: String = ""
 	for entry_value in intra_series:
 		var d: String = str((entry_value as Dictionary).get("start_date", ""))
-		if not after.is_empty() and d <= after:
+		if not after_date.is_empty() and d <= after_date:
 			continue
 		if earliest.is_empty() or d < earliest:
 			earliest = d
@@ -531,9 +531,9 @@ func test_intraleague_cycle_plans_always_sum_to_25_with_valid_lengths() -> void:
 		for i in range(PSSchedule.INTRALEAGUE_CYCLES):
 			flags.append(true)
 		all_september.append(flags)
-	for seed in [88001, 271828, 424242, 999983]:
-		var round_orders: Array = PSSchedule._round_orders_for_cycles(PSSchedule.INTRALEAGUE_CYCLES, seed)
-		var plans: Array = PSSchedule._intraleague_cycle_plans(PSSchedule.INTRALEAGUE_CYCLES, round_orders, rounds, seed, no_protected_cycles_by_round, no_same_week_as_next, all_september)
+	for base_seed in [88001, 271828, 424242, 999983]:
+		var round_orders: Array = PSSchedule._round_orders_for_cycles(PSSchedule.INTRALEAGUE_CYCLES, base_seed)
+		var plans: Array = PSSchedule._intraleague_cycle_plans(PSSchedule.INTRALEAGUE_CYCLES, round_orders, rounds, base_seed, no_protected_cycles_by_round, no_same_week_as_next, all_september)
 		assert_int(plans.size()).is_equal(PSSchedule.ROUNDS_PER_CYCLE)
 		for pair_plans_value in plans:
 			var pair_plans: Array = pair_plans_value as Array

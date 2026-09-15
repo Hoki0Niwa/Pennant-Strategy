@@ -414,20 +414,20 @@ func _anchor_comparison(slopes: Dictionary, matchups: Array, cells: Array) -> Di
 	# 実測では K% は両者がほぼ一致する (+.0245 / +.0208) 一方、得点は -.633 / -.113 と
 	# 5倍以上ずれる。**両方を出して、食い違ったら標本を増やすか非線形を疑う。**
 	# レベル差の判定は方向を問わない両側帯なので、どちらを見ても結論は変わらないのが正常。
-	var reference: Variant = _cell_at(cells, 0.0, 0.0)
+	var reference_cell: Variant = _cell_at(cells, 0.0, 0.0)
 	var dropped: Variant = _cell_at(cells, -ANCHOR_LEVEL_DROP, -ANCHOR_LEVEL_DROP)
 	var direct: Dictionary = {}
 	for metric in ["runs_per_game", "strikeout_rate", "walk_rate", "home_runs_per_game"]:
 		var entry: Dictionary = slopes.get(metric, {}) as Dictionary
 		result[metric] = _round_float(float(entry.get("diagonal_slope", 0.0)) * scale, 5)
-		if reference != null and dropped != null:
+		if reference_cell != null and dropped != null:
 			direct[metric] = _round_float(
-				float((dropped as Dictionary).get(metric, 0.0)) - float((reference as Dictionary).get(metric, 0.0)), 5
+				float((dropped as Dictionary).get(metric, 0.0)) - float((reference_cell as Dictionary).get(metric, 0.0)), 5
 			)
 	result["direct"] = direct
 	# 1セルの標本誤差の目安。得点/試合の試合間 σ は概ね 2.7 なので、セルあたり試合数から出す。
 	# 2セルの差はこの √2 倍。得点の直接差がこの帯に埋もれていたら「測れていない」と読む。
-	var games_per_cell: float = float((reference as Dictionary).get("games", 0)) if reference != null else 0.0
+	var games_per_cell: float = float((reference_cell as Dictionary).get("games", 0)) if reference_cell != null else 0.0
 	result["runs_standard_error_per_cell"] = _round_float(
 		RUNS_PER_GAME_SD / sqrt(max(1.0, games_per_cell)), 4
 	)
@@ -494,11 +494,14 @@ func _health_checks(anchors: Dictionary, reference_cell: Variant) -> Array:
 # pass/fail を付けずに数値だけ残す。仮定に依存していてゲートにできないが、
 # 較正の入力として毎回見たい量に使う。
 func _add_observation(checks: Array, name: String, value: Variant, description: String) -> void:
+	var rounded_value: Variant = null
+	if value != null:
+		rounded_value = _round_float(float(value), 5)
 	checks.append({
 		"name": name,
 		"status": STATUS_PASS,
 		"observation": true,
-		"value": null if value == null else _round_float(float(value), 5),
+		"value": rounded_value,
 		"description": description,
 	})
 

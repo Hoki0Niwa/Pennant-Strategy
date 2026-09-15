@@ -340,7 +340,7 @@ static func _apply_signing(state: Dictionary, players: Array, _teams: Array, _se
 
 # 市場入りの対象: 在籍中 (非引退) の外国人で、複数年契約中でない者
 # (初期シードの外国人は contract_end_year=0 なので全員対象になる=意図した挙動)。
-static func _build_contract_market_entries(players: Array, teams: Array, season: PSSeason) -> Array:
+static func _build_contract_market_entries(players: Array, _teams: Array, season: PSSeason) -> Array:
 	var year: int = season.year if season != null else 0
 	var league_ctx: Dictionary = {}
 	if season != null:

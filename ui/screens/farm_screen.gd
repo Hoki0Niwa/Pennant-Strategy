@@ -725,6 +725,7 @@ func _batter_stat_dict(s: PSBatterStats, ad: PSAdvancedStats = null) -> Dictiona
 	var has_pa: bool = ad != null and ad.plate_appearances > 0
 	var ad_dict: Dictionary = ad.to_dict() if ad != null else {}
 	var has_field: bool = int(ad_dict.get("fielding_chances", 0)) > 0
+	@warning_ignore("incompatible_ternary")
 	row.merge({
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
@@ -739,6 +740,7 @@ func _batter_stat_dict(s: PSBatterStats, ad: PSAdvancedStats = null) -> Dictiona
 func _pitcher_stat_dict(s: PSPitcherStats, ad: PSAdvancedStats = null) -> Dictionary:
 	var has_ip: bool = s.outs_pitched > 0
 	var has_bf: bool = ad != null and ad.plate_appearances > 0
+	@warning_ignore("incompatible_ternary")
 	return {
 		"g": s.games, "gs": s.starts, "cg": s.complete_games,
 		"w": s.wins, "l": s.losses, "hld": s.holds, "sv": s.saves, "qs": s.quality_starts,

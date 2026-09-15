@@ -1013,8 +1013,8 @@ func _build_lineup(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -> 
 
 
 func _build_rotation(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -> void:
-	var rotation: Dictionary = season.get_rotation(team.id)
-	var ids: Array = rotation.get("pitcher_ids", []) as Array
+	var rotation_state: Dictionary = season.get_rotation(team.id)
+	var ids: Array = rotation_state.get("pitcher_ids", []) as Array
 	if ids.is_empty():
 		var preview: Dictionary = GameSimulator.preview_rotation(season, team.id)
 		if bool(preview.get("ok", false)):
@@ -1038,15 +1038,15 @@ func _build_rotation(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -
 
 
 func _build_win_pattern(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -> void:
-	var rotation: Dictionary = season.get_rotation(team.id)
-	var roles: Dictionary = rotation.get("relief_roles", {}) as Dictionary
+	var rotation_state: Dictionary = season.get_rotation(team.id)
+	var roles: Dictionary = rotation_state.get("relief_roles", {}) as Dictionary
 	var closer_id: int = int(roles.get("closer_id", 0))
 	var setup_ids: Array = (roles.get("setup_ids", []) as Array).duplicate()
 
 	# 保存が無ければ、ローテに入っていないリリーフを評価順で簡易割当 (抑え=最良 / セット=次2人)。
 	if closer_id <= 0 and setup_ids.is_empty():
 		var rotation_set: Dictionary = {}
-		for id_value in (rotation.get("pitcher_ids", []) as Array):
+		for id_value in (rotation_state.get("pitcher_ids", []) as Array):
 			rotation_set[int(id_value)] = true
 		var relievers: Array = []
 		for record_row in RecordStore.get_team_player_records(team.id, season.year, season.season_number):

@@ -6,8 +6,6 @@ class_name ReleaseValueProjector
 # 出場実績は二値保護ではなく current への連続的な乗算割引として扱い、怪我で説明できる欠場は
 # season_injury_days に応じて割引を免除する。
 
-const TeamAutoAI = preload("res://services/season/team_auto_ai.gd")
-const TeamFinance = preload("res://services/season/team_finance.gd")
 const OFFSEASON_SERVICE_PATH: String = "res://services/season/offseason_service.gd"
 
 # 何年先までの成長期待を見込むか。現行 future_value_score (育成整理用) の 6 年より短く、

@@ -451,6 +451,7 @@ func test_batting_order_metrics_blend_ability_and_recent_performance() -> void:
 		var at_bats: int = plate_appearances - walks
 		var hits: int = int(round(float(at_bats) * average))
 		var home_runs: int = int(round(float(at_bats) * isolated_power * 0.5))
+		@warning_ignore("integer_division")
 		stats.games = maxi(1, plate_appearances / 4)
 		stats.plate_appearances = plate_appearances
 		stats.at_bats = at_bats
@@ -626,6 +627,7 @@ func test_batting_form_moves_starter_selection() -> void:
 	) -> void:
 		var walks: int = int(round(float(plate_appearances) * 0.09))
 		var at_bats: int = plate_appearances - walks
+		@warning_ignore("integer_division")
 		stats.games = maxi(1, plate_appearances / 4)
 		stats.plate_appearances = plate_appearances
 		stats.at_bats = at_bats
@@ -3925,7 +3927,7 @@ func test_box_score_excludes_pitchers_under_dh() -> void:
 # 打者一巡で同一イニングに2打席立った場合、「・」連結ではなく新しい列に書く。
 func test_box_score_adds_column_when_batting_around() -> void:
 	var BoxScore = load("res://services/reports/box_score_builder.gd")
-	var log: Dictionary = {
+	var game_log: Dictionary = {
 		"lineups": {"away": {"team_id": 1, "dh": false, "slots": [
 			{"slot": 1, "position": 8, "player_id": 101},
 		]}},
@@ -3935,7 +3937,7 @@ func test_box_score_adds_column_when_batting_around() -> void:
 			{"batting_team_id": 1, "batter_id": 101, "inning": 1, "category": "strikeout", "ab_charged": true, "rbi": 0},
 		],
 	}
-	var data: Dictionary = BoxScore.build(log, 1, null)
+	var data: Dictionary = BoxScore.build(game_log, 1, null)
 
 	# 1回の列が2列に増えている。
 	var inning1_cols: int = 0
@@ -4931,17 +4933,17 @@ func test_no_game_voids_stats_and_reschedules_the_game() -> void:
 			game["played"] = true
 	season.current_day = target_day
 
-	var before: Dictionary = _team_stat_totals(season, [away_id, home_id])
+	var totals_before: Dictionary = _team_stat_totals(season, [away_id, home_id])
 	var day_result: Dictionary = GameSimulator.simulate_current_day(season, false)
 	assert_bool(bool(day_result.get("ok", false))).is_true()
 
 	# 成績は 1 打席も増えていない。
-	var after: Dictionary = _team_stat_totals(season, [away_id, home_id])
-	assert_int(int(after["plate_appearances"])).is_equal(int(before["plate_appearances"]))
-	assert_int(int(after["outs_pitched"])).is_equal(int(before["outs_pitched"]))
-	assert_int(int(after["batter_games"])).is_equal(int(before["batter_games"]))
+	var totals_after: Dictionary = _team_stat_totals(season, [away_id, home_id])
+	assert_int(int(totals_after["plate_appearances"])).is_equal(int(totals_before["plate_appearances"]))
+	assert_int(int(totals_after["outs_pitched"])).is_equal(int(totals_before["outs_pitched"]))
+	assert_int(int(totals_after["batter_games"])).is_equal(int(totals_before["batter_games"]))
 	# 疲労は戻さない = 試合は実際に行われている。
-	assert_int(int(after["fatigue"])).is_greater(int(before["fatigue"]))
+	assert_int(int(totals_after["fatigue"])).is_greater(int(totals_before["fatigue"]))
 
 	# 台帳にノーゲームとして残り、試合は後日へ移り、未消化のまま。
 	var entries: Array = []

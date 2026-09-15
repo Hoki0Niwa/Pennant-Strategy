@@ -35,16 +35,16 @@ const INJURY_LOG_MIN_DAYS: int = 20
 static func append(player: PSPlayer, entry: Dictionary) -> void:
 	if player == null:
 		return
-	var log: Array = player.source_data.get(KEY, []) as Array
-	log.append(entry)
-	player.source_data[KEY] = log
+	var career_log: Array = player.source_data.get(KEY, []) as Array
+	career_log.append(entry)
+	player.source_data[KEY] = career_log
 
 
 # ドラフト時は player 構築前に source_data 辞書へ直接シードする。
 static func seed_draft_entry(source: Dictionary, year: int, team_id: int, round_no: int, development: bool) -> void:
-	var log: Array = source.get(KEY, []) as Array
-	log.append({"y": year, "t": TYPE_DRAFT, "o": team_id, "v": round_no, "d": development})
-	source[KEY] = log
+	var career_log: Array = source.get(KEY, []) as Array
+	career_log.append({"y": year, "t": TYPE_DRAFT, "o": team_id, "v": round_no, "d": development})
+	source[KEY] = career_log
 
 
 static func entries(player: PSPlayer) -> Array:

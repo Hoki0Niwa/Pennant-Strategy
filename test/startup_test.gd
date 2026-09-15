@@ -571,7 +571,6 @@ func test_game_result_screen_builds_with_active_season() -> void:
 	var test_save_id: String = SaveContext.active_save_id()
 
 	# 開幕日を消化し、未保存pending logから詳細描画できることを実データで通す。
-	var GameSimulator = load("res://services/simulation/game_simulator.gd")
 	GameSimulator.simulate_current_day(AppState.current_season, false)
 
 	var screen_script: GDScript = load("res://ui/screens/game_result_screen.gd") as GDScript
@@ -623,7 +622,6 @@ func test_player_detail_screen_builds_with_active_season() -> void:
 	AppState.select_team(team.id)
 	AppState.start_new_season()
 	AppState.current_screen = "player_detail"
-	var GameSimulator = load("res://services/simulation/game_simulator.gd")
 	GameSimulator.simulate_current_day(AppState.current_season, false)
 	var history_keys: Array = AppState.current_season.player_game_history.keys()
 	assert_array(history_keys).is_not_empty()
@@ -819,7 +817,6 @@ func test_farm_screen_and_player_detail_farm_tab_build() -> void:
 	AppState.current_screen = "farm"
 	var test_save_id: String = SaveContext.active_save_id()
 	var season: PSSeason = AppState.current_season
-	var GameSimulator = load("res://services/simulation/game_simulator.gd")
 	for _i in range(3):
 		GameSimulator.simulate_current_day(season, false)
 
@@ -1362,7 +1359,6 @@ func test_team_detail_screen_builds_with_active_season() -> void:
 	var test_save_id: String = SaveContext.active_save_id()
 
 	# 開幕日を消化して打撃/投球成績を残し、打線・ローテ・ランキング集計を実データで通す。
-	var GameSimulator = load("res://services/simulation/game_simulator.gd")
 	GameSimulator.simulate_current_day(AppState.current_season, false)
 
 	# 直近5年パネルのポストシーズン表示経路を検証するためアーカイブを1件差し込む
@@ -1485,7 +1481,6 @@ func test_offseason_screen_builds_each_step() -> void:
 	var test_save_id: String = SaveContext.active_save_id()
 
 	# 戦力外 WAR 列のため開幕日を消化して成績を残す。
-	var GameSimulator = load("res://services/simulation/game_simulator.gd")
 	GameSimulator.simulate_current_day(AppState.current_season, false)
 
 	AppState.offseason_active = true
@@ -2352,6 +2347,7 @@ func test_balance_chart_hover_maps_cursor_to_date_and_balance() -> void:
 	assert_int(int(screen.call("_chart_day_at", plot.position + Vector2(1.0, 10.0)))).is_equal(1)
 	assert_int(int(screen.call("_chart_day_at", Vector2(plot.end.x - 1.0, plot.position.y + 10.0)))).is_equal(max_day)
 	var mid_day: int = int(screen.call("_chart_day_at", Vector2(plot.get_center().x, plot.get_center().y)))
+	@warning_ignore("integer_division")
 	assert_int(mid_day).is_between(max_day / 2 - 1, max_day / 2 + 1)
 
 	# 開幕前は全球団ゼロ、最新日は順位表の勝-敗と一致する (max_day はグラフ表示中のリーグ基準なので、

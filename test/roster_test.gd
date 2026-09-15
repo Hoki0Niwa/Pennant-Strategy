@@ -7,7 +7,6 @@ const ReleasedMarket = preload("res://services/season/released_market_service.gd
 const TeamSetupBuilder = preload("res://services/simulation/game/team_setup_builder.gd")
 const TeamAutoAIRef = preload("res://services/season/team_auto_ai.gd")
 const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign_active_roster_rules.gd")
-const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
 
 const ALL_Z_KEYS: Array = [
 	"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Spray", "Bat_Aggression", "Bat_Platoon",
@@ -346,10 +345,10 @@ func test_normalize_initial_seed_player_drops_unshiftable_future_career_entries(
 		]},
 	}
 	var out: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(row, 2026)
-	var log: Array = (out["source_data"] as Dictionary)["career_log"] as Array
-	assert_int(log.size()).is_equal(2)
-	assert_str(str((log[0] as Dictionary).get("t", ""))).is_equal("draft")
-	assert_str(str((log[1] as Dictionary).get("t", ""))).is_equal("released")
+	var career_log: Array = (out["source_data"] as Dictionary)["career_log"] as Array
+	assert_int(career_log.size()).is_equal(2)
+	assert_str(str((career_log[0] as Dictionary).get("t", ""))).is_equal("draft")
+	assert_str(str((career_log[1] as Dictionary).get("t", ""))).is_equal("released")
 
 
 # 実CSVを正規化した直後の全選手で career_log に開始年以降の年が残っていないこと。経歴タブに
@@ -1986,7 +1985,7 @@ func test_process_demotion_marks_development_and_frees_slot() -> void:
 		_player({"id": 10, "team_id": 1}),
 		_player({"id": 11, "team_id": 1}),
 	]
-	var before: int = TeamFinance.controlled_count(players, 1)
+	var controlled_before: int = TeamFinance.controlled_count(players, 1)
 	var result: Dictionary = Offseason.process_demotion(players, 1, [10])
 	assert_int(int(result.get("demoted_count", 0))).is_equal(1)
 	var demoted: PSPlayer = players[0] as PSPlayer
@@ -1994,7 +1993,7 @@ func test_process_demotion_marks_development_and_frees_slot() -> void:
 	assert_str(demoted.registered_roster).is_equal("育成")
 	assert_bool(demoted.is_retired()).is_false()  # release と違い org に残る
 	assert_int(demoted.team_id).is_equal(1)
-	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(before - 1)
+	assert_int(TeamFinance.controlled_count(players, 1)).is_equal(controlled_before - 1)
 
 
 func test_demotion_not_blocked_by_development_count() -> void:

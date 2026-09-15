@@ -4,12 +4,6 @@ extends Node
 # TeamAutoAI.cut_score と ReleaseValueProjector.projected_value_components を並べ、
 # 序列相関・仮想放出セットの重複・不一致選手を出す。**ゲーム挙動には一切介入しない** (読み取り専用)。
 
-const OffseasonService = preload("res://services/season/offseason_service.gd")
-const TeamAutoAI = preload("res://services/season/team_auto_ai.gd")
-const ReleaseValueProjector = preload("res://services/season/release_value_projector.gd")
-const SeasonService = preload("res://services/season/season_service.gd")
-const GameSimulator = preload("res://services/simulation/game_simulator.gd")
-
 const DEFAULT_SEED: int = 20260714
 const DEFAULT_START_YEAR: int = 2026
 const DEFAULT_OUTPUT_MD: String = "res://reports/release_projection_report_latest.md"

@@ -490,6 +490,7 @@ func _slump_response_report(form_rows: Array) -> Dictionary:
 	form_rows.sort_custom(func(a, b) -> bool:
 		return float((a as Dictionary)["ops"]) < float((b as Dictionary)["ops"])
 	)
+	@warning_ignore("integer_division")
 	var group: int = form_rows.size() / 3
 	var low: Array = []
 	var high: Array = []
@@ -725,6 +726,7 @@ func _median(values: Array) -> int:
 		return 0
 	var sorted_values: Array = values.duplicate()
 	sorted_values.sort()
+	@warning_ignore("integer_division")
 	return int(sorted_values[sorted_values.size() / 2])
 
 
