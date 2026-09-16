@@ -1981,8 +1981,9 @@ func restore_from_save(data: Dictionary) -> bool:
 		push_warning(warning)
 
 	var player_rows: Array = data.get("players", []) as Array
-	if not player_rows.is_empty():
-		GameDb.replace_players_from_rows(player_rows)
+	var players_replaced: bool = not player_rows.is_empty() and GameDb.replace_players_from_rows(player_rows)
+	# 読み込んだ選手を保存済みの基準にする (次の保存で変わった選手だけを書くため)。
+	SaveService.seed_loaded_player_fingerprints(players_replaced)
 
 	# 予算は全球団一律の固定額 (TeamFinance.FIXED_BUDGET) なので、セーブに残っている
 	# team_funds は復元しない。球団ごとに違う額が入ったセーブを復元すると固定予算制が黙って崩れる。

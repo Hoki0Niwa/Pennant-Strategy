@@ -14,6 +14,15 @@ const SAVE_META_FILE: String = "save_meta.json"
 static var _saved_state_fingerprint: int = 0
 static var _saved_state_save_id: String = ""
 
+# 選手は SQLite の players テーブルへ変わった行だけを書く。引退扱いの選手はシーズン中は照合を飛ばし、
+# 次の場合だけ全員を照合する: オフ (戦力外市場・専用球団の契約で引退扱いから戻る) /
+# シーズンが無い / GameDb.players が丸ごと入れ替わった / PLAYER_FULL_CHECK_SAVE_INTERVAL 回ごと。
+const PLAYER_FULL_CHECK_SAVE_INTERVAL: int = 32
+static var _player_saves_since_full_check: int = 0
+static var _checked_players_generation: int = -1
+# load_state が players テーブルから行を読んだ DB。restore 後の照合基準の登録はこの DB のときだけ行う。
+static var _loaded_player_rows_db_path: String = ""
+
 
 static func save_state(app_state) -> bool:
 	if not SaveContext.has_active_save():
@@ -47,7 +56,7 @@ static func save_state(app_state) -> bool:
 		"selected_team_id": app_state.selected_team_id,
 		"current_screen": app_state.current_screen,
 		"season": season_data,
-		"players": _players_to_dicts(),
+		# 選手は players テーブルへ別に書く (SQLiteStoreService.save_game_state_and_players)。
 		# チーム予算 (funds) を {team_id: funds} で永続化。teams 本体は初期シード
 		# から再ロードされるため funds のみ保存する。
 		"team_funds": _team_funds_map(),
@@ -79,15 +88,22 @@ static func save_state(app_state) -> bool:
 	}
 	payload.merge(ModManager.save_metadata())
 
-	if SQLiteStoreService.save_game_state(payload):
+	var check_all_players: bool = _should_check_all_players(app_state)
+	if SQLiteStoreService.save_game_state_and_players(payload, GameDb.players, check_all_players):
+		if check_all_players:
+			_player_saves_since_full_check = 0
+			_checked_players_generation = GameDb.players_generation
+		else:
+			_player_saves_since_full_check += 1
 		_write_save_meta(app_state)
-		_remember_saved_state(payload)
+		_remember_saved_state(payload, SQLiteStoreService.saved_players_fingerprint(GameDb.players))
 		return true
 
 	# JSON fallback は SQLite 全体が使えない状況なので、履歴を分離したままでは
 	# 復元できない。blob から外していた場合は履歴込みの payload に差し替える。
 	if not history_in_blob and app_state.current_season != null:
 		payload["season"] = app_state.current_season.to_dict()
+	payload["players"] = _players_to_dicts()
 
 	var save_path: String = SaveContext.game_state_path()
 	var file: FileAccess = FileAccess.open(save_path, FileAccess.WRITE)
@@ -97,15 +113,43 @@ static func save_state(app_state) -> bool:
 
 	file.store_string(JSON.stringify(payload, "\t"))
 	_write_save_meta(app_state)
-	_remember_saved_state(payload)
+	_remember_saved_state(payload, _players_fingerprint())
 	return true
+
+
+static func _should_check_all_players(app_state) -> bool:
+	return app_state.current_season == null \
+		or app_state.offseason_active \
+		or GameDb.players_generation != _checked_players_generation \
+		or _player_saves_since_full_check + 1 >= PLAYER_FULL_CHECK_SAVE_INTERVAL
+
+
+# restore_from_save が選手を GameDb へ載せ終えた直後に呼ぶ。load_state がこの DB の players テーブルから
+# 読んだ選手を載せたなら「保存済み」の基準として登録し、それ以外 (JSON fallback / 載せ替えなし) なら
+# 次の保存で全員を書き直す。
+static func seed_loaded_player_fingerprints(players_replaced: bool) -> void:
+	var loaded_db_path: String = _loaded_player_rows_db_path
+	_loaded_player_rows_db_path = ""
+	if not players_replaced or loaded_db_path.is_empty() or loaded_db_path != SQLiteStoreService.runtime_db_path():
+		SQLiteStoreService.reset_player_fingerprints()
+		return
+	SQLiteStoreService.seed_player_fingerprints(GameDb.players)
+	_player_saves_since_full_check = 0
+	_checked_players_generation = GameDb.players_generation
 
 
 static func load_state() -> Dictionary:
 	if not SaveContext.select_active_or_latest_save():
 		return {}
+	_loaded_player_rows_db_path = ""
 	var sqlite_payload: Dictionary = SQLiteStoreService.load_game_state()
 	if not sqlite_payload.is_empty():
+		var player_rows: Array = SQLiteStoreService.load_player_rows()
+		if player_rows.is_empty():
+			push_error("Save has no player rows; it cannot be restored.")
+			return {}
+		sqlite_payload["players"] = player_rows
+		_loaded_player_rows_db_path = SQLiteStoreService.runtime_db_path()
 		return sqlite_payload
 
 	var save_path: String = SaveContext.game_state_path()
@@ -121,7 +165,7 @@ static func load_state() -> Dictionary:
 	if parsed is Dictionary:
 		var payload: Dictionary = parsed as Dictionary
 		if SQLiteStoreService.is_available():
-			SQLiteStoreService.save_game_state(payload)
+			SQLiteStoreService.save_game_state_with_player_rows(payload)
 		return payload
 
 	push_error("Save file is not valid: %s" % save_path)
@@ -298,16 +342,27 @@ static func _team_auto_lineup_map() -> Dictionary:
 	return out
 
 
-static func _remember_saved_state(payload: Dictionary) -> void:
-	_saved_state_fingerprint = _state_fingerprint(payload)
+static func _remember_saved_state(payload: Dictionary, players_fingerprint: int) -> void:
+	var snapshot: Dictionary = payload.duplicate(false)
+	snapshot["players_fingerprint"] = players_fingerprint
+	_saved_state_fingerprint = _state_fingerprint(snapshot)
 	_saved_state_save_id = SaveContext.active_save_id()
+
+
+# 全選手をハッシュし直して束ねた値。SQLiteStoreService.saved_players_fingerprint と同じ形。
+static func _players_fingerprint() -> int:
+	var hashes: Array = []
+	hashes.resize(GameDb.players.size())
+	for index in range(GameDb.players.size()):
+		hashes[index] = SQLiteStoreService.player_row_fingerprint(index, (GameDb.players[index] as PSPlayer).to_dict())
+	return hashes.hash()
 
 
 static func _current_state_snapshot(app_state) -> Dictionary:
 	return {
 		"selected_team_id": app_state.selected_team_id,
 		"season": app_state.current_season.to_dict(false) if app_state.current_season != null else {},
-		"players": _players_to_dicts(),
+		"players_fingerprint": _players_fingerprint(),
 		"team_funds": _team_funds_map(),
 		"team_previous_ranks": _team_previous_ranks_map(),
 		"team_auto_lineup": _team_auto_lineup_map(),
@@ -346,7 +401,7 @@ static func _state_fingerprint(snapshot: Dictionary) -> int:
 	var comparable: Dictionary = {
 		"selected_team_id": snapshot.get("selected_team_id", 0),
 		"season": season_data,
-		"players": snapshot.get("players", []),
+		"players_fingerprint": snapshot.get("players_fingerprint", 0),
 		"team_funds": snapshot.get("team_funds", {}),
 		"team_previous_ranks": snapshot.get("team_previous_ranks", {}),
 		"team_auto_lineup": snapshot.get("team_auto_lineup", {}),

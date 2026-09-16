@@ -6,7 +6,7 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
 # セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
 # 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
-const SCHEMA_VERSION: int = 10
+const SCHEMA_VERSION: int = 11
 
 # スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
 # 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -43,12 +43,198 @@ static func runtime_db_path() -> String:
 	return SaveContext.runtime_db_path()
 
 
-static func save_game_state(payload: Dictionary) -> bool:
-	return _save_blob("game_state", payload)
-
-
 static func load_game_state() -> Dictionary:
 	return _load_blob("game_state")
+
+
+# -----------------------------------------------------------------------------
+# 選手 (GameDb.players) は game_state blob に入れず、1人1行の players テーブルへ置く。
+# 1日に内容が変わる選手は数人なので、内容ハッシュが変わった行だけを書く。
+# 引退扱いの選手 (戦力外市場の未契約者を含む) は引退状態のまま保存済みなら to_dict もハッシュもしない
+# (プレー年数とともに引退選手が積み上がっても保存が重くならないようにする)。引退扱いから契約で戻るのは
+# オフだけなので、呼び出し側 (SaveService) はオフの保存では check_all=true で全員を照合する。
+# -----------------------------------------------------------------------------
+
+# player_id → 保存済みの内容ハッシュ (player_row_fingerprint)。
+static var _player_fingerprints: Dictionary = {}
+# 引退状態で保存済みの player_id → 保存時の GameDb.players 内の位置。check_all=false の保存では、
+# 位置が同じならハッシュを取らずに飛ばす (位置が変わったら並び順を書き直すために照合する)。
+static var _frozen_player_ids: Dictionary = {}
+static var _player_fingerprint_db_path: String = ""
+
+# 直近の save_game_state_and_players で書き込んだ選手の行数 (診断/テスト用)。
+static var last_player_write_count: int = 0
+
+
+# 並び順も内容に含める。GameDb.players の並び (= 読み込み順) は乱数を使う処理の反復順に効くので、
+# 同じ内容でも位置が変わった選手は sort_order を書き直す。
+static func player_row_fingerprint(index: int, row: Dictionary) -> int:
+	return [index, row.hash()].hash()
+
+
+static func player_fingerprint_cache_valid() -> bool:
+	return not _player_fingerprints.is_empty() and _player_fingerprint_db_path == runtime_db_path()
+
+
+static func reset_player_fingerprints() -> void:
+	_player_fingerprints.clear()
+	_frozen_player_ids.clear()
+	_player_fingerprint_db_path = ""
+
+
+# players テーブルから読んだ行を GameDb へ載せた直後に呼ぶ。この時点のメモリ = DB の内容として登録する。
+static func seed_player_fingerprints(players: Array) -> void:
+	reset_player_fingerprints()
+	for index in range(players.size()):
+		var player: PSPlayer = players[index] as PSPlayer
+		_player_fingerprints[player.id] = player_row_fingerprint(index, player.to_dict())
+		if player.is_retired():
+			_frozen_player_ids[player.id] = index
+	_player_fingerprint_db_path = runtime_db_path()
+
+
+# 保存済みハッシュを players の並びで束ねた値。SaveService の未保存変更検出が、
+# 全員をハッシュし直した値 (同じ形) と比べる。
+static func saved_players_fingerprint(players: Array) -> int:
+	var hashes: Array = []
+	hashes.resize(players.size())
+	for index in range(players.size()):
+		hashes[index] = int(_player_fingerprints.get((players[index] as PSPlayer).id, 0))
+	return hashes.hash()
+
+
+# 引退状態で保存済みとして飛ばしている選手のうち、内容が保存時と食い違うものの id (テスト・調査用)。
+# 空でなければ「シーズン中に引退選手を書き換える経路がある」ので、check_all の条件を見直す。
+static func audit_frozen_players(players: Array) -> Array:
+	var misses: Array = []
+	for index in range(players.size()):
+		var player: PSPlayer = players[index] as PSPlayer
+		if not _frozen_player_ids.has(player.id):
+			continue
+		if player_row_fingerprint(index, player.to_dict()) != int(_player_fingerprints.get(player.id, 0)):
+			misses.append(player.id)
+	return misses
+
+
+static func load_player_rows() -> Array:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return []
+	var rows: Array = _select_with_bindings(db, "SELECT data_json FROM players ORDER BY sort_order", [])
+	_close(db)
+	var player_rows: Array = []
+	for row_value in rows:
+		var parsed: Variant = JSON.parse_string(str((row_value as Dictionary).get("data_json", "{}")))
+		if parsed is Dictionary:
+			player_rows.append(parsed)
+	return player_rows
+
+
+# game_state blob と players テーブルを同一 transaction で書く (片方だけ進んだセーブを作らない)。
+# payload には選手を含めないこと。check_all=false では引退状態で保存済みの選手を照合しない。
+static func save_game_state_and_players(payload: Dictionary, players: Array, check_all: bool) -> bool:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return false
+	var ok: bool = _save_game_state_and_players_inner(db, payload, players, check_all)
+	_close(db)
+	return ok
+
+
+static func _save_game_state_and_players_inner(db: Object, payload: Dictionary, players: Array, check_all: bool) -> bool:
+	if not _execute(db, "BEGIN TRANSACTION"):
+		return false
+	if not _write_game_state_blob(db, payload):
+		_execute(db, "ROLLBACK")
+		return false
+
+	# キャッシュが無効 (プロセス初回・セーブフォルダ切替後) なら前回書いた内容が分からないので全行を書き直す。
+	var cache_valid: bool = player_fingerprint_cache_valid()
+	if not cache_valid and not _execute(db, "DELETE FROM players"):
+		_execute(db, "ROLLBACK")
+		return false
+
+	var pending_fingerprints: Dictionary = {}
+	var pending_frozen_index: Dictionary = {}
+	var seen_ids: Dictionary = {}
+	var writes: int = 0
+	var insert_sql: String = "INSERT OR REPLACE INTO players (player_id, sort_order, data_json) VALUES (?, ?, ?)"
+	for index in range(players.size()):
+		var player: PSPlayer = players[index] as PSPlayer
+		seen_ids[player.id] = true
+		if cache_valid and not check_all and int(_frozen_player_ids.get(player.id, -1)) == index:
+			continue
+		var row: Dictionary = player.to_dict()
+		var fingerprint: int = player_row_fingerprint(index, row)
+		if not cache_valid or int(_player_fingerprints.get(player.id, 0)) != fingerprint:
+			if not _query_with_bindings(db, insert_sql, [player.id, index, JSON.stringify(row)]):
+				_execute(db, "ROLLBACK")
+				return false
+			writes += 1
+		pending_fingerprints[player.id] = fingerprint
+		pending_frozen_index[player.id] = index if player.is_retired() else -1
+
+	# メモリから消えた選手は行も消す。
+	if cache_valid:
+		for cached_id_value in _player_fingerprints.keys():
+			if seen_ids.has(cached_id_value):
+				continue
+			if not _query_with_bindings(db, "DELETE FROM players WHERE player_id = ?", [int(cached_id_value)]):
+				_execute(db, "ROLLBACK")
+				return false
+
+	if not _execute(db, "COMMIT"):
+		return false
+
+	last_player_write_count = writes
+	# COMMIT 成功後にのみキャッシュへ反映する (ROLLBACK 時に「書いたつもり」を残さない)。
+	if not cache_valid:
+		reset_player_fingerprints()
+		_player_fingerprint_db_path = runtime_db_path()
+	else:
+		for cached_id_value in _player_fingerprints.keys():
+			if not seen_ids.has(cached_id_value):
+				_player_fingerprints.erase(cached_id_value)
+				_frozen_player_ids.erase(cached_id_value)
+	for id_value in pending_fingerprints.keys():
+		_player_fingerprints[id_value] = pending_fingerprints[id_value]
+		if int(pending_frozen_index[id_value]) >= 0:
+			_frozen_player_ids[id_value] = pending_frozen_index[id_value]
+		else:
+			_frozen_player_ids.erase(id_value)
+	return true
+
+
+# JSON fallback から読んだセーブを SQLite へ移すときの入口。行はまだ GameDb に載っていない辞書なので、
+# players テーブルを丸ごと書き直し、キャッシュは捨てる (次の保存で全員を照合する)。
+static func save_game_state_with_player_rows(payload: Dictionary) -> bool:
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return false
+	var blob: Dictionary = payload.duplicate(false)
+	var player_rows: Array = blob.get("players", []) as Array
+	blob.erase("players")
+	var ok: bool = _execute(db, "BEGIN TRANSACTION")
+	ok = ok and _write_game_state_blob(db, blob)
+	ok = ok and _execute(db, "DELETE FROM players")
+	var insert_sql: String = "INSERT OR REPLACE INTO players (player_id, sort_order, data_json) VALUES (?, ?, ?)"
+	for index in range(player_rows.size()):
+		if not ok:
+			break
+		var row: Dictionary = player_rows[index] as Dictionary
+		ok = _query_with_bindings(db, insert_sql, [int(row.get("id", 0)), index, JSON.stringify(row)])
+	ok = ok and _execute(db, "COMMIT")
+	if not ok:
+		_execute(db, "ROLLBACK")
+	_close(db)
+	reset_player_fingerprints()
+	return ok
+
+
+static func _write_game_state_blob(db: Object, payload: Dictionary) -> bool:
+	# 値はバインディングで渡す (数 MB の文字列を SQL へ連結するとエスケープとパースが重い)。
+	var sql: String = "INSERT OR REPLACE INTO runtime_blobs (key, value_json, updated_at) VALUES (?, ?, datetime('now'))"
+	return _query_with_bindings(db, sql, ["game_state", JSON.stringify(payload)])
 
 
 # freelist が一定割合 (既定 25%) を超えるときだけ VACUUM する。
@@ -182,6 +368,19 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 	var pending_fingerprints: Dictionary = {}
 	var seen_keys: Dictionary = {}
 
+	# 部分ペイロード (RecordStore が「前回の保存から変わっていない」と判断したレコードを
+	# 辞書化せずキーだけ送ってくる形) の受け口。ここで seen_keys へ入れておかないと、
+	# 下の削除掃除が「メモリから消えたレコード」と誤認して DB の行を消してしまう。
+	# キャッシュが無効なときは前回書いた内容が分からないため、部分ペイロードは受け付けない。
+	var unchanged_keys: Array = blob_payload.get("unchanged_player_record_keys", []) as Array
+	if not unchanged_keys.is_empty():
+		if not cache_valid:
+			push_error("Partial record payload received without a valid fingerprint cache.")
+			_execute(db, "ROLLBACK")
+			return false
+		for unchanged_key_value in unchanged_keys:
+			seen_keys[str(unchanged_key_value)] = true
+
 	if not cache_valid:
 		# (year, season_number) ごとに有効な player_id 集合を作り、
 		# DB 側で集合に居ない行を DELETE してから upsert する (メモリ側の削除を反映)。
@@ -286,6 +485,17 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 
 static func _fingerprint_cache_valid() -> bool:
 	return not _record_fingerprints.is_empty() and _fingerprint_db_path == runtime_db_path()
+
+
+# 変更点だけを送る保存 (RecordStore の部分ペイロード) が使えるか。
+static func fingerprint_cache_valid() -> bool:
+	return _fingerprint_cache_valid()
+
+
+# 「前回永続化した内容」のハッシュ。RecordStore.audit_persist_tracking() が
+# 変更点追跡の取りこぼしを照合するのに使う。
+static func record_fingerprints_snapshot() -> Dictionary:
+	return _record_fingerprints
 
 
 # 本体行と成績 4 テーブルそれぞれの内容ハッシュ ([本体, RECORD_STATS_KEYS の順])。
@@ -953,20 +1163,6 @@ static func _select_with_bindings(db: Object, sql: String, bindings: Array) -> A
 	return []
 
 
-static func _save_blob(key: String, payload: Dictionary) -> bool:
-	var db: Object = _open_runtime_db()
-	if db == null:
-		return false
-
-	# 値はバインディングで渡す。SQL 文へ文字列連結すると、数十 MB の blob で
-	# エスケープ置換と SQL パースの余計なコストがかかる。
-	var value_json: String = JSON.stringify(payload)
-	var sql: String = "INSERT OR REPLACE INTO runtime_blobs (key, value_json, updated_at) VALUES (?, ?, datetime('now'))"
-	var ok: bool = _query_with_bindings(db, sql, [key, value_json])
-	_close(db)
-	return ok
-
-
 static func _load_blob(key: String) -> Dictionary:
 	var db: Object = _open_runtime_db()
 	if db == null:
@@ -1020,6 +1216,7 @@ static func _open_runtime_db() -> Object:
 		# (同一パスの作り直しでは _fingerprint_cache_valid が誤って true になる)。
 		if db_file_missing:
 			reset_record_fingerprints()
+			reset_player_fingerprints()
 
 	return db
 
@@ -1182,6 +1379,14 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 		_stats_table_ddl("farm_pitcher_stats", PITCHER_STATS_COLUMNS),
 		"CREATE INDEX IF NOT EXISTS idx_fbs_year_season ON farm_batter_stats(year, season_number)",
 		"CREATE INDEX IF NOT EXISTS idx_fps_year_season ON farm_pitcher_stats(year, season_number)",
+		# --- 永続化スキーマ v11: 選手 (GameDb.players) ---
+		# game_state blob から分離し、内容が変わった選手の行だけを書く。data_json は PSPlayer.to_dict()。
+		# sort_order は GameDb.players 内の位置で、読み込みはこの順に並べる。
+		"""CREATE TABLE IF NOT EXISTS players (
+			player_id INTEGER PRIMARY KEY,
+			sort_order INTEGER NOT NULL,
+			data_json TEXT NOT NULL
+		)""",
 	]
 	for statement_row in statements:
 		var statement: String = str(statement_row)

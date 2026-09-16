@@ -1004,6 +1004,281 @@ func test_record_store_saves_only_changed_rows() -> void:
 	_restore_app_state(old_state, test_save_id)
 
 
+func test_record_store_skips_serializing_unchanged_past_season_records() -> void:
+	# 保存のたびに全レコードを to_dict + ハッシュするのをやめ、当季と印を付けたレコードだけを
+	# 書き直す。過去シーズンのレコードは辞書化されないが、DB からも消えない。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	var season: PSSeason = AppState.current_season
+
+	var current: PSPlayerSeasonRecord = null
+	for record_value in RecordStore.player_records.values():
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record.year == season.year and record.season_number == season.season_number and not record.is_pitcher():
+			current = record
+			break
+	assert_object(current).is_not_null()
+
+	# 同じ選手の「前年」レコードを作る (過去シーズン側の代表)。
+	var past_dict: Dictionary = current.to_dict()
+	past_dict["year"] = season.year - 1
+	var past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(past_dict)
+	past.batter_stats.hits = 100
+	assert_bool(RecordStore.set_player_record(past)).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	# 保存後: 当季は常に書き直す対象、過去シーズンは対象外。
+	assert_bool(RecordStore.is_record_persist_dirty(current)).is_true()
+	assert_bool(RecordStore.is_record_persist_dirty(past)).is_false()
+
+	# 印を付けずに過去シーズンを書き換えると保存されない。監査はその取りこぼしを検出する。
+	past.batter_stats.hits = 200
+	assert_array(RecordStore.audit_persist_tracking()).contains(
+		["%d:%d:%d" % [past.player_id, past.year, past.season_number]]
+	)
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	RecordStore.load_records()
+	var reloaded_past: PSPlayerSeasonRecord = RecordStore.get_player_record(
+		past.player_id, season.year - 1, past.season_number
+	)
+	# 過去シーズンのレコードは (書き直されなくても) DB から消えない。
+	assert_object(reloaded_past).is_not_null()
+	assert_int(reloaded_past.batter_stats.hits).is_equal(100)
+
+	# 印を付ければ書き直される。ロード直後は全件書き込みなので、1 回保存して印を消してから
+	# 印の有無が効いていることを見る (でないと「ロードのせいで書かれた」を通してしまう)。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(RecordStore.is_record_persist_dirty(reloaded_past)).is_false()
+	reloaded_past.batter_stats.hits = 200
+	RecordStore.mark_record_dirty(reloaded_past)
+	assert_bool(RecordStore.is_record_persist_dirty(reloaded_past)).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	RecordStore.load_records()
+	assert_int(RecordStore.get_player_record(
+		past.player_id, season.year - 1, past.season_number
+	).batter_stats.hits).is_equal(200)
+	assert_array(RecordStore.audit_persist_tracking()).is_empty()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_record_store_falls_back_to_full_persist_on_load_season_change_and_interval() -> void:
+	# 変更点追跡が当てにならない場面の安全弁: ロード直後・シーズンの切り替わり・
+	# FULL_PERSIST_SAVE_INTERVAL 回ごとは、印に関係なく全レコードを書き直す対象に戻す。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	var season: PSSeason = AppState.current_season
+
+	var past_dict: Dictionary = (RecordStore.player_records.values()[0] as PSPlayerSeasonRecord).to_dict()
+	past_dict["year"] = season.year - 1
+	var past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(past_dict)
+	assert_bool(RecordStore.set_player_record(past)).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(RecordStore.is_record_persist_dirty(past)).is_false()
+
+	# ロード直後はセッション最初の保存だけ全件を書き直す。
+	RecordStore.load_records()
+	var loaded_past: PSPlayerSeasonRecord = RecordStore.get_player_record(
+		past.player_id, season.year - 1, past.season_number
+	)
+	assert_bool(RecordStore.is_record_persist_dirty(loaded_past)).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(RecordStore.is_record_persist_dirty(loaded_past)).is_false()
+
+	# N 回ごとの全件照合。
+	RecordStore._saves_since_full_persist = RecordStore.FULL_PERSIST_SAVE_INTERVAL - 1
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(RecordStore._saves_since_full_persist).is_equal(0)
+
+	# 当季が変わったら、前のシーズンのレコードが「過去」側へ移る前に一度全件を書き直す。
+	# 本番でこれを呼ぶのは ensure_season_records で、当季の判定が効いていることは
+	# 上の is_record_persist_dirty(current)=true 側で見ている
+	# (ここで合成シーズンを ensure_season_records に渡すと、基準分布の static キャッシュが
+	# 空の母集団で作り直されて後続 suite を汚すため直接呼ぶ)。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(RecordStore.is_record_persist_dirty(loaded_past)).is_false()
+	RecordStore._set_live_season(season.year + 1, season.season_number + 1)
+	assert_bool(RecordStore.is_record_persist_dirty(loaded_past)).is_true()
+
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_players_are_saved_as_rows_and_only_changed_players_are_written() -> void:
+	# 選手は game_state blob に入れず players テーブルへ1人1行で置き、内容が変わった選手の行だけを書く。
+	# 読み直すと GameDb.players と同じ並び (乱数を使う処理の反復順) で戻る。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	var old_player_rows: Array = SaveService._players_to_dicts()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+
+	# start_new_season の保存で全員を書き終えているので、変更が無ければ 0 行。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(0)
+	assert_bool(SQLiteStoreService.load_game_state().has("players")).is_false()
+
+	var target: PSPlayer = GameDb.players[5] as PSPlayer
+	var target_id: int = target.id
+	target.salary += 123
+	var expected_salary: int = target.salary
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+
+	var expected_ids: Array = []
+	for player_value in GameDb.players:
+		expected_ids.append((player_value as PSPlayer).id)
+	assert_bool(AppState.restore_from_save(SaveService.load_state())).is_true()
+	var loaded_ids: Array = []
+	var loaded_hashes: Array = []
+	for player_value in GameDb.players:
+		loaded_ids.append((player_value as PSPlayer).id)
+		loaded_hashes.append((player_value as PSPlayer).to_dict().hash())
+	assert_array(loaded_ids).is_equal(expected_ids)
+	assert_int(GameDb.get_player(target_id).salary).is_equal(expected_salary)
+
+	# ロード直後は読み込んだ内容が基準なので、何も変えずに保存すれば 0 行。読み直しても同じ内容。
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(0)
+	assert_bool(AppState.restore_from_save(SaveService.load_state())).is_true()
+	var reloaded_hashes: Array = []
+	for player_value in GameDb.players:
+		reloaded_hashes.append((player_value as PSPlayer).to_dict().hash())
+	assert_array(reloaded_hashes).is_equal(loaded_hashes)
+
+	# 並びが変わった選手は内容が同じでも書き直す (読み込み順を保つ)。
+	var moved: PSPlayer = GameDb.players[0] as PSPlayer
+	GameDb.players.remove_at(0)
+	GameDb.players.append(moved)
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(GameDb.players.size())
+
+	GameDb.replace_players_from_rows(old_player_rows)
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_retired_players_are_skipped_in_season_and_checked_on_safety_triggers() -> void:
+	# 引退状態で保存済みの選手はシーズン中の保存で照合を飛ばす (年数とともに増えても保存が重くならない)。
+	# 引退扱いから契約で戻るのはオフだけなので、オフ・丸ごと入れ替え・一定回数ごとには全員を照合する。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	var old_player_rows: Array = SaveService._players_to_dicts()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	var retired: PSPlayer = GameDb.players[10] as PSPlayer
+	retired.source_data["retired"] = true
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+	assert_array(SQLiteStoreService.audit_frozen_players(GameDb.players)).is_empty()
+
+	# シーズン中: 引退選手を書き換えても照合しないので書かれず、監査がその食い違いを検出する。
+	retired.source_data["retired_age"] = 40
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(0)
+	assert_array(SQLiteStoreService.audit_frozen_players(GameDb.players)).contains([retired.id])
+
+	# オフの保存は全員を照合する。
+	AppState.offseason_active = true
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+	assert_array(SQLiteStoreService.audit_frozen_players(GameDb.players)).is_empty()
+	AppState.offseason_active = false
+
+	# GameDb.players の丸ごと入れ替え後も全員を照合する。
+	retired.source_data["retired_age"] = 41
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(0)
+	GameDb.players_generation += 1
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+
+	# 一定回数ごとの全員照合。
+	retired.source_data["retired_age"] = 42
+	SaveService._player_saves_since_full_check = SaveService.PLAYER_FULL_CHECK_SAVE_INTERVAL - 1
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+
+	GameDb.replace_players_from_rows(old_player_rows)
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_in_season_days_do_not_modify_retired_players() -> void:
+	# 上の「シーズン中は引退選手を照合しない」が成り立つ前提の確認。週次の入替・トレードを含む日送りで、
+	# 引退扱いの選手 (引退済み / 戦力外市場の未契約者) の内容が変わらないこと。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	var old_player_rows: Array = SaveService._players_to_dicts()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	var season: PSSeason = AppState.current_season
+
+	var next_id: int = 0
+	for player_value in GameDb.players:
+		next_id = max(next_id, (player_value as PSPlayer).id)
+	for index in range(20):
+		var row: Dictionary = (GameDb.players[index * 7] as PSPlayer).to_dict()
+		next_id += 1
+		row["id"] = next_id
+		row["team_id"] = 0
+		var retired: PSPlayer = PSPlayer.from_dict(row)
+		retired.source_data["retired"] = true
+		if index % 2 == 0:
+			retired.source_data["released"] = true
+		GameDb.players.append(retired)
+	GameDb.rebuild_player_indices()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+
+	var auto_swap_ctx: Dictionary = AppState._build_auto_swap_ctx(true)
+	for day_index in range(8):
+		var result: Dictionary = GameSimulator.simulate_current_day(season, false, auto_swap_ctx)
+		assert_bool(bool(result.get("ok", false))).is_true()
+	assert_array(SQLiteStoreService.audit_frozen_players(GameDb.players)).is_empty()
+
+	GameDb.replace_players_from_rows(old_player_rows)
+	_restore_app_state(old_state, test_save_id)
+
+
+func test_load_state_rejects_save_without_player_rows() -> void:
+	# 選手の行が無いセーブを読むと、GameDb が同梱の初期選手のまま進んでしまう。読めないセーブとして扱う。
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(SaveService.load_state().is_empty()).is_false()
+
+	var db: Object = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "DELETE FROM players")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(SaveService.load_state().is_empty()).is_true()
+
+	SQLiteStoreService.reset_player_fingerprints()
+	_restore_app_state(old_state, test_save_id)
+
+
 func test_save_state_rebuilds_schema_when_runtime_db_recreated_at_same_path() -> void:
 	# スキーマ構築はプロセス内で1回に間引かれるが、キャッシュがパスだけを見ていると
 	# 「セーブを消して同じ save_id で作り直した」ときに空 DB へスキーマを張らず、

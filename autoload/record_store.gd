@@ -41,6 +41,23 @@ var season_archives: Array:
 # 呼び出し側 (simulation_reporter.gd) で suspend_persistence() / resume_persistence() を使う。
 var _suspend_persistence: bool = false
 
+# 保存時の変更点追跡。当季 (最後に ensure_season_records へ渡したシーズン) のレコードは
+# PSGameDecisions.recover_after_day が毎日全球団ぶん書き込むので、常に書き直す対象とする。
+# 過去シーズンのレコードは mark_record_dirty() で印を付けたときだけ書き直し、印の無いものは
+# to_dict() もハッシュもせずに保存を飛ばす (プレー年数が増えるほど過去レコードが積み上がり、
+# 日送りのたびに全件を辞書化・ハッシュする固定費が伸びるため)。
+# 印を取りこぼすと成績が静かに消えるので、追跡が当てにならない場面では全件を書き直す:
+# ロード直後 / メモリの総入れ替え / シーズンの切り替わり / FULL_PERSIST_SAVE_INTERVAL 回ごと。
+var _live_year: int = -1
+var _live_season_number: int = -1
+var _dirty_record_keys: Dictionary = {}
+var _persist_all_records: bool = true
+var _saves_since_full_persist: int = 0
+
+# 何回かに1回は印を無視して全件を照合する安全弁。過去シーズンのレコード参照を持ち越して
+# 後から書き換えるコードがあっても、ここで必ず拾われる (取りこぼしの寿命を有限にする)。
+const FULL_PERSIST_SAVE_INTERVAL: int = 32
+
 
 func _ready() -> void:
 	pass
@@ -57,6 +74,7 @@ func ensure_loaded() -> void:
 # レースになる (AppState 経由でない reporter 系の経路もここで確実に温まる)。
 func ensure_season_records(season: PSSeason, teams: Array, players: Array, persist: bool = true) -> void:
 	ensure_loaded()
+	_set_live_season(season.year, season.season_number)
 	var changed: bool = false
 	# GameDb.players に存在する選手 (引退済みも含む) の id 集合。次の erase ループが
 	# 「GameDb から完全に消えた選手」の当季レコードだけを消し、引退で source_data["retired"]=true に
@@ -240,6 +258,7 @@ func set_player_record_team(
 	if record.team_id == team_id:
 		return true
 	record.team_id = team_id
+	mark_record_dirty(record)
 	# 移籍は稀なので、全体挿入順と完全に同じbucket順を保つためindexを一括再構築する。
 	_rebuild_team_player_record_index()
 	return true
@@ -253,6 +272,7 @@ func set_player_record(record: PSPlayerSeasonRecord, storage_key: Variant = null
 	if resolved_key == null:
 		resolved_key = _season_key(record.player_id, record.year, record.season_number)
 	_player_records[resolved_key] = record
+	mark_record_dirty(record)
 	_rebuild_team_player_record_index()
 	return true
 
@@ -278,6 +298,7 @@ func get_current_player_records_for_team(team_id: int, include_retired: bool = f
 
 
 func clear_records() -> void:
+	mark_all_records_dirty()
 	SQLiteStoreService.reset_record_fingerprints()
 	# 母集団が入れ替わるので、そこから実測した基準分布 (打順/起用/編成の判定ラインの元) は無効。
 	PSPerformanceReference.reset_cache()
@@ -329,6 +350,7 @@ func to_dict() -> Dictionary:
 func load_from_dict(payload: Dictionary) -> void:
 	# メモリ側を丸ごと入れ替えるため「前回永続化した内容」のキャッシュは無効。
 	# 空キャッシュ = 次回 save は全行書き込み。母集団から実測した基準分布も同時に無効化する。
+	mark_all_records_dirty()
 	SQLiteStoreService.reset_record_fingerprints()
 	PSPerformanceReference.reset_cache()
 	_player_records.clear()
@@ -359,6 +381,70 @@ func load_from_dict(payload: Dictionary) -> void:
 	records_changed.emit()
 
 
+# 過去シーズンのレコードを書き換えたら呼ぶ。当季のレコードは常に書き直す対象なので不要。
+func mark_record_dirty(record: PSPlayerSeasonRecord) -> void:
+	if record == null:
+		return
+	_dirty_record_keys[_season_key(record.player_id, record.year, record.season_number)] = true
+
+
+# 次の保存で全レコードを書き直す。変更点追跡が当てにならない場面の安全弁。
+func mark_all_records_dirty() -> void:
+	_persist_all_records = true
+	_dirty_record_keys.clear()
+
+
+# そのレコードを次の保存で辞書化し直すか。false のレコードは内容が前回の保存時と同じとみなす。
+func is_record_persist_dirty(record: PSPlayerSeasonRecord) -> bool:
+	if record == null:
+		return false
+	if _persist_all_records:
+		return true
+	# 当季がまだ分からない (ensure_season_records を一度も通っていない) 間は、どのレコードが
+	# 書き換わるか判断できないので全件を書き直す対象にする。
+	if _live_year < 0:
+		return true
+	if record.year == _live_year and record.season_number == _live_season_number:
+		return true
+	return _dirty_record_keys.has(_season_key(record.player_id, record.year, record.season_number))
+
+
+# 変更点追跡の取りこぼし検出 (テスト・調査用)。書き直し対象でないレコードの内容が、最後に
+# 永続化した内容と食い違っていたら「印を付けずに書き換えられた」ということ。
+# 返り値は食い違ったレコードのキー ("player_id:year:season_number") の配列。
+func audit_persist_tracking() -> Array:
+	var misses: Array = []
+	if _persist_all_records:
+		return misses
+	var fingerprints: Dictionary = SQLiteStoreService.record_fingerprints_snapshot()
+	if fingerprints.is_empty():
+		return misses
+	for record_row in _player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if is_record_persist_dirty(record):
+			continue
+		var key: String = _season_key(record.player_id, record.year, record.season_number)
+		if not fingerprints.has(key) or record.to_dict().hash() != int(fingerprints[key]):
+			misses.append(key)
+	return misses
+
+
+# 当季が変わる瞬間は、前のシーズンのレコードが「過去」側へ移る。移動の前後で取りこぼしが
+# 出ないよう、一度だけ全件を書き直す対象にする。
+func _set_live_season(year: int, season_number: int) -> void:
+	if year == _live_year and season_number == _live_season_number:
+		return
+	_live_year = year
+	_live_season_number = season_number
+	mark_all_records_dirty()
+
+
+func _clear_persist_marks() -> void:
+	_persist_all_records = false
+	_dirty_record_keys.clear()
+	_saves_since_full_persist = 0
+
+
 func save_records() -> bool:
 	if _suspend_persistence:
 		return true
@@ -369,11 +455,18 @@ func save_records() -> bool:
 		push_error("Record store is not loaded; refusing to overwrite persisted records.")
 		return false
 
-	var payload: Dictionary = to_dict()
+	_saves_since_full_persist += 1
+	if _saves_since_full_persist >= FULL_PERSIST_SAVE_INTERVAL:
+		mark_all_records_dirty()
+	# 変更点だけを送れるのは、SQLite 側が「前回書いた内容」を覚えているときだけ
+	# (キャッシュが空 / セーブフォルダ切替後は全行書き込みに戻る)。
+	var partial: bool = not _persist_all_records and SQLiteStoreService.fingerprint_cache_valid()
+	var payload: Dictionary = _persist_payload(partial)
 	# blob (team_records / season_archives) + 正規化テーブル (player_records) を
 	# 同一 transaction で更新する。player_records は正規化テーブルが真実なので blob には
 	# 含めない (sqlite_store 側で slim blob 化)。
 	if SQLiteStoreService.save_record_store_and_normalized(payload):
+		_clear_persist_marks()
 		return true
 
 	var records_path: String = SaveContext.records_path()
@@ -385,11 +478,44 @@ func save_records() -> bool:
 		push_error("Could not write records file: %s" % records_path)
 		return false
 
-	file.store_string(JSON.stringify(payload, "\t"))
+	# JSON fallback は全件を書く形式なので、部分ペイロードのままでは書けない。
+	file.store_string(JSON.stringify(to_dict() if partial else payload, "\t"))
+	_clear_persist_marks()
 	return true
 
 
+# partial=true では、書き直しが要るレコードだけ辞書化し、残りはキーだけを
+# "unchanged_player_record_keys" で渡す (SQLite 側が「メモリから消えた」と誤認して
+# 行を消さないようにするため)。partial=false は従来どおりの全件ペイロード。
+func _persist_payload(partial: bool) -> Dictionary:
+	if not partial:
+		return to_dict()
+	var payload: Dictionary = {
+		"version": 2,
+		"player_records": [],
+		"team_records": [],
+		"season_archives": [],
+		"unchanged_player_record_keys": [],
+	}
+	for record_row in _player_records.values():
+		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		if is_record_persist_dirty(record):
+			payload["player_records"].append(record.to_dict())
+		else:
+			payload["unchanged_player_record_keys"].append(
+				_season_key(record.player_id, record.year, record.season_number)
+			)
+	for record_row in _team_records.values():
+		payload["team_records"].append((record_row as PSTeamSeasonRecord).to_dict())
+	for archive_row in _season_archives:
+		payload["season_archives"].append((archive_row as PSSeasonArchive).to_dict())
+	return payload
+
+
 func load_records() -> void:
+	# hydrate 直後はメモリと DB が一致するが、ここから最初の保存までに何が書き換わるかは
+	# 追跡できない (当季がまだ確定していない)。セッション最初の保存だけ全件を書き直す。
+	mark_all_records_dirty()
 	SQLiteStoreService.reset_record_fingerprints()
 	_player_records.clear()
 	_clear_team_player_record_index()

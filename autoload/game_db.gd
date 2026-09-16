@@ -24,6 +24,9 @@ var farm_clubs_by_id: Dictionary = {}
 var players: Array = []
 var players_by_id: Dictionary = {}
 var players_by_team: Dictionary = {}
+# players を丸ごと入れ替えるたびに増える番号。保存側 (SaveService) はこれが変わったら、
+# 引退選手を含む全員の保存内容を照合し直す (配列内の位置と中身の前提が崩れるため)。
+var players_generation: int = 0
 
 
 func _ready() -> void:
@@ -36,6 +39,7 @@ func load_initial_data() -> void:
 	farm_clubs.clear()
 	farm_clubs_by_id.clear()
 	players.clear()
+	players_generation += 1
 	players_by_id.clear()
 	players_by_team.clear()
 
@@ -354,13 +358,15 @@ func rebuild_player_indices() -> void:
 		players_by_team[player.team_id].append(player)
 
 
-func replace_players_from_rows(player_rows: Array) -> void:
+# 入れ替えたら true。行に選手が1人も無ければ同梱の初期データを残して false を返す。
+func replace_players_from_rows(player_rows: Array) -> bool:
 	var sanitized_rows: Array = _sanitize_player_rows(player_rows)
 	if sanitized_rows.is_empty():
 		push_warning("Saved player rows did not contain initial players; keeping bundled initial data.")
-		return
+		return false
 
 	players.clear()
+	players_generation += 1
 	players_by_id.clear()
 	players_by_team.clear()
 
@@ -371,6 +377,7 @@ func replace_players_from_rows(player_rows: Array) -> void:
 		if not players_by_team.has(player.team_id):
 			players_by_team[player.team_id] = []
 		players_by_team[player.team_id].append(player)
+	return true
 
 
 func _read_json_array(path: String) -> Array:
