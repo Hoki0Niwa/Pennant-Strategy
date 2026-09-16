@@ -440,7 +440,16 @@ static func _fielder_id(defense: Dictionary, position: int) -> int:
 	return 0
 
 
+# 守備配置は交代があるまで変わらないので、作った配列を defense へ持たせて使い回す。
+# 返す配列は複数の play_event が共有するため、**読み取り専用として扱う** (書き換えると前のイベントも変わる)。
+const ALIGNMENT_CACHE_KEY: String = "_alignment_rows"
+const ALIGNMENT_SOURCE_KEY: String = "_alignment_source"
+
+
 static func _defense_alignment(defense: Dictionary) -> Array:
+	var cached: Array = defense.get(ALIGNMENT_CACHE_KEY, []) as Array
+	if not cached.is_empty() and _alignment_source_matches(defense):
+		return cached
 	var alignment: Array = []
 	var seen: Dictionary = {}
 	var pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
@@ -459,7 +468,43 @@ static func _defense_alignment(defense: Dictionary) -> Array:
 			continue
 		alignment.append(_alignment_row(record.player_id, position))
 		seen[player_key] = true
+	defense[ALIGNMENT_CACHE_KEY] = alignment
+	defense[ALIGNMENT_SOURCE_KEY] = _alignment_source(defense)
 	return alignment
+
+
+# 守備配置の元 (投手と、各スロットの守備位置・選手) を並べた列。1つでも違えば配置を作り直す。
+static func _alignment_source(defense: Dictionary) -> PackedInt64Array:
+	var source: PackedInt64Array = PackedInt64Array()
+	var pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
+	source.append(0 if pitcher == null else pitcher.player_id)
+	for slot_value in defense.get("fielders", []) as Array:
+		var slot: Dictionary = slot_value as Dictionary
+		var record: PSPlayerSeasonRecord = slot.get("record", null) as PSPlayerSeasonRecord
+		source.append(int(slot.get("position", 0)))
+		source.append(0 if record == null else record.player_id)
+	return source
+
+
+static func _alignment_source_matches(defense: Dictionary) -> bool:
+	var source: PackedInt64Array = defense.get(ALIGNMENT_SOURCE_KEY, PackedInt64Array()) as PackedInt64Array
+	if source.is_empty():
+		return false
+	var pitcher: PSPlayerSeasonRecord = defense.get("pitcher", null) as PSPlayerSeasonRecord
+	if source[0] != (0 if pitcher == null else pitcher.player_id):
+		return false
+	var index: int = 1
+	for slot_value in defense.get("fielders", []) as Array:
+		var slot: Dictionary = slot_value as Dictionary
+		var record: PSPlayerSeasonRecord = slot.get("record", null) as PSPlayerSeasonRecord
+		if index + 1 >= source.size():
+			return false
+		if source[index] != int(slot.get("position", 0)):
+			return false
+		if source[index + 1] != (0 if record == null else record.player_id):
+			return false
+		index += 2
+	return index == source.size()
 
 
 static func _alignment_row(player_id: int, position: int) -> Dictionary:

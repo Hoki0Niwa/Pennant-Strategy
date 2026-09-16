@@ -244,11 +244,17 @@ static func pick_reliever_for_context(setup: Dictionary, inning: int, game_resul
 	#   ホーム: 9回からクローザーを通常どおり投入し、以降は能力の高いリリーフ順。
 	if not prefer_long and score_margin == 0 and inning >= GameSimulator.REGULATION_INNINGS:
 		if is_visitor and inning < GameSimulator.MAX_INNINGS:
-			return _pick_bridge_reliever(eligible, inning, close_game, game_day, team_games_played_before, farm)
+			return _pick_bridge_reliever(
+				eligible, inning, close_game, game_day, team_games_played_before, farm,
+				_reliever_score_parts_cache(setup)
+			)
 		var closer: PSPlayerSeasonRecord = _find_role_in(setup, eligible, PSRotationPlanner.RELIEF_ROLE_CLOSER)
 		if closer != null:
 			return closer
-		return _highest_ability_reliever(eligible, inning, close_game, game_day, team_games_played_before, farm)
+		return _highest_ability_reliever(
+			eligible, inning, close_game, game_day, team_games_played_before, farm,
+			_reliever_score_parts_cache(setup)
+		)
 
 	# 選抜スコアは登板可否・役割ボーナス・疲労を含む合成値で、1試合の継投判断ごとに引かれる。
 	# comparator の中で計算すると 1 回の sort で O(n log n) 回走るので先に 1 人 1 回だけ引く
@@ -337,7 +343,7 @@ static func _pitched_previous_game(
 # 例: 9回=3番手, 10回=2番手, 11回=最良, 12回=クローザー。候補が足りなければ末尾(最弱)に丸める。
 static func _pick_bridge_reliever(
 	candidates: Array, inning: int, close_game: bool, game_day: int,
-	team_games_played_before: int, farm: bool = false
+	team_games_played_before: int, farm: bool = false, parts_cache: Dictionary = {}
 ) -> PSPlayerSeasonRecord:
 	if candidates.is_empty():
 		return null
@@ -347,7 +353,7 @@ static func _pick_bridge_reliever(
 		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
 		if reliever != null and not ability_by_id.has(reliever.player_id):
 			ability_by_id[reliever.player_id] = _reliever_ability_score(
-				reliever, inning, close_game, game_day, team_games_played_before, farm
+				reliever, inning, close_game, game_day, team_games_played_before, farm, parts_cache
 			)
 	ordered.sort_custom(func(a, b) -> bool:
 		return (
@@ -362,7 +368,7 @@ static func _pick_bridge_reliever(
 # 能力(基礎リリーフ評価)が最も高い候補を返す。同点でホームがクローザー投入後の継投に使う。
 static func _highest_ability_reliever(
 	candidates: Array, inning: int, close_game: bool, game_day: int,
-	team_games_played_before: int, farm: bool = false
+	team_games_played_before: int, farm: bool = false, parts_cache: Dictionary = {}
 ) -> PSPlayerSeasonRecord:
 	var best: PSPlayerSeasonRecord = null
 	var best_score: float = -INF
@@ -370,7 +376,9 @@ static func _highest_ability_reliever(
 		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
 		if reliever == null:
 			continue
-		var ability: float = _reliever_ability_score(reliever, inning, close_game, game_day, team_games_played_before, farm)
+		var ability: float = _reliever_ability_score(
+			reliever, inning, close_game, game_day, team_games_played_before, farm, parts_cache
+		)
 		if best == null or ability > best_score:
 			best = reliever
 			best_score = ability
@@ -380,10 +388,10 @@ static func _highest_ability_reliever(
 # 役割補正を含まない基礎リリーフ評価 (能力 - 疲労等)。同点延長の「評価の高い順」並べ替えに使う。
 static func _reliever_ability_score(
 	reliever: PSPlayerSeasonRecord, inning: int, close_game: bool, game_day: int,
-	team_games_played_before: int, farm: bool = false
+	team_games_played_before: int, farm: bool = false, parts_cache: Dictionary = {}
 ) -> float:
 	return PSPitcherUsageModel.reliever_selection_score(
-		reliever, false, inning, close_game, game_day, team_games_played_before, farm
+		reliever, false, inning, close_game, game_day, team_games_played_before, farm, parts_cache
 	)
 
 
@@ -394,6 +402,17 @@ static func _find_role_in(setup: Dictionary, candidates: Array, role: String) ->
 		if reliever != null and _relief_role_for_pitcher(setup, reliever) == role:
 			return reliever
 	return null
+
+
+# 選抜スコアのうち場面に依らない部分は、その試合の setup に持たせて使い回す (登板・故障で作り直す)。
+const RELIEVER_SCORE_PARTS_KEY: String = "_reliever_score_parts"
+
+
+static func _reliever_score_parts_cache(setup: Dictionary) -> Dictionary:
+	var cache: Dictionary = setup.get(RELIEVER_SCORE_PARTS_KEY, {}) as Dictionary
+	if not setup.has(RELIEVER_SCORE_PARTS_KEY):
+		setup[RELIEVER_SCORE_PARTS_KEY] = cache
+	return cache
 
 
 # 基礎スコア(能力・疲労・登板間隔)に、ユーザーが設定したリリーフ役割の場面補正を足す。
@@ -409,7 +428,8 @@ static func reliever_selection_score_for_setup(
 ) -> float:
 	var farm: bool = _is_farm_setup(setup)
 	var score: float = PSPitcherUsageModel.reliever_selection_score(
-		reliever, prefer_long, inning, close_game, game_day, team_games_played_before, farm
+		reliever, prefer_long, inning, close_game, game_day, team_games_played_before, farm,
+		_reliever_score_parts_cache(setup)
 	)
 	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
 	var role: String = str(role_by_pitcher.get(reliever.player_id, role_by_pitcher.get(str(reliever.player_id), "")))

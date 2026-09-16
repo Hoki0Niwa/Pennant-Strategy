@@ -178,11 +178,9 @@ static func _apply_plate_result(
 	if batter_id != 0:
 		var batter_stats = _record_for(advanced_stats, BUCKET_PLAYERS, batter_id)
 		batter_stats.add_plate_result(woba_weight, denominator_delta, xwoba_weight, denominator_delta, re24_delta)
-		_store_record(advanced_stats, BUCKET_PLAYERS, batter_stats)
 	if pitcher_id != 0:
 		var pitcher_stats = _record_for(advanced_stats, BUCKET_PITCHERS, pitcher_id)
 		pitcher_stats.add_plate_result(woba_weight, denominator_delta, xwoba_weight, denominator_delta, re24_delta)
-		_store_record(advanced_stats, BUCKET_PITCHERS, pitcher_stats)
 
 
 static func _apply_baserunning_event(advanced_stats: Dictionary, runner_event: Dictionary) -> void:
@@ -193,7 +191,6 @@ static func _apply_baserunning_event(advanced_stats: Dictionary, runner_event: D
 	if not is_zero_approx(bsr_value):
 		var runner_stats = _record_for(advanced_stats, BUCKET_PLAYERS, runner_id)
 		runner_stats.add_baserunning(bsr_value)
-		_store_record(advanced_stats, BUCKET_PLAYERS, runner_stats)
 
 
 static func _apply_fielding_event(advanced_stats: Dictionary, fielding_event: Dictionary) -> void:
@@ -212,7 +209,6 @@ static func _apply_fielding_event(advanced_stats: Dictionary, fielding_event: Di
 		str(fielding_event.get("oaa_zone", "")),
 		int(fielding_event.get("fielding_outs", 1 if bool(fielding_event.get("actual_out", false)) else 0))
 	)
-	_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
 # RE24 = 得点 + プレイ後の得点期待値 - プレイ前の得点期待値。
@@ -251,7 +247,6 @@ static func _apply_defensive_alignment(advanced_stats: Dictionary, play_event: D
 static func _apply_defensive_outs(advanced_stats: Dictionary, player_id: int, position: int, outs_added: int, zone: String) -> void:
 	var fielder_stats = _record_for(advanced_stats, BUCKET_PLAYERS, player_id)
 	fielder_stats.add_defensive_outs(position, outs_added, zone)
-	_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
 # 盗塁送球ミスなど runner_event 側にだけ出る失策を守備指標へ変換する。
@@ -287,7 +282,6 @@ static func _apply_runner_fielding_error_for_player(
 		_oaa_zone_for_position(position, zone),
 		0
 	)
-	_store_record(advanced_stats, BUCKET_PLAYERS, fielder_stats)
 
 
 static func _defensive_slot_for_position(play_event: Dictionary, position: int) -> Dictionary:
@@ -371,7 +365,9 @@ static func _ensure_shape(advanced_stats: Dictionary) -> void:
 		advanced_stats[BUCKET_PITCHERS] = {}
 
 
-# 既存 dict から AdvancedStatsRecord を復元し、呼び出し側が加算してから _store_record で戻す。
+# 既存 dict から AdvancedStatsRecord を復元し、以後は bucket に入れた object へ直接加算する。
+# 選手の高度指標レコードを返す。無ければ作って bucket へ入れるので、呼び出し側で入れ直す必要はない。
+# 試合中は object のまま bucket に置き、試合終了時に to_dict_container() でまとめて Dictionary 化する。
 static func _record_for(advanced_stats: Dictionary, bucket_name: String, player_id: int):
 	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
 	var key: String = _player_key(player_id)
@@ -388,13 +384,6 @@ static func _record_for(advanced_stats: Dictionary, bucket_name: String, player_
 	bucket[key] = stats
 	advanced_stats[bucket_name] = bucket
 	return stats
-
-
-# AdvancedStatsRecord は試合中だけ object のまま bucket へ戻し、試合終了時にまとめて Dictionary 化する。
-static func _store_record(advanced_stats: Dictionary, bucket_name: String, stats) -> void:
-	var bucket: Dictionary = advanced_stats.get(bucket_name, {}) as Dictionary
-	bucket[_player_key(stats.player_id)] = stats
-	advanced_stats[bucket_name] = bucket
 
 
 static func _player_key(player_id: int) -> String:

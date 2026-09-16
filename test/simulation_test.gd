@@ -1655,6 +1655,85 @@ func test_resolve_with_context_draws_category_with_game_cache_rules() -> void:
 	).contains_exactly([PSPlateAppearanceCoordinator.RESULT_WALK])
 
 
+# 守備配置の配列は交代があるまで使い回し、守備交代・継投があれば作り直す。
+func test_defense_alignment_is_shared_until_the_defense_changes() -> void:
+	var pitcher: PSPlayerSeasonRecord = _pitcher(830, "Alignment Pitcher", 0.2)
+	var catcher: PSPlayerSeasonRecord = _catcher(831, "Alignment Catcher", 0.1)
+	var infielder: PSPlayerSeasonRecord = _fielder(832, "Alignment Infielder", 0.0)
+	var defense: Dictionary = {
+		"pitcher": pitcher,
+		"fielders": [{"record": catcher, "position": 2}, {"record": infielder, "position": 3}],
+	}
+	var initial: Array = PSPlayEventBuilder._defense_alignment(defense)
+	assert_int(initial.size()).is_equal(3)
+	assert_bool(is_same(PSPlayEventBuilder._defense_alignment(defense), initial)).override_failure_message(
+		"守備が変わっていないのに守備配置を作り直している"
+	).is_true()
+
+	var replacement: PSPlayerSeasonRecord = _fielder(833, "Alignment Bench", 0.3)
+	(defense["fielders"][1] as Dictionary)["record"] = replacement
+	var after_substitution: Array = PSPlayEventBuilder._defense_alignment(defense)
+	assert_bool(is_same(after_substitution, initial)).override_failure_message(
+		"守備交代の後も前の守備配置を返している"
+	).is_false()
+	assert_int(int((after_substitution[2] as Dictionary).get("player_id", 0))).is_equal(replacement.player_id)
+
+	var reliever: PSPlayerSeasonRecord = _pitcher(834, "Alignment Reliever", 0.4)
+	defense["pitcher"] = reliever
+	assert_int(int((PSPlayEventBuilder._defense_alignment(defense)[0] as Dictionary).get("player_id", 0))).override_failure_message(
+		"継投の後も前の投手の守備配置を返している"
+	).is_equal(reliever.player_id)
+
+
+# 守備アウトの加算は bucket の中のレコードへ直接効く (取り出したレコードを入れ直す必要はない)。
+func test_defensive_outs_accumulate_in_the_advanced_stats_bucket() -> void:
+	var stats: Dictionary = PSAdvancedStatReducer.empty_advanced_stats()
+	PSAdvancedStatReducer._apply_defensive_outs(stats, 9001, 6, 2, "infield")
+	PSAdvancedStatReducer._apply_defensive_outs(stats, 9001, 6, 1, "infield")
+	var bucket: Dictionary = stats.get(PSAdvancedStatReducer.BUCKET_PLAYERS, {}) as Dictionary
+	var record: Variant = bucket.get("9001", null)
+	assert_bool(record != null).override_failure_message("守備アウトのレコードが bucket に入っていない").is_true()
+	assert_int(int(record.defensive_outs_by_position.get("6", 0))).is_equal(3)
+	assert_int(int(record.defensive_outs_by_oaa_zone.get("infield", 0))).is_equal(3)
+
+
+# 継投の選抜スコアは、場面に依らない部分を試合キャッシュから使い回しても毎回計算した値と一致する。
+# 疲労や登板状況が変われば作り直す。
+func test_reliever_selection_score_cache_matches_fresh_calculation() -> void:
+	var reliever: PSPlayerSeasonRecord = _pitcher(835, "Cache Reliever", 0.6)
+	reliever.role = "closer"
+	var cache: Dictionary = {}
+	var cases: Array = [[false, 7, false], [false, 9, true], [true, 6, false], [true, 9, true]]
+	for case_value in cases:
+		var case_row: Array = case_value as Array
+		var cached_score: float = PSPitcherUsageModel.reliever_selection_score(
+			reliever, bool(case_row[0]), int(case_row[1]), bool(case_row[2]), 120, 60, false, cache
+		)
+		var fresh_score: float = PSPitcherUsageModel.reliever_selection_score(
+			reliever, bool(case_row[0]), int(case_row[1]), bool(case_row[2]), 120, 60, false
+		)
+		assert_float(cached_score).override_failure_message(
+			"キャッシュした継投スコアが毎回計算した値と違う (ロング=%s 回=%d 接戦=%s)" % [case_row[0], case_row[1], case_row[2]]
+		).is_equal(fresh_score)
+	assert_int(cache.size()).is_equal(1)
+
+	var before_fatigue: float = PSPitcherUsageModel.reliever_selection_score(
+		reliever, false, 9, true, 120, 60, false, cache
+	)
+	reliever.fatigue += 20
+	var after_fatigue: float = PSPitcherUsageModel.reliever_selection_score(
+		reliever, false, 9, true, 120, 60, false, cache
+	)
+	assert_float(after_fatigue).is_less(before_fatigue)
+	reliever.last_pitched_team_game = 60
+	reliever.consecutive_appearances = 3
+	assert_float(PSPitcherUsageModel.reliever_selection_score(
+		reliever, false, 9, true, 120, 60, false, cache
+	)).override_failure_message(
+		"登板状況が変わったのに連投の減点が作り直されていない"
+	).is_less(after_fatigue - 100.0)
+
+
 # RuleValues の float フィールドごとに、他と重ならない値を同じ名前のキーで持つルール辞書を作る。
 func _distinct_rules_for_fields(values: Object, offset: float) -> Dictionary:
 	var rules: Dictionary = {}

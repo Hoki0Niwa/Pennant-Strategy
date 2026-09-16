@@ -176,90 +176,102 @@ static func _fielder_record(defense: Dictionary, position: int) -> PSPlayerSeaso
 	return null
 
 
+# 守備位置ごとの守備能力 (raw z) の重み。順序も含めて _weighted_score_z の入力そのもの。
+const FIELDING_WEIGHTS_PITCHER: Array = [
+	["PF_Reach", 0.40],
+	["PF_Secure", 0.35],
+	["PF_Throw", 0.25],
+]
+const FIELDING_WEIGHTS_CATCHER: Array = [
+	["C_FieldSecure", 0.25],
+	["C_Throw", 0.25],
+	["C_Blocking", 0.20],
+	["C_Framing", 0.15],
+	["C_GameCall", 0.15],
+]
+const FIELDING_WEIGHTS_FIRST: Array = [
+	["IF_Secure", 0.42],
+	["IF_Reach", 0.20],
+	["IF_PositionFit", 0.18],
+	["IF_ThrowAccuracy", 0.10],
+	["IF_Exchange", 0.10],
+]
+# 二塁: 併殺完成(Exchange)重視、肩(ThrowPower)は低めだが残す、守備範囲確保。
+const FIELDING_WEIGHTS_SECOND: Array = [
+	["IF_Reach", 0.30],
+	["IF_Exchange", 0.24],
+	["IF_Secure", 0.18],
+	["IF_PositionFit", 0.14],
+	["IF_ThrowPower", 0.06],
+	["IF_ThrowAccuracy", 0.08],
+]
+# 三塁: とにかく肩力(ThrowPower)突出。
+const FIELDING_WEIGHTS_THIRD: Array = [
+	["IF_ThrowPower", 0.32],
+	["IF_Secure", 0.22],
+	["IF_PositionFit", 0.16],
+	["IF_Reach", 0.16],
+	["IF_ThrowAccuracy", 0.10],
+	["IF_Exchange", 0.04],
+]
+# 遊撃: 全守備能力が高水準 (all-around)。
+const FIELDING_WEIGHTS_SHORT: Array = [
+	["IF_Reach", 0.22],
+	["IF_Secure", 0.18],
+	["IF_ThrowPower", 0.16],
+	["IF_PositionFit", 0.16],
+	["IF_Exchange", 0.14],
+	["IF_ThrowAccuracy", 0.14],
+]
+const FIELDING_WEIGHTS_LEFT: Array = [
+	["OF_Reach", 0.32],
+	["OF_Route", 0.22],
+	["OF_Secure", 0.22],
+	["OF_ArmPower", 0.08],
+	["OF_ArmAccuracy", 0.06],
+	["OF_PositionFit", 0.10],
+]
+# 中堅: 守備範囲(Reach)突出。
+const FIELDING_WEIGHTS_CENTER: Array = [
+	["OF_Reach", 0.44],
+	["OF_Route", 0.26],
+	["OF_Secure", 0.14],
+	["OF_PositionFit", 0.10],
+	["OF_ArmPower", 0.04],
+	["OF_ArmAccuracy", 0.02],
+]
+const FIELDING_WEIGHTS_RIGHT: Array = [
+	["OF_ArmPower", 0.20],
+	["OF_ArmAccuracy", 0.14],
+	["OF_Reach", 0.24],
+	["OF_Route", 0.16],
+	["OF_Secure", 0.16],
+	["OF_PositionFit", 0.10],
+]
+
+
 static func _fielding_score(record: PSPlayerSeasonRecord, position: int) -> float:
 	if record == null:
 		return LEAGUE_AVERAGE_FIELDING
 	match position:
 		1:
-			return _weighted_score_z(record, [
-				["PF_Reach", 0.40],
-				["PF_Secure", 0.35],
-				["PF_Throw", 0.25],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_PITCHER)
 		2:
-			return _weighted_score_z(record, [
-				["C_FieldSecure", 0.25],
-				["C_Throw", 0.25],
-				["C_Blocking", 0.20],
-				["C_Framing", 0.15],
-				["C_GameCall", 0.15],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_CATCHER)
 		3:
-			return _weighted_score_z(record, [
-				["IF_Secure", 0.42],
-				["IF_Reach", 0.20],
-				["IF_PositionFit", 0.18],
-				["IF_ThrowAccuracy", 0.10],
-				["IF_Exchange", 0.10],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_FIRST)
 		4:
-			# 二塁: 併殺完成(Exchange)重視、肩(ThrowPower)は低めだが残す、守備範囲確保。
-			return _weighted_score_z(record, [
-				["IF_Reach", 0.30],
-				["IF_Exchange", 0.24],
-				["IF_Secure", 0.18],
-				["IF_PositionFit", 0.14],
-				["IF_ThrowPower", 0.06],
-				["IF_ThrowAccuracy", 0.08],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_SECOND)
 		5:
-			# 三塁: とにかく肩力(ThrowPower)突出。
-			return _weighted_score_z(record, [
-				["IF_ThrowPower", 0.32],
-				["IF_Secure", 0.22],
-				["IF_PositionFit", 0.16],
-				["IF_Reach", 0.16],
-				["IF_ThrowAccuracy", 0.10],
-				["IF_Exchange", 0.04],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_THIRD)
 		6:
-			# 遊撃: 全守備能力が高水準 (all-around)。
-			return _weighted_score_z(record, [
-				["IF_Reach", 0.22],
-				["IF_Secure", 0.18],
-				["IF_ThrowPower", 0.16],
-				["IF_PositionFit", 0.16],
-				["IF_Exchange", 0.14],
-				["IF_ThrowAccuracy", 0.14],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_SHORT)
 		7:
-			return _weighted_score_z(record, [
-				["OF_Reach", 0.32],
-				["OF_Route", 0.22],
-				["OF_Secure", 0.22],
-				["OF_ArmPower", 0.08],
-				["OF_ArmAccuracy", 0.06],
-				["OF_PositionFit", 0.10],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_LEFT)
 		8:
-			# 中堅: 守備範囲(Reach)突出。
-			return _weighted_score_z(record, [
-				["OF_Reach", 0.44],
-				["OF_Route", 0.26],
-				["OF_Secure", 0.14],
-				["OF_PositionFit", 0.10],
-				["OF_ArmPower", 0.04],
-				["OF_ArmAccuracy", 0.02],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_CENTER)
 		9:
-			return _weighted_score_z(record, [
-				["OF_ArmPower", 0.20],
-				["OF_ArmAccuracy", 0.14],
-				["OF_Reach", 0.24],
-				["OF_Route", 0.16],
-				["OF_Secure", 0.16],
-				["OF_PositionFit", 0.10],
-			])
+			return _weighted_score_z(record, FIELDING_WEIGHTS_RIGHT)
 	return float(LEAGUE_AVERAGE_FIELDING)
 
 

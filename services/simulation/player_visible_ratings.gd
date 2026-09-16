@@ -79,40 +79,52 @@ static func summary_line_from_result(result: Dictionary) -> String:
 
 
 # ミート系表示。Barrel を中心に三振回避・四球・広角を足し、積極性はわずかに減点する。
+const CONTACT_SOURCE_KEYS: Array = ["Bat_Barrel", "Bat_KAvoid", "Bat_BBCreate", "Bat_Spray", "Bat_Platoon"]
+const CONTACT_WEIGHTS: Dictionary = {
+	"Bat_Barrel": 0.46,
+	"Bat_KAvoid": 0.24,
+	"Bat_BBCreate": 0.12,
+	"Bat_Spray": 0.08,
+	"Bat_Platoon": 0.06,
+	"Bat_Aggression": -0.04,
+}
+
+
 static func fielder_contact(record: PSPlayerSeasonRecord) -> int:
-	if _has_any_z(record, ["Bat_Barrel", "Bat_KAvoid", "Bat_BBCreate", "Bat_Spray", "Bat_Platoon"]):
-		return _display_from_weighted_z(record, {
-			"Bat_Barrel": 0.46,
-			"Bat_KAvoid": 0.24,
-			"Bat_BBCreate": 0.12,
-			"Bat_Spray": 0.08,
-			"Bat_Platoon": 0.06,
-			"Bat_Aggression": -0.04,
-		})
+	if _has_any_z(record, CONTACT_SOURCE_KEYS):
+		return _display_from_weighted_z(record, CONTACT_WEIGHTS)
 	return record.z_display("Bat_Barrel")
 
 
 # 長打系表示。Impact と Loft を主軸に、Barrel/Aggression/Spray/Platoon を少量足す。
+const POWER_SOURCE_KEYS: Array = ["Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Aggression", "Bat_Spray"]
+const POWER_WEIGHTS: Dictionary = {
+	"Bat_Impact": 0.50,
+	"Bat_Loft": 0.24,
+	"Bat_Barrel": 0.10,
+	"Bat_Aggression": 0.08,
+	"Bat_Spray": 0.04,
+	"Bat_Platoon": 0.04,
+}
+
+
 static func fielder_power(record: PSPlayerSeasonRecord) -> int:
-	if _has_any_z(record, ["Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Aggression", "Bat_Spray"]):
-		return _display_from_weighted_z(record, {
-			"Bat_Impact": 0.50,
-			"Bat_Loft": 0.24,
-			"Bat_Barrel": 0.10,
-			"Bat_Aggression": 0.08,
-			"Bat_Spray": 0.04,
-			"Bat_Platoon": 0.04,
-		})
+	if _has_any_z(record, POWER_SOURCE_KEYS):
+		return _display_from_weighted_z(record, POWER_WEIGHTS)
 	return record.z_display("Bat_Impact")
 
 
+const SPEED_SOURCE_KEYS: Array = ["Run_Speed", "Run_Judgment", "Run_Steal"]
+const SPEED_WEIGHTS: Dictionary = {
+	"Run_Speed": 0.64,
+	"Run_Judgment": 0.22,
+	"Run_Steal": 0.14,
+}
+
+
 static func fielder_speed(record: PSPlayerSeasonRecord) -> int:
-	if _has_any_z(record, ["Run_Speed", "Run_Judgment", "Run_Steal"]):
-		return _display_from_weighted_z(record, {
-			"Run_Speed": 0.64,
-			"Run_Judgment": 0.22,
-			"Run_Steal": 0.14,
-		})
+	if _has_any_z(record, SPEED_SOURCE_KEYS):
+		return _display_from_weighted_z(record, SPEED_WEIGHTS)
 	return record.z_display("Run_Speed")
 
 
@@ -180,16 +192,20 @@ static func fielder_arm(record: PSPlayerSeasonRecord) -> int:
 
 
 # 選球表示。BBCreate を中心にしつつ、三振回避や左右対応を加点、過度な積極性は減点する。
+const DISCIPLINE_SOURCE_KEYS: Array = ["Bat_BBCreate", "Bat_KAvoid", "Bat_Aggression", "Bat_Platoon", "Bat_Spray"]
+const DISCIPLINE_WEIGHTS: Dictionary = {
+	"Bat_BBCreate": 0.42,
+	"Bat_KAvoid": 0.22,
+	"Bat_Platoon": 0.12,
+	"Bat_Spray": 0.08,
+	"Bat_Barrel": 0.06,
+	"Bat_Aggression": -0.10,
+}
+
+
 static func fielder_discipline(record: PSPlayerSeasonRecord) -> int:
-	if _has_any_z(record, ["Bat_BBCreate", "Bat_KAvoid", "Bat_Aggression", "Bat_Platoon", "Bat_Spray"]):
-		return _display_from_weighted_z(record, {
-			"Bat_BBCreate": 0.42,
-			"Bat_KAvoid": 0.22,
-			"Bat_Platoon": 0.12,
-			"Bat_Spray": 0.08,
-			"Bat_Barrel": 0.06,
-			"Bat_Aggression": -0.10,
-		})
+	if _has_any_z(record, DISCIPLINE_SOURCE_KEYS):
+		return _display_from_weighted_z(record, DISCIPLINE_WEIGHTS)
 	return record.z_display("Bat_BBCreate")
 
 

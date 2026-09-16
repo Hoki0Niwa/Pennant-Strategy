@@ -120,7 +120,7 @@ func add_fielding(
 	fielding_chances += 1
 	var credited_outs: int = max(0, fielding_outs_value)
 	fielding_outs += credited_outs
-	var position_key: String = str(position)
+	var position_key: String = _position_key(position)
 	if position > 0:
 		fielding_chances_by_position[position_key] = int(fielding_chances_by_position.get(position_key, 0)) + 1
 		if credited_outs > 0:
@@ -144,7 +144,7 @@ func add_fielding(
 func add_defensive_outs(position: int, outs: int, oaa_zone: String = "") -> void:
 	if position <= 0 or outs <= 0:
 		return
-	var position_key: String = str(position)
+	var position_key: String = _position_key(position)
 	defensive_outs_by_position[position_key] = int(defensive_outs_by_position.get(position_key, 0)) + outs
 	var zone_key: String = oaa_zone
 	if zone_key.is_empty():
@@ -294,6 +294,16 @@ func _primary_oaa_zone() -> String:
 	if infield_chances <= 0 and outfield_chances <= 0:
 		return ""
 	return "outfield" if outfield_chances > infield_chances else "infield"
+
+
+# 守備位置の辞書キー。1〜9 は毎回 str() を作らず対応表から引く。
+const POSITION_KEYS: PackedStringArray = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
+
+func _position_key(position: int) -> String:
+	if position >= 0 and position < POSITION_KEYS.size():
+		return POSITION_KEYS[position]
+	return str(position)
 
 
 func _oaa_zone_for_position(position: int) -> String:

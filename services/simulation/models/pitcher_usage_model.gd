@@ -780,6 +780,31 @@ static func daily_recovery_amount(record: PSPlayerSeasonRecord) -> int:
 	return int(clamp(round(reliever_recovery), 10.0, 29.0))
 
 
+# 継投の選抜スコアのうち、場面 (ロング志向・回・接戦) に依らない部分。能力・疲労・登板間隔から作る。
+# 登板や故障で変わる値を一緒に持ち、変わっていたら作り直す。
+class RelieverScoreParts:
+	var fatigue: int = -1
+	var injury_days: int = -1
+	var injury_return_day: int = -1
+	var last_pitched_team_game: int = -1
+	var consecutive_appearances: int = -1
+	var current_day: int = -1
+	var team_games_played_before: int = -1
+	var farm: bool = false
+	var base_score: float = 0.0
+	var streak_penalty: float = 0.0
+	var injury_return_penalty: float = 0.0
+	var long_stamina: float = 0.0
+	var long_fatigue_resist: float = 0.0
+	var long_depth: float = 0.0
+	var long_pitch_count: float = 0.0
+	var long_closer_penalty: float = 0.0
+	var short_finish: float = 0.0
+	var close_bb_prevent: float = 0.0
+	var ninth_closer_bonus: float = 0.0
+
+
+# parts_cache は1試合ぶんの {player_id: RelieverScoreParts}。省略すると毎回作り直す。
 static func reliever_selection_score(
 	record: PSPlayerSeasonRecord,
 	prefer_long: bool,
@@ -787,32 +812,91 @@ static func reliever_selection_score(
 	close_game: bool,
 	current_day: int = 0,
 	team_games_played_before: int = 0,
-	farm: bool = false
+	farm: bool = false,
+	parts_cache: Dictionary = {}
 ) -> float:
 	if record == null:
 		return -999999.0
-	var fatigue_penalty: float = float(record.fatigue) * 1.15
-	var score: float = float(PlayerValueEvaluator.pitching_score_without_fatigue(record)) - fatigue_penalty
+	var parts: RelieverScoreParts = _reliever_score_parts(
+		record, current_day, team_games_played_before, farm, parts_cache
+	)
+	var score: float = parts.base_score - float(record.fatigue) * 1.15
+	score -= parts.streak_penalty
+	score -= parts.injury_return_penalty
+	if prefer_long:
+		score += parts.long_stamina
+		score += parts.long_fatigue_resist
+		score += parts.long_depth
+		score += parts.long_pitch_count
+		score -= parts.long_closer_penalty
+	else:
+		score += parts.short_finish
+		if close_game:
+			score += parts.close_bb_prevent
+		if inning >= 9:
+			score += parts.ninth_closer_bonus
+	return score
+
+
+# 場面に依らない部分を作る。発生しない減点・加点は 0 として持ち、足す順序は reliever_selection_score() と
+# 揃える (順序が変わると浮動小数の下位ビットがずれる)。
+static func _reliever_score_parts(
+	record: PSPlayerSeasonRecord,
+	current_day: int,
+	team_games_played_before: int,
+	farm: bool,
+	parts_cache: Dictionary
+) -> RelieverScoreParts:
+	var cached: RelieverScoreParts = parts_cache.get(record.player_id, null) as RelieverScoreParts
+	if cached != null and _reliever_parts_match(cached, record, current_day, team_games_played_before, farm):
+		return cached
+	var parts: RelieverScoreParts = RelieverScoreParts.new()
+	parts.fatigue = record.fatigue
+	parts.injury_days = record.injury_days
+	parts.injury_return_day = record.injury_return_day
+	parts.last_pitched_team_game = record.farm_last_pitched_team_game if farm else record.last_pitched_team_game
+	parts.consecutive_appearances = record.farm_consecutive_appearances if farm else record.consecutive_appearances
+	parts.current_day = current_day
+	parts.team_games_played_before = team_games_played_before
+	parts.farm = farm
+	parts.base_score = float(PlayerValueEvaluator.pitching_score_without_fatigue(record))
 	var arsenal: Dictionary = arsenal_summary(record)
 	var next_streak: int = next_consecutive_appearance_count(record, team_games_played_before, farm)
 	if next_streak >= 3:
-		score -= 120.0 + float(next_streak - 3) * 70.0
+		parts.streak_penalty = 120.0 + float(next_streak - 3) * 70.0
 	if recently_returned_from_injury(record, current_day, INJURY_RETURN_SOFT_REST_DAYS):
-		score -= 90.0
-	if prefer_long:
-		score += _ability(record, "Pit_Stamina") * 25.0
-		score += _ability(record, "Pit_FatigueResist") * 8.0
-		score += starter_depth_rating(arsenal) * 13.0
-		score += float(arsenal.get("effective_pitch_count", 0)) * 18.0
-		if record.role == "closer":
-			score -= 125.0
-	else:
-		score += reliever_finish_rating(arsenal) * 15.0
-		if close_game:
-			score += _ability(record, "Pit_BBPrevent") * 4.4
-		if inning >= 9 and record.role == "closer":
-			score += 55.0
-	return score
+		parts.injury_return_penalty = 90.0
+	parts.long_stamina = _ability(record, "Pit_Stamina") * 25.0
+	parts.long_fatigue_resist = _ability(record, "Pit_FatigueResist") * 8.0
+	parts.long_depth = starter_depth_rating(arsenal) * 13.0
+	parts.long_pitch_count = float(arsenal.get("effective_pitch_count", 0)) * 18.0
+	parts.short_finish = reliever_finish_rating(arsenal) * 15.0
+	parts.close_bb_prevent = _ability(record, "Pit_BBPrevent") * 4.4
+	if record.role == "closer":
+		parts.long_closer_penalty = 125.0
+		parts.ninth_closer_bonus = 55.0
+	parts_cache[record.player_id] = parts
+	return parts
+
+
+static func _reliever_parts_match(
+	parts: RelieverScoreParts,
+	record: PSPlayerSeasonRecord,
+	current_day: int,
+	team_games_played_before: int,
+	farm: bool
+) -> bool:
+	if parts.farm != farm or parts.current_day != current_day:
+		return false
+	if parts.team_games_played_before != team_games_played_before:
+		return false
+	if parts.fatigue != record.fatigue or parts.injury_days != record.injury_days:
+		return false
+	if parts.injury_return_day != record.injury_return_day:
+		return false
+	var last_game: int = record.farm_last_pitched_team_game if farm else record.last_pitched_team_game
+	var consecutive: int = record.farm_consecutive_appearances if farm else record.consecutive_appearances
+	return parts.last_pitched_team_game == last_game and parts.consecutive_appearances == consecutive
 
 
 static func is_reliever_available(

@@ -333,10 +333,14 @@ static func starter_defense_weight_for_position(position: int) -> float:
 	return STARTER_DEFENSE_WEIGHT
 
 
+# 守備適性を見る守備位置 (捕手〜右翼)。投手は best fit の対象にしない。
+const DEFENSIVE_FIT_POSITIONS: Array = [2, 3, 4, 5, 6, 7, 8, 9]
+
+
 static func best_defensive_fit(record: PSPlayerSeasonRecord) -> Dictionary:
 	var best_position: int = 0
 	var best_score: int = 0
-	for position in [2, 3, 4, 5, 6, 7, 8, 9]:
+	for position in DEFENSIVE_FIT_POSITIONS:
 		if position_aptitude(record, position) <= 0:
 			continue
 		var score: int = defensive_score_for_position(record, position)
