@@ -347,14 +347,19 @@ static func _simulate_day_games(season: PSSeason, today_indices: Array, persist:
 
 
 # ノーゲームになった試合を振替へ回す。当日の全試合を反映し終えてから呼ぶこと。
+# 反映時の `advance_current_day` はノーゲームがまだ当日に未消化で残っているので日付を進めない。
+# 振替で当日が空いたここで進め直す (進めないと日付が止まり、スキップ等がループを抜ける)。
 static func _postpone_no_games(season: PSSeason, no_game_rows: Array) -> Array:
 	var postponed: Array = []
+	if no_game_rows.is_empty():
+		return postponed
 	for game_row in no_game_rows:
 		var entry: Dictionary = PSRescheduleService.postpone(
 			season, game_row as Dictionary, PSRainoutService.OUTCOME_NO_GAME
 		)
 		if not entry.is_empty():
 			postponed.append(entry)
+	PSGameDecisions.advance_current_day(season)
 	return postponed
 
 

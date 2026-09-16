@@ -5013,16 +5013,21 @@ func test_no_game_voids_stats_and_reschedules_the_game() -> void:
 	season.current_day = target_day
 
 	var totals_before: Dictionary = _team_stat_totals(season, [away_id, home_id])
+	var rest_rows: Array = _fatigue_rest_rows(season, [away_id, home_id])
 	var day_result: Dictionary = GameSimulator.simulate_current_day(season, false)
 	assert_bool(bool(day_result.get("ok", false))).is_true()
+	# 同じ日に成立した試合があっても日付は翌試合日へ進む (止まるとスキップが途中で抜ける)。
+	assert_int(season.current_day).is_greater(target_day)
 
 	# 成績は 1 打席も増えていない。
 	var totals_after: Dictionary = _team_stat_totals(season, [away_id, home_id])
 	assert_int(int(totals_after["plate_appearances"])).is_equal(int(totals_before["plate_appearances"]))
 	assert_int(int(totals_after["outs_pitched"])).is_equal(int(totals_before["outs_pitched"]))
 	assert_int(int(totals_after["batter_games"])).is_equal(int(totals_before["batter_games"]))
-	# 疲労は戻さない = 試合は実際に行われている。
-	assert_int(int(totals_after["fatigue"])).is_greater(int(totals_before["fatigue"]))
+	# 疲労は戻さない = 試合は実際に行われている。日付が進んだぶんの回復は入るので、
+	# 「試合をせず休んだだけ」の疲労と比べる。
+	var rest_only_fatigue: int = _fatigue_after_rest(rest_rows, season.current_day - target_day)
+	assert_int(int(totals_after["fatigue"])).is_greater(rest_only_fatigue)
 
 	# 台帳にノーゲームとして残り、試合は後日へ移り、未消化のまま。
 	var entries: Array = []
@@ -5063,6 +5068,24 @@ func _team_stat_totals(season: PSSeason, team_ids: Array) -> Dictionary:
 			totals["batter_games"] = int(totals["batter_games"]) + record.batter_stats.games
 			totals["fatigue"] = int(totals["fatigue"]) + record.fatigue
 	return totals
+
+
+# 試合前の [疲労, 1日の回復量] を選手ごとに控える (回復量は疲労の水準で変わるので試合前に取る)。
+func _fatigue_rest_rows(season: PSSeason, team_ids: Array) -> Array:
+	var rows: Array = []
+	for team_id in team_ids:
+		for record_row in RecordStore.get_team_player_records(int(team_id), season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+			rows.append([record.fatigue, PSGameDecisions.daily_recovery_amount(record)])
+	return rows
+
+
+# 試合をせず days 日休んだだけの疲労合計 (PSGameDecisions.recover_after_day と同じ減らし方)。
+func _fatigue_after_rest(rest_rows: Array, days: int) -> int:
+	var total: int = 0
+	for row in rest_rows:
+		total += int(max(0, int(row[0]) - int(row[1]) * max(1, days)))
+	return total
 
 
 # 降雨コールドで成立した試合は、記録も勝敗も通常どおり残る。
