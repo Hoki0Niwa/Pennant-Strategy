@@ -411,7 +411,7 @@ func _season_skip_status() -> String:
 	var total: int = AppState.season_skip_total
 	var done: int = AppState.season_skip_done
 	var percent: float = float(done) / float(total) * 100.0 if total > 0 else 0.0
-	var skip_name: String = "月末スキップ" if AppState.season_skip_kind == "month" else "シーズンスキップ"
+	var skip_name: String = AppState.season_skip_name
 	var state: String = "%s停止処理中" % skip_name if AppState.season_skip_cancel_pending else "%s中" % skip_name
 	return "%s  %d / %d試合 (%0.1f%%)  %s" % [
 		state, done, total, percent, AppState.season_skip_label,

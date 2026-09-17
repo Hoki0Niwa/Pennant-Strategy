@@ -89,14 +89,17 @@ var selected_team_id: int = 0
 var current_season: PSSeason = null
 var last_status_message: String = ""
 var current_player_id: int = 0
-# 月末・残り全試合のスキップは順位表を表示したまま進める。進捗値は画面再生成時にも
-# 復元できるよう AppState 側へ保持し、完了後は通常の順位表操作へ戻す。
+# 月末・日数指定・日付指定・残り全試合のスキップは順位表を表示したまま進める。進捗値は
+# 画面再生成時にも復元できるよう AppState 側へ保持し、完了後は通常の順位表操作へ戻す。
 var season_skip_active: bool = false
 var season_skip_cancel_pending: bool = false
 var season_skip_done: int = 0
 var season_skip_total: int = 0
 var season_skip_label: String = ""
+# "season" / "month" / "until" (日数・日付指定)。
 var season_skip_kind: String = "season"
+# 順位表のステータス行に出すスキップ名 (「月末スキップ」「8/15(金)までスキップ」など)。
+var season_skip_name: String = "シーズンスキップ"
 var _season_skip_cancel_token: Dictionary = {}
 # 7日スキップはホーム画面内で進捗を表示する。画面ノード上の coroutine を途中で
 # 破棄しないよう、完了までは履歴・画面遷移だけをロックする。
@@ -1754,7 +1757,7 @@ func simulate_remaining_season_async(
 # 処理主体を破棄されるホーム画面ではなく Autoload に置き、順位表へ遷移した後も
 # シミュレーションと進捗通知を継続する。
 func start_remaining_season_skip(tree: SceneTree) -> void:
-	if not _begin_standings_skip("season", current_season.games_remaining() if current_season != null else 0):
+	if not _begin_standings_skip("season", "シーズンスキップ", current_season.games_remaining() if current_season != null else 0):
 		return
 	var result: Dictionary = await simulate_remaining_season_async(
 		tree,
@@ -1771,9 +1774,10 @@ func start_month_end_skip(tree: SceneTree) -> void:
 		return
 	var end_date: String = SeasonCalendar.last_day_of_month(SeasonCalendar.current_date(current_season))
 	var end_day: int = SeasonCalendar.season_day_for_date(current_season, end_date)
-	if not _begin_standings_skip("month", _count_unplayed_games_through_day(end_day)):
+	if not _begin_standings_skip("month", "月末スキップ", count_unplayed_games_through_day(end_day)):
 		return
-	var result: Dictionary = await simulate_to_month_end_async(
+	var result: Dictionary = await simulate_until_day_async(
+		end_day,
 		tree,
 		_on_remaining_season_skip_progress,
 		_season_skip_cancel_token,
@@ -1782,7 +1786,24 @@ func start_month_end_skip(tree: SceneTree) -> void:
 	_finish_standings_skip(result)
 
 
-func _begin_standings_skip(kind: String, total: int) -> bool:
+# end_day (season day) の試合までを消化する。日数指定・日付指定のスキップが共用する。
+# skip_name は順位表のステータス行に出す名前。
+func start_until_day_skip(tree: SceneTree, end_day: int, skip_name: String) -> void:
+	if current_season == null or end_day < current_season.current_day:
+		return
+	if not _begin_standings_skip("until", skip_name, count_unplayed_games_through_day(end_day)):
+		return
+	var result: Dictionary = await simulate_until_day_async(
+		end_day,
+		tree,
+		_on_remaining_season_skip_progress,
+		_season_skip_cancel_token,
+		true
+	)
+	_finish_standings_skip(result)
+
+
+func _begin_standings_skip(kind: String, skip_name: String, total: int) -> bool:
 	if season_skip_active or current_season == null:
 		return false
 	season_skip_active = true
@@ -1791,6 +1812,7 @@ func _begin_standings_skip(kind: String, total: int) -> bool:
 	season_skip_total = total
 	season_skip_label = SeasonCalendar.day_status_label(current_season, current_season.current_day)
 	season_skip_kind = kind
+	season_skip_name = skip_name
 	_season_skip_cancel_token = {"cancelled": false}
 	# 順位表はスキップ中だけの一時画面なので、画面履歴には積まない。
 	request_screen("standings", false)
@@ -1823,7 +1845,8 @@ func _on_remaining_season_skip_progress(done: int, total: int, _label: String) -
 	season_skip_progress.emit(season_skip_done, season_skip_total, season_skip_label)
 
 
-func _count_unplayed_games_through_day(end_day: int) -> int:
+# 現在日から end_day (その日を含む) までの未消化試合数。
+func count_unplayed_games_through_day(end_day: int) -> int:
 	if current_season == null:
 		return 0
 	var total: int = 0
@@ -1833,6 +1856,52 @@ func _count_unplayed_games_through_day(end_day: int) -> int:
 		if not bool(game.get("played", false)) and day >= current_season.current_day and day <= end_day:
 			total += 1
 	return total
+
+
+# 日程上のイベントまで進めるスキップ先のうち、まだ使えるものを日程順に返す。
+# 各要素は {key, label, skip_name, end_day} で、end_day はその日の試合まで消化する最終日:
+#   交流戦開始   = 交流戦の初日の前日
+#   交流戦終了   = 交流戦の最終日 (その日の交流戦を含む)
+#   オールスター = オールスター休養の初日の前日
+# end_day が現在日より前になった (イベントを過ぎた) ものと、end_day までに消化する試合が
+# 1 つも残っていないものは含めない。
+func season_milestone_skip_targets() -> Array:
+	var targets: Array = []
+	if current_season == null:
+		return targets
+	var interleague_start: int = PSSchedule.interleague_start_day(current_season.schedule)
+	var milestones: Array = [
+		{"key": "interleague_start", "name": "交流戦開始", "end_day": interleague_start - 1 if interleague_start > 0 else 0},
+		{"key": "interleague_end", "name": "交流戦終了", "end_day": PSSchedule.interleague_end_day(current_season.schedule)},
+		{"key": "all_star", "name": "オールスター", "end_day": PSSchedule.all_star_break_start_day() - 1},
+	]
+	for milestone_value in milestones:
+		var milestone: Dictionary = milestone_value as Dictionary
+		var end_day: int = int(milestone["end_day"])
+		if end_day < current_season.current_day:
+			continue
+		if count_unplayed_games_through_day(end_day) <= 0:
+			continue
+		targets.append({
+			"key": str(milestone["key"]),
+			"label": "%sまで進める" % str(milestone["name"]),
+			"skip_name": "%sまでスキップ" % str(milestone["name"]),
+			"end_day": end_day,
+		})
+	return targets
+
+
+# 未消化試合が残っている最後の season day。未消化試合が無ければ 0。
+# 雨天中止の振替で後ろへ伸びるので、スキップ先の上限は毎回ここから取る。
+func last_unplayed_game_day() -> int:
+	if current_season == null:
+		return 0
+	var last_day: int = 0
+	for game_value in current_season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("played", false)):
+			last_day = max(last_day, int(game.get("day", 0)))
+	return last_day
 
 
 func simulate_days_async(
@@ -1880,8 +1949,9 @@ func simulate_until_team_game_async(
 	return result
 
 
-# 現在日が属する月の最終日まで(その日の試合を含む)消化する。
-func simulate_to_month_end_async(
+# end_day (season day) の試合までを消化する。
+func simulate_until_day_async(
+	end_day: int,
 	tree: SceneTree,
 	progress_cb: Callable,
 	cancel_token: Dictionary,
@@ -1890,8 +1960,6 @@ func simulate_to_month_end_async(
 	if current_season == null:
 		return {"ok": false, "message": "シーズンが開始されていません"}
 
-	var end_date: String = SeasonCalendar.last_day_of_month(SeasonCalendar.current_date(current_season))
-	var end_day: int = SeasonCalendar.season_day_for_date(current_season, end_date)
 	var persist_progress: bool = auto_save_enabled
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = await GameSimulator.simulate_until_day_async(
@@ -1966,6 +2034,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	season_skip_total = 0
 	season_skip_label = ""
 	season_skip_kind = "season"
+	season_skip_name = "シーズンスキップ"
 	_season_skip_cancel_token = {}
 	short_skip_active = false
 	postseason_skip_active = false

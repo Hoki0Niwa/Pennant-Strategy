@@ -945,6 +945,7 @@ static func simulate_until_day_async(
 ) -> Dictionary:
 	var start_day: int = season.current_day
 	var simulated_games: int = 0
+	var postponed_games: int = 0
 	var last_result: Dictionary = {}
 	var guard: int = season.schedule.size() + 1
 	var total_games: int = 0
@@ -975,12 +976,14 @@ static func simulate_until_day_async(
 			return day_result
 		last_result = day_result
 		simulated_games += (day_result.get("results", []) as Array).size()
+		postponed_games += (day_result.get("postponed", []) as Array).size()
 		if season.current_day == prev_day:
 			break
 	if persist:
 		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
-	if simulated_games == 0:
+	# 範囲内の試合がすべて雨天中止でも日付は進んでいるので、失敗ではなく進行として返す。
+	if simulated_games == 0 and postponed_games == 0:
 		return {"ok": false, "cancelled": cancelled, "message": "消化できる試合がありません"}
 	var prefix: String = "%d試合を消化しました" % simulated_games
 	if cancelled:

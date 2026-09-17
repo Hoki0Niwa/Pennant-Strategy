@@ -402,6 +402,281 @@ func test_seven_day_skip_runs_inline_without_progress_dialog() -> void:
 		SaveContext.activate_save_id(old_save_id)
 
 
+func test_skip_target_dialog_resolves_days_and_dates_within_season() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	var season: PSSeason = AppState.current_season
+	var first_day: int = season.current_day
+	var last_day: int = AppState.last_unplayed_game_day()
+	assert_int(last_day).is_greater(first_day + 40)
+
+	var home_script: GDScript = load("res://ui/screens/home_screen.gd") as GDScript
+	var screen: Control = home_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var dialog: ConfirmationDialog = screen.call("_open_skip_target_dialog") as ConfirmationDialog
+	assert_bool(bool(dialog.call("has_targets"))).is_true()
+	var days_spin: SpinBox = dialog.get("_days_spin") as SpinBox
+	var month_select: OptionButton = dialog.get("_month_select") as OptionButton
+	var date_spin: SpinBox = dialog.get("_date_spin") as SpinBox
+	var preview: Label = dialog.get("_preview") as Label
+	assert_int(month_select.item_count).is_greater(1)
+
+	# 日数は本日を含む N 日間。日数を変えると日付の入力がその行き先へ追従する。
+	days_spin.value = 10
+	var ten_day_date: Dictionary = _date_dict(SeasonCalendar.date_for_season_day(season, first_day + 9))
+	assert_int(int(dialog.call("selected_end_day"))).is_equal(first_day + 9)
+	assert_str(str(dialog.call("selected_skip_name"))).is_equal("10日スキップ")
+	assert_str(month_select.get_item_text(month_select.selected)).is_equal("%d月" % int(ten_day_date["month"]))
+	assert_int(int(date_spin.value)).is_equal(int(ten_day_date["day"]))
+	assert_str(preview.text).contains(SeasonCalendar.label_for_date(SeasonCalendar.date_for_season_day(season, first_day + 9)))
+	assert_str(preview.text).contains("全球団で %d試合" % AppState.count_unplayed_games_through_day(first_day + 9))
+	# 範囲外は未消化試合が残る最終日へ丸める。
+	days_spin.value = 9999
+	assert_int(int(dialog.call("selected_end_day"))).is_equal(last_day)
+
+	# 日付は月と日で選び、その日の試合までを含む。日付を変えると日数が追従し、名前は日付表記になる。
+	var target_day: int = first_day + 40
+	var target_date: Dictionary = _date_dict(SeasonCalendar.date_for_season_day(season, target_day))
+	for index in range(month_select.item_count):
+		if month_select.get_item_text(index) == "%d月" % int(target_date["month"]):
+			month_select.select(index)
+			month_select.item_selected.emit(index)
+	date_spin.value = int(target_date["day"])
+	assert_int(int(dialog.call("selected_end_day"))).is_equal(target_day)
+	assert_int(int(days_spin.value)).is_equal(41)
+	var target_label: String = SeasonCalendar.label_for_date(SeasonCalendar.date_for_season_day(season, target_day))
+	assert_str(str(dialog.call("selected_skip_name"))).is_equal("%sまでスキップ" % target_label)
+	# 開幕月は本日より前の日を選べない。
+	month_select.select(0)
+	month_select.item_selected.emit(0)
+	date_spin.value = 1
+	assert_int(int(dialog.call("selected_end_day"))).is_equal(first_day)
+	assert_int(int(days_spin.value)).is_equal(1)
+
+	# 確定するとその行き先と名前を渡す。
+	var chosen: Array = []
+	dialog.connect("target_chosen", func(end_day: int, skip_name: String) -> void: chosen.append([end_day, skip_name]))
+	dialog.disconnect("target_chosen", (dialog.get_signal_connection_list("target_chosen")[0] as Dictionary)["callable"])
+	days_spin.value = 3
+	dialog.confirmed.emit()
+	assert_array(chosen).is_equal([[first_day + 2, "3日スキップ"]])
+	dialog.hide()
+
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func test_event_skip_targets_resolve_schedule_events_and_disappear_after_them() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	var season: PSSeason = AppState.current_season
+
+	var target_keys: Callable = func() -> Array:
+		return AppState.season_milestone_skip_targets().map(func(t: Dictionary) -> String: return str(t["key"]))
+	var targets: Array = AppState.season_milestone_skip_targets()
+	assert_array(target_keys.call()).is_equal(["interleague_start", "interleague_end", "all_star"])
+	var interleague_start: Dictionary = targets[0] as Dictionary
+	var interleague_finish: Dictionary = targets[1] as Dictionary
+	var all_star: Dictionary = targets[2] as Dictionary
+	assert_str(str(interleague_start["label"])).is_equal("交流戦開始まで進める")
+	assert_str(str(interleague_finish["label"])).is_equal("交流戦終了まで進める")
+	assert_str(str(all_star["label"])).is_equal("オールスターまで進める")
+
+	# 交流戦開始: 行き先の翌日が交流戦の初日。交流戦終了: 行き先が交流戦の最終日 (その日を含む)。
+	var first_interleague_day: int = 0
+	var last_interleague_day: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if bool(game.get("is_interleague", false)):
+			var day: int = int(game.get("day", 0))
+			first_interleague_day = day if first_interleague_day == 0 else mini(first_interleague_day, day)
+			last_interleague_day = maxi(last_interleague_day, day)
+	var interleague_end: int = int(interleague_start["end_day"])
+	assert_int(interleague_end).is_equal(first_interleague_day - 1)
+	assert_int(int(interleague_finish["end_day"])).is_equal(last_interleague_day)
+	assert_int(last_interleague_day).is_greater(first_interleague_day)
+
+	# オールスター: 行き先の翌日がテンプレートのオールスター休養初日 (その年の暦日に解決したもの) で、
+	# 休養の 2 日間には試合が無い。
+	var all_star_end: int = int(all_star["end_day"])
+	var base_opening: String = SeasonCalendar.opening_date_for_year(PSSchedule.TEMPLATE_BASE_YEAR)
+	var target_opening: String = SeasonCalendar.opening_date_for_year(season.year)
+	assert_str(SeasonCalendar.date_for_season_day(season, all_star_end + 1)).is_equal(
+		PSSchedule._resolve_target_date(PSSchedule.TEMPLATE_ALL_STAR_START_DATE, base_opening, target_opening))
+	var games_in_break: int = 0
+	for game_value in season.schedule:
+		var day: int = int((game_value as Dictionary).get("day", 0))
+		if day == all_star_end + 1 or day == all_star_end + 2:
+			games_in_break += 1
+	assert_int(games_in_break).is_equal(0)
+	assert_int(last_interleague_day).is_less(all_star_end)
+
+	var home_script: GDScript = load("res://ui/screens/home_screen.gd") as GDScript
+	var screen: Control = home_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+	# メニューの項目名を上から並べる。区切り線は "---"。
+	var menu_texts: Callable = func() -> Array:
+		screen.call("_on_skip_pressed")
+		var texts: Array = []
+		for child in screen.get_children():
+			if child is PopupMenu and not child.is_queued_for_deletion():
+				var menu: PopupMenu = child as PopupMenu
+				for index in range(menu.item_count):
+					texts.append("---" if menu.is_item_separator(index) else menu.get_item_text(index))
+				menu.hide()
+				menu.queue_free()
+		return texts
+	assert_array(menu_texts.call()).is_equal([
+		"7日進める", "月末まで進める", "残り全試合消化する",
+		"---", "交流戦開始まで進める", "交流戦終了まで進める", "オールスターまで進める",
+		"---", "日数・日付を指定…",
+	])
+
+	# 項目を選ぶと、そのイベントの行き先までのスキップが始まる。
+	# 101 = home_screen の SKIP_MENU_MILESTONE_BASE + 1 (2 番目のイベント = 交流戦終了)。
+	screen.call("_on_skip_menu_selected", 101)
+	assert_bool(AppState.season_skip_active).is_true()
+	assert_str(AppState.season_skip_name).is_equal("交流戦終了までスキップ")
+	assert_int(AppState.season_skip_total).is_equal(AppState.count_unplayed_games_through_day(last_interleague_day))
+	AppState.cancel_remaining_season_skip()
+	var guard: int = 600
+	while AppState.season_skip_active and guard > 0:
+		guard -= 1
+		await get_tree().process_frame
+	assert_int(guard).is_greater(0)
+
+	# イベントを過ぎたら、その項目は出さない。全部過ぎたらイベントのグループごと出さない。
+	season.current_day = first_interleague_day
+	assert_array(target_keys.call()).is_equal(["interleague_end", "all_star"])
+	season.current_day = last_interleague_day + 1
+	assert_array(target_keys.call()).is_equal(["all_star"])
+	assert_array(menu_texts.call()).is_equal([
+		"7日進める", "月末まで進める", "残り全試合消化する",
+		"---", "オールスターまで進める",
+		"---", "日数・日付を指定…",
+	])
+	season.current_day = all_star_end + 1
+	assert_array(target_keys.call()).is_empty()
+	assert_array(menu_texts.call()).is_equal(["7日進める", "月末まで進める", "残り全試合消化する", "---", "日数・日付を指定…"])
+
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
+func _date_dict(date_text: String) -> Dictionary:
+	var parts: PackedStringArray = date_text.split("-")
+	return {"year": int(parts[0]), "month": int(parts[1]), "day": int(parts[2])}
+
+
+func test_until_day_skip_stops_at_target_day_then_returns_home() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_screen: String = AppState.current_screen
+	var old_status: String = AppState.last_status_message
+	var old_auto_save: bool = AppState.auto_save_enabled
+	var old_save_id: String = SaveContext.active_save_id()
+
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	AppState.select_team(team.id)
+	AppState.auto_save_enabled = false
+	AppState.start_new_season()
+	var test_save_id: String = SaveContext.active_save_id()
+	var season: PSSeason = AppState.current_season
+	var end_day: int = season.current_day + 2
+
+	var standings_script: GDScript = load("res://ui/screens/standings_screen.gd") as GDScript
+	var screen: Control = standings_script.new()
+	add_child(screen)
+	await get_tree().process_frame
+
+	var observed: Dictionary = {"live": false}
+	var progress_observer: Callable = func(done: int, _total: int, _label: String) -> void:
+		if done > 0:
+			observed["live"] = bool(observed.get("live", false)) \
+				or str(screen.get("_status_text")).contains("3日スキップ中")
+	AppState.season_skip_progress.connect(progress_observer)
+
+	AppState.start_until_day_skip(get_tree(), end_day, "3日スキップ")
+	assert_str(AppState.season_skip_kind).is_equal("until")
+	var guard: int = 3000
+	while AppState.season_skip_active and guard > 0:
+		guard -= 1
+		await get_tree().process_frame
+	AppState.season_skip_progress.disconnect(progress_observer)
+
+	assert_int(guard).is_greater(0)
+	assert_str(AppState.current_screen).is_equal("home")
+	assert_bool(bool(observed.get("live", false))).is_true()
+	var unplayed_through_end: int = 0
+	var played_after_end: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var day: int = int(game.get("day", 0))
+		var played: bool = bool(game.get("played", false))
+		if day <= end_day and not played:
+			unplayed_through_end += 1
+		elif day > end_day and played:
+			played_after_end += 1
+	assert_int(unplayed_through_end).is_equal(0)
+	assert_int(played_after_end).is_equal(0)
+
+	screen.queue_free()
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	AppState.current_screen = old_screen
+	AppState.last_status_message = old_status
+	AppState.auto_save_enabled = old_auto_save
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+	if old_save_id.is_empty():
+		SaveContext.clear_active_save()
+	else:
+		SaveContext.activate_save_id(old_save_id)
+
+
 func test_today_button_runs_inline_without_progress_dialog() -> void:
 	var old_team_id: int = AppState.selected_team_id
 	var old_season: PSSeason = AppState.current_season

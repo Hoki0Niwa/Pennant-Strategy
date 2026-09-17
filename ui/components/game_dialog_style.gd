@@ -130,6 +130,27 @@ static func style_button(
 		button.add_theme_font_override("font", font)
 
 
+# ダイアログ内の数値入力。入力欄は PANEL_2 地、フォーカス時だけ BLUE 枠にする。
+static func style_spin_box(spin: SpinBox, font: Font = null, scale_factor: float = 1.0) -> void:
+	var edit: LineEdit = spin.get_line_edit()
+	edit.add_theme_stylebox_override("normal", _box(PANEL_2, BORDER, 6, 10))
+	edit.add_theme_stylebox_override("focus", _box(PANEL_2, BLUE, 6, 10))
+	edit.add_theme_stylebox_override("read_only", _box(PANEL, BORDER_SOFT, 6, 10))
+	edit.add_theme_color_override("font_color", TEXT)
+	edit.add_theme_color_override("font_uneditable_color", FAINT)
+	edit.add_theme_color_override("caret_color", TEXT)
+	edit.add_theme_color_override("selection_color", Color(BLUE.r, BLUE.g, BLUE.b, 0.35))
+	edit.add_theme_font_size_override("font_size", max(12, int(round(15.0 * scale_factor))))
+	if font != null:
+		edit.add_theme_font_override("font", font)
+
+
+# ダイアログ内の選択ボックス。本体はモーダルの action ボタン、開いた一覧は PopupMenu と同じ見た目。
+static func style_option_button(select: OptionButton, font: Font = null, scale_factor: float = 1.0) -> void:
+	style_button(select, "action", font, scale_factor)
+	style_popup(select.get_popup(), font, scale_factor)
+
+
 static func _box(
 	bg: Color,
 	border: Color,

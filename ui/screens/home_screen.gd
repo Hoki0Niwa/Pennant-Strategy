@@ -16,6 +16,15 @@ const RIGHT_W: float = 600.0
 const CAL_TITLE_X: float = CAL_RECT.position.x + 60.0
 const CAL_TITLE_SIZE: int = 23
 const CAL_NAV_GAP: float = 12.0
+const SkipTargetDialog = preload("res://ui/components/skip_target_dialog.gd")
+
+# スキップメニューの項目 ID。
+const SKIP_MENU_WEEK: int = 0
+const SKIP_MENU_MONTH_END: int = 1
+const SKIP_MENU_SEASON: int = 2
+const SKIP_MENU_TARGET: int = 3
+# 交流戦・オールスターなど日程の区切りまで進める項目は、この ID + _skip_milestone_targets の添字。
+const SKIP_MENU_MILESTONE_BASE: int = 100
 
 const WEEKDAYS: Array = ["月", "火", "水", "木", "金", "土", "日"]
 
@@ -50,6 +59,8 @@ var _era_by_team: Dictionary = {}
 var _skip_button: Button = null
 var _inline_skip_active: bool = false
 var _inline_skip_days: int = 0
+# スキップメニューを開いた時点で使える日程の区切り (AppState.season_milestone_skip_targets)。
+var _skip_milestone_targets: Array = []
 
 
 func _ready() -> void:
@@ -676,12 +687,23 @@ func _simulate_current_day() -> void:
 	queue_redraw()
 
 
-# スキップボタンの派生メニュー。日数/月末/自軍次戦/残り全試合をその場で選んで進める。
+# スキップボタンの派生メニュー。7日/月末/残り全試合、日程上のイベント (交流戦開始/交流戦終了/
+# オールスター) まで、日数・日付指定をその場で選んで進める。イベントは過ぎると項目ごと出さない。
 func _on_skip_pressed() -> void:
 	var menu: PopupMenu = PopupMenu.new()
-	menu.add_item("7日進める", 0)
-	menu.add_item("月末まで進める", 1)
-	menu.add_item("残り全試合", 2)
+	menu.add_item("7日進める", SKIP_MENU_WEEK)
+	menu.add_item("月末まで進める", SKIP_MENU_MONTH_END)
+	menu.add_item("残り全試合消化する", SKIP_MENU_SEASON)
+	# 日程上のイベントまで進める項目は区切り線で別グループにする。使えるものが無ければグループごと出さない。
+	_skip_milestone_targets = AppState.season_milestone_skip_targets()
+	if not _skip_milestone_targets.is_empty():
+		menu.add_separator()
+	for index in range(_skip_milestone_targets.size()):
+		var target: Dictionary = _skip_milestone_targets[index] as Dictionary
+		menu.add_item(str(target["label"]), SKIP_MENU_MILESTONE_BASE + index)
+	# 値を入力するダイアログを開く項目は、すぐ進む項目と分けて末尾に置く。
+	menu.add_separator()
+	menu.add_item("日数・日付を指定…", SKIP_MENU_TARGET)
 	_style_popup(menu)
 	add_child(menu)
 	menu.id_pressed.connect(_on_skip_menu_selected)
@@ -698,13 +720,37 @@ func _on_skip_pressed() -> void:
 
 
 func _on_skip_menu_selected(id: int) -> void:
+	var milestone_index: int = id - SKIP_MENU_MILESTONE_BASE
+	if milestone_index >= 0 and milestone_index < _skip_milestone_targets.size():
+		var target: Dictionary = _skip_milestone_targets[milestone_index] as Dictionary
+		AppState.start_until_day_skip(get_tree(), int(target["end_day"]), str(target["skip_name"]))
+		return
 	match id:
-		0:
+		SKIP_MENU_WEEK:
 			await _simulate_days(7)
-		1:
+		SKIP_MENU_TARGET:
+			_open_skip_target_dialog()
+		SKIP_MENU_MONTH_END:
 			_simulate_to_month_end()
-		2:
+		SKIP_MENU_SEASON:
 			_simulate_remaining_season()
+
+
+# 日数・日付の指定ダイアログを開く。確定したら月末スキップと同じく順位表を表示したまま進める
+# (長い範囲も指定できるので、途中で止められる経路に載せる)。
+func _open_skip_target_dialog() -> ConfirmationDialog:
+	var dialog: ConfirmationDialog = SkipTargetDialog.new()
+	add_child(dialog)
+	dialog.call("setup", _font, _scale_f)
+	dialog.connect("target_chosen", func(end_day: int, skip_name: String) -> void:
+		AppState.start_until_day_skip(get_tree(), end_day, skip_name)
+	)
+	dialog.visibility_changed.connect(func() -> void:
+		if is_instance_valid(dialog) and not dialog.visible:
+			dialog.queue_free()
+	)
+	dialog.popup_centered(Vector2i(int(round(460.0 * _scale_f)), 0))
+	return dialog
 
 
 func _simulate_days(days: int) -> void:

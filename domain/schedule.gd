@@ -589,6 +589,39 @@ static func _mark_long_break_slots_protected(protected_cycles_by_round: Array, r
 	)
 
 
+# 交流戦の初日の season day。交流戦の試合が無ければ 0。
+# 雨天中止の振替は後ろへしか動かないので、消化済みを含めた最小 day が当初の初日のまま保たれる。
+static func interleague_start_day(schedule: Array) -> int:
+	return int(_interleague_day_bounds(schedule)["start"])
+
+
+# 交流戦の最終日の season day (振替で後ろへ動いた交流戦の試合も含む)。交流戦の試合が無ければ 0。
+static func interleague_end_day(schedule: Array) -> int:
+	return int(_interleague_day_bounds(schedule)["end"])
+
+
+static func _interleague_day_bounds(schedule: Array) -> Dictionary:
+	var start_day: int = 0
+	var end_day: int = 0
+	for game_value in schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("is_interleague", false)):
+			continue
+		var day: int = int(game.get("day", 0))
+		if start_day == 0 or day < start_day:
+			start_day = day
+		end_day = max(end_day, day)
+	return {"start": start_day, "end": end_day}
+
+
+# オールスター休養 (リーグ戦を組まない期間) の初日の season day。
+# season day 1 は開幕日 (=3月最終金曜) で、テンプレートの日付枠も開幕日からのオフセットで年度に
+# 依らず同じ位置に来るので、TEMPLATE_BASE_YEAR の開幕日からの日数がそのまま season day になる。
+static func all_star_break_start_day() -> int:
+	var base_opening: String = SeasonCalendar.opening_date_for_year(TEMPLATE_BASE_YEAR)
+	return SeasonCalendar.days_between(base_opening, TEMPLATE_ALL_STAR_START_DATE) + 1
+
+
 # TEMPLATE_BASE_YEAR 基準の日付定数(交流戦/オールスター期間の境界など)を、対象年度の
 # 実日付へ変換する。day オフセット自体は年に依らず同じ意味を持つため、
 # base_opening からのオフセットを求めてから target_opening で解決するだけでよい。
