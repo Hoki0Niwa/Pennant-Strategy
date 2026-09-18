@@ -2767,6 +2767,73 @@ func test_active_roster_fa_days_survive_swap_with_stale_ledger_copy() -> void:
 	assert_int(season.get_active_roster_days(1, 12)).is_equal(7)
 
 
+func test_periodic_roster_swaps_spread_teams_across_game_days() -> void:
+	# 週次入替は 1 試合日に ceil(球団数 / SWAP_SPREAD_GAME_DAYS) 球団だけ、待ちの長い順 (同じなら球団の並び順) に回す。
+	# 回らなかった球団は期限が来たまま翌試合日へ持ち越す。
+	var teams: Array = []
+	for i in range(12):
+		teams.append(_team(9001 + i))
+	var per_day: int = ceili(12.0 / float(TeamAutoAIRef.SWAP_SPREAD_GAME_DAYS))
+	var season: PSSeason = _swap_season()
+	for game_day in range(1, 5):
+		TeamAutoAIRef.run_periodic_roster_swaps(season, teams, game_day, 0, true)
+		var processed: Array = _swapped_on(season, teams, game_day)
+		var expected: Array = []
+		for i in range((game_day - 1) * per_day, mini(game_day * per_day, teams.size())):
+			expected.append(9001 + i)
+		assert_array(processed).is_equal(expected)
+	for team_value in teams:
+		assert_int(season.get_last_auto_swap_day((team_value as PSTeam).id)).is_greater(0)
+
+	# 期限が来ていても件数を超えたぶんは翌日へ。待ちの長い球団から回す。
+	season = _swap_season()
+	for team_value in teams:
+		season.set_last_auto_swap_day((team_value as PSTeam).id, 15)
+	season.set_last_auto_swap_day(9005, 10)
+	season.set_last_auto_swap_day(9002, 12)
+	season.set_last_auto_swap_day(9007, 13)
+	season.set_last_auto_swap_day(9009, 11)
+	season.set_last_auto_swap_day(9010, 13)
+	TeamAutoAIRef.run_periodic_roster_swaps(season, teams, 20, 0, true)
+	assert_array(_swapped_on(season, teams, 20)).is_equal([9002, 9005, 9009])
+	TeamAutoAIRef.run_periodic_roster_swaps(season, teams, 21, 0, true)
+	assert_array(_swapped_on(season, teams, 21)).is_equal([9007, 9010])
+
+
+func test_periodic_roster_swaps_clear_backlog_after_long_break() -> void:
+	# 試合の無い日が続いて全球団が期限から大きく遅れたときは、SWAP_BACKLOG_CLEAR_GAME_DAYS 試合日で捌ける件数に増やす。
+	# 自動入替を切った自軍はスナップショットだけ期限の日に取り、件数に数えない。
+	var teams: Array = []
+	for i in range(12):
+		teams.append(_team(9001 + i))
+	var season: PSSeason = _swap_season()
+	for team_value in teams:
+		season.set_last_auto_swap_day((team_value as PSTeam).id, 1)
+	var current_day: int = 1 + TeamAutoAIRef.SWAP_INTERVAL_DAYS + TeamAutoAIRef.SWAP_OVERDUE_GRACE_DAYS + 10
+	TeamAutoAIRef.run_periodic_roster_swaps(season, teams, current_day, 9001, false)
+	var processed: Array = _swapped_on(season, teams, current_day)
+	var backlog_count: int = ceili(11.0 / float(TeamAutoAIRef.SWAP_BACKLOG_CLEAR_GAME_DAYS))
+	assert_int(backlog_count).is_greater(ceili(11.0 / float(TeamAutoAIRef.SWAP_SPREAD_GAME_DAYS)))
+	assert_int(processed.size()).is_equal(1 + backlog_count)
+	assert_array(processed).contains([9001])
+
+
+func _swap_season() -> PSSeason:
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	return season
+
+
+func _swapped_on(season: PSSeason, teams: Array, day: int) -> Array:
+	var ids: Array = []
+	for team_value in teams:
+		var team: PSTeam = team_value as PSTeam
+		if season.get_last_auto_swap_day(team.id) == day:
+			ids.append(team.id)
+	return ids
+
+
 func test_repair_active_roster_injuries_demotes_and_promotes_replacement() -> void:
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var season: PSSeason = PSSeason.new()

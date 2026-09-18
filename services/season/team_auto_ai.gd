@@ -8,6 +8,15 @@ const ForeignActiveRosterRules = preload("res://services/simulation/game/foreign
 # 一二軍入替の自動判定 + 戦力外候補スコアリング。
 
 const SWAP_INTERVAL_DAYS: int = 7
+# 週次入替は同じ日に全球団をまとめず、試合日ごとに数球団ずつ回す (1 日の処理を平らにする)。
+# 1 日の基本件数 = ceil(球団数 / SWAP_SPREAD_GAME_DAYS)。週 6 試合日に対して 4 で割るのは、
+# 処理能力を需要より多めに持たせるため: 6 にすると能力が需要とちょうど同じになり、月曜以外の休みで
+# 期限が次の試合日へずれた球団がそのまま溜まって、入替の間隔が 8〜12 日に伸びる。
+# 期限から SWAP_OVERDUE_GRACE_DAYS 日以上遅れた球団がいるときは、それらを
+# SWAP_BACKLOG_CLEAR_GAME_DAYS 試合日で捌ける件数まで増やす (オールスター休みなど試合の無い日が続いた後)。
+const SWAP_SPREAD_GAME_DAYS: int = 4
+const SWAP_OVERDUE_GRACE_DAYS: int = 2
+const SWAP_BACKLOG_CLEAR_GAME_DAYS: int = 3
 const DEMOTION_COOLDOWN_DAYS: int = 10
 const INJURY_SHORT_ABSENCE_STASH_DAYS: int = 3
 const INJURY_MAINSTAY_STASH_MAX_DAYS: int = 5
@@ -778,7 +787,8 @@ static func _position_aptitude(record: PSPlayerSeasonRecord, position: int) -> i
 # ---- 週次入替のメインエントリ ------------------------------------------------
 
 # 各CPU球団 + (include_user_team_id > 0 ならその自軍) に対し、
-# 最終入替から SWAP_INTERVAL_DAYS 以上経過していれば入替判定を実行。
+# 最終入替から SWAP_INTERVAL_DAYS 以上経過していれば入替判定の対象にする。
+# 1 試合日に回すのは待ちの長い順に数球団だけ (SWAP_SPREAD_GAME_DAYS)。
 # ---- 谷間の先発 (スポット昇格) ---------------------------------------------
 #
 # NPB で1球団が1シーズンに使う先発が12〜16人になるのは、**登録抹消 → 10日 → 再登録**の
@@ -1068,21 +1078,43 @@ static func run_periodic_roster_swaps(season: PSSeason, teams: Array, current_da
 	# 入替対象がある日にだけリーグ集計を作り、対象チーム間では同じ結果を使い回す。
 	var war_ctx: Dictionary = {}
 	var executed: Array = []
-	for team_row in teams:
-		var team: PSTeam = team_row as PSTeam
+	# 期限が来た球団 (初回 last_day == 0 を含む) を集め、待ちの長い順に今日の件数ぶんだけ回す。
+	# 回らなかった球団は期限が来たまま翌試合日へ持ち越す。
+	var due: Array = []
+	var managed_team_count: int = 0
+	var overdue_count: int = 0
+	for team_index in range(teams.size()):
+		var team: PSTeam = teams[team_index] as PSTeam
 		if team == null:
 			continue
-		var is_user: bool = (team.id == user_team_id)
+		var snapshot_only: bool = team.id == user_team_id and not include_user_team
+		if not snapshot_only:
+			managed_team_count += 1
 		var last_day: int = season.get_last_auto_swap_day(team.id)
-		# 初回(last_day == 0)も実行する。前回から SWAP_INTERVAL_DAYS 以上経過していれば実行。
 		if last_day > 0 and current_day - last_day < SWAP_INTERVAL_DAYS:
 			continue
 		# 自軍の自動入替が無効でも、ロスター画面の「直近2週間」表示用にスナップショットだけは残す
-		# (入替判定はしない)。CPU 球団・自動入替ONの自軍は _swap_one_team が入替と記録を行う。
-		if is_user and not include_user_team:
+		# (入替判定はしない。軽いので件数に数えず期限の日に行う)。
+		if snapshot_only:
 			_append_snapshots(season, RecordStore.get_team_player_records(team.id, season.year, season.season_number), current_day)
 			season.set_last_auto_swap_day(team.id, current_day)
 			continue
+		if last_day > 0 and current_day - last_day >= SWAP_INTERVAL_DAYS + SWAP_OVERDUE_GRACE_DAYS:
+			overdue_count += 1
+		due.append({"team": team, "last_day": last_day, "order": team_index})
+	if due.is_empty():
+		return {"ok": true, "executed": executed}
+	due.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["last_day"]) != int(b["last_day"]):
+			return int(a["last_day"]) < int(b["last_day"])
+		return int(a["order"]) < int(b["order"])
+	)
+	var todays_count: int = maxi(
+		ceili(float(managed_team_count) / float(SWAP_SPREAD_GAME_DAYS)),
+		ceili(float(overdue_count) / float(SWAP_BACKLOG_CLEAR_GAME_DAYS))
+	)
+	for due_index in range(mini(todays_count, due.size())):
+		var team: PSTeam = (due[due_index] as Dictionary)["team"] as PSTeam
 		if war_ctx.is_empty():
 			war_ctx = WarCalculator.build_league_context(season.year, season.season_number)
 		var summary: Dictionary = _swap_one_team(season, team.id, current_day, war_ctx)

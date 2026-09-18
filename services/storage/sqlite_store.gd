@@ -21,18 +21,38 @@ static var _schema_ensured_path: String = ""
 # 正しさには影響せず、書き込みが増えるだけ。
 static var _record_fingerprints: Dictionary = {}
 static var _fingerprint_db_path: String = ""
-# 同じキーで、本体行と成績 4 テーブルそれぞれの内容ハッシュ ([本体, RECORD_STATS_KEYS の順])。
-# 内容が変わった選手でも、書き込むのはハッシュが変わったテーブルだけにする
-# (日送りで変わるのは大半が本体行の疲労・故障と、その日出場した側の成績 1 テーブル)。
-# キーが無い選手 (ロード直後など) は全テーブルを書いてから覚える。
+# 同じキーで、本体行の列グループと成績 4 テーブルそれぞれの内容ハッシュ
+# ([本体のスカラー, BODY_JSON_GROUPS の順, RECORD_STATS_KEYS の順])。
+# 内容が変わった選手でも、書き込むのはハッシュが変わったテーブルだけにし、本体行は変わった列グループの列だけ
+# UPDATE する (日送りで変わるのは大半が疲労・故障のスカラーと、その日出場した側の詳細成績と成績 1 テーブル)。
+# キーが無い選手 (ロード直後など) は本体行を全列 INSERT OR REPLACE し、全テーブルを書いてから覚える。
+# UPDATE は行が無いと 0 行で黙って終わるので、キーがある = この DB にその選手の行を書いた、が前提。
 static var _record_part_fingerprints: Dictionary = {}
 
-# 直近の save_record_store_and_normalized で書き込んだ選手レコード数 / テーブル行数 (診断/テスト用)。
+# 直近の save_record_store_and_normalized で書き込んだ選手レコード数 / テーブル行数 /
+# 本体行の列グループ数 (全列書きは BODY_PART_COUNT 個と数える) (診断/テスト用)。
 static var last_record_upsert_count: int = 0
 static var last_record_table_write_count: int = 0
+static var last_record_body_group_write_count: int = 0
+# 本体行の列グループ UPDATE 文 (_group_update_statement)。
+static var _group_update_statements: Dictionary = {}
 
 # 選手年度レコードのうち、本体行とは別テーブルへ正規化する成績。キー名 = テーブル名。
 const RECORD_STATS_KEYS: Array = ["batter_stats", "pitcher_stats", "farm_batter_stats", "farm_pitcher_stats"]
+# 本体行の JSON 列を、変化の仕方でまとめたグループ (to_dict のキー。列名はキー + "_json")。
+# 詳細成績は出場した日に、スナップショット類はシーズン中ほぼ変わらないので、別々に書き直す。
+# どのグループにも入れていないキー・列はスカラー側のグループとして扱う。
+const BODY_JSON_GROUPS: Array = [
+	["advanced_stats"],
+	["farm_advanced_stats"],
+	[
+		"position_aptitudes_snapshot", "position_experience_snapshot", "source_data",
+		"z_abilities_snapshot", "raw_abilities_snapshot", "arsenal_snapshot",
+	],
+]
+# 本体行の列グループの数 (スカラー + BODY_JSON_GROUPS)。部品ハッシュの先頭からこの個数が本体行。
+const BODY_PART_COUNT: int = 1 + 3
+const PLAYER_SEASON_KEY_COLUMNS: Array = ["player_id", "year", "season_number"]
 
 
 static func is_available() -> bool:
@@ -413,6 +433,7 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 
 	var upserted_records: int = 0
 	var table_writes: int = 0
+	var body_group_writes: int = 0
 	var pending_parts: Dictionary = {}
 	for record_value in player_records:
 		var record: Dictionary = record_value as Dictionary
@@ -424,14 +445,29 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 		var fingerprint: int = record.hash()
 		if cache_valid and int(_record_fingerprints.get(record_key, 0)) == fingerprint:
 			continue
-		# 変わった選手でも、書くのは前回からハッシュが変わったテーブルだけ。前回を覚えていなければ全テーブル。
+		# 変わった選手でも、書くのは前回からハッシュが変わったテーブル (本体行は列グループ) だけ。
+		# 前回を覚えていなければ本体行の全列と全テーブル。
 		var parts: Array = _record_part_hashes(record)
 		var saved_parts: Array = (_record_part_fingerprints.get(record_key, []) as Array) if cache_valid else []
+		var known_row: bool = saved_parts.size() == parts.size()
 		var wrote_any: bool = false
-		for part_index in range(parts.size()):
-			if saved_parts.size() == parts.size() and int(saved_parts[part_index]) == int(parts[part_index]):
+		var body_groups: Array = []
+		for group_index in range(BODY_PART_COUNT):
+			if not known_row or int(saved_parts[group_index]) != int(parts[group_index]):
+				body_groups.append(group_index)
+		if not body_groups.is_empty():
+			var body_ok: bool = _update_player_season_groups(db, record, body_groups) if known_row \
+				else _upsert_player_season_record(db, record)
+			if not body_ok:
+				_execute(db, "ROLLBACK")
+				return false
+			table_writes += 1
+			body_group_writes += body_groups.size()
+			wrote_any = true
+		for part_index in range(BODY_PART_COUNT, parts.size()):
+			if known_row and int(saved_parts[part_index]) == int(parts[part_index]):
 				continue
-			if not _upsert_record_part(db, record, part_index):
+			if not _upsert_record_stats_part(db, record, part_index - BODY_PART_COUNT):
 				_execute(db, "ROLLBACK")
 				return false
 			table_writes += 1
@@ -466,6 +502,7 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 
 	last_record_upsert_count = upserted_records
 	last_record_table_write_count = table_writes
+	last_record_body_group_write_count = body_group_writes
 	# COMMIT 成功後にのみキャッシュへ反映する (ROLLBACK 時に「書いたつもり」を残さない)。
 	if not cache_valid:
 		# キャッシュ無効時は全レコードの全テーブルを書いたので、今回のハッシュがそのまま DB の内容。
@@ -498,23 +535,88 @@ static func record_fingerprints_snapshot() -> Dictionary:
 	return _record_fingerprints
 
 
-# 本体行と成績 4 テーブルそれぞれの内容ハッシュ ([本体, RECORD_STATS_KEYS の順])。
-# 本体行は成績を除いた残りのキー全体で取る (本体行の列はすべてそこから作られる)。
+# 本体行の列グループと成績 4 テーブルそれぞれの内容ハッシュ
+# ([本体のスカラー, BODY_JSON_GROUPS の順, RECORD_STATS_KEYS の順])。
+# スカラーは成績と BODY_JSON_GROUPS のキーを除いた残りのキー全体で取る (残りの列はすべてそこから作られる)。
 static func _record_part_hashes(record: Dictionary) -> Array:
 	var body: Dictionary = record.duplicate()
 	for stats_key in RECORD_STATS_KEYS:
 		body.erase(stats_key)
+	var group_hashes: Array = []
+	for group_value in BODY_JSON_GROUPS:
+		var values: Array = []
+		for key_value in group_value as Array:
+			values.append(body.get(key_value))
+			body.erase(key_value)
+		group_hashes.append(values.hash())
 	var parts: Array = [body.hash()]
+	parts.append_array(group_hashes)
 	for stats_key in RECORD_STATS_KEYS:
 		parts.append((record.get(stats_key, {}) as Dictionary).hash())
 	return parts
 
 
-# _record_part_hashes と同じ添字で 1 テーブルぶんを書く (0 = 本体行)。
-static func _upsert_record_part(db: Object, record: Dictionary, part_index: int) -> bool:
-	if part_index == 0:
-		return _upsert_player_season_record(db, record)
-	var stats_key: String = str(RECORD_STATS_KEYS[part_index - 1])
+# 本体行のうち、列グループ (_record_part_hashes の添字 0〜BODY_PART_COUNT-1) の列だけを UPDATE する。
+# 行が既にあることが前提 (無ければ 0 行で終わり、何も書かれない)。
+static func _update_player_season_groups(db: Object, record: Dictionary, group_indices: Array) -> bool:
+	var statement: Dictionary = _group_update_statement(group_indices)
+	var columns: Array = statement["columns"] as Array
+	if columns.is_empty():
+		return true
+	var bindings: Array = []
+	for column_value in columns:
+		bindings.append(_player_season_value(record, str(column_value)))
+	for key_column in PLAYER_SEASON_KEY_COLUMNS:
+		bindings.append(int(record.get(key_column, 0)))
+	return _query_with_bindings(db, str(statement["sql"]), bindings)
+
+
+# 列グループの組み合わせごとの {columns, sql}。組み合わせは高々 2^BODY_PART_COUNT 通りなのでプロセス内で使い回す。
+static func _group_update_statement(group_indices: Array) -> Dictionary:
+	var cache_key: String = str(group_indices)
+	if _group_update_statements.has(cache_key):
+		return _group_update_statements[cache_key] as Dictionary
+	var columns: Array = []
+	for group_index_value in group_indices:
+		var group_index: int = int(group_index_value)
+		columns.append_array(_body_scalar_columns() if group_index == 0 else _json_group_columns(group_index - 1))
+	var assignments: PackedStringArray = []
+	for column_value in columns:
+		assignments.append("%s = ?" % str(column_value))
+	var statement: Dictionary = {
+		"columns": columns,
+		"sql": "UPDATE player_season_records SET %s WHERE player_id = ? AND year = ? AND season_number = ?" % ", ".join(assignments),
+	}
+	_group_update_statements[cache_key] = statement
+	return statement
+
+
+# BODY_JSON_GROUPS[group_index] の列名。
+static func _json_group_columns(group_index: int) -> Array:
+	var columns: Array = []
+	for key_value in BODY_JSON_GROUPS[group_index] as Array:
+		columns.append("%s_json" % str(key_value))
+	return columns
+
+
+# 本体行のスカラー側グループの列 = PLAYER_SEASON_COLUMNS から主キーと BODY_JSON_GROUPS の列を除いた残り。
+static func _body_scalar_columns() -> Array:
+	var excluded: Dictionary = {}
+	for key_column in PLAYER_SEASON_KEY_COLUMNS:
+		excluded[key_column] = true
+	for group_index in range(BODY_JSON_GROUPS.size()):
+		for column_value in _json_group_columns(group_index):
+			excluded[column_value] = true
+	var columns: Array = []
+	for column_value in PLAYER_SEASON_COLUMNS:
+		if not excluded.has(column_value):
+			columns.append(column_value)
+	return columns
+
+
+# 成績テーブル RECORD_STATS_KEYS[stats_index] の 1 行を書く。
+static func _upsert_record_stats_part(db: Object, record: Dictionary, stats_index: int) -> bool:
+	var stats_key: String = str(RECORD_STATS_KEYS[stats_index])
 	var columns: Array = BATTER_STATS_COLUMNS if stats_key.ends_with("batter_stats") else PITCHER_STATS_COLUMNS
 	return _upsert_stats(
 		db, stats_key, columns,

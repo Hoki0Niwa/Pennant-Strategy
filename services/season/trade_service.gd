@@ -296,27 +296,41 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 
 
 # A の余剰×B の余剰から、双方の需要フィットが最低値以上かつ価値差が許容内の最良ペア。
+# B 側の需要フィットと価値は A の選手に依らないので、条件を満たす B の駒を先に 1 回だけ並べておく
+# (並び順は surplus_b のまま。最良の判定は同点なら先に見つけた組を残す)。
 static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary, trade_value_memo: Dictionary = {}) -> Dictionary:
 	var best: Dictionary = {}
 	var best_score: float = 0.0
+	var b_players: Array = []
+	var b_fits: PackedFloat64Array = []
+	var b_values: PackedFloat64Array = []
+	var b_ready: bool = false
 	for a_row in surplus_a:
 		var player_a: PSPlayer = a_row as PSPlayer
 		var fit_for_b: float = need_fit(player_a, need_b)
 		if fit_for_b < MIN_NEED_FIT:
 			continue
+		if not b_ready:
+			b_ready = true
+			for b_row in surplus_b:
+				var player_b: PSPlayer = b_row as PSPlayer
+				var fit_for_a: float = need_fit(player_b, need_a)
+				if fit_for_a < MIN_NEED_FIT:
+					continue
+				b_players.append(player_b)
+				b_fits.append(fit_for_a)
+				b_values.append(_cached_trade_value(player_b, trade_value_memo))
+			if b_players.is_empty():
+				return best
 		var value_a: float = _cached_trade_value(player_a, trade_value_memo)
-		for b_row in surplus_b:
-			var player_b: PSPlayer = b_row as PSPlayer
-			var fit_for_a: float = need_fit(player_b, need_a)
-			if fit_for_a < MIN_NEED_FIT:
-				continue
-			var value_diff: float = absf(value_a - _cached_trade_value(player_b, trade_value_memo))
+		for b_index in range(b_players.size()):
+			var value_diff: float = absf(value_a - b_values[b_index])
 			if value_diff > VALUE_DIFF_TOLERANCE:
 				continue
-			var score: float = fit_for_a + fit_for_b - value_diff * VALUE_DIFF_SCORE_PENALTY
+			var score: float = b_fits[b_index] + fit_for_b - value_diff * VALUE_DIFF_SCORE_PENALTY
 			if score > best_score:
 				best_score = score
-				best = {"player_a": player_a, "player_b": player_b, "score": score}
+				best = {"player_a": player_a, "player_b": b_players[b_index], "score": score}
 	return best
 
 

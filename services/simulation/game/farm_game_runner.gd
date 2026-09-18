@@ -51,7 +51,7 @@ static func simulate_day(
 			calc_results[local_index] = calculate(season, int(indices[local_index]), local_index, rule_groups)
 	else:
 		var task: Callable = _calc_task_body.bind(season, indices, calc_results, rule_groups)
-		var group_id: int = WorkerThreadPool.add_group_task(task, indices.size())
+		var group_id: int = WorkerThreadPool.add_group_task(task, indices.size(), -1, GameSimulator.DAY_TASKS_HIGH_PRIORITY)
 		WorkerThreadPool.wait_for_group_task_completion(group_id)
 
 	var applied: Array = []

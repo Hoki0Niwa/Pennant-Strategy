@@ -72,6 +72,11 @@ const POSITION_APTITUDE_KEYS: Dictionary = {
 	8: "center",
 	9: "right",
 }
+# 試合日の計算タスク (一軍・二軍) を WorkerThreadPool の高優先度で流す。低優先度 (add_group_task の既定) は
+# project setting threading/worker_pool/low_priority_thread_ratio (既定 0.3) ぶんのスレッドしか使えず、
+# 12 スレッドの機械でも同時 3〜4 試合になって 1 日の 6〜7 試合が 2〜3 巡に分かれる。
+# 高優先度なら 1 日の計算は最も長い 1 試合の時間で終わる。結果はレーン ID で決まるので優先度に依らない。
+const DAY_TASKS_HIGH_PRIORITY: bool = true
 
 static var _profile_enabled: bool = false
 static var _profile_totals_usec: Dictionary = {}
@@ -325,7 +330,7 @@ static func _simulate_day_games(season: PSSeason, today_indices: Array, persist:
 		# (プリウォーム漏れがあっても結果は変わらず、その回だけ計算し直しになる)。
 		PSPerformanceReference.set_frozen(true)
 		var task: Callable = _calc_task_body.bind(season, today_indices, calc_results, rule_groups)
-		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size())
+		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size(), -1, DAY_TASKS_HIGH_PRIORITY)
 		WorkerThreadPool.wait_for_group_task_completion(group_id)
 		PSPerformanceReference.set_frozen(false)
 
@@ -665,7 +670,7 @@ static func simulate_current_day_async(
 		calc_results.resize(today_indices.size())
 		var task: Callable = _calc_task_body.bind(season, today_indices, calc_results, rule_groups)
 		PSPerformanceReference.set_frozen(true)
-		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size())
+		var group_id: int = WorkerThreadPool.add_group_task(task, today_indices.size(), -1, DAY_TASKS_HIGH_PRIORITY)
 		while not WorkerThreadPool.is_group_task_completed(group_id):
 			if tree == null:
 				break

@@ -379,7 +379,58 @@ func test_trade_pair_keeps_first_tie_and_rechecks_values_between_searches() -> v
 	assert_dict(TradeService._best_pair_between(surplus_a, surplus_b, need, need)).is_empty()
 
 
+func test_trade_pair_matches_exhaustive_search() -> void:
+	# 需要フィットの足切り・価値差の許容・同点時の先着を、全組み合わせを素直に回した結果と比べる。
+	# 位置ごとに需要を変え、能力と年俸をずらして価値差の境界の両側に来る駒を混ぜる。
+	var surplus_a: Array = []
+	var surplus_b: Array = []
+	var positions: Array = [2, 3, 4, 6, 8]
+	for i in range(10):
+		var player_a: PSPlayer = _player_with_z(100 + i, 1, int(positions[i % positions.size()]), false, -1.0 + 0.3 * float(i % 7))
+		player_a.salary = 1000 + 3000 * (i % 4)
+		surplus_a.append(player_a)
+		var player_b: PSPlayer = _player_with_z(200 + i, 2, int(positions[(i + 2) % positions.size()]), false, -0.8 + 0.25 * float(i % 5))
+		player_b.salary = 1500 + 2500 * (i % 3)
+		surplus_b.append(player_b)
+	var needs: Array = [
+		[{2: 3.0, 3: 1.0, 4: 2.5, 6: 4.0, 8: 2.0}, {2: 2.0, 3: 5.0, 4: 1.5, 6: 2.0, 8: 3.5}],
+		[{3: 2.0}, {6: 2.0, 8: 2.0}],
+		[{2: 1.0}, {3: 6.0}],
+	]
+	for need_pair in needs:
+		var need_a: Dictionary = need_pair[0] as Dictionary
+		var need_b: Dictionary = need_pair[1] as Dictionary
+		var expected: Dictionary = _exhaustive_best_pair(surplus_a, surplus_b, need_a, need_b)
+		var actual: Dictionary = TradeService._best_pair_between(surplus_a, surplus_b, need_a, need_b)
+		assert_object(actual.get("player_a")).is_same(expected.get("player_a"))
+		assert_object(actual.get("player_b")).is_same(expected.get("player_b"))
+		assert_float(float(actual.get("score", 0.0))).is_equal(float(expected.get("score", 0.0)))
+	assert_bool(_exhaustive_best_pair(surplus_a, surplus_b, needs[0][0], needs[0][1]).is_empty()).is_false()
+	assert_bool(_exhaustive_best_pair(surplus_a, surplus_b, needs[2][0], needs[2][1]).is_empty()).is_true()
+
+
 # ---- helpers -------------------------------------------------------------------
+
+func _exhaustive_best_pair(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary) -> Dictionary:
+	var best: Dictionary = {}
+	var best_score: float = 0.0
+	for a_row in surplus_a:
+		var player_a: PSPlayer = a_row as PSPlayer
+		for b_row in surplus_b:
+			var player_b: PSPlayer = b_row as PSPlayer
+			var fit_for_b: float = TradeService.need_fit(player_a, need_b)
+			var fit_for_a: float = TradeService.need_fit(player_b, need_a)
+			if fit_for_b < TradeService.MIN_NEED_FIT or fit_for_a < TradeService.MIN_NEED_FIT:
+				continue
+			var value_diff: float = absf(TradeService.trade_value(player_a) - TradeService.trade_value(player_b))
+			if value_diff > TradeService.VALUE_DIFF_TOLERANCE:
+				continue
+			var score: float = fit_for_a + fit_for_b - value_diff * TradeService.VALUE_DIFF_SCORE_PENALTY
+			if score > best_score:
+				best_score = score
+				best = {"player_a": player_a, "player_b": player_b, "score": score}
+	return best
+
 
 func _season(day: int) -> PSSeason:
 	var season: PSSeason = PSSeason.new()

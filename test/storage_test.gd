@@ -936,8 +936,35 @@ func test_record_store_writes_only_changed_tables() -> void:
 	target.z_abilities_snapshot[z_key] = 2.25
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_record_body_group_write_count).is_equal(1)
 
+	# 本体行の中でも、書き直すのは変わった列グループだけ (疲労だけ → スカラー / 詳細成績も → 2 グループ)。
+	# 書かなかった列 (直前に書いた能力スナップショット) は DB 上でそのまま残る。
+	target.fatigue = 11
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_record_body_group_write_count).is_equal(1)
+	target.fatigue = 12
+	target.advanced_stats.plate_appearances = 41
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_record_body_group_write_count).is_equal(2)
+	target.farm_advanced_stats.plate_appearances = 17
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_record_body_group_write_count).is_equal(1)
+
+	# 列グループで書いてきた行は、同じレコードを全列で書き直した行と一致する。
 	var player_id: int = target.player_id
+	var row_sql: String = "SELECT * FROM player_season_records WHERE player_id = ? AND year = ? AND season_number = ?"
+	var row_bindings: Array = [player_id, season.year, season.season_number]
+	var db: Object = SQLiteStoreService._open_runtime_db()
+	var grouped_rows: Array = SQLiteStoreService._select_with_bindings(db, row_sql, row_bindings).duplicate(true)
+	assert_bool(SQLiteStoreService._upsert_player_season_record(db, target.to_dict())).is_true()
+	var full_rows: Array = SQLiteStoreService._select_with_bindings(db, row_sql, row_bindings).duplicate(true)
+	SQLiteStoreService._close(db)
+	assert_int(grouped_rows.size()).is_equal(1)
+	assert_str(JSON.stringify(grouped_rows, "", true, true)).is_equal(JSON.stringify(full_rows, "", true, true))
+
 	RecordStore.load_records()
 	var reloaded: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
 	assert_object(reloaded).is_not_null()
@@ -945,16 +972,40 @@ func test_record_store_writes_only_changed_tables() -> void:
 	assert_int(reloaded.fatigue).is_equal(12)
 	assert_int(reloaded.batter_stats.hits).is_equal(9)
 	assert_float(float(reloaded.z_abilities_snapshot.get(z_key, 0.0))).is_equal(2.25)
+	assert_int(reloaded.advanced_stats.plate_appearances).is_equal(41)
+	assert_int(reloaded.farm_advanced_stats.plate_appearances).is_equal(17)
 
-	# ロード直後はテーブルごとの内容を覚えていないので、変わった選手は全テーブルを書いてから覚える。
+	# ロード直後はテーブルごとの内容を覚えていないので、変わった選手は本体行の全列と全テーブルを書いてから覚える。
 	reloaded.fatigue = 13
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1 + SQLiteStoreService.RECORD_STATS_KEYS.size())
+	assert_int(SQLiteStoreService.last_record_body_group_write_count).is_equal(SQLiteStoreService.BODY_PART_COUNT)
 	reloaded.fatigue = 14
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	assert_int(SQLiteStoreService.last_record_table_write_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_record_body_group_write_count).is_equal(1)
 
 	_restore_app_state(old_state, test_save_id)
+
+
+func test_player_season_body_groups_cover_every_column_once() -> void:
+	# 本体行の列グループ (スカラー + BODY_JSON_GROUPS) と主キーで PLAYER_SEASON_COLUMNS をちょうど 1 回ずつ覆う。
+	# 漏れた列は列グループの UPDATE で書かれなくなり、重なった列は 2 回書かれる。
+	assert_int(SQLiteStoreService.BODY_PART_COUNT).is_equal(1 + SQLiteStoreService.BODY_JSON_GROUPS.size())
+	var covered: Array = []
+	covered.append_array(SQLiteStoreService.PLAYER_SEASON_KEY_COLUMNS)
+	covered.append_array(SQLiteStoreService._body_scalar_columns())
+	for group_index in range(SQLiteStoreService.BODY_JSON_GROUPS.size()):
+		covered.append_array(SQLiteStoreService._json_group_columns(group_index))
+	var expected: Array = SQLiteStoreService.PLAYER_SEASON_COLUMNS.duplicate()
+	covered.sort()
+	expected.sort()
+	assert_array(covered).is_equal(expected)
+	# JSON グループのキーは to_dict のキーで、スカラー側に同名の列が残らない。
+	var record_keys: Array = PSPlayerSeasonRecord.new().to_dict().keys()
+	for group_value in SQLiteStoreService.BODY_JSON_GROUPS:
+		for key_value in group_value as Array:
+			assert_bool(record_keys.has(key_value)).is_true()
 
 
 func test_record_store_saves_only_changed_rows() -> void:
