@@ -1,6 +1,6 @@
 extends Node
 
-# 薄い mod レイヤ。初期データの差し替えと、default_rules.json への部分上書きを扱う。
+# 薄い mod レイヤ。初期データの差し替え、default_rules.json への部分上書き、表示文言の上書きパスを扱う。
 # ルールは dot path で読み、頻繁に参照される値は _rule_cache に載せる。
 # セーブには active_mods と schema 情報を記録し、ロード時に現在の mod 構成と照合できるようにする。
 const DEFAULT_RULES_PATH: String = "res://data/rules/default_rules.json"
@@ -18,11 +18,16 @@ const HOT_RULE_GROUP_PATHS: Array[String] = [
 	"simulation.play_resolver",
 ]
 
+# reload_mods() の完了通知。mod 構成に依存するキャッシュ (Loc の文言辞書等) はこれで組み直す。
+signal mods_reloaded
+
 var _default_rules: Dictionary = {}
 var _rules: Dictionary = {}
 var _rule_cache: Dictionary = {}
 var _hot_rule_groups: Array[Dictionary] = []
 var _data_overrides: Dictionary = {}
+# locale → mod の文言 JSON パス (load order 順)。辞書の組み立ては Loc 側で行う。
+var _string_paths: Dictionary = {}
 var _active_mods: Array = []
 var last_compatibility_warnings: Array[String] = []
 
@@ -38,6 +43,7 @@ func reload_mods() -> void:
 	_rules = _default_rules.duplicate(true)
 	_rule_cache.clear()
 	_data_overrides.clear()
+	_string_paths.clear()
 	_active_mods.clear()
 	last_compatibility_warnings.clear()
 
@@ -51,6 +57,7 @@ func reload_mods() -> void:
 
 	_prewarm_rule_cache()
 	_refresh_hot_rule_groups()
+	mods_reloaded.emit()
 
 
 # マージ済み _rules の全リーフを事前に _rule_cache へ書き込む。以後 rule_value() は
@@ -88,6 +95,13 @@ func _refresh_hot_rule_groups() -> void:
 # データファイルの差し替え解決。未指定ならプロジェクト同梱の fallback_path をそのまま使う。
 func resolve_data_path(key: String, fallback_path: String) -> String:
 	return str(_data_overrides.get(key, fallback_path))
+
+
+# locale の文言を上書きする mod の JSON パス。先頭から順に重ねる (後勝ち)。
+func string_table_paths(locale: String) -> Array[String]:
+	var paths: Array[String] = []
+	paths.assign(_string_paths.get(locale, []) as Array)
+	return paths
 
 
 # "simulation.pa.league_k_base" のような dot path でネストした rules を読む。
@@ -258,6 +272,17 @@ func _apply_manifest(manifest: Dictionary) -> void:
 			var path: String = str(data_map[key_value])
 			if not key.is_empty() and not path.is_empty():
 				_data_overrides[key] = _resolve_mod_path(base_dir, path)
+
+	if manifest.has("strings") and manifest["strings"] is Dictionary:
+		var strings_map: Dictionary = manifest["strings"] as Dictionary
+		for locale_value in strings_map.keys():
+			var locale: String = str(locale_value)
+			var path: String = str(strings_map[locale_value])
+			if locale.is_empty() or path.is_empty():
+				continue
+			if not _string_paths.has(locale):
+				_string_paths[locale] = []
+			(_string_paths[locale] as Array).append(_resolve_mod_path(base_dir, path))
 
 	if manifest.has("rules"):
 		var rules_patch: Dictionary = {}

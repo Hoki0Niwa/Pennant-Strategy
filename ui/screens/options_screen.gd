@@ -54,7 +54,7 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
 
 	if _has_session():
-		_draw_shell("オプション", GameDb.get_team(AppState.selected_team_id), AppState.current_season)
+		_draw_shell(Loc.t("options.title"), GameDb.get_team(AppState.selected_team_id), AppState.current_season)
 	else:
 		_draw_pregame_chrome()
 
@@ -80,9 +80,9 @@ func _draw_pregame_chrome() -> void:
 	_round(Rect2(SIDEBAR_W, 0, BASE.x - SIDEBAR_W, HEADER_H), HEADER_BG, Color.TRANSPARENT, 0, 0)
 	_line(Vector2(SIDEBAR_W, HEADER_H), Vector2(BASE.x, HEADER_H), BORDER_SOFT, 1.0)
 	_text("PennantStrategy", Vector2(20, 40), 22, TEXT)
-	_text("ペナント戦略シミュレーション", Vector2(21, 62), 11, MUTED)
+	_text(Loc.t("app.subtitle"), Vector2(21, 62), 11, MUTED)
 	_text(_app_version_label(), Vector2(22, BASE.y - 24), 12, FAINT)
-	_text("オプション", Vector2(INNER_L, 56), 28, TEXT)
+	_text(Loc.t("options.title"), Vector2(INNER_L, 56), 28, TEXT)
 
 
 # ============================================================ layout
@@ -164,27 +164,27 @@ func _toggle_row_rect(panel: Rect2, i: int) -> Rect2:
 
 func _toggle_rows() -> Array:
 	return [
-		{"id": "autoswap", "label": "スキップ中の自動一二軍入替", "desc": "成績ベースで自動的に一二軍入替を行う", "on": AppState.auto_roster_swap_during_skip},
-		{"id": "autotrade", "label": "自軍のトレードをAIに任せる", "desc": "有効にすると週次の自動トレード判断に自軍も参加し、AIが自軍のトレードを自動で成立させる。無効時は従来通り(自分で提案/受信提案の受諾のみ)。", "on": AppState.auto_trade_for_user_team},
-		{"id": "autosave", "label": "自動セーブ", "desc": "試合進行・オフシーズン処理時に自動で保存する", "on": AppState.auto_save_enabled},
-		{"id": "dh1", "label": "第1リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("league1")},
-		{"id": "dh2", "label": "第2リーグ DH", "desc": "ホーム主催試合で指名打者制を使用", "on": AppState.is_dh_enabled_for_league("league2")},
-		{"id": "draftwaiver", "label": "ドラフト完全ウェーバー制", "desc": "1巡目の入札・抽選を行わず、全巡とも前年下位球団から順に指名する(次回ドラフトから適用)。", "on": AppState.draft_full_waiver},
-		{"id": "csadvantage", "label": "CSアドバンテージ 2026年規定", "desc": "ゲーム差10以上、またはファースト勝者が勝率5割未満なら、CSファイナルを2勝アドバンテージ・7試合・5勝先取にする。無効時は旧規定(常に1勝・6試合・4勝先取)。次回のポストシーズンから適用。", "on": AppState.cs_advantage_rule == PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026},
+		{"id": "autoswap", "label": Loc.t("options.toggle.autoswap.label"), "desc": Loc.t("options.toggle.autoswap.desc"), "on": AppState.auto_roster_swap_during_skip},
+		{"id": "autotrade", "label": Loc.t("options.toggle.autotrade.label"), "desc": Loc.t("options.toggle.autotrade.desc"), "on": AppState.auto_trade_for_user_team},
+		{"id": "autosave", "label": Loc.t("options.toggle.autosave.label"), "desc": Loc.t("options.toggle.autosave.desc"), "on": AppState.auto_save_enabled},
+		{"id": "dh1", "label": Loc.t("options.toggle.dh1.label"), "desc": Loc.t("options.toggle.dh.desc"), "on": AppState.is_dh_enabled_for_league("league1")},
+		{"id": "dh2", "label": Loc.t("options.toggle.dh2.label"), "desc": Loc.t("options.toggle.dh.desc"), "on": AppState.is_dh_enabled_for_league("league2")},
+		{"id": "draftwaiver", "label": Loc.t("options.toggle.draftwaiver.label"), "desc": Loc.t("options.toggle.draftwaiver.desc"), "on": AppState.draft_full_waiver},
+		{"id": "csadvantage", "label": Loc.t("options.toggle.csadvantage.label"), "desc": Loc.t("options.toggle.csadvantage.desc"), "on": AppState.cs_advantage_rule == PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026},
 	]
 
 
 # ============================================================ panels
 
 func _draw_save_panel(panel: Rect2) -> void:
-	_panel(panel, "セーブデータ")
-	_text("保存フォルダ", Vector2(panel.position.x + 18, panel.position.y + 62), FS_LABEL, MUTED)
+	_panel(panel, Loc.t("options.save.panel"))
+	_text(Loc.t("options.save.folder"), Vector2(panel.position.x + 18, panel.position.y + 62), FS_LABEL, MUTED)
 	_text(_save_path, Vector2(panel.position.x + 18, panel.position.y + 84), 13, MUTED, panel.size.x - 36)
 
 
 func _draw_settings_panel(panel: Rect2) -> void:
 	# トグル本体は ON/OFF チップボタンで右端に配置する。本文ではラベル/説明/区切り線のみ描く。
-	_panel(panel, "ゲーム設定")
+	_panel(panel, Loc.t("options.settings.panel"))
 	var rows: Array = _toggle_rows()
 	for i in range(rows.size()):
 		var row: Dictionary = rows[i] as Dictionary
@@ -199,31 +199,31 @@ func _draw_settings_panel(panel: Rect2) -> void:
 func _draw_devtools_panel(panel: Rect2) -> void:
 	# 操作系 (ボタン/プルダウン) は _build_buttons / _build_inputs で生成する。本文はタイトル/説明のみ。
 	if _has_session():
-		_panel(panel, "操作チーム変更（開発）")
-		_text("操作チーム", Vector2(panel.position.x + 18, panel.position.y + 109), 13, TEXT)
-		_text("日付・選手・成績・怪我などをすべて保持したまま、操作するチームを切り替えます。",
+		_panel(panel, Loc.t("options.dev.team_panel"))
+		_text(Loc.t("options.dev.team_label"), Vector2(panel.position.x + 18, panel.position.y + 109), 13, TEXT)
+		_text(Loc.t("options.dev.team_desc"),
 			Vector2(panel.position.x + 18, panel.position.y + 150), 12, MUTED, panel.size.x - 36)
 	else:
-		_panel(panel, "開発ツール（テストモード）")
-		_text("各ボタンでテストモードに移行します。", Vector2(panel.position.x + 18, panel.position.y + 58), 12, MUTED, panel.size.x - 36)
+		_panel(panel, Loc.t("options.dev.test_panel"))
+		_text(Loc.t("options.dev.test_desc"), Vector2(panel.position.x + 18, panel.position.y + 58), 12, MUTED, panel.size.x - 36)
 
 
 func _draw_regen_panel(panel: Rect2) -> void:
 	# 年数/シードの入力欄 (LineEdit) は _build_inputs で生成し、ここではラベルのみ描く。
-	_panel(panel, "初期選手の再生成")
-	_multiline("指定年数だけペナントを自動進行し、その時点の球団・選手を初期データ(CSV)へ書き出します。現在の initial_players.csv を上書きするため、反映には再起動または新規ペナント開始を推奨。",
+	_panel(panel, Loc.t("options.regen.panel"))
+	_multiline(Loc.t("options.regen.desc"),
 		Vector2(panel.position.x + 18, panel.position.y + 58), 12, MUTED, panel.size.x - 36)
 
 	var cy: float = panel.position.y + 150.0
-	_text("年数", Vector2(panel.position.x + 20, cy + 22), 13, TEXT)
-	_text("シード", Vector2(panel.position.x + 226, cy + 22), 13, TEXT)
+	_text(Loc.t("options.regen.seasons"), Vector2(panel.position.x + 20, cy + 22), 13, TEXT)
+	_text(Loc.t("options.regen.seed"), Vector2(panel.position.x + 226, cy + 22), 13, TEXT)
 
 	if not _regen_status.is_empty():
 		_multiline(_regen_status, Vector2(panel.position.x + 18, panel.position.y + 212), 12, MUTED, panel.size.x - 36)
 
 
 func _draw_dist_panel(panel: Rect2) -> void:
-	_panel(panel, "能力分布グラフ")
+	_panel(panel, Loc.t("options.dist.panel"))
 	if not _dist_status.is_empty():
 		_text(_dist_status, Vector2(panel.position.x + 18, panel.position.y + 70), 12, MUTED, panel.size.x - 250)
 	var area: Rect2 = Rect2(panel.position.x + 18, panel.position.y + 86, panel.size.x - 36, panel.size.y - 104)
@@ -231,7 +231,7 @@ func _draw_dist_panel(panel: Rect2) -> void:
 	if _dist_texture != null:
 		_draw_texture_fit(area, _dist_texture)
 	else:
-		_text("「グラフを出力」で各 z 能力値のヒストグラムを表示します。", Vector2(area.position.x + 16, area.position.y + 32), 13, FAINT, area.size.x - 32)
+		_text(Loc.t("options.dist.empty"), Vector2(area.position.x + 16, area.position.y + 32), 13, FAINT, area.size.x - 32)
 
 
 # テクスチャを base_rect 内にアスペクト維持で収めて描画する。
@@ -259,12 +259,12 @@ func _build_buttons() -> void:
 	if _has_session():
 		_build_nav_buttons()
 	else:
-		_add_button("back", "戻る", Rect2(INNER_R - 120.0, 22.0, 120.0, 42.0), func() -> void: AppState.request_screen("start"), "action")
+		_add_button("back", Loc.t("common.back"), Rect2(INNER_R - 120.0, 22.0, 120.0, 42.0), func() -> void: AppState.request_screen("start"), "action")
 
 	var rects: Dictionary = _layout_rects()
-	_add_button("manual_save", "手動セーブ", rects["save_btn"] as Rect2, _on_manual_save, "primary")
-	_add_button("select_save", "セーブデータ選択", rects["select_btn"] as Rect2, func() -> void: AppState.request_screen("save_select"), "action")
-	_add_button("delete_save", "セーブ削除", rects["delete_btn"] as Rect2, _on_delete_save, "action")
+	_add_button("manual_save", Loc.t("options.save.manual"), rects["save_btn"] as Rect2, _on_manual_save, "primary")
+	_add_button("select_save", Loc.t("options.save.select"), rects["select_btn"] as Rect2, func() -> void: AppState.request_screen("save_select"), "action")
+	_add_button("delete_save", Loc.t("options.save.delete"), rects["delete_btn"] as Rect2, _on_delete_save, "action")
 
 	# トグル: 各行の右端に ON/OFF チップを置き、1クリックで切り替える。
 	var settings_panel: Rect2 = rects["settings_panel"] as Rect2
@@ -274,21 +274,21 @@ func _build_buttons() -> void:
 		var id: String = str(spec["id"])
 		var on: bool = bool(spec["on"])
 		var row: Rect2 = _toggle_row_rect(settings_panel, i)
-		_add_button("tg_%s" % id, "有効" if on else "無効", Rect2(row.end.x - 80.0, row.position.y + 4.0, 76.0, 32.0),
+		_add_button("tg_%s" % id, Loc.t("common.enabled") if on else Loc.t("common.disabled"), Rect2(row.end.x - 80.0, row.position.y + 4.0, 76.0, 32.0),
 			func(target: String = id) -> void: _on_toggle(target), "chip_active" if on else "chip")
 
 	if DeveloperTools.enabled():
 		if not _has_session():
 			# テストモード遷移は履歴に積まない (戻る操作でタイトルへ直行できるように)。
-			_add_button("dev_balance", "計測レポート", rects["dev_balance"] as Rect2, func() -> void: AppState.request_screen("balance_report", false), "action")
-			_add_button("dev_probe", "選手プローブ", rects["dev_probe"] as Rect2, func() -> void: AppState.request_screen("player_probe", false), "action")
-			_add_button("dev_draft", "ドラフト検証", rects["dev_draft"] as Rect2, func() -> void: AppState.request_screen("draft_simulator", false), "action")
-			_add_button("dev_reload", "データ再読込", rects["dev_reload"] as Rect2, _reload_data, "action")
+			_add_button("dev_balance", Loc.t("options.dev.balance"), rects["dev_balance"] as Rect2, func() -> void: AppState.request_screen("balance_report", false), "action")
+			_add_button("dev_probe", Loc.t("options.dev.probe"), rects["dev_probe"] as Rect2, func() -> void: AppState.request_screen("player_probe", false), "action")
+			_add_button("dev_draft", Loc.t("options.dev.draft"), rects["dev_draft"] as Rect2, func() -> void: AppState.request_screen("draft_simulator", false), "action")
+			_add_button("dev_reload", Loc.t("options.dev.reload"), rects["dev_reload"] as Rect2, _reload_data, "action")
 			# 初期選手再生成・能力分布グラフ (開始前のみ)。
 			_add_button("regen_seed", "🎲", rects["regen_seedbtn"] as Rect2, func() -> void: _randomize_seed(), "chip")
-			_regen_button = _add_button("regen_run", "初期選手を再生成", rects["regen_run"] as Rect2, _on_regenerate_initial_players, "primary")
+			_regen_button = _add_button("regen_run", Loc.t("options.regen.run"), rects["regen_run"] as Rect2, _on_regenerate_initial_players, "primary")
 			_regen_button.disabled = _regen_running
-			_dist_button = _add_button("dist_run", "グラフを出力", rects["dist_btn"] as Rect2, func() -> void: await _generate_distribution_graph(), "action")
+			_dist_button = _add_button("dist_run", Loc.t("options.dist.run"), rects["dist_btn"] as Rect2, func() -> void: await _generate_distribution_graph(), "action")
 
 	_layout_buttons()
 
@@ -334,7 +334,7 @@ func _build_inputs() -> void:
 			var team: PSTeam = team_row as PSTeam
 			if team == null:
 				continue
-			_team_dropdown.add_item("%s（%s）" % [team.name, team.league_label()])
+			_team_dropdown.add_item(Loc.t("options.dev.team_item", {"team": team.name, "league": team.league_label()}))
 			_team_dropdown.set_item_metadata(_team_dropdown.item_count - 1, team.id)
 			if team.id == AppState.selected_team_id:
 				_team_dropdown.select(_team_dropdown.item_count - 1)
@@ -422,26 +422,26 @@ func _on_toggle(id: String) -> void:
 			var team_id: int = AppState.selected_team_id
 			if v and season != null and team_id > 0:
 				season.set_last_auto_swap_day(team_id, season.current_day - TeamAutoAI.SWAP_INTERVAL_DAYS)
-			_save_and_status("自動入替設定を保存しました。")
+			_save_and_status(Loc.t("options.status.autoswap_saved"))
 		"autotrade":
 			AppState.auto_trade_for_user_team = not AppState.auto_trade_for_user_team
-			_save_and_status("自動トレード設定を保存しました。")
+			_save_and_status(Loc.t("options.status.autotrade_saved"))
 		"autosave":
 			AppState.auto_save_enabled = not AppState.auto_save_enabled
-			_save_and_status("自動セーブ設定を保存しました。")
+			_save_and_status(Loc.t("options.status.autosave_saved"))
 		"dh1":
 			AppState.set_dh_enabled_for_league("league1", not AppState.is_dh_enabled_for_league("league1"))
-			_save_and_status("DH設定を保存しました。")
+			_save_and_status(Loc.t("options.status.dh_saved"))
 		"dh2":
 			AppState.set_dh_enabled_for_league("league2", not AppState.is_dh_enabled_for_league("league2"))
-			_save_and_status("DH設定を保存しました。")
+			_save_and_status(Loc.t("options.status.dh_saved"))
 		"draftwaiver":
 			AppState.draft_full_waiver = not AppState.draft_full_waiver
-			_save_and_status("ドラフト完全ウェーバー制設定を保存しました。")
+			_save_and_status(Loc.t("options.status.draftwaiver_saved"))
 		"csadvantage":
 			var use_2026: bool = AppState.cs_advantage_rule != PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026
 			AppState.cs_advantage_rule = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026 if use_2026 else PSPostseasonResult.CS_ADVANTAGE_RULE_LEGACY
-			_save_and_status("CSアドバンテージ規定を保存しました。")
+			_save_and_status(Loc.t("options.status.csadvantage_saved"))
 	# チップの ON/OFF 表示とスタイルを更新するため、ボタンを作り直す。
 	_build_buttons()
 	queue_redraw()
@@ -449,7 +449,7 @@ func _on_toggle(id: String) -> void:
 
 func _reload_data() -> void:
 	GameDb.load_initial_data()
-	_set_status("初期データを再読み込みしました: %d球団 / %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()], false)
+	_set_status(Loc.t("options.status.data_reloaded", {"teams": GameDb.get_team_count(), "players": GameDb.get_player_count()}), false)
 	queue_redraw()
 
 
@@ -462,23 +462,23 @@ func _on_team_changed(index: int) -> void:
 		return
 	AppState.select_team(team_id)
 	var team: PSTeam = GameDb.get_team(team_id)
-	_set_status("操作チームを変更しました: %s" % (team.name if team != null else "-"), false)
+	_set_status(Loc.t("options.status.team_changed", {"team": team.name if team != null else "-"}), false)
 	queue_redraw()
 
 
 func _save_and_status(ok_message: String) -> void:
 	var ok: bool = SaveService.save_state(AppState)
-	_set_status(ok_message if ok else "設定の保存に失敗しました。", not ok)
+	_set_status(ok_message if ok else Loc.t("options.status.settings_save_failed"), not ok)
 
 
 func _on_manual_save() -> void:
 	if AppState.current_season == null:
-		_set_status("シーズン開始前はセーブできません。", true)
+		_set_status(Loc.t("options.status.save_before_season"), true)
 		queue_redraw()
 		return
 	var ok: bool = SaveService.save_state(AppState)
 	_save_path = SaveService.current_save_display_path()
-	_set_status("セーブしました。" if ok else "セーブに失敗しました。", not ok)
+	_set_status(Loc.t("options.status.saved") if ok else Loc.t("options.status.save_failed"), not ok)
 	queue_redraw()
 
 
@@ -486,9 +486,10 @@ func _on_delete_save() -> void:
 	var deleted: Array = SaveService.delete_current_save()
 	_save_path = SaveService.current_save_display_path()
 	if deleted.is_empty():
-		_set_status("削除対象のファイルが見つかりません。", true)
+		_set_status(Loc.t("options.status.delete_not_found"), true)
 	else:
-		_set_status("削除しました: %s。再起動後に反映されます。" % "、".join(deleted), false)
+		var files: String = Loc.t("common.list_separator").join(PackedStringArray(deleted))
+		_set_status(Loc.t("options.status.deleted", {"files": files}), false)
 	queue_redraw()
 
 
@@ -518,14 +519,14 @@ func _on_regenerate_initial_players() -> void:
 	_regen_running = true
 	if _regen_button != null:
 		_regen_button.disabled = true
-	_regen_status = "生成中…（%d年分のシーズンを進行します）" % _regen_seasons
+	_regen_status = Loc.t("options.regen.running", {"seasons": _regen_seasons})
 	queue_redraw()
 
 	var overlay: ProgressOverlay = ProgressOverlayScript.new()
 	add_child(overlay)
 	var cancel_token: Dictionary = {"cancelled": false}
 	overlay.cancel_requested.connect(func() -> void: cancel_token["cancelled"] = true)
-	overlay.show_progress("初期選手を生成中…")
+	overlay.show_progress(Loc.t("options.regen.overlay"))
 	var update_overlay: Callable = func(done: int, total: int, label: String) -> void:
 		if overlay != null:
 			overlay.update_progress(done, total, label)
@@ -546,10 +547,10 @@ func _on_regenerate_initial_players() -> void:
 	overlay.queue_free()
 
 	if bool(report.get("cancelled", false)):
-		_finish_regen("キャンセルされました（元のデータは保持）。")
+		_finish_regen(Loc.t("options.regen.cancelled"))
 		return
 	if int(report.get("seasons_completed", 0)) <= 0:
-		_finish_regen("生成に失敗しました。")
+		_finish_regen(Loc.t("options.regen.failed"))
 		return
 
 	var players: Array = PSPlayerCsvIo.normalize_initial_seed_players(_active_player_dicts(), SeasonService.DEFAULT_START_YEAR)
@@ -562,11 +563,11 @@ func _on_regenerate_initial_players() -> void:
 	GameDb.load_initial_data()
 
 	if ok_players and ok_teams:
-		_finish_regen("完了: %d選手 / %d球団 (%d年後) を書き出しました。反映には再起動または新規ペナント開始を推奨。" % [
-			players.size(), teams.size(), int(report.get("end_year", 0)),
-		])
+		_finish_regen(Loc.t("options.regen.done", {
+			"players": players.size(), "teams": teams.size(), "years": int(report.get("end_year", 0)),
+		}))
 	else:
-		_finish_regen("CSV 書き出しに失敗しました（res:// が書込不可の可能性。エディタ/ソース実行時のみ可）。")
+		_finish_regen(Loc.t("options.regen.write_failed"))
 	_regen_seed = _random_seed()
 	if _seed_edit != null:
 		_seed_edit.text = str(_regen_seed)
@@ -615,7 +616,7 @@ func _team_dicts() -> Array:
 func _generate_distribution_graph() -> void:
 	if _dist_button != null:
 		_dist_button.disabled = true
-	_dist_status = "分布グラフ生成中…"
+	_dist_status = Loc.t("options.dist.running")
 	queue_redraw()
 
 	var keys: Array = AbilityDistributionChart.all_ability_keys()
@@ -647,9 +648,9 @@ func _generate_distribution_graph() -> void:
 	_dist_texture = ImageTexture.create_from_image(image)
 	_dist_size = chart_size
 	if save_ok:
-		_dist_status = "保存: %s (%d能力)" % [ProjectSettings.globalize_path(path), distributions.size()]
+		_dist_status = Loc.t("options.dist.saved", {"path": ProjectSettings.globalize_path(path), "count": distributions.size()})
 	else:
-		_dist_status = "画面表示のみ (PNG保存失敗: res:// 書込不可の可能性)"
+		_dist_status = Loc.t("options.dist.save_failed")
 	if _dist_button != null:
 		_dist_button.disabled = false
 	queue_redraw()
