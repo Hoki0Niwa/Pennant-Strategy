@@ -198,9 +198,9 @@ static func _slot_draft_need(chart: Dictionary, slot_key: String) -> float:
 
 static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "ドラフトは既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("draft.error.already_complete"), "state": state}
 	if not _is_candidate_available(state, candidate_id):
-		return {"ok": false, "message": "その候補は指名できません。", "state": state}
+		return {"ok": false, "message": Loc.t("draft.error.candidate_unavailable"), "state": state}
 
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var stage: String = str(state.get("stage", ""))
@@ -218,13 +218,13 @@ static func submit_user_candidate(state: Dictionary, candidate_id: int) -> Dicti
 	if stage == "user_pick":
 		var current_team_id: int = int(state.get("current_team_id", 0))
 		if current_team_id != user_team_id:
-			return {"ok": false, "message": "現在は自球団の指名順ではありません。", "state": state}
+			return {"ok": false, "message": Loc.t("draft.error.not_user_turn"), "state": state}
 		_make_pick(state, user_team_id, candidate_id, int(state.get("round", 2)), "user", false)
 		_consume_current_slot(state)
 		advance_until_user_turn_or_complete(state)
 		return {"ok": true, "state": state}
 
-	return {"ok": false, "message": "ドラフトは指名待ちではありません。", "state": state}
+	return {"ok": false, "message": Loc.t("draft.error.not_waiting_pick"), "state": state}
 
 
 static func auto_pick_for_user(state: Dictionary) -> Dictionary:
@@ -254,7 +254,7 @@ static func skip_user_pick(state: Dictionary) -> Dictionary:
 		return {"ok": true, "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if str(state.get("stage", "")) != "user_pick" or int(state.get("current_team_id", 0)) != user_team_id:
-		return {"ok": false, "message": "現在は自球団の指名順ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("draft.error.not_user_turn"), "state": state}
 	_mark_team_done(state, user_team_id)
 	_consume_current_slot(state)
 	advance_until_user_turn_or_complete(state)
@@ -718,7 +718,7 @@ static func _prepare_first_round_reveal(state: Dictionary) -> void:
 # 単独入札は確定、競合は抽選 (_resolve_first_round_wave が logs に lottery エントリを積む) で決まる。
 static func resolve_first_round_reveal(state: Dictionary) -> Dictionary:
 	if str(state.get("stage", "")) != "first_round_reveal":
-		return {"ok": false, "message": "現在は入札公開の段階ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("draft.error.not_reveal_stage"), "state": state}
 
 	var picks: Array = state.get("picks", []) as Array
 	var picks_before: int = picks.size()
@@ -744,7 +744,7 @@ static func resolve_first_round_reveal(state: Dictionary) -> Dictionary:
 # CPU のみの再入札を公開 (含まれない場合) へ進む。誰も残っていなければ1巡目を締めて次の巡へ進む。
 static func continue_first_round(state: Dictionary) -> Dictionary:
 	if str(state.get("stage", "")) != "first_round_result":
-		return {"ok": false, "message": "現在は結果確認の段階ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("draft.error.not_result_stage"), "state": state}
 
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var unresolved: Array = _active_first_round_unresolved(state)

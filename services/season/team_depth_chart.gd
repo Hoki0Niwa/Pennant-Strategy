@@ -273,18 +273,14 @@ static func _slot_of(chart: Dictionary, slot_key: String) -> Dictionary:
 	return (chart.get("slots", {}) as Dictionary).get(slot_key, {}) as Dictionary
 
 
-const FIELDER_SLOT_LABELS: Dictionary = {
-	2: "捕手", 3: "一塁", 4: "二塁", 5: "三塁", 6: "遊撃", 7: "左翼", 8: "中堅", 9: "右翼",
-}
-
-
 # スロットの表示名。UI 側で名前を作り直さないための単一ソース。
 static func slot_label(slot_key: String) -> String:
 	if slot_key == SLOT_STARTER:
-		return "先発"
+		return Loc.t("role.starter")
 	if slot_key == SLOT_RELIEVER:
-		return "救援"
-	return str(FIELDER_SLOT_LABELS.get(slot_position(slot_key), slot_key))
+		return Loc.t("role.reliever")
+	var position: int = slot_position(slot_key)
+	return PSPlayer.position_mid_name(position, slot_key) if position >= 2 and position <= 9 else slot_key
 
 
 # スロットの守備位置番号 (投手スロットは 1)。ポジション色の解決に使う。

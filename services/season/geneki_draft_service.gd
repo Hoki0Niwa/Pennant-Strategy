@@ -306,7 +306,7 @@ static func _validate_list(entries: Array, eligible: Array) -> Dictionary:
 		if bool((entry_row as Dictionary).get("exception", false)):
 			exception_count += 1
 	if exception_count > 1:
-		return {"ok": false, "message": "年俸5000万円以上の選手は1人までしかリストに入れられません"}
+		return {"ok": false, "message": Loc.t("geneki.error.high_salary_limit")}
 	var required: int = LIST_MIN
 	if exception_count > 0:
 		required = LIST_MIN_WITH_EXCEPTION
@@ -319,7 +319,7 @@ static func _validate_list(entries: Array, eligible: Array) -> Dictionary:
 			eligible_standard += 1
 	required = mini(required, eligible_standard + mini(1, eligible_exception))
 	if entries.size() < required:
-		return {"ok": false, "message": "リストは%d人以上必要です (年俸5000万円以上を含む場合は%d人以上)" % [LIST_MIN, LIST_MIN_WITH_EXCEPTION]}
+		return {"ok": false, "message": Loc.t("geneki.error.list_too_short", {"min": LIST_MIN, "min_with_exception": LIST_MIN_WITH_EXCEPTION})}
 	return {"ok": true}
 
 
@@ -327,7 +327,7 @@ static func _validate_list(entries: Array, eligible: Array) -> Dictionary:
 
 static func submit_user_list(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_ids: Array) -> Dictionary:
 	if str(state.get("phase", "")) != "submit":
-		return {"ok": false, "message": "リスト提出の段階ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.not_submit_phase"), "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var eligible: Array = _eligible_entries_for_team(players, user_team_id, season)
 	var entries: Array = []
@@ -339,7 +339,7 @@ static func submit_user_list(state: Dictionary, players: Array, teams: Array, se
 				found = (entry_row as Dictionary).duplicate(true)
 				break
 		if found.is_empty():
-			return {"ok": false, "message": "対象外の選手が含まれています (id=%d)" % player_id, "state": state}
+			return {"ok": false, "message": Loc.t("geneki.error.ineligible_player", {"id": player_id}), "state": state}
 		entries.append(found)
 	var validation: Dictionary = _validate_list(entries, eligible)
 	if not bool(validation.get("ok", false)):
@@ -354,7 +354,7 @@ static func submit_user_list(state: Dictionary, players: Array, teams: Array, se
 static func submit_user_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_id: int) -> Dictionary:
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if not bool(state.get("waiting_user", false)) or int(state.get("current_team_id", 0)) != user_team_id:
-		return {"ok": false, "message": "自軍の指名の手番ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.not_user_turn"), "state": state}
 	var phase: String = str(state.get("phase", ""))
 	var targets: Array = []
 	if phase == "round1":
@@ -362,10 +362,10 @@ static func submit_user_pick(state: Dictionary, players: Array, teams: Array, se
 	elif phase == "round2":
 		targets = round2_targets(state, user_team_id)
 	else:
-		return {"ok": false, "message": "指名の段階ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.not_pick_phase"), "state": state}
 	var entry: Dictionary = _find_entry(targets, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は指名できません", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.player_unavailable"), "state": state}
 	_apply_pick(state, teams, user_team_id, entry)
 	if phase == "round2":
 		state["round2_index"] = int(state.get("round2_index", 0)) + 1
@@ -376,10 +376,10 @@ static func submit_user_pick(state: Dictionary, players: Array, teams: Array, se
 static func pass_user_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if not bool(state.get("waiting_user", false)) or int(state.get("current_team_id", 0)) != user_team_id:
-		return {"ok": false, "message": "自軍の指名の手番ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.not_user_turn"), "state": state}
 	if str(state.get("phase", "")) != "round2":
-		return {"ok": false, "message": "1巡目の指名は棄権できません", "state": state}
-	_log(state, teams, "2巡目: %s は指名を見送り" % _team_name(teams, user_team_id))
+		return {"ok": false, "message": Loc.t("geneki.error.cannot_pass_round1"), "state": state}
+	_log(state, teams, Loc.t("geneki.log.round2_pass", {"team": _team_name(teams, user_team_id)}))
 	state["round2_index"] = int(state.get("round2_index", 0)) + 1
 	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
 
@@ -387,9 +387,9 @@ static func pass_user_pick(state: Dictionary, players: Array, teams: Array, seas
 # 2巡目の参加形態 (pick / offer_only / none) の選択。
 static func set_user_round2_mode(state: Dictionary, players: Array, teams: Array, season: PSSeason, mode: String) -> Dictionary:
 	if str(state.get("phase", "")) != "round2_entry":
-		return {"ok": false, "message": "2巡目の参加選択の段階ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.not_round2_entry_phase"), "state": state}
 	if not [ROUND2_MODE_PICK, ROUND2_MODE_OFFER_ONLY, ROUND2_MODE_NONE].has(mode):
-		return {"ok": false, "message": "不正な参加形態です", "state": state}
+		return {"ok": false, "message": Loc.t("geneki.error.invalid_entry_mode"), "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	(state["round2_participation"] as Dictionary)[str(user_team_id)] = mode
 	_begin_round2(state, teams)
@@ -469,7 +469,7 @@ static func _participants(state: Dictionary) -> Array:
 static func _begin_round1(state: Dictionary, _players: Array, teams: Array) -> void:
 	var participants: Array = _participants(state)
 	if participants.size() < 2:
-		_log(state, teams, "参加球団が不足しているため現役ドラフトは実施されませんでした")
+		_log(state, teams, Loc.t("geneki.log.not_held"))
 		_finish_event(state)
 		return
 
@@ -490,7 +490,7 @@ static func _begin_round1(state: Dictionary, _players: Array, teams: Array) -> v
 	state["votes"] = votes
 	state["vote_counts"] = vote_counts
 	state["phase"] = "round1"
-	_log(state, teams, "1巡目: 投票の結果、%s が最初の指名権を獲得" % _team_name(teams, _top_vote_team(state, participants)))
+	_log(state, teams, Loc.t("geneki.log.round1_first_pick", {"team": _team_name(teams, _top_vote_team(state, participants))}))
 
 
 static func _all_listed_entries_except(state: Dictionary, team_id: int) -> Array:
@@ -620,7 +620,7 @@ static func _cpu_pick_round1(state: Dictionary, teams: Array, picker_id: int) ->
 		(state["picked_round1"] as Dictionary)[str(picker_id)] = 0
 		(state["pick_order_log"] as Array).append(picker_id)
 		state["chain_next"] = 0
-		_log(state, teams, "1巡目: %s は指名できる選手がいませんでした" % _team_name(teams, picker_id))
+		_log(state, teams, Loc.t("geneki.log.round1_no_candidate", {"team": _team_name(teams, picker_id)}))
 		return
 	_apply_pick(state, teams, picker_id, _best_entry_for_team(state, picker_id, targets))
 
@@ -644,7 +644,9 @@ static func _apply_pick(state: Dictionary, teams: Array, picker_id: int, entry: 
 		state["chain_next"] = from_team_id
 	else:
 		(state["lost_round2"] as Dictionary)[str(from_team_id)] = int(entry.get("player_id", 0))
-	_log(state, teams, "%d巡目: %s が %s の %s を指名" % [round_no, _team_name(teams, picker_id), _team_name(teams, from_team_id), str(entry.get("name", ""))])
+	_log(state, teams, Loc.t("geneki.log.pick", {
+		"round": round_no, "team": _team_name(teams, picker_id), "from_team": _team_name(teams, from_team_id), "player": str(entry.get("name", "")),
+	}))
 
 
 # ============================================================ 2巡目
@@ -709,7 +711,7 @@ static func _begin_round2(state: Dictionary, teams: Array) -> void:
 	state["round2_index"] = 0
 	state["phase"] = "round2"
 	if order.is_empty():
-		_log(state, teams, "2巡目: 指名を希望する球団がなく終了")
+		_log(state, teams, Loc.t("geneki.log.round2_no_entry"))
 		_finish_event(state)
 
 
@@ -738,14 +740,14 @@ static func _cpu_pick_round2(state: Dictionary, players: Array, teams: Array, pi
 	var targets: Array = round2_targets(state, picker_id)
 	var best: Dictionary = _best_entry_for_team(state, picker_id, targets)
 	if best.is_empty() or _entry_score_for_team(state, picker_id, best) < ROUND2_PICK_MIN_SCORE:
-		_log(state, teams, "2巡目: %s は指名を見送り" % _team_name(teams, picker_id))
+		_log(state, teams, Loc.t("geneki.log.round2_pass", {"team": _team_name(teams, picker_id)}))
 		return
 	# 支配下枠の再確認 (2巡目の獲得は純増。同巡で放出済みなら差し引きゼロ)。
 	var net_gain: int = 1
 	if (state.get("lost_round2", {}) as Dictionary).has(str(picker_id)):
 		net_gain = 0
 	if TeamFinance.controlled_count(players, picker_id) + net_gain > TeamFinance.CONTROLLED_LIMIT:
-		_log(state, teams, "2巡目: %s は支配下枠が埋まっているため見送り" % _team_name(teams, picker_id))
+		_log(state, teams, Loc.t("geneki.log.round2_roster_full", {"team": _team_name(teams, picker_id)}))
 		return
 	_apply_pick(state, teams, picker_id, best)
 
@@ -761,7 +763,7 @@ static func _finish_event(state: Dictionary) -> void:
 
 static func finalize_geneki_draft(state: Dictionary, players: Array, _teams: Array, season: PSSeason) -> Dictionary:
 	if bool(state.get("finalized", false)):
-		return state.get("final_result", {"title": "現役ドラフト", "moves": []}) as Dictionary
+		return state.get("final_result", {"title": Loc.t("geneki.title"), "moves": []}) as Dictionary
 	var year: int = season.year if season != null else int(state.get("year", 0))
 	var moves: Array = []
 	var round1_count: int = 0
@@ -808,7 +810,7 @@ static func finalize_geneki_draft(state: Dictionary, players: Array, _teams: Arr
 		if int(move.get("from_team", 0)) == user_team_id:
 			user_lost += 1
 	var result: Dictionary = {
-		"title": "現役ドラフト",
+		"title": Loc.t("geneki.title"),
 		"moves": moves,
 		"moved_count": moves.size(),
 		"round1_count": round1_count,
@@ -844,7 +846,7 @@ static func _team_name(teams: Array, team_id: int) -> String:
 		var team: PSTeam = team_row as PSTeam
 		if team != null and team.id == team_id:
 			return team.name
-	return "球団%d" % team_id
+	return Loc.t("team.fallback_name", {"id": team_id})
 
 
 static func _log(state: Dictionary, _teams: Array, text: String) -> void:

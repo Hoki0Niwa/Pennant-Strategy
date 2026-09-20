@@ -4,7 +4,11 @@ extends RefCounted
 # 内部シミュレーションは current_day を使い、UI 表示や日程テンプレートは YYYY-MM-DD を使う。
 const SECONDS_PER_DAY: int = 86400
 const OPENING_MONTH: int = 3
-const JAPANESE_WEEKDAYS: Array = ["日", "月", "火", "水", "木", "金", "土"]
+# 曜日の表示名キー (Loc)。Time の weekday (0=日曜) の並び。
+const WEEKDAY_KEYS: Array = [
+	"weekday.sunday", "weekday.monday", "weekday.tuesday", "weekday.wednesday",
+	"weekday.thursday", "weekday.friday", "weekday.saturday",
+]
 
 
 # 開幕日は「3月最終金曜日」。25〜31日を後ろから探す。
@@ -98,7 +102,7 @@ static func label_for_date(date_text: String) -> String:
 		return date_text
 	var month: int = int(parts[1])
 	var day: int = int(parts[2])
-	return "%d/%d(%s)" % [month, day, weekday_label_for_date(date_text)]
+	return Loc.t("date.short_with_weekday", {"month": month, "day": day, "weekday": weekday_label_for_date(date_text)})
 
 
 static func compact_label_for_game(game: Dictionary, season: PSSeason = null) -> String:
@@ -121,7 +125,7 @@ static func weekday_for_date(date_text: String) -> int:
 
 
 static func weekday_label_for_date(date_text: String) -> String:
-	return str(JAPANESE_WEEKDAYS[weekday_for_date(date_text)])
+	return Loc.t(str(WEEKDAY_KEYS[weekday_for_date(date_text)]))
 
 
 static func _date_dict(date_text: String) -> Dictionary:

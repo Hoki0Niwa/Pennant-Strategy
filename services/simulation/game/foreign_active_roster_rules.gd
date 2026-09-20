@@ -56,13 +56,13 @@ static func is_within_limits(counts: Dictionary) -> bool:
 static func violation_message(counts: Dictionary) -> String:
 	var total: int = int(counts.get("foreigners", 0))
 	if total > TOTAL_MAX:
-		return "外国人枠は最大%d人です（現在%d人）" % [TOTAL_MAX, total]
+		return Loc.t("foreign_slot.total_over", {"max": TOTAL_MAX, "count": total})
 	var pitchers: int = int(counts.get("foreign_pitchers", 0))
 	if pitchers > TYPE_MAX:
-		return "外国人投手は最大%d人です（現在%d人）" % [TYPE_MAX, pitchers]
+		return Loc.t("foreign_slot.pitchers_over", {"max": TYPE_MAX, "count": pitchers})
 	var fielders: int = int(counts.get("foreign_fielders", 0))
 	if fielders > TYPE_MAX:
-		return "外国人野手は最大%d人です（現在%d人）" % [TYPE_MAX, fielders]
+		return Loc.t("foreign_slot.fielders_over", {"max": TYPE_MAX, "count": fielders})
 	return ""
 
 
@@ -70,8 +70,8 @@ static func add_block_message(counts: Dictionary, record: PSPlayerSeasonRecord) 
 	if record == null or not record.counts_toward_foreign_slot():
 		return ""
 	if int(counts.get("foreigners", 0)) >= TOTAL_MAX:
-		return "外国人枠は最大%d人です" % TOTAL_MAX
+		return Loc.t("foreign_slot.total_full", {"max": TOTAL_MAX})
 	var type_count: int = int(counts.get("foreign_pitchers" if record.is_pitcher() else "foreign_fielders", 0))
 	if type_count >= TYPE_MAX:
-		return "外国人%sは最大%d人です" % ["投手" if record.is_pitcher() else "野手", TYPE_MAX]
+		return Loc.t("foreign_slot.pitchers_full" if record.is_pitcher() else "foreign_slot.fielders_full", {"max": TYPE_MAX})
 	return ""

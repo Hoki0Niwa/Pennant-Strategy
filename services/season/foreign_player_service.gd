@@ -102,24 +102,24 @@ static func create_foreign_market_state(players: Array, teams: Array, season: PS
 static func _scout_phase_guard(state: Dictionary) -> Dictionary:
 	var phase: String = str(state.get("phase", "scout"))
 	if phase == "contract" or phase == "contract_result":
-		return {"ok": false, "message": "先に外国人契約市場を確定してください。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.contract_market_pending"), "state": state}
 	if phase == "scout_result":
-		return {"ok": false, "message": "外国人補強のスカウトは既に終了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.scout_finished"), "state": state}
 	return {}
 
 
 static func configure_user_scout_request(state: Dictionary, position: String, archetype: String, budget_band: String) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "外国人補強は既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.already_complete"), "state": state}
 	var phase_block: Dictionary = _scout_phase_guard(state)
 	if not phase_block.is_empty():
 		return phase_block
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var validation: Dictionary = _validated_request(position, archetype, budget_band)
 	if not bool(validation.get("ok", false)):
-		return {"ok": false, "message": str(validation.get("message", "スカウト条件が不正です。")), "state": state}
+		return {"ok": false, "message": str(validation.get("message", Loc.t("foreign.error.invalid_scout_request"))), "state": state}
 	_close_request_candidates(state, state.get("user_candidate_ids", []) as Array, true)
 	var request: Dictionary = {
 		"team_id": user_team_id,
@@ -139,31 +139,31 @@ static func configure_user_scout_request(state: Dictionary, position: String, ar
 
 static func submit_user_foreign_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "外国人補強は既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.already_complete"), "state": state}
 	var phase_block: Dictionary = _scout_phase_guard(state)
 	if not phase_block.is_empty():
 		return phase_block
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var candidate: Dictionary = _state_candidate_by_id(state, candidate_id)
 	if candidate.is_empty() or not bool(candidate.get("available", true)):
-		return {"ok": false, "message": "その外国人候補は選択できません。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.candidate_unavailable"), "state": state}
 	if int(candidate.get("request_team_id", user_team_id)) != user_team_id:
-		return {"ok": false, "message": "その候補は他球団向けのスカウト候補です。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.other_team_candidate"), "state": state}
 	if action == "skip":
 		candidate["user_skipped"] = true
 		candidate["available"] = false
 		_close_user_request_if_done(state)
 		return {"ok": true, "state": state}
 	if action != "sign":
-		return {"ok": false, "message": "不正な外国人補強操作です。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.invalid_action"), "state": state}
 	if not _can_team_sign_foreign(players, state, user_team_id):
-		return {"ok": false, "message": "支配下枠または外国人枠が不足しています。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.no_roster_room"), "state": state}
 	if not _can_team_afford_foreign(players, teams, user_team_id, candidate):
 		var team: PSTeam = _find_team_by_id(teams, user_team_id)
 		var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, user_team_id)) if team != null else 0
-		return {"ok": false, "message": "予算が不足しているため外国人選手を獲得できません(残額 %d万円 / 年俸 %d万円)。" % [room, int(candidate.get("salary", 0))], "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.over_budget", {"room": room, "salary": int(candidate.get("salary", 0))}), "state": state}
 	_apply_signing(state, players, teams, season, candidate, user_team_id, "user")
 	_close_request_candidates(state, state.get("user_candidate_ids", []) as Array, false)
 	state["user_request"] = {}
@@ -706,7 +706,7 @@ static func resolve_foreign_contract_market(state: Dictionary, players: Array, t
 # 契約市場の結果パネル ("次へ") から呼ばれ、phase を "contract_result" → "scout" へ進める。
 static func advance_foreign_contract_result(state: Dictionary) -> Dictionary:
 	if str(state.get("phase", "")) != "contract_result":
-		return {"ok": false, "message": "外国人契約市場の結果は表示されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.contract_result_not_shown"), "state": state}
 	state["phase"] = "scout"
 	return {"ok": true, "state": state}
 
@@ -714,7 +714,7 @@ static func advance_foreign_contract_result(state: Dictionary) -> Dictionary:
 # 外国人スカウトの結果パネル ("次へ") から呼ばれ、phase "scout_result" を経て complete を立てる。
 static func advance_foreign_scout_result(state: Dictionary) -> Dictionary:
 	if str(state.get("phase", "")) != "scout_result":
-		return {"ok": false, "message": "外国人補強の結果は表示されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.scout_result_not_shown"), "state": state}
 	state["complete"] = true
 	return {"ok": true, "state": state}
 
@@ -723,15 +723,15 @@ static func advance_foreign_scout_result(state: Dictionary) -> Dictionary:
 # 予算/枠は速報チェックのみで、最終確認は resolve_foreign_contract_market の採択時に再度行う。
 static func submit_user_contract_offer(state: Dictionary, players: Array, teams: Array, _season: PSSeason, player_id: int, years: int) -> Dictionary:
 	if str(state.get("phase", "contract")) != "contract":
-		return {"ok": false, "message": "外国人契約市場は既に終了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.contract_market_closed"), "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var entry: Dictionary = _contract_entry_by_player_id(state, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は外国人契約市場の対象ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.not_contract_target"), "state": state}
 	if bool(entry.get("resolved", false)):
-		return {"ok": false, "message": "その選手の契約市場は既に解決済みです。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.contract_resolved"), "state": state}
 	var home_team_id: int = int(entry.get("from_team_id", 0))
 	var is_home: bool = home_team_id == user_team_id
 	var target_player: PSPlayer = _find_player_by_id(players, player_id)
@@ -739,9 +739,9 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 		# 日本人扱いの外国人は外国人枠を埋めないので、枠が満杯でも引き抜ける (支配下70枠は消費する)。
 		var needs_slot: bool = target_player == null or target_player.counts_toward_foreign_slot()
 		if needs_slot and _foreign_count_for_team(players, user_team_id) >= MAX_FOREIGN_HELD_PER_TEAM:
-			return {"ok": false, "message": "外国人保有枠が不足しています。", "state": state}
+			return {"ok": false, "message": Loc.t("foreign.error.no_foreign_slot"), "state": state}
 		if _active_count_for_team(players, user_team_id) >= TeamFinance.CONTROLLED_LIMIT:
-			return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
+			return {"ok": false, "message": Loc.t("fa.error.no_roster_room"), "state": state}
 	var max_years: int = int(entry.get("max_years", 1))
 	var clamped_years: int = clampi(years, 1, maxi(1, max_years))
 	var base_salary: int = int(entry.get("market_salary", 0))
@@ -753,7 +753,7 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 	if is_home:
 		cost = maxi(0, salary - (target_player.salary if target_player != null else 0))
 	if not TeamFinance.can_afford_addition(players, team, cost):
-		return {"ok": false, "message": "予算が不足しているため提示できません。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.offer_over_budget"), "state": state}
 	entry["user_offer"] = {"team_id": user_team_id, "years": clamped_years, "salary": salary, "is_home": is_home}
 	return {"ok": true, "state": state}
 
@@ -761,7 +761,7 @@ static func submit_user_contract_offer(state: Dictionary, players: Array, teams:
 static func withdraw_user_contract_offer(state: Dictionary, player_id: int) -> Dictionary:
 	var entry: Dictionary = _contract_entry_by_player_id(state, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は外国人契約市場の対象ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("foreign.error.not_contract_target"), "state": state}
 	entry["user_offer"] = {}
 	return {"ok": true, "state": state}
 
@@ -934,16 +934,16 @@ static func scout_candidate_count(budget_band: String) -> int:
 
 static func _validated_request(position: String, archetype: String, budget_band: String) -> Dictionary:
 	if not REQUEST_POSITIONS.has(position):
-		return {"ok": false, "message": "希望ポジションが不正です。"}
+		return {"ok": false, "message": Loc.t("foreign.error.invalid_position")}
 	if not BUDGET_BANDS.has(budget_band):
-		return {"ok": false, "message": "予算帯が不正です。"}
+		return {"ok": false, "message": Loc.t("foreign.error.invalid_budget_band")}
 	var pitcher_request: bool = position == "starter" or position == "reliever"
 	if pitcher_request and not PITCHER_ARCHETYPES.has(archetype):
-		return {"ok": false, "message": "投手向けの選手タイプを選択してください。"}
+		return {"ok": false, "message": Loc.t("foreign.error.pitcher_type_required")}
 	if not pitcher_request and position != "any" and not FIELDER_ARCHETYPES.has(archetype):
-		return {"ok": false, "message": "野手向けの選手タイプを選択してください。"}
+		return {"ok": false, "message": Loc.t("foreign.error.fielder_type_required")}
 	if position == "any" and archetype != "balanced":
-		return {"ok": false, "message": "おまかせ検索ではバランス型を選択してください。"}
+		return {"ok": false, "message": Loc.t("foreign.error.any_requires_balanced")}
 	return {"ok": true}
 
 
@@ -1119,15 +1119,19 @@ static func _scouted_player_data(data: Dictionary, estimate_downside: int, estim
 
 
 static func _scout_comment(position: int, archetype: String, estimate_downside: int, estimate_upside: int) -> String:
-	var type_text: Dictionary = {
-		"balanced": "総合力型", "power": "長打力重視", "contact": "コンタクト重視",
-		"discipline": "選球眼重視", "speed_defense": "走守重視", "defense": "守備重視",
-		"strikeout": "奪三振力重視", "control": "制球力重視", "groundball": "ゴロを打たせるタイプ", "stamina": "持久力重視",
+	var type_keys: Dictionary = {
+		"balanced": "foreign.scout_type.balanced", "power": "foreign.scout_type.power", "contact": "foreign.scout_type.contact",
+		"discipline": "foreign.scout_type.discipline", "speed_defense": "foreign.scout_type.speed_defense", "defense": "foreign.scout_type.defense",
+		"strikeout": "foreign.scout_type.strikeout", "control": "foreign.scout_type.control", "groundball": "foreign.scout_type.groundball", "stamina": "foreign.scout_type.stamina",
 	}
-	var range_text: String = "表示値から-%d〜+%d" % [estimate_downside, estimate_upside]
+	var range_text: String = Loc.t("foreign.scout_range.both", {"down": estimate_downside, "up": estimate_upside})
 	if estimate_upside <= 0:
-		range_text = "表示値を上限に0〜-%d" % estimate_downside
-	return "%s。評価幅は%s。%s候補。" % [str(type_text.get(archetype, "バランス型")), range_text, "投手" if position == 1 else "野手"]
+		range_text = Loc.t("foreign.scout_range.down_only", {"down": estimate_downside})
+	return Loc.t("foreign.scout_comment", {
+		"type": Loc.t(str(type_keys.get(archetype, "foreign.scout_type.fallback"))),
+		"range": range_text,
+		"group": Loc.t("common.pitcher") if position == 1 else Loc.t("common.fielder"),
+	})
 
 
 static func _candidate_ids(candidates: Array) -> Array:

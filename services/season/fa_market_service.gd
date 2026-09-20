@@ -132,7 +132,7 @@ static func create_declaration_state(players: Array, teams: Array, season: PSSea
 		return int(da.get("player_id", 0)) < int(db.get("player_id", 0))
 	)
 	return {
-		"title": "FA宣言",
+		"title": Loc.t("fa.declaration_title"),
 		"year": year,
 		"entries": entries,
 		"holder_count": entries.size(),
@@ -202,15 +202,15 @@ static func create_fa_market_state(players: Array, _teams: Array, season: PSSeas
 
 static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String, offer_years: int = 0) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "FA市場は既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.already_complete"), "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var entry: Dictionary = _state_entry_by_player_id(state, candidate_id)
 	if entry.is_empty() or not bool(entry.get("available", true)):
-		return {"ok": false, "message": "そのFA候補は選択できません。", "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.candidate_unavailable"), "state": state}
 	if int(entry.get("from_team", 0)) == user_team_id:
-		return {"ok": false, "message": "自球団から宣言したFAは獲得対象にできません。", "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.own_declared_player"), "state": state}
 
 	if action == "skip":
 		entry["user_skipped"] = true
@@ -218,7 +218,7 @@ static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Ar
 		return {"ok": true, "state": state}
 
 	if action != "sign":
-		return {"ok": false, "message": "不正なFA操作です。", "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.invalid_action"), "state": state}
 	# ユーザー指定年数 (0=entry既定値のまま) は年齢上限でクランプして entry を上書きする。
 	# CPU経路 (auto_pick_for_user 含む) は offer_years=0 のまま呼ぶため entry 既定値を使う。
 	if offer_years > 0:
@@ -226,13 +226,13 @@ static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Ar
 		var candidate_age: int = candidate_player.age if candidate_player != null else int(entry.get("age", 0))
 		entry["offer_years"] = clampi(offer_years, 1, fa_offer_max_years(candidate_age))
 	if _signings_for_team(state, user_team_id) >= MAX_SIGNINGS_PER_TEAM:
-		return {"ok": false, "message": "今オフのFA獲得上限に達しています。", "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.signing_limit"), "state": state}
 	if not _can_team_accept_candidate(players, state, user_team_id, entry):
-		return {"ok": false, "message": "支配下枠が不足しています。", "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.no_roster_room"), "state": state}
 	if not _can_team_afford_candidate(players, teams, user_team_id, entry):
 		var team: PSTeam = _find_team_by_id(teams, user_team_id)
 		var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, user_team_id)) if team != null else 0
-		return {"ok": false, "message": "予算が不足しているためFA獲得できません(残額 %d万円 / 必要額 %d万円)。" % [room, _fa_cost(entry)], "state": state}
+		return {"ok": false, "message": Loc.t("fa.error.over_budget", {"room": room, "cost": _fa_cost(entry)}), "state": state}
 	var need: Dictionary = _build_position_need(players, teams)
 	var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 	var success_chance: float = _contract_success_chance(entry, team_need, "user")
@@ -244,7 +244,7 @@ static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Ar
 		entry["failed_for_user"] = true
 		_add_failed_negotiation(state, entry, user_team_id, "user", success_chance)
 		_advance_fa_state_if_done(state, players, teams, season)
-		return {"ok": true, "acquired": false, "message": "交渉はまとまりませんでした。", "state": state}
+		return {"ok": true, "acquired": false, "message": Loc.t("fa.negotiation_failed"), "state": state}
 	_advance_fa_state_if_done(state, players, teams, season)
 	return {"ok": true, "acquired": true, "state": state}
 
@@ -252,7 +252,7 @@ static func submit_user_fa_decision(state: Dictionary, players: Array, teams: Ar
 static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var best_id: int = 0
 	var best_score: float = -999999.0
 	for row in state.get("declared", []) as Array:

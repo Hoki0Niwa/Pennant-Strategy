@@ -62,26 +62,27 @@ const HEADER_H: float = 86.0
 const INNER_L: float = 262.0
 const INNER_R: float = 1900.0
 
+# title / label は表示名のキー (Loc)。
 const NAV_GROUPS: Array = [
-	{"title": "試合・情報", "items": [
-		{"id": "home", "label": "ホーム", "icon": "home"},
-		{"id": "game_results", "label": "試合結果", "icon": "results"},
-		{"id": "standings", "label": "順位表", "icon": "standings"},
-		{"id": "rankings", "label": "タイトル争い", "icon": "rankings"},
-		{"id": "ability_stats", "label": "能力・成績一覧", "icon": "record"},
-		{"id": "farm", "label": "ファーム情報", "icon": "farm"},
-		{"id": "history", "label": "シーズン履歴", "icon": "history"},
+	{"title": "nav.group.game_info", "items": [
+		{"id": "home", "label": "screen.home", "icon": "home"},
+		{"id": "game_results", "label": "screen.game_results", "icon": "results"},
+		{"id": "standings", "label": "screen.standings", "icon": "standings"},
+		{"id": "rankings", "label": "screen.rankings", "icon": "rankings"},
+		{"id": "ability_stats", "label": "screen.ability_stats", "icon": "record"},
+		{"id": "farm", "label": "screen.farm", "icon": "farm"},
+		{"id": "history", "label": "screen.history", "icon": "history"},
 	]},
-	{"title": "チーム・選手", "items": [
-		{"id": "team_detail", "label": "チーム詳細", "icon": "team"},
-		{"id": "player_detail", "label": "選手詳細", "icon": "player"},
-		{"id": "lineup_editor", "label": "打順・守備位置", "icon": "lineup"},
-		{"id": "rotation_editor", "label": "投手起用法", "icon": "pitch"},
-		{"id": "active_roster", "label": "選手登録", "icon": "swap"},
-		{"id": "trade", "label": "トレード", "icon": "hswap"},
+	{"title": "nav.group.team_players", "items": [
+		{"id": "team_detail", "label": "screen.team_detail", "icon": "team"},
+		{"id": "player_detail", "label": "screen.player_detail", "icon": "player"},
+		{"id": "lineup_editor", "label": "screen.lineup_editor", "icon": "lineup"},
+		{"id": "rotation_editor", "label": "screen.rotation_editor", "icon": "pitch"},
+		{"id": "active_roster", "label": "screen.active_roster", "icon": "swap"},
+		{"id": "trade", "label": "screen.trade", "icon": "hswap"},
 	]},
-	{"title": "設定・その他", "items": [
-		{"id": "options", "label": "オプション", "icon": "options"},
+	{"title": "nav.group.settings", "items": [
+		{"id": "options", "label": "screen.options", "icon": "options"},
 	]},
 ]
 
@@ -141,7 +142,7 @@ func _draw_shell(title: String, team: PSTeam, season: PSSeason) -> void:
 
 func _draw_sidebar() -> void:
 	_text("PennantStrategy", Vector2(20, 40), 22, TEXT)
-	_text("ペナント戦略シミュレーション", Vector2(21, 62), 11, MUTED)
+	_text(Loc.t("app.subtitle"), Vector2(21, 62), 11, MUTED)
 
 	var current: String = AppState.current_screen
 	for entry_value in _sidebar_entries:
@@ -181,7 +182,7 @@ func _draw_header(title: String, team: PSTeam, season: PSSeason) -> void:
 	_line(Vector2(x, 26), Vector2(x, 60), BORDER, 1.0)
 	x += 22.0
 	var date_text: String = _format_date_long(SeasonCalendar.current_date(season))
-	_text("%s    %d年目" % [date_text, season.season_number], Vector2(x, 52), 16, MUTED)
+	_text(Loc.t("header.date_and_season", {"date": date_text, "season": Loc.t("common.season_number", {"n": season.season_number})}), Vector2(x, 52), 16, MUTED)
 
 
 # ============================================================ sidebar layout
@@ -198,7 +199,7 @@ func _build_sidebar_layout() -> Array:
 		if not first:
 			y += 40
 		first = false
-		entries.append({"type": "title", "label": str(group["title"]), "y": y})
+		entries.append({"type": "title", "label": Loc.t(str(group["title"])), "y": y})
 		y += 14
 		for item_value in group["items"] as Array:
 			entries.append({"type": "item", "item": item_value, "rect": Rect2(12, y, SIDEBAR_W - 24, 38)})
@@ -215,7 +216,7 @@ func _build_nav_buttons() -> void:
 		var item: Dictionary = entry["item"] as Dictionary
 		var screen_name: String = str(item["id"])
 		var active: bool = screen_name == AppState.current_screen
-		_add_button("nav_%s" % screen_name, str(item["label"]), entry["rect"] as Rect2,
+		_add_button("nav_%s" % screen_name, Loc.t(str(item["label"])), entry["rect"] as Rect2,
 			func(target: String = screen_name) -> void: AppState.request_screen(target),
 			"nav_active" if active else "nav")
 
@@ -701,13 +702,15 @@ func _draw_data_table(rect: Rect2, columns: Array, rows: Array, opts: Dictionary
 		var content_w: float = _col_content_width(col, w, factor)
 		var header_delta_w: float = _growth_delta_width(col, factor)
 		var header_w: float = max(8.0, content_w - header_delta_w) if header_delta_w > 0.0 else content_w
+		# 列定義の title は Loc キーでも表示文字列でもよい (キーでなければそのまま出る)。
+		var col_title: String = Loc.t(str(col.get("title", "")))
 		match _col_align(col, default_align):
 			HORIZONTAL_ALIGNMENT_LEFT:
-				_text(str(col.get("title", "")), Vector2(cx + 4.0, hy), header_size, MUTED, header_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+				_text(col_title, Vector2(cx + 4.0, hy), header_size, MUTED, header_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 			HORIZONTAL_ALIGNMENT_CENTER:
-				_text(str(col.get("title", "")), Vector2(cx + 2.0, hy), header_size, MUTED, header_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+				_text(col_title, Vector2(cx + 2.0, hy), header_size, MUTED, header_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, true)
 			_:
-				_text_right(str(col.get("title", "")), cx + header_w - 4.0, hy, header_size, MUTED, header_w - 6.0, true)
+				_text_right(col_title, cx + header_w - 4.0, hy, header_size, MUTED, header_w - 6.0, true)
 		cx += w
 	var line_y: float = hy + 8.0
 	_line(Vector2(inner_x, line_y), Vector2(rect.end.x - inner_pad, line_y), BORDER, 1.5)
@@ -1206,8 +1209,8 @@ func _format_money(man_value: int) -> String:
 	var oku: int = int(float(man_value) / 10000.0)
 	var man: int = man_value - oku * 10000
 	if oku > 0:
-		return "%s億%s万円" % [_comma(oku), _comma(man)]
-	return "%s万円" % _comma(man)
+		return Loc.t("money.oku_man", {"oku": _comma(oku), "man": _comma(man)})
+	return Loc.t("money.man", {"man": _comma(man)})
 
 
 # 幅の狭い箇所 (SUMMARYパネル/12球団の予算一覧など) 向けの短縮表記 (例: 32000万円→3.2億)。
@@ -1215,8 +1218,8 @@ func _format_money(man_value: int) -> String:
 func _format_money_compact(man_value: int) -> String:
 	var abs_value: int = absi(man_value)
 	if abs_value >= 10000:
-		return "%.1f億" % (float(abs_value) / 10000.0)
-	return "%s万" % _comma(abs_value)
+		return Loc.t("money.oku_compact", {"oku": "%.1f" % (float(abs_value) / 10000.0)})
+	return Loc.t("money.man_compact", {"man": _comma(abs_value)})
 
 
 func _comma(value: int) -> String:
@@ -1233,12 +1236,12 @@ func _comma(value: int) -> String:
 
 func _format_date_long(date_text: String) -> String:
 	var d: Dictionary = _parse_date(date_text)
-	return "%d年 %d月%d日(%s)" % [
-		int(d.get("year", 0)),
-		int(d.get("month", 0)),
-		int(d.get("day", 0)),
-		SeasonCalendar.weekday_label_for_date(date_text),
-	]
+	return Loc.t("date.long_with_weekday", {
+		"year": int(d.get("year", 0)),
+		"month": int(d.get("month", 0)),
+		"day": int(d.get("day", 0)),
+		"weekday": SeasonCalendar.weekday_label_for_date(date_text),
+	})
 
 
 func _parse_date(date_text: String) -> Dictionary:

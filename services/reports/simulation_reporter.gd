@@ -1266,7 +1266,7 @@ func _team_name(team_id: int) -> String:
 
 
 func _position_name(position: int) -> String:
-	return str(PSPlayer.POSITION_NAMES.get(position, "不明"))
+	return PSPlayer.position_name(position, "不明")
 
 
 func _role_or_position_name(record: PSPlayerSeasonRecord) -> String:

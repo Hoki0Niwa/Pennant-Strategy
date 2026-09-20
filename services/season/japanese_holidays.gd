@@ -14,25 +14,25 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 const WEEKDAY_SUNDAY: int = 0
 const WEEKDAY_MONDAY: int = 1
 
-# {month, day, name} の固定日祝日。
+# {month, day, name} の固定日祝日。name は祝日名のキー (Loc)。
 const FIXED_HOLIDAYS: Array = [
-	{"month": 1, "day": 1, "name": "元日"},
-	{"month": 2, "day": 11, "name": "建国記念の日"},
-	{"month": 2, "day": 23, "name": "天皇誕生日"},
-	{"month": 5, "day": 3, "name": "憲法記念日"},
-	{"month": 5, "day": 4, "name": "みどりの日"},
-	{"month": 5, "day": 5, "name": "こどもの日"},
-	{"month": 8, "day": 11, "name": "山の日"},
-	{"month": 11, "day": 3, "name": "文化の日"},
-	{"month": 11, "day": 23, "name": "勤労感謝の日"},
+	{"month": 1, "day": 1, "name": "holiday.new_year"},
+	{"month": 2, "day": 11, "name": "holiday.foundation_day"},
+	{"month": 2, "day": 23, "name": "holiday.emperor_birthday"},
+	{"month": 5, "day": 3, "name": "holiday.constitution_day"},
+	{"month": 5, "day": 4, "name": "holiday.greenery_day"},
+	{"month": 5, "day": 5, "name": "holiday.children_day"},
+	{"month": 8, "day": 11, "name": "holiday.mountain_day"},
+	{"month": 11, "day": 3, "name": "holiday.culture_day"},
+	{"month": 11, "day": 23, "name": "holiday.labor_thanksgiving_day"},
 ]
 
 # {month, nth, name} の「第n月曜」祝日 (ハッピーマンデー制度)。
 const HAPPY_MONDAY_HOLIDAYS: Array = [
-	{"month": 1, "nth": 2, "name": "成人の日"},
-	{"month": 7, "nth": 3, "name": "海の日"},
-	{"month": 9, "nth": 3, "name": "敬老の日"},
-	{"month": 10, "nth": 2, "name": "スポーツの日"},
+	{"month": 1, "nth": 2, "name": "holiday.coming_of_age_day"},
+	{"month": 7, "nth": 3, "name": "holiday.marine_day"},
+	{"month": 9, "nth": 3, "name": "holiday.respect_for_aged_day"},
+	{"month": 10, "nth": 2, "name": "holiday.sports_day"},
 ]
 
 
@@ -40,7 +40,7 @@ static func is_holiday(date_text: String) -> bool:
 	return holidays_for_year(_year_of(date_text)).has(date_text)
 
 
-# date_text -> 祝日名。振替休日を含む。
+# date_text -> 祝日名のキー (Loc)。振替休日を含む。
 static func holidays_for_year(year: int) -> Dictionary:
 	var base: Dictionary = _base_holidays_for_year(year)
 	var combined: Dictionary = base.duplicate()
@@ -55,7 +55,7 @@ static func holidays_for_year(year: int) -> Dictionary:
 		while combined.has(candidate) and guard < 10:
 			candidate = SeasonCalendar.add_days(candidate, 1)
 			guard += 1
-		combined[candidate] = "振替休日"
+		combined[candidate] = "holiday.substitute"
 
 	return combined
 
@@ -69,8 +69,8 @@ static func _base_holidays_for_year(year: int) -> Dictionary:
 		var entry: Dictionary = entry_value as Dictionary
 		var date_text: String = SeasonCalendar.nth_weekday_of_month(year, int(entry.get("month", 1)), WEEKDAY_MONDAY, int(entry.get("nth", 1)))
 		holidays[date_text] = str(entry.get("name", ""))
-	holidays[_date_string(year, 3, _vernal_equinox_day(year))] = "春分の日"
-	holidays[_date_string(year, 9, _autumnal_equinox_day(year))] = "秋分の日"
+	holidays[_date_string(year, 3, _vernal_equinox_day(year))] = "holiday.vernal_equinox_day"
+	holidays[_date_string(year, 9, _autumnal_equinox_day(year))] = "holiday.autumnal_equinox_day"
 	return holidays
 
 

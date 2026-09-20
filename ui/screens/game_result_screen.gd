@@ -7,13 +7,11 @@ extends "res://ui/components/dashboard_screen.gd"
 const GameLogService = preload("res://services/storage/game_log_service.gd")
 const BoxScoreBuilder = preload("res://services/reports/box_score_builder.gd")
 
-const POSITION_LABELS: Dictionary = {
-	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右", 10: "指",
-}
-
+# 交代種別の表示名キー (Loc)。
 const SUB_KIND_LABELS: Dictionary = {
-	"pitching": "投手交代", "pinch_hit": "代打", "pinch_run": "代走", "defense": "守備固め",
-	"position_change": "守備位置変更",
+	"pitching": "game_result.sub.pitching", "pinch_hit": "game_log.appearance.pinch_hit",
+	"pinch_run": "game_log.appearance.pinch_run", "defense": "game_result.sub.defense",
+	"position_change": "game_result.sub.position_change",
 }
 
 # --- レイアウト基準 (base 座標) ---
@@ -41,36 +39,36 @@ const PITCH_RECT: Rect2 = Rect2(622, 720, 1278, 340)
 
 # 打席結果グリッドの固定列 (守備/選手/利/打数/安打/打点/通算率/HR)。残りをイニングへ割る。
 const BOX_FIXED: Array = [
-	{"key": "pos",  "label": "守",   "w": 46.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "name", "label": "選手", "w": 94.0,  "align": HORIZONTAL_ALIGNMENT_LEFT},
-	{"key": "bats", "label": "",     "w": 26.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "ab",   "label": "打",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "h",    "label": "安",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "rbi",  "label": "点",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "avg",  "label": "率",   "w": 48.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "pos",  "label": "box.col.pos",  "w": 46.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
+	{"key": "name", "label": "col.player",   "w": 94.0,  "align": HORIZONTAL_ALIGNMENT_LEFT},
+	{"key": "bats", "label": "",             "w": 26.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
+	{"key": "ab",   "label": "box.col.ab",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "h",    "label": "box.col.h",    "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "rbi",  "label": "box.col.rbi",  "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "avg",  "label": "box.col.avg",  "w": 48.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
 	{"key": "hr",   "label": "HR",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
 ]
 
 # 投手成績の列 (両チーム1表)。
 const PITCH_COLS: Array = [
-	{"key": "team",    "label": "チーム", "w": 64.0,  "align": HORIZONTAL_ALIGNMENT_LEFT},
-	{"key": "mark",    "label": "",       "w": 28.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "name",    "label": "投手",   "w": 150.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
-	{"key": "throws",  "label": "",       "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "w",       "label": "勝",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "l",       "label": "敗",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "s",       "label": "S",      "w": 36.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "g",       "label": "試",     "w": 44.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "ip",      "label": "回数",   "w": 56.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "bf",      "label": "打者",   "w": 48.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "pitches", "label": "球数",   "w": 52.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "h",       "label": "安",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "k",       "label": "三",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "bb",      "label": "四",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "hbp",     "label": "死",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "r",       "label": "失",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "er",      "label": "自",     "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "era",     "label": "防御率", "w": 60.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "team",    "label": "box.col.team",     "w": 64.0,  "align": HORIZONTAL_ALIGNMENT_LEFT},
+	{"key": "mark",    "label": "",                 "w": 28.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
+	{"key": "name",    "label": "common.pitcher",   "w": 150.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
+	{"key": "throws",  "label": "",                 "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
+	{"key": "w",       "label": "col.wins",         "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "l",       "label": "col.losses",       "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "s",       "label": "S",                "w": 36.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "g",       "label": "col.games_short",  "w": 44.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "ip",      "label": "box.col.ip",       "w": 56.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "bf",      "label": "box.col.bf",       "w": 48.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "pitches", "label": "box.col.pitches",  "w": 52.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "h",       "label": "box.col.h",        "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "k",       "label": "box.col.k",        "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "bb",      "label": "box.col.bb",       "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "hbp",     "label": "box.col.hbp",      "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "r",       "label": "col.runs_allowed", "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "er",      "label": "box.col.er",       "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+	{"key": "era",     "label": "stat.era",         "w": 60.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
 ]
 
 const LIST_ROW_H: float = 40.0
@@ -201,12 +199,12 @@ func _draw() -> void:
 		_draw_empty()
 		return
 
-	_draw_shell("試合結果", team, season)
+	_draw_shell(Loc.t("screen.game_results"), team, season)
 	_draw_game_list(season)
 
 	if _selected_index < 0 or _cur_game.is_empty():
 		_round(Rect2(RIGHT_X, TOP_Y, INNER_R - RIGHT_X, 956), PANEL, BORDER, 10)
-		_text("試合を選択してください", Vector2(RIGHT_X + 40, TOP_Y + 80), 18, MUTED)
+		_text(Loc.t("game_result.select_game"), Vector2(RIGHT_X + 40, TOP_Y + 80), 18, MUTED)
 		return
 
 	_draw_line_score(SCORE_RECT)
@@ -218,7 +216,7 @@ func _draw() -> void:
 
 func _draw_empty() -> void:
 	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-	_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+	_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 
 
 # --- 左カラム: 月別タブ + 試合一覧 ---
@@ -230,15 +228,15 @@ func _draw_game_list(_season: PSSeason) -> void:
 	var games: Array = _month_games()
 	var header_y: float = rect.position.y + 30
 	if _months.is_empty():
-		_text("試合がありません", Vector2(rect.position.x + 16, header_y + 30), 14, MUTED)
+		_text(Loc.t("game_result.no_games"), Vector2(rect.position.x + 16, header_y + 30), 14, MUTED)
 		return
 	var month: Dictionary = _months[_sel_month] as Dictionary
-	_text("%d年 %s" % [int(month["year"]), str(month["label"])], Vector2(rect.position.x + 16, header_y), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("%d試合" % games.size(), rect.end.x - 16, header_y, 12, MUTED, 80)
+	_text(Loc.t("game_result.month_header", {"year": int(month["year"]), "month": str(month["label"])}), Vector2(rect.position.x + 16, header_y), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("common.games_value", {"n": games.size()}), rect.end.x - 16, header_y, 12, MUTED, 80)
 	_line(Vector2(rect.position.x + 14, header_y + 12), Vector2(rect.end.x - 14, header_y + 12), BORDER_SOFT, 1.0)
 
 	if games.is_empty():
-		_text("この月の試合はありません", Vector2(rect.position.x + 16, header_y + 44), 13, MUTED)
+		_text(Loc.t("game_result.no_games_in_month"), Vector2(rect.position.x + 16, header_y + 44), 13, MUTED)
 		return
 
 	var visible_count: int = _list_visible_rows()
@@ -298,7 +296,7 @@ func _draw_list_row(rect: Rect2, game: Dictionary) -> void:
 # --- 上段: イニングスコア ---
 
 func _draw_line_score(rect: Rect2) -> void:
-	_panel(rect, "イニングスコア")
+	_panel(rect, Loc.t("game_result.line_score"))
 	var game: Dictionary = _cur_game
 	var innings: Array = _line_score_innings(game, _cur_log)
 	var inning_count: int = max(9, innings.size())
@@ -372,22 +370,22 @@ func _array_value(value: Variant) -> Array:
 # --- 上段: サマリー (勝敗投手 + 記録) ---
 
 func _draw_summary(rect: Rect2) -> void:
-	_panel(rect, "サマリー")
+	_panel(rect, Loc.t("game_result.summary"))
 	var result: Dictionary = _cur_game.get("result", {}) as Dictionary
 	var ox: float = rect.position.x + 18.0
 	var y: float = rect.position.y + 70.0
 
 	if bool(result.get("draw", false)):
-		_text("引き分け", Vector2(ox, y), 16, AMBER)
+		_text(Loc.t("game_result.draw"), Vector2(ox, y), 16, AMBER)
 	else:
 		var win_id: int = int(result.get("winning_pitcher_id", 0))
 		var loss_id: int = int(result.get("losing_pitcher_id", 0))
 		var save_id: int = int(result.get("save_pitcher_id", 0))
 		var holds: Array = result.get("hold_pitcher_ids", []) as Array
 		# 勝/敗/S を横並びチップ風に
-		_text("勝", Vector2(ox, y), 13, GREEN, 22)
+		_text(Loc.t("col.wins"), Vector2(ox, y), 13, GREEN, 22)
 		_text(_pitcher_label(win_id), Vector2(ox + 26, y), 14, TEXT, 240)
-		_text("敗", Vector2(ox + 320, y), 13, RED, 22)
+		_text(Loc.t("col.losses"), Vector2(ox + 320, y), 13, RED, 22)
 		_text(_pitcher_label(loss_id), Vector2(ox + 346, y), 14, TEXT, 280)
 		y += 30
 		if save_id > 0:
@@ -398,23 +396,24 @@ func _draw_summary(rect: Rect2) -> void:
 			for pid in holds:
 				labels.append(_player_name(int(pid)))
 			_text("H", Vector2(ox + 320, y), 13, BLUE, 22)
-			_text("、".join(labels), Vector2(ox + 346, y), 13, MUTED, 280)
+			_text(Loc.t("common.list_separator").join(PackedStringArray(labels)), Vector2(ox + 346, y), 13, MUTED, 280)
 		y += 30
 
 	_line(Vector2(ox, y - 6), Vector2(rect.end.x - 18, y - 6), BORDER_SOFT, 1.0)
 
 	var hr: Array = _records.get("hr", []) as Array
 	var errors: Array = _records.get("errors", []) as Array
-	_text("◇本塁打", Vector2(ox, y + 18), 12, MUTED, 70)
-	_text("　".join(hr) if not hr.is_empty() else "なし", Vector2(ox + 76, y + 18), 12, TEXT, rect.size.x - 110)
-	_text("◇失策", Vector2(ox, y + 44), 12, MUTED, 70)
-	_text("　".join(errors) if not errors.is_empty() else "なし", Vector2(ox + 76, y + 44), 12, TEXT, rect.size.x - 110)
+	var record_separator: String = Loc.t("game_result.record_separator")
+	_text(Loc.t("game_result.home_runs"), Vector2(ox, y + 18), 12, MUTED, 70)
+	_text(record_separator.join(PackedStringArray(hr)) if not hr.is_empty() else Loc.t("common.none"), Vector2(ox + 76, y + 18), 12, TEXT, rect.size.x - 110)
+	_text(Loc.t("game_result.errors"), Vector2(ox, y + 44), 12, MUTED, 70)
+	_text(record_separator.join(PackedStringArray(errors)) if not errors.is_empty() else Loc.t("common.none"), Vector2(ox + 76, y + 44), 12, TEXT, rect.size.x - 110)
 
 
 # --- 中段: 打席結果 (ボックススコア) ---
 
 func _draw_box_score(rect: Rect2) -> void:
-	var label: String = "打席結果（%s）" % ("ホーム" if _box_home else "ビジター")
+	var label: String = Loc.t("game_result.box_score", {"side": Loc.t("home.side_home") if _box_home else Loc.t("home.side_visitor")})
 	_panel(rect, label)
 	# ビジター/ホーム切替チップは _build_buttons で配置。
 
@@ -444,7 +443,7 @@ func _draw_box_score(rect: Rect2) -> void:
 	var cx: float = ix
 	for c_value in BOX_FIXED:
 		var c: Dictionary = c_value as Dictionary
-		_text(str(c["label"]), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
+		_text(Loc.t(str(c["label"])), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
 		cx += float(c["w"])
 	var grid_x: float = cx
 	# 守備/選手/利き腕(識別ブロック) と 打数以降(成績ブロック) の境界。
@@ -487,8 +486,8 @@ func _draw_box_score(rect: Rect2) -> void:
 		var ry: float = top + float(rows.size()) * row_h
 		var ty: float = ry + row_h * 0.5 + 4.0
 		var total_row: Dictionary = {
-			"pos": "計",
-			"name": "併殺 %d" % int(totals.get("gidp", 0)),
+			"pos": Loc.t("box.total"),
+			"name": Loc.t("box.double_plays", {"n": int(totals.get("gidp", 0))}),
 			"bats": "",
 			"ab": int(totals.get("ab", 0)),
 			"h": int(totals.get("h", 0)),
@@ -539,15 +538,15 @@ func _draw_box_row(row: Dictionary, ix: float, _fixed_w: float, inn_w: float, co
 # --- 中段: 交代 ---
 
 func _draw_subs(rect: Rect2) -> void:
-	_panel(rect, "交代")
+	_panel(rect, Loc.t("game_result.substitutions"))
 	var ox: float = rect.position.x + 16.0
 	var hy: float = rect.position.y + 60.0
 	var cols: Array = [
-		{"label": "回", "x": ox, "w": 52.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
-		{"label": "種別", "x": ox + 56.0, "w": 74.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
+		{"label": Loc.t("game_result.sub_col.inning"), "x": ox, "w": 52.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
+		{"label": Loc.t("game_result.sub_col.kind"), "x": ox + 56.0, "w": 74.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
 		{"label": "OUT", "x": ox + 134.0, "w": 130.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
 		{"label": "→ IN", "x": ox + 270.0, "w": 150.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
-		{"label": "守", "x": rect.end.x - 50.0, "w": 34.0, "align": HORIZONTAL_ALIGNMENT_CENTER},
+		{"label": Loc.t("box.col.pos"), "x": rect.end.x - 50.0, "w": 34.0, "align": HORIZONTAL_ALIGNMENT_CENTER},
 	]
 	for c_value in cols:
 		var c: Dictionary = c_value as Dictionary
@@ -555,7 +554,7 @@ func _draw_subs(rect: Rect2) -> void:
 	_line(Vector2(ox, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER_SOFT, 1.0)
 
 	if _subs.is_empty():
-		_text("交代はありませんでした", Vector2(ox, hy + 40), 13, MUTED)
+		_text(Loc.t("game_result.no_substitutions"), Vector2(ox, hy + 40), 13, MUTED)
 		return
 
 	var top: float = hy + 18.0
@@ -568,16 +567,16 @@ func _draw_subs(rect: Rect2) -> void:
 		var team_dot: Color = team.color if team != null else MUTED
 		_dot(Vector2(ox + 4, ty - 4), 3, team_dot)
 		_text(_half_label(int(entry.get("inning", 0)), str(entry.get("half", ""))), Vector2(ox + 12, ty), 12, MUTED, 44)
-		_text(str(SUB_KIND_LABELS.get(str(entry.get("kind", "")), "")), Vector2(ox + 56.0, ty), 12, TEXT, 74)
+		_text(Loc.t(str(SUB_KIND_LABELS.get(str(entry.get("kind", "")), ""))), Vector2(ox + 56.0, ty), 12, TEXT, 74)
 		_text(_player_name(int(entry.get("out_id", 0))), Vector2(ox + 134.0, ty), 12, MUTED, 130)
 		_text("→ %s" % _player_name(int(entry.get("in_id", 0))), Vector2(ox + 270.0, ty), 12, TEXT, 150)
-		_text(str(POSITION_LABELS.get(pos, "")) if pos > 0 else "", Vector2(rect.end.x - 50.0, ty), 12, MUTED, 34, HORIZONTAL_ALIGNMENT_CENTER)
+		_text(BoxScoreBuilder.position_char(pos) if pos > 0 else "", Vector2(rect.end.x - 50.0, ty), 12, MUTED, 34, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 # --- 下段: 投手成績 ---
 
 func _draw_pitching(rect: Rect2) -> void:
-	_panel(rect, "投手成績")
+	_panel(rect, Loc.t("game_result.pitching"))
 	var rows: Array = _pitching.get("rows", []) as Array
 	var ix: float = rect.position.x + 18.0
 	var hy: float = rect.position.y + 60.0
@@ -591,12 +590,12 @@ func _draw_pitching(rect: Rect2) -> void:
 		var c: Dictionary = c_value as Dictionary
 		if str(c["key"]) in ["w", "g", "h", "era"] and cx > ix:
 			sep_xs.append(cx)
-		_text(str(c["label"]), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
+		_text(Loc.t(str(c["label"])), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
 		cx += float(c["w"])
 	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 18, hy + 8), BORDER, 1.5)
 
 	if rows.is_empty():
-		_text("投手成績がありません", Vector2(ix, hy + 40), 13, MUTED)
+		_text(Loc.t("game_result.no_pitching"), Vector2(ix, hy + 40), 13, MUTED)
 		return
 
 	var top: float = hy + 16.0
@@ -625,14 +624,17 @@ func _draw_pitching(rect: Rect2) -> void:
 					txt = _team_short(tid)
 					col = MUTED
 				"mark":
-					var raw: String = str(row.get("mark", ""))
-					if raw == "○" or raw == "●":
+					var mark_id: String = str(row.get("mark", ""))
+					if mark_id == BoxScoreBuilder.MARK_WIN or mark_id == BoxScoreBuilder.MARK_LOSS:
 						# 勝利投手=白丸 / 敗戦投手=黒丸+白縁。テキストは描かない。
-						_draw_result_mark(Vector2(cx2 + w * 0.5, ty - 4), 5.0, raw, TEXT)
+						_draw_result_mark(Vector2(cx2 + w * 0.5, ty - 4), 5.0, "○" if mark_id == BoxScoreBuilder.MARK_WIN else "●", TEXT)
 						txt = ""
-					else:
-						txt = raw  # Ｓ / Ｈ / なし
-						col = _mark_color(raw)
+					elif mark_id == BoxScoreBuilder.MARK_SAVE:
+						txt = Loc.t("box.mark.save")
+						col = AMBER
+					elif mark_id == BoxScoreBuilder.MARK_HOLD:
+						txt = Loc.t("box.mark.hold")
+						col = BLUE
 				"throws":
 					var th: String = str(row.get("throws", ""))
 					txt = "(%s)" % th if not th.is_empty() else ""
@@ -648,15 +650,6 @@ func _draw_pitching(rect: Rect2) -> void:
 		_line(Vector2(ix, ry + row_h), Vector2(rect.end.x - 18, ry + row_h), HAIRLINE, 1.0)
 
 
-# 白星 (○) / 黒星 (●) は白字。引分 (△) は fallback (試合結果色)。投手の S/H はアンバー/青。
-func _mark_color(mark: String, fallback: Color = TEXT) -> Color:
-	match mark:
-		"○", "●": return TEXT
-		"Ｓ": return AMBER
-		"Ｈ": return BLUE
-	return fallback
-
-
 # ============================================================ buttons
 
 func _build_buttons() -> void:
@@ -664,7 +657,7 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
@@ -672,7 +665,7 @@ func _build_buttons() -> void:
 
 	# ヘッダ右: 表示チーム切替
 	var view_team: PSTeam = GameDb.get_team(_view_team_id)
-	var team_label: String = "表示: %s ▾" % (view_team.short_name if view_team != null else "-")
+	var team_label: String = Loc.t("game_result.view_team", {"team": view_team.short_name if view_team != null else "-"})
 	_team_button = _add_button("view_team", team_label, Rect2(1660, 22, 240, 42), _on_team_button_pressed, "action")
 
 	# 月タブ (左カラム上部に横並び、はみ出したら折り返す。一覧パネルはタブ下端から始まる)
@@ -757,7 +750,7 @@ func _reload_for_team() -> void:
 	_ps_games_for_view = _collect_ps_games(_view_team_id)
 	if not _ps_games_for_view.is_empty():
 		var season: PSSeason = AppState.current_season
-		_months.append({"year": season.year if season != null else 0, "key": "postseason", "label": "ポストシーズン"})
+		_months.append({"year": season.year if season != null else 0, "key": "postseason", "label": Loc.t("postseason.title")})
 	_list_scroll = 0
 	if _months.is_empty():
 		_sel_month = 0
@@ -813,7 +806,7 @@ func _build_ps_entry(stage_key: String, game: Dictionary) -> Dictionary:
 		"innings": result.get("innings", []) as Array,
 		"result": result,
 		"played": true,
-		"ps_label": "%s 第%d戦" % [_ps_stage_short(stage_key), int(game.get("game_num", 0))],
+		"ps_label": Loc.t("game_result.ps_game_label", {"stage": _ps_stage_short(stage_key), "n": int(game.get("game_num", 0))}),
 	}
 	return {
 		"stage_key": stage_key,
@@ -825,11 +818,11 @@ func _build_ps_entry(stage_key: String, game: Dictionary) -> Dictionary:
 
 func _ps_stage_short(stage_key: String) -> String:
 	match stage_key:
-		"cs1_league1": return "CS1 第1L"
-		"cs1_league2": return "CS1 第2L"
-		"cs2_league1": return "CSF 第1L"
-		"cs2_league2": return "CSF 第2L"
-		"japan_series": return "日本S"
+		"cs1_league1": return Loc.t("game_result.ps_stage.cs1_league1")
+		"cs1_league2": return Loc.t("game_result.ps_stage.cs1_league2")
+		"cs2_league1": return Loc.t("game_result.ps_stage.cs2_league1")
+		"cs2_league2": return Loc.t("game_result.ps_stage.cs2_league2")
+		"japan_series": return Loc.t("game_result.ps_stage.japan_series")
 	return stage_key
 
 
@@ -859,8 +852,8 @@ func _bucket_for_date(date_text: String) -> Dictionary:
 	var year: int = int(parts[0])
 	var month: int = int(parts[1])
 	if month == 3 or month == 4:
-		return {"year": year, "key": "%d-0304" % year, "label": "3・4月"}
-	return {"year": year, "key": "%d-%02d" % [year, month], "label": "%d月" % month}
+		return {"year": year, "key": "%d-0304" % year, "label": Loc.t("date.march_april")}
+	return {"year": year, "key": "%d-%02d" % [year, month], "label": Loc.t("date.month", {"month": month})}
 
 
 func _build_months(games: Array) -> Array:
@@ -1043,7 +1036,7 @@ func _game_color(game: Dictionary) -> Color:
 
 
 func _half_label(inning: int, half: String) -> String:
-	return "%d%s" % [inning, "表" if half == "top" else "裏"]
+	return Loc.t("game_result.inning_top" if half == "top" else "game_result.inning_bottom", {"n": inning})
 
 
 func _team_short(team_id: int) -> String:
@@ -1063,13 +1056,13 @@ func _player_name(player_id: int) -> String:
 
 func _pitcher_label(pitcher_id: int) -> String:
 	if pitcher_id <= 0:
-		return "不明"
+		return Loc.t("common.unknown")
 	var season: PSSeason = AppState.current_season
 	if season == null:
-		return "不明"
+		return Loc.t("common.unknown")
 	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(pitcher_id, season.year, season.season_number)
 	if record == null:
-		return "不明"
+		return Loc.t("common.unknown")
 	return "%s (%d-%d)" % [record.name, record.pitcher_stats.wins, record.pitcher_stats.losses]
 
 

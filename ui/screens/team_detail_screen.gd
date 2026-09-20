@@ -18,12 +18,6 @@ extends "res://ui/components/dashboard_screen.gd"
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-# 打順表示用の短いポジション名。
-const POS_SHORT: Dictionary = {
-	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三",
-	6: "遊", 7: "左", 8: "中", 9: "右", 10: "DH",
-}
-
 # --- レイアウト基準 (base 座標) ---
 # ヘッダ (shell) は y=0..86。識別バーはその下に十分余白を取り、球団名が上へ飛び出さないようにする。
 const ID_Y: float = 116.0                 # 識別バーの縦中心
@@ -131,15 +125,15 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 		return
 
 	var team: PSTeam = GameDb.get_team(_team_id)
 	if your_team == null:
 		your_team = team
-	_draw_shell("チーム詳細", your_team, season)
+	_draw_shell(Loc.t("screen.team_detail"), your_team, season)
 	if team == null:
-		_text("チーム情報が取得できません", Vector2(INNER_L, 300), 20, MUTED)
+		_text(Loc.t("error.team_not_found"), Vector2(INNER_L, 300), 20, MUTED)
 		return
 
 	_draw_identity(team)
@@ -168,7 +162,7 @@ func _draw_identity(team: PSTeam) -> void:
 	var cx: float = nx + 28.0
 	_chip(Rect2(cx, ID_Y - 13, 92, 26), team.league_label(), BLUE)
 	if team.id == AppState.selected_team_id:
-		_chip(Rect2(cx + 102, ID_Y - 13, 72, 26), "自軍", GREEN)
+		_chip(Rect2(cx + 102, ID_Y - 13, 72, 26), Loc.t("team_detail.own_team"), GREEN)
 
 
 # ロゴ+名前+▼ を覆う透明ボタンの矩形 (プルダウンのヒット領域)。
@@ -187,18 +181,18 @@ func _draw_statbar() -> void:
 	var rs: int = int(_team_metric.get("rs", 0))
 	var ra: int = int(_team_metric.get("ra", 0))
 	var has_pitch: bool = int(_team_metric.get("outs", 0)) > 0
-	var rank_text: String = "%d位" % _rank if _rank > 0 else "-"
+	var rank_text: String = Loc.t("common.rank_value", {"rank": _rank}) if _rank > 0 else "-"
 
 	# 1段目: 順位・勝敗・勝率・ゲーム差・得点・失点。得点/失点はリーグ内順位を note で添える。
 	var rs_note: Dictionary = _rank_note(int(_metric_ranks.get("rs", 0)))
 	var ra_note: Dictionary = _rank_note(int(_metric_ranks.get("ra", 0)))
 	var row1: Array = [
-		{"label": "順位", "value": rank_text, "color": BLUE},
-		{"label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws]},
-		{"label": "勝率", "value": _rate_short(_stats.win_rate() if _stats != null else 0.0), "color": GREEN},
-		{"label": "ゲーム差", "value": ("-" if _gb <= 0.0 else _float1(_gb))},
-		{"label": "得点", "value": str(rs), "note": str(rs_note["text"]), "note_color": rs_note["color"] as Color},
-		{"label": "失点", "value": str(ra), "note": str(ra_note["text"]), "note_color": ra_note["color"] as Color},
+		{"label": Loc.t("home.stat.rank"), "value": rank_text, "color": BLUE},
+		{"label": Loc.t("home.stat.record"), "value": Loc.t("common.record_value", {"w": wins, "l": losses, "d": draws})},
+		{"label": Loc.t("col.win_pct"), "value": _rate_short(_stats.win_rate() if _stats != null else 0.0), "color": GREEN},
+		{"label": Loc.t("home.stat.games_back"), "value": ("-" if _gb <= 0.0 else _float1(_gb))},
+		{"label": Loc.t("col.runs"), "value": str(rs), "note": str(rs_note["text"]), "note_color": rs_note["color"] as Color},
+		{"label": Loc.t("col.runs_allowed_full"), "value": str(ra), "note": str(ra_note["text"]), "note_color": ra_note["color"] as Color},
 	]
 	# 2段目: 打率・本塁打・盗塁・失策・防御率・セーブ (いずれもリーグ内順位を note で添える)。
 	var avg_note: Dictionary = _rank_note(int(_metric_ranks.get("avg", 0)))
@@ -208,12 +202,12 @@ func _draw_statbar() -> void:
 	var era_note: Dictionary = _rank_note(int(_metric_ranks.get("era", 0))) if has_pitch else {"text": "", "color": MUTED}
 	var sv_note: Dictionary = _rank_note(int(_metric_ranks.get("sv", 0)))
 	var row2: Array = [
-		{"label": "打率", "value": _rate_short(float(_team_metric.get("avg", 0.0))), "note": str(avg_note["text"]), "note_color": avg_note["color"] as Color},
-		{"label": "本塁打", "value": str(int(_team_metric.get("hr", 0))), "note": str(hr_note["text"]), "note_color": hr_note["color"] as Color},
-		{"label": "盗塁", "value": str(int(_team_metric.get("sb", 0))), "note": str(sb_note["text"]), "note_color": sb_note["color"] as Color},
-		{"label": "失策", "value": str(int(_team_metric.get("err", 0))), "note": str(err_note["text"]), "note_color": err_note["color"] as Color},
-		{"label": "防御率", "value": ("%0.2f" % float(_team_metric.get("era", 0.0))) if has_pitch else "-", "note": str(era_note["text"]), "note_color": era_note["color"] as Color},
-		{"label": "セーブ", "value": str(int(_team_metric.get("sv", 0))), "note": str(sv_note["text"]), "note_color": sv_note["color"] as Color},
+		{"label": Loc.t("stat.avg"), "value": _rate_short(float(_team_metric.get("avg", 0.0))), "note": str(avg_note["text"]), "note_color": avg_note["color"] as Color},
+		{"label": Loc.t("stat.home_runs"), "value": str(int(_team_metric.get("hr", 0))), "note": str(hr_note["text"]), "note_color": hr_note["color"] as Color},
+		{"label": Loc.t("stat.stolen_bases"), "value": str(int(_team_metric.get("sb", 0))), "note": str(sb_note["text"]), "note_color": sb_note["color"] as Color},
+		{"label": Loc.t("stat.errors"), "value": str(int(_team_metric.get("err", 0))), "note": str(err_note["text"]), "note_color": err_note["color"] as Color},
+		{"label": Loc.t("stat.era"), "value": ("%0.2f" % float(_team_metric.get("era", 0.0))) if has_pitch else "-", "note": str(era_note["text"]), "note_color": era_note["color"] as Color},
+		{"label": Loc.t("stat.saves"), "value": str(int(_team_metric.get("sv", 0))), "note": str(sv_note["text"]), "note_color": sv_note["color"] as Color},
 	]
 	_stat_strip(Rect2(INNER_L, STAT_Y1, INNER_R - INNER_L, STAT_H), row1)
 	_stat_strip(Rect2(INNER_L, STAT_Y2, INNER_R - INNER_L, STAT_H), row2)
@@ -225,13 +219,13 @@ func _rank_note(rank: int) -> Dictionary:
 		return {"text": "", "color": MUTED}
 	var last: int = _league_size if _league_size > 0 else 6
 	var color: Color = AMBER if rank == 1 else (VIOLET if rank >= last else BLUE)
-	return {"text": "リーグ%d位" % rank, "color": color}
+	return {"text": Loc.t("team_detail.league_rank", {"rank": rank}), "color": color}
 
 
 # --- 打線 (スタメン打順) ---
 
 func _draw_lineup(rect: Rect2) -> void:
-	_panel(rect, "打線（スタメン）")
+	_panel(rect, Loc.t("team_detail.lineup_panel"))
 
 	# 右側の値列 (右端からの右寄せ基準): 打率 / 本 / OPS / WAR
 	var c_avg: float = rect.end.x - 176.0
@@ -243,17 +237,17 @@ func _draw_lineup(rect: Rect2) -> void:
 	var hy: float = rect.position.y + 58
 	var sep_x: float = name_right + 10.0
 	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text("打順", Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("守", Vector2(rect.position.x + 64, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("選手", Vector2(rect.position.x + 98, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("打率", c_avg, hy, 11, MUTED, 52, true)
-	_text_right("本", c_hr, hy, 11, MUTED, 40, true)
+	_text(Loc.t("lineup.col.order"), Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("box.col.pos"), Vector2(rect.position.x + 64, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("col.player"), Vector2(rect.position.x + 98, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("col.avg"), c_avg, hy, 11, MUTED, 52, true)
+	_text_right(Loc.t("col.hr"), c_hr, hy, 11, MUTED, 40, true)
 	_text_right("OPS", c_ops, hy, 11, MUTED, 52, true)
 	_text_right("WAR", c_war, hy, 11, MUTED, 46, true)
 	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
 
 	if _lineup_rows.is_empty():
-		_text("打順を編成できません", Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
+		_text(Loc.t("team_detail.no_lineup"), Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
 		return
 
 	var top: float = rect.position.y + 74.0
@@ -286,7 +280,7 @@ func _draw_lineup(rect: Rect2) -> void:
 # --- ローテーション・勝ちパターン ---
 
 func _draw_rotation(rect: Rect2) -> void:
-	_panel(rect, "ローテーション・勝ちパターン")
+	_panel(rect, Loc.t("team_detail.rotation_panel"))
 
 	# 勝ちパターンはパネル下部の固定帯に置き、先発ローテはその上の領域に収める
 	# (枠からはみ出さないよう、勝ちパターンの高さから逆算する)。
@@ -303,16 +297,16 @@ func _draw_rotation(rect: Rect2) -> void:
 	var sub_y: float = rect.position.y + 56
 	var rot_sep_x: float = c_wl - 10.0
 	_round(Rect2(rect.position.x + 16, sub_y - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text("先発ローテーション", Vector2(rect.position.x + 18, sub_y), 13, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("勝敗", c_wl, sub_y, 11, MUTED, 78, true)
-	_text_right("防御率", c_era, sub_y, 11, MUTED, 60, true)
+	_text(Loc.t("team_detail.rotation"), Vector2(rect.position.x + 18, sub_y), 13, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("home.stat.record"), c_wl, sub_y, 11, MUTED, 78, true)
+	_text_right(Loc.t("stat.era"), c_era, sub_y, 11, MUTED, 60, true)
 	_text_right("WAR", c_war, sub_y, 11, MUTED, 46, true)
 	_line(Vector2(rect.position.x + 16, sub_y + 8), Vector2(rect.end.x - 18, sub_y + 8), BORDER, 1.5)
 
 	var rot_top: float = sub_y + 18.0
 	var rot_area: float = wp_label_y - 10.0 - rot_top
 	if _rotation_rows.is_empty():
-		_text("ローテーションを編成できません", Vector2(rect.position.x + 20, rot_top + 24), 13, MUTED)
+		_text(Loc.t("team_detail.no_rotation"), Vector2(rect.position.x + 20, rot_top + 24), 13, MUTED)
 	else:
 		var rot_h: float = min(30.0, rot_area / float(_rotation_rows.size()))
 		for i in range(_rotation_rows.size()):
@@ -330,9 +324,9 @@ func _draw_rotation(rect: Rect2) -> void:
 
 	# 勝ちパターン (セットアッパー / クローザー) — 下部固定帯
 	_line(Vector2(rect.position.x + 18, wp_label_y), Vector2(rect.end.x - 18, wp_label_y), BORDER, 1.5)
-	_text("勝ちパターン", Vector2(rect.position.x + 18, wp_label_y + 22), 13, MUTED)
+	_text(Loc.t("team_detail.win_pattern"), Vector2(rect.position.x + 18, wp_label_y + 22), 13, MUTED)
 	if _win_pattern.is_empty():
-		_text("リリーフ未設定", Vector2(rect.position.x + 150, wp_label_y + 22), 13, MUTED)
+		_text(Loc.t("team_detail.no_relief"), Vector2(rect.position.x + 150, wp_label_y + 22), 13, MUTED)
 		return
 	var wy: float = wp_label_y + 30.0
 	for i in range(wp_count):
@@ -351,19 +345,19 @@ func _draw_rotation(rect: Rect2) -> void:
 # --- 直近5年のチーム成績 ---
 
 func _draw_history(rect: Rect2) -> void:
-	_panel(rect, "直近5年のチーム成績")
+	_panel(rect, Loc.t("team_detail.history_panel"))
 
 	var inner_x: float = rect.position.x + 18.0
 	var hy: float = rect.position.y + 58
 	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text("年度", Vector2(inner_x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("順位", rect.position.x + 250, hy, 11, MUTED, 56, true)
-	_text_right("勝-敗-分", rect.end.x - 96, hy, 11, MUTED, 120, true)
-	_text_right("勝率", rect.end.x - 18, hy, 11, MUTED, 64, true)
+	_text(Loc.t("col.year"), Vector2(inner_x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("home.stat.rank"), rect.position.x + 250, hy, 11, MUTED, 56, true)
+	_text_right(Loc.t("col.w_l_d"), rect.end.x - 96, hy, 11, MUTED, 120, true)
+	_text_right(Loc.t("col.win_pct"), rect.end.x - 18, hy, 11, MUTED, 64, true)
 	_line(Vector2(inner_x, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
 
 	if _recent5.is_empty():
-		_text("完了したシーズンの記録がありません", Vector2(inner_x, rect.position.y + 110), 13, MUTED)
+		_text(Loc.t("team_detail.no_history"), Vector2(inner_x, rect.position.y + 110), 13, MUTED)
 		return
 
 	var top: float = rect.position.y + 74.0
@@ -374,13 +368,13 @@ func _draw_history(rect: Rect2) -> void:
 		var ty: float = ry + row_h * 0.5 + 5.0
 		var rank: int = int(row.get("rank", 0))
 		var rank_color: Color = AMBER if rank == 1 else TEXT
-		_text("%d年" % int(row.get("year", 0)), Vector2(inner_x, ty), 14, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		_text(Loc.t("common.year_value", {"year": int(row.get("year", 0))}), Vector2(inner_x, ty), 14, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		# CS / 日本シリーズ進出時はその到達段階を chip で表示。
 		var ps_text: String = str(row.get("ps", ""))
 		if not ps_text.is_empty():
 			var ps_w: float = _measure(ps_text, 11) + 18.0
 			_chip(Rect2(inner_x + 62.0, ry + row_h * 0.5 - 10.0, ps_w, 20.0), ps_text, row.get("ps_color", MUTED) as Color)
-		_text_right("%d位" % rank if rank > 0 else "-", rect.position.x + 250, ty, 14, rank_color, 56)
+		_text_right(Loc.t("common.rank_value", {"rank": rank}) if rank > 0 else "-", rect.position.x + 250, ty, 14, rank_color, 56)
 		_text_right("%d-%d-%d" % [int(row.get("w", 0)), int(row.get("l", 0)), int(row.get("d", 0))], rect.end.x - 96, ty, 13, MUTED, 120)
 		_text_right(_rate_short(float(row.get("pct", 0.0))), rect.end.x - 18, ty, 13, TEXT, 64)
 		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
@@ -389,15 +383,15 @@ func _draw_history(rect: Rect2) -> void:
 # --- 直近の対戦結果 / 今後の対戦予定 ---
 
 func _draw_schedule(rect: Rect2) -> void:
-	_panel(rect, "直近の対戦結果 / 今後の対戦予定")
+	_panel(rect, Loc.t("team_detail.schedule_panel"))
 
 	var gap: float = 16.0
 	var col_w: float = (rect.size.x - 36.0 - gap) / 2.0
 	var left_x: float = rect.position.x + 18.0
 	var right_x: float = left_x + col_w + gap
 	var head_y: float = rect.position.y + 60.0
-	_text("直近の結果", Vector2(left_x, head_y), 13, MUTED)
-	_text("今後の予定", Vector2(right_x, head_y), 13, MUTED)
+	_text(Loc.t("team_detail.recent_results"), Vector2(left_x, head_y), 13, MUTED)
+	_text(Loc.t("team_detail.upcoming"), Vector2(right_x, head_y), 13, MUTED)
 	_line(Vector2(left_x, head_y + 8), Vector2(left_x + col_w, head_y + 8), BORDER_SOFT, 1.0)
 	_line(Vector2(right_x, head_y + 8), Vector2(right_x + col_w, head_y + 8), BORDER_SOFT, 1.0)
 
@@ -407,14 +401,14 @@ func _draw_schedule(rect: Rect2) -> void:
 
 	# 左: 直近の結果
 	if _recent_games.is_empty():
-		_text("消化済みの試合はありません", Vector2(left_x, top + 30), 13, MUTED)
+		_text(Loc.t("team_detail.no_played_games"), Vector2(left_x, top + 30), 13, MUTED)
 	else:
 		for i in range(min(_recent_games.size(), max_rows)):
 			_draw_result_row(Rect2(left_x, top + float(i) * row_h, col_w, row_h - 6.0), _recent_games[i] as Dictionary)
 
 	# 右: 今後の予定
 	if _upcoming_games.is_empty():
-		_text("予定された試合はありません", Vector2(right_x, top + 30), 13, MUTED)
+		_text(Loc.t("team_detail.no_upcoming_games"), Vector2(right_x, top + 30), 13, MUTED)
 	else:
 		for i in range(min(_upcoming_games.size(), max_rows)):
 			_draw_upcoming_row(Rect2(right_x, top + float(i) * row_h, col_w, row_h - 6.0), _upcoming_games[i] as Dictionary)
@@ -445,7 +439,7 @@ func _draw_upcoming_row(cell: Rect2, game: Dictionary) -> void:
 # --- チーム内成績ランキング ---
 
 func _draw_rankings(rect: Rect2) -> void:
-	_panel(rect, "チーム内成績ランキング")
+	_panel(rect, Loc.t("team_detail.rankings_panel"))
 
 	# 上段=野手5部門 (青) / 下段=投手5部門 (赤)。
 	var cols: int = 5
@@ -476,7 +470,7 @@ func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
 
 	var entries: Array = card.get("entries", []) as Array
 	if entries.is_empty():
-		_text("該当者なし", Vector2(rect.position.x + 14, rect.position.y + 60), 12, MUTED)
+		_text(Loc.t("common.nobody"), Vector2(rect.position.x + 14, rect.position.y + 60), 12, MUTED)
 		return
 	var top: float = rect.position.y + 44.0
 	var row_h: float = min(34.0, (rect.end.y - top - 8.0) / float(max(1, entries.size())))
@@ -501,22 +495,22 @@ func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
 # 生値 (評価スケール) は12球団が団子になって読めないので、主役は**同じスロットの全球団を
 # 母集団にした S〜E グレード**。バーの長さ (全球団最大値との比) と順位 chip を補助に添える。
 func _draw_depth_chart(rect: Rect2) -> void:
-	var teams_text: String = "全%d球団中" % int(_depth_summary.get("team_count", 12))
-	_panel(rect, "デプスチャート（役割別の戦力）")
+	var teams_text: String = Loc.t("team_detail.depth.of_teams", {"n": int(_depth_summary.get("team_count", 12))})
+	_panel(rect, Loc.t("team_detail.depth.panel"))
 
 	var hy: float = rect.position.y + 58
 	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text("枠", Vector2(D_CHIP_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("人数", D_COUNT_R, hy, 11, MUTED, 60, true)
-	_text("現在の戦力（%s）" % teams_text, Vector2(D_CUR_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("将来性（%d年後）" % TeamDepthChart.FUTURE_HORIZON_YEARS, Vector2(D_PRO_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("平均年齢", D_AGE_R, hy, 11, MUTED, 70, true)
-	_draw_depth_player_header("主力", D_HOLDER_X, hy)
-	_draw_depth_player_header("最有望株", D_PROSPECT_X, hy)
+	_text(Loc.t("team_detail.depth.slot"), Vector2(D_CHIP_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("team_detail.depth.count"), D_COUNT_R, hy, 11, MUTED, 60, true)
+	_text(Loc.t("team_detail.depth.current_header", {"teams": teams_text}), Vector2(D_CUR_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("team_detail.depth.future_header", {"years": TeamDepthChart.FUTURE_HORIZON_YEARS}), Vector2(D_PRO_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("team_detail.depth.avg_age"), D_AGE_R, hy, 11, MUTED, 70, true)
+	_draw_depth_player_header(Loc.t("team_detail.depth.holder"), D_HOLDER_X, hy)
+	_draw_depth_player_header(Loc.t("team_detail.depth.prospect"), D_PROSPECT_X, hy)
 	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
 
 	if _depth_rows.is_empty():
-		_text("デプスチャートを構築できません", Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
+		_text(Loc.t("team_detail.depth.unavailable"), Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
 		return
 
 	var top: float = rect.position.y + 74.0
@@ -537,7 +531,7 @@ func _draw_depth_row(row: Dictionary, rect: Rect2, ry: float, row_h: float) -> v
 	var holder_count: int = int(row.get("holder_count", 0))
 
 	_chip(Rect2(D_CHIP_X, cy - 12, 48, 24), str(row.get("label", "")), _depth_slot_color(row))
-	_text_right("%d人" % holder_count, D_COUNT_R, ty, 13, MUTED if holder_count > 0 else RED, 60)
+	_text_right(Loc.t("common.people_value", {"n": holder_count}), D_COUNT_R, ty, 13, MUTED if holder_count > 0 else RED, 60)
 
 	_draw_depth_metric(D_CUR_BAR_X, D_CUR_GRADE_X, D_CUR_RANK_X, cy,
 		str(row.get("current_grade", "")), float(row.get("current_ratio", 0.0)), int(row.get("current_rank", 0)), total)
@@ -560,14 +554,14 @@ func _draw_depth_metric(bar_x: float, grade_x: float, rank_x: float, cy: float, 
 	if ratio > 0.0:
 		_round(Rect2(bar_x, cy - 8, maxf(4.0, D_BAR_W * ratio), 16), Color(color.r, color.g, color.b, 0.85), Color.TRANSPARENT, 4, 0)
 	_text(grade, Vector2(grade_x, cy + 8.0), 22, color, D_GRADE_W, HORIZONTAL_ALIGNMENT_CENTER, true)
-	_chip(Rect2(rank_x, cy - 11, RANK_CHIP_W, 22), "%d位" % rank if rank > 0 and total > 0 else "-", MUTED)
+	_chip(Rect2(rank_x, cy - 11, RANK_CHIP_W, 22), Loc.t("common.rank_value", {"rank": rank}) if rank > 0 and total > 0 else "-", MUTED)
 
 
 # 代表選手ブロックの見出し (選手名 / 年齢 / 総合)。主力・最有望株で同じ幾何を使う。
 func _draw_depth_player_header(title: String, x: float, hy: float) -> void:
 	_text(title, Vector2(x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("年齢", x + D_PLAYER_AGE_ROFF, hy, 11, MUTED, 40, true)
-	_text_right("総合", x + D_PLAYER_VALUE_ROFF, hy, 11, MUTED, 40, true)
+	_text_right(Loc.t("col.age"), x + D_PLAYER_AGE_ROFF, hy, 11, MUTED, 40, true)
+	_text_right(Loc.t("col.overall"), x + D_PLAYER_VALUE_ROFF, hy, 11, MUTED, 40, true)
 
 
 # 代表選手セル (名前 / 育成chip / 年齢 / 総合)。該当なしは "—"。
@@ -580,7 +574,7 @@ func _draw_depth_player(entry: Dictionary, x: float, ty: float, cy: float) -> vo
 	var player: PSPlayer = GameDb.get_player(int(entry.get("player_id", 0)))
 	_text(player.name if player != null else "-", Vector2(x, ty), 13, TEXT, D_PLAYER_NAME_W)
 	if bool(entry.get("development", false)):
-		_chip(Rect2(x + D_PLAYER_CHIP_OFF, cy - 9, 38, 18), "育成", AMBER)
+		_chip(Rect2(x + D_PLAYER_CHIP_OFF, cy - 9, 38, 18), Loc.t("common.development_chip"), AMBER)
 	var overall: int = int(round(float(entry.get("overall", 0.0))))
 	_text_right(str(int(entry.get("age", 0))), x + D_PLAYER_AGE_ROFF, ty, 13, MUTED, 40)
 	_text_right(str(overall), x + D_PLAYER_VALUE_ROFF, ty, 13, _table_rating_color(overall), 40, true)
@@ -602,16 +596,16 @@ func _draw_depth_summary() -> void:
 	var current_grade: String = str(_depth_summary.get("current_grade", "C"))
 	var future_grade: String = str(_depth_summary.get("future_grade", "C"))
 	var cells: Array = [
-		{"label": "支配下", "value": "%d人" % int(_depth_summary.get("controlled", 0)),
-			"note": "育成 %d人" % int(_depth_summary.get("development", 0)), "note_color": MUTED},
-		{"label": "平均年齢", "value": "%0.1f歳" % float(_depth_summary.get("avg_age", 0.0))},
-		{"label": "24歳以下", "value": "%d人" % int(_depth_summary.get("young", 0)), "color": BLUE},
-		{"label": "現在の戦力", "value": current_grade, "color": _strength_grade_color(current_grade),
-			"note": "%d球団中%d位" % [int(_depth_summary.get("team_count", 12)), int(_depth_summary.get("current_rank", 0))],
+		{"label": Loc.t("common.controlled"),"value": Loc.t("common.people_value", {"n": int(_depth_summary.get("controlled", 0))}),
+			"note": Loc.t("team_detail.depth.development_note", {"n": int(_depth_summary.get("development", 0))}), "note_color": MUTED},
+		{"label": Loc.t("team_detail.depth.avg_age"), "value": Loc.t("team_detail.depth.age_value", {"age": "%0.1f" % float(_depth_summary.get("avg_age", 0.0))})},
+		{"label": Loc.t("team_detail.depth.young"), "value": Loc.t("common.people_value", {"n": int(_depth_summary.get("young", 0))}), "color": BLUE},
+		{"label": Loc.t("team_detail.depth.current"), "value": current_grade, "color": _strength_grade_color(current_grade),
+			"note": Loc.t("team_detail.depth.rank_among", {"n": int(_depth_summary.get("team_count", 12)), "rank": int(_depth_summary.get("current_rank", 0))}),
 			"note_color": MUTED},
-		{"label": "将来性", "value": future_grade, "color": _strength_grade_color(future_grade),
-			"note": "%d年後" % TeamDepthChart.FUTURE_HORIZON_YEARS, "note_color": MUTED},
-		{"label": "最も弱い枠", "value": str(_depth_summary.get("weakest_label", "-")),
+		{"label": Loc.t("team_detail.depth.future"), "value": future_grade, "color": _strength_grade_color(future_grade),
+			"note": Loc.t("team_detail.depth.years_later", {"n": TeamDepthChart.FUTURE_HORIZON_YEARS}), "note_color": MUTED},
+		{"label": Loc.t("team_detail.depth.weakest"), "value": str(_depth_summary.get("weakest_label", "-")),
 			"color": RED, "note": str(_depth_summary.get("weakest_note", "")), "note_color": RED},
 	]
 	_stat_strip(Rect2(INNER_L, STAT_Y1, INNER_R - INNER_L, STAT_H), cells)
@@ -623,14 +617,14 @@ func _draw_depth_note(rect: Rect2) -> void:
 	var total: int = int(_depth_summary.get("team_count", 12))
 	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
 	var x: float = rect.position.x + 20.0
-	_text("現在の戦力", Vector2(x, rect.position.y + 32), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("一軍で実際に使う枠（先発5人 / 救援6人 / 野手はレギュラー1人）の評価平均。バーの長さは全%d球団の中での位置。" % total,
+	_text(Loc.t("team_detail.depth.current"), Vector2(x, rect.position.y + 32), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("team_detail.depth.note_current", {"n": total}),
 		Vector2(x + 108.0, rect.position.y + 32), 13, MUTED)
-	_text("将来性", Vector2(x, rect.position.y + 62), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("%d年後の同じ枠の予測（育成選手を含む全員が対象。年齢ごとの成長・衰えと引退の見込みを織り込む）。主力が高齢なら下がる。" % TeamDepthChart.FUTURE_HORIZON_YEARS,
+	_text(Loc.t("team_detail.depth.future"), Vector2(x, rect.position.y + 62), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("team_detail.depth.note_future", {"years": TeamDepthChart.FUTURE_HORIZON_YEARS}),
 		Vector2(x + 108.0, rect.position.y + 62), 13, MUTED)
-	_text("S〜E", Vector2(x, rect.position.y + 92), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("全%d球団の同じ枠を並べた中での位置（S=青 / A・B=緑 / C・D=黄 / E=赤）。将来性が D・E の枠が後継を要する枠。" % total,
+	_text(Loc.t("team_detail.depth.grade_range"), Vector2(x, rect.position.y + 92), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("team_detail.depth.note_grade", {"n": total}),
 		Vector2(x + 108.0, rect.position.y + 92), 13, MUTED)
 
 
@@ -640,7 +634,7 @@ func _build_buttons() -> void:
 	_clear_buttons()
 	var season: PSSeason = AppState.current_season
 	if season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
@@ -653,9 +647,9 @@ func _build_buttons() -> void:
 
 	# 識別バー右端のページタブ。概要 ⇄ デプスチャート。
 	var tab_y: float = ID_Y - TAB_H * 0.5
-	_add_button("page_overview", "概要", Rect2(INNER_R - TAB_W * 2.0 - 8.0, tab_y, TAB_W, TAB_H),
+	_add_button("page_overview", Loc.t("team_detail.page.overview"), Rect2(INNER_R - TAB_W * 2.0 - 8.0, tab_y, TAB_W, TAB_H),
 		func() -> void: _set_page(PAGE_OVERVIEW), "chip_active" if _page == PAGE_OVERVIEW else "chip")
-	_add_button("page_depth", "デプスチャート", Rect2(INNER_R - TAB_W, tab_y, TAB_W, TAB_H),
+	_add_button("page_depth", Loc.t("team_detail.page.depth"), Rect2(INNER_R - TAB_W, tab_y, TAB_W, TAB_H),
 		func() -> void: _set_page(PAGE_DEPTH), "chip_active" if _page == PAGE_DEPTH else "chip")
 
 	_layout_buttons()
@@ -826,7 +820,7 @@ func _build_depth_summary() -> void:
 		"future_grade": str(grades.get("future_grade", "C")),
 		"current_rank": int(grades.get("current_rank", 0)),
 		"weakest_label": str(weakest.get("label", "-")),
-		"weakest_note": "現在%s" % str(weakest.get("current_grade", "-")),
+		"weakest_note": Loc.t("team_detail.depth.weakest_note", {"grade": str(weakest.get("current_grade", "-"))}),
 	}
 
 
@@ -940,13 +934,13 @@ func _archive_postseason_label(archive: PSSeasonArchive, team: PSTeam) -> Dictio
 		return {}
 	var post: PSPostseasonResult = archive.postseason
 	if post.champion_team_id == team.id:
-		return {"text": "日本一", "color": AMBER}
+		return {"text": Loc.t("award.champion"), "color": AMBER}
 	if _stage_has_team(post.stage_dict("japan_series"), team.id):
-		return {"text": "日本S", "color": GREEN}
+		return {"text": Loc.t("game_result.ps_stage.japan_series"), "color": GREEN}
 	if _stage_has_team(post.stage_dict("cs2_%s" % team.league), team.id):
-		return {"text": "CSファイナル", "color": BLUE}
+		return {"text": Loc.t("team_detail.ps.cs_final"), "color": BLUE}
 	if _stage_has_team(post.stage_dict("cs1_%s" % team.league), team.id):
-		return {"text": "CSファースト", "color": VIOLET}
+		return {"text": Loc.t("team_detail.ps.cs_first"), "color": VIOLET}
 	return {}
 
 
@@ -1002,8 +996,8 @@ func _build_lineup(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -> 
 		_lineup_rows.append({
 			"slot": int(entry.get("slot", 0)),
 			"pos": pos,
-			"pos_label": str(POS_SHORT.get(pos, "-")),
-			"name": record.name if record != null else "(空き)",
+			"pos_label": PSPlayer.position_short_name(pos, "-"),
+			"name": record.name if record != null else Loc.t("team_detail.empty_slot"),
 			"avg": record.batter_stats.batting_average() if record != null else 0.0,
 			"hr": record.batter_stats.home_runs if record != null else 0,
 			"ops": record.batter_stats.ops() if record != null else 0.0,
@@ -1029,7 +1023,7 @@ func _build_rotation(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -
 		_rotation_rows.append({
 			"num": num,
 			"name": record.name,
-			"wl": "%d勝%d敗" % [record.pitcher_stats.wins, record.pitcher_stats.losses],
+			"wl": Loc.t("common.wins_losses", {"w": record.pitcher_stats.wins, "l": record.pitcher_stats.losses}),
 			"era": _era_str(record),
 			"war": _war_str(record),
 			"pid": record.player_id,
@@ -1067,17 +1061,17 @@ func _build_win_pattern(team: PSTeam, season: PSSeason, record_by_id: Dictionary
 	for pid in setup_ids.slice(0, 2):
 		var record: PSPlayerSeasonRecord = record_by_id.get(int(pid), null) as PSPlayerSeasonRecord
 		if record != null:
-			_win_pattern.append(_relief_entry("セットアッパー", VIOLET, record))
+			_win_pattern.append(_relief_entry(Loc.t("relief.setup"), VIOLET, record))
 	if closer_id > 0:
 		var closer: PSPlayerSeasonRecord = record_by_id.get(closer_id, null) as PSPlayerSeasonRecord
 		if closer != null:
-			_win_pattern.append(_relief_entry("クローザー", CLOSER_RED, closer))
+			_win_pattern.append(_relief_entry(Loc.t("relief.closer"), CLOSER_RED, closer))
 
 
 func _relief_entry(role: String, color: Color, record: PSPlayerSeasonRecord) -> Dictionary:
 	return {
 		"role": role, "color": color, "name": record.name,
-		"wl": "%d勝%d敗" % [record.pitcher_stats.wins, record.pitcher_stats.losses],
+		"wl": Loc.t("common.wins_losses", {"w": record.pitcher_stats.wins, "l": record.pitcher_stats.losses}),
 		"era": _era_str(record),
 		"war": _war_str(record),
 	}
@@ -1142,35 +1136,35 @@ func _build_rankings(records: Array) -> void:
 
 	# 上段=野手 (BLUE) / 下段=投手 (RED)。各 Top3。
 	_ranking_cards = [
-		_rank_card("打率", BLUE, batters, "rate",
+		_rank_card(Loc.t("stat.avg"), BLUE, batters, "rate",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.at_bats >= min_ab,
 			func(r: PSPlayerSeasonRecord) -> float: return r.batter_stats.batting_average()),
-		_rank_card("本塁打", BLUE, batters, "int",
+		_rank_card(Loc.t("stat.home_runs"), BLUE, batters, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.home_runs > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.batter_stats.home_runs)),
-		_rank_card("打点", BLUE, batters, "int",
+		_rank_card(Loc.t("stat.rbi"), BLUE, batters, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.runs_batted_in > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.batter_stats.runs_batted_in)),
 		_rank_card("OPS", BLUE, batters, "ops",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.at_bats >= min_ab,
 			func(r: PSPlayerSeasonRecord) -> float: return r.batter_stats.ops()),
-		_rank_card("WAR (野手)", BLUE, batters, "war",
+		_rank_card(Loc.t("team_detail.rank.war_fielder"), BLUE, batters, "war",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.batter_stats.plate_appearances > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return _war_of(r)),
-		_rank_card("勝利", RED, pitchers, "int",
+		_rank_card(Loc.t("stat.wins"), RED, pitchers, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.wins > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.pitcher_stats.wins)),
 		# 防御率は先発のみ (規定投球回ベースの簡易閾値)。
-		_rank_card("防御率 (先発)", RED, pitchers, "era",
+		_rank_card(Loc.t("team_detail.rank.era_starter"), RED, pitchers, "era",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.is_starter_pitcher() and r.pitcher_stats.outs_pitched >= min_outs,
 			func(r: PSPlayerSeasonRecord) -> float: return r.pitcher_stats.era()),
-		_rank_card("登板数", RED, pitchers, "int",
+		_rank_card(Loc.t("team_detail.rank.appearances"), RED, pitchers, "int",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.games > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return float(r.pitcher_stats.games)),
 		_rank_card("FIP", RED, pitchers, "fip",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.outs_pitched >= min_outs,
 			func(r: PSPlayerSeasonRecord) -> float: return _fip_of(r)),
-		_rank_card("WAR (投手)", RED, pitchers, "war",
+		_rank_card(Loc.t("team_detail.rank.war_pitcher"), RED, pitchers, "war",
 			func(r: PSPlayerSeasonRecord) -> bool: return r.pitcher_stats.outs_pitched > 0,
 			func(r: PSPlayerSeasonRecord) -> float: return _war_of(r)),
 	]

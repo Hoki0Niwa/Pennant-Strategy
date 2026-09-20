@@ -65,7 +65,11 @@ func overall() -> int:
 
 
 func league_label() -> String:
-	return "第1リーグ" if league == "league1" else "第2リーグ"
+	return league_label_for(league)
+
+
+static func league_label_for(league_id: String) -> String:
+	return Loc.t("league.league1") if league_id == "league1" else Loc.t("league.league2")
 
 
 func to_dict() -> Dictionary:

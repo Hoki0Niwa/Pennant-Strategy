@@ -16,42 +16,38 @@ extends "res://ui/components/dashboard_screen.gd"
 const PlayerValueEvaluator = preload("res://services/simulation/player_value_evaluator.gd")
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-const POS_SHORT: Dictionary = {
-	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三",
-	6: "遊", 7: "左", 8: "中", 9: "右", 10: "DH",
-}
-
 const POSITION_APTITUDE_KEYS: Dictionary = {
 	2: "catcher", 3: "first", 4: "second", 5: "third",
 	6: "shortstop", 7: "left", 8: "center", 9: "right",
 }
 
-# 投手能力タブの球種カラム見出し (密な表なので短縮名)。完全名は選手詳細で確認できる。
+# 投手能力タブの球種カラム見出しキー (密な表なので短縮名)。完全名は選手詳細で確認できる。
 const PITCH_SHORT: Dictionary = {
-	"four_seam": "直", "two_seam": "ツー", "sinker": "シ", "cutter": "カット",
-	"slider": "スラ", "curve": "カーブ", "fork": "フォ", "changeup": "チェ",
+	"four_seam": "pitch_short.four_seam", "two_seam": "pitch_short.two_seam", "sinker": "pitch_short.sinker",
+	"cutter": "pitch_short.cutter", "slider": "pitch_short.slider", "curve": "pitch_short.curve",
+	"fork": "pitch_short.fork", "changeup": "pitch_short.changeup",
 }
 
-# 絞り込みチップ。mode で投手/野手の列セットが決まる。pos は野手の守備位置。
+# 絞り込みチップ。mode で投手/野手の列セットが決まる。pos は野手の守備位置。label は表示名のキー (Loc)。
 const FILTERS: Array = [
-	{"id": "p_all", "label": "投手", "mode": "pitcher"},
-	{"id": "p_sp", "label": "先発", "mode": "pitcher"},
-	{"id": "p_rp", "label": "中継", "mode": "pitcher"},
-	{"id": "b_all", "label": "野手", "mode": "batter"},
-	{"id": "b_2", "label": "捕", "mode": "batter", "pos": 2},
-	{"id": "b_3", "label": "一", "mode": "batter", "pos": 3},
-	{"id": "b_4", "label": "二", "mode": "batter", "pos": 4},
-	{"id": "b_5", "label": "三", "mode": "batter", "pos": 5},
-	{"id": "b_6", "label": "遊", "mode": "batter", "pos": 6},
-	{"id": "b_7", "label": "左", "mode": "batter", "pos": 7},
-	{"id": "b_8", "label": "中", "mode": "batter", "pos": 8},
-	{"id": "b_9", "label": "右", "mode": "batter", "pos": 9},
+	{"id": "p_all", "label": "common.pitcher", "mode": "pitcher"},
+	{"id": "p_sp", "label": "role.starter", "mode": "pitcher"},
+	{"id": "p_rp", "label": "role.middle_short", "mode": "pitcher"},
+	{"id": "b_all", "label": "common.fielder", "mode": "batter"},
+	{"id": "b_2", "label": "position_short.catcher", "mode": "batter", "pos": 2},
+	{"id": "b_3", "label": "position_short.first_base", "mode": "batter", "pos": 3},
+	{"id": "b_4", "label": "position_short.second_base", "mode": "batter", "pos": 4},
+	{"id": "b_5", "label": "position_short.third_base", "mode": "batter", "pos": 5},
+	{"id": "b_6", "label": "position_short.shortstop", "mode": "batter", "pos": 6},
+	{"id": "b_7", "label": "position_short.left_field", "mode": "batter", "pos": 7},
+	{"id": "b_8", "label": "position_short.center_field", "mode": "batter", "pos": 8},
+	{"id": "b_9", "label": "position_short.right_field", "mode": "batter", "pos": 9},
 ]
 
 const TABS: Array = [
-	{"id": "abilities", "label": "能力値"},
-	{"id": "stats", "label": "成績"},
-	{"id": "advanced", "label": "高度な指標"},
+	{"id": "abilities", "label": "ability_stats.tab.abilities"},
+	{"id": "stats", "label": "farm.view.stats"},
+	{"id": "advanced", "label": "ability_stats.tab.advanced"},
 ]
 
 const ALL_TEAMS_ID: int = -1               # 内部: 全球団 (記録収集で全チームを走査)
@@ -110,13 +106,13 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 		return
 
 	var your_team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	if your_team == null and not GameDb.teams.is_empty():
 		your_team = GameDb.teams[0] as PSTeam
-	_draw_shell("能力・成績一覧", your_team, season)
+	_draw_shell(Loc.t("screen.ability_stats"), your_team, season)
 
 	_draw_subheader()
 
@@ -126,14 +122,14 @@ func _draw() -> void:
 	for col_value in columns:
 		var col: Dictionary = (col_value as Dictionary).duplicate()
 		if str(col.get("key", "")) == _sort_key:
-			col["title"] = str(col.get("title", "")) + (" ▲" if _sort_asc else " ▼")
+			col["title"] = Loc.t(str(col.get("title", ""))) + (" ▲" if _sort_asc else " ▼")
 		draw_cols.append(col)
 
 	# header_top はタブ (rect 上端 +14〜+50) と列ヘッダの間に余白を取るため広めに置く。
 	var opts: Dictionary = {
 		"header_top": 90.0, "inner_pad": 14.0, "header_size": 12, "cell_size": 13,
 		"row_h": 30.0, "alt_rows": true,
-		"empty_text": "該当する選手がいません",
+		"empty_text": Loc.t("common.no_matching_players"),
 		"scroll_key": "main", "scroll": _scroll, "scroll_zones": _scroll_zones,
 		"sel_kind": "player", "hits": _row_hits,
 	}
@@ -147,30 +143,30 @@ func _draw() -> void:
 			_round(hit["rect"] as Rect2, Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color(BLUE.r, BLUE.g, BLUE.b, 0.75), 6, 2)
 
 	# 操作ヒント (タブの右) と件数・選択数 (右肩)。
-	_text("クリック=選択 / Ctrl=追加 / Shift=範囲 / 選手名を右クリックで詳細",
+	_text(Loc.t("ability_stats.hint"),
 		Vector2(TABLE_RECT.position.x + 460.0, TABLE_RECT.position.y + 34.0), 11, FAINT, 660.0)
 	var sel_count: int = _selected_ids.size()
 	var count_right: float = TABLE_RECT.end.x - 18.0 - (124.0 if sel_count > 0 else 0.0)
-	var count_text: String = "選択 %d人 ・ 全%d人" % [sel_count, _rows.size()] if sel_count > 0 else "全%d人" % _rows.size()
+	var count_text: String = Loc.t("ability_stats.selected_count", {"n": sel_count, "total": _rows.size()}) if sel_count > 0 else Loc.t("common.total_players", {"n": _rows.size()})
 	_text_right(count_text, count_right, TABLE_RECT.position.y + 34.0, 12, BLUE if sel_count > 0 else MUTED, 280.0)
 
 
 # --- サブヘッダ (絞り込みラベル + 区切り線 + 球団プルダウン + 下端の仕切り) ---
 func _draw_subheader() -> void:
-	_text("絞り込み", Vector2(INNER_L, CHIP_Y + 20.0), 12, FAINT)
+	_text(Loc.t("ability_stats.filter_label"), Vector2(INNER_L, CHIP_Y + 20.0), 12, FAINT)
 	if _sep_x > 0.0:
 		_line(Vector2(_sep_x, CHIP_Y - 2.0), Vector2(_sep_x, CHIP_Y + 30.0), BORDER, 1.0)
 
 	# 球団プルダウン (右寄せ)。透明 nav ボタンがこの領域でクリックを拾う。
 	var dx: float = 1648.0
-	_text("表示", Vector2(dx, CHIP_Y + 6.0), 11, FAINT)
+	_text(Loc.t("common.view_label"), Vector2(dx, CHIP_Y + 6.0), 11, FAINT)
 	var nx: float = dx + 34.0
 	if _view_team_id != ALL_TEAMS_ID:
 		var team: PSTeam = GameDb.get_team(_view_team_id)
 		if team != null:
 			_team_badge(Rect2(dx + 34.0, CHIP_Y + 1.0, 26, 26), team)
 			nx = dx + 70.0
-	var view_name: String = "全球団" if _view_team_id == ALL_TEAMS_ID else _team_name(_view_team_id)
+	var view_name: String = Loc.t("common.all_teams") if _view_team_id == ALL_TEAMS_ID else _team_name(_view_team_id)
 	_text(view_name, Vector2(nx, CHIP_Y + 22.0), 17, TEXT)
 	_text("▼", Vector2(nx + _measure(view_name, 17) + 8.0, CHIP_Y + 19.0), 12, MUTED)
 
@@ -194,61 +190,61 @@ func _columns_for_current() -> Array:
 	match _active_tab:
 		"abilities":
 			# 疲労 (現在のコンディション) は能力の手前に置く。0〜100% (高いほど疲労)。
-			cols.append({"title": "疲労", "key": "fatigue", "w": 46, "align": "c", "fmt": "int"})
+			cols.append({"title": "col.fatigue", "key": "fatigue", "w": 46, "align": "c", "fmt": "int"})
 			if mode == "pitcher":
 				cols.append_array([
-					{"title": "球速", "key": "velocity", "w": 54, "align": "c", "fmt": "int"},
-					{"title": "球質", "key": "stuff", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "制球", "key": "control", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "持久", "key": "stamina", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.velocity", "key": "velocity", "w": 54, "align": "c", "fmt": "int"},
+					{"title": "rating.stuff", "key": "stuff", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.control", "key": "control", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.stamina", "key": "stamina", "w": 50, "align": "c", "fmt": "int"},
 				])
 				for type_value in _pitch_types:
 					cols.append({"title": str(PITCH_SHORT.get(str(type_value), str(type_value))), "key": "pitch_%s" % str(type_value), "w": 54, "align": "c", "fmt": "int"})
 				cols.append_array([
-					{"title": "総合", "key": "overall", "w": 50, "align": "r", "fmt": "int"},
-					{"title": "守備評", "key": "def_eval", "w": 54, "align": "r", "fmt": "int"},
-					{"title": "年俸(万円)", "key": "salary", "w": 82, "align": "r", "fmt": "comma"},
+					{"title": "col.overall", "key": "overall", "w": 50, "align": "r", "fmt": "int"},
+					{"title": "col.def_eval", "key": "def_eval", "w": 54, "align": "r", "fmt": "int"},
+					{"title": "col.salary_man", "key": "salary", "w": 82, "align": "r", "fmt": "comma"},
 				])
 			else:
 				cols.append_array([
-					{"title": "巧打", "key": "contact", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "長打", "key": "power", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "走力", "key": "speed", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "守備", "key": "defense", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "肩力", "key": "arm", "w": 50, "align": "c", "fmt": "int"},
-					{"title": "選球", "key": "discipline", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.contact", "key": "contact", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.power", "key": "power", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.speed", "key": "speed", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.defense", "key": "defense", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.arm", "key": "arm", "w": 50, "align": "c", "fmt": "int"},
+					{"title": "rating.discipline", "key": "discipline", "w": 50, "align": "c", "fmt": "int"},
 					# 対逆 = 逆の利き腕に対する OPS の上がり幅 (リーグ平均の左右差 = 1.0 / 変動幅は 値×0.05)。
 					# どちらの左右が有利側かは打席 (打) 列で読む。
-					{"title": "打", "key": "bats", "w": 30, "align": "c", "fmt": "str"},
-					{"title": "対逆", "key": "vs_opposite", "w": 50, "align": "c", "fmt": "f1"},
+					{"title": "lineup.col.bats", "key": "bats", "w": 30, "align": "c", "fmt": "str"},
+					{"title": "rating.vs_opposite", "key": "vs_opposite", "w": 50, "align": "c", "fmt": "f1"},
 				])
 				for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
-					cols.append({"title": str(POS_SHORT.get(pos, "?")), "key": "apt_%d" % pos, "w": 36, "align": "c", "fmt": "int"})
+					cols.append({"title": str(PSPlayer.POSITION_SHORT_KEYS[pos]), "key": "apt_%d" % pos, "w": 36, "align": "c", "fmt": "int"})
 				cols.append_array([
-					{"title": "総合", "key": "overall", "w": 50, "align": "r", "fmt": "int"},
-					{"title": "打撃", "key": "bat_eval", "w": 50, "align": "r", "fmt": "int"},
-					{"title": "守備評", "key": "def_eval", "w": 54, "align": "r", "fmt": "int"},
-					{"title": "年俸(万円)", "key": "salary", "w": 82, "align": "r", "fmt": "comma"},
+					{"title": "col.overall", "key": "overall", "w": 50, "align": "r", "fmt": "int"},
+					{"title": "strength.label.batting", "key": "bat_eval", "w": 50, "align": "r", "fmt": "int"},
+					{"title": "col.def_eval", "key": "def_eval", "w": 54, "align": "r", "fmt": "int"},
+					{"title": "col.salary_man", "key": "salary", "w": 82, "align": "r", "fmt": "comma"},
 				])
 		"advanced":
 			if mode == "pitcher":
 				cols.append_array([
-					{"title": "投球回", "key": "ip", "w": 64, "align": "r", "fmt": "f1"},
+					{"title": "col.innings", "key": "ip", "w": 64, "align": "r", "fmt": "f1"},
 					{"title": "FIP", "key": "fip", "w": 60, "align": "r", "fmt": "f2"},
 					{"title": "WAR", "key": "war", "w": 60, "align": "r", "fmt": "f1s"},
 					{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2"},
 					{"title": "BB/9", "key": "bb9", "w": 60, "align": "r", "fmt": "f2"},
 					{"title": "HR/9", "key": "hr9", "w": 60, "align": "r", "fmt": "f2"},
-					{"title": "球/打者", "key": "ppbf", "w": 70, "align": "r", "fmt": "f2"},
-					{"title": "球/回", "key": "ppi", "w": 62, "align": "r", "fmt": "f1"},
-					{"title": "対戦打者", "key": "bf", "w": 72, "align": "r", "fmt": "int"},
-					{"title": "投球数", "key": "pit", "w": 68, "align": "r", "fmt": "int"},
-					{"title": "救援", "key": "rel", "w": 56, "align": "r", "fmt": "int"},
+					{"title": "col.pitches_per_bf", "key": "ppbf", "w": 70, "align": "r", "fmt": "f2"},
+					{"title": "col.pitches_per_inning", "key": "ppi", "w": 62, "align": "r", "fmt": "f1"},
+					{"title": "col.batters_faced", "key": "bf", "w": 72, "align": "r", "fmt": "int"},
+					{"title": "col.pitches", "key": "pit", "w": 68, "align": "r", "fmt": "int"},
+					{"title": "role.reliever", "key": "rel", "w": 56, "align": "r", "fmt": "int"},
 				])
 			else:
 				cols.append_array([
-					{"title": "打席", "key": "pa", "w": 52, "align": "r", "fmt": "int"},
-					{"title": "球/打席", "key": "ppa", "w": 64, "align": "r", "fmt": "f2"},
+					{"title": "col.pa", "key": "pa", "w": 52, "align": "r", "fmt": "int"},
+					{"title": "col.pitches_per_pa", "key": "ppa", "w": 64, "align": "r", "fmt": "f2"},
 					{"title": "wOBA", "key": "woba", "w": 60, "align": "r", "fmt": "rate"},
 					{"title": "xwOBA", "key": "xwoba", "w": 64, "align": "r", "fmt": "rate"},
 					{"title": "wRC+", "key": "wrcplus", "w": 58, "align": "r", "fmt": "f1"},
@@ -256,8 +252,8 @@ func _columns_for_current() -> Array:
 					{"title": "BSR", "key": "bsr", "w": 58, "align": "r", "fmt": "f1s"},
 					{"title": "WAR", "key": "war", "w": 60, "align": "r", "fmt": "f1s"},
 					{"title": "OAA", "key": "oaa", "w": 58, "align": "r", "fmt": "f1s"},
-					{"title": "OAA内", "key": "oaa_if", "w": 64, "align": "r", "fmt": "f1s"},
-					{"title": "OAA外", "key": "oaa_of", "w": 64, "align": "r", "fmt": "f1s"},
+					{"title": "col.oaa_if", "key": "oaa_if", "w": 64, "align": "r", "fmt": "f1s"},
+					{"title": "col.oaa_of", "key": "oaa_of", "w": 64, "align": "r", "fmt": "f1s"},
 					{"title": "RngR", "key": "rngr", "w": 60, "align": "r", "fmt": "f1s"},
 					{"title": "ErrR", "key": "errr", "w": 60, "align": "r", "fmt": "f1s"},
 					{"title": "DPR", "key": "dpr", "w": 56, "align": "r", "fmt": "f1s"},
@@ -267,65 +263,65 @@ func _columns_for_current() -> Array:
 		_:  # stats (成績 = 基本成績 + 率指標)
 			if mode == "pitcher":
 				cols.append_array([
-					{"title": "登板", "key": "g", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "先発", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "完投", "key": "cg", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "完封", "key": "sho", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "勝", "key": "w", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "敗", "key": "l", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "col.complete_games", "key": "cg", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "col.shutouts", "key": "sho", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int"},
 					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
 					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
 					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int"},
-					{"title": "投球回", "key": "ip", "w": 62, "align": "r", "fmt": "f1"},
-					{"title": "防御率", "key": "era", "w": 60, "align": "r", "fmt": "f2"},
+					{"title": "col.innings", "key": "ip", "w": 62, "align": "r", "fmt": "f1"},
+					{"title": "stat.era", "key": "era", "w": 60, "align": "r", "fmt": "f2"},
 					{"title": "WHIP", "key": "whip", "w": 58, "align": "r", "fmt": "f2"},
-					{"title": "奪三振", "key": "so", "w": 58, "align": "r", "fmt": "int"},
-					{"title": "与四球", "key": "bb", "w": 58, "align": "r", "fmt": "int"},
-					{"title": "与死球", "key": "hbp", "w": 58, "align": "r", "fmt": "int"},
-					{"title": "被安打", "key": "h", "w": 58, "align": "r", "fmt": "int"},
-					{"title": "被本", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "失点", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "自責", "key": "er", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "stat.strikeouts", "key": "so", "w": 58, "align": "r", "fmt": "int"},
+					{"title": "col.walks_allowed", "key": "bb", "w": 58, "align": "r", "fmt": "int"},
+					{"title": "col.hbp_allowed", "key": "hbp", "w": 58, "align": "r", "fmt": "int"},
+					{"title": "col.hits_allowed", "key": "h", "w": 58, "align": "r", "fmt": "int"},
+					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int"},
 				])
 			else:
 				cols.append_array([
-					{"title": "試合", "key": "g", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "打席", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "打数", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "得点", "key": "r", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "安打", "key": "h", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "二塁", "key": "d", "w": 42, "align": "r", "fmt": "int"},
-					{"title": "三塁", "key": "t", "w": 42, "align": "r", "fmt": "int"},
-					{"title": "本", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "打点", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "盗塁", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "打率", "key": "avg", "w": 54, "align": "r", "fmt": "rate"},
-					{"title": "出塁", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
-					{"title": "長打", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
+					{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
+					{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int"},
+					{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int"},
+					{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
+					{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate"},
+					{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
+					{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
 					{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
-					{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "死球", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "三振", "key": "so", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "犠打", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "犠飛", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "併殺", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
-					{"title": "失策", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "box.pa.sacrifice", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "box.pa.sacrifice_fly", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
+					{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int"},
 				])
 	return cols
 
 
-# 全タブ共通の先頭列 (球団 / 選手 / 守備位置or役割 / 年齢)。
+# 全タブ共通の先頭列 (球団 / 選手 / 守備位置or役割 / 年齢)。title は表示名のキー (Loc)。
 func _identity_columns(include_age: bool) -> Array:
 	var cols: Array = [
-		{"title": "球団", "key": "team", "w": 56, "align": "l", "fmt": "team"},
-		{"title": "選手", "key": "name", "w": 118, "align": "l", "fmt": "str", "strong": true},
+		{"title": "col.team", "key": "team", "w": 56, "align": "l", "fmt": "team"},
+		{"title": "col.player", "key": "name", "w": 118, "align": "l", "fmt": "str", "strong": true},
 	]
 	if _current_mode() == "pitcher":
-		cols.append({"title": "役", "key": "role", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "role_sort"})
+		cols.append({"title": "col.role_short", "key": "role", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "role_sort"})
 	else:
-		cols.append({"title": "守", "key": "pos", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "pos_sort"})
+		cols.append({"title": "box.col.pos", "key": "pos", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "pos_sort"})
 	if include_age:
-		cols.append({"title": "年齢", "key": "age", "w": 42, "align": "c", "fmt": "int"})
+		cols.append({"title": "col.age", "key": "age", "w": 42, "align": "c", "fmt": "int"})
 	return cols
 
 
@@ -335,7 +331,7 @@ func _build_buttons() -> void:
 	_clear_buttons()
 	var season: PSSeason = AppState.current_season
 	if season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
@@ -351,7 +347,7 @@ func _build_buttons() -> void:
 		if fid == "b_all":
 			_sep_x = x + 2.0
 			x += 18.0
-		var label: String = str(filter["label"])
+		var label: String = Loc.t(str(filter["label"]))
 		var w: float = 38.0 if label.length() <= 1 else 52.0
 		var active: bool = fid == _filter_id
 		_add_button("flt_%s" % fid, label, Rect2(x, CHIP_Y, w, 30.0),
@@ -360,7 +356,7 @@ func _build_buttons() -> void:
 
 	# 規定打席/投球回到達者のみ (絞り込みチップ群の右にトグルとして置く)。
 	x += 14.0
-	var qual_label: String = "規定到達のみ"
+	var qual_label: String = Loc.t("common.qualified_only")
 	var qual_w: float = _measure(qual_label, 13) + 24.0
 	_add_button("flt_qualified", qual_label, Rect2(x, CHIP_Y, qual_w, 30.0),
 		func() -> void: _on_qualified_toggle(), "chip_active" if _qualified_only else "chip")
@@ -371,13 +367,13 @@ func _build_buttons() -> void:
 		var tab: Dictionary = tab_value as Dictionary
 		var tid: String = str(tab["id"])
 		var act: bool = tid == _active_tab
-		_add_button("tab_%s" % tid, str(tab["label"]), Rect2(tx, TABLE_RECT.position.y + 14.0, 134.0, 36.0),
+		_add_button("tab_%s" % tid, Loc.t(str(tab["label"])), Rect2(tx, TABLE_RECT.position.y + 14.0, 134.0, 36.0),
 			func(target: String = tid) -> void: _on_tab_pressed(target), "chip_active" if act else "chip")
 		tx += 144.0
 
 	# 選択解除ボタン (選択がある時だけ、テーブル右肩に)。
 	if not _selected_ids.is_empty():
-		_add_button("clear_sel", "選択解除 (%d)" % _selected_ids.size(),
+		_add_button("clear_sel", Loc.t("ability_stats.clear_selection", {"n": _selected_ids.size()}),
 			Rect2(TABLE_RECT.end.x - 16.0 - 104.0, TABLE_RECT.position.y + 15.0, 104.0, 30.0),
 			func() -> void: _on_clear_selection(), "action")
 
@@ -486,7 +482,7 @@ func _is_in_name_column(base_pos: Vector2) -> bool:
 
 func _on_team_menu_pressed() -> void:
 	var menu: PopupMenu = PopupMenu.new()
-	menu.add_item("全球団", ALL_TEAMS_MENU_ID)
+	menu.add_item(Loc.t("common.all_teams"), ALL_TEAMS_MENU_ID)
 	for i in range(_team_ids.size()):
 		var team: PSTeam = GameDb.get_team(int(_team_ids[i]))
 		if team == null:
@@ -722,7 +718,7 @@ func _identity_fields(record: PSPlayerSeasonRecord) -> Dictionary:
 		row["role_sort"] = badge["sort"]
 		row["role_dev"] = record.development_player
 	else:
-		row["pos"] = str(POS_SHORT.get(record.position, "?"))
+		row["pos"] = PSPlayer.position_short_name(record.position)
 		row["pos_color"] = _pos_color(record.position)
 		row["pos_sort"] = record.position
 		row["pos_dev"] = record.development_player
@@ -967,8 +963,8 @@ func _team_games_for_record(record: PSPlayerSeasonRecord) -> int:
 
 func _role_badge(role: String) -> Dictionary:
 	if role == "starter":
-		return {"text": "先", "color": PINK, "sort": 0}
-	return {"text": "中", "color": RED, "sort": 1}
+		return {"text": Loc.t("role.starter_short"), "color": PINK, "sort": 0}
+	return {"text": Loc.t("role.middle_char"), "color": RED, "sort": 1}
 
 
 func _position_aptitude(record: PSPlayerSeasonRecord, pos: int) -> int:
@@ -994,11 +990,11 @@ func _fatigue_pct(record: PSPlayerSeasonRecord) -> int:
 func _batting_side_short(batting_side: String) -> String:
 	match batting_side.to_upper():
 		PSPlatoonMatchup.HAND_RIGHT:
-			return "右"
+			return Loc.t("hand.right")
 		PSPlatoonMatchup.HAND_LEFT:
-			return "左"
+			return Loc.t("hand.left")
 		PSPlatoonMatchup.HAND_SWITCH:
-			return "両"
+			return Loc.t("hand.switch")
 	return "-"
 
 

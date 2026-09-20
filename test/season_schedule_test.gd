@@ -46,7 +46,7 @@ func test_japanese_holidays_substitute_holiday_for_sunday() -> void:
 	assert_bool(JapaneseHolidays.is_holiday("2026-05-04")).is_true()
 	assert_bool(JapaneseHolidays.is_holiday("2026-05-05")).is_true()
 	assert_bool(JapaneseHolidays.is_holiday("2026-05-06")).is_true()
-	assert_str(str(JapaneseHolidays.holidays_for_year(2026).get("2026-05-06", ""))).is_equal("振替休日")
+	assert_str(str(JapaneseHolidays.holidays_for_year(2026).get("2026-05-06", ""))).is_equal("holiday.substitute")
 
 
 func test_opening_date_is_last_friday_of_march() -> void:

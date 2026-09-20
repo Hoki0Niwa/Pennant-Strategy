@@ -26,24 +26,29 @@ const SKIP_MENU_TARGET: int = 3
 # 交流戦・オールスターなど日程の区切りまで進める項目は、この ID + _skip_milestone_targets の添字。
 const SKIP_MENU_MILESTONE_BASE: int = 100
 
-const WEEKDAYS: Array = ["月", "火", "水", "木", "金", "土", "日"]
+# カレンダーは月曜始まり。値は曜日名のキー (Loc)。
+const WEEKDAYS: Array = [
+	"weekday.monday", "weekday.tuesday", "weekday.wednesday", "weekday.thursday",
+	"weekday.friday", "weekday.saturday", "weekday.sunday",
+]
 
+# label は表示名のキー (Loc)。
 const FILTERS: Array = [
-	{"id": "all", "label": "全試合"},
-	{"id": "team", "label": "自軍のみ"},
-	{"id": "unplayed", "label": "未消化"},
-	{"id": "result", "label": "結果"},
+	{"id": "all", "label": "home.filter.all"},
+	{"id": "team", "label": "home.filter.team"},
+	{"id": "unplayed", "label": "home.filter.unplayed"},
+	{"id": "result", "label": "home.filter.result"},
 ]
 
 # 勝敗は図形で描く (白星=○→白丸 / 黒星=●→黒丸+白縁)。mark は意味どおりの記号を持たせ、
 # 見た目の塗り分けは _draw_result_mark に任せる。色は引分のみ使用 (○● は図形側で固定)。
 const LEGEND: Array = [
-	{"label": "勝利", "color": TEXT, "mark": "○"},
-	{"label": "敗戦", "color": TEXT, "mark": "●"},
-	{"label": "引分", "color": AMBER, "mark": "△"},
-	{"label": "未消化", "color": BLUE, "mark": ""},
-	{"label": "中止・ノーゲーム", "color": RED, "mark": ""},
-	{"label": "休養・移動日", "color": FAINT, "mark": ""},
+	{"label": "home.legend.win", "color": TEXT, "mark": "○"},
+	{"label": "home.legend.loss", "color": TEXT, "mark": "●"},
+	{"label": "home.legend.draw", "color": AMBER, "mark": "△"},
+	{"label": "home.legend.unplayed", "color": BLUE, "mark": ""},
+	{"label": "home.legend.cancelled", "color": RED, "mark": ""},
+	{"label": "home.legend.off_day", "color": FAINT, "mark": ""},
 ]
 
 # 降水確率の表示色。**能力の段階色 (青=優秀…) とは別系統**で、天気らしい
@@ -89,7 +94,7 @@ func _draw() -> void:
 
 	_era_by_team = _compute_team_era(season)
 
-	_draw_shell("ホーム", team, season)
+	_draw_shell(Loc.t("screen.home"), team, season)
 	_draw_statbar(team, season)
 	_draw_calendar(team.id, season)
 	_draw_right_column(team.id, season)
@@ -100,11 +105,11 @@ func _draw() -> void:
 
 func _draw_empty() -> void:
 	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-	_text("新規シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+	_text(Loc.t("home.no_season"), Vector2(770, 496), 20, MUTED)
 
 
 func _calendar_title_text() -> String:
-	return "%d年 %d月" % [_calendar_year, _calendar_month]
+	return Loc.t("date.year_month", {"year": _calendar_year, "month": _calendar_month})
 
 
 # --- サマリー KPI 帯 ---
@@ -122,14 +127,14 @@ func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
 	# 個別カード列ではなく1本の帯 (_stat_strip)。順位/勝率のみ色で強調し、
 	# 予算超過は年俸総額セルの note で警告する。
 	var cells: Array = [
-		{"label": "順位", "value": "%s位" % str(standing.get("rank", "-")), "color": BLUE},
-		{"label": "勝敗", "value": "%d勝 %d敗 %d分" % [wins, losses, draws]},
-		{"label": "勝率", "value": _rate_short(stats.win_rate() if stats != null else 0.0), "color": GREEN},
-		{"label": "ゲーム差", "value": ("-" if gb_value <= 0.0 else _float1(gb_value))},
-		{"label": "残り試合", "value": "%d試合" % season.team_games_remaining(team.id)},
-		{"label": "予算", "value": _format_money(team.funds)},
-		{"label": "年俸総額", "value": _format_money(payroll), "color": AMBER if over else TEXT,
-			"note": "予算超過" if over else "", "note_color": AMBER},
+		{"label": Loc.t("home.stat.rank"), "value": Loc.t("common.rank_value", {"rank": str(standing.get("rank", "-"))}), "color": BLUE},
+		{"label": Loc.t("home.stat.record"), "value": Loc.t("common.record_value", {"w": wins, "l": losses, "d": draws})},
+		{"label": Loc.t("col.win_pct"), "value": _rate_short(stats.win_rate() if stats != null else 0.0), "color": GREEN},
+		{"label": Loc.t("home.stat.games_back"), "value": ("-" if gb_value <= 0.0 else _float1(gb_value))},
+		{"label": Loc.t("home.stat.remaining"), "value": Loc.t("common.games_value", {"n": season.team_games_remaining(team.id)})},
+		{"label": Loc.t("home.stat.budget"), "value": _format_money(team.funds)},
+		{"label": Loc.t("home.stat.payroll"), "value": _format_money(payroll), "color": AMBER if over else TEXT,
+			"note": Loc.t("home.stat.over_budget") if over else "", "note_color": AMBER},
 	]
 	_stat_strip(Rect2(INNER_L, STAT_Y, INNER_R - INNER_L, STAT_H), cells)
 
@@ -151,7 +156,7 @@ func _draw_calendar(team_id: int, season: PSSeason) -> void:
 			wcolor = Color(RED.r, RED.g, RED.b, 0.85)
 		elif i == 5:
 			wcolor = Color(BLUE.r, BLUE.g, BLUE.b, 0.9)
-		_text(str(WEEKDAYS[i]), Vector2(inner_x + i * (cell_w + cell_gap), week_y), 13, wcolor, cell_w, HORIZONTAL_ALIGNMENT_CENTER)
+		_text(Loc.t(str(WEEKDAYS[i])), Vector2(inner_x + i * (cell_w + cell_gap), week_y), 13, wcolor, cell_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 	var first_date: String = _date_string(_calendar_year, _calendar_month, 1)
 	var offset: int = (SeasonCalendar.weekday_for_date(first_date) + 6) % 7
@@ -209,7 +214,7 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 	# バッジは上段に置き、セル本文 (対戦カード) と重ねない。
 	var badge_x: float = rect.end.x - 44
 	if is_today:
-		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), "本日", BLUE)
+		_chip(Rect2(badge_x, rect.position.y + 7, 36, 18), Loc.t("home.today_chip"), BLUE)
 		badge_x -= 38
 	if not rainouts.is_empty():
 		# ノーゲームは「試合はしたが記録ごと無効」なので中止と区別して出す。
@@ -219,7 +224,7 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 				has_no_game = true
 		var badge_w: float = 52.0 if has_no_game else 36.0
 		badge_x -= badge_w - 36.0
-		_chip(Rect2(badge_x, rect.position.y + 7, badge_w, 18), "ノーゲーム" if has_no_game else "中止", RED)
+		_chip(Rect2(badge_x, rect.position.y + 7, badge_w, 18), Loc.t("home.no_game_chip") if has_no_game else Loc.t("home.cancelled_chip"), RED)
 		badge_x -= badge_w + 2.0
 	if has_dh:
 		_chip(Rect2(badge_x, rect.position.y + 7, 30, 18), "DH", BLUE_SOFT)
@@ -229,7 +234,7 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 		if not rainouts.is_empty():
 			return
 		if _calendar_filter == "team" or _calendar_filter == "all":
-			var label: String = "休養" if _is_within_season_schedule_range(date_text, season) else "オフシーズン"
+			var label: String = Loc.t("home.rest_day") if _is_within_season_schedule_range(date_text, season) else Loc.t("common.offseason")
 			_text(label, Vector2(rect.position.x + 10, rect.position.y + 54), 12, FAINT)
 		return
 
@@ -251,7 +256,7 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 		_draw_cell_game(Rect2(rect.position.x + 7, y, rect.size.x - 14, slot_h - 4), game_value as Dictionary, team_id)
 		y += slot_h
 	if games.size() > shown.size():
-		_text("+%d試合" % (games.size() - shown.size()), Vector2(rect.position.x + 10, y + 12), 10, MUTED)
+		_text(Loc.t("home.more_games", {"n": games.size() - shown.size()}), Vector2(rect.position.x + 10, y + 12), 10, MUTED)
 
 
 func _draw_cell_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
@@ -273,7 +278,7 @@ func _draw_cell_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
 		else:
 			_text(_winner_short(game), Vector2(rect.end.x - 26, rect.position.y + 16), 12, color)
 	elif is_team:
-		_text("予定", Vector2(rect.end.x - 34, rect.position.y + 16), 10, MUTED)
+		_text(Loc.t("home.scheduled"), Vector2(rect.end.x - 34, rect.position.y + 16), 10, MUTED)
 
 
 # 自軍1試合セル: 対戦カード + スコア + 白星/黒星/三角 を添付画像どおり大きめに描く。
@@ -293,7 +298,7 @@ func _draw_cell_self_game(rect: Rect2, game: Dictionary, team_id: int) -> void:
 		_text(_self_score(game, team_id), Vector2(pill.position.x + 10, pill.position.y + 50), 14, TEXT)
 		_draw_result_mark(Vector2(pill.end.x - 22, pill.position.y + 45), 6.5, _result_symbol(game, team_id), color)
 	else:
-		_text("予定", Vector2(pill.position.x + 10, pill.position.y + 50), 13, MUTED)
+		_text(Loc.t("home.scheduled"), Vector2(pill.position.x + 10, pill.position.y + 50), 13, MUTED)
 
 
 # 自軍視点のスコア (自軍得点 - 相手得点)。勝てば大きい方が先に出る。
@@ -314,10 +319,11 @@ func _draw_legend(rect: Rect2) -> void:
 			_dot(Vector2(x + 6, y - 4), 5, item["color"] as Color)
 		else:
 			_draw_result_mark(Vector2(x + 6, y - 4), 5.0, mark, item["color"] as Color)
-		_text(str(item["label"]), Vector2(x + 18, y), 11, MUTED)
-		x += 20 + _measure(str(item["label"]), 11) + 18
+		var label: String = Loc.t(str(item["label"]))
+		_text(label, Vector2(x + 18, y), 11, MUTED)
+		x += 20 + _measure(label, 11) + 18
 	_chip(Rect2(x, y - 15, 30, 18), "DH", BLUE_SOFT)
-	_text("DH試合", Vector2(x + 38, y), 11, MUTED)
+	_text(Loc.t("home.legend.dh_game"), Vector2(x + 38, y), 11, MUTED)
 
 
 # --- 右カラム ---
@@ -331,17 +337,17 @@ func _draw_right_column(team_id: int, season: PSSeason) -> void:
 
 
 func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
-	_panel(rect, "今日のカード")
+	_panel(rect, Loc.t("home.today_games"))
 	var game: Dictionary = _team_game_on_day(team_id, season.current_day)
 	var ox: float = rect.position.x + 18
 	if game.is_empty():
-		_text("本日は自軍の試合はありません", Vector2(ox, rect.position.y + 78), 16, TEXT)
+		_text(Loc.t("home.no_team_game_today"), Vector2(ox, rect.position.y + 78), 16, TEXT)
 		var next_game: Dictionary = _next_team_game(team_id, season.current_day)
 		if not next_game.is_empty():
-			_text("次戦  %s   %s" % [
-				SeasonCalendar.compact_label_for_game(next_game, season),
-				_matchup_for_team(next_game, team_id),
-			], Vector2(ox, rect.position.y + 112), 14, MUTED)
+			_text(Loc.t("home.next_game", {
+				"date": SeasonCalendar.compact_label_for_game(next_game, season),
+				"matchup": _matchup_for_team(next_game, team_id),
+			}), Vector2(ox, rect.position.y + 112), 14, MUTED)
 		return
 
 	var away: PSTeam = GameDb.get_team(int(game.get("away_team_id", 0)))
@@ -358,7 +364,7 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_text(home.name, Vector2(hx + 44, row_y + 23), 16, TEXT, 176)
 
 	# 会場 (球場データは屋根の有無だけなので主催チームで代替) + 天気予報 + DH
-	var host_label: String = "%s 主催（%s）" % [home.name, "ホーム" if home.id == team_id else "ビジター"]
+	var host_label: String = Loc.t("home.host_label", {"team": home.name, "side": Loc.t("home.side_home") if home.id == team_id else Loc.t("home.side_visitor")})
 	_text(host_label, Vector2(ox, rect.position.y + 110), 13, MUTED)
 	var forecast_label: String = _forecast_label(season, game)
 	if not forecast_label.is_empty():
@@ -372,21 +378,21 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 		chip_x -= 48
 	# 雨天中止から組み直された試合。元の日付はカレンダー側に「中止」バッジで出る。
 	if int(game.get("postponed_count", 0)) > 0:
-		_chip(Rect2(chip_x, rect.position.y + 98, 44, 18), "振替", AMBER)
+		_chip(Rect2(chip_x, rect.position.y + 98, 44, 18), Loc.t("home.rescheduled_chip"), AMBER)
 		chip_x -= 48
 	# 降雨コールドで成立した試合 (成績も勝敗も通常どおり、回数だけ短い)。
 	var called_after: int = int(game.get("called_after_inning", 0))
 	if called_after > 0:
-		_chip(Rect2(chip_x, rect.position.y + 98, 62, 18), "%d回コールド" % called_after, RED)
+		_chip(Rect2(chip_x, rect.position.y + 98, 62, 18), Loc.t("home.called_game_chip", {"inning": called_after}), RED)
 
 	# 予告先発
-	_text("予告先発  %s  %s" % [away.short_name, _pitcher_line(_probable_pitcher(away.id, season))], Vector2(ox, rect.position.y + 138), 13, TEXT)
-	_text("予告先発  %s  %s" % [home.short_name, _pitcher_line(_probable_pitcher(home.id, season))], Vector2(ox, rect.position.y + 160), 13, TEXT)
+	_text(Loc.t("home.probable_starter", {"team": away.short_name, "pitcher": _pitcher_line(_probable_pitcher(away.id, season))}), Vector2(ox, rect.position.y + 138), 13, TEXT)
+	_text(Loc.t("home.probable_starter", {"team": home.short_name, "pitcher": _pitcher_line(_probable_pitcher(home.id, season))}), Vector2(ox, rect.position.y + 160), 13, TEXT)
 
 	if bool(game.get("played", false)):
 		# スコアは試合結果色、白星/黒星 (○●) の字色は白にする。
 		var gc: Color = _game_color(game, team_id)
-		var prefix: String = "終了  %s  " % _score(game)
+		var prefix: String = Loc.t("home.final_score", {"score": _score(game)})
 		_text(prefix, Vector2(ox, rect.position.y + 192), 15, gc)
 		_draw_result_mark(Vector2(ox + _measure(prefix, 15) + 7, rect.position.y + 187), 6.0, _result_symbol(game, team_id), gc)
 
@@ -394,12 +400,12 @@ func _draw_today_card(rect: Rect2, team_id: int, season: PSSeason) -> void:
 # 6試合を 2行x3列 のミニカードで表示。各カードは「[Aバッジ] 2-4 [Bバッジ]」の横並び。
 # 強調はスコアのみ (勝者のスコアを明色、敗者を淡色)。バッジは減光しない。
 func _draw_yesterday(rect: Rect2, team_id: int, season: PSSeason) -> void:
-	_panel(rect, "前日の試合結果")
+	_panel(rect, Loc.t("home.yesterday_results"))
 	var day: int = max(1, season.current_day - 1)
 	_text(SeasonCalendar.label_for_date(SeasonCalendar.date_for_season_day(season, day)), Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 	var rows: Array = _games_on_day(day, season)
 	if rows.is_empty():
-		_text("試合はありません", Vector2(rect.position.x + 18, rect.position.y + 92), 14, MUTED)
+		_text(Loc.t("home.no_games"), Vector2(rect.position.x + 18, rect.position.y + 92), 14, MUTED)
 		return
 	# 自軍の試合を先頭(左上)へ、続けて自軍と同じリーグの試合を上段へまとめる。
 	# 6試合を 2行x3列 で描くため、リーグでまとめないと相手リーグの試合が上段と下段に割れて読みづらい。
@@ -512,22 +518,22 @@ func _score_block_width(away_text: String, home_text: String, font_size: int) ->
 func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	var team: PSTeam = GameDb.get_team(team_id)
 	var league_key: String = team.league if team != null else "league1"
-	_panel(rect, "順位 / チーム指標")
+	_panel(rect, Loc.t("home.standings_panel"))
 	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
 	# ミニ順位表も共通テーブルの体裁 (bold ヘッダ + 太めルール + 行ヘアライン + 自軍のアクセントバー)。
 	# 球団はチームカラーのバッジで示す (略称はバッジの中に入るので、別に略称列は置かない)。
 	var hy: float = rect.position.y + 56
-	_text("順", Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("球団", Vector2(rect.position.x + 42, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("試合", rect.position.x + 150, hy, 11, MUTED, 80.0, true)
-	_text_right("勝", rect.position.x + 206, hy, 11, MUTED, 80.0, true)
-	_text_right("敗", rect.position.x + 256, hy, 11, MUTED, 80.0, true)
-	_text_right("分", rect.position.x + 304, hy, 11, MUTED, 80.0, true)
-	_text_right("勝率", rect.position.x + 380, hy, 11, MUTED, 80.0, true)
+	_text(Loc.t("col.rank"), Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("col.team"), Vector2(rect.position.x + 42, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("col.games"), rect.position.x + 150, hy, 11, MUTED, 80.0, true)
+	_text_right(Loc.t("col.wins"), rect.position.x + 206, hy, 11, MUTED, 80.0, true)
+	_text_right(Loc.t("col.losses"), rect.position.x + 256, hy, 11, MUTED, 80.0, true)
+	_text_right(Loc.t("col.draws"), rect.position.x + 304, hy, 11, MUTED, 80.0, true)
+	_text_right(Loc.t("col.win_pct"), rect.position.x + 380, hy, 11, MUTED, 80.0, true)
 	_text_right("GB", rect.position.x + 440, hy, 11, MUTED, 80.0, true)
-	_text_right("残", rect.position.x + 492, hy, 11, MUTED, 80.0, true)
-	_text_right("防御率", rect.end.x - 18, hy, 11, MUTED, 80.0, true)
+	_text_right(Loc.t("col.remaining"), rect.position.x + 492, hy, 11, MUTED, 80.0, true)
+	_text_right(Loc.t("stat.era"), rect.end.x - 18, hy, 11, MUTED, 80.0, true)
 	_line(Vector2(rect.position.x + 14, hy + 8), Vector2(rect.end.x - 14, hy + 8), BORDER, 1.5)
 
 	var entries: Array = _league_entries(league_key, season)
@@ -561,7 +567,7 @@ func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 
 
 func _draw_upcoming(rect: Rect2, team_id: int, season: PSSeason) -> void:
-	_panel(rect, "今後の自軍試合")
+	_panel(rect, Loc.t("home.upcoming_games"))
 	var y: float = rect.position.y + 58
 	var count: int = 0
 	for game_value in season.schedule:
@@ -587,24 +593,24 @@ func _draw_upcoming(rect: Rect2, team_id: int, season: PSSeason) -> void:
 		y += 30
 		count += 1
 	if count == 0:
-		_text("未消化の自軍試合はありません", Vector2(rect.position.x + 18, rect.position.y + 64), 13, MUTED)
+		_text(Loc.t("home.no_upcoming_games"), Vector2(rect.position.x + 18, rect.position.y + 64), 13, MUTED)
 
 
 func _draw_injuries(rect: Rect2, team_id: int) -> void:
 	var injured: Array = _injured_records(team_id)
-	_panel(rect, "怪我選手", AMBER if not injured.is_empty() else TEXT)
+	_panel(rect, Loc.t("home.injuries"), AMBER if not injured.is_empty() else TEXT)
 	var hy: float = rect.position.y + 50
-	_text("選手", Vector2(rect.position.x + 18, hy), 11, FAINT)
-	_text_right("離脱", rect.end.x - 70, hy, 11, FAINT)
-	_text_right("復帰", rect.end.x - 14, hy, 11, FAINT)
+	_text(Loc.t("col.player"), Vector2(rect.position.x + 18, hy), 11, FAINT)
+	_text_right(Loc.t("home.injury_out"), rect.end.x - 70, hy, 11, FAINT)
+	_text_right(Loc.t("home.injury_return"), rect.end.x - 14, hy, 11, FAINT)
 	if injured.is_empty():
-		_text("離脱者はいません", Vector2(rect.position.x + 18, rect.position.y + 78), 13, MUTED)
+		_text(Loc.t("home.no_injuries"), Vector2(rect.position.x + 18, rect.position.y + 78), 13, MUTED)
 		return
 	var y: float = rect.position.y + 74
 	for record_value in injured.slice(0, 4):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		_text(record.name, Vector2(rect.position.x + 18, y), 13, TEXT, 150)
-		_text_right("%d日" % record.injury_days, rect.end.x - 70, y, 13, AMBER)
+		_text_right(Loc.t("common.days_value", {"days": record.injury_days}), rect.end.x - 70, y, 13, AMBER)
 		_text_right(_return_label(record.injury_days), rect.end.x - 14, y, 12, MUTED)
 		y += 28
 
@@ -617,16 +623,16 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_button("team_select_empty", "チーム選択へ", Rect2(810, 560, 160, 46), func() -> void: AppState.request_screen("team_select"), "primary")
-		_add_button("options_empty", "オプション", Rect2(982, 560, 140, 46), func() -> void: AppState.request_screen("options"), "action")
+		_add_button("team_select_empty", Loc.t("home.to_team_select"), Rect2(810, 560, 160, 46), func() -> void: AppState.request_screen("team_select"), "primary")
+		_add_button("options_empty", Loc.t("screen.options"), Rect2(982, 560, 140, 46), func() -> void: AppState.request_screen("options"), "action")
 		_layout_buttons()
 		return
 
 	# 上部アクション。進行は日単位で、1試合だけ消化する操作は持たない。
-	_add_button("today", "本日を終了", Rect2(1384, 22, 128, 42), _simulate_current_day, "primary")
-	_skip_button = _add_button("skip", "スキップ ▾", Rect2(1522, 22, 120, 42), _on_skip_pressed, "action")
-	_add_button("save", "セーブ", Rect2(1652, 22, 88, 42), _save_game, "action")
-	var season_button: Button = _add_button("offseason", "翌年へ", Rect2(1750, 22, 150, 42), _on_offseason_pressed, "action")
+	_add_button("today", Loc.t("home.end_today"), Rect2(1384, 22, 128, 42), _simulate_current_day, "primary")
+	_skip_button = _add_button("skip", Loc.t("home.skip_menu"), Rect2(1522, 22, 120, 42), _on_skip_pressed, "action")
+	_add_button("save", Loc.t("home.save"), Rect2(1652, 22, 88, 42), _save_game, "action")
+	var season_button: Button = _add_button("offseason", Loc.t("home.season_button.next_year"), Rect2(1750, 22, 150, 42), _on_offseason_pressed, "action")
 	_configure_offseason_button(season_button)
 
 	# サイドバー
@@ -636,7 +642,7 @@ func _build_buttons() -> void:
 	var fwidths: Array = []
 	var total_fw: float = 0.0
 	for filter_value in FILTERS:
-		var fw: float = 26.0 + _measure(str((filter_value as Dictionary)["label"]), 13) + 20.0
+		var fw: float = 26.0 + _measure(Loc.t(str((filter_value as Dictionary)["label"])), 13) + 20.0
 		fwidths.append(fw)
 		total_fw += fw
 	total_fw += 8.0 * float(FILTERS.size() - 1)
@@ -644,7 +650,7 @@ func _build_buttons() -> void:
 	for idx in range(FILTERS.size()):
 		var filter: Dictionary = FILTERS[idx] as Dictionary
 		var fid: String = str(filter["id"])
-		_add_button("filter_%s" % fid, str(filter["label"]), Rect2(fx, 218, float(fwidths[idx]), 30),
+		_add_button("filter_%s" % fid, Loc.t(str(filter["label"])), Rect2(fx, 218, float(fwidths[idx]), 30),
 			func(target: String = fid) -> void: _set_calendar_filter(target),
 			"chip_active" if _calendar_filter == fid else "chip")
 		fx += float(fwidths[idx]) + 8.0
@@ -657,7 +663,7 @@ func _build_buttons() -> void:
 	# この試合を消化 (本日を終了と同じく日単位で消化する)
 	var today_game: Dictionary = _team_game_on_day(team.id, season.current_day)
 	if not today_game.is_empty() and not bool(today_game.get("played", false)):
-		_add_button("play_today", "この試合を消化", Rect2(RIGHT_X + RIGHT_W - 196, 372, 180, 36), _simulate_current_day, "primary")
+		_add_button("play_today", Loc.t("home.play_this_game"), Rect2(RIGHT_X + RIGHT_W - 196, 372, 180, 36), _simulate_current_day, "primary")
 
 	_layout_buttons()
 	if _inline_skip_active:
@@ -676,7 +682,7 @@ func _simulate_current_day() -> void:
 		return
 	_inline_skip_active = true
 	AppState.short_skip_active = true
-	_status_text = "本日の試合を消化中…"
+	_status_text = Loc.t("home.simulating_today")
 	_build_buttons()
 	queue_redraw()
 	var result: Dictionary = await AppState.simulate_current_day_async(get_tree(), Callable(), {"cancelled": false}, false)
@@ -691,9 +697,9 @@ func _simulate_current_day() -> void:
 # オールスター) まで、日数・日付指定をその場で選んで進める。イベントは過ぎると項目ごと出さない。
 func _on_skip_pressed() -> void:
 	var menu: PopupMenu = PopupMenu.new()
-	menu.add_item("7日進める", SKIP_MENU_WEEK)
-	menu.add_item("月末まで進める", SKIP_MENU_MONTH_END)
-	menu.add_item("残り全試合消化する", SKIP_MENU_SEASON)
+	menu.add_item(Loc.t("home.skip.week"), SKIP_MENU_WEEK)
+	menu.add_item(Loc.t("home.skip.month_end"), SKIP_MENU_MONTH_END)
+	menu.add_item(Loc.t("home.skip.season"), SKIP_MENU_SEASON)
 	# 日程上のイベントまで進める項目は区切り線で別グループにする。使えるものが無ければグループごと出さない。
 	_skip_milestone_targets = AppState.season_milestone_skip_targets()
 	if not _skip_milestone_targets.is_empty():
@@ -703,7 +709,7 @@ func _on_skip_pressed() -> void:
 		menu.add_item(str(target["label"]), SKIP_MENU_MILESTONE_BASE + index)
 	# 値を入力するダイアログを開く項目は、すぐ進む項目と分けて末尾に置く。
 	menu.add_separator()
-	menu.add_item("日数・日付を指定…", SKIP_MENU_TARGET)
+	menu.add_item(Loc.t("home.skip.target"), SKIP_MENU_TARGET)
 	_style_popup(menu)
 	add_child(menu)
 	menu.id_pressed.connect(_on_skip_menu_selected)
@@ -759,7 +765,7 @@ func _simulate_days(days: int) -> void:
 	_inline_skip_active = true
 	AppState.short_skip_active = true
 	_inline_skip_days = days
-	_status_text = "%d日スキップを開始しています…" % days
+	_status_text = Loc.t("home.skip.starting", {"days": days})
 	_build_buttons()
 	queue_redraw()
 	var result: Dictionary = await AppState.simulate_days_async(
@@ -782,9 +788,10 @@ func _simulate_to_month_end() -> void:
 
 func _on_inline_skip_progress(done: int, total: int, label: String) -> void:
 	var percent: float = float(done) / float(total) * 100.0 if total > 0 else 0.0
-	_status_text = "%d日スキップ中  %d / %d試合 (%0.1f%%)  %s" % [
-		_inline_skip_days, done, total, percent, label,
-	]
+	_status_text = Loc.t("skip.progress", {
+		"state": Loc.t("skip.state_running", {"name": Loc.t("skip.days", {"days": _inline_skip_days})}),
+		"done": done, "total": total, "percent": "%0.1f" % percent, "day": label,
+	})
 	queue_redraw()
 
 
@@ -806,7 +813,7 @@ func _sync_calendar_to_current() -> void:
 
 func _save_game() -> void:
 	var ok: bool = SaveService.save_state(AppState)
-	_status_text = "保存しました" if ok else "保存に失敗しました"
+	_status_text = Loc.t("home.saved") if ok else Loc.t("home.save_failed")
 	queue_redraw()
 
 
@@ -831,22 +838,22 @@ func _shift_month(delta: int) -> void:
 func _configure_offseason_button(button: Button) -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null:
-		button.text = "翌年へ"
+		button.text = Loc.t("home.season_button.next_year")
 		button.disabled = true
 		return
 	if AppState.offseason_active:
-		button.text = "翌年開始" if AppState.offseason_steps_complete() else "オフ続行"
+		button.text = Loc.t("home.season_button.start_next_year") if AppState.offseason_steps_complete() else Loc.t("home.season_button.continue_offseason")
 		button.disabled = false
 		return
 	if AppState.postseason_active:
-		button.text = "表彰へ" if (AppState.current_postseason != null and PostseasonService.is_complete(AppState.current_postseason)) else "PS続行"
+		button.text = Loc.t("postseason.to_awards") if (AppState.current_postseason != null and PostseasonService.is_complete(AppState.current_postseason)) else Loc.t("home.season_button.continue_postseason")
 		button.disabled = false
 		return
 	if season.is_finished():
-		button.text = "ポストシーズン" if (AppState.current_postseason == null or not PostseasonService.is_complete(AppState.current_postseason)) else "オフシーズン"
+		button.text = Loc.t("postseason.title") if (AppState.current_postseason == null or not PostseasonService.is_complete(AppState.current_postseason)) else Loc.t("common.offseason")
 		button.disabled = false
 		return
-	button.text = "翌年へ"
+	button.text = Loc.t("home.season_button.next_year")
 	button.disabled = true
 
 
@@ -857,7 +864,7 @@ func _on_offseason_pressed() -> void:
 	if AppState.offseason_active:
 		if AppState.offseason_steps_complete():
 			if not AppState.finalize_offseason():
-				_status_text = "翌年開始に失敗しました"
+				_status_text = Loc.t("home.start_next_year_failed")
 		else:
 			AppState.request_screen("home")
 		return
@@ -871,7 +878,7 @@ func _on_offseason_pressed() -> void:
 			AppState.request_screen("home")
 		return
 	if not season.is_finished():
-		_status_text = "シーズン完了後にオフシーズンを開始できます(残り%d試合)" % season.games_remaining()
+		_status_text = Loc.t("home.offseason_after_season", {"games": season.games_remaining()})
 		queue_redraw()
 		return
 	if AppState.current_postseason == null or not PostseasonService.is_complete(AppState.current_postseason):
@@ -925,10 +932,10 @@ func _forecast_label(season: PSSeason, game: Dictionary) -> String:
 	var forecast: Dictionary = PSRainoutService.forecast(season, game)
 	match str(forecast.get("kind", "none")):
 		"roof":
-			return "ドーム"
+			return Loc.t("weather.dome")
 		"rain":
 			var chance: int = int(forecast.get("chance", 0))
-			var label: String = "中止" if bool(forecast.get("certain", false)) and chance >= 100 else "降水 %d%%" % chance
+			var label: String = Loc.t("weather.cancelled") if bool(forecast.get("certain", false)) and chance >= 100 else Loc.t("weather.rain_chance", {"pct": chance})
 			return label + _rain_scope_suffix(forecast)
 		_:
 			return ""
@@ -938,9 +945,9 @@ func _forecast_label(season: PSSeason, game: Dictionary) -> String:
 func _rain_scope_suffix(forecast: Dictionary) -> String:
 	var scope: String = str(forecast.get("scope", ""))
 	if scope == PSRainoutService.WEATHER_NATIONAL:
-		return "（全国的な雨）"
+		return Loc.t("sim.rain.national")
 	if scope == PSRainoutService.WEATHER_REGIONAL:
-		return "（%sの雨）" % str(forecast.get("region_label", ""))
+		return Loc.t("weather.regional_rain", {"region": str(forecast.get("region_label", ""))})
 	return ""
 
 
@@ -951,7 +958,7 @@ func _forecast_short_label(season: PSSeason, game: Dictionary) -> String:
 		return ""
 	var chance: int = int(forecast.get("chance", 0))
 	if bool(forecast.get("certain", false)) and chance >= 100:
-		return "中止"
+		return Loc.t("weather.cancelled")
 	return "%d%%" % chance
 
 
@@ -1096,7 +1103,7 @@ func _result_symbol(game: Dictionary, team_id: int) -> String:
 
 func _winner_short(game: Dictionary) -> String:
 	if not bool(game.get("played", false)):
-		return "予定"
+		return Loc.t("home.scheduled")
 	var result: Dictionary = game.get("result", {}) as Dictionary
 	if bool(result.get("draw", false)):
 		return "△"
@@ -1200,22 +1207,22 @@ func _probable_pitcher(team_id: int, season: PSSeason) -> PSPlayerSeasonRecord:
 
 func _pitcher_line(record: PSPlayerSeasonRecord) -> String:
 	if record == null:
-		return "未定"
+		return Loc.t("common.undecided")
 	var ps: PSPitcherStats = record.pitcher_stats
 	var era: String = "-.--" if ps.outs_pitched <= 0 else "%0.2f" % ps.era()
-	return "%s  %d勝%d敗 防%s" % [record.name, ps.wins, ps.losses, era]
+	return Loc.t("home.pitcher_line", {"name": record.name, "w": ps.wins, "l": ps.losses, "era": era})
 
 
 func _return_label(days: int) -> String:
 	if days <= 0:
 		return "-"
 	if days >= 40:
-		return "未定"
+		return Loc.t("common.undecided")
 	var target_date: String = SeasonCalendar.add_days(SeasonCalendar.current_date(AppState.current_season), days)
 	var parts: PackedStringArray = target_date.split("-")
 	if parts.size() != 3:
-		return "%d日後" % days
-	return "%d/%d頃" % [int(parts[1]), int(parts[2])]
+		return Loc.t("home.return_in_days", {"days": days})
+	return Loc.t("home.return_around", {"month": int(parts[1]), "day": int(parts[2])})
 
 
 # ============================================================ home 固有の日付/順位ヘルパ

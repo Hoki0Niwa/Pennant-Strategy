@@ -42,7 +42,7 @@ static func simulate_day(
 	if indices.is_empty():
 		return {"ok": true, "results": [], "played_count": 0, "cancelled_count": 0}
 	if not _prewarm_profiles(season, indices):
-		return {"ok": false, "message": "二軍の成績データを読み込めませんでした"}
+		return {"ok": false, "message": Loc.t("farm.error.stats_load_failed")}
 
 	var calc_results: Array = []
 	calc_results.resize(indices.size())
@@ -82,10 +82,10 @@ static func calculate(
 	rule_groups: Array[Dictionary] = []
 ) -> Dictionary:
 	if farm_index < 0 or farm_index >= season.farm_schedule.size():
-		return {"ok": false, "message": "二軍の試合番号が不正です"}
+		return {"ok": false, "message": Loc.t("farm.error.invalid_game_index")}
 	var game: Dictionary = season.farm_schedule[farm_index] as Dictionary
 	if bool(game.get("played", false)):
-		return {"ok": false, "message": "この二軍戦は消化済みです"}
+		return {"ok": false, "message": Loc.t("farm.error.game_already_played")}
 
 	var away_team_id: int = int(game.get("away_team_id", 0))
 	var home_team_id: int = int(game.get("home_team_id", 0))

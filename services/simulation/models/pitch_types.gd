@@ -25,16 +25,16 @@ const ALL_TYPES: Array[String] = [
 # 「動く速球」として変化球枠から追加で持ちうる (assign_types を参照)。
 const FASTBALL_TYPES: Array[String] = [FOUR_SEAM, TWO_SEAM, SINKER]
 
-# UI 表示用の日本語名。
-const DISPLAY_NAMES := {
-	FOUR_SEAM: "ストレート",
-	TWO_SEAM: "ツーシーム",
-	SINKER: "シンカー",
-	CUTTER: "カットボール",
-	SLIDER: "スライダー",
-	CURVE: "カーブ",
-	FORK: "フォーク",
-	CHANGEUP: "チェンジアップ",
+# UI 表示名のキー (Loc)。
+const DISPLAY_NAME_KEYS := {
+	FOUR_SEAM: "pitch.four_seam",
+	TWO_SEAM: "pitch.two_seam",
+	SINKER: "pitch.sinker",
+	CUTTER: "pitch.cutter",
+	SLIDER: "pitch.slider",
+	CURVE: "pitch.curve",
+	FORK: "pitch.fork",
+	CHANGEUP: "pitch.changeup",
 }
 
 # 球種ごとの傾向(相対値)。k_bias: 三振寄り, gb_bias: ゴロ寄り(=フライ減), hr_bias: 被弾寄り。
@@ -246,7 +246,7 @@ static func assign_types(count: int, lean: float, seed_value: int) -> Array:
 
 # 表示名 (未知 type はキーをそのまま返す)。
 static func display_name(type_key: String) -> String:
-	return str(DISPLAY_NAMES.get(type_key, type_key))
+	return Loc.t(str(DISPLAY_NAME_KEYS[type_key])) if DISPLAY_NAME_KEYS.has(type_key) else type_key
 
 
 # 完成度(mastery z) を S〜D の5段階へ変換する (UI 表示用)。
@@ -281,4 +281,4 @@ static func arsenal_line(arsenal: Array) -> String:
 		if entry == null:
 			continue
 		parts.append("%s%s" % [display_name(str(entry.get("type", ""))), mastery_grade(float(entry.get("mastery", 0.0)))])
-	return " / ".join(parts)
+	return Loc.t("pitch.arsenal_separator").join(parts)

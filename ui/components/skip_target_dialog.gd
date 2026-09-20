@@ -41,9 +41,9 @@ func setup(font: Font = null, scale_factor: float = 1.0) -> void:
 	_first_day = season.current_day if season != null else 0
 	_last_day = AppState.last_unplayed_game_day()
 
-	title = "日数・日付を指定して進める"
-	ok_button_text = "スキップ開始"
-	cancel_button_text = "キャンセル"
+	title = Loc.t("skip_dialog.title")
+	ok_button_text = Loc.t("skip_dialog.start")
+	cancel_button_text = Loc.t("common.cancel")
 	GameDialogStyle.style_confirmation(self, font, scale_factor)
 	confirmed.connect(_on_confirmed)
 
@@ -51,14 +51,14 @@ func setup(font: Font = null, scale_factor: float = 1.0) -> void:
 	box.add_theme_constant_override("separation", max(10, int(round(14.0 * scale_factor))))
 	add_child(box)
 
-	var days_row: HBoxContainer = _make_row("日数")
+	var days_row: HBoxContainer = _make_row(Loc.t("skip_dialog.days"))
 	box.add_child(days_row)
 	_days_spin = _make_spin(1, max(1, _last_day - _first_day + 1), 1)
 	_days_spin.value_changed.connect(func(_value: float) -> void: _on_days_changed())
 	days_row.add_child(_days_spin)
-	days_row.add_child(_make_label("日間 (本日を含む)", GameDialogStyle.TEXT))
+	days_row.add_child(_make_label(Loc.t("skip_dialog.days_suffix"), GameDialogStyle.TEXT))
 
-	var date_row: HBoxContainer = _make_row("日付")
+	var date_row: HBoxContainer = _make_row(Loc.t("skip_dialog.date"))
 	box.add_child(date_row)
 	_month_select = OptionButton.new()
 	_month_select.custom_minimum_size = Vector2(96.0, 0.0) * _scale_factor
@@ -68,7 +68,7 @@ func setup(font: Font = null, scale_factor: float = 1.0) -> void:
 	_date_spin = _make_spin(1, 31, 1)
 	_date_spin.value_changed.connect(func(_value: float) -> void: _on_date_changed())
 	date_row.add_child(_date_spin)
-	date_row.add_child(_make_label("日の試合まで", GameDialogStyle.TEXT))
+	date_row.add_child(_make_label(Loc.t("skip_dialog.date_suffix"), GameDialogStyle.TEXT))
 
 	_preview = _make_label("", GameDialogStyle.MUTED)
 	box.add_child(_preview)
@@ -96,8 +96,8 @@ func selected_end_day() -> int:
 
 func selected_skip_name() -> String:
 	if _last_source == SOURCE_DATE:
-		return "%sまでスキップ" % _date_label(_end_day)
-	return "%d日スキップ" % (_end_day - _first_day + 1)
+		return Loc.t("skip.skip_until", {"target": _date_label(_end_day)})
+	return Loc.t("skip.days", {"days": _end_day - _first_day + 1})
 
 
 # 日数入力を書き換えた扱いで行き先を決める (テスト・外部からの初期値指定用)。
@@ -153,7 +153,7 @@ func _build_month_items() -> void:
 	var month: int = int(first["month"])
 	while year * 12 + month <= int(last["year"]) * 12 + int(last["month"]):
 		_months.append({"year": year, "month": month})
-		_month_select.add_item("%d月" % month)
+		_month_select.add_item(Loc.t("date.month", {"month": month}))
 		month += 1
 		if month > 12:
 			month = 1
@@ -199,13 +199,13 @@ func _update_preview() -> void:
 	if _preview == null:
 		return
 	if not has_targets():
-		_preview.text = "未消化の試合がありません"
+		_preview.text = Loc.t("sim.error.no_unplayed_games")
 		return
-	_preview.text = "%s の試合まで  ・  本日から %d日間  ・  全球団で %d試合" % [
-		_date_label(_end_day),
-		_end_day - _first_day + 1,
-		AppState.count_unplayed_games_through_day(_end_day),
-	]
+	_preview.text = Loc.t("skip_dialog.preview", {
+		"date": _date_label(_end_day),
+		"days": _end_day - _first_day + 1,
+		"games": AppState.count_unplayed_games_through_day(_end_day),
+	})
 
 
 func _on_confirmed() -> void:

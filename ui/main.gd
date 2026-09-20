@@ -30,24 +30,25 @@ const SCREEN_SCRIPT_PATHS: Dictionary = {
 	"history": "res://ui/screens/history_screen.gd",
 }
 
+# label は表示名のキー (Loc)。
 const SIDEBAR_ITEMS: Array = [
-	{"name": "home", "label": "ホーム"},
-	{"name": "game_results", "label": "試合結果"},
-	{"name": "standings", "label": "順位表"},
-	{"name": "rankings", "label": "タイトル争い"},
-	{"name": "ability_stats", "label": "能力・成績一覧"},
-	{"name": "farm", "label": "ファーム情報"},
-	{"name": "history", "label": "シーズン履歴"},
-	{"name": "team_detail", "label": "チーム詳細"},
-	{"name": "player_detail", "label": "選手詳細"},
-	{"name": "lineup_editor", "label": "打順・守備位置"},
-	{"name": "rotation_editor", "label": "投手起用法"},
-	{"name": "active_roster", "label": "選手登録"},
-	{"name": "trade", "label": "トレード"},
-	{"name": "balance_report", "label": "バランスレポート"},
-	{"name": "player_probe", "label": "選手プローブ"},
-	{"name": "draft_simulator", "label": "ドラフト検証"},
-	{"name": "options", "label": "オプション"},
+	{"name": "home", "label": "screen.home"},
+	{"name": "game_results", "label": "screen.game_results"},
+	{"name": "standings", "label": "screen.standings"},
+	{"name": "rankings", "label": "screen.rankings"},
+	{"name": "ability_stats", "label": "screen.ability_stats"},
+	{"name": "farm", "label": "screen.farm"},
+	{"name": "history", "label": "screen.history"},
+	{"name": "team_detail", "label": "screen.team_detail"},
+	{"name": "player_detail", "label": "screen.player_detail"},
+	{"name": "lineup_editor", "label": "screen.lineup_editor"},
+	{"name": "rotation_editor", "label": "screen.rotation_editor"},
+	{"name": "active_roster", "label": "screen.active_roster"},
+	{"name": "trade", "label": "screen.trade"},
+	{"name": "balance_report", "label": "screen.balance_report"},
+	{"name": "player_probe", "label": "options.dev.probe"},
+	{"name": "draft_simulator", "label": "options.dev.draft"},
+	{"name": "options", "label": "screen.options"},
 ]
 
 const DEVELOPER_SCREEN_NAMES: Dictionary = {
@@ -136,9 +137,9 @@ func _quit_request_mode() -> String:
 func _show_quit_dialog() -> void:
 	_ensure_quit_dialog()
 	if _quit_save_failed:
-		_quit_message.text = "セーブに失敗しました。\nもう一度保存するか、保存せずに終了してください。"
+		_quit_message.text = Loc.t("quit.save_failed")
 	else:
-		_quit_message.text = "現在の進行状況を保存して終了しますか？"
+		_quit_message.text = Loc.t("quit.confirm")
 	_quit_dialog.visible = true
 	if _quit_save_button.is_inside_tree():
 		_quit_save_button.grab_focus()
@@ -177,7 +178,7 @@ func _ensure_quit_dialog() -> Control:
 	panel.add_child(column)
 
 	var title: Label = Label.new()
-	title.text = "セーブして終了"
+	title.text = Loc.t("quit.title")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	GameDialogStyle.style_modal_title(title)
 	column.add_child(title)
@@ -196,21 +197,21 @@ func _ensure_quit_dialog() -> Control:
 	column.add_child(actions)
 
 	_quit_save_button = Button.new()
-	_quit_save_button.text = "保存して終了"
+	_quit_save_button.text = Loc.t("quit.save_and_quit")
 	_quit_save_button.custom_minimum_size = Vector2(126, 40)
 	_quit_save_button.pressed.connect(_on_save_and_quit)
 	GameDialogStyle.style_button(_quit_save_button, "primary")
 	actions.add_child(_quit_save_button)
 
 	var cancel_button: Button = Button.new()
-	cancel_button.text = "キャンセル"
+	cancel_button.text = Loc.t("common.cancel")
 	cancel_button.custom_minimum_size = Vector2(112, 40)
 	cancel_button.pressed.connect(_hide_quit_dialog)
 	GameDialogStyle.style_button(cancel_button, "action")
 	actions.add_child(cancel_button)
 
 	_quit_discard_button = Button.new()
-	_quit_discard_button.text = "保存せず終了"
+	_quit_discard_button.text = Loc.t("quit.quit_without_save")
 	_quit_discard_button.custom_minimum_size = Vector2(126, 40)
 	_quit_discard_button.pressed.connect(_on_quit_without_save)
 	GameDialogStyle.style_button(_quit_discard_button, "danger")
@@ -291,7 +292,7 @@ func _build_shell() -> void:
 	root.add_child(sidebar)
 
 	var menu_title: Label = Label.new()
-	menu_title.text = "メニュー"
+	menu_title.text = Loc.t("nav.menu")
 	menu_title.add_theme_font_size_override("font_size", 16)
 	menu_title.add_theme_color_override("font_color", Color(0.70, 0.74, 0.78))
 	sidebar.add_child(menu_title)
@@ -302,7 +303,7 @@ func _build_shell() -> void:
 		if DEVELOPER_SCREEN_NAMES.has(screen_name) and not DeveloperTools.enabled():
 			continue
 		var button: Button = Button.new()
-		button.text = str(item.get("label", ""))
+		button.text = Loc.t(str(item.get("label", "")))
 		button.custom_minimum_size = Vector2(150, 32)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -367,12 +368,12 @@ func _instantiate_screen(path: String) -> Control:
 	if script == null:
 		push_error("Could not load screen script: %s" % path)
 		var fallback: Label = Label.new()
-		fallback.text = "画面を読み込めませんでした: %s" % path
+		fallback.text = Loc.t("screen.error.load_failed", {"path": path})
 		return fallback
 	var screen: Control = script.new() as Control
 	if screen == null:
 		push_error("Screen script is not a Control: %s" % path)
 		var fallback: Label = Label.new()
-		fallback.text = "画面の型が不正です: %s" % path
+		fallback.text = Loc.t("screen.error.not_control", {"path": path})
 		return fallback
 	return screen

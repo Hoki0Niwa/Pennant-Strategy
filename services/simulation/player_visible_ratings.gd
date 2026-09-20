@@ -33,12 +33,12 @@ static func ratings_for_player_data(data: Dictionary) -> Dictionary:
 # 野手表示は打撃6項目。内部 z キーが細かいため、ユーザーに見せる粒度へ加重合成する。
 static func fielder_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 	return _display_rating_result("fielder", [
-		{"key": "contact", "label": "巧打", "display_value": fielder_contact(record)},
-		{"key": "power", "label": "長打", "display_value": fielder_power(record)},
-		{"key": "speed", "label": "走力", "display_value": fielder_speed(record)},
-		{"key": "defense", "label": "守備", "display_value": fielder_defense(record)},
-		{"key": "arm", "label": "肩力", "display_value": fielder_arm(record)},
-		{"key": "discipline", "label": "選球", "display_value": fielder_discipline(record)},
+		{"key": "contact", "label": Loc.t("rating.contact"), "display_value": fielder_contact(record)},
+		{"key": "power", "label": Loc.t("rating.power"), "display_value": fielder_power(record)},
+		{"key": "speed", "label": Loc.t("rating.speed"), "display_value": fielder_speed(record)},
+		{"key": "defense", "label": Loc.t("rating.defense"), "display_value": fielder_defense(record)},
+		{"key": "arm", "label": Loc.t("rating.arm"), "display_value": fielder_arm(record)},
+		{"key": "discipline", "label": Loc.t("rating.discipline"), "display_value": fielder_discipline(record)},
 		vs_opposite_row(record),
 	])
 
@@ -46,10 +46,10 @@ static func fielder_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 # 投手表示は球速、球質、制球、持久。球速だけ max_velocity の km/h をそのまま出す。
 static func pitcher_ratings(record: PSPlayerSeasonRecord) -> Dictionary:
 	return _display_rating_result("pitcher", [
-		{"key": "velocity", "label": "球速", "display_value": pitcher_velocity(record), "suffix": "km/h"},
-		{"key": "stuff", "label": "球質", "display_value": pitcher_stuff(record)},
-		{"key": "control", "label": "制球", "display_value": pitcher_control(record)},
-		{"key": "stamina", "label": "持久", "display_value": pitcher_stamina(record)},
+		{"key": "velocity", "label": Loc.t("rating.velocity"), "display_value": pitcher_velocity(record), "suffix": "km/h"},
+		{"key": "stuff", "label": Loc.t("rating.stuff"), "display_value": pitcher_stuff(record)},
+		{"key": "control", "label": Loc.t("rating.control"), "display_value": pitcher_control(record)},
+		{"key": "stamina", "label": Loc.t("rating.stamina"), "display_value": pitcher_stamina(record)},
 	])
 
 
@@ -224,7 +224,7 @@ static func fielder_discipline(record: PSPlayerSeasonRecord) -> int:
 #
 # ⚠️ **他の表示能力と違って 1-100 の能力値ではない。** 打力そのものは巧打/長打/選球が持つ。
 # 相性の量と OPS への換算は PSPlatoonMatchup が単一ソース ([[project_platoon_usage]])。
-const VS_OPPOSITE_LABEL: String = "対逆"
+const VS_OPPOSITE_LABEL_KEY: String = "rating.vs_opposite"
 # 1.0 の基準にするリーグの左右差 (OPS 差)。一軍スタメンの見込みスプリットの中央値。
 # ⚠️ **左右差の係数やテール圧縮を触ると中央が 1.0 からずれる。** そのときは測り直してここを更新する。
 const VS_OPPOSITE_LEAGUE_SPLIT_OPS: float = 0.077
@@ -246,7 +246,7 @@ static func vs_opposite_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	var multiplier: float = snappedf(fielder_vs_opposite(record), 0.1) + 0.0
 	return {
 		"key": "vs_opposite",
-		"label": VS_OPPOSITE_LABEL,
+		"label": Loc.t(VS_OPPOSITE_LABEL_KEY),
 		"value": multiplier,
 		"text": "%.1f" % multiplier,
 		"factor": clampf(multiplier / VS_OPPOSITE_BAR_MAX, 0.02, 1.0),

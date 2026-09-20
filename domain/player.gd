@@ -1,17 +1,21 @@
 extends RefCounted
 class_name PSPlayer
 
-const POSITION_NAMES = {
-	1: "投手",
-	2: "捕手",
-	3: "一塁手",
-	4: "二塁手",
-	5: "三塁手",
-	6: "遊撃手",
-	7: "左翼手",
-	8: "中堅手",
-	9: "右翼手",
-	10: "DH",
+# 守備位置の表示名キー (Loc)。name=「一塁手」/ mid=「一塁」/ short=「一」の3段階。
+const POSITION_NAME_KEYS: Dictionary = {
+	1: "position.pitcher", 2: "position.catcher", 3: "position.first_base", 4: "position.second_base",
+	5: "position.third_base", 6: "position.shortstop", 7: "position.left_field", 8: "position.center_field",
+	9: "position.right_field", 10: "position.dh",
+}
+const POSITION_MID_KEYS: Dictionary = {
+	1: "position_mid.pitcher", 2: "position_mid.catcher", 3: "position_mid.first_base", 4: "position_mid.second_base",
+	5: "position_mid.third_base", 6: "position_mid.shortstop", 7: "position_mid.left_field", 8: "position_mid.center_field",
+	9: "position_mid.right_field", 10: "position_mid.dh",
+}
+const POSITION_SHORT_KEYS: Dictionary = {
+	1: "position_short.pitcher", 2: "position_short.catcher", 3: "position_short.first_base", 4: "position_short.second_base",
+	5: "position_short.third_base", 6: "position_short.shortstop", 7: "position_short.left_field", 8: "position_short.center_field",
+	9: "position_short.right_field", 10: "position_short.dh",
 }
 
 # FA権/保有権の基準値。1軍登録日数を145日=1年相当に換算し、
@@ -346,6 +350,40 @@ func is_foreign_slot_exempt() -> bool:
 # 一軍登録枠・支配下の外国人保有上限・ドラフトの枠予約は全てこの判定で数える。
 func counts_toward_foreign_slot() -> bool:
 	return foreign_player and not is_foreign_slot_exempt()
+
+
+# registered_roster / contract_status はセーブ・初期データ CSV に保存されるデータ値 (日本語の ID)。
+# 表示するときだけ下の表でキー (Loc) に引き直す。表に無い値はそのまま出す。
+const REGISTERED_ROSTER_LABEL_KEYS: Dictionary = {
+	"支配下": "registered_roster.controlled",
+	"育成": "registered_roster.development",
+	"ファーム": "registered_roster.farm",
+}
+const CONTRACT_STATUS_LABEL_KEYS: Dictionary = {
+	"通常": "contract_status.normal",
+	"FA可能": "contract_status.fa_eligible",
+	"FA権間近": "contract_status.fa_near",
+}
+
+
+static func registered_roster_label(value: String) -> String:
+	return Loc.t(str(REGISTERED_ROSTER_LABEL_KEYS[value])) if REGISTERED_ROSTER_LABEL_KEYS.has(value) else value
+
+
+static func contract_status_label(value: String) -> String:
+	return Loc.t(str(CONTRACT_STATUS_LABEL_KEYS[value])) if CONTRACT_STATUS_LABEL_KEYS.has(value) else value
+
+
+static func position_name(position_id: int, fallback: String = "?") -> String:
+	return Loc.t(str(POSITION_NAME_KEYS[position_id])) if POSITION_NAME_KEYS.has(position_id) else fallback
+
+
+static func position_mid_name(position_id: int, fallback: String = "?") -> String:
+	return Loc.t(str(POSITION_MID_KEYS[position_id])) if POSITION_MID_KEYS.has(position_id) else fallback
+
+
+static func position_short_name(position_id: int, fallback: String = "?") -> String:
+	return Loc.t(str(POSITION_SHORT_KEYS[position_id])) if POSITION_SHORT_KEYS.has(position_id) else fallback
 
 
 static func fielding_ability_category_for_position(position_id: int) -> String:

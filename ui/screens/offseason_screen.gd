@@ -17,75 +17,75 @@ const PlayerValueEvaluator = preload("res://services/simulation/player_value_eva
 # ドラフト候補表のタブ。投手/野手に加え、先発・中継・各守備位置で絞り込む
 # (戦力外選択と同じタブ切り替え)。pos2..pos9 は守備位置 (本職 or 守備適性 > 0)。
 const DRAFT_TABS: Array = [
-	{"id": "pitcher", "label": "投手"},
-	{"id": "starter", "label": "先発"},
-	{"id": "reliever", "label": "中継"},
-	{"id": "fielder", "label": "野手"},
-	{"id": "pos2", "label": "捕"},
-	{"id": "pos3", "label": "一"},
-	{"id": "pos4", "label": "二"},
-	{"id": "pos5", "label": "三"},
-	{"id": "pos6", "label": "遊"},
-	{"id": "pos7", "label": "左"},
-	{"id": "pos8", "label": "中"},
-	{"id": "pos9", "label": "右"},
+	{"id": "pitcher", "label": "common.pitcher"},
+	{"id": "starter", "label": "role.starter"},
+	{"id": "reliever", "label": "role.middle_short"},
+	{"id": "fielder", "label": "common.fielder"},
+	{"id": "pos2", "label": "position_short.catcher"},
+	{"id": "pos3", "label": "position_short.first_base"},
+	{"id": "pos4", "label": "position_short.second_base"},
+	{"id": "pos5", "label": "position_short.third_base"},
+	{"id": "pos6", "label": "position_short.shortstop"},
+	{"id": "pos7", "label": "position_short.left_field"},
+	{"id": "pos8", "label": "position_short.center_field"},
+	{"id": "pos9", "label": "position_short.right_field"},
 ]
 
 const PICK_COLUMNS: Array = [
-	{"title": "チーム", "key": "team", "w": 72, "fmt": "team", "align": "left"},
-	{"title": "巡", "key": "round", "w": 48, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 110, "fmt": "string", "strong": true},
-	{"title": "守備", "key": "pos", "w": 52, "fmt": "pos_badge"},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "出身", "key": "source", "w": 60, "fmt": "string", "sep_before": true},
-	{"title": "総合", "key": "overall", "w": 52, "fmt": "int"},
-	{"title": "競合", "key": "note", "w": 52, "fmt": "string"},
+	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "team", "align": "left"},
+	{"title": "col.round", "key": "round", "w": 48, "fmt": "string"},
+	{"title": "col.player", "key": "name", "w": 110, "fmt": "string", "strong": true},
+	{"title": "col.pos", "key": "pos", "w": 52, "fmt": "pos_badge"},
+	{"title": "col.age", "key": "age", "w": 56, "fmt": "int"},
+	{"title": "col.source", "key": "source", "w": 60, "fmt": "string", "sep_before": true},
+	{"title": "col.overall", "key": "overall", "w": 52, "fmt": "int"},
+	{"title": "col.contested", "key": "note", "w": 52, "fmt": "string"},
 ]
 
 const LOTTERY_COLUMNS: Array = [
-	{"title": "回", "key": "wave", "w": 40, "fmt": "int"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string", "strong": true},
-	{"title": "競合", "key": "teams", "w": 200, "fmt": "string"},
-	{"title": "当選", "key": "team", "w": 84, "fmt": "team", "align": "left", "sep_before": true},
+	{"title": "col.wave", "key": "wave", "w": 40, "fmt": "int"},
+	{"title": "col.player", "key": "name", "w": 120, "fmt": "string", "strong": true},
+	{"title": "col.contested", "key": "teams", "w": 200, "fmt": "string"},
+	{"title": "col.lottery_winner", "key": "team", "w": 84, "fmt": "team", "align": "left", "sep_before": true},
 ]
 
 const ROOKIE_COLUMNS: Array = [
-	{"title": "チーム", "key": "team", "w": 72, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string", "strong": true},
-	{"title": "年齢", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "守備", "key": "pos", "w": 84, "fmt": "pos_badge"},
-	{"title": "総合", "key": "overall", "w": 56, "fmt": "int", "sep_before": true},
+	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "string"},
+	{"title": "col.player", "key": "name", "w": 120, "fmt": "string", "strong": true},
+	{"title": "col.age", "key": "age", "w": 56, "fmt": "int"},
+	{"title": "col.pos", "key": "pos", "w": 84, "fmt": "pos_badge"},
+	{"title": "col.overall", "key": "overall", "w": 56, "fmt": "int", "sep_before": true},
 ]
 
 const CAMP_PITCH_COLUMNS: Array = [
-	{"title": "チーム", "key": "team", "w": 72, "fmt": "team", "align": "left"},
-	{"title": "選手", "key": "name", "w": 120, "fmt": "string", "strong": true},
-	{"title": "年齢", "key": "age", "w": 60, "fmt": "int"},
-	{"title": "習得球種", "key": "pitch", "w": 110, "fmt": "string", "sep_before": true},
-	{"title": "完成度", "key": "grade", "w": 64, "fmt": "string"},
-	{"title": "総合", "key": "overall_cell", "w": 60, "fmt": "growth", "sep_before": true},
-	{"title": "球速", "key": "velocity", "w": 92, "fmt": "growth"},
-	{"title": "球質", "key": "stuff", "w": 50, "fmt": "growth"},
-	{"title": "制球", "key": "control", "w": 50, "fmt": "growth"},
-	{"title": "持久", "key": "stamina", "w": 72, "fmt": "growth"},
+	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "team", "align": "left"},
+	{"title": "col.player", "key": "name", "w": 120, "fmt": "string", "strong": true},
+	{"title": "col.age", "key": "age", "w": 60, "fmt": "int"},
+	{"title": "col.new_pitch", "key": "pitch", "w": 110, "fmt": "string", "sep_before": true},
+	{"title": "col.pitch_grade", "key": "grade", "w": 64, "fmt": "string"},
+	{"title": "col.overall", "key": "overall_cell", "w": 60, "fmt": "growth", "sep_before": true},
+	{"title": "rating.velocity", "key": "velocity", "w": 92, "fmt": "growth"},
+	{"title": "rating.stuff", "key": "stuff", "w": 50, "fmt": "growth"},
+	{"title": "rating.control", "key": "control", "w": 50, "fmt": "growth"},
+	{"title": "rating.stamina", "key": "stamina", "w": 72, "fmt": "growth"},
 ]
 
 # 基本能力(growth 書式=値+増減色分け)の列。成長 / キャンプ結果で共用。
 func _ability_columns(pitcher: bool, compact: bool = false) -> Array:
 	var cols: Array = []
 	if pitcher:
-		_append_growth_column(cols, "球速", "velocity", 74 if compact else 78, 30)
-		_append_growth_column(cols, "球質", "stuff", 44 if compact else 48, 28)
-		_append_growth_column(cols, "制球", "control", 44 if compact else 48, 28)
-		_append_growth_column(cols, "持久", "stamina", 56 if compact else 62, 28)
+		_append_growth_column(cols, "rating.velocity", "velocity", 74 if compact else 78, 30)
+		_append_growth_column(cols, "rating.stuff", "stuff", 44 if compact else 48, 28)
+		_append_growth_column(cols, "rating.control", "control", 44 if compact else 48, 28)
+		_append_growth_column(cols, "rating.stamina", "stamina", 56 if compact else 62, 28)
 	else:
 		var value_w: int = 44 if compact else 48
-		_append_growth_column(cols, "巧打", "contact", value_w, 28)
-		_append_growth_column(cols, "長打", "power", value_w, 28)
-		_append_growth_column(cols, "走力", "speed", value_w, 28)
-		_append_growth_column(cols, "守備", "defense", value_w, 28)
-		_append_growth_column(cols, "肩力", "arm", value_w, 28)
-		_append_growth_column(cols, "選球", "discipline", value_w, 28)
+		_append_growth_column(cols, "rating.contact", "contact", value_w, 28)
+		_append_growth_column(cols, "rating.power", "power", value_w, 28)
+		_append_growth_column(cols, "rating.speed", "speed", value_w, 28)
+		_append_growth_column(cols, "rating.defense", "defense", value_w, 28)
+		_append_growth_column(cols, "rating.arm", "arm", value_w, 28)
+		_append_growth_column(cols, "rating.discipline", "discipline", value_w, 28)
 	return cols
 
 
@@ -108,12 +108,12 @@ func _append_growth_column(cols: Array, title: String, key: String, value_w: int
 # 選手の成長 結果の列 (選手/年齢/結果 + 能力)。
 func _growth_columns(pitcher: bool) -> Array:
 	var cols: Array = [
-		{"title": "守備", "key": "pos", "w": 46, "fmt": "pos_badge"},
-		{"title": "選手", "key": "name", "w": 128, "fmt": "string", "strong": true},
-		{"title": "年齢", "key": "age", "w": 76, "fmt": "int", "gap_after": 24},
-		{"title": "結果", "key": "kind", "w": 104, "fmt": "string", "align": "right", "sep_before": true},
+		{"title": "col.pos", "key": "pos", "w": 46, "fmt": "pos_badge"},
+		{"title": "col.player", "key": "name", "w": 128, "fmt": "string", "strong": true},
+		{"title": "col.age", "key": "age", "w": 76, "fmt": "int", "gap_after": 24},
+		{"title": "col.result", "key": "kind", "w": 104, "fmt": "string", "align": "right", "sep_before": true},
 	]
-	_append_growth_column(cols, "総合", "overall_cell", 58, 30)
+	_append_growth_column(cols, "col.overall", "overall_cell", 58, 30)
 	(cols.back() as Dictionary)["sep_before"] = true
 	cols.append_array(_ability_columns(pitcher))
 	cols.append_array(_growth_detail_columns(pitcher))
@@ -123,55 +123,50 @@ func _growth_columns(pitcher: bool) -> Array:
 # キャンプ結果の列 (球団/選手/練習/成否/変化 + 成長と同じ能力)。
 func _camp_result_columns(pitcher: bool) -> Array:
 	var cols: Array = [
-		{"title": "球団", "key": "team", "w": 64, "fmt": "team", "align": "left"},
-		{"title": "選手", "key": "name", "w": 118, "fmt": "string", "strong": true},
-		{"title": "年齢", "key": "age", "w": 66, "fmt": "int", "gap_after": 20},
-		{"title": "練習", "key": "training", "w": 104, "fmt": "string", "sep_before": true},
-		{"title": "成否", "key": "result", "w": 52, "fmt": "string"},
-		{"title": "変更前", "key": "before_state", "w": 64, "fmt": "pos_badge"},
-		{"title": "変更後", "key": "after_state", "w": 64, "fmt": "pos_badge"},
+		{"title": "col.team", "key": "team", "w": 64, "fmt": "team", "align": "left"},
+		{"title": "col.player", "key": "name", "w": 118, "fmt": "string", "strong": true},
+		{"title": "col.age", "key": "age", "w": 66, "fmt": "int", "gap_after": 20},
+		{"title": "col.training", "key": "training", "w": 104, "fmt": "string", "sep_before": true},
+		{"title": "col.outcome", "key": "result", "w": 52, "fmt": "string"},
+		{"title": "col.before", "key": "before_state", "w": 64, "fmt": "pos_badge"},
+		{"title": "col.after", "key": "after_state", "w": 64, "fmt": "pos_badge"},
 	]
-	_append_growth_column(cols, "総合", "overall_cell", 54, 28)
+	_append_growth_column(cols, "col.overall", "overall_cell", 54, 28)
 	(cols.back() as Dictionary)["sep_before"] = true
 	cols.append_array(_ability_columns(pitcher, true))
 	cols.append_array(_growth_detail_columns(pitcher, true))
 	return cols
 
 const DRAFT_RESULT_COLUMNS: Array = [
-	{"title": "巡", "key": "round", "w": 36, "fmt": "string"},
-	{"title": "選手", "key": "name", "w": 96, "fmt": "string", "strong": true},
-	{"title": "守備", "key": "pos", "w": 46, "fmt": "pos_badge"},
-	{"title": "年", "key": "age", "w": 42, "fmt": "int"},
-	{"title": "総", "key": "overall", "w": 38, "fmt": "int", "sep_before": true},
+	{"title": "col.round", "key": "round", "w": 36, "fmt": "string"},
+	{"title": "col.player", "key": "name", "w": 96, "fmt": "string", "strong": true},
+	{"title": "col.pos", "key": "pos", "w": 46, "fmt": "pos_badge"},
+	{"title": "col.age_short", "key": "age", "w": 42, "fmt": "int"},
+	{"title": "col.overall_short", "key": "overall", "w": 38, "fmt": "int", "sep_before": true},
 ]
 
 # ドラフト進行中の表示切替チップ (指名画面=候補ボード+指名履歴/抽選、途中経過=結果画面風の全面ビュー)。
 const DRAFT_HISTORY_MODES: Array = [
-	{"id": "timeline", "label": "指名画面"},
-	{"id": "by_team", "label": "途中経過"},
+	{"id": "timeline", "label": "offseason.draft.mode.timeline"},
+	{"id": "by_team", "label": "offseason.draft.mode.by_team"},
 ]
-
-const POSITION_CHARS: Dictionary = {
-	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三",
-	6: "遊", 7: "左", 8: "中", 9: "右", 10: "指",
-}
 
 const FOREIGN_POSITION_OPTIONS: Array = [
-	{"id": "any", "label": "おまかせ"}, {"id": "starter", "label": "先発"}, {"id": "reliever", "label": "救援"},
-	{"id": "catcher", "label": "捕手"}, {"id": "first", "label": "一塁"}, {"id": "second", "label": "二塁"},
-	{"id": "third", "label": "三塁"}, {"id": "shortstop", "label": "遊撃"}, {"id": "outfield", "label": "外野"}, {"id": "dh", "label": "DH"},
+	{"id": "any", "label": "offseason.foreign.pos.any"}, {"id": "starter", "label": "role.starter"}, {"id": "reliever", "label": "role.reliever"},
+	{"id": "catcher", "label": "position.catcher"}, {"id": "first", "label": "position_mid.first_base"}, {"id": "second", "label": "position_mid.second_base"},
+	{"id": "third", "label": "position_mid.third_base"}, {"id": "shortstop", "label": "position_mid.shortstop"}, {"id": "outfield", "label": "offseason.foreign.pos.outfield"}, {"id": "dh", "label": "position_short.dh"},
 ]
 const FOREIGN_FIELDER_TYPES: Array = [
-	{"id": "balanced", "label": "バランス"}, {"id": "power", "label": "パワー"}, {"id": "contact", "label": "巧打"},
-	{"id": "discipline", "label": "選球眼"}, {"id": "speed_defense", "label": "走守"}, {"id": "defense", "label": "守備"},
+	{"id": "balanced", "label": "offseason.foreign.type.balanced"}, {"id": "power", "label": "offseason.foreign.type.power"}, {"id": "contact", "label": "rating.contact"},
+	{"id": "discipline", "label": "offseason.foreign.type.discipline"}, {"id": "speed_defense", "label": "offseason.foreign.type.speed_defense"}, {"id": "defense", "label": "rating.defense"},
 ]
 const FOREIGN_PITCHER_TYPES: Array = [
-	{"id": "balanced", "label": "バランス"}, {"id": "strikeout", "label": "奪三振"}, {"id": "control", "label": "制球"},
-	{"id": "groundball", "label": "ゴロ"}, {"id": "stamina", "label": "持久力"},
+	{"id": "balanced", "label": "offseason.foreign.type.balanced"}, {"id": "strikeout", "label": "stat.strikeouts"}, {"id": "control", "label": "rating.control"},
+	{"id": "groundball", "label": "offseason.foreign.type.groundball"}, {"id": "stamina", "label": "offseason.foreign.type.stamina"},
 ]
 const FOREIGN_BUDGET_OPTIONS: Array = [
-	{"id": "bargain", "label": "格安 0.3〜0.6億・4名"}, {"id": "standard", "label": "標準 0.6〜1.2億・3名"},
-	{"id": "core", "label": "主力 1.2〜2億・2名"}, {"id": "star", "label": "大物 2〜4億・1名"},
+	{"id": "bargain", "label": "offseason.foreign.budget.bargain"}, {"id": "standard", "label": "offseason.foreign.budget.standard"},
+	{"id": "core", "label": "offseason.foreign.budget.core"}, {"id": "star", "label": "offseason.foreign.budget.star"},
 ]
 
 # --- レイアウト基準 (base 座標) ---
@@ -190,21 +185,21 @@ const CY_BODY_RECT: Rect2 = Rect2(262, 284, 1638, 776)
 const COMP_SORT_OVERALL: String = "overall"
 const COMP_SORT_AGE: String = "age"
 const COMP_SORT_OPTIONS: Array = [
-	{"id": COMP_SORT_OVERALL, "label": "総合順"},
-	{"id": COMP_SORT_AGE, "label": "年齢順"},
+	{"id": COMP_SORT_OVERALL, "label": "offseason.comp.sort.overall"},
+	{"id": COMP_SORT_AGE, "label": "offseason.comp.sort.age"},
 ]
 
 # 人的補償の結果: 上段にケース一覧 (FA移籍ごとの選択)、下段に移った補償選手の選手表。
 const COMP_CASES_RECT: Rect2 = Rect2(262, 284, 1638, 300)
 const COMP_MOVES_RECT: Rect2 = Rect2(262, 596, 1638, 464)
 const COMP_CASE_COLUMNS: Array = [
-	{"key": "fa_name", "title": "FA選手", "w": 150, "fmt": "string", "strong": true},
-	{"key": "rank", "title": "ランク", "w": 56, "fmt": "string", "align": "center"},
-	{"key": "to_team", "title": "移籍先", "w": 110, "fmt": "team"},
-	{"key": "from_team", "title": "補償を受ける球団", "w": 130, "fmt": "team"},
-	{"key": "decision", "title": "選択", "w": 160, "fmt": "string"},
-	{"key": "picked", "title": "補償選手", "w": 150, "fmt": "string", "strong": true},
-	{"key": "money", "title": "補償金", "w": 110, "fmt": "string", "align": "right"},
+	{"key": "fa_name", "title": "offseason.comp.col.fa_player", "w": 150, "fmt": "string", "strong": true},
+	{"key": "rank", "title": "offseason.comp.col.rank", "w": 56, "fmt": "string", "align": "center"},
+	{"key": "to_team", "title": "offseason.comp.col.to_team", "w": 110, "fmt": "team"},
+	{"key": "from_team", "title": "offseason.comp.col.from_team", "w": 130, "fmt": "team"},
+	{"key": "decision", "title": "offseason.comp.col.decision", "w": 160, "fmt": "string"},
+	{"key": "picked", "title": "offseason.comp.col.picked", "w": 150, "fmt": "string", "strong": true},
+	{"key": "money", "title": "offseason.comp.col.money", "w": 110, "fmt": "string", "align": "right"},
 ]
 # キャンプ: 上段=候補ボード(全幅) / 下段=特別練習メニュー・成功率・成功時獲得適性の3パネル。
 const CAMP_BOARD: Rect2 = Rect2(262, 324, 1638, 512)
@@ -259,15 +254,15 @@ var _draft_record_cache: Dictionary = {} # candidate_id -> PSPlayerSeasonRecord 
 var _draft_pick_rows: Array = []
 var _draft_lottery_rows: Array = []
 var _draft_status_text: String = ""
-var _draft_submit_label: String = "指名する"
+var _draft_submit_label: String = "offseason.draft.button.pick"
 var _draft_show_skip: bool = false
-var _draft_skip_label: String = "本指名終了"
+var _draft_skip_label: String = "offseason.draft.button.end_main"
 var _draft_cand_by_id: Dictionary = {}
 # 1巡目入札の対話フロー: ""=通常表示 / "reveal"=入札公開 / "result"=抽選結果。
 var _draft_reveal_stage: String = ""
 # 1巡目パネルの球団別カード (12球団=4列×3行、並び順は _draft_reveal_card_order)。
 var _draft_reveal_cards: Array = []
-var _draft_reveal_go_label: String = "抽選へ"
+var _draft_reveal_go_label: String = "offseason.draft.button.to_lottery"
 # 進行中パネルの表示切替: "timeline"=指名画面 (候補ボード+指名履歴/抽選) / "by_team"=途中経過ビュー。
 var _draft_history_mode: String = "timeline"
 
@@ -487,7 +482,7 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_button("home_empty", "ホームへ", Rect2(860, 560, 200, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(860, 560, 200, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
@@ -498,37 +493,37 @@ func _build_buttons() -> void:
 		return
 
 	# 上部右: セーブ / 次のステップへ / 翌年開始 (セーブは全ステップ共通)。
-	_add_button("save", "セーブ", Rect2(1452, 22, 84, 42), _on_save_pressed, "action")
-	var next_button: Button = _add_button("next", "次のステップへ", Rect2(1544, 22, 170, 42), _on_next_pressed, "primary")
+	_add_button("save", Loc.t("offseason.button.save"), Rect2(1452, 22, 84, 42), _on_save_pressed, "action")
+	var next_button: Button = _add_button("next", Loc.t("offseason.button.next_step"), Rect2(1544, 22, 170, 42), _on_next_pressed, "primary")
 	next_button.disabled = not bool(_view.get("can_advance", false))
-	var finalize_button: Button = _add_button("finalize", "翌年開始", Rect2(1722, 22, 178, 42), _on_finalize_pressed, "primary")
+	var finalize_button: Button = _add_button("finalize", Loc.t("offseason.button.start_next_year"),Rect2(1722, 22, 178, 42), _on_finalize_pressed, "primary")
 	finalize_button.disabled = not bool(_view.get("can_finalize", false))
 
 	match _active_panel:
 		AppState.OFFSEASON_PANEL_RELEASE:
 			_action_row([
-				{"id": "rel_commit", "label": "戦力外を確定して次へ", "cb": _on_commit_release_pressed, "kind": "primary", "w": 220},
-				{"id": "rel_auto", "label": "推奨選手を表示", "cb": _on_auto_select_release_pressed, "kind": "action", "w": 160},
-				{"id": "rel_auto_commit", "label": "自動で決定して次へ", "cb": _on_auto_commit_release_pressed, "kind": "action", "w": 180},
+				{"id": "rel_commit", "label": "offseason.button.release_commit", "cb": _on_commit_release_pressed, "kind": "primary", "w": 220},
+				{"id": "rel_auto", "label": "offseason.button.show_recommended", "cb": _on_auto_select_release_pressed, "kind": "action", "w": 160},
+				{"id": "rel_auto_commit", "label": "offseason.button.auto_commit","cb": _on_auto_commit_release_pressed, "kind": "action", "w": 180},
 			])
 			_build_player_tabs("release", _release_tab, _release_pitcher_records.size(), _release_fielder_records.size(), _set_release_tab)
 		AppState.OFFSEASON_PANEL_DRAFT:
 			if _draft_reveal_stage == "reveal":
 				_action_row([
 					{"id": "draft_proceed", "label": _draft_reveal_go_label, "cb": _on_draft_proceed_pressed, "kind": "primary", "w": 140},
-					{"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150},
+					{"id": "draft_auto_all", "label": "offseason.button.auto_rest", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150},
 				])
 			elif _draft_reveal_stage == "result":
 				_action_row([
-					{"id": "draft_proceed", "label": "次へ", "cb": _on_draft_proceed_pressed, "kind": "primary", "w": 140},
-					{"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150},
+					{"id": "draft_proceed", "label": "offseason.button.next", "cb": _on_draft_proceed_pressed, "kind": "primary", "w": 140},
+					{"id": "draft_auto_all", "label": "offseason.button.auto_rest", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150},
 				])
 			else:
 				var specs: Array = [{"id": "draft_submit", "label": _draft_submit_label, "cb": _on_draft_submit_pressed, "kind": "primary", "w": 130}]
 				if _draft_show_skip:
 					specs.append({"id": "draft_skip", "label": _draft_skip_label, "cb": _on_draft_skip_pressed, "kind": "action", "w": 130})
-				specs.append({"id": "draft_auto", "label": "この指名を自動", "cb": _on_draft_auto_pressed, "kind": "action", "w": 150})
-				specs.append({"id": "draft_auto_all", "label": "残りを自動進行", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150})
+				specs.append({"id": "draft_auto", "label": "offseason.button.auto_this_pick", "cb": _on_draft_auto_pressed, "kind": "action", "w": 150})
+				specs.append({"id": "draft_auto_all", "label": "offseason.button.auto_rest", "cb": _on_draft_auto_all_pressed, "kind": "action", "w": 150})
 				_action_row(specs)
 				# 「途中経過」ビュー中は候補ボードを描かないため、候補タブも出さない。
 				if _draft_history_mode != "by_team":
@@ -538,106 +533,106 @@ func _build_buttons() -> void:
 			_action_row([
 				# 支配下/育成は枠の消費も契約年数も違うので、手動獲得ではユーザーが選ぶ
 				# (自動判断は候補ごとの既定 track を使う)。
-				{"id": "rm_sign_controlled", "label": "支配下で獲得", "cb": _on_released_sign_controlled_pressed, "kind": "primary", "w": 140, "disabled": not _released_can_submit},
-				{"id": "rm_sign_development", "label": "育成で獲得", "cb": _on_released_sign_development_pressed, "kind": "action", "w": 130, "disabled": not _released_can_submit},
-				{"id": "rm_skip", "label": "見送る", "cb": _on_released_skip_pressed, "kind": "action", "w": 100, "disabled": not _released_can_submit},
-				{"id": "rm_auto", "label": "この判断を自動", "cb": _on_released_auto_pressed, "kind": "action", "w": 150, "disabled": not _released_can_auto},
-				{"id": "rm_auto_all", "label": "残りを自動進行", "cb": _on_released_auto_all_pressed, "kind": "action", "w": 150},
+				{"id": "rm_sign_controlled", "label": "offseason.button.sign_controlled", "cb": _on_released_sign_controlled_pressed, "kind": "primary", "w": 140, "disabled": not _released_can_submit},
+				{"id": "rm_sign_development", "label": "offseason.button.sign_development", "cb": _on_released_sign_development_pressed, "kind": "action", "w": 130, "disabled": not _released_can_submit},
+				{"id": "rm_skip", "label": "offseason.button.skip", "cb": _on_released_skip_pressed, "kind": "action", "w": 100, "disabled": not _released_can_submit},
+				{"id": "rm_auto", "label": "offseason.button.auto_this", "cb": _on_released_auto_pressed, "kind": "action", "w": 150, "disabled": not _released_can_auto},
+				{"id": "rm_auto_all", "label": "offseason.button.auto_rest", "cb": _on_released_auto_all_pressed, "kind": "action", "w": 150},
 			])
 			var released_counts: Dictionary = _player_row_pitcher_fielder_counts(_released_player_rows)
 			_build_player_tabs("released_market", _released_tab, int(released_counts.get(PLAYER_TAB_PITCHER, 0)), int(released_counts.get(PLAYER_TAB_FIELDER, 0)), _set_released_tab)
 		AppState.OFFSEASON_PANEL_GENEKI_DRAFT:
 			if _geneki_phase == "submit":
 				_action_row([
-					{"id": "gd_submit", "label": "リストを確定", "cb": _on_geneki_submit_list_pressed, "kind": "primary", "w": 150},
-					{"id": "gd_reco", "label": "推奨リストに戻す", "cb": _on_geneki_reset_recommended_pressed, "kind": "action", "w": 170},
-					{"id": "gd_ai", "label": "すべてAIに任せる", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170},
+					{"id": "gd_submit", "label": "offseason.button.submit_list", "cb": _on_geneki_submit_list_pressed, "kind": "primary", "w": 150},
+					{"id": "gd_reco", "label": "offseason.button.reset_recommended", "cb": _on_geneki_reset_recommended_pressed, "kind": "action", "w": 170},
+					{"id": "gd_ai", "label": "offseason.button.all_ai", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170},
 				])
 			elif _geneki_phase == "round2_entry":
 				_action_row([
-					{"id": "gd_r2_pick", "label": "指名して参加", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_PICK), "kind": "primary", "w": 150},
-					{"id": "gd_r2_offer", "label": "放出のみ参加", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_OFFER_ONLY), "kind": "action", "w": 150},
-					{"id": "gd_r2_none", "label": "参加しない", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_NONE), "kind": "action", "w": 130},
-					{"id": "gd_ai", "label": "すべてAIに任せる", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170},
+					{"id": "gd_r2_pick", "label": "offseason.button.round2_pick", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_PICK), "kind": "primary", "w": 150},
+					{"id": "gd_r2_offer", "label": "offseason.button.round2_offer_only", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_OFFER_ONLY), "kind": "action", "w": 150},
+					{"id": "gd_r2_none", "label": "offseason.button.round2_none", "cb": func() -> void: _on_geneki_round2_mode_pressed(GenekiDraftService.ROUND2_MODE_NONE), "kind": "action", "w": 130},
+					{"id": "gd_ai", "label": "offseason.button.all_ai", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170},
 				])
 			else:
 				var specs: Array = [
-					{"id": "gd_pick", "label": "指名する", "cb": _on_geneki_pick_pressed, "kind": "primary", "w": 120, "disabled": selected_geneki_pick_id <= 0},
+					{"id": "gd_pick", "label": "offseason.draft.button.pick", "cb": _on_geneki_pick_pressed, "kind": "primary", "w": 120, "disabled": selected_geneki_pick_id <= 0},
 				]
 				if _geneki_phase == "round2":
-					specs.append({"id": "gd_pass", "label": "見送る", "cb": _on_geneki_pass_pressed, "kind": "action", "w": 100})
-				specs.append({"id": "gd_ai", "label": "すべてAIに任せる", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170})
+					specs.append({"id": "gd_pass", "label": "offseason.button.skip", "cb": _on_geneki_pass_pressed, "kind": "action", "w": 100})
+				specs.append({"id": "gd_ai", "label": "offseason.button.all_ai", "cb": _on_geneki_ai_all_pressed, "kind": "action", "w": 170})
 				_action_row(specs)
 			var geneki_counts: Dictionary = _player_row_pitcher_fielder_counts(_geneki_player_rows)
 			_build_player_tabs("geneki", _geneki_tab, int(geneki_counts.get(PLAYER_TAB_PITCHER, 0)), int(geneki_counts.get(PLAYER_TAB_FIELDER, 0)), _set_geneki_tab)
 		AppState.OFFSEASON_PANEL_FA:
 			_action_row([
-				{"id": "fa_submit", "label": "交渉する", "cb": _on_fa_submit_pressed, "kind": "primary", "w": 110, "disabled": not _fa_can_submit},
-				{"id": "fa_skip", "label": "見送る", "cb": _on_fa_skip_pressed, "kind": "action", "w": 100, "disabled": not _fa_can_submit},
-				{"id": "fa_auto", "label": "この判断を自動", "cb": _on_fa_auto_pressed, "kind": "action", "w": 150, "disabled": not _fa_can_auto},
-				{"id": "fa_auto_all", "label": "残りを自動進行", "cb": _on_fa_auto_all_pressed, "kind": "action", "w": 150},
+				{"id": "fa_submit", "label": "offseason.button.negotiate", "cb": _on_fa_submit_pressed, "kind": "primary", "w": 110, "disabled": not _fa_can_submit},
+				{"id": "fa_skip", "label": "offseason.button.skip", "cb": _on_fa_skip_pressed, "kind": "action", "w": 100, "disabled": not _fa_can_submit},
+				{"id": "fa_auto", "label": "offseason.button.auto_this", "cb": _on_fa_auto_pressed, "kind": "action", "w": 150, "disabled": not _fa_can_auto},
+				{"id": "fa_auto_all", "label": "offseason.button.auto_rest", "cb": _on_fa_auto_all_pressed, "kind": "action", "w": 150},
 			])
 			var fa_counts: Dictionary = _player_row_pitcher_fielder_counts(_fa_player_rows)
 			_build_player_tabs("fa_market", _fa_tab, int(fa_counts.get(PLAYER_TAB_PITCHER, 0)), int(fa_counts.get(PLAYER_TAB_FIELDER, 0)), _set_fa_tab)
 			_build_fa_year_chips()
 		AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT:
 			_action_row([
-				{"id": "cp_submit", "label": "プロテクトを確定", "cb": _on_compensation_protect_submit_pressed, "kind": "primary", "w": 170,
+				{"id": "cp_submit", "label": "offseason.button.protect_submit", "cb": _on_compensation_protect_submit_pressed, "kind": "primary", "w": 170,
 					"disabled": selected_comp_protect_ids.size() != _comp_required_protect},
-				{"id": "cp_reco", "label": "推奨リストに戻す", "cb": _on_compensation_protect_recommended_pressed, "kind": "action", "w": 170},
-				{"id": "cp_ai", "label": "すべてAIに任せる", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 170},
+				{"id": "cp_reco", "label": "offseason.button.reset_recommended", "cb": _on_compensation_protect_recommended_pressed, "kind": "action", "w": 170},
+				{"id": "cp_ai", "label": "offseason.button.all_ai", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 170},
 			])
 			_build_comp_protect_sort_chips()
 		AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
 			_action_row([
-				{"id": "cpk_pick", "label": "この選手を獲得", "cb": _on_compensation_pick_pressed, "kind": "primary", "w": 160, "disabled": selected_comp_pick_id <= 0},
-				{"id": "cpk_money", "label": "金銭補償のみ", "cb": _on_compensation_money_pressed, "kind": "action", "w": 140},
-				{"id": "cpk_auto", "label": "この判断を自動", "cb": _on_compensation_auto_case_pressed, "kind": "action", "w": 150},
-				{"id": "cpk_ai", "label": "残りを自動進行", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 150},
+				{"id": "cpk_pick", "label": "offseason.button.comp_pick", "cb": _on_compensation_pick_pressed, "kind": "primary", "w": 160, "disabled": selected_comp_pick_id <= 0},
+				{"id": "cpk_money", "label": "offseason.button.comp_money", "cb": _on_compensation_money_pressed, "kind": "action", "w": 140},
+				{"id": "cpk_auto", "label": "offseason.button.auto_this", "cb": _on_compensation_auto_case_pressed, "kind": "action", "w": 150},
+				{"id": "cpk_ai", "label": "offseason.button.auto_rest", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 150},
 			])
 			var comp_counts: Dictionary = _player_row_pitcher_fielder_counts(_comp_pick_rows)
 			_build_player_tabs("comp_pick", _comp_pick_tab, int(comp_counts.get(PLAYER_TAB_PITCHER, 0)), int(comp_counts.get(PLAYER_TAB_FIELDER, 0)), _set_comp_pick_tab)
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 			var fgc_entry: Dictionary = _fgc_by_id.get(selected_fgc_player_id, {}) as Dictionary
 			var fgc_has_offer: bool = not (fgc_entry.get("user_offer", {}) as Dictionary).is_empty()
-			var fgc_submit_label: String = "提示する"
+			var fgc_submit_label: String = "offseason.button.offer"
 			if not fgc_entry.is_empty():
-				fgc_submit_label = "残留を提示する" if int(fgc_entry.get("from_team_id", 0)) == AppState.selected_team_id else "引き抜きを提示する"
+				fgc_submit_label = "offseason.button.offer_retain" if int(fgc_entry.get("from_team_id", 0)) == AppState.selected_team_id else "offseason.button.offer_poach"
 			_action_row([
 				{"id": "fgc_submit", "label": fgc_submit_label, "cb": _on_fgc_submit_pressed, "kind": "primary", "w": 180, "disabled": fgc_entry.is_empty()},
-				{"id": "fgc_withdraw", "label": "提示を取り下げる", "cb": _on_fgc_withdraw_pressed, "kind": "action", "w": 170, "disabled": not fgc_has_offer},
-				{"id": "fgc_finalize", "label": "契約市場を確定して次へ", "cb": _on_foreign_contract_finalize_pressed, "kind": "primary", "w": 220},
-				{"id": "fgc_ai_all", "label": "すべてAIに任せる", "cb": _on_foreign_contract_ai_all_pressed, "kind": "action", "w": 170},
+				{"id": "fgc_withdraw", "label": "offseason.button.withdraw_offer", "cb": _on_fgc_withdraw_pressed, "kind": "action", "w": 170, "disabled": not fgc_has_offer},
+				{"id": "fgc_finalize", "label": "offseason.button.fgc_finalize", "cb": _on_foreign_contract_finalize_pressed, "kind": "primary", "w": 220},
+				{"id": "fgc_ai_all", "label": "offseason.button.all_ai", "cb": _on_foreign_contract_ai_all_pressed, "kind": "action", "w": 170},
 			])
 			_build_player_tabs("fgc_away", _fgc_tab, _fgc_away_pitcher_rows.size(), _fgc_away_fielder_rows.size(), _set_fgc_tab,
 				FGC_AWAY_RECT.position.y + 14.0 - (BODY.position.y + 16.0))
 			_build_fgc_year_chips()
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
 			_action_row([
-				{"id": "fgc_result_next", "label": "次へ", "cb": _on_foreign_contract_result_next_pressed, "kind": "primary", "w": 140},
+				{"id": "fgc_result_next", "label": "offseason.button.next", "cb": _on_foreign_contract_result_next_pressed, "kind": "primary", "w": 140},
 			])
 			var fgc_result_counts: Dictionary = _player_row_pitcher_fielder_counts(_fgc_contract_result_rows)
 			_build_player_tabs("fgc_contract_result", _result_people_tab, int(fgc_result_counts.get(PLAYER_TAB_PITCHER, 0)), int(fgc_result_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 		AppState.OFFSEASON_PANEL_FOREIGN_RESULT:
 			_action_row([
-				{"id": "fgc_scout_result_next", "label": "次へ", "cb": _on_foreign_scout_result_next_pressed, "kind": "primary", "w": 140},
+				{"id": "fgc_scout_result_next", "label": "offseason.button.next", "cb": _on_foreign_scout_result_next_pressed, "kind": "primary", "w": 140},
 			])
 			var fgc_scout_counts: Dictionary = _player_row_pitcher_fielder_counts(_fgc_scout_result_rows)
 			_build_player_tabs("fgc_scout_result", _result_people_tab, int(fgc_scout_counts.get(PLAYER_TAB_PITCHER, 0)), int(fgc_scout_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 		AppState.OFFSEASON_PANEL_FOREIGN:
 			_action_row([
-				{"id": "fg_search", "label": "候補を検索", "cb": _on_foreign_search_pressed, "kind": "primary", "w": 120},
-				{"id": "fg_submit", "label": "獲得する", "cb": _on_foreign_submit_pressed, "kind": "primary", "w": 110, "disabled": not _foreign_can_submit},
-				{"id": "fg_skip", "label": "見送る", "cb": _on_foreign_skip_pressed, "kind": "action", "w": 100, "disabled": not _foreign_can_submit},
-				{"id": "fg_auto_all", "label": "補強を終了", "cb": _on_foreign_auto_all_pressed, "kind": "action", "w": 130},
-				{"id": "fg_ai_all", "label": "すべてAIに任せる", "cb": _on_foreign_ai_all_pressed, "kind": "action", "w": 170},
+				{"id": "fg_search", "label": "offseason.button.search", "cb": _on_foreign_search_pressed, "kind": "primary", "w": 120},
+				{"id": "fg_submit", "label": "offseason.button.sign","cb": _on_foreign_submit_pressed, "kind": "primary", "w": 110, "disabled": not _foreign_can_submit},
+				{"id": "fg_skip", "label": "offseason.button.skip", "cb": _on_foreign_skip_pressed, "kind": "action", "w": 100, "disabled": not _foreign_can_submit},
+				{"id": "fg_auto_all", "label": "offseason.button.end_foreign", "cb": _on_foreign_auto_all_pressed, "kind": "action", "w": 130},
+				{"id": "fg_ai_all", "label": "offseason.button.all_ai", "cb": _on_foreign_ai_all_pressed, "kind": "action", "w": 170},
 			])
 			_build_foreign_scout_chips()
 		AppState.OFFSEASON_PANEL_CAMP:
 			_action_row([
-				{"id": "camp_submit", "label": "実行", "cb": _on_camp_submit_pressed, "kind": "primary", "w": 100, "disabled": not _camp_can_submit},
-				{"id": "camp_finish", "label": "キャンプ終了", "cb": _on_camp_finish_pressed, "kind": "action", "w": 140, "disabled": _camp_complete},
-				{"id": "camp_auto", "label": "自軍をAIに任せる", "cb": _on_camp_auto_pressed, "kind": "action", "w": 180, "disabled": _camp_complete},
+				{"id": "camp_submit", "label": "offseason.button.execute", "cb": _on_camp_submit_pressed, "kind": "primary", "w": 100, "disabled": not _camp_can_submit},
+				{"id": "camp_finish", "label": "offseason.button.end_camp", "cb": _on_camp_finish_pressed, "kind": "action", "w": 140, "disabled": _camp_complete},
+				{"id": "camp_auto", "label": "offseason.button.camp_auto","cb": _on_camp_auto_pressed, "kind": "action", "w": 180, "disabled": _camp_complete},
 			])
 			_build_candidate_tabs(_camp_candidate_rows, _camp_tab, _set_camp_tab, "camp")
 			_build_camp_chips()
@@ -645,10 +640,10 @@ func _build_buttons() -> void:
 			var cy_entry: Dictionary = _cy_by_id.get(selected_cy_player_id, {}) as Dictionary
 			var cy_pending: int = AppState.pending_contract_years_count()
 			_action_row([
-				{"id": "cy_submit", "label": "年数を決定", "cb": _on_cy_submit_pressed, "kind": "primary", "w": 140, "disabled": cy_entry.is_empty()},
-				{"id": "cy_withdraw", "label": "決定を取り消す", "cb": _on_cy_withdraw_pressed, "kind": "action", "w": 150, "disabled": not bool(cy_entry.get("decided", false))},
-				{"id": "cy_finalize", "label": "確定して次へ", "cb": _on_cy_finalize_pressed, "kind": "primary", "w": 150, "disabled": cy_pending > 0},
-				{"id": "cy_auto", "label": "自動で決めて次へ", "cb": _on_cy_auto_pressed, "kind": "action", "w": 180, "disabled": cy_pending <= 0},
+				{"id": "cy_submit", "label": "offseason.button.cy_submit", "cb": _on_cy_submit_pressed, "kind": "primary", "w": 140, "disabled": cy_entry.is_empty()},
+				{"id": "cy_withdraw", "label": "offseason.button.cy_withdraw", "cb": _on_cy_withdraw_pressed, "kind": "action", "w": 150, "disabled": not bool(cy_entry.get("decided", false))},
+				{"id": "cy_finalize", "label": "offseason.button.confirm_next", "cb": _on_cy_finalize_pressed, "kind": "primary", "w": 150, "disabled": cy_pending > 0},
+				{"id": "cy_auto", "label": "offseason.button.auto_decide_next","cb": _on_cy_auto_pressed, "kind": "action", "w": 180, "disabled": cy_pending <= 0},
 			])
 			_build_player_tabs("cy", _cy_tab, _cy_pitcher_rows.size(), _cy_fielder_rows.size(), _set_cy_tab)
 			_build_cy_year_chips()
@@ -664,8 +659,8 @@ func _build_player_tabs(prefix: String, active_tab: String, pitcher_count: int, 
 	var x: float = BODY.position.x + 16.0
 	var y: float = BODY.position.y + 16.0 + y_offset
 	var tabs: Array = [
-		{"id": PLAYER_TAB_PITCHER, "label": "投手 %d" % pitcher_count, "w": 92.0},
-		{"id": PLAYER_TAB_FIELDER, "label": "野手 %d" % fielder_count, "w": 92.0},
+		{"id": PLAYER_TAB_PITCHER, "label": Loc.t("offseason.tab.pitchers", {"n": pitcher_count}), "w": 92.0},
+		{"id": PLAYER_TAB_FIELDER, "label": Loc.t("offseason.tab.fielders", {"n": fielder_count}), "w": 92.0},
 	]
 	for tab_value in tabs:
 		var tab: Dictionary = tab_value as Dictionary
@@ -685,7 +680,7 @@ func _build_candidate_tabs(rows: Array, active_tab: String, callback: Callable, 
 	for tab_value in DRAFT_TABS:
 		var tab: Dictionary = tab_value as Dictionary
 		var tab_id: String = str(tab["id"])
-		var label: String = "%s %d" % [str(tab["label"]), _candidate_tab_count(rows, tab_id)]
+		var label: String = "%s %d" % [Loc.t(str(tab["label"])), _candidate_tab_count(rows, tab_id)]
 		var w: float = 14.0 + _measure(label, 13) + 14.0
 		var active: bool = tab_id == active_tab
 		_add_button("%s_tab_%s" % [prefix, tab_id], label, Rect2(x, y, w, 30.0),
@@ -871,7 +866,7 @@ func _action_row(specs: Array) -> void:
 	for spec_value in specs:
 		var spec: Dictionary = spec_value as Dictionary
 		var w: float = float(spec.get("w", 120))
-		var button: Button = _add_button(str(spec.get("id", "")), str(spec.get("label", "")), Rect2(x, ACTION_Y, w, 40), spec.get("cb") as Callable, str(spec.get("kind", "action")))
+		var button: Button = _add_button(str(spec.get("id", "")), Loc.t(str(spec.get("label", ""))),Rect2(x, ACTION_Y, w, 40), spec.get("cb") as Callable, str(spec.get("kind", "action")))
 		if spec.has("disabled"):
 			button.disabled = bool(spec["disabled"])
 		x += w + gap
@@ -889,7 +884,7 @@ func _build_foreign_scout_chips() -> void:
 		for option_value in row.get("options", []) as Array:
 			var option: Dictionary = option_value as Dictionary
 			var id: String = str(option.get("id", ""))
-			var label: String = str(option.get("label", ""))
+			var label: String = Loc.t(str(option.get("label", "")))
 			var w: float = 22.0 + _measure(label, 13) + 22.0
 			var callback: Callable = row.get("callback") as Callable
 			_add_button("%s_%s" % [str(row.get("prefix", "fg")), id], label, Rect2(x, float(row.get("y", 0.0)), w, 30.0),
@@ -1144,9 +1139,10 @@ func _build_draft_history_mode_chips() -> void:
 	for option_value in DRAFT_HISTORY_MODES:
 		var option: Dictionary = option_value as Dictionary
 		var id: String = str(option["id"])
-		var w: float = 14.0 + _measure(str(option["label"]), 13) + 14.0
+		var label: String = Loc.t(str(option["label"]))
+		var w: float = 14.0 + _measure(label, 13) + 14.0
 		var active: bool = id == _draft_history_mode
-		_add_button("draft_hist_%s" % id, str(option["label"]), Rect2(x, BODY.position.y, w, 30.0),
+		_add_button("draft_hist_%s" % id, label,Rect2(x, BODY.position.y, w, 30.0),
 			func(target: String = id) -> void: _set_draft_history_mode(target),
 			"chip_active" if active else "chip")
 		x += w + 8.0
@@ -1156,7 +1152,7 @@ func _build_draft_history_mode_chips() -> void:
 func _draft_history_chips_total_width() -> float:
 	var total: float = 0.0
 	for option_value in DRAFT_HISTORY_MODES:
-		total += 14.0 + _measure(str((option_value as Dictionary)["label"]), 13) + 14.0
+		total += 14.0 + _measure(Loc.t(str((option_value as Dictionary)["label"])), 13) + 14.0
 	return total + 8.0 * float(DRAFT_HISTORY_MODES.size() - 1)
 
 
@@ -1194,13 +1190,13 @@ func _draw() -> void:
 		return
 
 	# ヘッダのタイトルは現在のステップ名 (大きく)。何ステップ目かはサブヘッダに控えめに置く。
-	var header_title: String = "オフシーズン"
+	var header_title: String = Loc.t("common.offseason")
 	if bool(_view.get("active", false)):
 		header_title = _step_name(str(_view.get("step", "")))
 	_draw_shell(header_title, team, season)
 
 	if not bool(_view.get("active", false)):
-		_text(str(_view.get("status", "オフシーズンが開始されていません")), Vector2(INNER_L, 200), 18, MUTED)
+		_text(str(_view.get("status", Loc.t("offseason.not_started"))),Vector2(INNER_L, 200), 18, MUTED)
 		return
 
 	_draw_subheader()
@@ -1218,7 +1214,7 @@ func _draw() -> void:
 		AppState.OFFSEASON_PANEL_FA:
 			# FA一覧は戦力外獲得と同じ選手レコード表 (投手/野手タブ・候補詳細なし) + 提示年数列。
 			_draw_player_record_table(BODY, _fa_status_text, _fa_player_rows, _fa_tab == PLAYER_TAB_PITCHER,
-				"fa", "fa_market_%s" % _fa_tab, "fa", selected_fa_candidate_id, "該当するFA候補がいません。", true, false, "", true, true)
+				"fa", "fa_market_%s" % _fa_tab, "fa", selected_fa_candidate_id, Loc.t("offseason.empty.fa_candidates"),true, false, "", true, true)
 		AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT:
 			_draw_compensation_protect_panel()
 		AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
@@ -1241,7 +1237,7 @@ func _draw() -> void:
 
 func _draw_empty() -> void:
 	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-	_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+	_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 
 
 # ステップ名はヘッダ見出しが持つ。ここは状況テキストだけを描く (ステップ番号は表示しない)。
@@ -1254,37 +1250,37 @@ func _draw_subheader() -> void:
 func _step_name(step: String) -> String:
 	match step:
 		AppState.OFFSEASON_STEP_FA_DECLARATION:
-			return "FA宣言"
+			return Loc.t("offseason.header.fa_declaration")
 		AppState.OFFSEASON_STEP_RETIREMENT:
-			return "引退"
+			return Loc.t("offseason.header.retirement")
 		AppState.OFFSEASON_STEP_RELEASE_EDIT:
-			return "戦力外通告"
+			return Loc.t("offseason.step.release")
 		AppState.OFFSEASON_STEP_RELEASE_COMMIT:
-			return "戦力外通告 結果"
+			return Loc.t("offseason.header.release_result")
 		AppState.OFFSEASON_STEP_DRAFT_MAIN:
-			return "ドラフト本指名"
+			return Loc.t("offseason.header.draft_main")
 		AppState.OFFSEASON_STEP_DRAFT_DEVELOPMENT:
-			return "育成ドラフト"
+			return Loc.t("offseason.header.draft_development")
 		AppState.OFFSEASON_STEP_RELEASED_MARKET:
-			return "戦力外獲得"
+			return Loc.t("offseason.step.released_market")
 		AppState.OFFSEASON_STEP_GENEKI_DRAFT:
-			return "現役ドラフト"
+			return Loc.t("offseason.header.geneki_draft")
 		AppState.OFFSEASON_STEP_FA_MARKET:
-			return "FA市場"
+			return Loc.t("offseason.step.fa_market")
 		AppState.OFFSEASON_STEP_COMPENSATION:
-			return "人的補償"
+			return Loc.t("offseason.header.compensation")
 		AppState.OFFSEASON_STEP_CONTRACT_YEARS:
-			return "契約年数"
+			return Loc.t("contract_years.title")
 		AppState.OFFSEASON_STEP_FOREIGN_MARKET:
-			return "外国人補強"
+			return Loc.t("offseason.step.foreign")
 		AppState.OFFSEASON_STEP_CAMP:
-			return "キャンプ"
+			return Loc.t("offseason.step.camp")
 		AppState.OFFSEASON_STEP_GROWTH:
-			return "選手の成長"
+			return Loc.t("offseason.header.growth")
 		AppState.OFFSEASON_STEP_CONTRACT_RENEWAL:
-			return "契約更改"
+			return Loc.t("offseason.step.salary")
 		_:
-			return "オフシーズン"
+			return Loc.t("common.offseason")
 
 
 # 全ステップ共通の自軍ロスターサマリー: 支配下 / 育成 / 外国人枠 (_stat_strip) + ポジション別人数 (小型セル列)。
@@ -1301,10 +1297,10 @@ func _draw_summary_panel() -> void:
 	# その分ポジション別の枠を狭める (SUMMARY.end.x までを分割するため div_x が右へ寄る)。
 	var strip_w: float = 560.0
 	var cells: Array = [
-		{"label": "支配下", "value": "%d/%d" % [controlled, TeamFinance.CONTROLLED_LIMIT], "color": AMBER if controlled >= TeamFinance.CONTROLLED_LIMIT else TEXT},
-		{"label": "育成", "value": "%d" % dev},
-		{"label": "外国人", "value": "%d/%d" % [foreign, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM], "color": AMBER if foreign >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM else TEXT},
-		{"label": "予算残", "value": ("-" + _format_money_exact(-room)) if room < 0 else _format_money_exact(room), "color": AMBER if room < 0 else TEXT},
+		{"label": Loc.t("common.controlled"), "value": "%d/%d" % [controlled, TeamFinance.CONTROLLED_LIMIT], "color": AMBER if controlled >= TeamFinance.CONTROLLED_LIMIT else TEXT},
+		{"label": Loc.t("common.development_chip"), "value": "%d" % dev},
+		{"label": Loc.t("roster.foreign"), "value":"%d/%d" % [foreign, ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM], "color": AMBER if foreign >= ForeignPlayerService.MAX_FOREIGN_HELD_PER_TEAM else TEXT},
+		{"label": Loc.t("offseason.summary.budget_room"), "value":("-" + _format_money_exact(-room)) if room < 0 else _format_money_exact(room), "color": AMBER if room < 0 else TEXT},
 	]
 	_stat_strip(Rect2(SUMMARY.position.x, SUMMARY.position.y, strip_w, SUMMARY.size.y), cells)
 
@@ -1312,12 +1308,12 @@ func _draw_summary_panel() -> void:
 	_line(Vector2(div_x, SUMMARY.position.y + 14.0), Vector2(div_x, SUMMARY.end.y - 14.0), HAIRLINE, 1.0)
 	var label_y: float = SUMMARY.position.y + 28.0
 	var value_y: float = SUMMARY.position.y + 58.0
-	_text("ポジション別 (支配下)", Vector2(div_x + 20.0, label_y), FS_LABEL, MUTED)
+	_text(Loc.t("offseason.summary.by_position"), Vector2(div_x + 20.0, label_y), FS_LABEL, MUTED)
 	var px0: float = div_x + 20.0
 	# 投手 (pos=1) は先発/中継 (抑えは中継に含む) で分けて表示するため、野手8ポジション+2で10枠。
 	var slots: Array = [
-		{"char": "先", "count": int(_roster_summary.get("starters", 0)), "color": _pos_color(1)},
-		{"char": "継", "count": int(_roster_summary.get("relievers", 0)), "color": _pos_color(1)},
+		{"char": Loc.t("role.starter_short"), "count": int(_roster_summary.get("starters", 0)), "color": _pos_color(1)},
+		{"char": Loc.t("offseason.summary.reliever_char"), "count":int(_roster_summary.get("relievers", 0)), "color": _pos_color(1)},
 	]
 	for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
 		slots.append({"char": _position_char(pos), "count": int(positions.get(pos, 0)), "color": _pos_color(pos)})
@@ -1337,10 +1333,10 @@ func _format_money_exact(man_value: int) -> String:
 	var oku: int = a / 10000
 	var man: int = a % 10000
 	if oku > 0 and man > 0:
-		return "%d億%s万" % [oku, _comma(man)]
+		return Loc.t("money.oku_man_compact", {"oku": oku, "man": _comma(man)})
 	elif oku > 0:
-		return "%d億" % oku
-	return "%s万" % _comma(man)
+		return Loc.t("money.oku_compact", {"oku": oku})
+	return Loc.t("money.man_compact", {"man": _comma(man)})
 
 
 # --- 戦力外通告 ---
@@ -1348,7 +1344,7 @@ func _format_money_exact(man_value: int) -> String:
 func _draw_release_panel() -> void:
 	var records: Array = _release_visible_records()
 	var pitcher_tab: bool = _release_tab == PLAYER_TAB_PITCHER
-	_draw_player_record_table(BODY, _release_summary_text, records, pitcher_tab, "release", "release_%s" % _release_tab, "release", 0, "該当する選手がいません。", true, false, "", true)
+	_draw_player_record_table(BODY, _release_summary_text, records, pitcher_tab, "release", "release_%s" % _release_tab, "release", 0, Loc.t("offseason.empty.players"), true, false, "", true)
 
 
 # --- ドラフト ---
@@ -1371,15 +1367,15 @@ func _draw_draft_panel() -> void:
 	var table_top: float = status_y + 68.0
 	var board_h: float = (BODY.end.y - table_top) * 0.62
 	_draw_candidate_board(Rect2(INNER_L, table_top, BODY.size.x, board_h), _draft_candidate_rows, _draft_tab,
-		selected_draft_candidate_id, "draft", _draft_record_cache, "出身", "成長")
+		selected_draft_candidate_id, "draft", _draft_record_cache, Loc.t("col.source"), Loc.t("offseason.col.growth"))
 
 	var lower_top: float = table_top + board_h + 14.0
 	var lower_h: float = BODY.end.y - lower_top
 	var gap: float = 16.0
 	var half: float = (BODY.size.x - gap) / 2.0
 	# 指名履歴 (左) / 抽選 (右) を他パネルと同じ表で描く。
-	_draw_table_inner(Rect2(INNER_L, lower_top, half, lower_h), "指名履歴", PICK_COLUMNS, _draft_pick_rows, "draft_picks", "", 0, true)
-	_draw_table_inner(Rect2(INNER_L + half + gap, lower_top, half, lower_h), "抽選", LOTTERY_COLUMNS, _draft_lottery_rows, "draft_lottery", "", 0, true)
+	_draw_table_inner(Rect2(INNER_L, lower_top, half, lower_h), Loc.t("offseason.draft.pick_history"), PICK_COLUMNS, _draft_pick_rows, "draft_picks", "", 0, true)
+	_draw_table_inner(Rect2(INNER_L + half + gap, lower_top, half, lower_h), Loc.t("offseason.draft.lottery"),LOTTERY_COLUMNS, _draft_lottery_rows, "draft_lottery", "", 0, true)
 
 
 # 「途中経過」モードのビュー。結果画面 (_draw_draft_result) と同じ構成で BODY 全面に
@@ -1387,16 +1383,16 @@ func _draw_draft_panel() -> void:
 func _draw_draft_progress_panel() -> void:
 	var state: Dictionary = AppState.draft_state
 	var picks: Array = state.get("picks", []) as Array
-	var phase_label: String = "育成ドラフト" if str(state.get("segment", "main")) == "development" else "本指名"
-	_text("%s 途中経過 指名%d人" % [phase_label, picks.size()], Vector2(BODY.position.x, BODY.position.y + 26), 20, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var phase_label: String = Loc.t("offseason.header.draft_development") if str(state.get("segment", "main")) == "development" else Loc.t("offseason.step.draft")
+	_text(Loc.t("offseason.draft.progress_title", {"phase": phase_label, "n": picks.size()}), Vector2(BODY.position.x, BODY.position.y + 26), 20, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	# 優先リーグ表示は右上のチップ (指名画面/途中経過) と重ならないよう、チップ幅ぶん左へ寄せる。
-	_text_right("同順位優先リーグ: %s" % _league_label(str(state.get("priority_league", ""))),
+	_text_right(Loc.t("offseason.draft.priority_league", {"league": _league_label(str(state.get("priority_league", "")))}),
 		BODY.end.x - _draft_history_chips_total_width() - 16.0, BODY.position.y + 24, 14, MUTED, 320.0)
 
 	var content_top: float = BODY.position.y + 52.0
 	if not _draft_lottery_rows.is_empty():
 		var lottery_h: float = min(64.0 + float(_draft_lottery_rows.size()) * 28.0, 220.0)
-		_draw_table_inner(Rect2(BODY.position.x, content_top, BODY.size.x, lottery_h), "1巡目 抽選", LOTTERY_COLUMNS, _draft_lottery_rows, "draft_progress_lottery", "", 0, true, 15, 28.0)
+		_draw_table_inner(Rect2(BODY.position.x, content_top, BODY.size.x, lottery_h), Loc.t("offseason.draft.first_round_lottery"), LOTTERY_COLUMNS, _draft_lottery_rows, "draft_progress_lottery", "", 0, true, 15, 28.0)
 		content_top += lottery_h + 14.0
 
 	_draw_picks_team_grid(Rect2(BODY.position.x, content_top, BODY.size.x, BODY.end.y - content_top), picks, "rank")
@@ -1415,9 +1411,9 @@ func _draw_draft_reveal_panel() -> void:
 	var gap: float = 16.0
 	var left_w: float = (BODY.size.x - gap) * (2.0 / 3.0)
 	var right_w: float = BODY.size.x - gap - left_w
-	var left_title: String = "抽選結果" if _draft_reveal_stage == "result" else "入札一覧"
+	var left_title: String = Loc.t("offseason.draft.lottery_result") if _draft_reveal_stage == "result" else Loc.t("offseason.draft.bid_list")
 	_draw_draft_reveal_cards_panel(Rect2(INNER_L, table_top, left_w, table_h), left_title)
-	_draw_table_inner(Rect2(INNER_L + left_w + gap, table_top, right_w, table_h), "抽選", LOTTERY_COLUMNS, _draft_lottery_rows, "draft_lottery", "", 0, true)
+	_draw_table_inner(Rect2(INNER_L + left_w + gap, table_top, right_w, table_h), Loc.t("offseason.draft.lottery"),LOTTERY_COLUMNS, _draft_lottery_rows, "draft_lottery", "", 0, true)
 
 
 # _panel と同じフラット枠+タイトルの下に、球団カード (_draft_reveal_cards) を4列×N行のグリッドで描く。
@@ -1426,7 +1422,7 @@ func _draw_draft_reveal_cards_panel(rect: Rect2, title: String) -> void:
 	var grid_top: float = rect.position.y + 50.0
 	var grid_rect: Rect2 = Rect2(rect.position.x + 16.0, grid_top, rect.size.x - 32.0, rect.end.y - grid_top - 16.0)
 	if _draft_reveal_cards.is_empty():
-		_text("該当する球団がいません。", Vector2(grid_rect.position.x, grid_rect.position.y + 20.0), 14, MUTED)
+		_text(Loc.t("offseason.empty.teams"),Vector2(grid_rect.position.x, grid_rect.position.y + 20.0), 14, MUTED)
 		return
 	var cols: int = 4
 	var rows: int = int(ceil(float(_draft_reveal_cards.size()) / float(cols)))
@@ -1470,15 +1466,15 @@ func _draw_draft_reveal_card(rect: Rect2, card: Dictionary) -> void:
 		dx += badge_w + 8.0
 	var detail_text: String = ""
 	if int(card.get("age", 0)) > 0:
-		detail_text = "%d歳" % int(card.get("age", 0))
+		detail_text = Loc.t("common.age_value", {"age": int(card.get("age", 0))})
 	var source: String = str(card.get("source", ""))
 	if not source.is_empty():
-		detail_text += (" ・ " if not detail_text.is_empty() else "") + source
+		detail_text += (Loc.t("common.middle_dot_separator") if not detail_text.is_empty() else "") + source
 	if not detail_text.is_empty():
 		_text(detail_text, Vector2(dx, detail_y + 15.0), 13, MUTED if not muted else FAINT, rect.end.x - pad - dx)
 
 	if int(card.get("overall", 0)) > 0:
-		_text("総合 %d" % int(card.get("overall", 0)), Vector2(rect.position.x + pad, detail_y + 42.0), 14, TEXT if not muted else MUTED, rect.size.x - pad * 2.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		_text(Loc.t("offseason.draft.card_overall", {"n": int(card.get("overall", 0))}),Vector2(rect.position.x + pad, detail_y + 42.0), 14, TEXT if not muted else MUTED, rect.size.x - pad * 2.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # 候補ボード (ドラフト/外国人補強で共用)。戦力外選択と同じ行スタイルで、投手系タブは
@@ -1496,7 +1492,7 @@ func _draw_candidate_board(rect: Rect2, rows: Array, tab: String, selected_id: i
 		_draw_candidate_fielder_header(rect, hy, info1_header, info2_header)
 
 	if visible_rows.is_empty():
-		_text("該当する候補がいません。", Vector2(rect.position.x + 18.0, rect.position.y + 64.0), 14, MUTED)
+		_text(Loc.t("offseason.empty.candidates"), Vector2(rect.position.x + 18.0, rect.position.y + 64.0), 14, MUTED)
 		return
 
 	var row_h: float = 27.0
@@ -1633,16 +1629,16 @@ func _draft_apt_value_entries(aptitudes: Dictionary) -> Array:
 func _draw_candidate_pitcher_header(rect: Rect2, y: float, info1_header: String, info2_header: String) -> void:
 	var xs: Dictionary = _draft_table_x(rect, true)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text("役割", Vector2(float(xs["badge_x"]), y), 11, FAINT, 50.0, HORIZONTAL_ALIGNMENT_CENTER)
-	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
-	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
+	_text(Loc.t("col.role"), Vector2(float(xs["badge_x"]), y), 11, FAINT, 50.0, HORIZONTAL_ALIGNMENT_CENTER)
+	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, FAINT)
+	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, FAINT, 40.0)
 	_text(info1_header, Vector2(float(xs["src_x"]), y), 11, FAINT)
-	_text_cell("総合", float(xs["eval_r"]), y, 11, FAINT, 44.0)
+	_text_cell(Loc.t("col.overall"), float(xs["eval_r"]), y, 11, FAINT, 44.0)
 	_text_cell(info2_header, float(xs["grow_r"]), y, 11, FAINT, 52.0)
-	_text_cell("球速", float(xs["velo_r"]), y, 11, FAINT, 56.0)
-	_text_cell("球質", float(xs["stuff_r"]), y, 11, FAINT)
-	_text_cell("制球", float(xs["ctrl_r"]), y, 11, FAINT)
-	_text_cell("持久", float(xs["stam_r"]), y, 11, FAINT, 54.0)
+	_text_cell(Loc.t("rating.velocity"), float(xs["velo_r"]), y, 11, FAINT, 56.0)
+	_text_cell(Loc.t("rating.stuff"), float(xs["stuff_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.control"), float(xs["ctrl_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.stamina"), float(xs["stam_r"]), y, 11, FAINT, 54.0)
 	_draw_draft_grid_cells(float(xs["block_x"]), rect.end.x - 14.0, y, _draft_pitch_header_entries(), true)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
@@ -1650,18 +1646,18 @@ func _draw_candidate_pitcher_header(rect: Rect2, y: float, info1_header: String,
 func _draw_candidate_fielder_header(rect: Rect2, y: float, info1_header: String, info2_header: String) -> void:
 	var xs: Dictionary = _draft_table_x(rect, false)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text("守備", Vector2(float(xs["badge_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
-	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
-	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
+	_text(Loc.t("col.pos"), Vector2(float(xs["badge_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
+	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, FAINT)
+	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, FAINT, 40.0)
 	_text(info1_header, Vector2(float(xs["src_x"]), y), 11, FAINT)
-	_text_cell("総合", float(xs["eval_r"]), y, 11, FAINT, 44.0)
+	_text_cell(Loc.t("col.overall"), float(xs["eval_r"]), y, 11, FAINT, 44.0)
 	_text_cell(info2_header, float(xs["grow_r"]), y, 11, FAINT, 52.0)
-	_text_cell("巧打", float(xs["meet_r"]), y, 11, FAINT)
-	_text_cell("長打", float(xs["pow_r"]), y, 11, FAINT)
-	_text_cell("走力", float(xs["spd_r"]), y, 11, FAINT)
-	_text_cell("守備", float(xs["def_r"]), y, 11, FAINT)
-	_text_cell("肩力", float(xs["arm_r"]), y, 11, FAINT)
-	_text_cell("選球", float(xs["eye_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.contact"), float(xs["meet_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.power"), float(xs["pow_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.speed"), float(xs["spd_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.defense"), float(xs["def_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.arm"), float(xs["arm_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.discipline"), float(xs["eye_r"]), y, 11, FAINT)
 	_draw_draft_grid_cells(float(xs["block_x"]), rect.end.x - 14.0, y, _draft_apt_header_entries(), true)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
@@ -1718,7 +1714,7 @@ func _draw_released_market_panel() -> void:
 		"released_market_%s" % _released_tab,
 		"released",
 		selected_released_candidate_id,
-		"該当する自由契約候補がいません。",
+		Loc.t("offseason.empty.released_candidates"),
 		true,
 		false,
 		"",
@@ -1736,15 +1732,15 @@ func _draw_foreign_contract_panel() -> void:
 	if not _fgc_status_text.is_empty():
 		_text(_fgc_status_text, Vector2(INNER_L, BODY.position.y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var pitcher_tab: bool = _fgc_tab == PLAYER_TAB_PITCHER
-	var tab_label: String = "投手" if pitcher_tab else "野手"
+	var tab_label: String = Loc.t("common.pitcher") if pitcher_tab else Loc.t("common.fielder")
 	var home_rows: Array = _fgc_home_pitcher_rows if pitcher_tab else _fgc_home_fielder_rows
 	var away_rows: Array = _fgc_away_pitcher_rows if pitcher_tab else _fgc_away_fielder_rows
-	_draw_player_record_table(FGC_HOME_RECT, "自軍の契約切れ外国人 %s %d人" % [tab_label, home_rows.size()], home_rows,
+	_draw_player_record_table(FGC_HOME_RECT, Loc.t("offseason.fgc.home_title", {"tab": tab_label, "n": home_rows.size()}), home_rows,
 		pitcher_tab, "fgc", "fgc_home_%s" % _fgc_tab, "", selected_fgc_player_id,
-		"自軍に契約切れの外国人はいません。", false, false, "fgc_market", true, true)
-	_draw_player_record_table(FGC_AWAY_RECT, "他球団の契約切れ外国人 (引き抜き候補) %s %d人" % [tab_label, away_rows.size()], away_rows,
+		Loc.t("offseason.fgc.home_empty"), false, false, "fgc_market", true, true)
+	_draw_player_record_table(FGC_AWAY_RECT, Loc.t("offseason.fgc.away_title", {"tab": tab_label, "n": away_rows.size()}), away_rows,
 		pitcher_tab, "fgc", "fgc_away_%s" % _fgc_tab, "", selected_fgc_player_id,
-		"該当する引き抜き候補がいません。", true, false, "fgc_market_away", true, true)
+		Loc.t("offseason.fgc.away_empty"),true, false, "fgc_market_away", true, true)
 
 
 # 契約市場エントリ (未解決) を選手レコード表の行モデルへ変換する。契約情報 (現年俸/提示年俸/
@@ -1776,7 +1772,7 @@ func _fgc_market_player_rows(entries: Array) -> Array:
 			"fgc_years": years_display,
 			"market_salary_text": _format_money_compact(offer_salary_value),
 			"fgc_current_salary_text": _format_money_compact(current_salary),
-			"offer_text": "提示中" if has_offer else "未提示",
+			"offer_text": Loc.t("offseason.fgc.offered") if has_offer else Loc.t("offseason.fgc.not_offered"),
 			"offer_color": BLUE if has_offer else FAINT,
 		}
 		rows.append({"record": record, "player": player, "entry": row_entry})
@@ -1791,9 +1787,9 @@ func _draw_contract_years_panel() -> void:
 		_text(_cy_status_text, Vector2(INNER_L, BODY.position.y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var pitcher_tab: bool = _cy_tab == PLAYER_TAB_PITCHER
 	var rows: Array = _cy_pitcher_rows if pitcher_tab else _cy_fielder_rows
-	var title: String = "契約年数の対象 %s %d人" % ["投手" if pitcher_tab else "野手", rows.size()]
+	var title: String = Loc.t("offseason.cy.title", {"tab": Loc.t("common.pitcher") if pitcher_tab else Loc.t("common.fielder"), "n": rows.size()})
 	_draw_player_record_table(CY_BODY_RECT, title, rows, pitcher_tab, "cy", "cy_%s" % _cy_tab, "",
-		selected_cy_player_id, "契約年数を決める選手がいません。", true, false, "contract_years", true, true)
+		selected_cy_player_id, Loc.t("offseason.cy.empty"),true, false, "contract_years", true, true)
 
 
 # 外国人補強パネル: 条件指定3行とスカウト候補4人。能力値はスカウト推定値を表示する。
@@ -1801,18 +1797,18 @@ func _draw_foreign_panel() -> void:
 	var status_y: float = BODY.position.y
 	if not _foreign_status_text.is_empty():
 		_text(_foreign_status_text, Vector2(INNER_L, status_y + 4.0), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("守備・役割", Vector2(INNER_L, status_y + 58.0), 13, MUTED, 100)
-	_text("選手タイプ", Vector2(INNER_L, status_y + 100.0), 13, MUTED, 100)
-	_text("予算帯", Vector2(INNER_L, status_y + 142.0), 13, MUTED, 100)
+	_text(Loc.t("offseason.foreign.label.position"), Vector2(INNER_L, status_y + 58.0), 13, MUTED, 100)
+	_text(Loc.t("offseason.foreign.label.type"), Vector2(INNER_L, status_y + 100.0), 13, MUTED, 100)
+	_text(Loc.t("offseason.foreign.label.budget"), Vector2(INNER_L, status_y + 142.0), 13, MUTED, 100)
 	var selected: Dictionary = _foreign_by_id.get(selected_foreign_candidate_id, {}) as Dictionary
 	if not selected.is_empty():
-		_text("推定総合 %d〜%d　%s" % [int(selected.get("estimate_min", 0)), int(selected.get("estimate_max", 0)), str(selected.get("scout_comment", ""))],
+		_text(Loc.t("offseason.foreign.estimate", {"min": int(selected.get("estimate_min", 0)), "max": int(selected.get("estimate_max", 0)), "comment": str(selected.get("scout_comment", ""))}),
 			Vector2(INNER_L, status_y + 182.0), 13, MUTED, 1420, HORIZONTAL_ALIGNMENT_LEFT, true)
 		_text(_foreign_ability_range_text(selected), Vector2(INNER_L, status_y + 204.0), 13, MUTED, 1500, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var table_top: float = status_y + 224.0
 	var board_tab: String = _foreign_board_tab()
 	_draw_candidate_board(Rect2(INNER_L, table_top, BODY.size.x, BODY.end.y - table_top),
-		_foreign_candidate_rows, board_tab, selected_foreign_candidate_id, "foreign", _foreign_record_cache, "タイプ", "年俸")
+		_foreign_candidate_rows, board_tab, selected_foreign_candidate_id, "foreign", _foreign_record_cache, Loc.t("offseason.col.type"), Loc.t("col.salary"))
 
 
 # --- キャンプ ---
@@ -1831,53 +1827,53 @@ func _draw_camp_panel() -> void:
 
 # 特別練習メニュー (練習種別 / 対象位置のチップ)。チップ本体は _build_camp_chips がボタンで重ね描く。
 func _draw_camp_menu_panel() -> void:
-	_panel(CAMP_MENU, "特別練習メニュー")
+	_panel(CAMP_MENU, Loc.t("offseason.camp.menu_title"))
 	if selected_camp_player_id <= 0 or _camp_types.is_empty():
 		_draw_text_lines(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 58, CAMP_MENU.size.x - 32, _camp_detail_text, 13, MUTED)
 		return
-	_text("練習種別", Vector2(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 60), 11, FAINT)
+	_text(Loc.t("offseason.camp.training_type"), Vector2(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 60), 11, FAINT)
 	if not _camp_positions.is_empty():
-		_text("対象位置", Vector2(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 130), 11, FAINT)
+		_text(Loc.t("offseason.camp.target_position"), Vector2(CAMP_MENU.position.x + 16, CAMP_MENU.position.y + 130), 11, FAINT)
 
 
 # 成功率パネル。
 func _draw_camp_rate_panel() -> void:
-	_panel(CAMP_RATE, "成功率")
+	_panel(CAMP_RATE, Loc.t("offseason.camp.rate_title"))
 	if _camp_selected_option.is_empty():
-		_text("選手と特別練習を選択してください。", Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 60), 13, MUTED, CAMP_RATE.size.x - 32)
+		_text(Loc.t("offseason.camp.select_prompt"), Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 60), 13, MUTED, CAMP_RATE.size.x - 32)
 		return
 	var opt: Dictionary = _camp_selected_option
 	var pct: float = float(opt.get("success_chance", 0.0)) * 100.0
 	_text("%0.1f%%" % pct, Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 92), 38, _camp_rate_color(pct))
-	_text("リスク %s" % str(opt.get("risk_label", "中")), Vector2(CAMP_RATE.position.x + 180, CAMP_RATE.position.y + 80), 14, MUTED)
-	_text("練習: %s" % str(opt.get("training_label", "")), Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 126), 13, TEXT, CAMP_RATE.size.x - 32)
-	_text("対象: %s" % _camp_training_target(opt), Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 148), 13, TEXT, CAMP_RATE.size.x - 32)
-	_draw_text_lines(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 166, CAMP_RATE.size.x - 32, "理由: %s" % str(opt.get("reason", "")), 12, MUTED)
+	_text(Loc.t("offseason.camp.risk", {"risk": str(opt.get("risk_label", Loc.t("camp.risk.medium")))}), Vector2(CAMP_RATE.position.x + 180, CAMP_RATE.position.y + 80), 14, MUTED)
+	_text(Loc.t("offseason.camp.training", {"training": str(opt.get("training_label", ""))}), Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 126), 13, TEXT, CAMP_RATE.size.x - 32)
+	_text(Loc.t("offseason.camp.target", {"target": _camp_training_target(opt)}), Vector2(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 148), 13, TEXT, CAMP_RATE.size.x - 32)
+	_draw_text_lines(CAMP_RATE.position.x + 16, CAMP_RATE.position.y + 166, CAMP_RATE.size.x - 32, Loc.t("offseason.camp.reason", {"reason": str(opt.get("reason", ""))}), 12, MUTED)
 
 
 # 成功時獲得適性値パネル (守備適性が対象の練習のみ数値を出す)。
 func _draw_camp_apt_panel() -> void:
-	_panel(CAMP_APT, "成功時獲得適性値")
+	_panel(CAMP_APT, Loc.t("offseason.camp.apt_title"))
 	if _camp_selected_option.is_empty():
-		_text("選手と特別練習を選択してください。", Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 60), 13, MUTED, CAMP_APT.size.x - 32)
+		_text(Loc.t("offseason.camp.select_prompt"), Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 60), 13, MUTED, CAMP_APT.size.x - 32)
 		return
 	var opt: Dictionary = _camp_selected_option
 	var target_position: int = int(opt.get("target_position", 0))
 	if target_position <= 0:
-		_text("この練習は守備適性の対象ではありません。", Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 60), 13, MUTED, CAMP_APT.size.x - 32)
+		_text(Loc.t("offseason.camp.not_aptitude_training"), Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 60), 13, MUTED, CAMP_APT.size.x - 32)
 		var tgt: String = _camp_training_target(opt)
 		if not tgt.is_empty():
-			_text("対象: %s" % tgt, Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 92), 14, TEXT)
+			_text(Loc.t("offseason.camp.target", {"target": tgt}), Vector2(CAMP_APT.position.x + 16, CAMP_APT.position.y + 92), 14, TEXT)
 		return
 	var player: PSPlayer = GameDb.get_player(int(opt.get("player_id", 0)))
 	var current: int = _player_position_aptitude_for_ui(player, target_position)
 	var projected: int = int(opt.get("projected_aptitude", 0))
 	var gain: int = projected - current
 	var px: float = CAMP_APT.position.x + 16
-	_text("対象守備位置: %s" % _position_name(target_position), Vector2(px, CAMP_APT.position.y + 58), 13, MUTED)
-	_text("現在", Vector2(px, CAMP_APT.position.y + 92), 12, FAINT)
+	_text(Loc.t("offseason.camp.target_field_position", {"pos": _position_name(target_position)}), Vector2(px, CAMP_APT.position.y + 58), 13, MUTED)
+	_text(Loc.t("offseason.camp.current"), Vector2(px, CAMP_APT.position.y + 92), 12, FAINT)
 	_text(str(current), Vector2(px, CAMP_APT.position.y + 128), 30, TEXT)
-	_text("成功時", Vector2(px + 190, CAMP_APT.position.y + 92), 12, FAINT)
+	_text(Loc.t("offseason.camp.on_success"), Vector2(px + 190, CAMP_APT.position.y + 92), 12, FAINT)
 	_text(str(projected), Vector2(px + 190, CAMP_APT.position.y + 128), 30, _grade_color(projected) if gain >= 0 else RED)
 	if gain != 0:
 		_text("(%+d)" % gain, Vector2(px + 300, CAMP_APT.position.y + 124), 18, GREEN if gain > 0 else RED)
@@ -1897,13 +1893,13 @@ func _draw_results(rect: Rect2) -> void:
 	var step: String = str(_view.get("step", ""))
 	var result: Dictionary = _view.get("result", {}) as Dictionary
 	if result.is_empty():
-		_text(str(_view.get("status", "結果データがありません")), Vector2(rect.position.x, rect.position.y + 24), 16, MUTED)
+		_text(str(_view.get("status", Loc.t("offseason.no_result"))), Vector2(rect.position.x, rect.position.y + 24), 16, MUTED)
 		return
 	match step:
 		AppState.OFFSEASON_STEP_FA_DECLARATION:
 			_draw_fa_declaration_result(rect, result)
 		AppState.OFFSEASON_STEP_RETIREMENT:
-			_draw_people_result(rect, "引退した選手", result, "retired", "今オフは引退者がいませんでした。")
+			_draw_people_result(rect, Loc.t("offseason.result.retired_title"), result, "retired", Loc.t("offseason.result.retired_empty"))
 		AppState.OFFSEASON_STEP_CONTRACT_YEARS:
 			_draw_contract_years_result(rect, result)
 		AppState.OFFSEASON_STEP_RELEASE_COMMIT:
@@ -1935,7 +1931,7 @@ func _draw_results(rect: Rect2) -> void:
 
 func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, key: String, empty_text: String) -> void:
 	var people: Array = result.get(key, []) as Array
-	_draw_people_player_table(rect, "%s %d人" % [title_text, people.size()], people, _result_people_tab, key == "retired", empty_text, "result", true, true)
+	_draw_people_player_table(rect, Loc.t("offseason.result.title_count", {"title": title_text, "n": people.size()}), people, _result_people_tab, key == "retired", empty_text, "result", true, true)
 
 
 func _draw_release_result(rect: Rect2, result: Dictionary) -> void:
@@ -1943,20 +1939,20 @@ func _draw_release_result(rect: Rect2, result: Dictionary) -> void:
 	var user_n: int = int(result.get("user_released_count", -1))
 	var cpu_n: int = int(result.get("cpu_released_count", -1))
 	var foreign_n: int = int(result.get("foreign_released_count", 0))
-	var heading: String = "戦力外通告: %d人" % released.size()
+	var heading: String = Loc.t("offseason.result.release_heading", {"n": released.size()})
 	if user_n >= 0 and cpu_n >= 0:
-		heading = "戦力外通告: %d人 (自軍%d人 / 他球団 %d人 / 外国人 %d人)" % [released.size(), user_n, cpu_n, foreign_n]
+		heading = Loc.t("offseason.result.release_heading_detail", {"n": released.size(), "user": user_n, "cpu": cpu_n, "foreign": foreign_n})
 	var demoted: Array = result.get("demoted", []) as Array
 	if demoted.is_empty():
-		_draw_people_player_table(rect, heading, released, _result_people_tab, false, "今オフは戦力外通告がありませんでした。", "result", true, true)
+		_draw_people_player_table(rect, heading, released, _result_people_tab, false, Loc.t("offseason.result.release_empty"), "result", true, true)
 		return
 	# 戦力外 + 育成降格 を上下2枚で。
 	var half: float = (rect.size.y - 50.0) / 2.0
-	_draw_people_player_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), heading, released, _result_people_tab, false, "今オフは戦力外通告がありませんでした。", "result", true, true)
+	_draw_people_player_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), heading, released, _result_people_tab, false, Loc.t("offseason.result.release_empty"), "result", true, true)
 	var user_d: int = int(result.get("user_demoted_count", 0))
 	var cpu_d: int = int(result.get("cpu_demoted_count", 0))
 	var lower: Rect2 = Rect2(rect.position.x, rect.position.y + half + 56.0, rect.size.x, half - 6.0)
-	_draw_people_player_table(lower, "育成降格: %d人 (自軍%d人 / 他球団 %d人)" % [demoted.size(), user_d, cpu_d], demoted, _result_people_tab, false, "", "result2", false, true)
+	_draw_people_player_table(lower, Loc.t("offseason.result.demote_heading", {"n": demoted.size(), "user": user_d, "cpu": cpu_d}),demoted, _result_people_tab, false, "", "result2", false, true)
 
 
 func _draw_rookies_result(rect: Rect2, result: Dictionary) -> void:
@@ -1974,47 +1970,47 @@ func _draw_rookies_result(rect: Rect2, result: Dictionary) -> void:
 			"pos_dev": bool(entry.get("development_player", entry.get("development", false))),
 			"overall": int(entry.get("overall", 0)),
 		})
-	_heading_table(rect, "新人補強: %d人" % rookies.size(), ROOKIE_COLUMNS, rows, "補強の候補がありませんでした。", "result")
+	_heading_table(rect, Loc.t("offseason.result.rookies_heading", {"n": rookies.size()}), ROOKIE_COLUMNS, rows, Loc.t("offseason.result.rookies_empty"), "result")
 
 
 func _draw_released_result(rect: Rect2, result: Dictionary) -> void:
 	# 支配下と育成では枠の扱いも契約年数も違うので、どちらで獲得したかを結果表に明示する
 	# (team_mode "released_result" が WHIP/OAA 枠を「区分」へ差し替える)。
-	var heading: String = "戦力外獲得: 候補 %d人 / 獲得 %d人 (支配下 %d / 育成 %d) / 未獲得 %d人" % [
-		int(result.get("candidates_count", 0)), int(result.get("signed_count", 0)),
-		int(result.get("signed_controlled_count", 0)), int(result.get("signed_development_count", 0)),
-		int(result.get("remaining_count", 0)),
-	]
+	var heading: String = Loc.t("offseason.result.released_heading", {
+		"candidates": int(result.get("candidates_count", 0)), "signed": int(result.get("signed_count", 0)),
+		"controlled": int(result.get("signed_controlled_count", 0)), "development": int(result.get("signed_development_count", 0)),
+		"remaining": int(result.get("remaining_count", 0)),
+	})
 	var rows: Array = _result_signing_player_rows(result.get("signings", []) as Array)
 	for row_value in rows:
 		var entry: Dictionary = (row_value as Dictionary).get("entry", {}) as Dictionary
 		# 支配下だけ色を付け、育成は既定色にする (守備/役割バッジも支配下=塗りつぶし / 育成=枠線のみ)。
 		var development: bool = bool(entry.get("development_player", false))
-		entry["outcome_label"] = ReleasedMarketService.TRACK_DEVELOPMENT if development else ReleasedMarketService.TRACK_CONTROLLED
+		entry["outcome_label"] = PSPlayer.registered_roster_label(ReleasedMarketService.TRACK_DEVELOPMENT if development else ReleasedMarketService.TRACK_CONTROLLED)
 		entry["outcome_color"] = TEXT if development else BLUE
 	_draw_player_record_table(rect, heading, rows,
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "released_result_%s" % _result_people_tab, "", 0,
-		"今オフは戦力外からの獲得がありませんでした。", true, false, "released_result", true)
+		Loc.t("offseason.result.released_empty"), true, false, "released_result", true)
 
 
 func _draw_geneki_result(rect: Rect2, result: Dictionary) -> void:
-	var heading: String = "現役ドラフト: 移籍 %d人 (1巡目 %d / 2巡目 %d) — 自軍 獲得%d / 放出%d" % [
-		int(result.get("moved_count", 0)), int(result.get("round1_count", 0)), int(result.get("round2_count", 0)),
-		int(result.get("user_gained", 0)), int(result.get("user_lost", 0)),
-	]
+	var heading: String = Loc.t("offseason.result.geneki_heading", {
+		"moved": int(result.get("moved_count", 0)), "round1": int(result.get("round1_count", 0)), "round2": int(result.get("round2_count", 0)),
+		"gained": int(result.get("user_gained", 0)), "lost": int(result.get("user_lost", 0)),
+	})
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("moves", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "geneki_result_%s" % _result_people_tab, "", 0,
-		"現役ドラフトでの移籍はありませんでした。", true, false, "move", true)
+		Loc.t("offseason.result.geneki_empty"), true, false, "move", true)
 
 
 func _draw_fa_result(rect: Rect2, result: Dictionary) -> void:
-	var heading: String = "FA市場: 宣言 %d人 / 移籍 %d人 / 残留 %d人" % [
-		int(result.get("declared_count", 0)), int(result.get("moved_count", 0)), int(result.get("returned_count", 0)),
-	]
+	var heading: String = Loc.t("offseason.result.fa_heading", {
+		"declared": int(result.get("declared_count", 0)), "moved": int(result.get("moved_count", 0)), "returned": int(result.get("returned_count", 0)),
+	})
 	# team_mode "fa_result": "move" と同じ球団列レイアウト + 年俸の隣に契約年数列 (_has_contract_years_column)。
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(result.get("signings", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "fa_result_%s" % _result_people_tab, "", 0,
-		"今オフは FA 移籍が成立しませんでした。", true, false, "fa_result", true)
+		Loc.t("offseason.result.fa_empty"), true, false, "fa_result", true)
 
 
 func _draw_foreign_result(rect: Rect2, result: Dictionary) -> void:
@@ -2022,9 +2018,9 @@ func _draw_foreign_result(rect: Rect2, result: Dictionary) -> void:
 	# 専用フェーズ (contract_result パネル) で表示済みなので、ここで合算して二重に見せない。
 	var scout_rows: Array = _result_signing_player_rows(result.get("signings", []) as Array)
 	var pitcher_table: bool = _result_people_tab == PLAYER_TAB_PITCHER
-	var heading: String = "外国人スカウト獲得: 候補 %d人 / 獲得 %d人" % [int(result.get("candidates_count", 0)), int(result.get("signed_count", 0))]
+	var heading: String = Loc.t("offseason.result.foreign_heading", {"candidates": int(result.get("candidates_count", 0)), "signed": int(result.get("signed_count", 0))})
 	_draw_player_record_table(rect, heading, scout_rows, pitcher_table, "", "foreign_result_%s" % _result_people_tab, "", 0,
-		"今オフはスカウトからの獲得がありませんでした。", true, false, "team")
+		Loc.t("offseason.result.foreign_empty"),true, false, "team")
 
 
 # 契約市場結果 (contract_signings) を結果表の署名行モデルへ変換する。契約年数と去就ラベルを補う。
@@ -2036,13 +2032,13 @@ func _fgc_result_entries(result: Dictionary) -> Array:
 		entry["contract_years"] = int(entry.get("years", 0))
 		match str(entry.get("outcome", "")):
 			"retained":
-				entry["outcome_label"] = "残留"
+				entry["outcome_label"] = Loc.t("offseason.outcome.retained")
 				entry["outcome_color"] = TEXT
 			"poached":
-				entry["outcome_label"] = "移籍"
+				entry["outcome_label"] = Loc.t("offseason.outcome.moved")
 				entry["outcome_color"] = AMBER
 			_:
-				entry["outcome_label"] = "退団"
+				entry["outcome_label"] = Loc.t("offseason.outcome.departed")
 				entry["outcome_color"] = MUTED
 		entries.append(entry)
 	return entries
@@ -2052,9 +2048,9 @@ func _draw_camp_result(rect: Rect2, result: Dictionary) -> void:
 	# 成長と同じ候補タブ (投手/先発/中継/野手/各守備位置) で絞り込む。タブ行は _build_step_result_tabs が rect.y+30 に描く。
 	var pitcher_table: bool = _candidate_tab_is_pitcher(_camp_result_tab)
 	var actions: Array = _candidate_rows_for_tab(_camp_result_entries(), _camp_result_tab)
-	_text("キャンプ結果: 特別練習 %d件 / 通常球種習得 %d人" % [
-		(result.get("actions", []) as Array).size(), int(result.get("normal_pitch_learning_count", 0)),
-	], Vector2(rect.position.x, rect.position.y + 4), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("offseason.result.camp_heading", {
+		"actions": (result.get("actions", []) as Array).size(), "pitches": int(result.get("normal_pitch_learning_count", 0)),
+	}), Vector2(rect.position.x, rect.position.y + 4), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	# 通常キャンプの球種習得は投手系タブのときだけ下段に出す。
 	var pitch_rows: Array = []
@@ -2074,15 +2070,15 @@ func _draw_camp_result(rect: Rect2, result: Dictionary) -> void:
 
 	var content_top: float = rect.position.y + 68.0
 	var content_h: float = rect.end.y - content_top
-	var action_title: String = "%s の特別練習 %d件" % ["投手" if pitcher_table else "野手", actions.size()]
+	var action_title: String = Loc.t("offseason.result.camp_actions_title", {"tab": Loc.t("common.pitcher") if pitcher_table else Loc.t("common.fielder"), "n": actions.size()})
 	if pitch_rows.is_empty():
 		_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, content_h), action_title, _camp_result_columns(pitcher_table), _camp_action_rows(actions), "camp_res_%s" % _camp_result_tab, "", 0, true)
 		if actions.is_empty():
-			_text("該当する特別練習がありません。", Vector2(rect.position.x + 18, content_top + 64), 14, MUTED)
+			_text(Loc.t("offseason.result.camp_actions_empty"),Vector2(rect.position.x + 18, content_top + 64), 14, MUTED)
 		return
 	var top_h: float = content_h * 0.66
 	_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, top_h), action_title, _camp_result_columns(pitcher_table), _camp_action_rows(actions), "camp_res_%s" % _camp_result_tab, "", 0, true)
-	_draw_table_inner(Rect2(rect.position.x, content_top + top_h + 10.0, rect.size.x, content_h - top_h - 10.0), "通常キャンプ球種習得 %d人" % pitch_rows.size(), CAMP_PITCH_COLUMNS, pitch_rows, "camp_res_pitch", "", 0, true)
+	_draw_table_inner(Rect2(rect.position.x, content_top + top_h + 10.0, rect.size.x, content_h - top_h - 10.0), Loc.t("offseason.result.camp_pitch_title", {"n": pitch_rows.size()}), CAMP_PITCH_COLUMNS, pitch_rows, "camp_res_pitch", "", 0, true)
 
 
 # キャンプ特別練習アクションを能力変動表の行に変換 (成長と同じ能力セル + キャンプ固有列)。
@@ -2100,7 +2096,7 @@ func _camp_action_rows(actions: Array) -> Array:
 			"name": str(action.get("name", "")),
 			"age": int(action.get("age", 0)),
 			"training": str(action.get("training_label", "")),
-			"result": "成功" if bool(action.get("success", false)) else ("失敗*" if bool(action.get("penalty", false)) else "失敗"),
+			"result": Loc.t("offseason.camp.success") if bool(action.get("success", false)) else (Loc.t("offseason.camp.failure_penalty") if bool(action.get("penalty", false)) else Loc.t("offseason.camp.failure")),
 			"result_color": _camp_result_color(action),
 			"before_state": str(change_pair.get("before", "")),
 			"before_state_color": change_pair.get("before_color", MUTED) as Color,
@@ -2125,20 +2121,20 @@ func _draw_growth_result(rect: Rect2, result: Dictionary) -> void:
 	# 一覧はドラフトと同じ候補タブ (投手/先発/中継/野手/各守備位置) で切り替える1枚の表。
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var team_name: String = team.short_name if team != null else ""
-	var heading: String = "%s の成長 %d人 / 衰え %d人" % [team_name, int(result.get("growers_count", 0)), int(result.get("decayers_count", 0))]
+	var heading: String = Loc.t("offseason.result.growth_heading", {"team": team_name, "growers": int(result.get("growers_count", 0)), "decayers": int(result.get("decayers_count", 0))})
 	_text(heading, Vector2(rect.position.x, rect.position.y + 4), 15, TEXT, 1240, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var kind_counts: Dictionary = result.get("growth_kind_counts", {}) as Dictionary
 	if not kind_counts.is_empty():
-		_text_right("覚醒 %d  成長 %d  停滞 %d  劣化 %d  大幅劣化 %d" % [
-			int(kind_counts.get("awakening", 0)), int(kind_counts.get("growth", 0)), int(kind_counts.get("stagnation", 0)),
-			int(kind_counts.get("decline", 0)), int(kind_counts.get("major_decline", 0)),
-		], rect.end.x, rect.position.y + 6, 13, MUTED, 700.0)
+		_text_right(Loc.t("offseason.result.growth_kinds", {
+			"awakening": int(kind_counts.get("awakening", 0)), "growth": int(kind_counts.get("growth", 0)), "stagnation": int(kind_counts.get("stagnation", 0)),
+			"decline": int(kind_counts.get("decline", 0)), "major_decline": int(kind_counts.get("major_decline", 0)),
+		}), rect.end.x, rect.position.y + 6, 13, MUTED, 700.0)
 
 	# タブ行は _build_step_result_tabs が rect.y + 30 にボタンで重ねる。
 	var entries: Array = _candidate_rows_for_tab(_growth_board_entries(), _growth_tab)
 	var pitcher_table: bool = _candidate_tab_is_pitcher(_growth_tab)
 	var columns: Array = _growth_columns(pitcher_table)
-	var title: String = "%s %d人" % ["投手" if pitcher_table else "野手", entries.size()]
+	var title: String = Loc.t("offseason.result.title_count", {"title": Loc.t("common.pitcher") if pitcher_table else Loc.t("common.fielder"), "n": entries.size()})
 	var table_top: float = rect.position.y + 68.0
 	_draw_table_inner(Rect2(rect.position.x, table_top, rect.size.x, rect.end.y - table_top),
 		title, columns, _growth_rows(entries), "growth_board_%s" % _growth_tab, "", 0, true)
@@ -2149,23 +2145,23 @@ func _draw_growth_result(rect: Rect2, result: Dictionary) -> void:
 func _draw_contract_result(rect: Rect2, result: Dictionary) -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var team_name: String = team.short_name if team != null else ""
-	var heading: String = "%s 契約更改 (昇給 %d / 減給 %d / 予算超過球団 %d)" % [
-		team_name, int(result.get("raises_count", 0)), int(result.get("cuts_count", 0)),
-		int(result.get("over_budget_count", 0)),
-	]
+	var heading: String = Loc.t("offseason.result.contract_heading", {
+		"team": team_name, "raises": int(result.get("raises_count", 0)), "cuts": int(result.get("cuts_count", 0)),
+		"over_budget": int(result.get("over_budget_count", 0)),
+	})
 	# タブ行 (投手/野手) は _build_step_result_tabs が BODY 左上に重ねる。
 	_draw_player_record_table(rect, heading, _contract_player_rows(result), _contract_tab == PLAYER_TAB_PITCHER,
-		"", "contract_%s" % _contract_tab, "", 0, "自チームの選手記録がありません。", true, false, "contract")
+		"", "contract_%s" % _contract_tab, "", 0, Loc.t("offseason.result.contract_empty"), true, false, "contract")
 
 
 # 契約年数: 成立した複数年契約の一覧 (全球団)。単年は一覧に出さない (件数のみ見出しに出す)。
 func _draw_contract_years_result(rect: Rect2, result: Dictionary) -> void:
 	var multi_year: Array = result.get("multi_year_signings", []) as Array
-	var heading: String = "契約年数 (対象 %d人 / 複数年契約 %d件)" % [
-		int(result.get("decided_count", 0)), int(result.get("multi_year_count", 0)),
-	]
+	var heading: String = Loc.t("offseason.result.contract_years_heading", {
+		"decided": int(result.get("decided_count", 0)), "multi": int(result.get("multi_year_count", 0)),
+	})
 	_draw_player_record_table(rect, heading, _result_signing_player_rows(multi_year), _result_people_tab == PLAYER_TAB_PITCHER,
-		"", "contract_years_result_%s" % _result_people_tab, "", 0, "今オフは複数年契約が成立しませんでした。",
+		"", "contract_years_result_%s" % _result_people_tab, "", 0, Loc.t("offseason.result.contract_years_empty"),
 		true, false, "contract_years_result", true)
 
 
@@ -2179,11 +2175,11 @@ func _draw_fa_declaration_result(rect: Rect2, result: Dictionary) -> void:
 		var row: Dictionary = _fa_declaration_row(row_value as Dictionary)
 		if not row.is_empty():
 			rows.append(row)
-	var heading: String = "FA権保有者 %d人 / 宣言 %d人 (うち今オフ新規取得 %d人)" % [
-		int(result.get("holder_count", 0)), int(result.get("declared_count", 0)), int(result.get("new_fa_count", 0)),
-	]
+	var heading: String = Loc.t("offseason.result.fa_declaration_heading", {
+		"holders": int(result.get("holder_count", 0)), "declared": int(result.get("declared_count", 0)), "new": int(result.get("new_fa_count", 0)),
+	})
 	_draw_player_record_table(rect, heading, rows, pitcher_table, "", "fa_decl_%s" % _fa_declaration_tab, "",
-		0, "FA権を持つ選手がいません。", true, false, "fa_declaration", true)
+		0, Loc.t("offseason.result.fa_declaration_empty"),true, false, "fa_declaration", true)
 
 
 func _fa_declaration_row(entry: Dictionary) -> Dictionary:
@@ -2198,9 +2194,9 @@ func _fa_declaration_row(entry: Dictionary) -> Dictionary:
 		"position": int(entry.get("position", record.position)),
 		"role": str(entry.get("role", record.role)),
 		"salary": int(entry.get("salary", record.salary)),
-		"offer_text": "新規取得" if bool(entry.get("is_new_fa", false)) else "保有%d年目" % (int(entry.get("fa_pass_count", 0)) + 1),
+		"offer_text": Loc.t("offseason.fa_decl.new_holder") if bool(entry.get("is_new_fa", false)) else Loc.t("offseason.fa_decl.holding_year", {"n": int(entry.get("fa_pass_count", 0)) + 1}),
 		"offer_color": BLUE if bool(entry.get("is_new_fa", false)) else MUTED,
-		"outcome_label": "宣言" if declared else "残留",
+		"outcome_label": Loc.t("offseason.fa_decl.declared") if declared else Loc.t("offseason.outcome.retained"),
 		"outcome_color": AMBER if declared else MUTED,
 	}
 	return {"record": record, "player": GameDb.get_player(pid), "entry": row_entry, "__dim": not declared}
@@ -2227,9 +2223,9 @@ func _set_fa_declaration_tab(tab_id: String) -> void:
 func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 	var picks: Array = result.get("draft_picks", []) as Array
 	var rookies: Array = result.get("rookies", []) as Array
-	var title_text: String = str(result.get("title", "ドラフト"))
-	_text("%s終了 指名%d人 / 入団%d人" % [title_text, picks.size(), rookies.size()], Vector2(rect.position.x, rect.position.y + 26), 20, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("同順位優先リーグ: %s" % _league_label(str(result.get("priority_league", ""))), rect.end.x, rect.position.y + 24, 14, MUTED, 320.0)
+	var title_text: String = str(result.get("title", Loc.t("offseason.step.draft_generic")))
+	_text(Loc.t("offseason.draft.result_title", {"title": title_text, "picks": picks.size(), "rookies": rookies.size()}), Vector2(rect.position.x, rect.position.y + 26), 20, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("offseason.draft.priority_league", {"league": _league_label(str(result.get("priority_league", "")))}),rect.end.x, rect.position.y + 24, 14, MUTED, 320.0)
 
 	var content_top: float = rect.position.y + 52.0
 
@@ -2241,7 +2237,7 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 			lottery_rows.append(_lottery_row(log_entry))
 	if not lottery_rows.is_empty():
 		var lottery_h: float = min(64.0 + float(lottery_rows.size()) * 28.0, 220.0)
-		_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, lottery_h), "1巡目 抽選", LOTTERY_COLUMNS, lottery_rows, "draft_result_lottery", "", 0, true, 15, 28.0)
+		_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, lottery_h), Loc.t("offseason.draft.first_round_lottery"), LOTTERY_COLUMNS, lottery_rows, "draft_result_lottery", "", 0, true, 15, 28.0)
 		content_top += lottery_h + 14.0
 
 	_draw_picks_team_grid(Rect2(rect.position.x, content_top, rect.size.x, rect.end.y - content_top), picks, "alpha")
@@ -2290,7 +2286,7 @@ func _draw_picks_team_grid(area: Rect2, picks: Array, order_mode: String = "alph
 			var rows: Array = []
 			for pick_row in team_picks:
 				rows.append(_pick_row(pick_row as Dictionary))
-			_draw_table_inner(Rect2(cx, ry, cell_w, row_h), "%s %d人" % [_team_short(team_id), team_picks.size()], DRAFT_RESULT_COLUMNS, rows, "", "", 0, true, 15, cell_row_h)
+			_draw_table_inner(Rect2(cx, ry, cell_w, row_h), Loc.t("offseason.result.title_count", {"title": _team_short(team_id), "n": team_picks.size()}), DRAFT_RESULT_COLUMNS, rows, "", "", 0, true, 15, cell_row_h)
 			cx += cell_w + gap
 
 
@@ -2386,44 +2382,25 @@ func _draw_people_player_table(rect: Rect2, title: String, people: Array, tab_id
 	var pitcher_table: bool = tab_id == PLAYER_TAB_PITCHER
 	var scoped_empty: String = empty_text
 	if scoped_empty.is_empty():
-		scoped_empty = "該当する選手がいません。"
+		scoped_empty = Loc.t("offseason.empty.players")
 	_draw_player_record_table(rect, title, rows, pitcher_table, "", "%s_%s" % [scroll_key, tab_id], "", 0, scoped_empty, show_tab_space, career_stats, "", show_salary)
 
 
-func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career_stats: bool, show_salary: bool, show_offer_years: bool = false) -> void:
+func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool,show_salary: bool, show_offer_years: bool = false) -> void:
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	if _is_move_team_column_mode(team_mode):
-		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
-		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
-	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
-		_text("現球団" if team_mode == "fgc_market_away" else "球団", Vector2(float(xs["team_x"]), y), 11, FAINT)
-	_text("役割", Vector2(float(xs["role_x"]), y), 11, FAINT, 52.0, HORIZONTAL_ALIGNMENT_CENTER)
-	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
-	if xs.has("salary_r"):
-		_text_cell("年数" if _is_contract_offer_mode(team_mode) else "年俸", float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_contract_offer_mode(team_mode) else 76.0)
-	if xs.has("offer_years_r"):
-		_text_cell(_offer_amount_label(team_mode), float(xs["offer_years_r"]), y, 11, FAINT, 66.0 if _is_contract_offer_mode(team_mode) else 46.0)
-	if team_mode == "contract":
-		_text_cell("年俸増減", float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
-	if xs.has("contract_years_r"):
-		_text_cell("契約年数", float(xs["contract_years_r"]), y, 11, FAINT, 52.0)
-	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
-	_text_cell("在", float(xs["years_r"]), y, 11, FAINT, 30.0)
-	_text_cell("怪", float(xs["inj_r"]), y, 11, FAINT, 30.0)
-	_text_cell("評価", float(xs["eval_r"]), y, 11, FAINT, 44.0)
-	_text_cell("WAR", float(xs["war_r"]), y, 11, FAINT, 46.0)
-	_text_cell("球速", float(xs["velo_r"]), y, 11, FAINT, 58.0)
-	_text_cell("球質", float(xs["stuff_r"]), y, 11, FAINT)
-	_text_cell("制球", float(xs["ctrl_r"]), y, 11, FAINT)
-	_text_cell("持久", float(xs["stam_r"]), y, 11, FAINT, 54.0)
-	_text_cell("登板" if career_stats else "登板", float(xs["g_r"]), y, 11, FAINT, 44.0)
-	_text_cell("勝", float(xs["w_r"]), y, 11, FAINT, 28.0)
-	_text_cell("敗", float(xs["l_r"]), y, 11, FAINT, 28.0)
+	_draw_player_table_identity_header(xs, y, team_mode, true)
+	_text_cell(Loc.t("rating.velocity"), float(xs["velo_r"]), y, 11, FAINT, 58.0)
+	_text_cell(Loc.t("rating.stuff"), float(xs["stuff_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.control"), float(xs["ctrl_r"]), y, 11, FAINT)
+	_text_cell(Loc.t("rating.stamina"), float(xs["stam_r"]), y, 11, FAINT, 54.0)
+	_text_cell(Loc.t("col.appearances"), float(xs["g_r"]), y, 11, FAINT, 44.0)
+	_text_cell(Loc.t("col.wins"), float(xs["w_r"]), y, 11, FAINT, 28.0)
+	_text_cell(Loc.t("col.losses"), float(xs["l_r"]), y, 11, FAINT, 28.0)
 	_text_cell("S", float(xs["sv_r"]), y, 11, FAINT, 28.0)
 	_text_cell("H", float(xs["hld_r"]), y, 11, FAINT, 28.0)
-	_text_cell("投球回", float(xs["ip_r"]), y, 11, FAINT, 62.0)
-	_text_cell("防御率", float(xs["era_r"]), y, 11, FAINT, 62.0)
+	_text_cell(Loc.t("col.innings"), float(xs["ip_r"]), y, 11, FAINT, 62.0)
+	_text_cell(Loc.t("stat.era"), float(xs["era_r"]), y, 11, FAINT, 62.0)
 	_text_cell(_contract_slot_label(team_mode, "FIP"), float(xs["fip_r"]), y, 11, FAINT, 54.0)
 	_text_cell(_outcome_slot_label(team_mode, "WHIP"), float(xs["whip_r"]), y, 11, FAINT, 58.0)
 	if not xs.has("salary_r"):
@@ -2431,42 +2408,50 @@ func _draw_pitcher_table_header(rect: Rect2, y: float, team_mode: String, career
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
 
-func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool, show_salary: bool, show_offer_years: bool = false) -> void:
-	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
-	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+# 投手/野手表で共通の左側見出し (球団列 → 役割/守備 → 選手 → 契約系列 → 年齢/在籍/怪我/評価/WAR)。
+func _draw_player_table_identity_header(xs: Dictionary, y: float, team_mode: String, pitcher: bool) -> void:
 	if _is_move_team_column_mode(team_mode):
-		_text("移籍元球団", Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
-		_text("移籍先球団", Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
+		_text(Loc.t("offseason.col.from_team"), Vector2(float(xs["team_from_x"]), y), 11, FAINT, 56.0)
+		_text(Loc.t("offseason.col.to_team"), Vector2(float(xs["team_to_x"]), y), 11, FAINT, 56.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
-		_text("現球団" if team_mode == "fgc_market_away" else "球団", Vector2(float(xs["team_x"]), y), 11, FAINT)
-	_text("守備", Vector2(float(xs["role_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
-	_text("選手", Vector2(float(xs["name_x"]), y), 11, FAINT)
+		_text(Loc.t("offseason.col.current_team") if team_mode == "fgc_market_away" else Loc.t("col.team"), Vector2(float(xs["team_x"]), y), 11, FAINT)
+	if pitcher:
+		_text(Loc.t("col.role"), Vector2(float(xs["role_x"]), y), 11, FAINT, 52.0, HORIZONTAL_ALIGNMENT_CENTER)
+	else:
+		_text(Loc.t("col.pos"), Vector2(float(xs["role_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
+	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, FAINT)
 	if xs.has("salary_r"):
-		_text_cell("年数" if _is_contract_offer_mode(team_mode) else "年俸", float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_contract_offer_mode(team_mode) else 76.0)
+		_text_cell(Loc.t("offseason.col.years") if _is_contract_offer_mode(team_mode) else Loc.t("col.salary"), float(xs["salary_r"]), y, 11, FAINT, 44.0 if _is_contract_offer_mode(team_mode) else 76.0)
 	if xs.has("offer_years_r"):
 		_text_cell(_offer_amount_label(team_mode), float(xs["offer_years_r"]), y, 11, FAINT, 66.0 if _is_contract_offer_mode(team_mode) else 46.0)
 	if team_mode == "contract":
-		_text_cell("年俸増減", float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
+		_text_cell(Loc.t("offseason.col.salary_delta"), float(xs["salary_delta_r"]), y, 11, FAINT, 80.0)
 	if xs.has("contract_years_r"):
-		_text_cell("契約年数", float(xs["contract_years_r"]), y, 11, FAINT, 52.0)
-	_text_cell("年齢", float(xs["age_r"]), y, 11, FAINT, 40.0)
-	_text_cell("在", float(xs["years_r"]), y, 11, FAINT, 30.0)
-	_text_cell("怪", float(xs["inj_r"]), y, 11, FAINT, 30.0)
-	_text_cell("評価", float(xs["eval_r"]), y, 11, FAINT, 44.0)
+		_text_cell(Loc.t("offseason.col.contract_years"), float(xs["contract_years_r"]), y, 11, FAINT, 52.0)
+	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, FAINT, 40.0)
+	_text_cell(Loc.t("offseason.col.tenure_short"), float(xs["years_r"]), y, 11, FAINT, 30.0)
+	_text_cell(Loc.t("offseason.col.injury_short"), float(xs["inj_r"]), y, 11, FAINT, 30.0)
+	_text_cell(Loc.t("col.evaluation"), float(xs["eval_r"]), y, 11, FAINT, 44.0)
 	_text_cell("WAR", float(xs["war_r"]), y, 11, FAINT, 46.0)
-	_text_cell("巧打", float(xs["meet_r"]), y, 11, FAINT, 38.0)
-	_text_cell("長打", float(xs["pow_r"]), y, 11, FAINT, 38.0)
-	_text_cell("走力", float(xs["spd_r"]), y, 11, FAINT, 38.0)
-	_text_cell("守備", float(xs["def_r"]), y, 11, FAINT, 38.0)
-	_text_cell("肩力", float(xs["arm_r"]), y, 11, FAINT, 38.0)
-	_text_cell("選球", float(xs["eye_r"]), y, 11, FAINT, 38.0)
-	_text_cell("試合", float(xs["g_r"]), y, 11, FAINT, 42.0)
-	_text_cell("打率", float(xs["avg_r"]), y, 11, FAINT, 52.0)
-	_text_cell("本", float(xs["hr_r"]), y, 11, FAINT, 34.0)
-	_text_cell("打点", float(xs["rbi_r"]), y, 11, FAINT, 44.0)
-	_text_cell(_contract_slot_label(team_mode, "盗塁"), float(xs["sb_r"]), y, 11, FAINT, 44.0)
+
+
+func _draw_fielder_table_header(rect: Rect2, y: float, team_mode: String, _career_stats: bool, show_salary: bool, show_offer_years: bool = false) -> void:
+	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
+	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_draw_player_table_identity_header(xs, y, team_mode, false)
+	_text_cell(Loc.t("rating.contact"), float(xs["meet_r"]), y, 11, FAINT, 38.0)
+	_text_cell(Loc.t("rating.power"), float(xs["pow_r"]), y, 11, FAINT, 38.0)
+	_text_cell(Loc.t("rating.speed"), float(xs["spd_r"]), y, 11, FAINT, 38.0)
+	_text_cell(Loc.t("rating.defense"), float(xs["def_r"]), y, 11, FAINT, 38.0)
+	_text_cell(Loc.t("rating.arm"), float(xs["arm_r"]), y, 11, FAINT, 38.0)
+	_text_cell(Loc.t("rating.discipline"), float(xs["eye_r"]), y, 11, FAINT, 38.0)
+	_text_cell(Loc.t("col.games"), float(xs["g_r"]), y, 11, FAINT, 42.0)
+	_text_cell(Loc.t("col.avg"), float(xs["avg_r"]), y, 11, FAINT, 52.0)
+	_text_cell(Loc.t("col.hr"), float(xs["hr_r"]), y, 11, FAINT, 34.0)
+	_text_cell(Loc.t("stat.rbi"), float(xs["rbi_r"]), y, 11, FAINT, 44.0)
+	_text_cell(_contract_slot_label(team_mode, "stat.stolen_bases"), float(xs["sb_r"]), y, 11, FAINT, 44.0)
 	if not xs.has("salary_r"):
-		_text_cell("出塁率", float(xs["obp_r"]), y, 11, FAINT, 62.0)
+		_text_cell(Loc.t("stat.obp"), float(xs["obp_r"]), y, 11, FAINT, 62.0)
 	_text_cell("OPS", float(xs["ops_r"]), y, 11, FAINT, 54.0)
 	if xs.has("salary_r"):
 		_text_cell("wRC+", float(xs["woba_r"]), y, 11, FAINT, 60.0)
@@ -2586,7 +2571,7 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 	if xs.has("salary_r"):
 		if fgc_market:
 			# 年数は既定で "N年"。決定状態そのものを見せたい一覧 (契約年数) は fgc_years_text で上書きする。
-			_text_cell(str(entry.get("fgc_years_text", "%d年" % int(entry.get("fgc_years", 1)))),
+			_text_cell(str(entry.get("fgc_years_text", Loc.t("offseason.years_value", {"n": int(entry.get("fgc_years", 1))}))),
 				float(xs["salary_r"]), y, 13, entry.get("fgc_years_color", TEXT) as Color, 44.0)
 		else:
 			_text_cell(_comma(_player_table_salary(entry, record)), float(xs["salary_r"]), y, 13, TEXT, 76.0)
@@ -2594,7 +2579,7 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 		if fgc_market:
 			_text_cell(str(entry.get("market_salary_text", "-")), float(xs["offer_years_r"]), y, 13, TEXT, 66.0)
 		else:
-			_text_cell("%d年" % int(entry.get("offer_years", 0)), float(xs["offer_years_r"]), y, 13, TEXT, 46.0)
+			_text_cell(Loc.t("offseason.years_value", {"n": int(entry.get("offer_years", 0))}), float(xs["offer_years_r"]), y, 13, TEXT, 46.0)
 	if xs.has("salary_delta_r"):
 		var salary_delta: int = int(entry.get("salary_delta", 0))
 		_text_cell(_salary_delta_text(salary_delta), float(xs["salary_delta_r"]), y, 13, _salary_delta_color(salary_delta), 80.0)
@@ -2604,9 +2589,9 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 		var contract_years: int = int(entry.get("contract_years", 1))
 		var contract_years_text: String = "-"
 		if contract_years == 1:
-			contract_years_text = "単年"
+			contract_years_text = Loc.t("offseason.single_year")
 		elif contract_years >= 2:
-			contract_years_text = "%d年" % contract_years
+			contract_years_text = Loc.t("offseason.years_value", {"n": contract_years})
 		_text_cell(contract_years_text, float(xs["contract_years_r"]), y, 13,
 			BLUE if contract_years >= 2 else (MUTED if contract_years == 1 else FAINT), 52.0)
 	_text_cell(str(record.age), float(xs["age_r"]), y, 13, MUTED, 40.0)
@@ -2642,24 +2627,24 @@ func _is_contract_offer_mode(team_mode: String) -> bool:
 func _contract_slot_label(team_mode: String, default_label: String) -> String:
 	match team_mode:
 		"fgc_market", "fgc_market_away":
-			return "提示状態"
+			return Loc.t("offseason.col.offer_state")
 		"contract_years":
-			return "区分"
+			return Loc.t("col.category")
 		"fa_declaration":
-			return "権利"
-	return default_label
+			return Loc.t("offseason.col.fa_right")
+	return Loc.t(default_label)
 
 
 # WHIP (投手) / OAA (野手) 枠の見出し。契約系の team_mode はここを去就・現年俸へ差し替える。
 func _outcome_slot_label(team_mode: String, default_label: String) -> String:
 	match team_mode:
 		"fgc_result", "fa_declaration":
-			return "去就"
+			return Loc.t("offseason.col.outcome")
 		"released_result":
-			return "区分"
+			return Loc.t("col.category")
 		"fgc_market", "fgc_market_away", "contract_years":
-			return "現年俸"
-	return default_label
+			return Loc.t("offseason.col.current_salary")
+	return Loc.t(default_label)
 
 
 # 移籍元/移籍先の2列 (旧球団→新球団) を出す team_mode。
@@ -2677,10 +2662,10 @@ func _is_outcome_slot_mode(team_mode: String) -> bool:
 # 前方2列目 (offer_years_r 枠) の見出し。契約提示系だけ金額を出すのでモードごとに呼び分ける。
 func _offer_amount_label(team_mode: String) -> String:
 	if team_mode == "contract_years":
-		return "基準年俸"
+		return Loc.t("offseason.col.base_salary")
 	if _is_fgc_market_mode(team_mode):
-		return "提示年俸"
-	return "年数"
+		return Loc.t("offseason.col.offer_salary")
+	return Loc.t("offseason.col.years")
 
 
 # 年俸の隣に「契約年数」列を出す team_mode。列の幅は選手名の余白から捻出するので、
@@ -2966,12 +2951,12 @@ func _release_row(player: PSPlayer) -> Dictionary:
 	var is_demote: bool = selected_demote_ids.has(player.id)
 	var note_parts: Array = []
 	if player.foreign_player:
-		note_parts.append("外")
+		note_parts.append(Loc.t("offseason.release.foreign_mark"))
 	var check_text: String = ""
 	if is_release:
 		check_text = "✓"
 	elif is_demote:
-		check_text = "育"
+		check_text = Loc.t("offseason.release.demote_mark")
 	var war_entry: Variant = release_war_by_id.get(player.id, {})
 	var war_value: float = float(war_entry.get("war", 0.0)) if war_entry is Dictionary else float(war_entry)
 	var row: Dictionary = {
@@ -3025,28 +3010,28 @@ func _release_stat_text(player: PSPlayer) -> String:
 	if player.is_pitcher():
 		var ps: PSPitcherStats = record.pitcher_stats
 		if ps.games <= 0:
-			return "登板なし"
+			return Loc.t("offseason.release.no_appearances")
 		var era_str: String = "--" if ps.outs_pitched <= 0 else "%0.2f" % ps.era()
-		return "登%d 先%d %d勝%d敗S%d H%d 防%s 奪%d" % [
-			ps.games, ps.starts, ps.wins, ps.losses, ps.saves, ps.holds, era_str, ps.strikeouts,
-		]
+		return Loc.t("offseason.release.pitcher_line", {
+			"g": ps.games, "gs": ps.starts, "w": ps.wins, "l": ps.losses, "sv": ps.saves, "hld": ps.holds, "era": era_str, "so": ps.strikeouts,
+		})
 	var bs: PSBatterStats = record.batter_stats
 	if bs.plate_appearances <= 0:
-		return "出場なし"
-	return "試%d 打席%d 率%0.3f 本%d 点%d 盗%d OPS%0.3f" % [
-		bs.games, bs.plate_appearances, bs.batting_average(),
-		bs.home_runs, bs.runs_batted_in, bs.stolen_bases, bs.ops(),
-	]
+		return Loc.t("offseason.release.no_games")
+	return Loc.t("offseason.release.batter_line", {
+		"g": bs.games, "pa": bs.plate_appearances, "avg": "%0.3f" % bs.batting_average(),
+		"hr": bs.home_runs, "rbi": bs.runs_batted_in, "sb": bs.stolen_bases, "ops": "%0.3f" % bs.ops(),
+	})
 
 
 func _refresh_release_summary() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var team_name: String = team.short_name if team != null else ""
-	_release_summary_text = "[%s] 戦力外 %d人 / 育成降格 %d人 / 自軍%d人" % [
-		team_name, selected_release_ids.size(), selected_demote_ids.size(), team_roster_records.size(),
-	]
+	_release_summary_text = Loc.t("offseason.release.summary", {
+		"team": team_name, "release": selected_release_ids.size(), "demote": selected_demote_ids.size(), "roster": team_roster_records.size(),
+	})
 	if _release_foreign_count > 0:
-		_release_summary_text += " / 外国人%d人は契約市場で扱う" % _release_foreign_count
+		_release_summary_text += Loc.t("offseason.release.summary_foreign", {"n": _release_foreign_count})
 
 
 func _on_auto_select_release_pressed() -> void:
@@ -3062,7 +3047,7 @@ func _on_auto_select_release_pressed() -> void:
 		selected_demote_ids[int(pid_value)] = true
 	_rebuild_release_rows()
 	_refresh_release_summary()
-	_set_status("推奨選手を表示しました (戦力外%d / 育成降格%d)。確定前に編集できます。" % [selected_release_ids.size(), selected_demote_ids.size()], MUTED)
+	_set_status(Loc.t("offseason.release.recommended_shown", {"release": selected_release_ids.size(), "demote": selected_demote_ids.size()}), MUTED)
 
 
 func _on_auto_commit_release_pressed() -> void:
@@ -3113,7 +3098,7 @@ func _build_release_recommendation() -> Dictionary:
 	var team_id: int = AppState.selected_team_id
 	var season: PSSeason = AppState.current_season
 	if team_id <= 0 or season == null:
-		return {"ok": false, "message": "戦力外候補を計算できません。"}
+		return {"ok": false, "message": Loc.t("offseason.release.cannot_compute")}
 	var release_ids: Array = []
 	var demote_ids: Array = []
 	# 長期故障の育成降格は戦力外候補とは独立に拾う (怪我人は候補側で保護されるため、
@@ -3141,9 +3126,9 @@ func _build_release_recommendation() -> Dictionary:
 
 func _show_release_confirm_dialog() -> void:
 	var dialog: ConfirmationDialog = _ensure_release_confirm_dialog()
-	dialog.dialog_text = "現在の選択で戦力外通告を確定します。\n戦力外 %d人 / 育成降格 %d人\nよろしいですか？" % [
-		selected_release_ids.size(), selected_demote_ids.size(),
-	]
+	dialog.dialog_text = Loc.t("offseason.release.confirm_text", {
+		"release": selected_release_ids.size(), "demote": selected_demote_ids.size(),
+	})
 	dialog.popup_centered(Vector2i(480, 210))
 
 
@@ -3151,9 +3136,9 @@ func _ensure_release_confirm_dialog() -> ConfirmationDialog:
 	if _release_confirm_dialog != null and is_instance_valid(_release_confirm_dialog):
 		return _release_confirm_dialog
 	_release_confirm_dialog = ConfirmationDialog.new()
-	_release_confirm_dialog.title = "戦力外通告の確認"
-	_release_confirm_dialog.ok_button_text = "確定する"
-	_release_confirm_dialog.cancel_button_text = "キャンセル"
+	_release_confirm_dialog.title = Loc.t("offseason.release.confirm_title")
+	_release_confirm_dialog.ok_button_text = Loc.t("offseason.release.confirm_ok")
+	_release_confirm_dialog.cancel_button_text = Loc.t("common.cancel")
 	_release_confirm_dialog.confirmed.connect(_on_release_confirmed)
 	add_child(_release_confirm_dialog)
 	_style_confirmation_dialog(_release_confirm_dialog)
@@ -3169,32 +3154,32 @@ func _populate_draft() -> void:
 	var first_round_wave: int = int(state.get("first_round_wave", 1))
 	var current_team_id: int = int(state.get("current_team_id", AppState.selected_team_id))
 	var is_dev_segment: bool = str(state.get("segment", "main")) == "development"
-	var phase_label: String = "育成ドラフト" if is_dev_segment else "本指名"
+	var phase_label: String = Loc.t("offseason.header.draft_development") if is_dev_segment else Loc.t("offseason.step.draft")
 	var reveal: Dictionary = state.get("first_round_reveal", {}) as Dictionary
 	var reveal_wave: int = int(reveal.get("wave", 1))
 	if stage == "first_round_bid":
-		var bid_label: String = "1巡目 入札" if first_round_wave <= 1 else "1巡目 再入札%d回目" % first_round_wave
-		_draft_status_text = "%s %s: %s" % [phase_label, bid_label, _team_short(AppState.selected_team_id)]
-		_draft_submit_label = "入札する"
+		var bid_label: String = Loc.t("offseason.draft.first_round_bid") if first_round_wave <= 1 else Loc.t("offseason.draft.first_round_rebid", {"n": first_round_wave})
+		_draft_status_text = Loc.t("offseason.draft.status_bid", {"phase": phase_label, "bid": bid_label, "team": _team_short(AppState.selected_team_id)})
+		_draft_submit_label = "offseason.draft.button.bid"
 		_draft_reveal_stage = ""
 	elif stage == "user_pick":
-		_draft_status_text = "%s %d巡目 指名: %s" % [phase_label, round_no, _team_short(current_team_id)]
-		_draft_submit_label = "指名する"
+		_draft_status_text = Loc.t("offseason.draft.status_pick", {"phase": phase_label, "round": round_no, "team": _team_short(current_team_id)})
+		_draft_submit_label = "offseason.draft.button.pick"
 		_draft_reveal_stage = ""
 	elif stage == "first_round_reveal":
-		_draft_status_text = "本指名 1巡目 入札公開" if reveal_wave <= 1 else "本指名 1巡目 再入札%d回目 入札公開" % reveal_wave
-		_draft_submit_label = "指名する"
+		_draft_status_text = Loc.t("offseason.draft.status_reveal") if reveal_wave <= 1 else Loc.t("offseason.draft.status_reveal_rebid", {"n": reveal_wave})
+		_draft_submit_label = "offseason.draft.button.pick"
 		_draft_reveal_stage = "reveal"
 	elif stage == "first_round_result":
-		_draft_status_text = "本指名 1巡目 抽選結果"
-		_draft_submit_label = "指名する"
+		_draft_status_text = Loc.t("offseason.draft.status_lottery_result")
+		_draft_submit_label = "offseason.draft.button.pick"
 		_draft_reveal_stage = "result"
 	else:
 		_draft_status_text = phase_label
-		_draft_submit_label = "指名する"
+		_draft_submit_label = "offseason.draft.button.pick"
 		_draft_reveal_stage = ""
 	_draft_show_skip = stage == "user_pick"
-	_draft_skip_label = "育成指名終了" if is_dev_segment else "本指名終了"
+	_draft_skip_label = "offseason.draft.button.end_development" if is_dev_segment else "offseason.draft.button.end_main"
 
 	_draft_record_cache = {}
 	_draft_cand_by_id = {}
@@ -3226,7 +3211,7 @@ func _populate_draft() -> void:
 		_draft_pick_rows.append(_pick_row(pick_row as Dictionary))
 
 	_draft_reveal_cards = []
-	_draft_reveal_go_label = "抽選へ"
+	_draft_reveal_go_label = "offseason.draft.button.to_lottery"
 	if _draft_reveal_stage != "":
 		var reveal_bids: Dictionary = reveal.get("bids", {}) as Dictionary
 		var reveal_winners: Dictionary = reveal.get("winners", {}) as Dictionary
@@ -3243,7 +3228,7 @@ func _populate_draft() -> void:
 			if int(counts_by_candidate[cid_key]) >= 2:
 				any_contested = true
 				break
-		_draft_reveal_go_label = "抽選へ" if any_contested else "指名確定へ"
+		_draft_reveal_go_label = "offseason.draft.button.to_lottery" if any_contested else "offseason.draft.button.to_confirm"
 		# result 段階では当選候補が picked=true になり _draft_cand_by_id (未 picked のみ) から
 		# 引けないため、候補プール全量から id -> candidate の対応をここで作る。
 		var cand_by_id_full: Dictionary = {}
@@ -3353,7 +3338,7 @@ func _draft_growth_color(value: float) -> Color:
 func _pick_row(pick: Dictionary) -> Dictionary:
 	var round_no: int = int(pick.get("round", 0))
 	# 育成指名は巡目欄に "育" を冠して区別する (競合欄には出さない)。
-	var round_text: String = ("育%d" % round_no) if bool(pick.get("development", false)) else str(round_no)
+	var round_text: String = Loc.t("offseason.draft.development_round", {"n": round_no}) if bool(pick.get("development", false)) else str(round_no)
 	var badge: Dictionary = _pick_pos_badge(pick)
 	return {
 		"round": round_text,
@@ -3393,17 +3378,17 @@ func _team_color(team_id: int) -> Color:
 func _source_label(source_type: String) -> String:
 	match source_type:
 		"high_school":
-			return "高校"
+			return Loc.t("draft.source.high_school")
 		"university":
-			return "大学"
+			return Loc.t("draft.source.university")
 		"industrial":
-			return "社会人"
+			return Loc.t("draft.source.industrial")
 		"independent":
-			return "独立"
+			return Loc.t("draft.source.independent")
 		"overseas_school":
-			return "海外"
+			return Loc.t("draft.source.overseas_school")
 		DraftService.FARM_CLUB_SOURCE_TYPE:
-			return "ファーム"
+			return Loc.t("draft.source.farm_club")
 		_:
 			return source_type
 
@@ -3463,16 +3448,16 @@ func _draft_reveal_card(team_id: int, candidate_id: int, candidate: Dictionary, 
 	var note_color: Color = TEXT
 	if _draft_reveal_stage == "reveal":
 		if contest_count >= 2:
-			note = "競合%d球団" % contest_count
+			note = Loc.t("offseason.draft.note.contested", {"n": contest_count})
 			note_color = AMBER
 		else:
-			note = "単独"
+			note = Loc.t("offseason.draft.note.single")
 			note_color = TEXT
 	elif int(winners.get(str(candidate_id), 0)) == team_id:
-		note = "当選" if contest_count >= 2 else "確定"
+		note = Loc.t("offseason.draft.note.won") if contest_count >= 2 else Loc.t("offseason.draft.note.confirmed")
 		note_color = GREEN if contest_count >= 2 else TEXT
 	elif loser_ids.has(team_id):
-		note = "外れ"
+		note = Loc.t("offseason.draft.note.lost")
 		note_color = MUTED
 	return {
 		"team_id": team_id,
@@ -3503,7 +3488,7 @@ func _draft_reveal_card_picked(team_id: int, pick: Dictionary) -> Dictionary:
 		"age": int(pick.get("age", 0)),
 		"source": _source_label(str(pick.get("source_type", ""))),
 		"overall": int(pick.get("overall", 0)),
-		"note": "指名済",
+		"note": Loc.t("offseason.draft.note.picked"),
 		"note_color": MUTED,
 		"muted": true,
 	}
@@ -3521,7 +3506,7 @@ func _draft_reveal_card_empty(team_id: int) -> Dictionary:
 		"age": 0,
 		"source": "",
 		"overall": 0,
-		"note": "指名なし",
+		"note": Loc.t("offseason.draft.note.no_pick"),
 		"note_color": FAINT,
 		"muted": true,
 	}
@@ -3529,11 +3514,11 @@ func _draft_reveal_card_empty(team_id: int) -> Dictionary:
 
 func _on_draft_submit_pressed() -> void:
 	if selected_draft_candidate_id <= 0:
-		_set_status("ドラフト候補を選択してください。", RED)
+		_set_status(Loc.t("offseason.draft.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_draft_candidate(selected_draft_candidate_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "指名に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.pick"))), RED)
 		return
 	_refresh()
 
@@ -3541,7 +3526,7 @@ func _on_draft_submit_pressed() -> void:
 func _on_draft_skip_pressed() -> void:
 	var result: Dictionary = AppState.skip_draft_pick()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "見送りに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.skip"))), RED)
 		return
 	_refresh()
 
@@ -3549,7 +3534,7 @@ func _on_draft_skip_pressed() -> void:
 func _on_draft_auto_pressed() -> void:
 	var result: Dictionary = AppState.auto_draft_user_pick()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "自動指名に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.auto_pick"))), RED)
 		return
 	_refresh()
 
@@ -3557,7 +3542,7 @@ func _on_draft_auto_pressed() -> void:
 func _on_draft_auto_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_draft_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.auto_all"))), RED)
 		return
 	_refresh()
 
@@ -3567,7 +3552,7 @@ func _on_draft_auto_all_pressed() -> void:
 func _on_draft_proceed_pressed() -> void:
 	var result: Dictionary = AppState.proceed_draft_first_round()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.proceed"))), RED)
 		return
 	_refresh()
 
@@ -3581,9 +3566,9 @@ func _populate_released() -> void:
 	for row in state.get("signings", []) as Array:
 		if int((row as Dictionary).get("to_team", 0)) == AppState.selected_team_id:
 			user_signings += 1
-	_released_status_text = "戦力外獲得: 候補%d人 / 自軍獲得%d人 / 残り候補%d人" % [
-		(state.get("candidates", []) as Array).size(), user_signings, candidates.size(),
-	]
+	_released_status_text = Loc.t("offseason.released.status", {
+		"candidates": (state.get("candidates", []) as Array).size(), "signed": user_signings, "remaining": candidates.size(),
+	})
 	_released_rows = []
 	_released_player_rows = []
 	_released_by_id = {}
@@ -3634,11 +3619,11 @@ func _on_released_sign_development_pressed() -> void:
 
 func _submit_released_sign(track: String) -> void:
 	if selected_released_candidate_id <= 0:
-		_set_status("自由契約候補を選択してください。", RED)
+		_set_status(Loc.t("offseason.released.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_released_candidate(selected_released_candidate_id, track)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "戦力外獲得に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.released_sign"))), RED)
 		return
 	selected_released_candidate_id = 0
 	_refresh()
@@ -3649,7 +3634,7 @@ func _on_released_skip_pressed() -> void:
 		return
 	var result: Dictionary = AppState.skip_released_candidate(selected_released_candidate_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "自由契約候補の見送りに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.released_skip"))), RED)
 		return
 	selected_released_candidate_id = 0
 	_refresh()
@@ -3658,7 +3643,7 @@ func _on_released_skip_pressed() -> void:
 func _on_released_auto_pressed() -> void:
 	var result: Dictionary = AppState.auto_released_user_pick()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "戦力外獲得の自動判断に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.released_auto"))), RED)
 		return
 	selected_released_candidate_id = 0
 	_refresh()
@@ -3667,7 +3652,7 @@ func _on_released_auto_pressed() -> void:
 func _on_released_auto_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_released_market_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "戦力外獲得市場の自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.released_auto_all"))), RED)
 		return
 	selected_released_candidate_id = 0
 	_refresh()
@@ -3696,19 +3681,19 @@ func _populate_geneki() -> void:
 			for entry_row in GenekiDraftService.round1_targets(state, AppState.selected_team_id):
 				var entry: Dictionary = entry_row as Dictionary
 				_append_geneki_row(int(entry.get("player_id", 0)), int(entry.get("from_team_id", 0)), entry)
-			_geneki_status_text = "現役ドラフト 1巡目: 自軍の指名手番です。他球団のリスト選手から1人を指名してください (指名は義務)。"
+			_geneki_status_text = Loc.t("offseason.geneki.status_round1")
 		"round2":
 			for entry_row in GenekiDraftService.round2_targets(state, AppState.selected_team_id):
 				var entry: Dictionary = entry_row as Dictionary
 				_append_geneki_row(int(entry.get("player_id", 0)), int(entry.get("from_team_id", 0)), entry)
-			_geneki_status_text = "現役ドラフト 2巡目: 自軍の指名手番です。指名するか見送ってください。"
+			_geneki_status_text = Loc.t("offseason.geneki.status_round2")
 		"round2_entry":
 			for entry_row in GenekiDraftService.round2_candidate_pool_preview(state, AppState.selected_team_id):
 				var entry: Dictionary = entry_row as Dictionary
 				_append_geneki_row(int(entry.get("player_id", 0)), int(entry.get("from_team_id", 0)), entry)
-			_geneki_status_text = "現役ドラフト 2巡目: 参加形態を選んでください。「参加しない」を選ぶと自軍リスト選手は2巡目で指名されません。"
+			_geneki_status_text = Loc.t("offseason.geneki.status_round2_entry")
 		_:
-			_geneki_status_text = "現役ドラフトの進行を待っています。"
+			_geneki_status_text = Loc.t("offseason.geneki.status_waiting")
 	if selected_geneki_pick_id > 0 and not _geneki_by_id.has(selected_geneki_pick_id):
 		selected_geneki_pick_id = 0
 
@@ -3736,9 +3721,9 @@ func _append_geneki_row(pid: int, team_id: int, candidate: Dictionary) -> void:
 func _geneki_refresh_submit_status() -> void:
 	var state: Dictionary = AppState.geneki_draft_state
 	var eligible_count: int = (state.get("user_eligible_ids", []) as Array).size()
-	_geneki_status_text = "現役ドラフト: 対象リスト提出 — 対象%d人 / 選択中%d人 (2人以上。年俸5000万円以上は1人まで、含める場合は3人以上)" % [
-		eligible_count, selected_geneki_list_ids.size(),
-	]
+	_geneki_status_text = Loc.t("offseason.geneki.status_submit", {
+		"eligible": eligible_count, "selected": selected_geneki_list_ids.size(),
+	})
 
 
 func _draw_geneki_panel() -> void:
@@ -3747,15 +3732,15 @@ func _draw_geneki_panel() -> void:
 		"submit":
 			_draw_player_record_table(BODY, _geneki_status_text, _geneki_player_rows, pitcher_tab,
 				"geneki_list", "geneki_list_%s" % _geneki_tab, "", 0,
-				"リストに載せられる対象選手がいません。", true, false, "", true)
+				Loc.t("offseason.geneki.empty_list"), true, false, "", true)
 		"round1", "round2":
 			_draw_player_record_table(BODY, _geneki_status_text, _geneki_player_rows, pitcher_tab,
 				"geneki_pick", "geneki_pick_%s" % _geneki_tab, "", selected_geneki_pick_id,
-				"指名できる選手がいません。", true, false, "team", true)
+				Loc.t("offseason.empty.pickable"), true, false, "team", true)
 		"round2_entry":
 			_draw_player_record_table(BODY, _geneki_status_text, _geneki_player_rows, pitcher_tab,
 				"", "geneki_pool_%s" % _geneki_tab, "", 0,
-				"2巡目に残っている選手はいません。", true, false, "team", true)
+				Loc.t("offseason.geneki.empty_round2"),true, false, "team", true)
 		_:
 			_text(_geneki_status_text, Vector2(INNER_L, BODY.position.y + 24.0), 15, MUTED)
 
@@ -3776,7 +3761,7 @@ func _on_geneki_submit_list_pressed() -> void:
 		ids.append(int(pid))
 	var result: Dictionary = AppState.submit_geneki_list(ids)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "リストの提出に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.geneki_list"))), RED)
 		return
 	_refresh()
 
@@ -3791,11 +3776,11 @@ func _on_geneki_reset_recommended_pressed() -> void:
 
 func _on_geneki_pick_pressed() -> void:
 	if selected_geneki_pick_id <= 0:
-		_set_status("指名する選手を選択してください。", RED)
+		_set_status(Loc.t("offseason.geneki.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_geneki_pick(selected_geneki_pick_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "指名に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.pick"))), RED)
 		return
 	selected_geneki_pick_id = 0
 	_refresh()
@@ -3804,7 +3789,7 @@ func _on_geneki_pick_pressed() -> void:
 func _on_geneki_pass_pressed() -> void:
 	var result: Dictionary = AppState.pass_geneki_pick()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "見送りに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.skip"))), RED)
 		return
 	selected_geneki_pick_id = 0
 	_refresh()
@@ -3813,7 +3798,7 @@ func _on_geneki_pass_pressed() -> void:
 func _on_geneki_round2_mode_pressed(mode: String) -> void:
 	var result: Dictionary = AppState.set_geneki_round2_mode(mode)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "2巡目参加の選択に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.geneki_round2_mode"))), RED)
 		return
 	_refresh()
 
@@ -3821,7 +3806,7 @@ func _on_geneki_round2_mode_pressed(mode: String) -> void:
 func _on_geneki_ai_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_geneki_draft_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "現役ドラフトの自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.geneki_auto_all"))), RED)
 		return
 	selected_geneki_pick_id = 0
 	_refresh()
@@ -3836,9 +3821,9 @@ func _populate_fa() -> void:
 	for row in state.get("signings", []) as Array:
 		if int((row as Dictionary).get("to_team", 0)) == AppState.selected_team_id:
 			user_signings += 1
-	_fa_status_text = "FA市場: 宣言%d人 / 自軍獲得%d人 / 候補%d人" % [
-		(state.get("declared", []) as Array).size(), user_signings, candidates.size(),
-	]
+	_fa_status_text = Loc.t("offseason.fa.status", {
+		"declared": (state.get("declared", []) as Array).size(), "signed": user_signings, "candidates": candidates.size(),
+	})
 	# 一覧は戦力外獲得と同じ選手レコード表。候補を record 化して投手/野手タブで出す。
 	_fa_player_rows = []
 	_fa_by_id = {}
@@ -3897,12 +3882,12 @@ func _build_fa_year_chips() -> void:
 	var x: float = BODY.end.x
 	var widths: Array = []
 	for n in range(1, max_years + 1):
-		var w: float = 14.0 + _measure("%d年" % n, 13) + 14.0
+		var w: float = 14.0 + _measure(Loc.t("offseason.years_value", {"n": n}), 13) + 14.0
 		widths.append(w)
 		x -= w + 8.0
 	x += 8.0
 	for n in range(1, max_years + 1):
-		var label: String = "%d年" % n
+		var label: String = Loc.t("offseason.years_value", {"n": n})
 		var w: float = float(widths[n - 1])
 		_add_button("fa_years_%d" % n, label, Rect2(x, y, w, 32.0),
 			func(years: int = n) -> void: _select_fa_offer_years(years),
@@ -3918,11 +3903,11 @@ func _select_fa_offer_years(years: int) -> void:
 
 func _on_fa_submit_pressed() -> void:
 	if selected_fa_candidate_id <= 0:
-		_set_status("FA候補を選択してください。", RED)
+		_set_status(Loc.t("offseason.fa.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_fa_candidate(selected_fa_candidate_id, selected_fa_offer_years)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "FA獲得に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fa_sign"))), RED)
 		return
 	var message: String = str(result.get("message", ""))
 	var acquired: bool = bool(result.get("acquired", true))
@@ -3930,7 +3915,7 @@ func _on_fa_submit_pressed() -> void:
 	selected_fa_offer_years = 0
 	_refresh()
 	if not acquired:
-		_set_status(message if not message.is_empty() else "交渉はまとまりませんでした。", AMBER)
+		_set_status(message if not message.is_empty() else Loc.t("offseason.fa.negotiation_failed"), AMBER)
 
 
 func _on_fa_skip_pressed() -> void:
@@ -3938,7 +3923,7 @@ func _on_fa_skip_pressed() -> void:
 		return
 	var result: Dictionary = AppState.skip_fa_candidate(selected_fa_candidate_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "FA見送りに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fa_skip"))), RED)
 		return
 	selected_fa_candidate_id = 0
 	selected_fa_offer_years = 0
@@ -3948,7 +3933,7 @@ func _on_fa_skip_pressed() -> void:
 func _on_fa_auto_pressed() -> void:
 	var result: Dictionary = AppState.auto_fa_user_pick()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "FA自動判断に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fa_auto"))), RED)
 		return
 	selected_fa_candidate_id = 0
 	selected_fa_offer_years = 0
@@ -3958,7 +3943,7 @@ func _on_fa_auto_pressed() -> void:
 func _on_fa_auto_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_fa_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "FA自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fa_auto_all"))), RED)
 		return
 	selected_fa_candidate_id = 0
 	selected_fa_offer_years = 0
@@ -3975,7 +3960,7 @@ func _populate_compensation_protect() -> void:
 	_comp_case = CompensationService.current_case(state)
 	if _comp_case.is_empty():
 		_comp_sections = []
-		_comp_status_text = "対象の補償がありません。"
+		_comp_status_text = Loc.t("offseason.comp.no_case")
 		return
 	var year: int = int(state.get("year", 0))
 	_comp_required_protect = CompensationService.required_protect_size(_comp_case)
@@ -4003,18 +3988,18 @@ func _populate_compensation_protect() -> void:
 			return av > bv if sort_desc else av < bv
 		)
 	_comp_sections = [
-		{"label": "投手", "cells": groups["p"]},
-		{"label": "捕手", "cells": groups["c"]},
-		{"label": "内野手", "cells": groups["if"]},
-		{"label": "外野手", "cells": groups["of"]},
-		{"label": "その他", "cells": groups["other"]},
+		{"label": Loc.t("common.pitcher"), "cells": groups["p"]},
+		{"label": Loc.t("position.catcher"), "cells": groups["c"]},
+		{"label": Loc.t("offseason.comp.group.infielders"), "cells": groups["if"]},
+		{"label": Loc.t("offseason.comp.group.outfielders"), "cells": groups["of"]},
+		{"label": Loc.t("offseason.comp.group.other"), "cells": groups["other"]},
 	]
 	var locked_count: int = (_comp_case.get("locked_ids", []) as Array).size()
-	_comp_headline = "%s (%sランク) の人的補償 — %s へプロテクトリストを提出" % [
-		str(_comp_case.get("name", "")), str(_comp_case.get("fa_rank", "")),
-		_team_name(int(_comp_case.get("from_team", 0))),
-	]
-	_comp_status_text = "自動保護%d人 (外国人・新人・今オフFA加入) はプロテクト枠を消費しません。選ばなかった選手から1人を持っていかれます。" % locked_count
+	_comp_headline = Loc.t("offseason.comp.protect_headline", {
+		"player": str(_comp_case.get("name", "")), "rank": str(_comp_case.get("fa_rank", "")),
+		"team": _team_name(int(_comp_case.get("from_team", 0))),
+	})
+	_comp_status_text = Loc.t("offseason.comp.protect_status", {"n": locked_count})
 	_comp_refresh_protect_status()
 
 
@@ -4033,7 +4018,7 @@ func _append_compensation_grid_cell(groups: Dictionary, pid: int, year: int, loc
 	var cell: Dictionary = {
 		"id": pid,
 		"name": "%s %s" % [head, player.name],
-		"sub": "%d歳 / %d" % [player.age, overall],
+		"sub": Loc.t("offseason.comp.cell_sub", {"age": player.age, "overall": overall}),
 		"pos": player.position,
 		"state": cell_state,
 		"note": CompensationService.auto_protected_reason(player, year) if locked else "",
@@ -4060,7 +4045,7 @@ func _build_comp_protect_sort_chips() -> void:
 		var option: Dictionary = option_value as Dictionary
 		var id: String = str(option.get("id", ""))
 		var active: bool = id == _comp_protect_sort
-		var label: String = str(option.get("label", ""))
+		var label: String = Loc.t(str(option.get("label", "")))
 		if active:
 			label += " ▼" if _comp_protect_sort_desc else " ▲"
 		var w: float = 20.0 + _measure(label, 13) + 20.0
@@ -4087,7 +4072,7 @@ func _reset_compensation_protect_to_recommended() -> void:
 
 
 func _comp_refresh_protect_status() -> void:
-	_comp_counter_text = "プロテクト %d / %d人" % [selected_comp_protect_ids.size(), _comp_required_protect]
+	_comp_counter_text = Loc.t("offseason.comp.protect_counter", {"n": selected_comp_protect_ids.size(), "required": _comp_required_protect})
 	# セルの選択状態は _comp_sections が保持しているので、選択が動いたらここで塗り直す。
 	# ポジションの偏りを見ながら選べるよう、セクション見出しに選択数も出す。
 	for section_value in _comp_sections:
@@ -4105,7 +4090,7 @@ func _comp_refresh_protect_status() -> void:
 			if on:
 				chosen += 1
 		# 分母は選べる選手だけ (自動保護は枠を消費しないので数に入れない)。
-		section["note"] = "選択 %d / %d人" % [chosen, selectable]
+		section["note"] = Loc.t("offseason.comp.section_note", {"chosen": chosen, "selectable": selectable})
 
 
 # 補償選手の指名 (自軍が FA 選手を出した側)。ここは能力と成績で選ぶ場面なので従来の選手レコード表。
@@ -4114,7 +4099,7 @@ func _populate_compensation_pick() -> void:
 	_comp_case = CompensationService.current_case(state)
 	_comp_pick_rows = []
 	if _comp_case.is_empty():
-		_comp_status_text = "対象の補償がありません。"
+		_comp_status_text = Loc.t("offseason.comp.no_case")
 		return
 	for id_value in CompensationService.exposed_ids(_comp_case):
 		var pid: int = int(id_value)
@@ -4133,14 +4118,14 @@ func _populate_compensation_pick() -> void:
 		})
 	_comp_pick_tab = _player_tab_with_rows(_comp_pick_rows, _comp_pick_tab)
 	selected_comp_pick_id = _player_first_visible_id(_comp_pick_rows, _comp_pick_tab, selected_comp_pick_id)
-	_comp_headline = "%s (%sランク) の人的補償 — %s の非プロテクト選手" % [
-		str(_comp_case.get("name", "")), str(_comp_case.get("fa_rank", "")),
-		_team_name(int(_comp_case.get("to_team", 0))),
-	]
-	_comp_status_text = "人的補償: 選手1人 + %s / 金銭補償のみ: %s" % [
-		_format_money(int(_comp_case.get("money_with_player", 0))),
-		_format_money(int(_comp_case.get("money_only", 0))),
-	]
+	_comp_headline = Loc.t("offseason.comp.pick_headline", {
+		"player": str(_comp_case.get("name", "")), "rank": str(_comp_case.get("fa_rank", "")),
+		"team": _team_name(int(_comp_case.get("to_team", 0))),
+	})
+	_comp_status_text = Loc.t("offseason.comp.pick_status", {
+		"with_player": _format_money(int(_comp_case.get("money_with_player", 0))),
+		"money_only": _format_money(int(_comp_case.get("money_only", 0))),
+	})
 
 
 func _set_comp_pick_tab(tab_id: String) -> void:
@@ -4162,37 +4147,37 @@ func _draw_compensation_protect_panel() -> void:
 		"right_color": GREEN if complete else AMBER,
 		"sel_kind": "comp_protect",
 		"hits": _row_hits,
-		"empty_text": "プロテクト対象の選手がいません。",
+		"empty_text": Loc.t("offseason.comp.protect_empty"),
 	})
 	_text(_comp_status_text, Vector2(BODY.position.x + 27.0, BODY.position.y + 50.0), 12, MUTED, BODY.size.x - 54.0)
 	# 並び替えチップ (_build_comp_protect_sort_chips) の見出し。チップはボタンなので、
 	# ラベルだけこちらで描く (x は チップ開始位置 INNER_L+66 に合わせてある)。
-	_text("並び順", Vector2(INNER_L, ACTION_Y + 25.0), 12, MUTED, 60.0)
+	_text(Loc.t("offseason.comp.sort_label"),Vector2(INNER_L, ACTION_Y + 25.0), 12, MUTED, 60.0)
 
 
 func _draw_compensation_pick_panel() -> void:
 	_draw_player_record_table(BODY, "%s  —  %s" % [_comp_headline, _comp_status_text], _comp_pick_rows,
 		_comp_pick_tab == PLAYER_TAB_PITCHER, "comp_pick", "comp_pick_%s" % _comp_pick_tab, "",
-		selected_comp_pick_id, "指名できる選手がいません (全員プロテクトされています)。", true, false, "", true)
+		selected_comp_pick_id, Loc.t("offseason.comp.pick_empty"), true, false, "", true)
 
 
 func _draw_compensation_result(rect: Rect2, result: Dictionary) -> void:
 	var cases: Array = result.get("cases", []) as Array
 	if cases.is_empty():
-		_text("今オフはA・Bランクの FA 移籍がなく、人的補償は発生しませんでした。",
+		_text(Loc.t("offseason.comp.result_none"),
 			Vector2(rect.position.x + 18.0, rect.position.y + 34.0), 15, MUTED)
 		return
-	var heading: String = "人的補償 %d件中%d件で選手が移動 (金銭のみ%d件)" % [
-		int(result.get("case_count", 0)), int(result.get("moved_count", 0)), int(result.get("money_only_count", 0)),
-	]
+	var heading: String = Loc.t("offseason.comp.result_heading", {
+		"cases": int(result.get("case_count", 0)), "moved": int(result.get("moved_count", 0)), "money_only": int(result.get("money_only_count", 0)),
+	})
 	# 上段にケース一覧 (どのFA移籍でどちらを選んだか)、下段に実際に移った補償選手。
 	var case_rows: Array = []
 	for case_value in cases:
 		var case: Dictionary = case_value as Dictionary
 		var is_player: bool = str(case.get("decision", "")) == "player"
-		var decision: String = "人的補償" if is_player else "金銭補償のみ"
+		var decision: String = Loc.t("offseason.header.compensation") if is_player else Loc.t("offseason.button.comp_money")
 		if not is_player and not str(case.get("forced_reason", "")).is_empty():
-			decision = "金銭補償のみ (対象者なし)"
+			decision = Loc.t("offseason.comp.decision_money_forced")
 		var from_team: PSTeam = GameDb.get_team(int(case.get("from_team", 0)))
 		var to_team: PSTeam = GameDb.get_team(int(case.get("to_team", 0)))
 		case_rows.append({
@@ -4208,10 +4193,10 @@ func _draw_compensation_result(rect: Rect2, result: Dictionary) -> void:
 			"money": _format_money(int(case.get("compensation_money", 0))),
 		})
 	_draw_data_table(COMP_CASES_RECT, COMP_CASE_COLUMNS, case_rows, {"title": heading, "row_h_max": 30.0})
-	_draw_player_record_table(COMP_MOVES_RECT, "移籍した補償選手 %d人" % int(result.get("moved_count", 0)),
+	_draw_player_record_table(COMP_MOVES_RECT, Loc.t("offseason.comp.moves_title", {"n": int(result.get("moved_count", 0))}),
 		_result_signing_player_rows(result.get("moves", []) as Array),
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "result_comp_%s" % _result_people_tab, "", 0,
-		"人的補償で移籍した選手はいません。", true, false, "move", true)
+		Loc.t("offseason.comp.moves_empty"),true, false, "move", true)
 
 
 func _on_compensation_protect_submit_pressed() -> void:
@@ -4220,7 +4205,7 @@ func _on_compensation_protect_submit_pressed() -> void:
 		ids.append(int(pid))
 	var result: Dictionary = AppState.submit_compensation_protect_list(ids)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "プロテクトリストの提出に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.protect_list"))), RED)
 		return
 	_comp_protect_seeded_key = ""
 	_refresh()
@@ -4235,11 +4220,11 @@ func _on_compensation_protect_recommended_pressed() -> void:
 
 func _on_compensation_pick_pressed() -> void:
 	if selected_comp_pick_id <= 0:
-		_set_status("獲得する選手を選択してください。", RED)
+		_set_status(Loc.t("offseason.comp.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_compensation_pick(selected_comp_pick_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "人的補償の指名に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.comp_pick"))), RED)
 		return
 	selected_comp_pick_id = 0
 	_comp_protect_seeded_key = ""
@@ -4249,7 +4234,7 @@ func _on_compensation_pick_pressed() -> void:
 func _on_compensation_money_pressed() -> void:
 	var result: Dictionary = AppState.submit_compensation_money_only()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "金銭補償の選択に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.comp_money"))), RED)
 		return
 	selected_comp_pick_id = 0
 	_comp_protect_seeded_key = ""
@@ -4259,7 +4244,7 @@ func _on_compensation_money_pressed() -> void:
 func _on_compensation_auto_case_pressed() -> void:
 	var result: Dictionary = AppState.auto_compensation_current_case()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "人的補償の自動判断に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.comp_auto"))), RED)
 		return
 	selected_comp_pick_id = 0
 	_comp_protect_seeded_key = ""
@@ -4269,7 +4254,7 @@ func _on_compensation_auto_case_pressed() -> void:
 func _on_compensation_ai_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_compensation_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "人的補償の自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.comp_auto_all"))), RED)
 		return
 	selected_comp_pick_id = 0
 	_comp_protect_seeded_key = ""
@@ -4317,9 +4302,9 @@ func _populate_foreign_contract() -> void:
 			_fgc_away_fielder_rows.append(row_value)
 	var home_total: int = _fgc_home_pitcher_rows.size() + _fgc_home_fielder_rows.size()
 	var away_total: int = _fgc_away_pitcher_rows.size() + _fgc_away_fielder_rows.size()
-	_fgc_status_text = "外国人契約市場: 契約切れ 自軍%d人 / 他球団%d人 (提示中%d件)。残留を提示しない自軍選手は退団します (引き抜き時は移籍)。" % [
-		home_total, away_total, offer_count,
-	]
+	_fgc_status_text = Loc.t("offseason.fgc.status", {
+		"home": home_total, "away": away_total, "offers": offer_count,
+	})
 	_ensure_fgc_selection()
 
 
@@ -4371,12 +4356,12 @@ func _build_fgc_year_chips() -> void:
 	var x: float = BODY.end.x
 	var widths: Array = []
 	for n in range(1, max_years + 1):
-		var w: float = 14.0 + _measure("%d年" % n, 13) + 14.0
+		var w: float = 14.0 + _measure(Loc.t("offseason.years_value", {"n": n}), 13) + 14.0
 		widths.append(w)
 		x -= w + 8.0
 	x += 8.0
 	for n in range(1, max_years + 1):
-		var label: String = "%d年" % n
+		var label: String = Loc.t("offseason.years_value", {"n": n})
 		var w: float = float(widths[n - 1])
 		_add_button("fgc_years_%d" % n, label, Rect2(x, y, w, 32.0),
 			func(years: int = n) -> void: _select_fgc_offer_years(years),
@@ -4398,13 +4383,13 @@ func _select_fgc_offer_years(years: int) -> void:
 
 func _on_fgc_submit_pressed() -> void:
 	if selected_fgc_player_id <= 0:
-		_set_status("提示する選手を選択してください。", RED)
+		_set_status(Loc.t("offseason.fgc.select_prompt"), RED)
 		return
 	var entry: Dictionary = _fgc_by_id.get(selected_fgc_player_id, {}) as Dictionary
 	var years: int = selected_fgc_offer_years if selected_fgc_offer_years > 0 else _fgc_default_offer_years(entry)
 	var result: Dictionary = AppState.submit_foreign_contract_offer(selected_fgc_player_id, years)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "契約提示に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fgc_offer"))), RED)
 		return
 	_refresh()
 
@@ -4414,7 +4399,7 @@ func _on_fgc_withdraw_pressed() -> void:
 		return
 	var result: Dictionary = AppState.withdraw_foreign_contract_offer(selected_fgc_player_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "提示の取り下げに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fgc_withdraw"))), RED)
 		return
 	selected_fgc_offer_years = 0
 	_refresh()
@@ -4428,7 +4413,7 @@ func _on_foreign_contract_finalize_pressed() -> void:
 		if not ((entry_value as Dictionary).get("user_offer", {}) as Dictionary).is_empty():
 			offer_count += 1
 	var dialog: ConfirmationDialog = _ensure_fgc_confirm_dialog()
-	dialog.dialog_text = "外国人契約市場を確定します。\n自分の提示 %d件を解決します。残留を提示しない自軍選手は退団します (他球団に引き抜かれた場合のみ移籍)。\n他球団はCPUが自動で残留/引き抜きを判断します。\nよろしいですか？" % offer_count
+	dialog.dialog_text = Loc.t("offseason.fgc.confirm_text", {"n": offer_count})
 	dialog.popup_centered(Vector2i(560, 220))
 
 
@@ -4436,9 +4421,9 @@ func _ensure_fgc_confirm_dialog() -> ConfirmationDialog:
 	if _fgc_confirm_dialog != null and is_instance_valid(_fgc_confirm_dialog):
 		return _fgc_confirm_dialog
 	_fgc_confirm_dialog = ConfirmationDialog.new()
-	_fgc_confirm_dialog.title = "外国人契約市場の確認"
-	_fgc_confirm_dialog.ok_button_text = "確定する"
-	_fgc_confirm_dialog.cancel_button_text = "キャンセル"
+	_fgc_confirm_dialog.title = Loc.t("offseason.fgc.confirm_title")
+	_fgc_confirm_dialog.ok_button_text = Loc.t("offseason.release.confirm_ok")
+	_fgc_confirm_dialog.cancel_button_text = Loc.t("common.cancel")
 	_fgc_confirm_dialog.confirmed.connect(_on_fgc_finalize_confirmed)
 	add_child(_fgc_confirm_dialog)
 	_style_confirmation_dialog(_fgc_confirm_dialog)
@@ -4448,7 +4433,7 @@ func _ensure_fgc_confirm_dialog() -> ConfirmationDialog:
 func _on_fgc_finalize_confirmed() -> void:
 	var result: Dictionary = AppState.finalize_foreign_contract_market()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人契約市場の確定に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fgc_finalize"))), RED)
 		return
 	selected_fgc_player_id = 0
 	selected_fgc_offer_years = 0
@@ -4460,7 +4445,7 @@ func _on_fgc_finalize_confirmed() -> void:
 func _on_foreign_contract_ai_all_pressed() -> void:
 	var result: Dictionary = AppState.auto_complete_foreign_contract_market()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人契約市場の自動判断に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.fgc_auto"))), RED)
 		return
 	selected_fgc_player_id = 0
 	selected_fgc_offer_years = 0
@@ -4489,20 +4474,20 @@ func _populate_foreign_contract_result() -> void:
 				departed += 1
 		if int(entry.get("years", 0)) > 1:
 			multi_year += 1
-	_fgc_contract_result_heading = "外国人契約市場: 残留 %d人 / 移籍 %d人 / 退団 %d人 (複数年契約 %d件)" % [retained, poached, departed, multi_year]
+	_fgc_contract_result_heading = Loc.t("offseason.fgc.result_heading", {"retained": retained, "poached": poached, "departed": departed, "multi": multi_year})
 	_result_people_tab = _player_tab_with_rows(_fgc_contract_result_rows, _result_people_tab)
 
 
 func _draw_foreign_contract_result_panel() -> void:
 	_draw_player_record_table(BODY, _fgc_contract_result_heading, _fgc_contract_result_rows,
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "foreign_contract_result_panel_%s" % _result_people_tab, "", 0,
-		"該当する契約市場の結果がありません。", true, false, "fgc_result", true)
+		Loc.t("offseason.fgc.result_empty"), true, false, "fgc_result", true)
 
 
 func _on_foreign_contract_result_next_pressed() -> void:
 	var result: Dictionary = AppState.advance_foreign_contract_result()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.proceed"))), RED)
 		return
 	_refresh()
 
@@ -4512,22 +4497,22 @@ func _on_foreign_contract_result_next_pressed() -> void:
 func _populate_foreign_scout_result() -> void:
 	var state: Dictionary = AppState.foreign_state
 	_fgc_scout_result_rows = _result_signing_player_rows(state.get("signings", []) as Array)
-	_fgc_scout_result_heading = "外国人スカウト獲得: 候補 %d人 / 獲得 %d人" % [
-		(state.get("candidates", []) as Array).size(), _fgc_scout_result_rows.size(),
-	]
+	_fgc_scout_result_heading = Loc.t("offseason.result.foreign_heading", {
+		"candidates": (state.get("candidates", []) as Array).size(), "signed": _fgc_scout_result_rows.size(),
+	})
 	_result_people_tab = _player_tab_with_rows(_fgc_scout_result_rows, _result_people_tab)
 
 
 func _draw_foreign_scout_result_panel() -> void:
 	_draw_player_record_table(BODY, _fgc_scout_result_heading, _fgc_scout_result_rows,
 		_result_people_tab == PLAYER_TAB_PITCHER, "", "foreign_scout_result_panel_%s" % _result_people_tab, "", 0,
-		"今オフは外国人の獲得がありませんでした。", true, false, "team")
+		Loc.t("offseason.fgc.scout_empty"), true, false, "team")
 
 
 func _on_foreign_scout_result_next_pressed() -> void:
 	var result: Dictionary = AppState.advance_foreign_scout_result()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.proceed"))), RED)
 		return
 	_refresh()
 
@@ -4558,15 +4543,15 @@ func _populate_contract_years() -> void:
 		else:
 			_cy_fielder_rows.append(table_row)
 	var total: int = _cy_pitcher_rows.size() + _cy_fielder_rows.size()
-	_cy_status_text = "契約年数の決定: 対象 %d人 / 決定済み %d人。全員決めるまで次へ進めません (「自動で決める」で残りを一括決定)。" % [total, decided_count]
+	_cy_status_text = Loc.t("offseason.cy.status", {"total": total, "decided": decided_count})
 	_ensure_cy_selection()
 
 
 # 対象区分の表示ラベル。_build_contract_years_pool の reason と対応する。
 const CONTRACT_YEARS_REASON_LABELS: Dictionary = {
-	"new_fa": "FA権取得",
-	"contract_end": "契約満了",
-	"fa_returned": "FA残留",
+	"new_fa": "offseason.cy.reason.new_fa",
+	"contract_end": "offseason.cy.reason.contract_end",
+	"fa_returned": "offseason.cy.reason.fa_returned",
 }
 
 
@@ -4590,13 +4575,13 @@ func _cy_entry_row(entry: Dictionary) -> Dictionary:
 		"role": str(entry.get("role", record.role)),
 		"salary": current_salary,
 		# 年数枠に決定状態そのものを出す (未決定は AMBER で目立たせる)。
-		"fgc_years_text": ("単年" if years <= 1 else "%d年" % years) if decided else "未決定",
+		"fgc_years_text": (Loc.t("offseason.single_year") if years <= 1 else Loc.t("offseason.years_value", {"n": years})) if decided else Loc.t("offseason.cy.undecided"),
 		"fgc_years_color": (TEXT if years <= 1 else BLUE) if decided else AMBER,
 		# 基準年俸は決定済みならその年数での年俸、未決定なら単年ベースの査定額
 		# (entry.salary は未決定のとき 0 なので base_salary へフォールバックする)。
 		"market_salary_text": _format_money_compact(decided_salary if decided_salary > 0 else int(entry.get("base_salary", 0))),
 		"fgc_current_salary_text": _format_money_compact(current_salary),
-		"offer_text": str(CONTRACT_YEARS_REASON_LABELS.get(str(entry.get("reason", "")), "")),
+		"offer_text": Loc.t(str(CONTRACT_YEARS_REASON_LABELS.get(str(entry.get("reason", "")), ""))),
 		"offer_color": MUTED,
 	}
 	return {"record": record, "player": player, "entry": row_entry}
@@ -4656,7 +4641,7 @@ func _build_cy_year_chips() -> void:
 
 
 func _cy_year_label(years: int) -> String:
-	return "単年" if years <= 1 else "%d年" % years
+	return Loc.t("offseason.single_year") if years <= 1 else Loc.t("offseason.years_value", {"n": years})
 
 
 # 年数チップ未選択時の既定年数: 決定済みならその年数、なければ単年。
@@ -4672,13 +4657,13 @@ func _select_cy_years(years: int) -> void:
 
 func _on_cy_submit_pressed() -> void:
 	if selected_cy_player_id <= 0:
-		_set_status("契約年数を決める選手を選択してください。", RED)
+		_set_status(Loc.t("offseason.cy.select_prompt"), RED)
 		return
 	var entry: Dictionary = _cy_by_id.get(selected_cy_player_id, {}) as Dictionary
 	var years: int = selected_cy_years if selected_cy_years > 0 else _cy_default_years(entry)
 	var result: Dictionary = AppState.submit_contract_years(selected_cy_player_id, years)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "契約年数の決定に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.cy_submit"))), RED)
 		return
 	_refresh()
 
@@ -4688,7 +4673,7 @@ func _on_cy_withdraw_pressed() -> void:
 		return
 	var result: Dictionary = AppState.withdraw_contract_years(selected_cy_player_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "決定の取り消しに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.cy_withdraw"))), RED)
 		return
 	selected_cy_years = 0
 	_refresh()
@@ -4699,11 +4684,11 @@ func _on_cy_withdraw_pressed() -> void:
 func _on_cy_auto_pressed() -> void:
 	var auto_result: Dictionary = AppState.auto_decide_contract_years()
 	if not bool(auto_result.get("ok", false)):
-		_set_status(str(auto_result.get("message", "自動決定に失敗しました。")), RED)
+		_set_status(str(auto_result.get("message", Loc.t("offseason.fail.cy_auto"))), RED)
 		return
 	var result: Dictionary = AppState.finalize_contract_years()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "契約年数の確定に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.cy_finalize"))), RED)
 		return
 	selected_cy_player_id = 0
 	selected_cy_years = 0
@@ -4714,14 +4699,14 @@ func _on_cy_auto_pressed() -> void:
 func _on_cy_finalize_pressed() -> void:
 	var pending: int = AppState.pending_contract_years_count()
 	if pending > 0:
-		_set_status("契約年数が未決定の選手が %d 人います。" % pending, RED)
+		_set_status(Loc.t("offseason.cy.pending", {"n": pending}), RED)
 		return
 	var multi_year: int = 0
 	for entry_value in _cy_by_id.values():
 		if int((entry_value as Dictionary).get("years", 1)) >= 2:
 			multi_year += 1
 	var dialog: ConfirmationDialog = _ensure_cy_confirm_dialog()
-	dialog.dialog_text = "決めた契約年数で確定します。\n自軍 %d人 (うち複数年 %d人)。\nよろしいですか？" % [_cy_by_id.size(), multi_year]
+	dialog.dialog_text = Loc.t("offseason.cy.confirm_text", {"n": _cy_by_id.size(), "multi": multi_year})
 	dialog.popup_centered(Vector2i(520, 210))
 
 
@@ -4729,9 +4714,9 @@ func _ensure_cy_confirm_dialog() -> ConfirmationDialog:
 	if _cy_confirm_dialog != null and is_instance_valid(_cy_confirm_dialog):
 		return _cy_confirm_dialog
 	_cy_confirm_dialog = ConfirmationDialog.new()
-	_cy_confirm_dialog.title = "契約年数の確認"
-	_cy_confirm_dialog.ok_button_text = "確定する"
-	_cy_confirm_dialog.cancel_button_text = "キャンセル"
+	_cy_confirm_dialog.title = Loc.t("offseason.cy.confirm_title")
+	_cy_confirm_dialog.ok_button_text = Loc.t("offseason.release.confirm_ok")
+	_cy_confirm_dialog.cancel_button_text = Loc.t("common.cancel")
 	_cy_confirm_dialog.confirmed.connect(_on_cy_finalize_confirmed)
 	add_child(_cy_confirm_dialog)
 	_style_confirmation_dialog(_cy_confirm_dialog)
@@ -4741,7 +4726,7 @@ func _ensure_cy_confirm_dialog() -> ConfirmationDialog:
 func _on_cy_finalize_confirmed() -> void:
 	var result: Dictionary = AppState.finalize_contract_years()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "契約年数の確定に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.cy_finalize"))), RED)
 		return
 	selected_cy_player_id = 0
 	selected_cy_years = 0
@@ -4759,9 +4744,10 @@ func _populate_foreign() -> void:
 		if int((row as Dictionary).get("to_team", 0)) == AppState.selected_team_id:
 			user_signings += 1
 	var has_request: bool = not (state.get("user_request", {}) as Dictionary).is_empty()
-	_foreign_status_text = "外国人補強: 現在%d人 / 今オフ獲得%d人 / 上限4 / %s" % [
-		current_foreign, user_signings, "候補%d人" % candidates.size() if has_request else "条件を選んで候補を検索してください",
-	]
+	_foreign_status_text = Loc.t("offseason.foreign.status", {
+		"current": current_foreign, "signed": user_signings,
+		"detail": Loc.t("offseason.foreign.candidates_count", {"n": candidates.size()}) if has_request else Loc.t("offseason.foreign.search_prompt"),
+	})
 	# 一覧はドラフトと同じ候補ボード。中央2列は 評価(tier) / 年俸。
 	_foreign_record_cache = {}
 	_foreign_candidate_rows = []
@@ -4828,16 +4814,17 @@ func _foreign_ability_range_text(candidate: Dictionary) -> String:
 		var low: int = maxi(1, value - downside)
 		var high: int = value + upside if suffix == "km/h" else mini(100, value + upside)
 		parts.append("%s %d〜%d%s" % [str(rating.get("label", "")), low, high, suffix])
-	return "能力推定: %s" % " / ".join(parts)
+	return Loc.t("offseason.foreign.ability_estimate", {"parts": " / ".join(parts)})
 
 
 func _foreign_archetype_short(archetype: String) -> String:
 	var labels: Dictionary = {
-		"balanced": "万能", "power": "長打", "contact": "巧打", "discipline": "選球",
-		"speed_defense": "走守", "defense": "守備", "strikeout": "奪三振", "control": "制球",
-		"groundball": "ゴロ", "stamina": "持久",
+		"balanced": "offseason.foreign.archetype.balanced", "power": "rating.power", "contact": "rating.contact",
+		"discipline": "rating.discipline", "speed_defense": "offseason.foreign.type.speed_defense", "defense": "rating.defense",
+		"strikeout": "stat.strikeouts", "control": "rating.control", "groundball": "offseason.foreign.type.groundball",
+		"stamina": "rating.stamina",
 	}
-	return str(labels.get(archetype, archetype))
+	return Loc.t(str(labels.get(archetype, archetype)))
 
 
 func _select_foreign_position(request_position: String) -> void:
@@ -4870,7 +4857,7 @@ func _on_foreign_search_pressed() -> void:
 		_foreign_request_position, _foreign_request_archetype, _foreign_request_budget
 	)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人候補の検索に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.foreign_search"))), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()
@@ -4878,11 +4865,11 @@ func _on_foreign_search_pressed() -> void:
 
 func _on_foreign_submit_pressed() -> void:
 	if selected_foreign_candidate_id <= 0:
-		_set_status("外国人候補を選択してください。", RED)
+		_set_status(Loc.t("offseason.foreign.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_foreign_candidate(selected_foreign_candidate_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人獲得に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.foreign_sign"))), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()
@@ -4893,7 +4880,7 @@ func _on_foreign_skip_pressed() -> void:
 		return
 	var result: Dictionary = AppState.skip_foreign_candidate(selected_foreign_candidate_id)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人見送りに失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.foreign_skip"))), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()
@@ -4902,7 +4889,7 @@ func _on_foreign_skip_pressed() -> void:
 func _on_foreign_auto_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_foreign_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人自動進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.foreign_auto_all"))), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()
@@ -4911,7 +4898,7 @@ func _on_foreign_auto_all_pressed() -> void:
 func _on_foreign_ai_all_pressed() -> void:
 	var result: Dictionary = AppState.complete_all_foreign_automatically()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "外国人補強のAI進行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.foreign_ai_all"))), RED)
 		return
 	selected_foreign_candidate_id = 0
 	_refresh()
@@ -4927,9 +4914,9 @@ func _populate_camp() -> void:
 		if int((row as Dictionary).get("team_id", 0)) == AppState.selected_team_id:
 			user_actions += 1
 	var roster_players: Array = _camp_roster_players()
-	_camp_status_text = "キャンプ: 自軍特別練習 %d/%d件 / 選手%d人" % [
-		user_actions, CampServiceRef.MAX_SPECIAL_TRAININGS_PER_TEAM, roster_players.size(),
-	]
+	_camp_status_text = Loc.t("offseason.camp.status", {
+		"done": user_actions, "max": CampServiceRef.MAX_SPECIAL_TRAININGS_PER_TEAM, "players": roster_players.size(),
+	})
 	var trained: Dictionary = _camp_trained_player_set(state)
 	var roster_ids: Dictionary = {}
 	# 総合降順にソートして候補ボード用の行を作る (# は総合順位)。レーティング用 record はここで cache へ。
@@ -4962,7 +4949,7 @@ func _populate_camp() -> void:
 	_camp_positions = []
 	_camp_selected_option = {}
 	_camp_can_submit = false
-	_camp_detail_text = "選手を選択してください。"
+	_camp_detail_text = Loc.t("offseason.camp.select_player")
 	if selected_camp_player_id <= 0:
 		return
 	_camp_options = CampServiceRef.user_training_options_for_player(state, GameDb.players, AppState.current_season, selected_camp_player_id)
@@ -5057,17 +5044,17 @@ func _selected_camp_option(options: Array) -> Dictionary:
 func _format_camp_unavailable_player(player_id: int) -> String:
 	var player: PSPlayer = GameDb.get_player(player_id)
 	if player == null:
-		return "選手を選択してください。"
+		return Loc.t("offseason.camp.select_player")
 	var lines: Array = []
 	lines.append("%s  %s" % [player.name, _player_role_or_position(player)])
 	if _camp_trained_player_set(AppState.camp_state).has(player.id):
-		lines.append("この選手は今オフに特別練習済みです。")
+		lines.append(Loc.t("offseason.camp.already_trained"))
 	elif player.injury_days > 0:
-		lines.append("怪我のため今オフの特別練習は選択できません。")
+		lines.append(Loc.t("offseason.camp.injured"))
 	else:
-		lines.append("選択できる特別練習がありません。")
+		lines.append(Loc.t("offseason.camp.no_options"))
 	lines.append("")
-	lines.append("能力")
+	lines.append(Loc.t("player_detail.panel.ability"))
 	lines.append(PlayerVisibleRatings.summary_line_for_player_data(player.to_dict()))
 	return "\n".join(lines)
 
@@ -5078,34 +5065,34 @@ func _camp_training_target(candidate: Dictionary) -> String:
 		return _position_name(target_position)
 	var training_type: String = str(candidate.get("training_type", ""))
 	if training_type == CampServiceRef.TRAIN_STARTER:
-		return "先発"
+		return Loc.t("role.starter")
 	if training_type == CampServiceRef.TRAIN_RELIEVER:
-		return "中継"
+		return Loc.t("role.middle_short")
 	return ""
 
 
 func _format_camp_details(candidate: Dictionary) -> String:
 	if candidate.is_empty():
-		return "選手を選択し、特別練習を指定してください。"
+		return Loc.t("offseason.camp.select_player_and_training")
 	var player: PSPlayer = GameDb.get_player(int(candidate.get("player_id", 0)))
 	var target_position: int = int(candidate.get("target_position", 0))
 	var lines: Array = []
 	lines.append("%s  %s" % [str(candidate.get("name", "")), _dict_role_or_position(candidate)])
-	lines.append("%d歳  練習 %s  対象 %s" % [int(candidate.get("age", 0)), str(candidate.get("training_label", "")), _camp_training_target(candidate)])
-	lines.append("成功率 %0.1f%%  リスク %s" % [float(candidate.get("success_chance", 0.0)) * 100.0, str(candidate.get("risk_label", "中"))])
-	lines.append("理由: %s" % str(candidate.get("reason", "")))
+	lines.append(Loc.t("offseason.camp.detail_line", {"age": int(candidate.get("age", 0)), "training": str(candidate.get("training_label", "")), "target": _camp_training_target(candidate)}))
+	lines.append(Loc.t("offseason.camp.detail_rate", {"rate": "%0.1f" % (float(candidate.get("success_chance", 0.0)) * 100.0), "risk": str(candidate.get("risk_label", Loc.t("camp.risk.medium")))}))
+	lines.append(Loc.t("offseason.camp.reason", {"reason": str(candidate.get("reason", ""))}))
 	if target_position > 0:
 		var current: int = _player_position_aptitude_for_ui(player, target_position)
-		lines.append("対象適性: %s  現在 %d  成功時 %d" % [_position_name(target_position), current, int(candidate.get("projected_aptitude", 0))])
+		lines.append(Loc.t("offseason.camp.detail_aptitude", {"pos": _position_name(target_position), "current": current, "projected": int(candidate.get("projected_aptitude", 0))}))
 	if player != null:
 		lines.append("")
-		lines.append("能力")
+		lines.append(Loc.t("player_detail.panel.ability"))
 		lines.append(PlayerVisibleRatings.summary_line_for_player_data(player.to_dict()))
 		if player.is_pitcher():
 			var arsenal_text: String = PSPitchTypes.arsenal_line(player.arsenal)
 			if not arsenal_text.is_empty():
 				lines.append("")
-				lines.append("球種")
+				lines.append(Loc.t("offseason.camp.pitches"))
 				lines.append(arsenal_text)
 	return "\n".join(lines)
 
@@ -5123,11 +5110,11 @@ func _player_position_aptitude_for_ui(player: PSPlayer, pos: int) -> int:
 
 func _on_camp_submit_pressed() -> void:
 	if selected_camp_player_id <= 0 or selected_camp_training_type.is_empty():
-		_set_status("選手と特別練習を選択してください。", RED)
+		_set_status(Loc.t("offseason.camp.select_prompt"), RED)
 		return
 	var result: Dictionary = AppState.submit_camp_player_training(selected_camp_player_id, selected_camp_training_type, selected_camp_target_position)
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "特別練習の実行に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.camp_submit"))), RED)
 		return
 	_refresh()
 
@@ -5135,7 +5122,7 @@ func _on_camp_submit_pressed() -> void:
 func _on_camp_auto_pressed() -> void:
 	var result: Dictionary = AppState.auto_camp_user_pick()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "キャンプ自動判断に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.camp_auto"))), RED)
 		return
 	selected_camp_player_id = 0
 	selected_camp_training_type = ""
@@ -5146,7 +5133,7 @@ func _on_camp_auto_pressed() -> void:
 func _on_camp_finish_pressed() -> void:
 	var result: Dictionary = AppState.finish_camp()
 	if not bool(result.get("ok", false)):
-		_set_status(str(result.get("message", "キャンプ終了に失敗しました。")), RED)
+		_set_status(str(result.get("message", Loc.t("offseason.fail.camp_finish"))), RED)
 		return
 	selected_camp_player_id = 0
 	selected_camp_training_type = ""
@@ -5828,20 +5815,20 @@ func _league_team_ids_draft_order(league: String) -> Array:
 func _role_label(role: String) -> String:
 	match role:
 		"starter":
-			return "先発"
+			return Loc.t("role.starter")
 		"reliever":
-			return "中継"
+			return Loc.t("role.middle_short")
 		"closer":
-			return "抑え"
+			return Loc.t("role.closer_short")
 		_:
 			return role
 
 
 func _league_label(league: String) -> String:
 	if league == "league1":
-		return "第1"
+		return Loc.t("league.league1_short")
 	if league == "league2":
-		return "第2"
+		return Loc.t("league.league2_short")
 	return league
 
 
@@ -5859,11 +5846,14 @@ func _team_short(team_id: int) -> String:
 
 
 func _position_name(pos: int) -> String:
-	return str(PSPlayer.POSITION_NAMES.get(pos, "?"))
+	return PSPlayer.position_name(pos)
 
 
+# 1文字の守備位置表記。DH だけは "DH" では幅が合わないので打順表と同じ "指" を使う。
 func _position_char(pos: int) -> String:
-	return str(POSITION_CHARS.get(pos, "?"))
+	if pos == 10:
+		return Loc.t("box.position.dh")
+	return PSPlayer.position_short_name(pos)
 
 
 func _dict_role_or_position(data: Dictionary) -> String:
@@ -5893,13 +5883,11 @@ func _resolved_pitcher_role(role: String, data: Dictionary) -> String:
 func _role_char(role: String) -> String:
 	match role:
 		"starter":
-			return "先"
-		"reliever":
-			return "継"
+			return Loc.t("role.starter_short")
 		"closer":
-			return "抑"
+			return Loc.t("offseason.closer_char")
 		_:
-			return "継"
+			return Loc.t("offseason.summary.reliever_char")
 
 
 func _active_foreign_count(team_id: int) -> int:
@@ -5925,9 +5913,9 @@ func _on_next_pressed() -> void:
 
 func _on_finalize_pressed() -> void:
 	if not AppState.finalize_offseason():
-		_set_status("翌年開始に失敗しました", RED)
+		_set_status(Loc.t("offseason.fail.finalize"), RED)
 
 
 func _on_save_pressed() -> void:
 	var ok: bool = SaveService.save_state(AppState)
-	_set_status("保存しました" if ok else "保存に失敗しました", MUTED if ok else RED)
+	_set_status(Loc.t("home.saved") if ok else Loc.t("home.save_failed"), MUTED if ok else RED)

@@ -14,11 +14,12 @@ const TIER_MODERATE: int = 1  # 中度 (数週間)
 const TIER_MAJOR: int = 2     # 重傷 (シーズン終了級)
 const TIER_SEVERE: int = 3    # 重大手術 (トミー・ジョン等, シーズン跨ぎ)
 
-const TIER_NAMES := {
-	TIER_MINOR: "軽傷",
-	TIER_MODERATE: "中度",
-	TIER_MAJOR: "重傷",
-	TIER_SEVERE: "重大手術",
+# 重症度の表示名キー (Loc)。
+const TIER_NAME_KEYS := {
+	TIER_MINOR: "injury.tier.minor",
+	TIER_MODERATE: "injury.tier.moderate",
+	TIER_MAJOR: "injury.tier.major",
+	TIER_SEVERE: "injury.tier.severe",
 }
 
 # --- 発生頻度 (tunable) ---
@@ -65,12 +66,12 @@ const IN_GAME_CAUSE_WEIGHTS_BATTER := {
 	CAUSE_FIELDING: 0.20,
 	CAUSE_HIT_BY_PITCH: 0.08,
 }
-const IN_GAME_CAUSE_LABELS := {
-	CAUSE_RUNNING: "走塁中",
-	CAUSE_BATTING: "打撃中",
-	CAUSE_FIELDING: "守備中",
-	CAUSE_HIT_BY_PITCH: "死球",
-	CAUSE_PITCHING: "投球中",
+const IN_GAME_CAUSE_LABEL_KEYS := {
+	CAUSE_RUNNING: "injury.cause.running",
+	CAUSE_BATTING: "injury.cause.batting",
+	CAUSE_FIELDING: "injury.cause.fielding",
+	CAUSE_HIT_BY_PITCH: "injury.cause.hit_by_pitch",
+	CAUSE_PITCHING: "injury.cause.pitching",
 }
 
 # --- ティア抽選の重み (内部で正規化)。大半は軽傷、長期離脱は希少。 ---
@@ -132,62 +133,66 @@ const REGION_SHOULDER: String = "throw_shoulder"  # 野手の送球肩 (中度�
 const REGION_GENERAL: String = "general"
 
 # --- 部位名カタログ {tier: [{label, region}]} ---
-# arm 部位は _decorate_label で投球腕の左右を冠する (例「右肘…」)。
+# label は怪我名のキー (Loc)。arm 部位は _decorate_label で投球腕の左右を付け、文言側の {side} に入る
+# (例「右肘…」)。record.injury_type にはこのキー (左右付き) を保存し、表示時に injury_display_name で引く。
+const INJURY_NAME_GENERIC: String = "injury.name.generic"
 const PITCHER_CATALOG := {
 	TIER_MINOR: [
-		{"label": "肩の張り", "region": REGION_ARM},
-		{"label": "肘の張り", "region": REGION_ARM},
-		{"label": "前腕の張り", "region": REGION_ARM},
-		{"label": "腰の張り", "region": REGION_BACK},
-		{"label": "ふくらはぎの張り", "region": REGION_LEG},
-		{"label": "指のマメ", "region": REGION_HAND},
+		{"label": "injury.name.shoulder_tightness", "region": REGION_ARM},
+		{"label": "injury.name.elbow_tightness", "region": REGION_ARM},
+		{"label": "injury.name.forearm_tightness", "region": REGION_ARM},
+		{"label": "injury.name.back_tightness", "region": REGION_BACK},
+		{"label": "injury.name.calf_tightness", "region": REGION_LEG},
+		{"label": "injury.name.finger_blister", "region": REGION_HAND},
 	],
 	TIER_MODERATE: [
-		{"label": "肩関節炎", "region": REGION_ARM},
-		{"label": "肘内側の炎症", "region": REGION_ARM},
-		{"label": "腰部捻挫", "region": REGION_BACK},
-		{"label": "ハムストリング肉離れ", "region": REGION_LEG},
-		{"label": "肋骨の疲労骨折", "region": REGION_BACK},
+		{"label": "injury.name.shoulder_arthritis", "region": REGION_ARM},
+		{"label": "injury.name.elbow_inflammation", "region": REGION_ARM},
+		{"label": "injury.name.lumbar_sprain", "region": REGION_BACK},
+		{"label": "injury.name.hamstring_strain", "region": REGION_LEG},
+		{"label": "injury.name.rib_stress_fracture", "region": REGION_BACK},
 	],
 	TIER_MAJOR: [
-		{"label": "肩腱板損傷", "region": REGION_ARM},
-		{"label": "肘内側側副靭帯損傷", "region": REGION_ARM},
-		{"label": "腰椎椎間板ヘルニア", "region": REGION_BACK},
+		{"label": "injury.name.rotator_cuff_injury", "region": REGION_ARM},
+		{"label": "injury.name.ucl_injury", "region": REGION_ARM},
+		{"label": "injury.name.lumbar_disc_herniation", "region": REGION_BACK},
 	],
 	TIER_SEVERE: [
-		{"label": "肘内側側副靭帯再建術(トミー・ジョン手術)", "region": REGION_ARM},
-		{"label": "肩関節唇損傷(手術)", "region": REGION_ARM},
+		{"label": "injury.name.ucl_reconstruction", "region": REGION_ARM},
+		{"label": "injury.name.labrum_surgery", "region": REGION_ARM},
 	],
 }
 
 const BATTER_CATALOG := {
 	TIER_MINOR: [
-		{"label": "ハムストリングの張り", "region": REGION_LEG},
-		{"label": "腰の張り", "region": REGION_BACK},
-		{"label": "手首の打撲", "region": REGION_HAND},
-		{"label": "死球による打撲", "region": REGION_HAND},
-		{"label": "ふくらはぎの張り", "region": REGION_LEG},
-		{"label": "軽度の脳震盪", "region": REGION_GENERAL},
+		{"label": "injury.name.hamstring_tightness", "region": REGION_LEG},
+		{"label": "injury.name.back_tightness", "region": REGION_BACK},
+		{"label": "injury.name.wrist_contusion", "region": REGION_HAND},
+		{"label": "injury.name.hbp_contusion", "region": REGION_HAND},
+		{"label": "injury.name.calf_tightness", "region": REGION_LEG},
+		{"label": "injury.name.mild_concussion", "region": REGION_GENERAL},
 	],
 	TIER_MODERATE: [
-		{"label": "ハムストリング肉離れ", "region": REGION_LEG},
-		{"label": "腹斜筋の肉離れ", "region": REGION_BACK},
-		{"label": "手首の捻挫", "region": REGION_HAND},
-		{"label": "足首の捻挫", "region": REGION_LEG},
-		{"label": "送球肩の関節炎", "region": REGION_SHOULDER},
+		{"label": "injury.name.hamstring_strain", "region": REGION_LEG},
+		{"label": "injury.name.oblique_strain", "region": REGION_BACK},
+		{"label": "injury.name.wrist_sprain", "region": REGION_HAND},
+		{"label": "injury.name.ankle_sprain", "region": REGION_LEG},
+		{"label": "injury.name.throwing_shoulder_arthritis", "region": REGION_SHOULDER},
 	],
 	TIER_MAJOR: [
-		{"label": "有鈎骨骨折", "region": REGION_HAND},
-		{"label": "腰椎椎間板ヘルニア", "region": REGION_BACK},
-		{"label": "膝半月板損傷", "region": REGION_LEG},
-		{"label": "手首靭帯損傷(TFCC)", "region": REGION_HAND},
+		{"label": "injury.name.hamate_fracture", "region": REGION_HAND},
+		{"label": "injury.name.lumbar_disc_herniation", "region": REGION_BACK},
+		{"label": "injury.name.meniscus_tear", "region": REGION_LEG},
+		{"label": "injury.name.tfcc_injury", "region": REGION_HAND},
 	],
 	TIER_SEVERE: [
-		{"label": "前十字靭帯断裂", "region": REGION_LEG},
-		{"label": "アキレス腱断裂", "region": REGION_LEG},
-		{"label": "膝蓋腱断裂", "region": REGION_LEG},
+		{"label": "injury.name.acl_tear", "region": REGION_LEG},
+		{"label": "injury.name.achilles_rupture", "region": REGION_LEG},
+		{"label": "injury.name.patellar_tendon_rupture", "region": REGION_LEG},
 	],
 }
+# 左右付きキーの区切り ("injury.name.elbow_tightness:R")。
+const SIDE_SEPARATOR: String = ":"
 
 
 # 発生判定の本体。発生しなければ {} を返す。発生したら怪我情報の Dictionary を返す
@@ -225,7 +230,7 @@ static func roll_in_game_cause(is_pitcher: bool) -> String:
 
 
 static func in_game_cause_label(cause: String) -> String:
-	return str(IN_GAME_CAUSE_LABELS.get(cause, ""))
+	return Loc.t(str(IN_GAME_CAUSE_LABEL_KEYS[cause])) if IN_GAME_CAUSE_LABEL_KEYS.has(cause) else ""
 
 
 # 指定ティアの怪我を record に適用する (smoke からも直接呼べるよう public)。
@@ -233,7 +238,7 @@ static func apply_injury(record: PSPlayerSeasonRecord, is_pitcher: bool, tier: i
 	var days: int = _roll_days(tier)
 	var entry: Dictionary = _pick_catalog_entry(is_pitcher, tier)
 	var region: String = str(entry.get("region", REGION_GENERAL))
-	var label: String = _decorate_label(str(entry.get("label", "故障")), region, record.throwing_hand)
+	var label: String = _decorate_label(str(entry.get("label", INJURY_NAME_GENERIC)), region, record.throwing_hand)
 
 	record.injury_days = days
 	record.injury_return_day = 0
@@ -275,15 +280,14 @@ static func _pick_catalog_entry(is_pitcher: bool, tier: int) -> Dictionary:
 	var catalog: Dictionary = PITCHER_CATALOG if is_pitcher else BATTER_CATALOG
 	var entries: Array = catalog.get(tier, []) as Array
 	if entries.is_empty():
-		return {"label": "故障", "region": REGION_GENERAL}
+		return {"label": INJURY_NAME_GENERIC, "region": REGION_GENERAL}
 	return entries[Rng.range_int(0, entries.size() - 1)] as Dictionary
 
 
-# arm(投球腕)の怪我には左右を冠する。それ以外はそのまま。
+# arm(投球腕)の怪我には左右を付ける。それ以外はそのまま。
 static func _decorate_label(base: String, region: String, throwing_hand: String) -> String:
 	if region == REGION_ARM:
-		var side: String = "左" if throwing_hand == "L" else "右"
-		return side + base
+		return base + SIDE_SEPARATOR + ("L" if throwing_hand == "L" else "R")
 	return base
 
 
@@ -351,12 +355,25 @@ static func _rand_range(lo: float, hi: float) -> float:
 
 
 static func tier_name(severity: int) -> String:
-	return str(TIER_NAMES.get(severity, "軽傷"))
+	return Loc.t(str(TIER_NAME_KEYS.get(severity, TIER_NAME_KEYS[TIER_MINOR])))
+
+
+# 保存された怪我名キー (左右付きなら "key:R") を表示名にする。空なら汎用の「故障」。
+static func injury_display_name(injury_type: String) -> String:
+	if injury_type.is_empty():
+		return Loc.t(INJURY_NAME_GENERIC)
+	var key: String = injury_type.get_slice(SIDE_SEPARATOR, 0)
+	var side_code: String = injury_type.get_slice(SIDE_SEPARATOR, 1) if injury_type.contains(SIDE_SEPARATOR) else ""
+	var side: String = ""
+	if side_code == "L":
+		side = Loc.t("injury.side.left")
+	elif side_code == "R":
+		side = Loc.t("injury.side.right")
+	return Loc.t(key, {"side": side})
 
 
 # UI 表示ラベル "部位名(重症度)"。健康(injury_days<=0)なら空文字。
 static func display_label(injury_type: String, injury_severity: int, injury_days: int) -> String:
 	if injury_days <= 0:
 		return ""
-	var type_label: String = injury_type if not injury_type.is_empty() else "故障"
-	return "%s(%s)" % [type_label, tier_name(injury_severity)]
+	return Loc.t("injury.display_label", {"name": injury_display_name(injury_type), "tier": tier_name(injury_severity)})

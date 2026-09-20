@@ -238,7 +238,7 @@ static func _pitcher_usage_bonus(record: PSPlayerSeasonRecord) -> float:
 static func preview_perf_based_active_roster(season: PSSeason, team_id: int) -> Dictionary:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	if all_records.is_empty():
-		return {"ok": false, "message": "選手データがありません"}
+		return {"ok": false, "message": Loc.t("error.no_player_data")}
 
 	var starters: Array = []
 	var relievers: Array = []
@@ -347,10 +347,10 @@ static func repair_active_roster_injuries(season: PSSeason, team_id: int, curren
 	if active_id_list.is_empty():
 		all_records = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 		if all_records.is_empty():
-			return {"ok": false, "message": "選手データがありません", "changed": false}
+			return {"ok": false, "message": Loc.t("error.no_player_data"), "changed": false}
 		var preview: Dictionary = preview_perf_based_active_roster(season, team_id)
 		if not bool(preview.get("ok", false)):
-			return {"ok": false, "message": str(preview.get("message", "一軍ロスターを作成できません")), "changed": false}
+			return {"ok": false, "message": str(preview.get("message", Loc.t("roster.error.cannot_build_active"))), "changed": false}
 		active_id_list = (preview.get("player_ids", []) as Array).duplicate()
 		season.set_active_roster(team_id, {"player_ids": active_id_list.duplicate()})
 		roster = season.get_active_roster(team_id)
@@ -402,7 +402,7 @@ static func repair_active_roster_injuries(season: PSSeason, team_id: int, curren
 	if all_records.is_empty():
 		all_records = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 		if all_records.is_empty():
-			return {"ok": false, "message": "選手データがありません", "changed": false}
+			return {"ok": false, "message": Loc.t("error.no_player_data"), "changed": false}
 		for record_row in all_records:
 			var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 			if record != null:

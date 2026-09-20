@@ -96,11 +96,11 @@ static func cs_final_terms(season: PSSeason, top_id: int, challenger_id: int, ru
 	}
 	var game_gap: float = cs_final_game_gap(top_stats, challenger_stats)
 	if game_gap >= CS2_EXTENDED_GAME_GAP:
-		extended["reason"] = "ゲーム差%.1f" % game_gap
+		extended["reason"] = Loc.t("postseason.extended_reason.game_gap", {"gap": "%.1f" % game_gap})
 		return extended
 	var challenger_win_rate: float = challenger_stats.win_rate()
 	if challenger_win_rate < CS2_EXTENDED_WIN_RATE:
-		extended["reason"] = "挑戦者の勝率%.3f" % challenger_win_rate
+		extended["reason"] = Loc.t("postseason.extended_reason.win_rate", {"rate": "%.3f" % challenger_win_rate})
 		return extended
 	return standard
 
@@ -135,28 +135,28 @@ static func _apply_cs_final_terms(postseason: PSPostseasonResult, series: Dictio
 static func advance_stage(postseason: PSPostseasonResult, stage_key: String, season: PSSeason) -> Dictionary:
 	var s: Dictionary = postseason.stage_dict(stage_key)
 	if s.is_empty():
-		return {"ok": false, "message": "ステージが存在しません"}
+		return {"ok": false, "message": Loc.t("postseason.error.no_stage")}
 	if bool(s.get("completed", false)):
-		return {"ok": false, "message": "既に完了しています"}
+		return {"ok": false, "message": Loc.t("postseason.error.stage_complete")}
 
 	# CS2 / JS は前段の勝者を充填
 	if stage_key == "cs2_league1":
 		var w: int = int(postseason.cs1_league1.get("winner_id", 0))
 		if w == 0:
-			return {"ok": false, "message": "CS1 第1リーグが未消化です"}
+			return {"ok": false, "message": Loc.t("postseason.error.cs1_pending", {"league": PSTeam.league_label_for("league1")})}
 		s["challenger_id"] = w
 		_apply_cs_final_terms(postseason, s, season)
 	elif stage_key == "cs2_league2":
 		var w2: int = int(postseason.cs1_league2.get("winner_id", 0))
 		if w2 == 0:
-			return {"ok": false, "message": "CS1 第2リーグが未消化です"}
+			return {"ok": false, "message": Loc.t("postseason.error.cs1_pending", {"league": PSTeam.league_label_for("league2")})}
 		s["challenger_id"] = w2
 		_apply_cs_final_terms(postseason, s, season)
 	elif stage_key == "japan_series":
 		var c: int = int(postseason.cs2_league1.get("winner_id", 0))
 		var p: int = int(postseason.cs2_league2.get("winner_id", 0))
 		if c == 0 or p == 0:
-			return {"ok": false, "message": "CS2が未消化です"}
+			return {"ok": false, "message": Loc.t("postseason.error.cs2_pending")}
 		if str(s.get("first_home_league", _japan_series_first_home_league(postseason.season_number))) == FIRST_LEAGUE:
 			s["top_id"] = c
 			s["challenger_id"] = p
@@ -410,11 +410,11 @@ static func _team_games_before(team_games_before_by_team: Dictionary, team_id: i
 
 static func sync_to_next_postseason_day(postseason: PSPostseasonResult, season: PSSeason) -> Dictionary:
 	if postseason == null or season == null:
-		return {"ok": false, "message": "ポストシーズンが開始されていません"}
+		return {"ok": false, "message": Loc.t("postseason.error.not_started")}
 	_ensure_postseason_schedule(postseason, season)
 	var target_day: int = _next_scheduled_day(postseason, season)
 	if target_day <= 0:
-		return {"ok": false, "completed": is_complete(postseason), "message": "未消化のポストシーズン日程がありません"}
+		return {"ok": false, "completed": is_complete(postseason), "message": Loc.t("postseason.error.no_remaining_days")}
 	var recovery_days: int = _move_season_to_day(season, target_day)
 	return {
 		"ok": true,
@@ -428,14 +428,14 @@ static func sync_to_next_postseason_day(postseason: PSPostseasonResult, season: 
 # 1日進める: 次のポストシーズン試合日まで season.current_day を進め、その日にある試合を消化する。
 static func advance_one_day(postseason: PSPostseasonResult, season: PSSeason, persist: bool = true) -> Dictionary:
 	if postseason == null or season == null:
-		return {"ok": false, "message": "ポストシーズンが開始されていません"}
+		return {"ok": false, "message": Loc.t("postseason.error.not_started")}
 	_ensure_postseason_schedule(postseason, season)
 	var keys: Array = active_group_keys(postseason)
 	if keys.is_empty():
-		return {"ok": false, "completed": true, "message": "ポストシーズンは終了しています"}
+		return {"ok": false, "completed": true, "message": Loc.t("postseason.error.finished")}
 	var target_day: int = _next_scheduled_day(postseason, season)
 	if target_day <= 0:
-		return {"ok": false, "completed": is_complete(postseason), "message": "消化できるポストシーズン日程がありません"}
+		return {"ok": false, "completed": is_complete(postseason), "message": Loc.t("postseason.error.no_playable_days")}
 	var recovery_before: int = _move_season_to_day(season, target_day)
 	postseason.current_day += 1
 	var play_day: int = postseason.current_day
@@ -508,7 +508,7 @@ static func play_series_game(season: PSSeason, series: Dictionary, day: int, tea
 	var top_id: int = int(series.get("top_id", 0))
 	var challenger_id: int = int(series.get("challenger_id", 0))
 	if top_id <= 0 or challenger_id <= 0:
-		return {"ok": false, "message": "対戦カードが未確定です"}
+		return {"ok": false, "message": Loc.t("postseason.error.matchup_undecided")}
 	var advantage: int = int(series.get("advantage_wins", 0))
 	var top_wins: int = int(series.get("top_wins", advantage))
 	var challenger_wins: int = int(series.get("challenger_wins", 0))

@@ -28,33 +28,31 @@ const SECTION_GAP: float = 28.0 # トレードブロック内の異なるセク�
 const OFFER_CARD_H: float = 130.0
 const OFFER_CARD_GAP: float = 10.0
 
-const POS_LABELS: Dictionary = {1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右"}
-
-# ポジション絞り込み (自軍ロスターのみ。相手球団はプルダウン切替のため対象外)。
+# ポジション絞り込み (自軍ロスターのみ。相手球団はプルダウン切替のため対象外)。label は表示名のキー (Loc)。
 const FILTER_DEFS: Array = [
-	{"pos": 0, "label": "全"},
-	{"pos": 1, "label": "投"},
-	{"pos": 2, "label": "捕"},
-	{"pos": 3, "label": "内野"},
-	{"pos": 4, "label": "外野"},
+	{"pos": 0, "label": "filter.all"},
+	{"pos": 1, "label": "position_short.pitcher"},
+	{"pos": 2, "label": "position_short.catcher"},
+	{"pos": 3, "label": "filter.infield"},
+	{"pos": 4, "label": "filter.outfield"},
 ]
 
 const PLAYER_COLUMNS: Array = [
-	{"title": "区分", "key": "role",   "w": 54,  "align": "c", "fmt": "pos_badge"},
-	{"title": "選手", "key": "name",   "w": 178, "align": "l", "fmt": "str", "strong": true},
-	{"title": "年齢", "key": "age",    "w": 48,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "評価", "key": "value",  "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "WAR",  "key": "war",    "w": 56,  "align": "r", "fmt": "str"},
-	{"title": "年俸", "key": "salary", "w": 128, "align": "r", "fmt": "str", "sep_before": true},
+	{"title": "col.category",   "key": "role",   "w": 54,  "align": "c", "fmt": "pos_badge"},
+	{"title": "col.player",     "key": "name",   "w": 178, "align": "l", "fmt": "str", "strong": true},
+	{"title": "col.age",        "key": "age",    "w": 48,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "col.evaluation", "key": "value",  "w": 56,  "align": "r", "fmt": "int"},
+	{"title": "WAR",            "key": "war",    "w": 56,  "align": "r", "fmt": "str"},
+	{"title": "col.salary",     "key": "salary", "w": 128, "align": "r", "fmt": "str", "sep_before": true},
 ]
 
 const LOG_COLUMNS: Array = [
-	{"title": "日",     "key": "day",     "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "球団A",  "key": "team_a",  "w": 130, "align": "l", "fmt": "str", "strong": true},
-	{"title": "放出",   "key": "a_gives", "w": 220, "align": "l", "fmt": "str"},
-	{"title": "球団B",  "key": "team_b",  "w": 130, "align": "l", "fmt": "str", "sep_before": true, "strong": true},
-	{"title": "放出",   "key": "b_gives", "w": 220, "align": "l", "fmt": "str"},
-	{"title": "種別",   "key": "source",  "w": 80,  "align": "l", "fmt": "str", "sep_before": true},
+	{"title": "col.day",          "key": "day",     "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "trade.col.team_a", "key": "team_a",  "w": 130, "align": "l", "fmt": "str", "strong": true},
+	{"title": "trade.col.gives",  "key": "a_gives", "w": 220, "align": "l", "fmt": "str"},
+	{"title": "trade.col.team_b", "key": "team_b",  "w": 130, "align": "l", "fmt": "str", "sep_before": true, "strong": true},
+	{"title": "trade.col.gives",  "key": "b_gives", "w": 220, "align": "l", "fmt": "str"},
+	{"title": "col.kind",         "key": "source",  "w": 80,  "align": "l", "fmt": "str", "sep_before": true},
 ]
 
 var _row_hits: Array = []      # [{rect, kind, meta}]
@@ -109,24 +107,24 @@ func _draw() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	if season == null or team == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 		return
 
-	_draw_shell("トレード", team, season)
+	_draw_shell(Loc.t("screen.trade"), team, season)
 
 	var window_open: bool = TradeService.is_trade_window_open(season)
 	# 操作ヒントは絞り込みチップ行の右に置く (ヘッダ直下だと帯・ヘッダ境界と重なって欠ける)。
-	_text("行クリック=選択（各球団最大%d人） / 選手名を右クリックで選手詳細" % TradeService.MAX_PLAYERS_PER_SIDE,
+	_text(Loc.t("trade.hint", {"max": TradeService.MAX_PLAYERS_PER_SIDE}),
 		Vector2(INNER_L + 290.0, FILTER_Y + 19.0), 12, FAINT)
 	if AppState.auto_trade_for_user_team:
-		_chip(Rect2(INNER_R - 200.0, FILTER_Y + 1.0, 200.0, 24.0), "自動トレード: AI委任中", BLUE)
+		_chip(Rect2(INNER_R - 200.0, FILTER_Y + 1.0, 200.0, 24.0), Loc.t("trade.auto_delegated"), BLUE)
 
 	_draw_stat_strip(TOP_STRIP, season, team, window_open)
 
-	_draw_player_table(LEFT_RECT, "自軍: %s" % team.name, _mine_rows_filtered(), _give_ids, "mine")
+	_draw_player_table(LEFT_RECT, Loc.t("trade.mine_title", {"team": team.name}), _mine_rows_filtered(), _give_ids, "mine")
 	_draw_center_block(CENTER_RECT, season, window_open)
 	var opponent: PSTeam = GameDb.get_team(_view_team_id)
-	_draw_player_table(RIGHT_RECT, "相手: %s ▾" % (opponent.name if opponent != null else "-"), _theirs_rows, _receive_ids, "theirs")
+	_draw_player_table(RIGHT_RECT, _theirs_title(opponent), _theirs_rows, _receive_ids, "theirs")
 
 	_draw_offers_panel(OFFERS_RECT, season)
 	_draw_log_table(LOG_RECT, season)
@@ -142,13 +140,13 @@ func _draw_stat_strip(rect: Rect2, season: PSSeason, team: PSTeam, window_open: 
 	var payroll: int = TeamFinance.team_payroll(GameDb.players, team.id)
 	var room: int = TeamFinance.budget_room(team.funds, payroll)
 	var cells: Array = [
-		{"label": "交換期限", "value": ("残り%d日" % days_left) if window_open else "期限終了",
-			"color": TEXT if window_open else AMBER, "note": "7/31まで" if window_open else ""},
-		{"label": "自軍の今季成立数", "value": "%d/%d" % [trades_count, TradeService.MAX_TRADES_PER_TEAM],
+		{"label": Loc.t("trade.stat.deadline"), "value": Loc.t("trade.stat.days_left", {"days": days_left}) if window_open else Loc.t("trade.stat.closed"),
+			"color": TEXT if window_open else AMBER, "note": Loc.t("trade.stat.deadline_note") if window_open else ""},
+		{"label": Loc.t("trade.stat.completed"), "value": "%d/%d" % [trades_count, TradeService.MAX_TRADES_PER_TEAM],
 			"color": RED if trades_count >= TradeService.MAX_TRADES_PER_TEAM else TEXT},
-		{"label": "支配下枠", "value": "%d/%d" % [controlled, TeamFinance.CONTROLLED_LIMIT],
+		{"label": Loc.t("trade.stat.controlled"), "value": "%d/%d" % [controlled, TeamFinance.CONTROLLED_LIMIT],
 			"color": RED if controlled >= TeamFinance.CONTROLLED_LIMIT else (AMBER if controlled >= TeamFinance.CONTROLLED_LIMIT - 2 else TEXT)},
-		{"label": "予算残", "value": "%s%s" % ["-" if room < 0 else "", _format_money_compact(absi(room))],
+		{"label": Loc.t("trade.stat.budget_room"), "value": "%s%s" % ["-" if room < 0 else "", _format_money_compact(absi(room))],
 			"color": GREEN if room >= 0 else RED},
 	]
 	_stat_strip(rect, cells)
@@ -167,7 +165,7 @@ func _days_left(season: PSSeason) -> int:
 func _draw_player_table(rect: Rect2, title: String, rows: Array, selected_ids: Array, sel_kind: String) -> void:
 	var opts: Dictionary = {
 		"title": title, "header_top": 58.0, "row_h": 30.0,
-		"cell_size": 12, "empty_text": "選手がいません",
+		"cell_size": 12, "empty_text": Loc.t("common.no_players"),
 		"scroll_key": sel_kind, "scroll": _scroll, "scroll_zones": _scroll_zones,
 		"sel_kind": sel_kind, "hits": _row_hits,
 	}
@@ -184,19 +182,19 @@ func _draw_player_table(rect: Rect2, title: String, rows: Array, selected_ids: A
 # --- トレードブロック (中央) ---
 
 func _draw_center_block(rect: Rect2, season: PSSeason, window_open: bool) -> void:
-	_panel(rect, "トレードブロック")
+	_panel(rect, Loc.t("trade.block"))
 	var px: float = rect.position.x + 18.0
 	var card_w: float = rect.size.x - 36.0
 	var y: float = rect.position.y + 50.0
 
-	_text("出す（自軍 → 相手）", Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("trade.give_header"), Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	y += HEADER_GAP
 	for i in range(TradeService.MAX_PLAYERS_PER_SIDE):
 		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _give_ids[i] if i < _give_ids.size() else 0, "give_slot", season)
 		y += SLOT_H + SLOT_GAP
 
 	y += SECTION_GAP
-	_text("貰う（相手 → 自軍）", Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("trade.receive_header"), Vector2(px, y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	y += HEADER_GAP
 	for i in range(TradeService.MAX_PLAYERS_PER_SIDE):
 		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _receive_ids[i] if i < _receive_ids.size() else 0, "receive_slot", season)
@@ -212,7 +210,7 @@ func _draw_trade_slot(rect: Rect2, player_id: int, kind: String, season: PSSeaso
 	var mid_y: float = rect.position.y + rect.size.y * 0.5 + 4.0
 	if player_id <= 0:
 		_round(rect, Color.TRANSPARENT, BORDER_SOFT, 6, 1)
-		_text("（空き）", Vector2(rect.position.x + 12.0, mid_y), 12, FAINT)
+		_text(Loc.t("trade.empty_slot"), Vector2(rect.position.x + 12.0, mid_y), 12, FAINT)
 		return
 	var player: PSPlayer = GameDb.get_player(player_id)
 	if player == null:
@@ -225,7 +223,7 @@ func _draw_trade_slot(rect: Rect2, player_id: int, kind: String, season: PSSeaso
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
 	_text_right(_format_money_compact(player.salary), rect.end.x - 8.0, mid_y, 12, MUTED, 76.0)
 	_text_right(str(eval), rect.end.x - 8.0 - 76.0 - 6.0, mid_y, 12, _table_rating_color(eval), 34.0)
-	_text_right("%d歳" % player.age, rect.end.x - 8.0 - 76.0 - 6.0 - 34.0 - 6.0, mid_y, 12, MUTED, 40.0)
+	_text_right(Loc.t("common.age_value", {"age": player.age}), rect.end.x - 8.0 - 76.0 - 6.0 - 34.0 - 6.0, mid_y, 12, MUTED, 40.0)
 	_text(player.name, Vector2(rect.position.x + 56.0, mid_y), 13, TEXT, rect.size.x - 56.0 - 76.0 - 34.0 - 40.0 - 30.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_row_hits.append({"rect": rect, "kind": kind, "meta": player.id})
 
@@ -245,11 +243,11 @@ func _draw_trade_balance(rect: Rect2, y: float, w: float) -> float:
 	y += 30.0
 	var diff: float = receive_value - give_value
 	var diff_color: Color = GREEN if diff > 0.05 else (RED if diff < -0.05 else MUTED)
-	_text("戦力価値差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text(Loc.t("trade.value_diff"), Vector2(rect.position.x + 18.0, y), 11, MUTED)
 	_text_right(("%+.1f" % diff), rect.end.x - 18.0, y, 15, diff_color, 100.0, true)
 	y += 22.0
 	var salary_diff: int = _sum_salary(_receive_ids) - _sum_salary(_give_ids)
-	_text("年俸差", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text(Loc.t("trade.salary_diff"), Vector2(rect.position.x + 18.0, y), 11, MUTED)
 	_text_right("%s%s" % ["+" if salary_diff > 0 else ("-" if salary_diff < 0 else ""), _format_money_compact(absi(salary_diff))],
 		rect.end.x - 18.0, y, 13, TEXT, 120.0)
 	return y + SECTION_GAP
@@ -259,31 +257,31 @@ func _draw_trade_verdict(rect: Rect2, y: float, window_open: bool) -> void:
 	var text: String
 	var color: Color
 	if _give_ids.is_empty() or _receive_ids.is_empty():
-		text = "出す/貰う選手を選んでください"
+		text = Loc.t("trade.verdict.select_players")
 		color = MUTED
 	elif not window_open:
-		text = "交換期限を過ぎています"
+		text = Loc.t("trade.error.deadline_passed")
 		color = AMBER
 	elif not bool(_eval.get("ok", false)):
-		text = str(_eval.get("message", "この組み合わせは提案できません"))
+		text = str(_eval.get("message", Loc.t("trade.verdict.cannot_propose")))
 		color = AMBER
 	elif bool(_eval.get("accepted", false)):
-		text = "受諾見込み"
+		text = Loc.t("trade.verdict.likely_accept")
 		color = GREEN
 	else:
-		text = str(_eval.get("message", "交渉はまとまりません"))
+		text = str(_eval.get("message", Loc.t("trade.verdict.unlikely")))
 		color = RED
-	_text("成立見込み", Vector2(rect.position.x + 18.0, y), 11, MUTED)
+	_text(Loc.t("trade.verdict.title"), Vector2(rect.position.x + 18.0, y), 11, MUTED)
 	_text(text, Vector2(rect.position.x + 18.0, y + 22.0), 14, color, rect.size.x - 36.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # --- 相手球団からの提案 (下段左) ---
 
 func _draw_offers_panel(rect: Rect2, season: PSSeason) -> void:
-	_panel(rect, "相手球団からの提案")
+	_panel(rect, Loc.t("trade.offers"))
 	var offers: Array = TradeService.pending_user_offers(season)
 	if offers.is_empty():
-		_text("現在、届いている提案はありません", Vector2(rect.position.x + 18.0, rect.position.y + 78.0), 13, MUTED)
+		_text(Loc.t("trade.no_offers"), Vector2(rect.position.x + 18.0, rect.position.y + 78.0), 13, MUTED)
 		return
 	for i in range(min(offers.size(), TradeService.MAX_PENDING_USER_OFFERS)):
 		_draw_offer_card(_offer_card_rect(rect, i), offers[i] as Dictionary, season)
@@ -298,10 +296,10 @@ func _draw_offer_card(rect: Rect2, offer: Dictionary, season: PSSeason) -> void:
 	_round(rect, PANEL_2, Color.TRANSPARENT, 8, 0)
 	var cpu_team: PSTeam = GameDb.get_team(int(offer.get("cpu_team_id", 0)))
 	_text(cpu_team.name if cpu_team != null else "?", Vector2(rect.position.x + 16.0, rect.position.y + 24.0), 15, TEXT, rect.size.x - 220.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("期限 day%d" % int(offer.get("expires_day", 0)), rect.end.x - 16.0, rect.position.y + 20.0, 11, FAINT, 140.0)
+	_text_right(Loc.t("trade.offer_expires", {"day": int(offer.get("expires_day", 0))}), rect.end.x - 16.0, rect.position.y + 20.0, 11, FAINT, 140.0)
 	_line(Vector2(rect.position.x + 16.0, rect.position.y + 32.0), Vector2(rect.end.x - 16.0, rect.position.y + 32.0), HAIRLINE, 1.0)
-	_text("受取: " + _offer_players_text(offer.get("cpu_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 56.0), 13, GREEN, rect.size.x - 32.0)
-	_text("放出: " + _offer_players_text(offer.get("user_player_ids", []) as Array, season), Vector2(rect.position.x + 16.0, rect.position.y + 80.0), 13, RED, rect.size.x - 32.0)
+	_text(Loc.t("trade.offer_receive", {"players": _offer_players_text(offer.get("cpu_player_ids", []) as Array, season)}), Vector2(rect.position.x + 16.0, rect.position.y + 56.0), 13, GREEN, rect.size.x - 32.0)
+	_text(Loc.t("trade.offer_give", {"players": _offer_players_text(offer.get("user_player_ids", []) as Array, season)}), Vector2(rect.position.x + 16.0, rect.position.y + 80.0), 13, RED, rect.size.x - 32.0)
 
 
 func _offer_players_text(ids: Array, season: PSSeason) -> String:
@@ -313,8 +311,8 @@ func _offer_players_text(ids: Array, season: PSSeason) -> String:
 			continue
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
-		parts.append("%s (評価%d, %s)" % [player.name, eval, _format_money_compact(player.salary)])
-	return "、".join(PackedStringArray(parts))
+		parts.append(Loc.t("trade.offer_player", {"name": player.name, "eval": eval, "salary": _format_money_compact(player.salary)}))
+	return Loc.t("common.list_separator").join(PackedStringArray(parts))
 
 
 # --- 今季の成立トレード (下段右) ---
@@ -330,23 +328,23 @@ func _draw_log_table(rect: Rect2, season: PSSeason) -> void:
 		rows.append({
 			"day": int(entry.get("day", 0)),
 			"team_a": team_a.name if team_a != null else "?",
-			"a_gives": "、".join(PackedStringArray(entry.get("a_player_names", []) as Array)),
+			"a_gives": Loc.t("common.list_separator").join(PackedStringArray(entry.get("a_player_names", []) as Array)),
 			"team_b": team_b.name if team_b != null else "?",
-			"b_gives": "、".join(PackedStringArray(entry.get("b_player_names", []) as Array)),
+			"b_gives": Loc.t("common.list_separator").join(PackedStringArray(entry.get("b_player_names", []) as Array)),
 			"source": _source_label(str(entry.get("source", ""))),
 		})
 	_draw_data_table(rect, LOG_COLUMNS, rows, {
-		"title": "今季の成立トレード", "header_top": 58.0, "row_h": 28.0,
-		"cell_size": 12, "empty_text": "今季の成立トレードはまだありません",
+		"title": Loc.t("trade.log_title"), "header_top": 58.0, "row_h": 28.0,
+		"cell_size": 12, "empty_text": Loc.t("trade.log_empty"),
 		"scroll_key": "log", "scroll": _scroll, "scroll_zones": _scroll_zones,
 	})
 
 
 func _source_label(source: String) -> String:
 	match source:
-		"cpu": return "球団間"
-		"user_offer": return "受諾"
-		"user_proposal": return "自軍提案"
+		"cpu": return Loc.t("trade.source.cpu")
+		"user_offer": return Loc.t("trade.source.user_offer")
+		"user_proposal": return Loc.t("trade.source.user_proposal")
 		_: return source
 
 
@@ -357,7 +355,7 @@ func _build_buttons() -> void:
 	var season: PSSeason = AppState.current_season
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	if season == null or team == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
@@ -369,7 +367,7 @@ func _build_buttons() -> void:
 	for def_value in FILTER_DEFS:
 		var def: Dictionary = def_value as Dictionary
 		var pos: int = int(def["pos"])
-		var btn: Button = _add_button("filter_%d" % pos, str(def["label"]), Rect2(fx, FILTER_Y, 46.0, 26.0),
+		var btn: Button = _add_button("filter_%d" % pos, Loc.t(str(def["label"])), Rect2(fx, FILTER_Y, 46.0, 26.0),
 			func(p: int = pos) -> void: _set_filter(p),
 			"chip_active" if pos == _filter_pos else "chip")
 		_filter_buttons[pos] = btn
@@ -377,13 +375,13 @@ func _build_buttons() -> void:
 
 	# 相手球団の切替 (テーブルタイトル自体がプルダウン)。
 	var opponent: PSTeam = GameDb.get_team(_view_team_id)
-	var theirs_title: String = "相手: %s ▾" % (opponent.name if opponent != null else "-")
+	var theirs_title: String = _theirs_title(opponent)
 	_team_menu_button = _add_button("team_menu", "", _theirs_title_hotspot(RIGHT_RECT, theirs_title), _on_team_menu_pressed, "nav")
 
-	var propose_btn: Button = _add_button("propose", "この内容で提案する",
+	var propose_btn: Button = _add_button("propose", Loc.t("trade.propose"),
 		Rect2(CENTER_RECT.position.x + 18.0, CENTER_RECT.end.y - 46.0, 176.0, 36.0), _submit_proposal, "primary")
 	propose_btn.disabled = not _can_submit()
-	_add_button("clear_sel", "クリア",
+	_add_button("clear_sel", Loc.t("common.clear"),
 		Rect2(CENTER_RECT.position.x + 202.0, CENTER_RECT.end.y - 46.0, 112.0, 36.0), func() -> void: _clear_selection(), "chip")
 
 	_build_offer_buttons(OFFERS_RECT, TradeService.pending_user_offers(season))
@@ -396,10 +394,14 @@ func _build_offer_buttons(rect: Rect2, offers: Array) -> void:
 		var offer: Dictionary = offers[i] as Dictionary
 		var card: Rect2 = _offer_card_rect(rect, i)
 		var offer_id: int = int(offer.get("id", 0))
-		_add_button("offer_accept_%d" % offer_id, "受諾", Rect2(card.end.x - 176.0, card.end.y - 34.0, 76.0, 28.0),
+		_add_button("offer_accept_%d" % offer_id, Loc.t("trade.accept"), Rect2(card.end.x - 176.0, card.end.y - 34.0, 76.0, 28.0),
 			func() -> void: _accept_offer(offer_id), "primary")
-		_add_button("offer_decline_%d" % offer_id, "拒否", Rect2(card.end.x - 92.0, card.end.y - 34.0, 76.0, 28.0),
+		_add_button("offer_decline_%d" % offer_id, Loc.t("trade.decline"), Rect2(card.end.x - 92.0, card.end.y - 34.0, 76.0, 28.0),
 			func() -> void: _decline_offer(offer_id), "chip")
+
+
+func _theirs_title(opponent: PSTeam) -> String:
+	return Loc.t("trade.theirs_title", {"team": opponent.name if opponent != null else "-"})
 
 
 # 「相手: 球団名 ▾」タイトルの見た目 (BLUEティック+テキスト) をおおむね覆う透明ボタン矩形。
@@ -480,10 +482,10 @@ func _submit_proposal() -> void:
 		_eval = {}
 		_refresh_all()
 		_message_color = GREEN
-		_message = "トレードが成立しました。"
+		_message = Loc.t("trade.done")
 	else:
 		_message_color = AMBER
-		_message = str(result.get("message", "交渉はまとまりませんでした。"))
+		_message = str(result.get("message", Loc.t("fa.negotiation_failed")))
 	_build_buttons()
 	queue_redraw()
 
@@ -497,10 +499,10 @@ func _accept_offer(offer_id: int) -> void:
 		GameDb.rebuild_player_indices()
 		_refresh_all()
 		_message_color = GREEN
-		_message = "提案を受諾し、トレードが成立しました。"
+		_message = Loc.t("trade.offer_accepted")
 	else:
 		_message_color = AMBER
-		_message = str(result.get("message", "受諾できませんでした。"))
+		_message = str(result.get("message", Loc.t("trade.accept_failed")))
 	_build_buttons()
 	queue_redraw()
 
@@ -511,7 +513,7 @@ func _decline_offer(offer_id: int) -> void:
 		return
 	TradeService.decline_user_offer(season, offer_id)
 	_message_color = MUTED
-	_message = "提案を拒否しました。"
+	_message = Loc.t("trade.offer_declined")
 	_build_buttons()
 	queue_redraw()
 
@@ -543,12 +545,12 @@ func _toggle_selection(ids: Array, player_id: int) -> void:
 		var lock_year: int = lock_season.year if lock_season != null else 0
 		if player == null or not TradeService.is_tradeable(player, lock_year):
 			_message_color = AMBER
-			_message = "%s はトレード対象にできません。" % (player.name if player != null else "その選手")
+			_message = Loc.t("trade.player_not_tradeable", {"player": player.name if player != null else Loc.t("trade.that_player")})
 			_build_buttons()
 			return
 		if ids.size() >= TradeService.MAX_PLAYERS_PER_SIDE:
 			_message_color = AMBER
-			_message = "選択できるのは各球団%d人までです。" % TradeService.MAX_PLAYERS_PER_SIDE
+			_message = Loc.t("trade.selection_limit", {"max": TradeService.MAX_PLAYERS_PER_SIDE})
 			_build_buttons()
 			return
 		ids.append(player_id)
@@ -636,9 +638,9 @@ func _player_row(player: PSPlayer, season: PSSeason) -> Dictionary:
 func _role_chip(player: PSPlayer) -> Dictionary:
 	if player.is_pitcher():
 		if player.is_starter_pitcher():
-			return {"text": "先発", "color": PINK}
-		return {"text": "中継", "color": RED}
-	return {"text": str(POS_LABELS.get(player.position, "?")), "color": _pos_color(player.position)}
+			return {"text": Loc.t("role.starter"), "color": PINK}
+		return {"text": Loc.t("role.middle_short"), "color": RED}
+	return {"text": PSPlayer.position_short_name(player.position), "color": _pos_color(player.position)}
 
 
 func _war_color(war: float) -> Color:

@@ -32,12 +32,12 @@ const BENCH_COUNT: int = 7
 # どのグレードがどの項目か読み取れない。
 const GRADE_COLS: int = 3
 const GRADE_ROWS: Array = [
-	{"key": "starter", "label": "先発"},
-	{"key": "relief", "label": "中継"},
-	{"key": "bench", "label": "控え"},
-	{"key": "batting", "label": "打撃"},
-	{"key": "defense", "label": "守備"},
-	{"key": "future", "label": "若手"},
+	{"key": "starter", "label": "strength.label.starter"},
+	{"key": "relief", "label": "strength.label.relief"},
+	{"key": "bench", "label": "strength.label.bench"},
+	{"key": "batting", "label": "strength.label.batting"},
+	{"key": "defense", "label": "strength.label.defense"},
+	{"key": "future", "label": "strength.label.future"},
 ]
 const GRADE_ROW_H: float = 50.0
 const GRADE_TOP: float = 132.0
@@ -117,13 +117,13 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
 	_round(Rect2(0, 0, BASE.x, 4), Color(BLUE.r, BLUE.g, BLUE.b, 0.85), Color.TRANSPARENT, 0, 0)
 
-	_text("チーム選択", Vector2(MARGIN, 66), 30, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("team_select.title"), Vector2(MARGIN, 66), 30, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var selected: PSTeam = _selected_team()
-	var sub: String = "選択中: %s" % selected.name if selected != null else "操作する球団を選んでください"
+	var sub: String = Loc.t("team_select.selected", {"team": selected.name}) if selected != null else Loc.t("team_select.prompt")
 	_text(sub, Vector2(MARGIN + 2, 96), 15, MUTED if selected == null else BLUE)
 
-	_draw_league(LEFT_X, _league1, _league_label(_league1, "第1リーグ"))
-	_draw_league(RIGHT_X, _league2, _league_label(_league2, "第2リーグ"))
+	_draw_league(LEFT_X, _league1, _league_label(_league1, PSTeam.league_label_for("league1")))
+	_draw_league(RIGHT_X, _league2, _league_label(_league2, PSTeam.league_label_for("league2")))
 
 
 func _draw_league(area_x: float, infos: Array, label: String) -> void:
@@ -153,15 +153,15 @@ func _draw_card(rect: Rect2, info: Dictionary) -> void:
 
 	_team_badge(Rect2(rect.position.x + 22.0, rect.position.y + 20.0, 46.0, 46.0), team)
 	_text(team.name, Vector2(rect.position.x + 80.0, rect.position.y + 44.0), 23, TEXT, rect.size.x - 96.0)
-	_text("前年 %d位" % team.previous_rank, Vector2(rect.position.x + 80.0, rect.position.y + 70.0), 14, MUTED, rect.size.x - 96.0)
+	_text(Loc.t("team_select.previous_rank", {"rank": team.previous_rank}), Vector2(rect.position.x + 80.0, rect.position.y + 70.0), 14, MUTED, rect.size.x - 96.0)
 	if selected:
-		_chip(Rect2(rect.end.x - 82.0, rect.position.y + 18.0, 64.0, 24.0), "選択中", BLUE)
+		_chip(Rect2(rect.end.x - 82.0, rect.position.y + 18.0, 64.0, 24.0), Loc.t("team_select.selected_chip"), BLUE)
 
 	_line(Vector2(rect.position.x + 18.0, rect.position.y + 92.0), Vector2(rect.end.x - 18.0, rect.position.y + 92.0), BORDER_SOFT, 1.0)
 
 	_draw_grades(rect, info)
 
-	_text("支配下 %d名 ・ 育成 %d名" % [int(info["controlled"]), int(info["dev"])],
+	_text(Loc.t("team_select.roster_counts", {"controlled": int(info["controlled"]), "dev": int(info["dev"])}),
 		Vector2(rect.position.x + 18.0, rect.position.y + 246.0), 14, MUTED, rect.size.x - 36.0)
 
 
@@ -176,7 +176,7 @@ func _draw_grades(rect: Rect2, info: Dictionary) -> void:
 		@warning_ignore("integer_division")
 		var y: float = rect.position.y + GRADE_TOP + GRADE_ROW_H * float(i / GRADE_COLS)
 		var grade: String = str(info.get("%s_grade" % str(row["key"]), "-"))
-		_text(str(row["label"]), Vector2(x, y), GRADE_LABEL_FS, MUTED, GRADE_LABEL_W)
+		_text(Loc.t(str(row["label"])), Vector2(x, y), GRADE_LABEL_FS, MUTED, GRADE_LABEL_W)
 		_text(grade, Vector2(x + GRADE_LABEL_W, y), GRADE_FS, _strength_grade_color(grade),
 			GRADE_VALUE_W, HORIZONTAL_ALIGNMENT_LEFT, true)
 
@@ -188,9 +188,9 @@ func _build_buttons() -> void:
 
 	var back_rect: Rect2 = Rect2(BASE.x - MARGIN - 110.0, 40.0, 110.0, 42.0)
 	var start_rect: Rect2 = Rect2(back_rect.position.x - 16.0 - 230.0, 40.0, 230.0, 42.0)
-	var start_button: Button = _add_button("start", "このチームで開始", start_rect, _start_selected, "primary")
+	var start_button: Button = _add_button("start", Loc.t("team_select.start"), start_rect, _start_selected, "primary")
 	start_button.disabled = _selected_team_id <= 0
-	_add_button("back", "戻る", back_rect, func() -> void: AppState.request_screen("start"), "action")
+	_add_button("back", Loc.t("common.back"), back_rect, func() -> void: AppState.request_screen("start"), "action")
 
 	# カード全体を透明ボタンで覆い、クリックで選択する。
 	_add_select_buttons(LEFT_X, _league1)

@@ -5,9 +5,14 @@ class_name PSBoxScoreBuilder
 # 1 チーム分の伝統的ボックススコア(選手×イニングのマトリクス)を組み立てる純関数群。
 # UI(game_result_screen)が build() の戻り値をそのまま表に流す。
 
-const POSITION_CHARS: Dictionary = {
-	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右", 10: "指",
-}
+# 投手成績の勝敗マーク ID (build_pitching の row.mark)。表示は UI 側で図形/文言にする。
+const MARK_WIN: String = "win"
+const MARK_LOSS: String = "loss"
+const MARK_SAVE: String = "save"
+const MARK_HOLD: String = "hold"
+
+# 打席結果の略記キー (Loc)。{dir} には打球方向の守備位置1文字が入る。
+const PA_HIT_KEYS: Dictionary = {1: "box.pa.single", 2: "box.pa.double", 3: "box.pa.triple", 4: "box.pa.home_run"}
 
 
 # 戻り値: {rows: Array[Dictionary], totals: Dictionary, inning_count: int, columns: Array}
@@ -173,15 +178,22 @@ static func _player_row(entry: Dictionary, team_pas: Array, column_count: int, c
 static func _position_label(entry: Dictionary) -> String:
 	match str(entry.get("kind", "")):
 		"pinch_hit":
-			return "打"
+			return Loc.t("box.kind.pinch_hit")
 		"pinch_run":
-			return "走"
+			return Loc.t("box.kind.pinch_run")
 		"pitching":
-			return "投"
+			return Loc.t("box.kind.pitching")
 		"start":
 			# スタメンの守備位置はカッコで囲み、途中出場 (守備固め等) と区別する。
-			return "(%s)" % str(POSITION_CHARS.get(int(entry.get("position", 0)), ""))
-	return str(POSITION_CHARS.get(int(entry.get("position", 0)), ""))
+			return Loc.t("box.start_position", {"pos": position_char(int(entry.get("position", 0)))})
+	return position_char(int(entry.get("position", 0)))
+
+
+# スコアブック表記の守備位置1文字。DH はボックス専用の「指」。
+static func position_char(position: int) -> String:
+	if position == 10:
+		return Loc.t("box.position.dh")
+	return PSPlayer.position_short_name(position, "") if position >= 1 and position <= 9 else ""
 
 
 static func _bats_label(record: PSPlayerSeasonRecord) -> String:
@@ -189,51 +201,51 @@ static func _bats_label(record: PSPlayerSeasonRecord) -> String:
 		return ""
 	match str(record.batting_side):
 		"L":
-			return "左"
+			return Loc.t("hand.left")
 		"S", "B", "両":
-			return "両"
-	return "右"
+			return Loc.t("hand.switch")
+	return Loc.t("hand.right")
 
 
 static func _pa_abbrev(pa: Dictionary) -> String:
 	var cat: String = str(pa.get("category", "out"))
 	var bases: int = int(pa.get("bases", 0))
-	var dir: String = str(POSITION_CHARS.get(int(pa.get("fielder_position", 0)), ""))
+	var dir: String = position_char(int(pa.get("fielder_position", 0)))
 	var result: String = str(pa.get("result", ""))
 	match cat:
 		"walk":
-			return "敬遠" if result == "intentional_walk" else "四球"
+			return Loc.t("box.pa.intentional_walk") if result == "intentional_walk" else Loc.t("box.pa.walk")
 		"hit_by_pitch":
-			return "死球"
+			return Loc.t("box.pa.hit_by_pitch")
 		"strikeout":
-			return "三振"
+			return Loc.t("box.pa.strikeout")
 		"hit":
-			var suf: String = "安" if bases <= 1 else ("2" if bases == 2 else ("3" if bases == 3 else "本"))
-			return dir + suf
+			return Loc.t(str(PA_HIT_KEYS[clampi(bases, 1, 4)]), {"dir": dir})
 		"double_play":
-			return dir + "併"
+			return Loc.t("box.pa.double_play", {"dir": dir})
 		"sacrifice_fly":
-			return "犠飛"
+			return Loc.t("box.pa.sacrifice_fly")
 		"sacrifice":
-			return "犠打"
+			return Loc.t("box.pa.sacrifice")
 		"fielders_choice":
-			return "野選"
+			return Loc.t("box.pa.fielders_choice")
 		"error":
-			return dir + "失"
+			return Loc.t("box.pa.error", {"dir": dir})
 	# 通常アウト: 打球種別で ゴ/直/飛
-	var rc: String = "ゴ"
+	var out_key: String = "box.pa.ground_out"
 	match str(pa.get("batted_ball_type", "")):
 		"liner":
-			rc = "直"
+			out_key = "box.pa.line_out"
 		"fly", "popup":
-			rc = "飛"
+			out_key = "box.pa.fly_out"
 		"grounder":
-			rc = "ゴ"
+			out_key = "box.pa.ground_out"
 		_:
-			rc = "直" if result.contains("line") else ("飛" if (result.contains("fly") or result.contains("pop")) else "ゴ")
-	if dir.is_empty():
-		return rc
-	return dir + rc
+			if result.contains("line"):
+				out_key = "box.pa.line_out"
+			elif result.contains("fly") or result.contains("pop"):
+				out_key = "box.pa.fly_out"
+	return Loc.t(out_key, {"dir": dir})
 
 
 static func _totals(team_pas: Array) -> Dictionary:
@@ -290,13 +302,13 @@ static func build_pitching(log_data: Dictionary, season: PSSeason) -> Dictionary
 			var tally: Dictionary = tallies.get(pid, {}) as Dictionary
 			var mark: String = ""
 			if pid == win_id:
-				mark = "○"
+				mark = MARK_WIN
 			elif pid == loss_id:
-				mark = "●"
+				mark = MARK_LOSS
 			elif pid == save_id:
-				mark = "Ｓ"
+				mark = MARK_SAVE
 			elif holds.has(pid):
-				mark = "Ｈ"
+				mark = MARK_HOLD
 			rows.append({
 				"team_id": tid,
 				"mark": mark,
@@ -346,7 +358,7 @@ static func _pitcher_pa_tallies(pa_log: Array) -> Dictionary:
 static func _throws_label(record: PSPlayerSeasonRecord) -> String:
 	if record == null:
 		return ""
-	return "左" if str(record.throwing_hand) == "L" else "右"
+	return Loc.t("hand.left") if str(record.throwing_hand) == "L" else Loc.t("hand.right")
 
 
 static func _ip_str(outs: int) -> String:
@@ -365,29 +377,29 @@ static func build_records(log_data: Dictionary, season: PSSeason) -> Dictionary:
 			continue
 		var batter: PSPlayerSeasonRecord = _record(int(pa.get("batter_id", 0)), season)
 		var pitcher: PSPlayerSeasonRecord = _record(int(pa.get("pitcher_id", 0)), season)
-		hr.append("%s %d号 (%s = %s)" % [
-			batter.name if batter != null else "?",
-			int(pa.get("hr_number", 0)),
-			_hr_run_label(int(pa.get("rbi", 1))),
-			pitcher.name if pitcher != null else "?",
-		])
+		hr.append(Loc.t("box.record.home_run", {
+			"batter": batter.name if batter != null else "?",
+			"number": int(pa.get("hr_number", 0)),
+			"type": _hr_run_label(int(pa.get("rbi", 1))),
+			"pitcher": pitcher.name if pitcher != null else "?",
+		}))
 	var errors: Array = []
 	for e_row in (log_data.get("errors", []) as Array):
 		var e: Dictionary = e_row as Dictionary
 		var fielder: PSPlayerSeasonRecord = _record(int(e.get("fielder_id", 0)), season)
-		errors.append("%s(%d回)" % [fielder.name if fielder != null else "-", int(e.get("inning", 0))])
+		errors.append(Loc.t("box.record.error", {"fielder": fielder.name if fielder != null else "-", "inning": int(e.get("inning", 0))}))
 	return {"hr": hr, "errors": errors}
 
 
 static func _hr_run_label(rbi: int) -> String:
 	match rbi:
 		4:
-			return "満塁"
+			return Loc.t("box.hr.grand_slam")
 		3:
-			return "3ラン"
+			return Loc.t("box.hr.three_run")
 		2:
-			return "2ラン"
-	return "ソロ"
+			return Loc.t("box.hr.two_run")
+	return Loc.t("box.hr.solo")
 
 
 static func _record(player_id: int, season: PSSeason) -> PSPlayerSeasonRecord:

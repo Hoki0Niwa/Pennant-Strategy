@@ -391,23 +391,23 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 static func accept_user_offer(season: PSSeason, players: Array, teams: Array, offer_id: int, user_team_id: int) -> Dictionary:
 	var offer: Dictionary = _pending_offer_by_id(season, offer_id)
 	if offer.is_empty():
-		return {"ok": false, "message": "その提案は有効ではありません。"}
+		return {"ok": false, "message": Loc.t("trade.error.offer_invalid")}
 	if not is_trade_window_open(season):
 		offer["status"] = "expired"
-		return {"ok": false, "message": "交換期限を過ぎています。"}
+		return {"ok": false, "message": Loc.t("trade.error.deadline_passed")}
 	var cpu_team_id: int = int(offer.get("cpu_team_id", 0))
 	# 提案生成時点では CPU 側の上限しか見ていない (自軍側は _generate_user_offer が未チェック)。
 	# 生成後に他のトレードで両球団の成立数が変わりうるため、受諾時にも改めて双方を確認する。
 	if trades_count_for_team(season, cpu_team_id) >= MAX_TRADES_PER_TEAM or trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:
 		offer["status"] = "invalid"
-		return {"ok": false, "message": "今季のトレード成立上限に達しているため受諾できません。"}
+		return {"ok": false, "message": Loc.t("trade.error.accept_limit")}
 	var validation: Dictionary = _validate_trade_sides(
 		players, teams, cpu_team_id, offer.get("cpu_player_ids", []) as Array,
 		user_team_id, offer.get("user_player_ids", []) as Array, season.year
 	)
 	if not bool(validation.get("ok", false)):
 		offer["status"] = "invalid"
-		return {"ok": false, "message": str(validation.get("message", "提案が成立条件を満たしません。"))}
+		return {"ok": false, "message": str(validation.get("message", Loc.t("trade.error.conditions_unmet")))}
 	var entry: Dictionary = execute_trade(
 		season, players,
 		cpu_team_id, offer.get("cpu_player_ids", []) as Array,
@@ -415,7 +415,7 @@ static func accept_user_offer(season: PSSeason, players: Array, teams: Array, of
 		"user_offer"
 	)
 	if entry.is_empty():
-		return {"ok": false, "message": "トレードを実行できませんでした。"}
+		return {"ok": false, "message": Loc.t("trade.error.execute_failed")}
 	offer["status"] = "accepted"
 	return {"ok": true, "trade": entry}
 
@@ -423,7 +423,7 @@ static func accept_user_offer(season: PSSeason, players: Array, teams: Array, of
 static func decline_user_offer(season: PSSeason, offer_id: int) -> Dictionary:
 	var offer: Dictionary = _pending_offer_by_id(season, offer_id)
 	if offer.is_empty():
-		return {"ok": false, "message": "その提案は有効ではありません。"}
+		return {"ok": false, "message": Loc.t("trade.error.offer_invalid")}
 	offer["status"] = "declined"
 	return {"ok": true}
 
@@ -442,22 +442,22 @@ static func _pending_offer_by_id(season: PSSeason, offer_id: int) -> Dictionary:
 # 戻り値 { ok, accepted, cpu_gain, message }。
 static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Array, user_team_id: int, give_ids: Array, receive_ids: Array) -> Dictionary:
 	if not is_trade_window_open(season):
-		return {"ok": false, "accepted": false, "message": "交換期限を過ぎています。"}
+		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.deadline_passed")}
 	if give_ids.is_empty() or receive_ids.is_empty() \
 			or give_ids.size() > MAX_PLAYERS_PER_SIDE or receive_ids.size() > MAX_PLAYERS_PER_SIDE:
-		return {"ok": false, "accepted": false, "message": "トレードは各球団1〜%d人で提案してください。" % MAX_PLAYERS_PER_SIDE}
+		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.side_size", {"max": MAX_PLAYERS_PER_SIDE})}
 	var cpu_team_id: int = _owner_team_of(players, receive_ids)
 	if cpu_team_id <= 0 or cpu_team_id == user_team_id:
-		return {"ok": false, "accepted": false, "message": "相手選手は同一の他球団に所属している必要があります。"}
+		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.mixed_partner_teams")}
 	var validation: Dictionary = _validate_trade_sides(players, teams, user_team_id, give_ids, cpu_team_id, receive_ids, season.year)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "accepted": false, "message": str(validation.get("message", ""))}
 	# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象とする。
 	# cpu_team_id 側だけを見ると、自軍がこの上限を回避できてしまう。
 	if trades_count_for_team(season, cpu_team_id) >= MAX_TRADES_PER_TEAM:
-		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": "相手球団は今季のトレードに消極的です。"}
+		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": Loc.t("trade.partner_reluctant")}
 	if trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:
-		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": "自球団は今季のトレード成立上限に達しています。"}
+		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": Loc.t("trade.error.user_limit")}
 
 	var need: Dictionary = build_team_needs(players, teams)
 	var cpu_need: Dictionary = need.get(cpu_team_id, {}) as Dictionary
@@ -474,7 +474,7 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 		"accepted": accepted,
 		"cpu_gain": cpu_gain,
 		"cpu_team_id": cpu_team_id,
-		"message": "" if accepted else "交渉はまとまりませんでした (相手の評価が見合いません)。",
+		"message": "" if accepted else Loc.t("trade.declined_by_value"),
 	}
 
 
@@ -490,7 +490,7 @@ static func submit_user_proposal(season: PSSeason, players: Array, teams: Array,
 		"user_proposal"
 	)
 	if entry.is_empty():
-		return {"ok": false, "accepted": false, "message": "トレードを実行できませんでした。"}
+		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.execute_failed")}
 	evaluated["trade"] = entry
 	return evaluated
 
@@ -584,21 +584,21 @@ static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, 
 		for id_value in (pair as Array)[1] as Array:
 			var player: PSPlayer = _find_player_by_id(players, int(id_value))
 			if player == null or player.team_id != team_id:
-				return {"ok": false, "message": "対象選手が既に移籍または退団しています。"}
+				return {"ok": false, "message": Loc.t("trade.error.player_gone")}
 			if not is_tradeable(player, season_year):
-				return {"ok": false, "message": "%s はトレード対象にできません (外国人/育成/怪我/新人/複数年契約中)。" % player.name}
+				return {"ok": false, "message": Loc.t("trade.error.not_tradeable", {"player": player.name})}
 	if not _capacity_ok_after_trade(players, team_a_id, a_ids, b_ids):
-		return {"ok": false, "message": "自軍の支配下枠(70人)を超えるためこのトレードは成立できません。"}
+		return {"ok": false, "message": Loc.t("trade.error.user_roster_full")}
 	if not _capacity_ok_after_trade(players, team_b_id, b_ids, a_ids):
-		return {"ok": false, "message": "相手球団の支配下枠(70人)を超えるためこのトレードは成立できません。"}
+		return {"ok": false, "message": Loc.t("trade.error.partner_roster_full")}
 	var salary_a_out: int = _salary_total(players, a_ids)
 	var salary_b_out: int = _salary_total(players, b_ids)
 	var team_a: PSTeam = _find_team_by_id(teams, team_a_id)
 	var team_b: PSTeam = _find_team_by_id(teams, team_b_id)
 	if not TeamFinance.trade_payroll_ok(players, team_a, salary_a_out, salary_b_out):
-		return {"ok": false, "message": "自軍の年俸総額が予算を超えるためこのトレードは成立できません。"}
+		return {"ok": false, "message": Loc.t("trade.error.user_over_budget")}
 	if not TeamFinance.trade_payroll_ok(players, team_b, salary_b_out, salary_a_out):
-		return {"ok": false, "message": "相手球団の予算を超えるためこのトレードは成立できません。"}
+		return {"ok": false, "message": Loc.t("trade.error.partner_over_budget")}
 	return {"ok": true}
 
 

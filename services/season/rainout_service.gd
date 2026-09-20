@@ -72,19 +72,19 @@ const WEATHER_NONE: String = "none"
 const WEATHER_NATIONAL: String = "national"
 const WEATHER_REGIONAL: String = "regional"
 
-# 地方の表示名 (気象庁の地方予報区)。`PSTeam.home_region` の id で引き、表に無い id はそのまま出す。
+# 地方の表示名キー (気象庁の地方予報区)。`PSTeam.home_region` の id で引き、表に無い id はそのまま出す。
 const REGION_LABELS: Dictionary = {
-	"hokkaido": "北海道",
-	"tohoku": "東北",
-	"kanto_koshin": "関東甲信",
-	"hokuriku": "北陸",
-	"tokai": "東海",
-	"kinki": "近畿",
-	"chugoku": "中国",
-	"shikoku": "四国",
-	"kyushu_north": "九州北部",
-	"kyushu_south": "九州南部",
-	"okinawa": "沖縄",
+	"hokkaido": "region.hokkaido",
+	"tohoku": "region.tohoku",
+	"kanto_koshin": "region.kanto_koshin",
+	"hokuriku": "region.hokuriku",
+	"tokai": "region.tokai",
+	"kinki": "region.kinki",
+	"chugoku": "region.chugoku",
+	"shikoku": "region.shikoku",
+	"kyushu_north": "region.kyushu_north",
+	"kyushu_south": "region.kyushu_south",
+	"okinawa": "region.okinawa",
 }
 
 # 試合中に打ち切られたときの「成立イニング数」の分布 (2023-2025 の実測 23 件)。
@@ -214,7 +214,7 @@ static func region_of_game(game: Dictionary) -> String:
 
 
 static func region_label(region: String) -> String:
-	return str(REGION_LABELS.get(region, region))
+	return Loc.t(str(REGION_LABELS[region])) if REGION_LABELS.has(region) else region
 
 
 # 予報 1 件。UI はこれだけを見ればよい。

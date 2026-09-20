@@ -131,57 +131,65 @@ static func log_contract_extension(player: PSPlayer, year: int, team_id: int, sa
 
 # 表示用整形。{year, label, detail} を返す。球団名は GameDb から解決する。
 static func describe(entry: Dictionary) -> Dictionary:
-	var year_text: String = "%d年" % int(entry.get("y", 0)) if int(entry.get("y", 0)) > 0 else "-"
+	var year_text: String = Loc.t("common.year_value", {"year": int(entry.get("y", 0))}) if int(entry.get("y", 0)) > 0 else "-"
 	var from_name: String = _team_name(int(entry.get("f", 0)))
 	var to_name: String = _team_name(int(entry.get("o", 0)))
 	var value: int = int(entry.get("v", 0))
+	var move: String = Loc.t("career.detail.move", {"from": from_name, "to": to_name})
 	match str(entry.get("t", "")):
 		TYPE_DRAFT:
-			var dev_suffix: String = " (育成)" if bool(entry.get("d", false)) else ""
-			return {"year": year_text, "label": "ドラフト入団", "detail": "%s %d位%s" % [to_name, value, dev_suffix]}
+			var detail_key: String = "career.detail.draft_development" if bool(entry.get("d", false)) else "career.detail.draft"
+			return {"year": year_text, "label": Loc.t("career.label.draft"), "detail": Loc.t(detail_key, {"team": to_name, "round": value})}
 		TYPE_TRADE:
-			return {"year": year_text, "label": "トレード移籍", "detail": "%s → %s" % [from_name, to_name]}
+			return {"year": year_text, "label": Loc.t("career.label.trade"), "detail": move}
 		TYPE_GENEKI_DRAFT:
-			return {"year": year_text, "label": "現役ドラフト移籍", "detail": "%s → %s" % [from_name, to_name]}
+			return {"year": year_text, "label": Loc.t("career.label.geneki_draft"), "detail": move}
 		TYPE_COMPENSATION:
-			return {"year": year_text, "label": "人的補償移籍", "detail": "%s → %s" % [from_name, to_name]}
+			return {"year": year_text, "label": Loc.t("career.label.compensation"), "detail": move}
 		TYPE_FA_MOVE:
-			return {"year": year_text, "label": "FA移籍", "detail": "%s → %s (%s)" % [from_name, to_name, _money(value)]}
+			return {"year": year_text, "label": Loc.t("career.label.fa_move"), "detail": _with_note(move, _money(value))}
 		TYPE_FA_STAY:
-			return {"year": year_text, "label": "FA残留", "detail": "%s (%s)" % [to_name, _money(value)]}
+			return {"year": year_text, "label": Loc.t("career.label.fa_stay"), "detail": _with_note(to_name, _money(value))}
 		TYPE_RELEASED:
-			return {"year": year_text, "label": "戦力外", "detail": from_name}
+			return {"year": year_text, "label": Loc.t("career.label.released"), "detail": from_name}
 		TYPE_RELEASED_SIGNED:
-			var track: String = "育成契約" if bool(entry.get("d", false)) else "支配下契約"
-			return {"year": year_text, "label": "移籍 (戦力外獲得)", "detail": "%s → %s (%s)" % [from_name, to_name, track]}
+			var track: String = Loc.t("career.track.development") if bool(entry.get("d", false)) else Loc.t("career.track.controlled")
+			return {"year": year_text, "label": Loc.t("career.label.released_signed"), "detail": _with_note(move, track)}
 		TYPE_FOREIGN_JOIN:
-			return {"year": year_text, "label": "入団 (外国人)", "detail": "%s (%s)" % [to_name, _money(value)]}
+			return {"year": year_text, "label": Loc.t("career.label.foreign_join"), "detail": _with_note(to_name, _money(value))}
 		TYPE_FOREIGN_STAY:
-			return {"year": year_text, "label": "外国人残留", "detail": "%s (%s)" % [to_name, _money(value)]}
+			return {"year": year_text, "label": Loc.t("career.label.foreign_stay"), "detail": _with_note(to_name, _money(value))}
 		TYPE_FOREIGN_MOVE:
-			return {"year": year_text, "label": "外国人移籍", "detail": "%s → %s (%s)" % [from_name, to_name, _money(value)]}
+			return {"year": year_text, "label": Loc.t("career.label.foreign_move"), "detail": _with_note(move, _money(value))}
 		TYPE_FOREIGN_DEPART:
-			return {"year": year_text, "label": "退団 (外国人)", "detail": from_name}
+			return {"year": year_text, "label": Loc.t("career.label.foreign_depart"), "detail": from_name}
 		TYPE_DEV_DEMOTE:
-			return {"year": year_text, "label": "育成降格", "detail": to_name}
+			return {"year": year_text, "label": Loc.t("career.label.dev_demote"), "detail": to_name}
 		TYPE_DEV_PROMOTE:
-			return {"year": year_text, "label": "支配下登録", "detail": to_name}
+			return {"year": year_text, "label": Loc.t("career.label.dev_promote"), "detail": to_name}
 		TYPE_RETIRED:
-			return {"year": year_text, "label": "引退", "detail": "%s (%d歳)" % [from_name, value]}
+			return {"year": year_text, "label": Loc.t("career.label.retired"), "detail": _with_note(from_name, Loc.t("common.age_value", {"age": value}))}
 		TYPE_SALARY:
-			return {"year": year_text, "label": "契約更改", "detail": _money(value)}
+			return {"year": year_text, "label": Loc.t("career.label.salary"), "detail": _money(value)}
 		TYPE_INJURY:
-			return {"year": year_text, "label": "長期離脱", "detail": "%s (%d日)" % [str(entry.get("s", "故障")), value]}
+			var injury_name: String = PSInjuryModel.injury_display_name(str(entry.get("s", ""))) if entry.has("s") else Loc.t("career.detail.injury_unknown")
+			return {"year": year_text, "label": Loc.t("career.label.injury"), "detail": _with_note(injury_name, Loc.t("common.days_value", {"days": value}))}
 		TYPE_CONTRACT_EXTENSION:
-			return {"year": year_text, "label": "複数年延長", "detail": "%s %d年 (%s)" % [to_name, int(entry.get("w", 1)), _money(value)]}
+			var extension: String = Loc.t("career.detail.extension", {"team": to_name, "years": int(entry.get("w", 1))})
+			return {"year": year_text, "label": Loc.t("career.label.contract_extension"), "detail": _with_note(extension, _money(value))}
 	return {"year": year_text, "label": str(entry.get("t", "")), "detail": ""}
+
+
+# 「本文 (補足)」の形。括弧の種類と間隔は言語で変わるので文言側に置く。
+static func _with_note(text: String, note: String) -> String:
+	return Loc.t("common.with_note", {"text": text, "note": note})
 
 
 static func _team_name(team_id: int) -> String:
 	if team_id <= 0:
 		return "-"
 	var team: PSTeam = GameDb.get_team(team_id)
-	return team.name if team != null else "球団%d" % team_id
+	return team.name if team != null else Loc.t("team.fallback_name", {"id": team_id})
 
 
 static func _money(man_value: int) -> String:
@@ -190,5 +198,5 @@ static func _money(man_value: int) -> String:
 	var oku: int = int(float(man_value) / 10000.0)
 	var man: int = man_value - oku * 10000
 	if oku > 0:
-		return "%d億%d万円" % [oku, man] if man > 0 else "%d億円" % oku
-	return "%d万円" % man
+		return Loc.t("money.oku_man", {"oku": oku, "man": man}) if man > 0 else Loc.t("money.oku", {"oku": oku})
+	return Loc.t("money.man", {"man": man})

@@ -112,7 +112,7 @@ var _share_locked: Dictionary = {}        # pos(2-9) -> bool
 var _platoon_ids: Dictionary = {}         # pos(2-9) -> player_id
 var _team_scheduled_games: int = 0        # 先発試合数の表示に使うシーズン試合数
 var _rotation_pitcher_id: int = 0
-var _rotation_pitcher_name: String = "(未定)"
+var _rotation_pitcher_name: String = Loc.t("postseason.undecided")
 var _status_text: String = ""
 var _status_is_error: bool = false
 var _field_centers: Dictionary = {}
@@ -517,10 +517,10 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("チームが選択されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("sim.error.no_team"), Vector2(770, 496), 20, MUTED)
 		return
 
-	_draw_shell("打順・守備位置", team, season)
+	_draw_shell(Loc.t("screen.lineup_editor"), team, season)
 	_draw_roster_table()
 	_draw_order_panel()
 	_draw_field_panel()
@@ -531,28 +531,28 @@ func _draw() -> void:
 # --- 一軍登録野手 ---
 
 func _draw_roster_table() -> void:
-	_panel(TABLE_PANEL, "一軍登録野手")
-	_text("下の打順・守備位置へドラッグ", Vector2(TABLE_PANEL.position.x + 196, TABLE_PANEL.position.y + 32), 12, FAINT)
+	_panel(TABLE_PANEL, Loc.t("lineup.roster_panel"))
+	_text(Loc.t("lineup.roster_hint"), Vector2(TABLE_PANEL.position.x + 196, TABLE_PANEL.position.y + 32), 12, FAINT)
 
 	var hy: float = TABLE_PANEL.position.y + 60
-	_text("守備", Vector2(C_BADGE_X, hy), 11, FAINT)
-	_text("選手", Vector2(C_JERSEY_X, hy), 11, FAINT)
-	_text_right("年齢", C_AGE_R, hy, 11, FAINT)
-	_text("疲労", Vector2(C_FAT_DOT_X, hy), 11, FAINT)
-	_text_right("評価", C_EVAL_R, hy, 11, FAINT)
+	_text(Loc.t("rating.defense"), Vector2(C_BADGE_X, hy), 11, FAINT)
+	_text(Loc.t("col.player"), Vector2(C_JERSEY_X, hy), 11, FAINT)
+	_text_right(Loc.t("col.age"), C_AGE_R, hy, 11, FAINT)
+	_text(Loc.t("col.fatigue"), Vector2(C_FAT_DOT_X, hy), 11, FAINT)
+	_text_right(Loc.t("col.evaluation"), C_EVAL_R, hy, 11, FAINT)
 	_text_right("WAR", C_WAR_R, hy, 11, FAINT)
-	_text_right("巧打", C_MEET_R, hy, 11, FAINT)
-	_text_right("長打", C_POW_R, hy, 11, FAINT)
-	_text_right("走力", C_SPD_R, hy, 11, FAINT)
-	_text_right("守備", C_DEF_R, hy, 11, FAINT)
-	_text_right("肩力", C_ARM_R, hy, 11, FAINT)
-	_text_right("選球", C_EYE_R, hy, 11, FAINT)
-	_text_right("試合", C_G_R, hy, 11, FAINT)
-	_text_right("打率", C_AVG_R, hy, 11, FAINT)
-	_text_right("本", C_HR_R, hy, 11, FAINT)
-	_text_right("打点", C_RBI_R, hy, 11, FAINT)
-	_text_right("盗塁", C_SB_R, hy, 11, FAINT)
-	_text_right("出塁率", C_OBP_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.contact"), C_MEET_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.power"), C_POW_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.speed"), C_SPD_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.defense"), C_DEF_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.arm"), C_ARM_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.discipline"), C_EYE_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.games"), C_G_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.avg"), C_AVG_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.hr"), C_HR_R, hy, 11, FAINT)
+	_text_right(Loc.t("stat.rbi"), C_RBI_R, hy, 11, FAINT)
+	_text_right(Loc.t("stat.stolen_bases"), C_SB_R, hy, 11, FAINT)
+	_text_right(Loc.t("stat.obp"), C_OBP_R, hy, 11, FAINT)
 	_text_right("OPS", C_OPS_R, hy, 11, FAINT)
 	_text_right("wOBA", C_WOBA_R, hy, 11, FAINT)
 	_text_right("wRC+", C_WRC_R, hy, 11, FAINT)
@@ -583,7 +583,7 @@ func _draw_roster_table() -> void:
 		shown += 1
 
 	if _fielders.is_empty():
-		_text("一軍に登録された野手がいません", Vector2(C_BADGE_X, y + 6), 13, MUTED)
+		_text(Loc.t("lineup.no_active_fielders"), Vector2(C_BADGE_X, y + 6), 13, MUTED)
 	elif shown > 0:
 		# 能力ブロック(巧打..選球)と成績ブロック(試合..OAA)の境界を縦ヘアラインで区切る。
 		var rows_bottom: float = y - 18.0
@@ -635,17 +635,17 @@ func _draw_rating(value: int, right_x: float, y: float) -> void:
 # --- スタメン / 打順 ---
 
 func _draw_order_panel() -> void:
-	_panel(ORDER_PANEL, "スタメン / 打順")
-	_text("ドラッグ&ドロップで打順を変更できます", Vector2(ORDER_PANEL.position.x + 158, ORDER_PANEL.position.y + 32), 12, FAINT)
+	_panel(ORDER_PANEL, Loc.t("lineup.order_panel"))
+	_text(Loc.t("lineup.order_hint"), Vector2(ORDER_PANEL.position.x + 158, ORDER_PANEL.position.y + 32), 12, FAINT)
 
 	var hy: float = ORDER_PANEL.position.y + 82
-	_text("打順", Vector2(O_NUM_CX - 16, hy), 11, FAINT)
-	_text("守備", Vector2(O_BADGE_X, hy), 11, FAINT)
-	_text("選手", Vector2(O_NAME_X, hy), 11, FAINT)
-	_text("打", Vector2(O_BATS_CX - 8, hy), 11, FAINT)
+	_text(Loc.t("lineup.col.order"), Vector2(O_NUM_CX - 16, hy), 11, FAINT)
+	_text(Loc.t("rating.defense"), Vector2(O_BADGE_X, hy), 11, FAINT)
+	_text(Loc.t("col.player"), Vector2(O_NAME_X, hy), 11, FAINT)
+	_text(Loc.t("lineup.col.bats"), Vector2(O_BATS_CX - 8, hy), 11, FAINT)
 	_text_right("AVG", O_AVG_R, hy, 11, FAINT)
 	_text_right("HR", O_HR_R, hy, 11, FAINT)
-	_text_right("打点", O_RBI_R, hy, 11, FAINT)
+	_text_right(Loc.t("stat.rbi"), O_RBI_R, hy, 11, FAINT)
 	_text_right("OPS", O_OPS_R, hy, 11, FAINT)
 	_line(Vector2(O_NUM_CX - 16, ORDER_PANEL.position.y + 90), Vector2(ORDER_PANEL.end.x - 16, ORDER_PANEL.position.y + 90), BORDER, 1.5)
 
@@ -654,15 +654,15 @@ func _draw_order_panel() -> void:
 		Vector2(O_NUM_CX - 16, ORDER_MODE_ROW_Y - 16), Vector2(ORDER_PANEL.end.x - 16, ORDER_MODE_ROW_Y - 16),
 		HAIRLINE, 1.0
 	)
-	_text("編集中の打順", Vector2(ORDER_PANEL.position.x + 18, ORDER_MODE_ROW_Y + 20), 12, MUTED)
+	_text(Loc.t("lineup.editing_order"), Vector2(ORDER_PANEL.position.x + 18, ORDER_MODE_ROW_Y + 20), 12, MUTED)
 	# DH 切替は両リーグ混在時のみ意味がある。出ないときは現在の状態だけ静的に見せる。
 	if not (_dh_available and _non_dh_available):
 		_text(
-			"DH: %s" % ("使用" if _dh_enabled else "なし"),
+			_dh_status_text(),
 			Vector2(ORDER_PANEL.position.x + 118, ORDER_MODE_ROW_Y + 20), 12, FAINT
 		)
 	if not _hand_mode.is_empty() and not _has_saved_hand_lineup():
-		var warning: String = "未保存 (このままだと対右の打順が使われます)"
+		var warning: String = Loc.t("lineup.vs_left_unsaved")
 		_text(
 			warning, Vector2(ORDER_PANEL.end.x - 18 - _measure(warning, 11), ORDER_MODE_ROW_Y + 20),
 			11, AMBER
@@ -690,17 +690,17 @@ func _draw_order_row(i: int, baseline: float) -> void:
 	var pos: int = int(slot["pos"])
 	if _is_fixed_pitcher(i):
 		_pos_badge(Rect2(O_BADGE_X, baseline - 16, 38, 21), 1)
-		_text("%s (ローテ)" % _rotation_pitcher_name, Vector2(O_NAME_X, baseline), 14, MUTED, O_BATS_CX - 60 - O_NAME_X)
+		_text(Loc.t("lineup.rotation_pitcher", {"name": _rotation_pitcher_name}), Vector2(O_NAME_X, baseline), 14, MUTED, O_BATS_CX - 60 - O_NAME_X)
 		return
 	if pos > 0:
 		_pos_badge(Rect2(O_BADGE_X, baseline - 16, 38, 21), pos)
 	var pid: int = int(slot["pid"])
 	if pid <= 0:
-		_text("(未設定)", Vector2(O_NAME_X, baseline), 14, FAINT, O_BATS_CX - 60 - O_NAME_X)
+		_text(Loc.t("lineup.unset_paren"), Vector2(O_NAME_X, baseline), 14, FAINT, O_BATS_CX - 60 - O_NAME_X)
 		return
 	var record: PSPlayerSeasonRecord = _record_by_id(pid)
 	if record == null:
-		_text("(未設定)", Vector2(O_NAME_X, baseline), 14, FAINT)
+		_text(Loc.t("lineup.unset_paren"), Vector2(O_NAME_X, baseline), 14, FAINT)
 		return
 	var bs: PSBatterStats = record.batter_stats
 	_text(record.name, Vector2(O_NAME_X, baseline), 14, TEXT, O_BATS_CX - 60 - O_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
@@ -715,8 +715,8 @@ func _draw_order_row(i: int, baseline: float) -> void:
 
 # 左に守備図、右に出場配分リスト。1つのパネルを縦のヘアラインで区切る。
 func _draw_field_panel() -> void:
-	_panel(FIELD_PANEL, "守備位置設定")
-	_text("一軍登録野手から各枠へドラッグ", Vector2(FIELD_PANEL.position.x + 168, FIELD_PANEL.position.y + 32), 12, FAINT)
+	_panel(FIELD_PANEL, Loc.t("lineup.field_panel"))
+	_text(Loc.t("lineup.field_hint"), Vector2(FIELD_PANEL.position.x + 168, FIELD_PANEL.position.y + 32), 12, FAINT)
 	_line(Vector2(1486, FIELD_PANEL.position.y + 56), Vector2(1486, FIELD_PANEL.end.y - 20), HAIRLINE, 1.0)
 
 	_draw_field_backdrop()
@@ -769,7 +769,7 @@ func _draw_field_card(center: Vector2, pos: int, draggable: bool) -> void:
 			var record: PSPlayerSeasonRecord = _record_by_id(pid)
 			_text(record.name if record != null else "?", Vector2(name_x, baseline), 12, TEXT, name_w)
 		else:
-			_text("未設定", Vector2(name_x, baseline), 12, FAINT, name_w)
+			_text(Loc.t("lineup.unset"), Vector2(name_x, baseline), 12, FAINT, name_w)
 	_field_hits.append({"rect": rect, "pos": pos, "draggable": draggable})
 
 
@@ -784,9 +784,9 @@ func _draw_share_list() -> void:
 	_share_value_hits = []
 	_auto_chip_hits = []
 
-	_text("出場配分", Vector2(SHARE_LIST_LEFT, SHARE_LIST_TOP - 26.0), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("lineup.share_title"), Vector2(SHARE_LIST_LEFT, SHARE_LIST_TOP - 26.0), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text(
-		"スライダーか%%をクリックで数値入力 (0=自動) ・ 全%d試合" % _team_scheduled_games,
+		Loc.t("lineup.share_hint", {"games": _team_scheduled_games}),
 		Vector2(SHARE_LIST_LEFT + 62.0, SHARE_LIST_TOP - 22.0), 11, FAINT
 	)
 
@@ -819,7 +819,7 @@ func _draw_share_row(index: int, pos: int) -> void:
 	)
 	var starter: PSPlayerSeasonRecord = _record_by_id(_player_at_position(pos))
 	_text(
-		starter.name if starter != null else "未設定",
+		starter.name if starter != null else Loc.t("lineup.unset"),
 		Vector2(starter_rect.position.x + 7.0, starter_rect.position.y + 15.0), 14,
 		TEXT if starter != null else FAINT, starter_rect.size.x - 12.0
 	)
@@ -833,14 +833,14 @@ func _draw_share_row(index: int, pos: int) -> void:
 	)
 	if _share_edit_pos != pos:
 		_text(
-			"自動" if share <= 0.0 else "%d%%" % int(round(share * 100.0)),
+			Loc.t("lineup.auto") if share <= 0.0 else "%d%%" % int(round(share * 100.0)),
 			Vector2(value_rect.position.x, value_rect.position.y + 15.0), 15,
 			TEXT if locked else FAINT, value_rect.size.x, HORIZONTAL_ALIGNMENT_RIGHT
 		)
 	_share_value_hits.append({"rect": value_rect, "pos": pos})
 
 	var auto_rect: Rect2 = Rect2(SHARE_LIST_RIGHT - SHARE_AUTO_CHIP_W, top + 2.0, SHARE_AUTO_CHIP_W, 18.0)
-	_chip(auto_rect, "自動", MUTED if locked else BLUE, not locked)
+	_chip(auto_rect, Loc.t("lineup.auto"), MUTED if locked else BLUE, not locked)
 	_auto_chip_hits.append({"rect": auto_rect, "pos": pos})
 
 	# --- 下段 ---
@@ -848,8 +848,8 @@ func _draw_share_row(index: int, pos: int) -> void:
 		# DH は「専任を指定する」か「守備を外れた選手から自動」かの 2 モード。
 		# 指定モード (locked) の残りシェアも自動選出で埋まる。
 		_text(
-			("残り%d%%と休養日は守備を外れた選手から選ばれます" % int(round((1.0 - share) * 100.0)))
-			if locked else "その日守備を外れた選手のうち打撃最良が入ります",
+			Loc.t("lineup.dh_locked_note", {"pct": int(round((1.0 - share) * 100.0))})
+			if locked else Loc.t("lineup.dh_auto_note"),
 			Vector2(starter_rect.position.x + 2.0, top + 34.0), 11, FAINT,
 			SHARE_LIST_RIGHT - starter_rect.position.x
 		)
@@ -867,7 +867,7 @@ func _draw_share_row(index: int, pos: int) -> void:
 			_round(cell_rect, PANEL_3, Color.TRANSPARENT, 4, 0)
 			_share_cell_text(
 				cell_rect, record.name if record != null else "?", TEXT,
-				_platoon_share_label(pos) if r == 0 else "補", MUTED if r == 0 else FAINT
+				_platoon_share_label(pos) if r == 0 else Loc.t("lineup.backup_short"), MUTED if r == 0 else FAINT
 			)
 			_bench_chip_hits.append({"rect": cell_rect, "pos": pos, "pid": int(list[r])})
 			continue
@@ -885,7 +885,7 @@ func _draw_share_row(index: int, pos: int) -> void:
 		if platoon != null:
 			_share_cell_text(cell_rect, platoon.name, MUTED, _platoon_share_label(pos), FAINT)
 		elif r == list.size():
-			_text("控え%d" % (r + 1), Vector2(cell_rect.position.x + 5.0, cell_rect.position.y + 13.0), 11, FAINT)
+			_text(Loc.t("lineup.bench_n", {"n": r + 1}), Vector2(cell_rect.position.x + 5.0, cell_rect.position.y + 13.0), 11, FAINT)
 	_bench_cell_hits.append({
 		"rect": Rect2(starter_rect.position.x, top + 22.0, SHARE_LIST_RIGHT - starter_rect.position.x, 17.0),
 		"pos": pos,
@@ -930,29 +930,34 @@ func _share_cell_text(
 func _draw_status_bar() -> void:
 	var y: float = 1072.0
 	var x: float = TABLE_PANEL.position.x
-	x = _status_item(x, y, "打順", _order_ok())
-	x = _status_item(x, y, "守備位置", _defense_ok())
-	x = _status_item(x, y, "控え配置", true)
+	x = _status_item(x, y, Loc.t("lineup.col.order"), _order_ok())
+	x = _status_item(x, y, Loc.t("lineup.status.positions"), _defense_ok())
+	x = _status_item(x, y, Loc.t("lineup.status.bench"), true)
 	# 出場配分の結果を数で見せる。実 NPB は 1 球団あたり 4-5 人 ([[project_qualified_batter_count]])。
-	var projected: String = "規定到達見込み: %d人" % _projected_qualified_count()
+	var projected: String = Loc.t("lineup.status.projected_qualified", {"n": _projected_qualified_count()})
 	_dot(Vector2(x + 6, y - 4), 5, BLUE)
 	_text(projected, Vector2(x + 18, y), 13, MUTED)
 	x += 18 + _measure(projected, 13) + 26
 	var unset: int = _unset_count()
 	if unset > 0:
+		var unset_text: String = Loc.t("lineup.status.unset_slots", {"n": unset})
 		_dot(Vector2(x + 6, y - 4), 5, AMBER)
-		_text("未設定: %d枠" % unset, Vector2(x + 18, y), 13, AMBER)
-		x += 18 + _measure("未設定: %d枠" % unset, 13) + 26
+		_text(unset_text, Vector2(x + 18, y), 13, AMBER)
+		x += 18 + _measure(unset_text, 13) + 26
 	_dot(Vector2(x + 6, y - 4), 5, BLUE)
-	_text("DH: %s" % ("使用" if _dh_enabled else "なし"), Vector2(x + 18, y), 13, MUTED)
+	_text(_dh_status_text(), Vector2(x + 18, y), 13, MUTED)
 
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(FIELD_PANEL.end.x - _measure(_status_text, 13) - 4, y), 13, RED if _status_is_error else MUTED)
 
 
+func _dh_status_text() -> String:
+	return Loc.t("lineup.dh_status", {"state": Loc.t("lineup.dh_used") if _dh_enabled else Loc.t("common.none")})
+
+
 func _status_item(x: float, y: float, label: String, ok: bool) -> float:
 	_dot(Vector2(x + 6, y - 4), 5, GREEN if ok else RED)
-	var text: String = "%s: %s" % [label, "OK" if ok else "要確認"]
+	var text: String = Loc.t("lineup.status.item", {"label": label, "state": "OK" if ok else Loc.t("lineup.status.needs_check")})
 	_text(text, Vector2(x + 18, y), 13, TEXT if ok else RED)
 	return x + 18 + _measure(text, 13) + 26
 
@@ -992,22 +997,22 @@ func _is_bench_target(pos: int) -> bool:
 func _build_chrome_buttons() -> void:
 	_clear_buttons()
 	_build_nav_buttons()
-	_add_button("auto", "自動編成", Rect2(1486, 22, 132, 42), _on_auto_pressed, "action")
-	_add_button("reset", "リセット", Rect2(1628, 22, 112, 42), _load_initial_state, "action")
-	_add_button("save", "保存", Rect2(1750, 22, 132, 42), _on_save_pressed, "primary")
+	_add_button("auto", Loc.t("common.auto_arrange"), Rect2(1486, 22, 132, 42), _on_auto_pressed, "action")
+	_add_button("reset", Loc.t("common.reset"), Rect2(1628, 22, 112, 42), _load_initial_state, "action")
+	_add_button("save", Loc.t("common.save"), Rect2(1750, 22, 132, 42), _on_save_pressed, "primary")
 	# 打順パネル下部: 編集中の打順の切替。DH 有無は両リーグ混在時のみ意味がある。
 	var mode_x: float = ORDER_PANEL.position.x + 118.0
 	if not (_dh_available and _non_dh_available):
 		mode_x += 74.0  # 静的な「DH: 使用」表示のぶん
 	if _dh_available and _non_dh_available:
-		_add_button("mode_non_dh", "非DH", Rect2(mode_x, ORDER_MODE_ROW_Y, 76, 30),
+		_add_button("mode_non_dh", Loc.t("lineup.mode_non_dh"), Rect2(mode_x, ORDER_MODE_ROW_Y, 76, 30),
 			func() -> void: _on_mode_pressed(false), "chip_active" if not _dh_enabled else "chip")
 		_add_button("mode_dh", "DH", Rect2(mode_x + 82.0, ORDER_MODE_ROW_Y, 64, 30),
 			func() -> void: _on_mode_pressed(true), "chip_active" if _dh_enabled else "chip")
 		mode_x += 170.0
-	_add_button("hand_r", "対右投手", Rect2(mode_x, ORDER_MODE_ROW_Y, 106, 30),
+	_add_button("hand_r", Loc.t("lineup.vs_right"), Rect2(mode_x, ORDER_MODE_ROW_Y, 106, 30),
 		func() -> void: _on_hand_pressed(""), "chip_active" if _hand_mode.is_empty() else "chip")
-	_add_button("hand_l", "対左投手", Rect2(mode_x + 112.0, ORDER_MODE_ROW_Y, 106, 30),
+	_add_button("hand_l", Loc.t("lineup.vs_left"), Rect2(mode_x + 112.0, ORDER_MODE_ROW_Y, 106, 30),
 		func() -> void: _on_hand_pressed("L"), "chip_active" if _hand_mode == "L" else "chip")
 
 
@@ -1044,12 +1049,12 @@ func _load_initial_state() -> void:
 	var season: PSSeason = AppState.current_season
 	_team_id = AppState.selected_team_id
 	if season == null or _team_id <= 0:
-		_set_status("チームが選択されていません", true)
+		_set_status(Loc.t("sim.error.no_team"), true)
 		queue_redraw()
 		return
 	var team: PSTeam = GameDb.get_team(_team_id)
 	if team == null:
-		_set_status("チーム情報が取得できません", true)
+		_set_status(Loc.t("error.team_not_found"), true)
 		queue_redraw()
 		return
 
@@ -1093,10 +1098,10 @@ func _load_fielders(season: PSSeason) -> void:
 	if bool(preview.get("ok", false)):
 		_rotation_pitcher_id = int(preview.get("pitcher_id", 0))
 		var pitcher: PSPlayerSeasonRecord = _record_by_id_in(RecordStore.get_team_player_records(_team_id, season.year, season.season_number), _rotation_pitcher_id)
-		_rotation_pitcher_name = pitcher.name if pitcher != null else "(未定)"
+		_rotation_pitcher_name = pitcher.name if pitcher != null else Loc.t("postseason.undecided")
 	else:
 		_rotation_pitcher_id = 0
-		_rotation_pitcher_name = "(未定)"
+		_rotation_pitcher_name = Loc.t("postseason.undecided")
 
 
 func _load_backups(season: PSSeason) -> void:
@@ -1147,12 +1152,12 @@ func _load_lineup_for_mode() -> void:
 		var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, _dh_enabled, _hand_mode)
 		if bool(preview.get("ok", false)):
 			_apply_lineup(preview)
-			_set_status("保存された打順がありません。自動編成を表示しています。", false)
+			_set_status(Loc.t("lineup.status.no_saved"), false)
 		else:
-			_set_status("自動編成に失敗しました: %s" % str(preview.get("message", "")), true)
+			_set_status(Loc.t("common.auto_arrange_failed", {"reason": str(preview.get("message", ""))}), true)
 	else:
 		_apply_lineup(lineup)
-		_set_status("保存された打順を表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(lineup.get("updated_at_day", 0))), false)
+		_set_status(Loc.t("lineup.status.showing_saved", {"day": SeasonCalendar.day_status_label(season, int(lineup.get("updated_at_day", 0)))}), false)
 	# 控え野手全員がどこかのポジションに所属するよう、保存済みに無い控えを補完する。
 	_assign_all_reserves(false)
 	_refresh_status()
@@ -1191,12 +1196,12 @@ func _on_auto_pressed() -> void:
 		return
 	var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, _dh_enabled, _hand_mode)
 	if not bool(preview.get("ok", false)):
-		_set_status("自動編成に失敗しました: %s" % str(preview.get("message", "")), true)
+		_set_status(Loc.t("common.auto_arrange_failed", {"reason": str(preview.get("message", ""))}), true)
 		queue_redraw()
 		return
 	_apply_lineup(preview)
 	_assign_all_reserves(true)
-	_set_status("自動編成を表示中 (未保存)", false)
+	_set_status(Loc.t("common.auto_arrange_unsaved"), false)
 	_refresh_status()
 	queue_redraw()
 
@@ -1265,12 +1270,12 @@ func _apt_positions_sorted(record: PSPlayerSeasonRecord) -> Array:
 func _on_save_pressed() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null or _team_id <= 0:
-		_set_status("シーズン未開始のため保存できません", true)
+		_set_status(Loc.t("common.cannot_save_before_season"), true)
 		queue_redraw()
 		return
 	var errors: Array = _validate()
 	if not errors.is_empty():
-		_set_status("保存失敗: %s" % " / ".join(errors), true)
+		_set_status(Loc.t("lineup.status.save_failed", {"errors": " / ".join(PackedStringArray(errors))}), true)
 		queue_redraw()
 		return
 
@@ -1312,7 +1317,7 @@ func _on_save_pressed() -> void:
 	if team != null and team.auto_lineup:
 		team.auto_lineup = false
 	SaveService.save_state(AppState)
-	_set_status("保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
+	_set_status(Loc.t("common.saved_at", {"day": SeasonCalendar.day_status_label(season, season.current_day)}), false)
 	queue_redraw()
 
 
@@ -1334,17 +1339,17 @@ func _validate() -> Array:
 			dh_count += 1
 		if pos >= 2 and pos <= 9:
 			if positions_seen.has(pos):
-				errors.append("%sが重複" % _short_pos(pos))
+				errors.append(Loc.t("lineup.error.duplicate_position", {"pos": _short_pos(pos)}))
 			positions_seen[pos] = true
 		if pid > 0:
 			if players_seen.has(pid):
-				errors.append("%sが重複起用" % _player_name(pid))
+				errors.append(Loc.t("lineup.error.duplicate_player", {"player": _player_name(pid)}))
 			players_seen[pid] = true
 	for pos_value in DEF_POSITIONS:
 		if not positions_seen.has(int(pos_value)):
-			errors.append("%s未設定" % _short_pos(int(pos_value)))
+			errors.append(Loc.t("lineup.error.position_unset", {"pos": _short_pos(int(pos_value))}))
 	if _dh_enabled and dh_count != 1:
-		errors.append("DH枠が%d個" % dh_count)
+		errors.append(Loc.t("lineup.error.dh_count", {"n": dh_count}))
 	return errors
 
 
@@ -1495,9 +1500,9 @@ func _oaa_color(ad: PSAdvancedStats) -> Color:
 
 func _bats(record: PSPlayerSeasonRecord) -> String:
 	match record.batting_side:
-		"L": return "左"
-		"S": return "両"
-		_: return "右"
+		"L": return Loc.t("hand.left")
+		"S": return Loc.t("hand.switch")
+		_: return Loc.t("hand.right")
 
 
 # 定位置選手が実際に取る出場シェア。指定済みならその値、未指定なら AI の実効配分。
@@ -1519,7 +1524,7 @@ func _platoon_share_label(pos: int) -> String:
 	if share <= 0.0:
 		return ""
 	if share >= 1.0:
-		return "補"
+		return Loc.t("lineup.backup_short")
 	return "%d%%" % int(round((1.0 - share) * 100.0))
 
 
@@ -1540,18 +1545,7 @@ func _projected_qualified_count() -> int:
 
 
 func _short_pos(pos: int) -> String:
-	match pos:
-		1: return "投"
-		2: return "捕"
-		3: return "一"
-		4: return "二"
-		5: return "三"
-		6: return "遊"
-		7: return "左"
-		8: return "中"
-		9: return "右"
-		10: return "DH"
-		_: return "?"
+	return PSPlayer.position_short_name(pos)
 
 
 # 守備位置の色は共有基底 dashboard_screen._pos_color を使う (全画面共通)。

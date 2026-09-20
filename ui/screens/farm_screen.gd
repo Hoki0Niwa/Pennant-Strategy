@@ -16,30 +16,26 @@ extends "res://ui/components/dashboard_screen.gd"
 
 const VIEW_STANDINGS: String = "standings"
 const VIEW_STATS: String = "stats"
+# label は表示名のキー (Loc)。
 const VIEWS: Array = [
-	{"id": VIEW_STANDINGS, "label": "順位"},
-	{"id": VIEW_STATS, "label": "成績"},
+	{"id": VIEW_STANDINGS, "label": "farm.view.standings"},
+	{"id": VIEW_STATS, "label": "farm.view.stats"},
 ]
-
-const POS_SHORT: Dictionary = {
-	1: "投", 2: "捕", 3: "一", 4: "二", 5: "三",
-	6: "遊", 7: "左", 8: "中", 9: "右", 10: "DH",
-}
 
 # 絞り込みチップ。mode で投手/野手の列セットが決まる (ability_stats と同じ構成)。
 const FILTERS: Array = [
-	{"id": "p_all", "label": "投手", "mode": "pitcher"},
-	{"id": "p_sp", "label": "先発", "mode": "pitcher"},
-	{"id": "p_rp", "label": "中継", "mode": "pitcher"},
-	{"id": "b_all", "label": "野手", "mode": "batter"},
-	{"id": "b_2", "label": "捕", "mode": "batter", "pos": 2},
-	{"id": "b_3", "label": "一", "mode": "batter", "pos": 3},
-	{"id": "b_4", "label": "二", "mode": "batter", "pos": 4},
-	{"id": "b_5", "label": "三", "mode": "batter", "pos": 5},
-	{"id": "b_6", "label": "遊", "mode": "batter", "pos": 6},
-	{"id": "b_7", "label": "左", "mode": "batter", "pos": 7},
-	{"id": "b_8", "label": "中", "mode": "batter", "pos": 8},
-	{"id": "b_9", "label": "右", "mode": "batter", "pos": 9},
+	{"id": "p_all", "label": "common.pitcher", "mode": "pitcher"},
+	{"id": "p_sp", "label": "role.starter", "mode": "pitcher"},
+	{"id": "p_rp", "label": "role.middle_short", "mode": "pitcher"},
+	{"id": "b_all", "label": "common.fielder", "mode": "batter"},
+	{"id": "b_2", "label": "position_short.catcher", "mode": "batter", "pos": 2},
+	{"id": "b_3", "label": "position_short.first_base", "mode": "batter", "pos": 3},
+	{"id": "b_4", "label": "position_short.second_base", "mode": "batter", "pos": 4},
+	{"id": "b_5", "label": "position_short.third_base", "mode": "batter", "pos": 5},
+	{"id": "b_6", "label": "position_short.shortstop", "mode": "batter", "pos": 6},
+	{"id": "b_7", "label": "position_short.left_field", "mode": "batter", "pos": 7},
+	{"id": "b_8", "label": "position_short.center_field", "mode": "batter", "pos": 8},
+	{"id": "b_9", "label": "position_short.right_field", "mode": "batter", "pos": 9},
 ]
 
 const ALL_TEAMS_ID: int = -1               # 内部: 全球団 (記録収集で全チームを走査)
@@ -112,13 +108,13 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 		return
 
 	var your_team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	if your_team == null and not GameDb.teams.is_empty():
 		your_team = GameDb.teams[0] as PSTeam
-	_draw_shell("ファーム情報", your_team, season)
+	_draw_shell(Loc.t("screen.farm"), your_team, season)
 
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(INNER_L, INFO_Y), 13, MUTED)
@@ -136,11 +132,11 @@ func _draw_standings_view() -> void:
 		var rows: Array = _rows_by_district.get(district, []) as Array
 		_draw_data_table(DISTRICT_RECTS[i] as Rect2, _district_columns(), rows, {
 			"title": PSFarmLeague.district_label(district),
-			"right_label": ("%d球団 ・ 勝率順" % rows.size()) if not rows.is_empty() else "",
-			"empty_text": "二軍の順位はまだ記録されていません",
+			"right_label": Loc.t("farm.district_right_label", {"n": rows.size()}) if not rows.is_empty() else "",
+			"empty_text": Loc.t("farm.no_standings"),
 		})
 	if _summary_cells.is_empty():
-		_panel(SUMMARY_RECT, "ファーム全体")
+		_panel(SUMMARY_RECT, Loc.t("farm.league_summary"))
 	else:
 		_stat_strip(SUMMARY_RECT, _summary_cells)
 
@@ -152,22 +148,22 @@ func _draw_stats_view() -> void:
 	for col_value in columns:
 		var col: Dictionary = (col_value as Dictionary).duplicate()
 		if str(col.get("key", "")) == _sort_key:
-			col["title"] = str(col.get("title", "")) + (" ▲" if _sort_asc else " ▼")
+			col["title"] = Loc.t(str(col.get("title", ""))) + (" ▲" if _sort_asc else " ▼")
 		draw_cols.append(col)
 
 	var opts: Dictionary = {
-		"title": "二軍成績", "header_top": 72.0, "inner_pad": 14.0, "header_size": 12, "cell_size": 13,
+		"title": Loc.t("farm.stats_title"), "header_top": 72.0, "inner_pad": 14.0, "header_size": 12, "cell_size": 13,
 		"row_h": 30.0, "alt_rows": true,
-		"empty_text": "該当する選手がいません",
+		"empty_text": Loc.t("common.no_matching_players"),
 		"scroll_key": "main", "scroll": _scroll, "scroll_zones": _scroll_zones,
 		"sel_kind": "player", "hits": _row_hits,
 	}
 	_draw_data_table(TABLE_RECT, draw_cols, _rows, opts)
 	_build_table_header_hits(_header_hits, TABLE_RECT, draw_cols, opts)
 
-	_text("選手名を右クリックで選手詳細へ",
+	_text(Loc.t("common.right_click_player_hint"),
 		Vector2(TABLE_RECT.position.x + 160.0, TABLE_RECT.position.y + 34.0), 11, FAINT, 420.0)
-	_text_right("全%d人" % _rows.size(), TABLE_RECT.end.x - 18.0, TABLE_RECT.position.y + 34.0, 12, MUTED, 200.0)
+	_text_right(Loc.t("common.total_players", {"n": _rows.size()}), TABLE_RECT.end.x - 18.0, TABLE_RECT.position.y + 34.0, 12, MUTED, 200.0)
 
 
 # --- サブヘッダ (成績ビューの絞り込み + 球団プルダウン) ---
@@ -178,7 +174,7 @@ func _draw_stats_subheader() -> void:
 
 	# 球団プルダウン (右寄せ)。透明 nav ボタンがこの領域でクリックを拾う。
 	var dx: float = 1648.0
-	_text("表示", Vector2(dx, CHIP_Y + 6.0), 11, FAINT)
+	_text(Loc.t("common.view_label"), Vector2(dx, CHIP_Y + 6.0), 11, FAINT)
 	var nx: float = dx + 34.0
 	if _view_team_id != ALL_TEAMS_ID:
 		# 専用球団は GameDb.teams に居ないので get_any_team で引く。
@@ -186,7 +182,7 @@ func _draw_stats_subheader() -> void:
 		if team != null:
 			_team_badge(Rect2(dx + 34.0, CHIP_Y + 1.0, 26, 26), team)
 			nx = dx + 70.0
-	var view_name: String = "全球団" if _view_team_id == ALL_TEAMS_ID else _team_name(_view_team_id)
+	var view_name: String = Loc.t("common.all_teams") if _view_team_id == ALL_TEAMS_ID else _team_name(_view_team_id)
 	_text(view_name, Vector2(nx, CHIP_Y + 22.0), 17, TEXT)
 	_text("▼", Vector2(nx + _measure(view_name, 17) + 8.0, CHIP_Y + 19.0), 12, MUTED)
 
@@ -200,20 +196,20 @@ func _team_hotspot_rect() -> Rect2:
 # 地区順位表。**「差」「残」は置かない** — 地区で試合数が揃わずゲーム差が意味を持たないため。
 func _district_columns() -> Array:
 	return [
-		{"title": "順",   "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
-		{"title": "球団", "key": "team", "w": 300, "align": "l", "fmt": "team", "strong": true},
-		{"title": "試合", "key": "g",    "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "勝",   "key": "w",    "w": 50,  "align": "r", "fmt": "int"},
-		{"title": "敗",   "key": "l",    "w": 50,  "align": "r", "fmt": "int"},
-		{"title": "分",   "key": "d",    "w": 46,  "align": "r", "fmt": "int"},
-		{"title": "勝率", "key": "pct",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
-		{"title": "得",   "key": "rs",   "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "失",   "key": "ra",   "w": 56,  "align": "r", "fmt": "int"},
-		{"title": "得失", "key": "diff", "w": 64,  "align": "r", "fmt": "diff"},
-		{"title": "打率", "key": "avg",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
-		{"title": "本",   "key": "hr",   "w": 48,  "align": "r", "fmt": "int"},
-		{"title": "盗",   "key": "sb",   "w": 48,  "align": "r", "fmt": "int"},
-		{"title": "防",   "key": "era",  "w": 64,  "align": "r", "fmt": "float2", "sep_before": true},
+		{"title": "col.rank",         "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
+		{"title": "col.team",         "key": "team", "w": 300, "align": "l", "fmt": "team", "strong": true},
+		{"title": "col.games",        "key": "g",    "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "col.wins",         "key": "w",    "w": 50,  "align": "r", "fmt": "int"},
+		{"title": "col.losses",       "key": "l",    "w": 50,  "align": "r", "fmt": "int"},
+		{"title": "col.draws",        "key": "d",    "w": 46,  "align": "r", "fmt": "int"},
+		{"title": "col.win_pct",      "key": "pct",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
+		{"title": "col.runs_scored",  "key": "rs",   "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "col.runs_allowed", "key": "ra",   "w": 56,  "align": "r", "fmt": "int"},
+		{"title": "col.run_diff",     "key": "diff", "w": 64,  "align": "r", "fmt": "diff"},
+		{"title": "col.avg",          "key": "avg",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
+		{"title": "col.hr",           "key": "hr",   "w": 48,  "align": "r", "fmt": "int"},
+		{"title": "col.sb",           "key": "sb",   "w": 48,  "align": "r", "fmt": "int"},
+		{"title": "col.era_short",    "key": "era",  "w": 64,  "align": "r", "fmt": "float2", "sep_before": true},
 		{"title": "WHIP", "key": "whip", "w": 70,  "align": "r", "fmt": "float2"},
 		{"title": "K/9",  "key": "k9",   "w": 62,  "align": "r", "fmt": "float2"},
 		{"title": "S",    "key": "sv",   "w": 44,  "align": "r", "fmt": "int"},
@@ -224,57 +220,57 @@ func _district_columns() -> Array:
 # 成績ビューの列。高度指標も必ず farm_advanced_stats から読み、一軍成績とは混ぜない。
 func _stat_columns() -> Array:
 	var cols: Array = [
-		{"title": "球団", "key": "team", "w": 56, "align": "l", "fmt": "team"},
-		{"title": "選手", "key": "name", "w": 132, "align": "l", "fmt": "str", "strong": true},
+		{"title": "col.team", "key": "team", "w": 56, "align": "l", "fmt": "team"},
+		{"title": "col.player", "key": "name", "w": 132, "align": "l", "fmt": "str", "strong": true},
 	]
 	if _current_mode() == "pitcher":
-		cols.append({"title": "役", "key": "role", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "role_sort"})
-		cols.append({"title": "年齢", "key": "age", "w": 44, "align": "c", "fmt": "int"})
+		cols.append({"title": "col.role_short", "key": "role", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "role_sort"})
+		cols.append({"title": "col.age", "key": "age", "w": 44, "align": "c", "fmt": "int"})
 		cols.append_array([
-			{"title": "登板", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true},
-			{"title": "先発", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
-			{"title": "完投", "key": "cg", "w": 46, "align": "r", "fmt": "int"},
-			{"title": "勝", "key": "w", "w": 38, "align": "r", "fmt": "int"},
-			{"title": "敗", "key": "l", "w": 38, "align": "r", "fmt": "int"},
+			{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true},
+			{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
+			{"title": "col.complete_games", "key": "cg", "w": 46, "align": "r", "fmt": "int"},
+			{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int"},
+			{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int"},
 			{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
 			{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
 			{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int"},
-			{"title": "投球回", "key": "ip", "w": 64, "align": "r", "fmt": "f1", "sep_before": true},
-			{"title": "防御率", "key": "era", "w": 62, "align": "r", "fmt": "f2"},
+			{"title": "col.innings", "key": "ip", "w": 64, "align": "r", "fmt": "f1", "sep_before": true},
+			{"title": "stat.era", "key": "era", "w": 62, "align": "r", "fmt": "f2"},
 			{"title": "WHIP", "key": "whip", "w": 60, "align": "r", "fmt": "f2"},
 			{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2"},
 			{"title": "wOBAA", "key": "wobaa", "w": 64, "align": "r", "fmt": "rate"},
 			{"title": "xwOBAA", "key": "xwobaa", "w": 68, "align": "r", "fmt": "rate"},
 			{"title": "RE24A", "key": "re24a", "w": 62, "align": "r", "fmt": "f1s"},
-			{"title": "奪三振", "key": "so", "w": 58, "align": "r", "fmt": "int", "sep_before": true},
-			{"title": "与四球", "key": "bb", "w": 58, "align": "r", "fmt": "int"},
-			{"title": "与死球", "key": "hbp", "w": 58, "align": "r", "fmt": "int"},
-			{"title": "被安打", "key": "h", "w": 58, "align": "r", "fmt": "int"},
-			{"title": "被本", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
-			{"title": "失点", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
-			{"title": "自責", "key": "er", "w": 48, "align": "r", "fmt": "int"},
+			{"title": "stat.strikeouts", "key": "so", "w": 58, "align": "r", "fmt": "int", "sep_before": true},
+			{"title": "col.walks_allowed", "key": "bb", "w": 58, "align": "r", "fmt": "int"},
+			{"title": "col.hbp_allowed", "key": "hbp", "w": 58, "align": "r", "fmt": "int"},
+			{"title": "col.hits_allowed", "key": "h", "w": 58, "align": "r", "fmt": "int"},
+			{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
+			{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
+			{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int"},
 		])
 		return cols
-	cols.append({"title": "守", "key": "pos", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "pos_sort"})
-	cols.append({"title": "年齢", "key": "age", "w": 44, "align": "c", "fmt": "int"})
+	cols.append({"title": "box.col.pos", "key": "pos", "w": 40, "align": "c", "fmt": "pos_badge", "sort_key": "pos_sort"})
+	cols.append({"title": "col.age", "key": "age", "w": 44, "align": "c", "fmt": "int"})
 	cols.append_array([
-		{"title": "試合", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "打席", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
-		{"title": "打数", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "得点", "key": "r", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "安打", "key": "h", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "二塁", "key": "d", "w": 42, "align": "r", "fmt": "int"},
-		{"title": "三塁", "key": "t", "w": 42, "align": "r", "fmt": "int"},
-		{"title": "本", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
-		{"title": "打点", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "盗塁", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "打率", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true},
-		{"title": "出塁", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
-		{"title": "長打", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
+		{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
+		{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int"},
+		{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int"},
+		{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
+		{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true},
+		{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
+		{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
 		{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
-		{"title": "四球", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "死球", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
-		{"title": "三振", "key": "so", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
+		{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
+		{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int"},
 		{"title": "wOBA", "key": "woba", "w": 60, "align": "r", "fmt": "rate", "sep_before": true},
 		{"title": "xwOBA", "key": "xwoba", "w": 64, "align": "r", "fmt": "rate"},
 		{"title": "wRAA", "key": "wraa", "w": 60, "align": "r", "fmt": "f1s"},
@@ -292,7 +288,7 @@ func _build_buttons() -> void:
 	_team_menu_button = null
 	var season: PSSeason = AppState.current_season
 	if season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
@@ -303,7 +299,7 @@ func _build_buttons() -> void:
 	for view_value in VIEWS:
 		var view: Dictionary = view_value as Dictionary
 		var vid: String = str(view["id"])
-		_add_button("view_%s" % vid, str(view["label"]), Rect2(x, CHIP_Y, VIEW_CHIP_W, 30.0),
+		_add_button("view_%s" % vid, Loc.t(str(view["label"])), Rect2(x, CHIP_Y, VIEW_CHIP_W, 30.0),
 			func(target: String = vid) -> void: _on_view_pressed(target), "chip_active" if vid == _view else "chip")
 		x += VIEW_CHIP_W + 8.0
 
@@ -317,13 +313,13 @@ func _build_buttons() -> void:
 			var fid: String = str(filter["id"])
 			if fid == "b_all":
 				x += 14.0
-			var label: String = str(filter["label"])
+			var label: String = Loc.t(str(filter["label"]))
 			var w: float = 38.0 if label.length() <= 1 else 52.0
 			_add_button("flt_%s" % fid, label, Rect2(x, CHIP_Y, w, 30.0),
 				func(target: String = fid) -> void: _on_filter_pressed(target), "chip_active" if fid == _filter_id else "chip")
 			x += w + 8.0
 		x += 14.0
-		var qual_label: String = "規定到達のみ"
+		var qual_label: String = Loc.t("common.qualified_only")
 		_add_button("flt_qualified", qual_label, Rect2(x, CHIP_Y, _measure(qual_label, 13) + 24.0, 30.0),
 			func() -> void: _on_qualified_toggle(), "chip_active" if _qualified_only else "chip")
 		_team_menu_button = _add_button("team_menu", "", _team_hotspot_rect(), _on_team_menu_pressed, "nav")
@@ -372,7 +368,7 @@ func _on_header_clicked(key: String) -> void:
 
 func _on_team_menu_pressed() -> void:
 	var menu: PopupMenu = PopupMenu.new()
-	menu.add_item("全球団", ALL_TEAMS_MENU_ID)
+	menu.add_item(Loc.t("common.all_teams"), ALL_TEAMS_MENU_ID)
 	for i in range(_team_ids.size()):
 		var team: PSTeam = GameDb.get_any_team(int(_team_ids[i]))
 		if team == null:
@@ -383,7 +379,7 @@ func _on_team_menu_pressed() -> void:
 			var prev: PSTeam = GameDb.get_any_team(int(_team_ids[i - 1]))
 			if prev != null and prev.league != team.league:
 				menu.add_separator(_team_group_label(team))
-		menu.add_item("%s (%s)" % [team.name, team.short_name], int(_team_ids[i]))
+		menu.add_item(Loc.t("common.team_with_short", {"team": team.name, "short": team.short_name}), int(_team_ids[i]))
 	_style_popup(menu)
 	add_child(menu)
 	menu.id_pressed.connect(_on_team_selected)
@@ -516,10 +512,11 @@ func _refresh() -> void:
 	if season == null:
 		return
 
-	_status_text = "%d年 / %d年目  %s  (二軍 残り%d試合)" % [
-		season.year, season.season_number,
-		SeasonCalendar.day_status_label(season, season.current_day), season.farm_games_remaining(),
-	]
+	_status_text = Loc.t("farm.status", {
+		"season": Loc.t("common.year_and_season", {"year": season.year, "n": season.season_number}),
+		"day": SeasonCalendar.day_status_label(season, season.current_day),
+		"remaining": season.farm_games_remaining(),
+	})
 
 	if _view == VIEW_STATS:
 		_collect_records(season)
@@ -623,22 +620,22 @@ func _build_summary_cells(season: PSSeason, batter: PSBatterStats, pitcher: PSPi
 
 	var cells: Array = [
 		{
-			"label": "消化試合",
+			"label": Loc.t("farm.summary.played"),
 			"value": "%d / %d" % [played, season.farm_schedule.size()],
-			"note": ("中止%d" % cancelled) if cancelled > 0 else "",
+			"note": Loc.t("farm.summary.cancelled", {"n": cancelled}) if cancelled > 0 else "",
 			"note_color": AMBER,
 		},
-		{"label": "引き分け率", "value": "%.1f%%" % (draw_rate * 100.0)},
-		{"label": "リーグ打率", "value": _rate_short(batter.batting_average())},
-		{"label": "リーグ防御率", "value": ("%.2f" % pitcher.era()) if pitcher.outs_pitched > 0 else "-"},
+		{"label": Loc.t("farm.summary.draw_rate"), "value": "%.1f%%" % (draw_rate * 100.0)},
+		{"label": Loc.t("farm.summary.league_avg"), "value": _rate_short(batter.batting_average())},
+		{"label": Loc.t("farm.summary.league_era"), "value": ("%.2f" % pitcher.era()) if pitcher.outs_pitched > 0 else "-"},
 	]
 	var self_id: int = AppState.selected_team_id
 	var self_district: String = PSFarmLeague.district_for_team(self_id)
 	var self_rank: int = _rank_of(self_district, self_id)
 	if self_rank > 0:
 		cells.append({
-			"label": "自軍 (%s)" % PSFarmLeague.district_label(self_district),
-			"value": "%d位" % self_rank,
+			"label": Loc.t("farm.summary.self", {"district": PSFarmLeague.district_label(self_district)}),
+			"value": Loc.t("common.rank_value", {"rank": self_rank}),
 			"color": BLUE,
 		})
 	return cells
@@ -702,12 +699,12 @@ func _identity_fields(record: PSPlayerSeasonRecord) -> Dictionary:
 	}
 	if record.is_pitcher():
 		var starter: bool = record.is_starter_pitcher()
-		row["role"] = "先" if starter else "中"
+		row["role"] = Loc.t("role.starter_short") if starter else Loc.t("role.middle_char")
 		row["role_color"] = PINK if starter else RED
 		row["role_sort"] = 0 if starter else 1
 		row["role_dev"] = record.development_player
 	else:
-		row["pos"] = str(POS_SHORT.get(record.position, "?"))
+		row["pos"] = PSPlayer.position_short_name(record.position)
 		row["pos_color"] = _pos_color(record.position)
 		row["pos_sort"] = record.position
 		row["pos_dev"] = record.development_player
@@ -826,4 +823,4 @@ func _team_name(team_id: int) -> String:
 
 # 球団プルダウンの区切り見出し。専用球団は一軍リーグに属さないので専用の見出しを出す。
 func _team_group_label(team: PSTeam) -> String:
-	return "ファーム専用球団" if team.farm_only else team.league_label()
+	return Loc.t("farm.farm_only_teams") if team.farm_only else team.league_label()

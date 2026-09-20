@@ -33,14 +33,14 @@ func _draw() -> void:
 	# ロゴエンブレム + タイトル
 	_draw_emblem(Rect2(BASE.x * 0.5 - 64, 196, 128, 128))
 	_text("PennantStrategy", Vector2(0, 410), 60, TEXT, BASE.x, HORIZONTAL_ALIGNMENT_CENTER, true)
-	_text("ペナントレース運営シミュレーション", Vector2(0, 452), 20, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
+	_text(Loc.t("start.tagline"), Vector2(0, 452), 20, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 	# メニューカード (ボタンの背面パネル)
 	var card_h: float = _menu_card_height()
 	_round(Rect2(CARD_X, MENU_TOP, CARD_W, card_h), PANEL, BORDER, 14)
 
 	# 収録データのサマリー (カード下端)
-	_text("初期データ  %d球団 ・ %d選手" % [GameDb.get_team_count(), GameDb.get_player_count()],
+	_text(Loc.t("start.data_summary", {"teams": GameDb.get_team_count(), "players": GameDb.get_player_count()}),
 		Vector2(0, MENU_TOP + card_h + 38), 14, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 	# フッタ + ステータス
@@ -71,13 +71,13 @@ func _build_buttons() -> void:
 	_clear_buttons()
 
 	var y: float = MENU_TOP + 36.0
-	_add_button("new_game", "新しく始める", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("team_select"), "primary")
+	_add_button("new_game", Loc.t("start.new_game"), Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("team_select"), "primary")
 	y += BTN_H + BTN_GAP
-	_add_button("continue", "続きから", Rect2(BTN_X, y, BTN_W, BTN_H), _continue_game, "action")
+	_add_button("continue", Loc.t("start.continue"), Rect2(BTN_X, y, BTN_W, BTN_H), _continue_game, "action")
 	y += BTN_H + BTN_GAP
-	_add_button("load", "セーブデータ選択", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("save_select"), "action")
+	_add_button("load", Loc.t("options.save.select"), Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("save_select"), "action")
 	y += BTN_H + BTN_GAP
-	_add_button("options", "オプション", Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("options"), "action")
+	_add_button("options", Loc.t("options.title"), Rect2(BTN_X, y, BTN_W, BTN_H), func() -> void: AppState.request_screen("options"), "action")
 
 	_layout_buttons()
 
@@ -88,7 +88,7 @@ func _build_buttons() -> void:
 func _continue_game() -> void:
 	var save_data: Dictionary = SaveService.load_state()
 	if save_data.is_empty():
-		_status_text = "セーブデータがありません"
+		_status_text = Loc.t("save.none")
 		queue_redraw()
 		return
 	AppState.restore_from_save(save_data)

@@ -172,15 +172,15 @@ static func auto_protected_reason(player: PSPlayer, year: int) -> String:
 	if player == null:
 		return ""
 	if player.foreign_player:
-		return "外国人"
+		return Loc.t("compensation.auto_protect.foreign")
 	if year > 0 and int(player.source_data.get("draft_year", 0)) == year:
-		return "新人"
+		return Loc.t("compensation.auto_protect.rookie")
 	if player.years <= 0 and bool(player.source_data.get("rookie_year", false)):
-		return "新人"
+		return Loc.t("compensation.auto_protect.rookie")
 	if year > 0 and int(player.source_data.get("fa_signed_year", 0)) == year:
-		return "FA加入"
+		return Loc.t("compensation.auto_protect.fa_signed")
 	if year > 0 and int(player.source_data.get("compensation_year", 0)) == year:
-		return "補償加入"
+		return Loc.t("compensation.auto_protect.compensation_signed")
 	return ""
 
 
@@ -396,9 +396,9 @@ static func _resolve_case(state: Dictionary, players: Array, teams: Array, seaso
 		case["decision"] = "money"
 		case["picked_player_id"] = 0
 		case["compensation_money"] = int(case.get("money_only", 0))
-		_log(state, "%s (%sランク): %s は金銭補償のみを選択" % [
-			str(case.get("name", "")), str(case.get("fa_rank", "")), _team_name(teams, from_team),
-		])
+		_log(state, Loc.t("compensation.log.money_only", {
+			"player": str(case.get("name", "")), "rank": str(case.get("fa_rank", "")), "team": _team_name(teams, from_team),
+		}))
 	else:
 		case["decision"] = "player"
 		case["picked_player_id"] = picked.id
@@ -414,10 +414,10 @@ static func _resolve_case(state: Dictionary, players: Array, teams: Array, seaso
 		picked.source_data["compensation_year"] = year
 		PSCareerLog.log_compensation(picked, year, to_team, from_team)
 		_refund_money_difference(teams, case)
-		_log(state, "%s (%sランク): %s が %s から %s を人的補償で獲得" % [
-			str(case.get("name", "")), str(case.get("fa_rank", "")),
-			_team_name(teams, from_team), _team_name(teams, to_team), picked.name,
-		])
+		_log(state, Loc.t("compensation.log.player_picked", {
+			"player": str(case.get("name", "")), "rank": str(case.get("fa_rank", "")),
+			"team": _team_name(teams, from_team), "from_team": _team_name(teams, to_team), "picked": picked.name,
+		}))
 	case["resolved"] = true
 
 
@@ -438,10 +438,10 @@ static func _refund_money_difference(teams: Array, case: Dictionary) -> void:
 
 static func submit_protect_list(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_ids: Array) -> Dictionary:
 	if str(state.get("phase", "")) != "protect" or not bool(state.get("waiting_user", false)):
-		return {"ok": false, "message": "プロテクトリスト提出の段階ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.not_protect_phase"), "state": state}
 	var case: Dictionary = current_case(state)
 	if case.is_empty():
-		return {"ok": false, "message": "対象の補償がありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
 	var eligible: Dictionary = {}
 	for id_value in case.get("eligible_ids", []) as Array:
 		eligible[int(id_value)] = true
@@ -450,14 +450,14 @@ static func submit_protect_list(state: Dictionary, players: Array, teams: Array,
 	for id_value in player_ids:
 		var pid: int = int(id_value)
 		if not eligible.has(pid):
-			return {"ok": false, "message": "プロテクト対象外の選手が含まれています (id=%d)" % pid, "state": state}
+			return {"ok": false, "message": Loc.t("compensation.error.ineligible_player", {"id": pid}), "state": state}
 		if seen.has(pid):
 			continue
 		seen[pid] = true
 		unique_ids.append(pid)
 	var required: int = required_protect_size(case)
 	if unique_ids.size() != required:
-		return {"ok": false, "message": "プロテクトはちょうど%d人選んでください (現在%d人)" % [required, unique_ids.size()], "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.protect_count", {"required": required, "count": unique_ids.size()}), "state": state}
 	case["protect_ids"] = unique_ids
 	case["protect_submitted"] = true
 	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
@@ -473,22 +473,22 @@ static func recommended_protect_ids(state: Dictionary, players: Array) -> Array:
 
 static func submit_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason, player_id: int) -> Dictionary:
 	if str(state.get("phase", "")) != "pick" or not bool(state.get("waiting_user", false)):
-		return {"ok": false, "message": "人的補償の選択段階ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.not_pick_phase"), "state": state}
 	var case: Dictionary = current_case(state)
 	if case.is_empty():
-		return {"ok": false, "message": "対象の補償がありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
 	if not exposed_ids(case).has(player_id):
-		return {"ok": false, "message": "プロテクトされている選手は指名できません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.protected_player"), "state": state}
 	_resolve_case(state, players, teams, season, case, player_id)
 	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
 
 
 static func submit_money_only(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	if str(state.get("phase", "")) != "pick" or not bool(state.get("waiting_user", false)):
-		return {"ok": false, "message": "人的補償の選択段階ではありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.not_pick_phase"), "state": state}
 	var case: Dictionary = current_case(state)
 	if case.is_empty():
-		return {"ok": false, "message": "対象の補償がありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
 	_resolve_case(state, players, teams, season, case, 0)
 	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
 
@@ -497,7 +497,7 @@ static func submit_money_only(state: Dictionary, players: Array, teams: Array, s
 static func auto_current_case(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var case: Dictionary = current_case(state)
 	if case.is_empty():
-		return {"ok": false, "message": "対象の補償がありません", "state": state}
+		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	if not bool(case.get("protect_submitted", false)):
 		case["protect_ids"] = cpu_protect_ids(players, case)
@@ -515,7 +515,7 @@ static func complete_automatically(state: Dictionary, players: Array, teams: Arr
 
 static func finalize_compensation(state: Dictionary) -> Dictionary:
 	if bool(state.get("finalized", false)):
-		return state.get("final_result", {"title": "人的補償", "moves": []}) as Dictionary
+		return state.get("final_result", {"title": Loc.t("compensation.title"), "moves": []}) as Dictionary
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var moves: Array = []
 	var cases_view: Array = []
@@ -560,7 +560,7 @@ static func finalize_compensation(state: Dictionary) -> Dictionary:
 		if to_team == user_team_id:
 			user_lost += 1
 	var result: Dictionary = {
-		"title": "人的補償",
+		"title": Loc.t("compensation.title"),
 		"cases": cases_view,
 		"moves": moves,
 		"case_count": cases_view.size(),
@@ -597,7 +597,7 @@ static func _find_team(teams: Array, team_id: int) -> PSTeam:
 
 static func _team_name(teams: Array, team_id: int) -> String:
 	var team: PSTeam = _find_team(teams, team_id)
-	return team.name if team != null else "球団%d" % team_id
+	return team.name if team != null else Loc.t("team.fallback_name", {"id": team_id})
 
 
 static func _log(state: Dictionary, text: String) -> void:

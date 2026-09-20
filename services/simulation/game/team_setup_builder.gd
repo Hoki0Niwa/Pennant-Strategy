@@ -57,7 +57,7 @@ static func build_team_setup(
 	)
 	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
 	if rotation_pitcher == null:
-		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
+		return {"ok": false, "message": Loc.t("lineup_setup.no_starting_pitcher", {"team": GameSimulator._team_name(team_id)})}
 	var relievers: Array = PSRotationPlanner.select_relievers_for_innings(
 		reliever_pool, starter_pitchers, rotation_pitcher.player_id, saved_rotation, farm_priority, farm_games
 	)
@@ -121,7 +121,7 @@ static func preview_lineup(
 	var rotation_decision: Dictionary = PSRotationPlanner.resolve_rotation_decision(season, team_id, starter_pitchers)
 	var rotation_pitcher: PSPlayerSeasonRecord = rotation_decision.get("pitcher", null) as PSPlayerSeasonRecord
 	if rotation_pitcher == null:
-		return {"ok": false, "message": "%sの先発投手を決定できません" % GameSimulator._team_name(team_id)}
+		return {"ok": false, "message": Loc.t("lineup_setup.no_starting_pitcher", {"team": GameSimulator._team_name(team_id)})}
 
 	var team_games_played_before: int = 0 if team_record == null else int(team_record.stats.games)
 	var setup: Dictionary = build_setup_from_auto(
@@ -171,7 +171,7 @@ static func resolve_rotation_order(season: PSSeason, team_id: int) -> Array:
 static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bool = true) -> Dictionary:
 	var all_records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
 	if all_records.is_empty():
-		return {"ok": false, "message": "%sの選手データがありません" % GameSimulator._team_name(team_id)}
+		return {"ok": false, "message": Loc.t("lineup_setup.no_player_data", {"team": GameSimulator._team_name(team_id)})}
 
 	const TARGET_TOTAL: int = 31
 	# 通常の一軍先発は6人。谷間は二軍からのスポット昇格、ローテ下位の休養・再調整は
@@ -275,7 +275,7 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	if _healthy_catcher_count_in_records(selected) < required_catchers:
 		return {
 			"ok": false,
-			"message": "%sは健康な捕手を%d人そろえられません" % [GameSimulator._team_name(team_id), required_catchers],
+			"message": Loc.t("lineup_setup.not_enough_catchers", {"team": GameSimulator._team_name(team_id), "count": required_catchers}),
 			"player_ids": player_ids,
 			"summary": summarize_active_roster_ids(player_ids, all_records),
 		}
@@ -283,7 +283,7 @@ static func preview_active_roster(season: PSSeason, team_id: int, dh_enabled: bo
 	if not _records_can_field_game(season, team_id, selected, dh_enabled):
 		return {
 			"ok": false,
-			"message": "%sは健康な支配下選手だけでは試合可能な1軍を組めません" % GameSimulator._team_name(team_id),
+			"message": Loc.t("lineup_setup.cannot_build_active", {"team": GameSimulator._team_name(team_id)}),
 			"player_ids": player_ids,
 			"summary": summarize_active_roster_ids(player_ids, all_records),
 		}
@@ -728,9 +728,9 @@ static func prepare_team_setup(
 		available_fielders = eligible_or_fallback(fielders, required_fielders)
 
 	if starter_pitchers.is_empty():
-		return {"ok": false, "message": "%sに先発適正が中継適正を上回る投手がいません" % GameSimulator._team_name(team_id)}
+		return {"ok": false, "message": Loc.t("lineup_setup.no_starter_type_pitcher", {"team": GameSimulator._team_name(team_id)})}
 	if available_fielders.size() < required_fielders:
-		return {"ok": false, "message": "%sの野手が%d人未満です" % [GameSimulator._team_name(team_id), required_fielders]}
+		return {"ok": false, "message": Loc.t("lineup_setup.not_enough_fielders", {"team": GameSimulator._team_name(team_id), "count": required_fielders})}
 
 	_sort_by_starter_order(starter_pitchers)
 
@@ -788,9 +788,9 @@ static func _prepare_farm_setup(
 	# 一軍が上位を抜いた残りなので、故障が重なると人数が足りないことが実際に起こり得る。
 	# その場合はエラーを返し、呼び出し側 (PSFarmGameRunner) が試合を中止扱いにする。
 	if starter_pitchers.is_empty():
-		return {"ok": false, "message": "%sの二軍に先発できる投手がいません" % GameSimulator._team_name(team_id)}
+		return {"ok": false, "message": Loc.t("lineup_setup.farm_no_starting_pitcher", {"team": GameSimulator._team_name(team_id)})}
 	if available_fielders.size() < required_fielders:
-		return {"ok": false, "message": "%sの二軍の野手が%d人未満です" % [GameSimulator._team_name(team_id), required_fielders]}
+		return {"ok": false, "message": Loc.t("lineup_setup.farm_not_enough_fielders", {"team": GameSimulator._team_name(team_id), "count": required_fielders})}
 
 	_sort_by_starter_order(starter_pitchers)
 	return {
@@ -869,7 +869,7 @@ static func build_setup_from_auto(
 		)
 	)
 	if fielding_slots.size() < GameSimulator.DEFENSIVE_ASSIGNMENT_ORDER.size():
-		return {"ok": false, "message": "%sの守備位置を埋められません" % GameSimulator._team_name(team_id)}
+		return {"ok": false, "message": Loc.t("lineup_setup.cannot_fill_positions", {"team": GameSimulator._team_name(team_id)})}
 	var batting_order: Array = records_from_fielding_slots(fielding_slots)
 	var position_by_player_id: Dictionary = position_map_from_fielding_slots(fielding_slots)
 	if dh_enabled:
@@ -889,7 +889,7 @@ static func build_setup_from_auto(
 				available_fielders, fielding_slots, {}, batting_memo, opponent_hand
 			)
 		if designated_hitter == null:
-			return {"ok": false, "message": "%sにDH候補がいません" % GameSimulator._team_name(team_id)}
+			return {"ok": false, "message": Loc.t("lineup_setup.no_dh_candidate", {"team": GameSimulator._team_name(team_id)})}
 		batting_order.append(designated_hitter)
 		position_by_player_id[designated_hitter.player_id] = BattingOrderService.DH_POSITION
 

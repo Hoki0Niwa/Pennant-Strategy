@@ -833,7 +833,7 @@ func test_team_lineup_history_round_trips_and_preserves_other_seasons() -> void:
 	var other_year: int = season.year - 5
 	var other_row: Dictionary = {
 		"team_id": 1, "game_index": 0, "day": 1, "date": "2020-04-01",
-		"opponent_id": 2, "home_away": "home", "result": "勝",
+		"opponent_id": 2, "home_away": "home", "result": GameSimulator.GAME_RESULT_WIN,
 		"score_for": 5, "score_against": 2, "starter_pitcher_id": 901, "dh": false,
 		"slots": [{"slot": 1, "pos": 8, "pid": 101}, {"slot": 9, "pos": 1, "pid": 901}],
 	}
@@ -841,7 +841,7 @@ func test_team_lineup_history_round_trips_and_preserves_other_seasons() -> void:
 
 	var current_row: Dictionary = {
 		"team_id": 1, "game_index": 0, "day": 1, "date": "2026-04-01",
-		"opponent_id": 2, "home_away": "away", "result": "敗",
+		"opponent_id": 2, "home_away": "away", "result": GameSimulator.GAME_RESULT_LOSS,
 		"score_for": 2, "score_against": 5, "starter_pitcher_id": 902, "dh": true,
 		"slots": [
 			{"slot": 1, "pos": 8, "pid": 201}, {"slot": 2, "pos": 4, "pid": 202},

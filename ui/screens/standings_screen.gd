@@ -9,10 +9,7 @@ extends "res://ui/components/dashboard_screen.gd"
 # - 下段右: 交流戦順位表 (is_interleague 試合のみ集計、全12球団の混合順位)。
 # 重い集計 (チーム指標 / 貯金時系列 / 交流戦) は _refresh で1度だけ行いキャッシュ、_draw は描画専念。
 
-const LEAGUES: Array = [
-	{"key": "league1", "label": "第1リーグ"},
-	{"key": "league2", "label": "第2リーグ"},
-]
+const LEAGUES: Array = ["league1", "league2"]
 
 # --- レイアウト基準 (base 座標) ---
 const INFO_Y: float = 112.0
@@ -28,22 +25,22 @@ const CHART_LEGEND_VALUE_W: float = 34.0
 # 列幅は実データ幅基準で詰める (余白は球団名列へ寄せ、数値列が間延びしないように)。
 # sep_before で「勝敗 / 勝率・差・残 / 得失点 / 打撃 / 投手」のブロック境界に縦ヘアラインを引く。
 const LEAGUE_COLUMNS: Array = [
-	{"title": "順",   "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
-	{"title": "球団", "key": "team", "w": 280, "align": "l", "fmt": "team", "strong": true},
-	{"title": "試合", "key": "g",    "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "勝",   "key": "w",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "敗",   "key": "l",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "分",   "key": "d",    "w": 46,  "align": "r", "fmt": "int"},
-	{"title": "勝率", "key": "pct",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "差",   "key": "gb",   "w": 60,  "align": "r", "fmt": "gb"},
-	{"title": "残",   "key": "rem",  "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "得",   "key": "rs",   "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "失",   "key": "ra",   "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "得失", "key": "diff", "w": 64,  "align": "r", "fmt": "diff"},
-	{"title": "打率", "key": "avg",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "本",   "key": "hr",   "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "盗",   "key": "sb",   "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "防",   "key": "era",  "w": 64,  "align": "r", "fmt": "float2", "sep_before": true},
+	{"title": "col.rank",         "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
+	{"title": "col.team",         "key": "team", "w": 280, "align": "l", "fmt": "team", "strong": true},
+	{"title": "col.games",        "key": "g",    "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "col.wins",         "key": "w",    "w": 50,  "align": "r", "fmt": "int"},
+	{"title": "col.losses",       "key": "l",    "w": 50,  "align": "r", "fmt": "int"},
+	{"title": "col.draws",        "key": "d",    "w": 46,  "align": "r", "fmt": "int"},
+	{"title": "col.win_pct",      "key": "pct",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
+	{"title": "col.games_back",   "key": "gb",   "w": 60,  "align": "r", "fmt": "gb"},
+	{"title": "col.remaining",    "key": "rem",  "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "col.runs_scored",  "key": "rs",   "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "col.runs_allowed", "key": "ra",   "w": 56,  "align": "r", "fmt": "int"},
+	{"title": "col.run_diff",     "key": "diff", "w": 64,  "align": "r", "fmt": "diff"},
+	{"title": "col.avg",          "key": "avg",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
+	{"title": "col.hr",           "key": "hr",   "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "col.sb",           "key": "sb",   "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "col.era_short",    "key": "era",  "w": 64,  "align": "r", "fmt": "float2", "sep_before": true},
 	{"title": "WHIP", "key": "whip", "w": 70,  "align": "r", "fmt": "float2"},
 	{"title": "K/9",  "key": "k9",   "w": 62,  "align": "r", "fmt": "float2"},
 	{"title": "S",    "key": "sv",   "w": 44,  "align": "r", "fmt": "int"},
@@ -51,15 +48,15 @@ const LEAGUE_COLUMNS: Array = [
 ]
 
 const INTER_COLUMNS: Array = [
-	{"title": "順",   "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
-	{"title": "球団", "key": "team", "w": 210, "align": "l", "fmt": "team", "strong": true},
-	{"title": "L",    "key": "lg",   "w": 42,  "align": "l", "fmt": "str"},
-	{"title": "試",   "key": "g",    "w": 46,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "勝",   "key": "w",    "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "敗",   "key": "l",    "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "分",   "key": "d",    "w": 44,  "align": "r", "fmt": "int"},
-	{"title": "勝率", "key": "pct",  "w": 66,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "差",   "key": "gb",   "w": 56,  "align": "r", "fmt": "gb"},
+	{"title": "col.rank",       "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
+	{"title": "col.team",       "key": "team", "w": 210, "align": "l", "fmt": "team", "strong": true},
+	{"title": "L",              "key": "lg",   "w": 42,  "align": "l", "fmt": "str"},
+	{"title": "col.games_short", "key": "g",   "w": 46,  "align": "r", "fmt": "int", "sep_before": true},
+	{"title": "col.wins",       "key": "w",    "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "col.losses",     "key": "l",    "w": 48,  "align": "r", "fmt": "int"},
+	{"title": "col.draws",      "key": "d",    "w": 44,  "align": "r", "fmt": "int"},
+	{"title": "col.win_pct",    "key": "pct",  "w": 66,  "align": "r", "fmt": "rate", "sep_before": true},
+	{"title": "col.games_back", "key": "gb",   "w": 56,  "align": "r", "fmt": "gb"},
 ]
 
 # 集計キャッシュ
@@ -140,21 +137,21 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 		return
 
-	_draw_shell("順位表", team, season)
+	_draw_shell(Loc.t("screen.standings"), team, season)
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(INNER_L, INFO_Y), 13, MUTED)
 
-	_draw_table(TABLE_A, str(LEAGUES[0]["label"]), "", LEAGUE_COLUMNS, _entries_by_league.get("league1", []) as Array)
-	_draw_table(TABLE_B, str(LEAGUES[1]["label"]), "", LEAGUE_COLUMNS, _entries_by_league.get("league2", []) as Array)
+	_draw_table(TABLE_A, PSTeam.league_label_for("league1"), "", LEAGUE_COLUMNS, _entries_by_league.get("league1", []) as Array)
+	_draw_table(TABLE_B, PSTeam.league_label_for("league2"), "", LEAGUE_COLUMNS, _entries_by_league.get("league2", []) as Array)
 	_draw_balance_chart(CHART_RECT)
 	if _interleague_played:
-		_draw_table(INTER_RECT, "交流戦順位表", "", INTER_COLUMNS, _interleague_rows)
+		_draw_table(INTER_RECT, Loc.t("standings.interleague"), "", INTER_COLUMNS, _interleague_rows)
 	else:
-		_panel(INTER_RECT, "交流戦順位表")
-		_text("交流戦はまだ開幕していません", Vector2(INTER_RECT.position.x + 24, INTER_RECT.position.y + INTER_RECT.size.y * 0.5), 15, MUTED, INTER_RECT.size.x - 48, HORIZONTAL_ALIGNMENT_CENTER)
+		_panel(INTER_RECT, Loc.t("standings.interleague"))
+		_text(Loc.t("standings.interleague_not_started"), Vector2(INTER_RECT.position.x + 24, INTER_RECT.position.y + INTER_RECT.size.y * 0.5), 15, MUTED, INTER_RECT.size.x - 48, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 # 汎用テーブル描画 (リーグ順位表 / 交流戦で共用)。描画本体は基底の _draw_data_table が持つ。
@@ -177,7 +174,7 @@ func _draw_balance_chart(rect: Rect2) -> void:
 	var hover_day: int = clampi(_chart_hover_day, 1, max_day) if _chart_hover_day >= 0 else -1
 
 	# 見出し + ホバー中の日付 (ヘッダと同じ「区切り線 → 日付」の並び)。
-	var title: String = "貯金・借金の推移"
+	var title: String = Loc.t("standings.balance_chart")
 	_round(Rect2(rect.position.x + 18, rect.position.y + 19, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
 	_text(title, Vector2(rect.position.x + 27, rect.position.y + 32), 17, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	if hover_day > 0:
@@ -310,14 +307,14 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
 	if AppState.season_skip_active:
 		_add_button(
 			"cancel_season_skip",
-			"停止処理中…" if AppState.season_skip_cancel_pending else "スキップ停止",
+			Loc.t("skip.stopping") if AppState.season_skip_cancel_pending else Loc.t("skip.stop"),
 			Rect2(1730, 22, 150, 42),
 			AppState.cancel_remaining_season_skip,
 			"action"
@@ -328,9 +325,9 @@ func _build_buttons() -> void:
 	_build_nav_buttons()
 
 	# 貯金グラフのリーグ切替チップ (グラフパネル右上)。
-	_add_button("chart_league1", "第1", Rect2(CHART_RECT.end.x - 142, CHART_RECT.position.y + 14, 64, 28),
+	_add_button("chart_league1", Loc.t("league.league1_short"), Rect2(CHART_RECT.end.x - 142, CHART_RECT.position.y + 14, 64, 28),
 		func() -> void: _set_chart_league("league1"), "chip_active" if _chart_league == "league1" else "chip")
-	_add_button("chart_league2", "第2", Rect2(CHART_RECT.end.x - 72, CHART_RECT.position.y + 14, 64, 28),
+	_add_button("chart_league2", Loc.t("league.league2_short"), Rect2(CHART_RECT.end.x - 72, CHART_RECT.position.y + 14, 64, 28),
 		func() -> void: _set_chart_league("league2"), "chip_active" if _chart_league == "league2" else "chip")
 
 	_layout_buttons()
@@ -359,17 +356,18 @@ func _refresh() -> void:
 	if season == null:
 		return
 
-	_status_text = "%d年 / %d年目  %s  (残り%d試合)" % [
-		season.year, season.season_number,
-		SeasonCalendar.day_status_label(season, season.current_day), season.games_remaining(),
-	]
+	_status_text = Loc.t("standings.status", {
+		"season": Loc.t("common.year_and_season", {"year": season.year, "n": season.season_number}),
+		"day": SeasonCalendar.day_status_label(season, season.current_day),
+		"remaining": season.games_remaining(),
+	})
 
 	# 残り試合数と直接対決残数は日程 1 走査でまとめて数え、両リーグの順位表で使い回す。
 	_remaining_by_team = PSPennantRace.remaining_by_team(season)
 	_head_to_head = PSPennantRace.head_to_head_remaining(season)
 
 	for league_row in LEAGUES:
-		var key: String = str((league_row as Dictionary)["key"])
+		var key: String = str(league_row)
 		_entries_by_league[key] = _build_league_rows(key, season)
 
 	_build_balance_series(season)
@@ -402,7 +400,7 @@ func _on_season_skip_finished(result: Dictionary) -> void:
 	_skip_ui_active = AppState.season_skip_active
 	_skip_ui_cancel_pending = AppState.season_skip_cancel_pending
 	_refresh()
-	_status_text = str(result.get("message", "スキップが完了しました。"))
+	_status_text = str(result.get("message", Loc.t("skip.finished")))
 	_build_buttons()
 	queue_redraw()
 
@@ -412,10 +410,10 @@ func _season_skip_status() -> String:
 	var done: int = AppState.season_skip_done
 	var percent: float = float(done) / float(total) * 100.0 if total > 0 else 0.0
 	var skip_name: String = AppState.season_skip_name
-	var state: String = "%s停止処理中" % skip_name if AppState.season_skip_cancel_pending else "%s中" % skip_name
-	return "%s  %d / %d試合 (%0.1f%%)  %s" % [
-		state, done, total, percent, AppState.season_skip_label,
-	]
+	var state: String = Loc.t("skip.state_stopping", {"name": skip_name}) if AppState.season_skip_cancel_pending else Loc.t("skip.state_running", {"name": skip_name})
+	return Loc.t("skip.progress", {
+		"state": state, "done": done, "total": total, "percent": "%0.1f" % percent, "day": AppState.season_skip_label,
+	})
 
 
 func _build_league_rows(league_key: String, season: PSSeason) -> Array:
@@ -457,10 +455,10 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 		var gb_color: Color = TEXT
 		if rank == 1:
 			if clinched:
-				gb_value = "優勝"
+				gb_value = Loc.t("standings.clinched")
 				gb_color = AMBER
 			elif bool(magic_info.get("lit", false)):
-				gb_value = "M%d" % int(magic_info.get("magic", 0))
+				gb_value = Loc.t("standings.magic", {"n": int(magic_info.get("magic", 0))})
 				gb_color = BLUE
 		rows.append({
 			"rank": rank, "team": team.name, "team_id": team.id, "color": team.color,
@@ -593,7 +591,7 @@ func _build_interleague_rows(season: PSSeason) -> void:
 		var gb: float = 0.0 if rank == 1 else float((leader_w - int(entry["w"])) + (int(entry["l"]) - leader_l)) / 2.0
 		_interleague_rows.append({
 			"rank": rank, "team": team.name, "team_id": team.id, "color": team.color,
-			"lg": "第1" if team.league == "league1" else "第2",
+			"lg": Loc.t("league.league1_short") if team.league == "league1" else Loc.t("league.league2_short"),
 			"is_self": team.id == self_id, "is_leader": rank == 1,
 			"g": int(entry["w"]) + int(entry["l"]) + int(entry["d"]),
 			"w": int(entry["w"]), "l": int(entry["l"]), "d": int(entry["d"]),

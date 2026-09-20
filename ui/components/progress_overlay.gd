@@ -51,7 +51,7 @@ func _build() -> void:
 	margin.add_child(box)
 
 	_title_label = Label.new()
-	_title_label.text = "処理中..."
+	_title_label.text = Loc.t("progress.processing")
 	_title_label.add_theme_font_size_override("font_size", 18)
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(_title_label)
@@ -74,7 +74,7 @@ func _build() -> void:
 	box.add_child(button_row)
 
 	_cancel_button = Button.new()
-	_cancel_button.text = "キャンセル"
+	_cancel_button.text = Loc.t("common.cancel")
 	_cancel_button.custom_minimum_size = Vector2(140, 34)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	button_row.add_child(_cancel_button)
@@ -87,7 +87,7 @@ func show_progress(label: String) -> void:
 	_detail_label.text = ""
 	_progress_bar.value = 0.0
 	_cancel_button.disabled = false
-	_cancel_button.text = "キャンセル"
+	_cancel_button.text = Loc.t("common.cancel")
 	visible = true
 
 
@@ -117,5 +117,5 @@ func _on_cancel_pressed() -> void:
 		return
 	_cancelled = true
 	_cancel_button.disabled = true
-	_cancel_button.text = "キャンセル中..."
+	_cancel_button.text = Loc.t("progress.cancelling")
 	cancel_requested.emit()

@@ -151,7 +151,7 @@ static func game_log_root() -> String:
 static func display_path() -> String:
 	var dir: String = active_save_dir()
 	if dir.is_empty():
-		return "未作成"
+		return Loc.t("save.not_created")
 	return dir
 
 

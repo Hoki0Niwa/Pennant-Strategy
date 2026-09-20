@@ -6,37 +6,35 @@ extends "res://ui/components/dashboard_screen.gd"
 
 const WarCalculator = preload("res://services/reports/war_calculator.gd")
 
-const LEAGUES: Array = [
-	{"key": "league1", "label": "第1リーグ"},
-	{"key": "league2", "label": "第2リーグ"},
-]
+const LEAGUES: Array = ["league1", "league2"]
 
 const RANKING_TOP_COUNT: int = 7
 const QUALIFIER_PA_PER_TEAM_GAME: float = 3.1
 const QUALIFIER_OUTS_PER_TEAM_GAME: float = 3.0
 
 const BATTER_CATEGORIES: Array = [
-	{"key": "war",       "label": "WAR",    "min_pa": false},
-	{"key": "average",   "label": "打率",   "min_pa": true},
-	{"key": "home_runs", "label": "本塁打", "min_pa": false},
-	{"key": "rbi",       "label": "打点",   "min_pa": false},
-	{"key": "ops",       "label": "OPS",    "min_pa": true},
-	{"key": "hits",      "label": "安打",   "min_pa": false},
-	{"key": "woba",      "label": "wOBA",   "min_pa": true},
-	{"key": "wrc_plus",  "label": "wRC+",   "min_pa": true},
-	{"key": "stolen",    "label": "盗塁",   "min_pa": false},
+	{"key": "war",       "label": "stat.war",       "min_pa": false},
+	{"key": "average",   "label": "stat.avg",       "min_pa": true},
+	{"key": "home_runs", "label": "stat.home_runs", "min_pa": false},
+	{"key": "rbi",       "label": "stat.rbi",       "min_pa": false},
+	{"key": "ops",       "label": "stat.ops",       "min_pa": true},
+	{"key": "hits",      "label": "stat.hits",      "min_pa": false},
+	{"key": "woba",      "label": "stat.woba",      "min_pa": true},
+	{"key": "wrc_plus",  "label": "stat.wrc_plus",  "min_pa": true},
+	{"key": "stolen",    "label": "stat.stolen_bases", "min_pa": false},
 ]
 
+# label は表示名のキー (Loc)。
 const PITCHER_CATEGORIES: Array = [
-	{"key": "war",        "label": "WAR",    "min_ip": false},
-	{"key": "wins",       "label": "勝利",   "min_ip": false},
-	{"key": "era",        "label": "防御率", "min_ip": true,  "ascending": true},
-	{"key": "strikeouts", "label": "奪三振", "min_ip": false},
-	{"key": "fip",        "label": "FIP",    "min_ip": true,  "ascending": true},
-	{"key": "saves",      "label": "セーブ", "min_ip": false},
-	{"key": "holds",      "label": "ホールド", "min_ip": false},
-	{"key": "k9",         "label": "K/9",    "min_ip": true},
-	{"key": "woba_allowed", "label": "wOBAA", "min_ip": true, "ascending": true},
+	{"key": "war",        "label": "stat.war",        "min_ip": false},
+	{"key": "wins",       "label": "stat.wins",       "min_ip": false},
+	{"key": "era",        "label": "stat.era",        "min_ip": true,  "ascending": true},
+	{"key": "strikeouts", "label": "stat.strikeouts", "min_ip": false},
+	{"key": "fip",        "label": "stat.fip",        "min_ip": true,  "ascending": true},
+	{"key": "saves",      "label": "stat.saves",      "min_ip": false},
+	{"key": "holds",      "label": "stat.holds",      "min_ip": false},
+	{"key": "k9",         "label": "stat.k9",         "min_ip": true},
+	{"key": "woba_allowed", "label": "stat.woba_allowed", "min_ip": true, "ascending": true},
 ]
 
 # --- レイアウト基準 (base 座標) ---
@@ -114,7 +112,7 @@ func _draw() -> void:
 		_draw_empty()
 		return
 
-	_draw_shell("タイトル争い", team, season)
+	_draw_shell(Loc.t("screen.rankings"), team, season)
 	if not _info_text.is_empty():
 		_text(_info_text, Vector2(INNER_L, INFO_Y), 13, MUTED)
 
@@ -122,15 +120,14 @@ func _draw() -> void:
 	var tab_data: Dictionary = _data.get(tab_key, {}) as Dictionary
 	var league_w: float = (INNER_R - INNER_L - LEAGUE_GAP) / 2.0
 	for li in range(LEAGUES.size()):
-		var league: Dictionary = LEAGUES[li] as Dictionary
-		var key: String = str(league["key"])
+		var key: String = str(LEAGUES[li])
 		var lx: float = INNER_L + float(li) * (league_w + LEAGUE_GAP)
-		_draw_league_column(lx, league_w, str(league["label"]), tab_data.get(key, []) as Array)
+		_draw_league_column(lx, league_w, PSTeam.league_label_for(key), tab_data.get(key, []) as Array)
 
 
 func _draw_empty() -> void:
 	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-	_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+	_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 
 
 func _draw_league_column(lx: float, lw: float, label: String, cats: Array) -> void:
@@ -157,7 +154,7 @@ func _draw_category_panel(rect: Rect2, label: String, rows: Array) -> void:
 	_line(Vector2(rect.position.x + 12, rect.position.y + 44), Vector2(rect.end.x - 12, rect.position.y + 44), BORDER, 1.5)
 
 	if rows.is_empty():
-		_text("データなし", Vector2(rect.position.x + 12, rect.position.y + 72), 12, FAINT)
+		_text(Loc.t("common.no_data"), Vector2(rect.position.x + 12, rect.position.y + 72), 12, FAINT)
 		return
 
 	var inner_x: float = rect.position.x + 12.0
@@ -202,18 +199,18 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
 	_build_nav_buttons()
 
 	# ヘッダ右側に 野手/投手 タブ + 再集計。
-	_add_button("tab_batter", "野手", Rect2(1486, 22, 92, 42),
+	_add_button("tab_batter", Loc.t("common.fielder"), Rect2(1486, 22, 92, 42),
 		func() -> void: _set_tab(true), "chip_active" if _show_batters else "chip")
-	_add_button("tab_pitcher", "投手", Rect2(1584, 22, 92, 42),
+	_add_button("tab_pitcher", Loc.t("common.pitcher"), Rect2(1584, 22, 92, 42),
 		func() -> void: _set_tab(false), "chip_active" if not _show_batters else "chip")
-	_add_button("refresh", "再集計", Rect2(1682, 22, 110, 42), _on_refresh_pressed, "action")
+	_add_button("refresh", Loc.t("rankings.refresh"), Rect2(1682, 22, 110, 42), _on_refresh_pressed, "action")
 
 	_layout_buttons()
 
@@ -243,11 +240,11 @@ func _refresh() -> void:
 	var max_team_games: int = _max_team_games(season)
 	var qualifier_pa: int = int(max(1, ceil(QUALIFIER_PA_PER_TEAM_GAME * float(max_team_games))))
 	var qualifier_outs: int = int(max(1, ceil(QUALIFIER_OUTS_PER_TEAM_GAME * float(max_team_games))))
-	_info_text = "各部門 Top%d    規定打席 ≥ %d    規定投球回 ≥ %s 回    ※所属球団試合数基準" % [
-		RANKING_TOP_COUNT,
-		qualifier_pa,
-		_format_innings(qualifier_outs),
-	]
+	_info_text = Loc.t("rankings.info", {
+		"top": RANKING_TOP_COUNT,
+		"pa": qualifier_pa,
+		"ip": _format_innings(qualifier_outs),
+	})
 
 	_war_ctx_cache = WarCalculator.build_league_context(season.year, season.season_number)
 	var all_records: Array = _collect_records(season)
@@ -255,12 +252,12 @@ func _refresh() -> void:
 	var batter: Dictionary = {}
 	var pitcher: Dictionary = {}
 	for league_row in LEAGUES:
-		var key: String = str((league_row as Dictionary)["key"])
+		var key: String = str(league_row)
 		var bcats: Array = []
 		for category_row in BATTER_CATEGORIES:
 			var category: Dictionary = category_row as Dictionary
 			bcats.append({
-				"label": str(category["label"]),
+				"label": Loc.t(str(category["label"])),
 				"rows": _batter_rows(all_records, category, season, key),
 			})
 		batter[key] = bcats
@@ -268,7 +265,7 @@ func _refresh() -> void:
 		for category_row in PITCHER_CATEGORIES:
 			var category: Dictionary = category_row as Dictionary
 			pcats.append({
-				"label": str(category["label"]),
+				"label": Loc.t(str(category["label"])),
 				"rows": _pitcher_rows(all_records, category, season, key),
 			})
 		pitcher[key] = pcats

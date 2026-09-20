@@ -140,11 +140,11 @@ const GROWTH_KIND_ORDER: Array = [
 	GROWTH_KIND_MAJOR_DECLINE,
 ]
 const GROWTH_KIND_LABELS: Dictionary = {
-	"awakening": "覚醒",
-	"growth": "成長",
-	"stagnation": "停滞",
-	"decline": "劣化",
-	"major_decline": "大幅劣化",
+	"awakening": "growth.kind.awakening",
+	"growth": "growth.kind.growth",
+	"stagnation": "growth.kind.stagnation",
+	"decline": "growth.kind.decline",
+	"major_decline": "growth.kind.major_decline",
 }
 # 成長/衰え時の 1 キーあたり z 変化量の一律スケール。値を上げるほどオフごとの能力の振れが大きくなる。
 # z は Z_ABILITY_MIN/MAX (±4) でクランプされるため暴走しない。年齢別の成長/劣化バランス
@@ -206,11 +206,11 @@ static func release_block_reason(player: PSPlayer, offseason_year: int) -> Strin
 	if player == null:
 		return ""
 	if player.is_multi_year_locked_offseason(offseason_year):
-		return "複数年契約中(残%d年)" % player.contract_years_remaining(offseason_year)
+		return Loc.t("offseason.block_reason.multi_year", {"years": player.contract_years_remaining(offseason_year)})
 	if player.is_fa_declared(offseason_year):
-		return "今オフFA宣言済み"
+		return Loc.t("offseason.block_reason.fa_declared")
 	if player.is_new_fa_holder(offseason_year):
-		return "今オフFA権を新規取得"
+		return Loc.t("offseason.block_reason.new_fa_holder")
 	return ""
 
 
@@ -219,12 +219,12 @@ static func reject_locked_release_or_demote(players: Array, release_ids: Array, 
 		var player: PSPlayer = _find_player_by_id(players, int(id_value))
 		var reason: String = release_block_reason(player, offseason_year)
 		if not reason.is_empty():
-			return {"ok": false, "message": "%s は%sのため戦力外にできません" % [player.name, reason]}
+			return {"ok": false, "message": Loc.t("offseason.error.cannot_release", {"player": player.name, "reason": reason})}
 	for id_value in demote_ids:
 		var player: PSPlayer = _find_player_by_id(players, int(id_value))
 		var reason: String = release_block_reason(player, offseason_year)
 		if not reason.is_empty():
-			return {"ok": false, "message": "%s は%sのため育成降格にできません" % [player.name, reason]}
+			return {"ok": false, "message": Loc.t("offseason.error.cannot_demote", {"player": player.name, "reason": reason})}
 	return {"ok": true}
 
 
@@ -1161,7 +1161,7 @@ static func injury_value_penalty(player: PSPlayer) -> float:
 
 
 static func development_kind_label(kind: String) -> String:
-	return str(GROWTH_KIND_LABELS.get(kind, kind))
+	return Loc.t(str(GROWTH_KIND_LABELS[kind])) if GROWTH_KIND_LABELS.has(kind) else kind
 
 
 static func expected_development_score_bonus(age: int, horizon: int = 6, _position: int = 0) -> float:
@@ -2078,12 +2078,12 @@ static func _contract_years_entry_by_player_id(state: Dictionary, player_id: int
 # 選手への適用は finalize_contract_years でまとめて行う (取り消しできるようにするため)。
 static func submit_contract_years(state: Dictionary, players: Array, teams: Array, user_team_id: int, player_id: int, years: int) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "契約年数の決定は既に終了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("contract_years.error.already_complete"), "state": state}
 	var entry: Dictionary = _contract_years_entry_by_player_id(state, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は契約年数の決定対象ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("contract_years.error.not_target"), "state": state}
 	if int(entry.get("team_id", 0)) != user_team_id:
-		return {"ok": false, "message": "自球団の選手のみ契約年数を決められます。", "state": state}
+		return {"ok": false, "message": Loc.t("contract_years.error.not_user_player"), "state": state}
 	var clamped_years: int = clampi(years, 1, maxi(1, int(entry.get("max_years", 1))))
 	var salary: int = _contract_years_salary(int(entry.get("base_salary", 0)), clamped_years)
 	if clamped_years >= 2:
@@ -2091,7 +2091,7 @@ static func submit_contract_years(state: Dictionary, players: Array, teams: Arra
 		var team: PSTeam = _find_team_by_id(teams, user_team_id)
 		var delta: int = maxi(0, salary - (player.salary if player != null else 0))
 		if not TeamFinance.can_afford_addition(players, team, delta):
-			return {"ok": false, "message": "予算が不足しているためこの年数では契約できません。", "state": state}
+			return {"ok": false, "message": Loc.t("contract_years.error.over_budget"), "state": state}
 	entry["decided"] = true
 	entry["years"] = clamped_years
 	entry["salary"] = salary
@@ -2102,7 +2102,7 @@ static func submit_contract_years(state: Dictionary, players: Array, teams: Arra
 static func withdraw_contract_years(state: Dictionary, player_id: int) -> Dictionary:
 	var entry: Dictionary = _contract_years_entry_by_player_id(state, player_id)
 	if entry.is_empty():
-		return {"ok": false, "message": "その選手は契約年数の決定対象ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("contract_years.error.not_target"), "state": state}
 	entry["decided"] = false
 	entry["years"] = 0
 	entry["salary"] = 0
@@ -2226,7 +2226,7 @@ static func _contract_years_result(state: Dictionary, decisions: Array) -> Dicti
 		return int((a as Dictionary).get("value", 0)) > int((b as Dictionary).get("value", 0))
 	)
 	return {
-		"title": "契約年数",
+		"title": Loc.t("contract_years.title"),
 		"year": int(state.get("year", 0)),
 		"decisions": decisions,
 		"decided_count": decisions.size(),

@@ -309,7 +309,7 @@ func _team_roster_rows(team_id: int, season: PSSeason) -> Array:
 			"years": player.years,
 			"foreign_player": player.foreign_player,
 			"position": player.position,
-			"position_label": str(PSPlayer.POSITION_NAMES.get(player.position, "-")) + ("/" + player.role if is_pitcher and player.role != "" else ""),
+			"position_label": PSPlayer.position_name(player.position, "-") + ("/" + player.role if is_pitcher and player.role != "" else ""),
 			"is_pitcher": is_pitcher,
 			"salary": player.salary,
 			"overall": int(new_components.get("current", 0.0)),

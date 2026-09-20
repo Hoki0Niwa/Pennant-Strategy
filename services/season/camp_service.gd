@@ -85,17 +85,6 @@ const POSITION_CONVERT_DIFFICULTY: Dictionary = {
 const DEFENSE_PRESSURE_MIN_RATING_DELTA: float = -4.0
 const DEFENSE_PRESSURE_BASE: float = 30.0
 const DEFENSE_PRESSURE_WEIGHT: float = 18.0
-const POSITION_LABELS: Dictionary = {
-	1: "投手",
-	2: "捕手",
-	3: "一塁",
-	4: "二塁",
-	5: "三塁",
-	6: "遊撃",
-	7: "左翼",
-	8: "中堅",
-	9: "右翼",
-}
 
 
 static func process_camp(players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
@@ -140,25 +129,25 @@ static func create_camp_state(players: Array, teams: Array, season: PSSeason, us
 
 static func submit_user_camp_action(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "キャンプは既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.already_complete"), "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var entry: Dictionary = _state_candidate_by_id(state, candidate_id)
 	if entry.is_empty() or not bool(entry.get("available", true)):
-		return {"ok": false, "message": "その特別練習は選択できません。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.training_unavailable"), "state": state}
 	if int(entry.get("team_id", 0)) != user_team_id:
-		return {"ok": false, "message": "自球団の候補ではありません。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.not_user_candidate"), "state": state}
 
 	if action == "skip":
 		entry["user_skipped"] = true
 		_advance_user_state_if_done(state, players, teams, season)
 		return {"ok": true, "state": state}
 	if action != "train":
-		return {"ok": false, "message": "不正なキャンプ操作です。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.invalid_action"), "state": state}
 	if not _can_apply_entry(state, entry):
 		entry["available"] = false
-		return {"ok": false, "message": "この球団または選手は今オフの特別練習上限に達しています。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.training_limit"), "state": state}
 	_apply_training(state, players, season, entry, "user")
 	_advance_user_state_if_done(state, players, teams, season)
 	return {"ok": true, "state": state}
@@ -341,20 +330,20 @@ static func submit_user_player_training(
 	target_position: int = 0
 ) -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "キャンプは既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.already_complete"), "state": state}
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var player: PSPlayer = _find_player_by_id(players, player_id)
 	if player == null or player.team_id != user_team_id:
-		return {"ok": false, "message": "自球団の選手を選択してください。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.select_user_player"), "state": state}
 	if not _player_can_train(player):
-		return {"ok": false, "message": "この選手は今オフの特別練習を選択できません。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.player_cannot_train"), "state": state}
 	var entry: Dictionary = _build_user_training_entry(player, season, training_type, target_position)
 	if entry.is_empty():
-		return {"ok": false, "message": "この選手には選択できない特別練習です。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.training_not_for_player"), "state": state}
 	if not _can_apply_entry(state, entry):
-		return {"ok": false, "message": "この球団または選手は今オフの特別練習上限に達しています。", "state": state}
+		return {"ok": false, "message": Loc.t("camp.error.training_limit"), "state": state}
 	_apply_training(state, players, season, entry, "user_manual")
 	_advance_user_training_state_if_done(state, players, teams, season)
 	return {"ok": true, "state": state}
@@ -442,7 +431,9 @@ static func _pitcher_candidates(player: PSPlayer, profile: Dictionary, season: P
 			var relief_advantage: float = PSPitcherRoleModel.reliever_advantage(record)
 			var blocked: float = (value * 0.5 + 20.0 + float(starter_surplus) * ROLE_BALANCE_NEED_WEIGHT) * idle
 			var expected_relief: float = blocked + relief_advantage * 8.0
-			rows.append(_candidate_base(player, TRAIN_RELIEVER, expected_relief, _reliever_success_chance(record), "中継不足(先発過多 %d) / 出場不足 %.0f%% / 救援適性差 %.2f" % [starter_surplus, idle * 100.0, relief_advantage]))
+			rows.append(_candidate_base(player, TRAIN_RELIEVER, expected_relief, _reliever_success_chance(record), Loc.t("camp.reason.reliever", {
+				"surplus": starter_surplus, "idle": "%.0f" % (idle * 100.0), "advantage": "%.2f" % relief_advantage,
+			})))
 	else:
 		# 先発不足のときだけ、出場の少ない高能力中継を先発適性順に先発へ。
 		if starter_surplus < 0:
@@ -450,7 +441,9 @@ static func _pitcher_candidates(player: PSPlayer, profile: Dictionary, season: P
 			var deficit: int = -starter_surplus
 			var blocked_s: float = (value * 0.5 + 20.0 + float(deficit) * ROLE_BALANCE_NEED_WEIGHT) * idle
 			var expected: float = blocked_s + advantage * 8.0
-			rows.append(_candidate_base(player, TRAIN_STARTER, expected, _starter_success_chance(record), "先発不足 %d / 出場不足 %.0f%% / 先発適性差 %.2f" % [deficit, idle * 100.0, advantage]))
+			rows.append(_candidate_base(player, TRAIN_STARTER, expected, _starter_success_chance(record), Loc.t("camp.reason.starter", {
+				"deficit": deficit, "idle": "%.0f" % (idle * 100.0), "advantage": "%.2f" % advantage,
+			})))
 	return rows
 
 
@@ -482,7 +475,9 @@ static func _fielder_candidates(player: PSPlayer, profile: Dictionary, season: P
 		if current_aptitude <= 0:
 			var expected: float = position_need + pressure * 0.5 - surplus_penalty * 0.5 + float(ability_bonus) * 1.8 + float(OffseasonService.player_value_score(player)) * 0.04
 			if position_need > 0.0 or ability_bonus >= 2 or pressure > 0.0:
-				var entry: Dictionary = _candidate_base(player, TRAIN_POSITION_LEARN, expected, _position_learn_success_chance(record, position, ability_bonus), "守備可人数不足 %.1f / 適性補正 %+d / 守備実績圧力 %.0f" % [position_need, ability_bonus, pressure * 0.5])
+				var entry: Dictionary = _candidate_base(player, TRAIN_POSITION_LEARN, expected, _position_learn_success_chance(record, position, ability_bonus), Loc.t("camp.reason.position_learn", {
+					"need": "%.1f" % position_need, "bonus": "%+d" % ability_bonus, "pressure": "%.0f" % (pressure * 0.5),
+				}))
 				entry["target_position"] = position
 				entry["target_position_name"] = _position_label(position)
 				entry["projected_aptitude"] = _target_aptitude(record, position, false)
@@ -491,7 +486,9 @@ static func _fielder_candidates(player: PSPlayer, profile: Dictionary, season: P
 			var convert_need: float = _primary_need_score(profile, position) + position_need * 0.5
 			var expected_convert: float = convert_need + pressure - surplus_penalty + float(current_aptitude - 55) * 0.18 + float(ability_bonus) * 1.2
 			if convert_need > 0.0 or current_aptitude >= 82 or pressure > 0.0:
-				var convert_entry: Dictionary = _candidate_base(player, TRAIN_POSITION_CONVERT, expected_convert, _position_convert_success_chance(record, position, current_aptitude, ability_bonus), "本職不足 %.1f / 現適性 %d / 適性補正 %+d / 守備実績圧力 %.0f" % [convert_need, current_aptitude, ability_bonus, pressure])
+				var convert_entry: Dictionary = _candidate_base(player, TRAIN_POSITION_CONVERT, expected_convert, _position_convert_success_chance(record, position, current_aptitude, ability_bonus), Loc.t("camp.reason.position_convert", {
+					"need": "%.1f" % convert_need, "aptitude": current_aptitude, "bonus": "%+d" % ability_bonus, "pressure": "%.0f" % pressure,
+				}))
 				convert_entry["target_position"] = position
 				convert_entry["target_position_name"] = _position_label(position)
 				convert_entry["projected_aptitude"] = _target_aptitude(record, position, true)
@@ -553,11 +550,11 @@ static func _build_user_training_entry(player: PSPlayer, season: PSSeason, train
 		if training_type == TRAIN_STARTER:
 			if is_starter:
 				return {}
-			return _candidate_base(player, TRAIN_STARTER, 0.0, _starter_success_chance(record), "選手指定: 先発転向")
+			return _candidate_base(player, TRAIN_STARTER, 0.0, _starter_success_chance(record), Loc.t("camp.reason.user_starter"))
 		if training_type == TRAIN_RELIEVER:
 			if not is_starter:
 				return {}
-			return _candidate_base(player, TRAIN_RELIEVER, 0.0, _reliever_success_chance(record), "選手指定: リリーフ転向")
+			return _candidate_base(player, TRAIN_RELIEVER, 0.0, _reliever_success_chance(record), Loc.t("camp.reason.user_reliever"))
 		return {}
 
 	if target_position < 3 or target_position > 9 or not DEFENSIVE_POSITIONS.has(target_position):
@@ -574,7 +571,7 @@ static func _build_user_training_entry(player: PSPlayer, season: PSSeason, train
 			TRAIN_POSITION_LEARN,
 			0.0,
 			_position_learn_success_chance(record, target_position, ability_bonus),
-			"選手指定: 守備位置獲得"
+			Loc.t("camp.reason.user_position_learn")
 		)
 		learn["target_position"] = target_position
 		learn["target_position_name"] = _position_label(target_position)
@@ -588,7 +585,7 @@ static func _build_user_training_entry(player: PSPlayer, season: PSSeason, train
 			TRAIN_POSITION_CONVERT,
 			0.0,
 			_position_convert_success_chance(record, target_position, current_aptitude, ability_bonus),
-			"選手指定: 既存サブポジから本職変更"
+			Loc.t("camp.reason.user_position_convert")
 		)
 		convert_entry["target_position"] = target_position
 		convert_entry["target_position_name"] = _position_label(target_position)
@@ -608,7 +605,7 @@ static func _candidate_base(player: PSPlayer, training_type: String, expected_va
 		"training_type": training_type,
 		"training_label": training_label(training_type),
 		"success_chance": success_chance,
-		"risk_label": "中",
+		"risk_label": Loc.t("camp.risk.medium"),
 		"expected_value": expected_value,
 		"need_score": max(0.0, expected_value),
 		"reason": reason,
@@ -619,13 +616,13 @@ static func _candidate_base(player: PSPlayer, training_type: String, expected_va
 static func training_label(training_type: String) -> String:
 	match training_type:
 		TRAIN_STARTER:
-			return "先発転向"
+			return Loc.t("camp.training.starter")
 		TRAIN_RELIEVER:
-			return "リリーフ転向"
+			return Loc.t("camp.training.reliever")
 		TRAIN_POSITION_LEARN:
-			return "新守備位置習得"
+			return Loc.t("camp.training.position_learn")
 		TRAIN_POSITION_CONVERT:
-			return "本職変更"
+			return Loc.t("camp.training.position_convert")
 		_:
 			return training_type
 
@@ -1133,4 +1130,4 @@ static func _find_player_by_id(players: Array, player_id: int) -> PSPlayer:
 
 
 static func _position_label(position: int) -> String:
-	return str(POSITION_LABELS.get(position, "?"))
+	return PSPlayer.position_mid_name(position) if position >= 1 and position <= 9 else "?"

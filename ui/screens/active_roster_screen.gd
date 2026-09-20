@@ -35,18 +35,18 @@ const COL3: Rect2 = Rect2(1390, COL_TOP, 510, COL_H)
 # 育成カラム下部に支配下登録ボタンを置くため、育成リストはこの分だけ短くする。
 const DEV_BUTTON_RESERVE: float = 48.0
 
-# ポジション絞り込み: 0=全 / 1=投 / 2..9=守備位置 (サブポジ適性も含めて判定)。
+# ポジション絞り込み: 0=全 / 1=投 / 2..9=守備位置 (サブポジ適性も含めて判定)。label は表示名のキー (Loc)。
 const FILTER_DEFS: Array = [
-	{"pos": 0, "label": "全"},
-	{"pos": 1, "label": "投"},
-	{"pos": 2, "label": "捕"},
-	{"pos": 3, "label": "一"},
-	{"pos": 4, "label": "二"},
-	{"pos": 5, "label": "三"},
-	{"pos": 6, "label": "遊"},
-	{"pos": 7, "label": "左"},
-	{"pos": 8, "label": "中"},
-	{"pos": 9, "label": "右"},
+	{"pos": 0, "label": "filter.all"},
+	{"pos": 1, "label": "position_short.pitcher"},
+	{"pos": 2, "label": "position_short.catcher"},
+	{"pos": 3, "label": "position_short.first_base"},
+	{"pos": 4, "label": "position_short.second_base"},
+	{"pos": 5, "label": "position_short.third_base"},
+	{"pos": 6, "label": "position_short.shortstop"},
+	{"pos": 7, "label": "position_short.left_field"},
+	{"pos": 8, "label": "position_short.center_field"},
+	{"pos": 9, "label": "position_short.right_field"},
 ]
 
 const DETAIL: Rect2 = Rect2(262, 740, 700, 316)
@@ -190,7 +190,7 @@ func _finish_drag(base_pos: Vector2) -> void:
 	elif src == "dev" and (dst == "active" or dst == "inactive"):
 		_promote_to_controlled(id)
 	else:
-		_set_status("この移動はできません (育成への降格は戦力外フェーズで行います)", true)
+		_set_status(Loc.t("roster.invalid_move"), true)
 
 
 func _drop_zone_at(base_pos: Vector2) -> String:
@@ -229,15 +229,15 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("チームが選択されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("sim.error.no_team"), Vector2(770, 496), 20, MUTED)
 		return
 
-	_draw_shell("選手登録", team, season)
+	_draw_shell(Loc.t("screen.active_roster"), team, season)
 
 	var summary: Dictionary = _compute_stats()
 	_draw_stat_cards(summary)
 	# ポジション絞り込みチップ列の補足ラベル (チップ本体はオーバーレイボタン)。
-	_text("ポジション絞り込み (サブポジ含む)", Vector2(INNER_L + float(FILTER_DEFS.size()) * 50.0 + 8.0, FILTER_Y + 21), 12, FAINT)
+	_text(Loc.t("roster.filter_hint"), Vector2(INNER_L + float(FILTER_DEFS.size()) * 50.0 + 8.0, FILTER_Y + 21), 12, FAINT)
 	_draw_columns()
 	_draw_detail_panels(summary)
 
@@ -269,16 +269,16 @@ func _draw_stat_cards(s: Dictionary) -> void:
 	var f_color: Color = RED if not ForeignActiveRosterRules.is_within_limits(foreign_counts) else TEXT
 
 	var cells: Array = [
-		{"label": "1軍", "value": "%d/%d" % [total, ROSTER_MAX], "color": total_color},
-		{"label": "投手", "value": str(pitchers), "color": pit_color,
-			"note": "先発%d 中継%d" % [int(s["starters"]), int(s["middle"])]},
-		{"label": "野手", "value": str(fielders),
-			"note": "捕%d 内%d 外%d" % [catchers, int(s["infield"]), int(s["outfield"])]},
-		{"label": "捕手", "value": str(catchers), "color": c_color, "note": "最低%d" % MIN_CATCHERS},
-		{"label": "外国人", "value": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color,
-			"note": "投%d 野%d（各%d以内）" % [foreign_pitchers, foreign_fielders, FOREIGN_TYPE_MAX]},
-		{"label": "支配下", "value": "%d/%d" % [int(s["controlled"]), TeamFinance.CONTROLLED_LIMIT]},
-		{"label": "育成", "value": str(int(s["development"])), "color": GREEN},
+		{"label": Loc.t("roster.first_team"), "value": "%d/%d" % [total, ROSTER_MAX], "color": total_color},
+		{"label": Loc.t("common.pitcher"), "value": str(pitchers), "color": pit_color,
+			"note": Loc.t("roster.pitchers_note", {"starters": int(s["starters"]), "middle": int(s["middle"])})},
+		{"label": Loc.t("common.fielder"), "value": str(fielders),
+			"note": Loc.t("roster.fielders_note", {"c": catchers, "inf": int(s["infield"]), "of": int(s["outfield"])})},
+		{"label": Loc.t("position.catcher"), "value": str(catchers), "color": c_color, "note": Loc.t("roster.catchers_note", {"min": MIN_CATCHERS})},
+		{"label": Loc.t("roster.foreign"), "value": "%d/%d" % [foreigners, FOREIGN_MAX], "color": f_color,
+			"note": Loc.t("roster.foreign_note", {"p": foreign_pitchers, "f": foreign_fielders, "max": FOREIGN_TYPE_MAX})},
+		{"label": Loc.t("common.controlled"), "value": "%d/%d" % [int(s["controlled"]), TeamFinance.CONTROLLED_LIMIT]},
+		{"label": Loc.t("common.development_chip"), "value": str(int(s["development"])), "color": GREEN},
 	]
 	_stat_strip(Rect2(INNER_L, CARD_Y, INNER_R - INNER_L, CARD_H), cells)
 
@@ -321,9 +321,9 @@ func _draw_columns() -> void:
 	dev_rows.sort_custom(sort_by_position)
 
 	_row_hits = []
-	_draw_column(COL1, "1軍", "%d/%d" % [active_rows.size(), ROSTER_MAX], active_rows, "active", 0.0)
-	_draw_column(COL2, "2軍", "%d人" % inactive_rows.size(), inactive_rows, "inactive", 0.0)
-	_draw_column(COL3, "育成", "%d人" % dev_rows.size(), dev_rows, "dev", DEV_BUTTON_RESERVE)
+	_draw_column(COL1, Loc.t("roster.first_team"), "%d/%d" % [active_rows.size(), ROSTER_MAX], active_rows, "active", 0.0)
+	_draw_column(COL2, Loc.t("roster.second_team"), Loc.t("common.people_value", {"n": inactive_rows.size()}), inactive_rows, "inactive", 0.0)
+	_draw_column(COL3, Loc.t("common.development_chip"), Loc.t("common.people_value", {"n": dev_rows.size()}), dev_rows, "dev", DEV_BUTTON_RESERVE)
 
 
 func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, list_key: String, reserve_bottom: float) -> void:
@@ -337,12 +337,12 @@ func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, 
 	var x: float = panel.position.x
 	var w: float = panel.size.x
 	var hy: float = panel.position.y + 58
-	_text("区分▾", Vector2(x + C_CHIP_X, hy), FS_LABEL, FAINT)
-	_text("選手", Vector2(x + C_NAME_X, hy), FS_LABEL, FAINT)
-	_text_right("年齢", x + w - C_AGE_ROFF, hy, FS_LABEL, FAINT, 40)
+	_text(Loc.t("roster.col.category_sort"), Vector2(x + C_CHIP_X, hy), FS_LABEL, FAINT)
+	_text(Loc.t("col.player"), Vector2(x + C_NAME_X, hy), FS_LABEL, FAINT)
+	_text_right(Loc.t("col.age"), x + w - C_AGE_ROFF, hy, FS_LABEL, FAINT, 40)
 	_text_right("WAR", x + w - C_WAR_ROFF, hy, FS_LABEL, FAINT, 40)
-	_text_right("評価", x + w - C_EVAL_ROFF, hy, FS_LABEL, FAINT, 44)
-	_text("備考", Vector2(x + w - C_NOTE_ROFF, hy), FS_LABEL, FAINT)
+	_text_right(Loc.t("col.evaluation"), x + w - C_EVAL_ROFF, hy, FS_LABEL, FAINT, 44)
+	_text(Loc.t("roster.col.note"), Vector2(x + w - C_NOTE_ROFF, hy), FS_LABEL, FAINT)
 	_line(Vector2(x + C_CHIP_X, panel.position.y + 68), Vector2(x + w - 16, panel.position.y + 68), HAIRLINE, 1.0)
 
 	var row0: float = panel.position.y + 88
@@ -368,9 +368,9 @@ func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, 
 		y += ROW_H
 
 	if rows.is_empty():
-		_text("該当する選手がいません", Vector2(x + 16, row0 + 6), 13, MUTED)
+		_text(Loc.t("common.no_matching_players"), Vector2(x + 16, row0 + 6), 13, MUTED)
 	elif max_scroll > 0:
-		_text("▲▼ ホイールでスクロール (%d/%d)" % [min(start + visible_count, rows.size()), rows.size()],
+		_text(Loc.t("roster.scroll_hint", {"shown": min(start + visible_count, rows.size()), "total": rows.size()}),
 			Vector2(x + 16, bottom + 6), 10, FAINT)
 
 
@@ -385,7 +385,7 @@ func _draw_row(row: Dictionary, x: float, w: float, y: float) -> void:
 	_text_right(str(int(row["eval"])), x + w - C_EVAL_ROFF, y, 14, _eval_color(int(row["eval"])), 44)
 	var note: String = str(row["note"])
 	if not note.is_empty():
-		_text(note, Vector2(x + w - C_NOTE_ROFF, y), 11, AMBER if note.begins_with("怪我") else MUTED, C_NOTE_ROFF - 12)
+		_text(note, Vector2(x + w - C_NOTE_ROFF, y), 11, AMBER if bool(row.get("note_injury", false)) else MUTED, C_NOTE_ROFF - 12)
 
 
 # --- 下段パネル ---
@@ -397,10 +397,10 @@ func _draw_detail_panels(_summary: Dictionary) -> void:
 
 
 func _draw_player_detail() -> void:
-	_panel(DETAIL, "選手詳細")
+	_panel(DETAIL, Loc.t("screen.player_detail"))
 	var player: PSPlayer = GameDb.get_player(_selected_id)
 	if player == null:
-		_text("選手を選択してください", Vector2(DETAIL.position.x + 18, DETAIL.position.y + 70), 14, MUTED)
+		_text(Loc.t("roster.select_player"), Vector2(DETAIL.position.x + 18, DETAIL.position.y + 70), 14, MUTED)
 		return
 	var record: PSPlayerSeasonRecord = _find_record(_selected_id)
 
@@ -413,7 +413,7 @@ func _draw_player_detail() -> void:
 	_chip(Rect2(px + 56 + _measure(player.name, 22) + 16, top - 20, 48, 24), str(role_chip["text"]), role_chip["color"] as Color)
 
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(Offseason.player_value_score(player))
-	_text_right("総合", DETAIL.end.x - 84, top - 18, 12, FAINT, 60)
+	_text_right(Loc.t("col.overall"), DETAIL.end.x - 84, top - 18, 12, FAINT, 60)
 	_text_right(str(eval), DETAIL.end.x - 18, top + 4, 26, _eval_color(eval), 90)
 
 	# 能力レーティング (PlayerVisibleRatings)。投手/野手で項目が変わる。
@@ -443,21 +443,21 @@ func _draw_player_detail() -> void:
 	_line(Vector2(px, by + 48), Vector2(DETAIL.end.x - 18, by + 48), BORDER_SOFT, 1.0)
 	var cy: float = by + 76
 	var fatigue_pct: int = clampi(int(round(float(player.fatigue) * 100.0 / float(GameSimulator.FATIGUE_MAX))), 0, 100)
-	_text("疲労度", Vector2(px, cy - 18), 11, FAINT)
+	_text(Loc.t("roster.fatigue"), Vector2(px, cy - 18), 11, FAINT)
 	_text("%d%%" % fatigue_pct, Vector2(px, cy + 4), 18, _fatigue_color(fatigue_pct))
-	_text("怪我", Vector2(px + 150, cy - 18), 11, FAINT)
+	_text(Loc.t("roster.injury"), Vector2(px + 150, cy - 18), 11, FAINT)
 	if player.injury_days > 0:
-		_text("%d日  %s" % [player.injury_days, PSInjuryModel.display_label(player.injury_type, player.injury_severity, player.injury_days)],
+		_text(Loc.t("roster.injury_detail", {"days": player.injury_days, "label": PSInjuryModel.display_label(player.injury_type, player.injury_severity, player.injury_days)}),
 			Vector2(px + 150, cy + 4), 16, RED, DETAIL.size.x - 186)
 	else:
-		_text("なし", Vector2(px + 150, cy + 4), 18, GREEN)
+		_text(Loc.t("common.none"), Vector2(px + 150, cy + 4), 18, GREEN)
 
 
 func _draw_season_stats() -> void:
-	_panel(SEASON, "今季成績")
+	_panel(SEASON, Loc.t("roster.season_stats"))
 	var record: PSPlayerSeasonRecord = _find_record(_selected_id)
 	if record == null:
-		_text("出場記録がありません", Vector2(SEASON.position.x + 18, SEASON.position.y + 70), 14, MUTED)
+		_text(Loc.t("roster.no_appearances"), Vector2(SEASON.position.x + 18, SEASON.position.y + 70), 14, MUTED)
 		return
 	var war: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
 	var cells: Array = _pitcher_season_cells(record, war) if record.is_pitcher() else _batter_season_cells(record, war)
@@ -466,10 +466,10 @@ func _draw_season_stats() -> void:
 
 # 直近 RECENT_WINDOW_DAYS 日のスナップショット差分。高度指標は窓別に持てないので基本+派生率のみ。
 func _draw_recent_stats() -> void:
-	_panel(RECENT, "直近2週間")
+	_panel(RECENT, Loc.t("roster.recent_two_weeks"))
 	var record: PSPlayerSeasonRecord = _find_record(_selected_id)
 	if record == null:
-		_text("出場記録がありません", Vector2(RECENT.position.x + 18, RECENT.position.y + 70), 14, MUTED)
+		_text(Loc.t("roster.no_appearances"), Vector2(RECENT.position.x + 18, RECENT.position.y + 70), 14, MUTED)
 		return
 	var snap: Dictionary = {}
 	var season: PSSeason = AppState.current_season
@@ -494,17 +494,17 @@ func _batter_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Arra
 	if ad != null:
 		oaa_total = float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))
 	return [
-		{"label": "試合", "value": str(bs.games)},
-		{"label": "打席", "value": str(bs.plate_appearances)},
-		{"label": "安打", "value": str(bs.hits)},
-		{"label": "本塁打", "value": str(bs.home_runs)},
-		{"label": "打点", "value": str(bs.runs_batted_in)},
-		{"label": "二塁打", "value": str(bs.doubles)},
-		{"label": "盗塁", "value": str(bs.stolen_bases)},
-		{"label": "四球", "value": str(bs.walks)},
-		{"label": "三振", "value": str(bs.strikeouts)},
-		{"label": "打率", "value": _rate_short(bs.batting_average())},
-		{"label": "出塁率", "value": _rate_short(bs.on_base_percentage())},
+		{"label": "col.games", "value": str(bs.games)},
+		{"label": "col.pa", "value": str(bs.plate_appearances)},
+		{"label": "stat.hits", "value": str(bs.hits)},
+		{"label": "stat.home_runs", "value": str(bs.home_runs)},
+		{"label": "stat.rbi", "value": str(bs.runs_batted_in)},
+		{"label": "stat.doubles", "value": str(bs.doubles)},
+		{"label": "stat.stolen_bases", "value": str(bs.stolen_bases)},
+		{"label": "col.walks", "value": str(bs.walks)},
+		{"label": "col.strikeouts_batter", "value": str(bs.strikeouts)},
+		{"label": "stat.avg", "value": _rate_short(bs.batting_average())},
+		{"label": "stat.obp", "value": _rate_short(bs.on_base_percentage())},
 		{"label": "OPS", "value": _rate_short(bs.ops())},
 		{"label": "wOBA", "value": _rate_short(ad.woba()) if played else "-"},
 		{"label": "wRC+", "value": str(int(round(ad.wrc_plus()))) if played else "-"},
@@ -518,13 +518,13 @@ func _batter_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Arra
 # 直近窓用の基本成績 (今季成績の項目から派生率/カウントのみを抜粋。高度指標は窓別に持てない)。
 func _batter_basic_cells(bs: PSBatterStats) -> Array:
 	return [
-		{"label": "試合", "value": str(bs.games)},
-		{"label": "打席", "value": str(bs.plate_appearances)},
-		{"label": "安打", "value": str(bs.hits)},
-		{"label": "本塁打", "value": str(bs.home_runs)},
-		{"label": "打点", "value": str(bs.runs_batted_in)},
-		{"label": "打率", "value": _rate_short(bs.batting_average())},
-		{"label": "出塁率", "value": _rate_short(bs.on_base_percentage())},
+		{"label": "col.games", "value": str(bs.games)},
+		{"label": "col.pa", "value": str(bs.plate_appearances)},
+		{"label": "stat.hits", "value": str(bs.hits)},
+		{"label": "stat.home_runs", "value": str(bs.home_runs)},
+		{"label": "stat.rbi", "value": str(bs.runs_batted_in)},
+		{"label": "stat.avg", "value": _rate_short(bs.batting_average())},
+		{"label": "stat.obp", "value": _rate_short(bs.on_base_percentage())},
 		{"label": "OPS", "value": _rate_short(bs.ops())},
 	]
 
@@ -532,12 +532,12 @@ func _batter_basic_cells(bs: PSBatterStats) -> Array:
 func _pitcher_basic_cells(ps: PSPitcherStats) -> Array:
 	var thrown: bool = ps.outs_pitched > 0
 	return [
-		{"label": "登板", "value": str(ps.games)},
-		{"label": "投球回", "value": _ip_str(ps)},
-		{"label": "勝", "value": str(ps.wins)},
-		{"label": "敗", "value": str(ps.losses)},
-		{"label": "セーブ", "value": str(ps.saves)},
-		{"label": "防御率", "value": ("%0.2f" % ps.era()) if thrown else "-.--"},
+		{"label": "col.appearances", "value": str(ps.games)},
+		{"label": "col.innings", "value": _ip_str(ps)},
+		{"label": "col.wins", "value": str(ps.wins)},
+		{"label": "col.losses", "value": str(ps.losses)},
+		{"label": "stat.saves", "value": str(ps.saves)},
+		{"label": "stat.era", "value": ("%0.2f" % ps.era()) if thrown else "-.--"},
 		{"label": "WHIP", "value": ("%0.2f" % ps.whip()) if thrown else "-.--"},
 		{"label": "K/9", "value": ("%0.2f" % ps.strikeouts_per_nine()) if thrown else "-"},
 	]
@@ -547,18 +547,18 @@ func _pitcher_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Arr
 	var ps: PSPitcherStats = record.pitcher_stats
 	var thrown: bool = ps.outs_pitched > 0
 	return [
-		{"label": "登板", "value": str(ps.games)},
-		{"label": "先発", "value": str(ps.starts)},
-		{"label": "勝", "value": str(ps.wins)},
-		{"label": "敗", "value": str(ps.losses)},
-		{"label": "セーブ", "value": str(ps.saves)},
-		{"label": "ホールド", "value": str(ps.holds)},
-		{"label": "投球回", "value": _ip_str(ps)},
-		{"label": "被安打", "value": str(ps.hits_allowed)},
-		{"label": "被本塁打", "value": str(ps.home_runs_allowed)},
-		{"label": "与四球", "value": str(ps.walks)},
-		{"label": "奪三振", "value": str(ps.strikeouts)},
-		{"label": "防御率", "value": ("%0.2f" % ps.era()) if thrown else "-.--"},
+		{"label": "col.appearances", "value": str(ps.games)},
+		{"label": "col.games_started", "value": str(ps.starts)},
+		{"label": "col.wins", "value": str(ps.wins)},
+		{"label": "col.losses", "value": str(ps.losses)},
+		{"label": "stat.saves", "value": str(ps.saves)},
+		{"label": "stat.holds", "value": str(ps.holds)},
+		{"label": "col.innings", "value": _ip_str(ps)},
+		{"label": "col.hits_allowed", "value": str(ps.hits_allowed)},
+		{"label": "stat.hr_allowed", "value": str(ps.home_runs_allowed)},
+		{"label": "col.walks_allowed", "value": str(ps.walks)},
+		{"label": "stat.strikeouts", "value": str(ps.strikeouts)},
+		{"label": "stat.era", "value": ("%0.2f" % ps.era()) if thrown else "-.--"},
 		{"label": "FIP", "value": ("%0.2f" % float(war.get("fip", 0.0))) if thrown and war.has("fip") else "-.--"},
 		{"label": "WHIP", "value": ("%0.2f" % ps.whip()) if thrown else "-.--"},
 		{"label": "K/9", "value": ("%0.2f" % ps.strikeouts_per_nine()) if thrown else "-"},
@@ -591,7 +591,7 @@ func _draw_stat_grid(panel: Rect2, cells: Array, cols: int) -> void:
 		var cx: float = px + float(col) * cell_w
 		var cy: float = top_y + float(row) * row_h
 		var color: Color = cell.get("color", TEXT) as Color
-		_text(str(cell["label"]), Vector2(cx + 12, cy + row_h * 0.42), FS_LABEL, MUTED, cell_w - 22)
+		_text(Loc.t(str(cell["label"])), Vector2(cx + 12, cy + row_h * 0.42), FS_LABEL, MUTED, cell_w - 22)
 		_text_right(str(cell["value"]), cx + cell_w - 12, cy + row_h * 0.80, 17, color, cell_w - 22)
 
 
@@ -618,9 +618,9 @@ func _draw_drag_ghost() -> void:
 func _build_chrome_buttons() -> void:
 	_build_nav_buttons()
 	# 右上ボタンは投手起用法 (rotation_editor) と同一構成・同位置。
-	_add_button("auto", "自動編成", Rect2(1486, 22, 132, 42), _on_auto_pressed, "action")
-	_add_button("reset", "リセット", Rect2(1628, 22, 112, 42), _load_initial_state, "action")
-	_add_button("save", "保存", Rect2(1750, 22, 132, 42), _on_save_pressed, "primary")
+	_add_button("auto", Loc.t("common.auto_arrange"), Rect2(1486, 22, 132, 42), _on_auto_pressed, "action")
+	_add_button("reset", Loc.t("common.reset"), Rect2(1628, 22, 112, 42), _load_initial_state, "action")
+	_add_button("save", Loc.t("common.save"), Rect2(1750, 22, 132, 42), _on_save_pressed, "primary")
 
 	# ポジション絞り込みチップ列。
 	_filter_buttons = {}
@@ -628,7 +628,7 @@ func _build_chrome_buttons() -> void:
 	for def_value in FILTER_DEFS:
 		var def: Dictionary = def_value as Dictionary
 		var pos: int = int(def["pos"])
-		var btn: Button = _add_button("filter_%d" % pos, str(def["label"]), Rect2(fx, FILTER_Y, 44, 30),
+		var btn: Button = _add_button("filter_%d" % pos, Loc.t(str(def["label"])), Rect2(fx, FILTER_Y, 44, 30),
 			func(p: int = pos) -> void: _set_filter(p),
 			"chip_active" if pos == _filter_pos else "chip")
 		_filter_buttons[pos] = btn
@@ -636,10 +636,10 @@ func _build_chrome_buttons() -> void:
 
 	# 1軍↔2軍 の移動ボタン (ガター中央)。
 	var g1: float = (COL1.end.x + COL2.position.x) * 0.5
-	_add_button("demote", "2軍へ →", Rect2(g1 - 40, COL_TOP + COL_H * 0.5 - 40, 80, 36), _on_demote_pressed, "action")
-	_add_button("promote", "← 1軍へ", Rect2(g1 - 40, COL_TOP + COL_H * 0.5 + 4, 80, 36), _on_promote_pressed, "action")
+	_add_button("demote", Loc.t("roster.demote_button"), Rect2(g1 - 40, COL_TOP + COL_H * 0.5 - 40, 80, 36), _on_demote_pressed, "action")
+	_add_button("promote", Loc.t("roster.promote_button"), Rect2(g1 - 40, COL_TOP + COL_H * 0.5 + 4, 80, 36), _on_promote_pressed, "action")
 	# 支配下登録は育成カラム枠内の下部に置く。
-	_add_button("register", "支配下登録 ↑", Rect2(COL3.position.x + 16, COL3.end.y - 40, COL3.size.x - 32, 32), _on_register_pressed, "primary")
+	_add_button("register", Loc.t("roster.register_button"), Rect2(COL3.position.x + 16, COL3.end.y - 40, COL3.size.x - 32, 32), _on_register_pressed, "primary")
 
 
 # ============================================================ data load
@@ -648,12 +648,12 @@ func _load_initial_state() -> void:
 	var season: PSSeason = AppState.current_season
 	_team_id = AppState.selected_team_id
 	if season == null or _team_id <= 0:
-		_set_status("チームが選択されていません", true)
+		_set_status(Loc.t("sim.error.no_team"), true)
 		queue_redraw()
 		return
 	var team: PSTeam = GameDb.get_team(_team_id)
 	if team == null:
-		_set_status("チーム情報が取得できません", true)
+		_set_status(Loc.t("error.team_not_found"), true)
 		queue_redraw()
 		return
 
@@ -683,14 +683,14 @@ func _load_initial_state() -> void:
 	if saved.is_empty():
 		var preview: Dictionary = GameSimulator.preview_active_roster(season, _team_id)
 		if not bool(preview.get("ok", false)):
-			_set_status("自動編成に失敗しました: %s" % str(preview.get("message", "")), true)
+			_set_status(Loc.t("common.auto_arrange_failed", {"reason": str(preview.get("message", ""))}), true)
 			queue_redraw()
 			return
 		initial_ids = preview.get("player_ids", []) as Array
-		_set_status("保存されたロスターがありません。自動編成を表示しています。", false)
+		_set_status(Loc.t("roster.status.no_saved"), false)
 	else:
 		initial_ids = saved.get("player_ids", []) as Array
-		_set_status("保存されたロスターを表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0))), false)
+		_set_status(Loc.t("roster.status.showing_saved", {"day": SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0)))}), false)
 	for id_value in initial_ids:
 		_active_ids[int(id_value)] = true
 
@@ -708,10 +708,10 @@ func _demote(player_id: int) -> void:
 	var record: PSPlayerSeasonRecord = _find_record(player_id)
 	var summary: Dictionary = GameSimulator.summarize_active_roster_ids(_active_ids.keys(), _all_records)
 	if _is_catcher(record) and int(summary.get("catchers", 0)) <= MIN_CATCHERS:
-		_set_status("捕手は1軍に最低%d人必要です" % MIN_CATCHERS, true)
+		_set_status(Loc.t("roster.error.min_catchers", {"min": MIN_CATCHERS}), true)
 		return
 	_active_ids.erase(player_id)
-	_set_status("%s を2軍に移しました" % (record.name if record != null else ""), false)
+	_set_status(Loc.t("roster.status.demoted", {"player": record.name if record != null else ""}), false)
 	queue_redraw()
 
 
@@ -723,14 +723,14 @@ func _promote(player_id: int) -> void:
 		return
 	var summary: Dictionary = GameSimulator.summarize_active_roster_ids(_active_ids.keys(), _all_records)
 	if int(summary.get("total", 0)) >= ROSTER_MAX:
-		_set_status("1軍は最大%d人です" % ROSTER_MAX, true)
+		_set_status(Loc.t("roster.error.max_active", {"max": ROSTER_MAX}), true)
 		return
 	var foreign_block: String = ForeignActiveRosterRules.add_block_message(summary, record)
 	if not foreign_block.is_empty():
 		_set_status(foreign_block, true)
 		return
 	_active_ids[player_id] = true
-	_set_status("%s を1軍に上げました" % record.name, false)
+	_set_status(Loc.t("roster.status.promoted", {"player": record.name}), false)
 	queue_redraw()
 
 
@@ -743,7 +743,7 @@ func _promote_to_controlled(player_id: int) -> void:
 	if _pending_controlled.has(player_id):
 		return
 	if _effective_controlled_count() >= TeamFinance.CONTROLLED_LIMIT:
-		_set_status("支配下枠が満杯です (最大%d人)。先に支配下選手を整理してください" % TeamFinance.CONTROLLED_LIMIT, true)
+		_set_status(Loc.t("roster.error.controlled_full", {"max": TeamFinance.CONTROLLED_LIMIT}), true)
 		return
 	_pending_controlled[player_id] = true
 	_development_players.erase(player)
@@ -754,7 +754,7 @@ func _promote_to_controlled(player_id: int) -> void:
 		_all_records.append(record if record != null else PSPlayerSeasonRecord.from_player(player, season.year, season.season_number))
 	_selected_id = player_id
 	_selected_list = "inactive"
-	_set_status("%s を支配下登録します (保存で確定)" % player.name, false)
+	_set_status(Loc.t("roster.status.register_pending", {"player": player.name}), false)
 	queue_redraw()
 
 
@@ -767,21 +767,21 @@ func _on_demote_pressed() -> void:
 	if _selected_list == "active" and _active_ids.has(_selected_id):
 		_demote(_selected_id)
 	else:
-		_set_status("1軍の選手を選択してください", true)
+		_set_status(Loc.t("roster.error.select_active"), true)
 
 
 func _on_promote_pressed() -> void:
 	if _selected_list == "inactive" and not _active_ids.has(_selected_id):
 		_promote(_selected_id)
 	else:
-		_set_status("2軍の選手を選択してください", true)
+		_set_status(Loc.t("roster.error.select_inactive"), true)
 
 
 func _on_register_pressed() -> void:
 	if _selected_list == "dev":
 		_promote_to_controlled(_selected_id)
 	else:
-		_set_status("育成選手を選択してください", true)
+		_set_status(Loc.t("roster.error.select_development"), true)
 
 
 func _on_auto_pressed() -> void:
@@ -790,33 +790,33 @@ func _on_auto_pressed() -> void:
 		return
 	var preview: Dictionary = GameSimulator.preview_active_roster(season, _team_id)
 	if not bool(preview.get("ok", false)):
-		_set_status("自動編成に失敗しました: %s" % str(preview.get("message", "")), true)
+		_set_status(Loc.t("common.auto_arrange_failed", {"reason": str(preview.get("message", ""))}), true)
 		queue_redraw()
 		return
 	_active_ids = {}
 	for id_value in (preview.get("player_ids", []) as Array):
 		_active_ids[int(id_value)] = true
-	_set_status("自動編成を表示中 (未保存)", false)
+	_set_status(Loc.t("common.auto_arrange_unsaved"), false)
 	queue_redraw()
 
 
 func _on_save_pressed() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null or _team_id <= 0:
-		_set_status("シーズン未開始のため保存できません", true)
+		_set_status(Loc.t("common.cannot_save_before_season"), true)
 		queue_redraw()
 		return
 	var summary: Dictionary = GameSimulator.summarize_active_roster_ids(_active_ids.keys(), _all_records)
 	var total: int = int(summary.get("total", 0))
 	if total > ROSTER_MAX:
-		_set_status("保存失敗: 1軍は最大%d人です(%d人)" % [ROSTER_MAX, total], true)
+		_set_status(Loc.t("lineup.status.save_failed", {"errors": Loc.t("roster.error.max_active_count", {"max": ROSTER_MAX, "n": total})}), true)
 		return
 	var foreign_violation: String = ForeignActiveRosterRules.violation_message(summary)
 	if not foreign_violation.is_empty():
-		_set_status("保存失敗: %s" % foreign_violation, true)
+		_set_status(Loc.t("lineup.status.save_failed", {"errors": foreign_violation}), true)
 		return
 	if int(summary.get("catchers", 0)) < MIN_CATCHERS:
-		_set_status("保存失敗: 捕手は1軍に最低%d人必要です (%d人)" % [MIN_CATCHERS, int(summary.get("catchers", 0))], true)
+		_set_status(Loc.t("lineup.status.save_failed", {"errors": Loc.t("roster.error.min_catchers_count", {"min": MIN_CATCHERS, "n": int(summary.get("catchers", 0))})}), true)
 		return
 
 	# 保存待ちの育成→支配下登録をここで確定する (リセットなら _load_initial_state でクリアされ未確定のまま)。
@@ -828,7 +828,7 @@ func _on_save_pressed() -> void:
 	season.set_active_roster(_team_id, {"player_ids": player_ids})
 	GameSimulator.preview_lineup(season, _team_id, false)
 	SaveService.save_state(AppState)
-	_set_status("保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
+	_set_status(Loc.t("common.saved_at", {"day": SeasonCalendar.day_status_label(season, season.current_day)}), false)
 	queue_redraw()
 
 
@@ -868,6 +868,7 @@ func _record_row(record: PSPlayerSeasonRecord) -> Dictionary:
 		"has_war": true,
 		"eval": PlayerValueEvaluator.overall_score(record),
 		"note": _note_for(record.foreign_player, record.injury_days, record.counts_toward_foreign_slot()),
+		"note_injury": record.injury_days > 0,
 	}
 
 
@@ -886,15 +887,16 @@ func _dev_row(player: PSPlayer) -> Dictionary:
 		"has_war": false,
 		"eval": int(Offseason.player_value_score(player)),
 		"note": _note_for(player.foreign_player, player.injury_days, player.counts_toward_foreign_slot()),
+		"note_injury": player.injury_days > 0,
 	}
 
 
 func _note_for(foreign: bool, injury_days: int, foreign_slot: bool = true) -> String:
 	if injury_days > 0:
-		return "怪我%d日" % injury_days
+		return Loc.t("roster.note.injury", {"days": injury_days})
 	if foreign:
 		# 日本人扱い (外国人枠を消費しない) の外国人は、枠の計数と表示を分けて示す。
-		return "外" if foreign_slot else "外(枠外)"
+		return Loc.t("roster.note.foreign") if foreign_slot else Loc.t("roster.note.foreign_exempt")
 	return ""
 
 
@@ -918,8 +920,8 @@ func _load_rotation_classification(season: PSSeason) -> void:
 func _classify(pid: int, is_pitcher: bool, role: String, pos: int, is_active: bool) -> Dictionary:
 	if is_pitcher:
 		if _pitcher_group(pid, role, is_active) == 0:
-			return {"text": "先発", "color": PINK, "order": 0}
-		return {"text": "中継", "color": RED, "order": 1}
+			return {"text": Loc.t("role.starter"), "color": PINK, "order": 0}
+		return {"text": Loc.t("role.middle_short"), "color": RED, "order": 1}
 	var order: int = pos + 1 if pos >= 2 and pos <= 9 else 11
 	# 守備位置の色は共有基底 _pos_color に統一 (捕=BLUE / 内野=AMBER / 外野=GREEN)。
 	return {"text": _pos_short(pos), "color": _pos_color(pos), "order": order}
@@ -938,17 +940,7 @@ func _pitcher_group(pid: int, role: String, is_active: bool) -> int:
 
 
 func _pos_short(pos: int) -> String:
-	match pos:
-		2: return "捕"
-		3: return "一"
-		4: return "二"
-		5: return "三"
-		6: return "遊"
-		7: return "左"
-		8: return "中"
-		9: return "右"
-		10: return "DH"
-		_: return "?"
+	return PSPlayer.position_short_name(pos) if pos >= 2 else "?"
 
 
 # ============================================================ ポジション絞り込み
@@ -1033,17 +1025,17 @@ func _compute_stats() -> Dictionary:
 
 func _bio_line(player: PSPlayer) -> String:
 	var parts: Array = []
-	parts.append("%d歳 (%d年目)" % [player.age, player.years])
-	parts.append("%dcm %dkg" % [player.height, player.weight])
-	parts.append("%s投%s打" % [_hand_name(player.throwing_hand), _hand_name(player.batting_side)])
+	parts.append(Loc.t("player.age_and_years", {"age": player.age, "years": player.years}))
+	parts.append(Loc.t("player.height_weight", {"height": player.height, "weight": player.weight}))
+	parts.append(Loc.t("player.throws_bats", {"throws": _hand_name(player.throwing_hand), "bats": _hand_name(player.batting_side)}))
 	if not player.hometown.is_empty():
 		parts.append(player.hometown)
 	return "  ".join(parts)
 
 
 func _contract_line(player: PSPlayer) -> String:
-	var roster: String = "育成" if player.development_player else player.registered_roster
-	return "%s  年俸 %s" % [roster, _format_money(player.salary)]
+	var roster: String = Loc.t("common.development_chip") if player.development_player else PSPlayer.registered_roster_label(player.registered_roster)
+	return Loc.t("roster.contract_line", {"roster": roster, "salary": _format_money(player.salary)})
 
 
 func _is_valid_drop(src: String, dst: String) -> bool:
@@ -1093,9 +1085,9 @@ func _ip_str(ps: PSPitcherStats) -> String:
 
 func _hand_name(value: String) -> String:
 	match value:
-		"L": return "左"
-		"S": return "両"
-		_: return "右"
+		"L": return Loc.t("hand.left")
+		"S": return Loc.t("hand.switch")
+		_: return Loc.t("hand.right")
 
 
 func _find_record(player_id: int) -> PSPlayerSeasonRecord:

@@ -19,9 +19,9 @@ const DISTRICT_WEST: String = "west"
 const DISTRICT_ORDER: Array[String] = [DISTRICT_EAST, DISTRICT_CENTRAL, DISTRICT_WEST]
 
 const DISTRICT_LABELS: Dictionary = {
-	DISTRICT_EAST: "東地区",
-	DISTRICT_CENTRAL: "中地区",
-	DISTRICT_WEST: "西地区",
+	DISTRICT_EAST: "farm.district.east",
+	DISTRICT_CENTRAL: "farm.district.central",
+	DISTRICT_WEST: "farm.district.west",
 }
 
 # ファーム専用球団。id は一軍12球団 (1-12) の続き。`league` は空文字 = どの一軍リーグにも属さない。
@@ -115,7 +115,7 @@ static func district_for_team(team_id: int) -> String:
 
 
 static func district_label(district: String) -> String:
-	return str(DISTRICT_LABELS.get(district, district))
+	return Loc.t(str(DISTRICT_LABELS[district])) if DISTRICT_LABELS.has(district) else district
 
 
 # 二軍に参加する全 team_id (一軍12球団 + 専用2球団)。引数の team_ids は一軍側の球団。

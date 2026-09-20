@@ -136,7 +136,7 @@ static func summarize_active_roster_ids(player_ids: Array, records: Array) -> Di
 static func simulate_next_unplayed_game(season: PSSeason, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
 	var game_index: int = _next_unplayed_game_index(season)
 	if game_index < 0:
-		return {"ok": false, "message": "未消化の試合がありません"}
+		return {"ok": false, "message": Loc.t("sim.error.no_unplayed_games")}
 	var prev_day: int = season.current_day
 	var result: Dictionary = simulate_game_at_index(season, game_index, persist)
 	if bool(result.get("ok", false)) and not auto_swap_ctx.is_empty() and season.current_day != prev_day:
@@ -196,12 +196,12 @@ static func simulate_current_day(season: PSSeason, persist: bool = true, auto_sw
 		"ok": true,
 		"results": results,
 		"postponed": postponed,
-		"message": "%s の%d試合を消化しました。%s%s" % [
-			SeasonCalendar.day_status_label(season, day),
-			results.size(),
-			_postponed_note(season, day, postponed),
-			str(last_result.get("message", "")),
-		],
+		"message": Loc.t("sim.day_done", {
+			"day": SeasonCalendar.day_status_label(season, day),
+			"games": results.size(),
+			"postponed": _postponed_note(season, day, postponed),
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
@@ -255,9 +255,9 @@ static func _finish_dayless(
 		"ok": true,
 		"results": [],
 		"postponed": postponed,
-		"message": "%s は一軍の試合が成立しませんでした。%s" % [
-			SeasonCalendar.day_status_label(season, day), _postponed_note(season, day, postponed)
-		],
+		"message": Loc.t("sim.day_no_games", {
+			"day": SeasonCalendar.day_status_label(season, day), "postponed": _postponed_note(season, day, postponed),
+		}),
 	}
 
 
@@ -271,15 +271,15 @@ static func _postponed_note(season: PSSeason, day: int, postponed: Array) -> Str
 			no_games += 1
 		else:
 			cancelled += 1
-	var parts: Array = []
+	var parts: PackedStringArray = []
 	if cancelled > 0:
-		parts.append("%d試合が雨天中止" % cancelled)
+		parts.append(Loc.t("sim.rain.cancelled", {"count": cancelled}))
 	if no_games > 0:
-		parts.append("%d試合がノーゲーム" % no_games)
+		parts.append(Loc.t("sim.rain.no_game", {"count": no_games}))
 	if parts.is_empty():
 		return ""
-	var scope: String = "（全国的な雨）" if PSRainoutService.national_rain_on(season, day) else ""
-	return "%s%s。" % ["・".join(parts), scope]
+	var scope: String = Loc.t("sim.rain.national") if PSRainoutService.national_rain_on(season, day) else ""
+	return Loc.t("sim.rain.note", {"parts": Loc.t("sim.rain.separator").join(parts), "scope": scope})
 
 
 # 谷間の先発 (二軍から1試合限定の昇格) と、登板を終えたスポット昇格の抹消。
@@ -313,7 +313,7 @@ static func _simulate_farm_day(season: PSSeason, day: int, force_sequential: boo
 # 並列時は既に終わっている場合があり、計算中に更新された選手状態はrollbackされない)。
 static func _simulate_day_games(season: PSSeason, today_indices: Array, persist: bool, sequential: bool) -> Dictionary:
 	if not _prewarm_day_profiles(season, today_indices):
-		return {"ok": false, "message": "成績データを読み込めませんでした"}
+		return {"ok": false, "message": Loc.t("sim.error.stats_load_failed")}
 	var rule_groups: Array[Dictionary] = ModManager.hot_rule_groups_snapshot()
 	var calc_results: Array = []
 	calc_results.resize(today_indices.size())
@@ -435,7 +435,7 @@ static func _finish_single_game_day_fallback(
 
 static func simulate_days(season: PSSeason, days: int, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
 	if days <= 0:
-		return {"ok": false, "message": "日数は1以上を指定してください"}
+		return {"ok": false, "message": Loc.t("sim.error.days_must_be_positive")}
 	var start_day: int = season.current_day
 	var target_day: int = start_day + days
 	var simulated_games: int = 0
@@ -463,23 +463,23 @@ static func simulate_days(season: PSSeason, days: int, persist: bool = true, aut
 		_persist_simulation_outputs(season)
 	# 全試合が雨天中止だった日も「進行した」— 0 試合でも日付は進んでいる。
 	if simulated_games == 0 and postponed_games == 0:
-		return {"ok": false, "message": "進行できる試合がありません"}
+		return {"ok": false, "message": Loc.t("sim.error.no_playable_games")}
+	var prefix: String = Loc.t("sim.days_done", {"days": min(days, season.current_day - start_day), "games": simulated_games})
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
-		"message": "%d日分、%d試合を消化しました。%s から %s。%s" % [
-			min(days, season.current_day - start_day),
-			simulated_games,
-			SeasonCalendar.day_status_label(season, start_day),
-			SeasonCalendar.day_status_label(season, season.current_day),
-			str(last_result.get("message", "")),
-		],
+		"message": Loc.t("sim.range_done", {
+			"prefix": prefix,
+			"from": SeasonCalendar.day_status_label(season, start_day),
+			"to": SeasonCalendar.day_status_label(season, season.current_day),
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
 static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bool = true, auto_swap_ctx: Dictionary = {}) -> Dictionary:
 	if team_id <= 0:
-		return {"ok": false, "message": "チームが指定されていません"}
+		return {"ok": false, "message": Loc.t("sim.error.no_team")}
 	var start_day: int = season.current_day
 	var simulated_games: int = 0
 	var postponed_games: int = 0
@@ -505,17 +505,18 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 	if persist:
 		_persist_simulation_outputs(season)
 	if simulated_games == 0 and postponed_games == 0:
-		return {"ok": false, "message": "次の自軍試合は本日です。または未消化試合がありません"}
+		return {"ok": false, "message": Loc.t("sim.error.team_game_today")}
+	var prefix: String = Loc.t("sim.until_team_game_done", {"day": SeasonCalendar.day_status_label(season, season.current_day)})
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
-		"message": "自軍試合日(%s)まで進めました。%s から %s、%d試合消化。%s" % [
-			SeasonCalendar.day_status_label(season, season.current_day),
-			SeasonCalendar.day_status_label(season, start_day),
-			SeasonCalendar.day_status_label(season, season.current_day),
-			simulated_games,
-			str(last_result.get("message", "")),
-		],
+		"message": Loc.t("sim.range_games_done", {
+			"prefix": prefix,
+			"from": SeasonCalendar.day_status_label(season, start_day),
+			"to": SeasonCalendar.day_status_label(season, season.current_day),
+			"games": simulated_games,
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
@@ -605,7 +606,7 @@ static func simulate_remaining_season(
 		if day_results.is_empty() and (day_result.get("postponed", []) as Array).is_empty():
 			if simulated_count > 0 and persist:
 				_persist_simulation_outputs(season)
-			return {"ok": false, "message": "試合日の消化結果が空です"}
+			return {"ok": false, "message": Loc.t("sim.error.empty_day_result")}
 		simulated_count += day_results.size()
 		if season.current_day == prev_day:
 			break
@@ -613,12 +614,12 @@ static func simulate_remaining_season(
 	if persist:
 		_persist_simulation_outputs(season)
 	if simulated_count == 0:
-		return {"ok": false, "message": "未消化の試合がありません"}
+		return {"ok": false, "message": Loc.t("sim.error.no_unplayed_games")}
 	return {
 		"ok": true,
 		"results": [],
 		"simulated_count": simulated_count,
-		"message": "残り%d試合をすべて消化しました。%s" % [simulated_count, str(last_result.get("message", ""))],
+		"message": Loc.t("sim.all_remaining_done", {"games": simulated_count, "detail": str(last_result.get("message", ""))}),
 	}
 
 
@@ -648,7 +649,7 @@ static func simulate_current_day_async(
 	progress_total: int = 0
 ) -> Dictionary:
 	if _is_cancelled(cancel_token):
-		return {"ok": false, "cancelled": true, "message": "シミュレーションはキャンセルされました"}
+		return {"ok": false, "cancelled": true, "message": Loc.t("sim.cancelled")}
 	var day: int = season.current_day
 	# 同期版と同じ位置で雨天中止を判定する (片方だけだと同期/非同期で日程が食い違う)。
 	var postponed: Array = PSRainoutService.apply_to_day(season, day).get("postponed", []) as Array
@@ -660,7 +661,7 @@ static func simulate_current_day_async(
 	var results: Array = []
 	if not today_indices.is_empty():
 		if not _prewarm_day_profiles(season, today_indices):
-			return {"ok": false, "message": "成績データを読み込めませんでした"}
+			return {"ok": false, "message": Loc.t("sim.error.stats_load_failed")}
 		# 同期版と同じ順序 (スポット昇格 → 二軍戦 → 一軍戦)。同期/非同期で結果が一致する
 		# 必要があるので **両方の経路に必ず入れる** — 片方だけだと決定性テストが落ちる。
 		_run_spot_starter_callups(season, day, auto_swap_ctx)
@@ -698,7 +699,7 @@ static func simulate_current_day_async(
 
 	if results.is_empty():
 		if _is_cancelled(cancel_token):
-			return {"ok": false, "cancelled": true, "message": "シミュレーションはキャンセルされました"}
+			return {"ok": false, "cancelled": true, "message": Loc.t("sim.cancelled")}
 		if not postponed.is_empty():
 			# 当日の一軍戦が 1 つも成立しなかった日。二軍戦とスポット昇格を済ませたかどうかで
 			# 締め方が変わる (today_indices が空なら未実行なのでここで走らせる)。
@@ -739,12 +740,12 @@ static func simulate_current_day_async(
 		"results": results,
 		"postponed": postponed,
 		"cancelled": _is_cancelled(cancel_token),
-		"message": "%s の%d試合を消化しました。%s%s" % [
-			SeasonCalendar.day_status_label(season, day),
-			results.size(),
-			_postponed_note(season, day, postponed),
-			str(last_result.get("message", "")),
-		],
+		"message": Loc.t("sim.day_done", {
+			"day": SeasonCalendar.day_status_label(season, day),
+			"games": results.size(),
+			"postponed": _postponed_note(season, day, postponed),
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
@@ -781,7 +782,7 @@ static func simulate_remaining_season_async(
 		if day_results.is_empty() and (day_result.get("postponed", []) as Array).is_empty():
 			if simulated_count > 0 and persist:
 				_persist_simulation_outputs(season)
-			return {"ok": false, "cancelled": _is_cancelled(cancel_token), "message": "試合日の消化結果が空です"}
+			return {"ok": false, "cancelled": _is_cancelled(cancel_token), "message": Loc.t("sim.error.empty_day_result")}
 		simulated_count += day_results.size()
 		if bool(day_result.get("cancelled", false)):
 			break
@@ -792,12 +793,12 @@ static func simulate_remaining_season_async(
 		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_count == 0:
-		return {"ok": false, "cancelled": cancelled, "message": "未消化の試合がありません"}
+		return {"ok": false, "cancelled": cancelled, "message": Loc.t("sim.error.no_unplayed_games")}
 	var message: String
 	if cancelled:
-		message = "%d試合まで進めてキャンセルされました。%s" % [simulated_count, str(last_result.get("message", ""))]
+		message = Loc.t("sim.cancelled_after_games_with_detail", {"games": simulated_count, "detail": str(last_result.get("message", ""))})
 	else:
-		message = "残り%d試合をすべて消化しました。%s" % [simulated_count, str(last_result.get("message", ""))]
+		message = Loc.t("sim.all_remaining_done", {"games": simulated_count, "detail": str(last_result.get("message", ""))})
 	return {
 		"ok": true,
 		"results": [],
@@ -817,7 +818,7 @@ static func simulate_days_async(
 	cancel_token: Dictionary
 ) -> Dictionary:
 	if days <= 0:
-		return {"ok": false, "message": "日数は1以上を指定してください"}
+		return {"ok": false, "message": Loc.t("sim.error.days_must_be_positive")}
 	var start_day: int = season.current_day
 	var target_day: int = start_day + days
 	var simulated_games: int = 0
@@ -858,21 +859,21 @@ static func simulate_days_async(
 		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_games == 0 and postponed_games == 0:
-		return {"ok": false, "cancelled": cancelled, "message": "進行できる試合がありません"}
+		return {"ok": false, "cancelled": cancelled, "message": Loc.t("sim.error.no_playable_games")}
 	var elapsed_days: int = min(days, season.current_day - start_day)
-	var prefix: String = "%d日分、%d試合を消化しました" % [elapsed_days, simulated_games]
+	var prefix: String = Loc.t("sim.days_done", {"days": elapsed_days, "games": simulated_games})
 	if cancelled:
-		prefix = "%d試合まで進めてキャンセルされました" % simulated_games
+		prefix = Loc.t("sim.cancelled_after_games", {"games": simulated_games})
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
 		"cancelled": cancelled,
-		"message": "%s。%s から %s。%s" % [
-			prefix,
-			SeasonCalendar.day_status_label(season, start_day),
-			SeasonCalendar.day_status_label(season, season.current_day),
-			str(last_result.get("message", ""))
-		],
+		"message": Loc.t("sim.range_done", {
+			"prefix": prefix,
+			"from": SeasonCalendar.day_status_label(season, start_day),
+			"to": SeasonCalendar.day_status_label(season, season.current_day),
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
@@ -886,7 +887,7 @@ static func simulate_until_team_game_async(
 	cancel_token: Dictionary
 ) -> Dictionary:
 	if team_id <= 0:
-		return {"ok": false, "message": "チームが指定されていません"}
+		return {"ok": false, "message": Loc.t("sim.error.no_team")}
 	var start_day: int = season.current_day
 	var simulated_games: int = 0
 	var postponed_games: int = 0
@@ -919,21 +920,21 @@ static func simulate_until_team_game_async(
 		_persist_simulation_outputs(season)
 	var cancelled: bool = _is_cancelled(cancel_token)
 	if simulated_games == 0 and postponed_games == 0:
-		return {"ok": false, "cancelled": cancelled, "message": "次の自軍試合は本日です。または未消化試合がありません"}
-	var prefix: String = "自軍試合日(%s)まで進めました" % SeasonCalendar.day_status_label(season, season.current_day)
+		return {"ok": false, "cancelled": cancelled, "message": Loc.t("sim.error.team_game_today")}
+	var prefix: String = Loc.t("sim.until_team_game_done", {"day": SeasonCalendar.day_status_label(season, season.current_day)})
 	if cancelled:
-		prefix = "%s でキャンセルされました" % SeasonCalendar.day_status_label(season, season.current_day)
+		prefix = Loc.t("sim.cancelled_at_day", {"day": SeasonCalendar.day_status_label(season, season.current_day)})
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
 		"cancelled": cancelled,
-		"message": "%s。%s から %s、%d試合消化。%s" % [
-			prefix,
-			SeasonCalendar.day_status_label(season, start_day),
-			SeasonCalendar.day_status_label(season, season.current_day),
-			simulated_games,
-			str(last_result.get("message", ""))
-		],
+		"message": Loc.t("sim.range_games_done", {
+			"prefix": prefix,
+			"from": SeasonCalendar.day_status_label(season, start_day),
+			"to": SeasonCalendar.day_status_label(season, season.current_day),
+			"games": simulated_games,
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
@@ -989,20 +990,20 @@ static func simulate_until_day_async(
 	var cancelled: bool = _is_cancelled(cancel_token)
 	# 範囲内の試合がすべて雨天中止でも日付は進んでいるので、失敗ではなく進行として返す。
 	if simulated_games == 0 and postponed_games == 0:
-		return {"ok": false, "cancelled": cancelled, "message": "消化できる試合がありません"}
-	var prefix: String = "%d試合を消化しました" % simulated_games
+		return {"ok": false, "cancelled": cancelled, "message": Loc.t("sim.error.no_games_in_range")}
+	var prefix: String = Loc.t("sim.games_done", {"games": simulated_games})
 	if cancelled:
-		prefix = "%d試合まで進めてキャンセルされました" % simulated_games
+		prefix = Loc.t("sim.cancelled_after_games", {"games": simulated_games})
 	return {
 		"ok": true,
 		"simulated_count": simulated_games,
 		"cancelled": cancelled,
-		"message": "%s。%s から %s。%s" % [
-			prefix,
-			SeasonCalendar.day_status_label(season, start_day),
-			SeasonCalendar.day_status_label(season, season.current_day),
-			str(last_result.get("message", "")),
-		],
+		"message": Loc.t("sim.range_done", {
+			"prefix": prefix,
+			"from": SeasonCalendar.day_status_label(season, start_day),
+			"to": SeasonCalendar.day_status_label(season, season.current_day),
+			"detail": str(last_result.get("message", "")),
+		}),
 	}
 
 
@@ -1043,11 +1044,11 @@ static func _simulate_game_calculation(
 ) -> Dictionary:
 	var profile_start: int = Time.get_ticks_usec() if _profile_enabled else 0
 	if game_index < 0 or game_index >= season.schedule.size():
-		return {"ok": false, "message": "試合番号が不正です"}
+		return {"ok": false, "message": Loc.t("sim.error.invalid_game_index")}
 
 	var game: Dictionary = season.schedule[game_index] as Dictionary
 	if bool(game.get("played", false)):
-		return {"ok": false, "message": "この試合は消化済みです"}
+		return {"ok": false, "message": Loc.t("sim.error.game_already_played")}
 
 	var away_team_id: int = int(game.get("away_team_id", 0))
 	var home_team_id: int = int(game.get("home_team_id", 0))
@@ -1217,7 +1218,7 @@ static func _log_long_injuries_to_career(season: PSSeason, result: Dictionary) -
 		if days < PSCareerLog.INJURY_LOG_MIN_DAYS:
 			continue
 		var player: PSPlayer = GameDb.get_player(int(event.get("player_id", 0)))
-		PSCareerLog.log_injury(player, season.year, days, str(event.get("label", "故障")))
+		PSCareerLog.log_injury(player, season.year, days, str(event.get("label", PSInjuryModel.INJURY_NAME_GENERIC)))
 
 
 static func _injury_repair_team_ids(result: Dictionary, away_team_id: int, home_team_id: int) -> Dictionary:
@@ -1414,8 +1415,8 @@ static func _record_player_game_logs(season: PSSeason, game_index: int, game: Di
 			"team_id": team_id,
 			"opponent_id": opponent_id,
 			"home_away": "away" if team_id == away_team_id else "home",
-			"appearance": _player_appearance_label(result, player_id, team_id, batter_delta, pitcher_delta),
-			"result": _team_result_label(score_for, score_against),
+			"appearance": _player_appearance_id(result, player_id, team_id, batter_delta, pitcher_delta),
+			"result": _team_result_id(score_for, score_against),
 			"score_for": score_for,
 			"score_against": score_against,
 			"batter": batter_dict,
@@ -1484,7 +1485,7 @@ static func _team_lineup_row(
 		"date": date,
 		"opponent_id": opponent_id,
 		"home_away": home_away,
-		"result": _team_result_label(score_for, score_against),
+		"result": _team_result_id(score_for, score_against),
 		"score_for": score_for,
 		"score_against": score_against,
 		"starter_pitcher_id": starter_pitcher_id,
@@ -1561,38 +1562,69 @@ static func _stats_dict_has_any(stats: Dictionary) -> bool:
 	return false
 
 
-static func _team_result_label(score_for: int, score_against: int) -> String:
+# 試合ログ (選手別/スタメン履歴) に保存する勝敗 ID。表示は game_result_text で引く。
+const GAME_RESULT_WIN: String = "win"
+const GAME_RESULT_LOSS: String = "loss"
+const GAME_RESULT_DRAW: String = "draw"
+const GAME_RESULT_KEYS: Dictionary = {
+	GAME_RESULT_WIN: "game_log.result.win",
+	GAME_RESULT_LOSS: "game_log.result.loss",
+	GAME_RESULT_DRAW: "game_log.result.draw",
+}
+# 選手別試合ログの出場形態 ID → 表示名キー。
+const APPEARANCE_KEYS: Dictionary = {
+	"starter": "game_log.appearance.starter",
+	"reliever": "game_log.appearance.reliever",
+	"lineup": "game_log.appearance.lineup",
+	"pinch_hit_defense": "game_log.appearance.pinch_hit_defense",
+	"pinch_run_defense": "game_log.appearance.pinch_run_defense",
+	"pinch_hit": "game_log.appearance.pinch_hit",
+	"pinch_run": "game_log.appearance.pinch_run",
+	"defense": "game_log.appearance.defense",
+	"sub": "game_log.appearance.sub",
+}
+
+
+static func game_result_text(result_id: String) -> String:
+	return Loc.t(str(GAME_RESULT_KEYS[result_id])) if GAME_RESULT_KEYS.has(result_id) else result_id
+
+
+static func appearance_text(appearance_id: String) -> String:
+	return Loc.t(str(APPEARANCE_KEYS[appearance_id])) if APPEARANCE_KEYS.has(appearance_id) else appearance_id
+
+
+static func _team_result_id(score_for: int, score_against: int) -> String:
 	if score_for > score_against:
-		return "勝"
+		return GAME_RESULT_WIN
 	if score_for < score_against:
-		return "敗"
-	return "分"
+		return GAME_RESULT_LOSS
+	return GAME_RESULT_DRAW
 
 
-static func _player_appearance_label(result: Dictionary, player_id: int, team_id: int, batter_stats: PSBatterStats, pitcher_stats: PSPitcherStats) -> String:
+static func _player_appearance_id(result: Dictionary, player_id: int, team_id: int, batter_stats: PSBatterStats, pitcher_stats: PSPitcherStats) -> String:
 	if pitcher_stats.starts > 0:
-		return "先発"
+		return "starter"
 	if pitcher_stats.relief_appearances > 0:
-		return "救援"
+		return "reliever"
 	var started: bool = _player_started_for_team(result, player_id, team_id)
 	var sub_kinds: Dictionary = _substitution_kinds_for_player(result, player_id, team_id)
 	if started:
-		return "スタメン"
+		return "lineup"
 	var pinch_hit: bool = bool(sub_kinds.get("pinch_hit", false))
 	var pinch_run: bool = bool(sub_kinds.get("pinch_run", false))
 	var defense: bool = bool(sub_kinds.get("defense", false))
 	if pinch_hit and defense:
-		return "代打→守備"
+		return "pinch_hit_defense"
 	if pinch_run and defense:
-		return "代走→守備"
+		return "pinch_run_defense"
 	if pinch_hit:
-		return "代打"
+		return "pinch_hit"
 	if pinch_run:
-		return "代走"
+		return "pinch_run"
 	if defense:
-		return "守備"
+		return "defense"
 	if batter_stats.plate_appearances > 0 or batter_stats.games > 0:
-		return "途中"
+		return "sub"
 	return "-"
 
 

@@ -4,21 +4,22 @@ extends "res://ui/components/dashboard_screen.gd"
 # 日本一、MVP、新人王、打撃タイトル、投手タイトル、ベストナイン、ゴールデン・グラブ賞を
 # シーズン終了時の結果として表示する。ベストナイン/ゴールデン・グラブの選出は AwardsService。
 
+# タイトル名のキー (Loc)。
 const BATTING_TITLE_LABELS: Dictionary = {
-	"average": "首位打者",
-	"home_runs": "本塁打王",
-	"rbi": "打点王",
-	"stolen_bases": "盗塁王",
-	"hits": "最多安打",
+	"average": "award.title.average",
+	"home_runs": "award.title.home_runs",
+	"rbi": "award.title.rbi",
+	"stolen_bases": "award.title.stolen_bases",
+	"hits": "award.title.hits",
 }
 
 const PITCHING_TITLE_LABELS: Dictionary = {
-	"wins": "最多勝利",
-	"era": "最優秀防御率",
-	"strikeouts": "最多奪三振",
-	"saves": "最多セーブ",
-	"holds": "最多ホールド",
-	"win_rate": "最高勝率",
+	"wins": "award.title.wins",
+	"era": "award.title.era",
+	"strikeouts": "award.title.strikeouts",
+	"saves": "award.title.saves",
+	"holds": "award.title.holds",
+	"win_rate": "award.title.win_rate",
 }
 
 const CHAMP_RECT: Rect2 = Rect2(262, 112, 1068, 128)
@@ -30,8 +31,16 @@ const GOLDEN_GLOVE_RECT: Rect2 = Rect2(1350, 595, 550, 463)
 
 # 各パネル内は幅が狭い (2リーグ並列) ため、スロット名は 1〜2 文字の短縮ラベルで描く。
 # 並びは PSAwards.BEST_NINE_SLOT_POSITIONS / GOLDEN_GLOVE_SLOT_POSITIONS に一致させる。
-const BEST_NINE_SLOT_LABELS: Array = ["投", "捕", "一", "二", "三", "遊", "外", "外", "外", "DH"]
-const GOLDEN_GLOVE_SLOT_LABELS: Array = ["投", "捕", "一", "二", "三", "遊", "外", "外", "外"]
+# 値はスロット名のキー (Loc)。
+const BEST_NINE_SLOT_LABELS: Array = [
+	"position_short.pitcher", "position_short.catcher", "position_short.first_base", "position_short.second_base",
+	"position_short.third_base", "position_short.shortstop", "award.slot.outfield", "award.slot.outfield", "award.slot.outfield",
+	"position_short.dh",
+]
+const GOLDEN_GLOVE_SLOT_LABELS: Array = [
+	"position_short.pitcher", "position_short.catcher", "position_short.first_base", "position_short.second_base",
+	"position_short.third_base", "position_short.shortstop", "award.slot.outfield", "award.slot.outfield", "award.slot.outfield",
+]
 
 var _has_awards: bool = false
 var _season_label: String = ""
@@ -100,7 +109,7 @@ func _draw() -> void:
 		_draw_empty()
 		return
 
-	_draw_shell("年間表彰", team, season)
+	_draw_shell(Loc.t("award.screen_title"), team, season)
 
 	if not _has_awards:
 		_draw_no_awards()
@@ -108,11 +117,11 @@ func _draw() -> void:
 
 	_text(_season_label, Vector2(INNER_L, 102), 13, MUTED)
 	_draw_champion_panel(CHAMP_RECT)
-	_draw_award_table(AWARDS_RECT, "最優秀選手・新人王", _award_rows, BLUE, "賞")
-	_draw_award_table(BAT_RECT, "打撃タイトル", _bat_rows, GREEN, "部門")
-	_draw_award_table(PIT_RECT, "投手タイトル", _pit_rows, PINK, "部門")
-	_draw_award_grid(BEST_NINE_RECT, "ベストナイン", BLUE, BEST_NINE_SLOT_LABELS, PSAwards.BEST_NINE_SLOT_POSITIONS, _best_nine)
-	_draw_award_grid(GOLDEN_GLOVE_RECT, "ゴールデン・グラブ賞", AMBER, GOLDEN_GLOVE_SLOT_LABELS, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS, _golden_glove)
+	_draw_award_table(AWARDS_RECT, Loc.t("award.panel.mvp_rookie"), _award_rows, BLUE, Loc.t("award.header.award"))
+	_draw_award_table(BAT_RECT, Loc.t("award.panel.batting"), _bat_rows, GREEN, Loc.t("award.header.category"))
+	_draw_award_table(PIT_RECT, Loc.t("award.panel.pitching"), _pit_rows, PINK, Loc.t("award.header.category"))
+	_draw_award_grid(BEST_NINE_RECT, Loc.t("award.best_nine"), BLUE, BEST_NINE_SLOT_LABELS, PSAwards.BEST_NINE_SLOT_POSITIONS, _best_nine)
+	_draw_award_grid(GOLDEN_GLOVE_RECT, Loc.t("award.golden_glove"), AMBER, GOLDEN_GLOVE_SLOT_LABELS, PSAwards.GOLDEN_GLOVE_SLOT_POSITIONS, _golden_glove)
 
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(INNER_L, 1076), 12, RED)
@@ -120,13 +129,13 @@ func _draw() -> void:
 
 func _draw_empty() -> void:
 	_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-	_text("シーズンが開始されていません", Vector2(770, 496), 20, MUTED)
+	_text(Loc.t("flow.error.season_not_started"), Vector2(770, 496), 20, MUTED)
 
 
 func _draw_no_awards() -> void:
 	_round(Rect2(560, 380, 800, 240), PANEL, BORDER, 12)
-	_text("表彰データがありません", Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
-	_text("ポストシーズン終了後、またはシーズン終了後に表彰が計算されます。",
+	_text(Loc.t("award.none"), Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("award.none_hint"),
 		Vector2(560, 548), 14, MUTED, 800, HORIZONTAL_ALIGNMENT_CENTER)
 
 
@@ -136,11 +145,11 @@ func _draw_champion_panel(rect: Rect2) -> void:
 		_round(rect, Color(AMBER.r, AMBER.g, AMBER.b, 0.10), Color.TRANSPARENT, 10, 0)
 	else:
 		_round(rect, PANEL, Color.TRANSPARENT, 10, 0)
-	_text("日本一", Vector2(rect.position.x + 24, rect.position.y + 36), 18, AMBER, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("award.champion"), Vector2(rect.position.x + 24, rect.position.y + 36), 18, AMBER, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text(_season_label, Vector2(rect.end.x - 260, rect.position.y + 34), 13, MUTED, 240, HORIZONTAL_ALIGNMENT_RIGHT)
 
 	if _champion_id <= 0:
-		_text("ポストシーズンの記録がありません", Vector2(rect.position.x + 24, rect.position.y + 86), 18, MUTED)
+		_text(Loc.t("award.no_postseason"), Vector2(rect.position.x + 24, rect.position.y + 86), 18, MUTED)
 		return
 
 	var team: PSTeam = GameDb.get_team(_champion_id)
@@ -169,12 +178,12 @@ func _draw_award_table(rect: Rect2, title: String, rows: Array, accent: Color, l
 	var hy: float = rect.position.y + 64.0
 	_round(Rect2(inner_x, hy - 18.0, usable, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
 	_text(label_header, Vector2(inner_x + 2.0, hy), 11, MUTED, label_w - 4.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("第1リーグ", Vector2(c1_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("第2リーグ", Vector2(c2_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(PSTeam.league_label_for("league1"), Vector2(c1_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(PSTeam.league_label_for("league2"), Vector2(c2_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_line(Vector2(inner_x, rect.position.y + 72.0), Vector2(rect.end.x - 18.0, rect.position.y + 72.0), BORDER, 1.5)
 
 	if rows.is_empty():
-		_text("記録がありません", Vector2(inner_x + 4.0, rect.position.y + 110.0), 13, MUTED)
+		_text(Loc.t("common.no_records"), Vector2(inner_x + 4.0, rect.position.y + 110.0), 13, MUTED)
 		return
 
 	var row_top: float = rect.position.y + 82.0
@@ -193,7 +202,7 @@ func _draw_player_cell(rect: Rect2, cell: Dictionary) -> void:
 	var pid: int = int(cell.get("pid", 0))
 	var ty: float = rect.position.y + rect.size.y * 0.5 + 5.0
 	if pid <= 0:
-		_text("(該当なし)", Vector2(rect.position.x + 4.0, ty), 13, FAINT, rect.size.x - 8.0)
+		_text(Loc.t("common.none_applicable"), Vector2(rect.position.x + 4.0, ty), 13, FAINT, rect.size.x - 8.0)
 		return
 
 	var hover: bool = pid == _hover_pid
@@ -231,12 +240,11 @@ func _draw_award_grid(rect: Rect2, title: String, accent: Color, slot_labels: Ar
 
 	var col_w: float = inner.size.x * 0.5
 	var league_keys: Array = ["league1", "league2"]
-	var league_labels: Array = ["第1リーグ", "第2リーグ"]
 
 	# 列見出し + 中央の縦区切り。
 	var hy: float = inner.position.y + 28.0
 	for li in range(2):
-		_text(str(league_labels[li]), Vector2(inner.position.x + col_w * float(li) + 16.0, hy), 12, MUTED, col_w - 24.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		_text(PSTeam.league_label_for(str(league_keys[li])), Vector2(inner.position.x + col_w * float(li) + 16.0, hy), 12, MUTED, col_w - 24.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_line(Vector2(inner.position.x + 14, inner.position.y + 40), Vector2(inner.end.x - 14, inner.position.y + 40), BORDER, 1.5)
 	_line(Vector2(inner.position.x + col_w, inner.position.y + 14), Vector2(inner.position.x + col_w, inner.end.y - 14), BORDER_SOFT, 1.0)
 
@@ -249,7 +257,7 @@ func _draw_award_grid(rect: Rect2, title: String, accent: Color, slot_labels: Ar
 			var cx: float = inner.position.x + col_w * float(li)
 			var cells: Array = columns.get(league_keys[li], []) as Array
 			var cell: Dictionary = cells[i] as Dictionary if i < cells.size() else {}
-			_draw_award_cell(Rect2(cx + 8.0, y + 2.0, col_w - 16.0, row_h - 4.0), str(slot_labels[i]), pos, cell)
+			_draw_award_cell(Rect2(cx + 8.0, y + 2.0, col_w - 16.0, row_h - 4.0), Loc.t(str(slot_labels[i])), pos, cell)
 		if i < slot_labels.size() - 1:
 			_line(Vector2(inner.position.x + 12, y + row_h), Vector2(inner.end.x - 12, y + row_h), HAIRLINE, 1.0)
 
@@ -263,7 +271,7 @@ func _draw_award_cell(rect: Rect2, slot_label: String, slot_pos: int, cell: Dict
 	var body_w: float = rect.end.x - body_x
 	var pid: int = int(cell.get("pid", 0))
 	if pid <= 0:
-		_text("(該当なし)", Vector2(body_x + 4.0, ty), 12, FAINT, body_w - 8.0)
+		_text(Loc.t("common.none_applicable"), Vector2(body_x + 4.0, ty), 12, FAINT, body_w - 8.0)
 		return
 
 	if pid == _hover_pid:
@@ -291,12 +299,12 @@ func _build_buttons() -> void:
 	var team: PSTeam = GameDb.get_team(AppState.selected_team_id)
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
-		_add_button("home_empty", "ホームへ", Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
+		_add_button("home_empty", Loc.t("common.to_home"), Rect2(880, 560, 160, 46), func() -> void: AppState.request_screen("home"), "primary")
 		_layout_buttons()
 		return
 
 	_build_nav_buttons()
-	_add_button("offseason", "オフシーズンへ", Rect2(1738, 22, 162, 42), _on_offseason_pressed, "primary")
+	_add_button("offseason", Loc.t("award.to_offseason"), Rect2(1738, 22, 162, 42), _on_offseason_pressed, "primary")
 	_layout_buttons()
 
 
@@ -325,7 +333,7 @@ func _refresh() -> void:
 	if awards == null:
 		return
 	_has_awards = true
-	_season_label = "%d年 / %d年目" % [awards.year, awards.season_number]
+	_season_label = Loc.t("common.year_and_season", {"year": awards.year, "n": awards.season_number})
 
 	var postseason: PSPostseasonResult = AppState.current_postseason
 	if postseason != null and postseason.champion_team_id > 0:
@@ -333,8 +341,8 @@ func _refresh() -> void:
 		_champion_series_text = _japan_series_record(postseason)
 
 	_award_rows = [
-		{"label": "MVP", "league1": _player_cell(awards.mvp_league1_player_id), "league2": _player_cell(awards.mvp_league2_player_id)},
-		{"label": "新人王", "league1": _player_cell(awards.rookie_league1_player_id), "league2": _player_cell(awards.rookie_league2_player_id)},
+		{"label": Loc.t("award.mvp"), "league1": _player_cell(awards.mvp_league1_player_id), "league2": _player_cell(awards.mvp_league2_player_id)},
+		{"label": Loc.t("award.rookie"), "league1": _player_cell(awards.rookie_league1_player_id), "league2": _player_cell(awards.rookie_league2_player_id)},
 	]
 	_bat_rows = _build_title_rows(awards.batting_titles, BATTING_TITLE_LABELS, PSAwards.BATTING_CATEGORIES, false)
 	_pit_rows = _build_title_rows(awards.pitching_titles, PITCHING_TITLE_LABELS, PSAwards.PITCHING_CATEGORIES, true)
@@ -348,7 +356,7 @@ func _build_title_rows(titles: Dictionary, label_map: Dictionary, keys_order: Ar
 	var rows: Array = []
 	for key in keys_order:
 		rows.append({
-			"label": str(label_map.get(key, key)),
+			"label": Loc.t(str(label_map.get(key, key))),
 			"league1": _player_cell(int(league1.get(key, 0)), str(key), is_pitcher),
 			"league2": _player_cell(int(league2.get(key, 0)), str(key), is_pitcher),
 		})
@@ -369,7 +377,7 @@ func _resolve_award_slots(entries: Array) -> Array:
 	for entry_value in entries:
 		var entry: Dictionary = entry_value as Dictionary
 		var pid: int = int(entry.get("pid", 0))
-		var cell: Dictionary = {"pid": pid, "name": "(該当なし)", "team_id": 0, "value": str(entry.get("value", ""))}
+		var cell: Dictionary = {"pid": pid, "name": Loc.t("common.none_applicable"), "team_id": 0, "value": str(entry.get("value", ""))}
 		if pid > 0:
 			var record: PSPlayerSeasonRecord = _player_record(pid)
 			if record != null:
@@ -386,7 +394,7 @@ func _resolve_award_slots(entries: Array) -> Array:
 
 
 func _player_cell(player_id: int, title_key: String = "", is_pitcher: bool = false) -> Dictionary:
-	var cell: Dictionary = {"pid": player_id, "name": "(該当なし)", "team_id": 0, "value": ""}
+	var cell: Dictionary = {"pid": player_id, "name": Loc.t("common.none_applicable"), "team_id": 0, "value": ""}
 	if player_id <= 0:
 		return cell
 	var record: PSPlayerSeasonRecord = _player_record(player_id)
@@ -411,7 +419,7 @@ func _japan_series_record(postseason: PSPostseasonResult) -> String:
 	var winner_is_top: bool = int(js.get("winner_id", 0)) == int(js.get("top_id", 0))
 	var w: int = top_wins if winner_is_top else chal_wins
 	var l: int = chal_wins if winner_is_top else top_wins
-	return "%d勝%d敗" % [w, l]
+	return Loc.t("common.wins_losses", {"w": w, "l": l})
 
 
 func _title_value(record: PSPlayerSeasonRecord, title_key: String, is_pitcher: bool) -> String:
@@ -419,7 +427,7 @@ func _title_value(record: PSPlayerSeasonRecord, title_key: String, is_pitcher: b
 		var ps: PSPitcherStats = record.pitcher_stats
 		match title_key:
 			"wins":
-				return "%d勝" % ps.wins
+				return Loc.t("award.value.wins", {"n": ps.wins})
 			"era":
 				if ps.outs_pitched <= 0:
 					return "--"
@@ -442,13 +450,13 @@ func _title_value(record: PSPlayerSeasonRecord, title_key: String, is_pitcher: b
 		"average":
 			return ".%03d" % int(round(bs.batting_average() * 1000))
 		"home_runs":
-			return "%d本" % bs.home_runs
+			return Loc.t("award.value.home_runs", {"n": bs.home_runs})
 		"rbi":
-			return "%d点" % bs.runs_batted_in
+			return Loc.t("award.value.rbi", {"n": bs.runs_batted_in})
 		"stolen_bases":
-			return "%d盗" % bs.stolen_bases
+			return Loc.t("award.value.stolen_bases", {"n": bs.stolen_bases})
 		"hits":
-			return "%d安" % bs.hits
+			return Loc.t("award.value.hits", {"n": bs.hits})
 		_:
 			return ""
 

@@ -59,11 +59,12 @@ const R_WAR_R: float = 690.0
 const R_EVAL_R: float = 770.0
 
 # リリーフレーン定義 (上から: クローザー→セットアッパー→ミドル→ロング)。closer は max=1。
+# label / desc は表示文言のキー (Loc)。
 const RELIEF_LANES: Array = [
-	{"key": "closer", "label": "クローザー", "desc": "9回接戦", "color": CLOSER_RED},
-	{"key": "setup", "label": "セットアッパー", "desc": "接戦 7〜8回", "color": VIOLET},
-	{"key": "middle", "label": "ミドルリリーフ", "desc": "同点〜ビハインド / 6〜8回", "color": RED},
-	{"key": "long", "label": "ロングリリーフ", "desc": "大量リード時 / 6回以前", "color": BLUE},
+	{"key": "closer", "label": "relief.closer", "desc": "relief.closer_desc", "color": CLOSER_RED},
+	{"key": "setup", "label": "relief.setup", "desc": "relief.setup_desc", "color": VIOLET},
+	{"key": "middle", "label": "relief.middle", "desc": "relief.middle_desc", "color": RED},
+	{"key": "long", "label": "relief.long", "desc": "relief.long_desc", "color": BLUE},
 ]
 
 var _team_id: int = 0
@@ -211,10 +212,10 @@ func _draw() -> void:
 	var season: PSSeason = AppState.current_season
 	if team == null or season == null:
 		_text("PennantStrategy", Vector2(740, 430), 44, TEXT)
-		_text("チームが選択されていません", Vector2(770, 496), 20, MUTED)
+		_text(Loc.t("sim.error.no_team"), Vector2(770, 496), 20, MUTED)
 		return
 
-	_draw_shell("投手起用法", team, season)
+	_draw_shell(Loc.t("screen.rotation_editor"), team, season)
 	_draw_pitcher_table()
 	_draw_rotation_panel()
 	_draw_relief_panel()
@@ -228,27 +229,27 @@ func _draw() -> void:
 # --- 一軍投手一覧 ---
 
 func _draw_pitcher_table() -> void:
-	_panel(TABLE_PANEL, "一軍投手一覧")
-	_text("ドラッグして下の枠へ配置", Vector2(TABLE_PANEL.position.x + 178, TABLE_PANEL.position.y + 32), 12, FAINT)
+	_panel(TABLE_PANEL, Loc.t("rotation.pitcher_list"))
+	_text(Loc.t("rotation.drag_hint"), Vector2(TABLE_PANEL.position.x + 178, TABLE_PANEL.position.y + 32), 12, FAINT)
 
 	var hy: float = TABLE_PANEL.position.y + 60
-	_text("役割", Vector2(C_ROLE_X, hy), 11, FAINT)
-	_text("選手", Vector2(C_JERSEY_X, hy), 11, FAINT)
-	_text_right("年齢", C_AGE_R, hy, 11, FAINT)
-	_text("疲労", Vector2(C_FAT_DOT_X, hy), 11, FAINT)
-	_text_right("評価", C_EVAL_R, hy, 11, FAINT)
+	_text(Loc.t("col.role"), Vector2(C_ROLE_X, hy), 11, FAINT)
+	_text(Loc.t("col.player"), Vector2(C_JERSEY_X, hy), 11, FAINT)
+	_text_right(Loc.t("col.age"), C_AGE_R, hy, 11, FAINT)
+	_text(Loc.t("col.fatigue"), Vector2(C_FAT_DOT_X, hy), 11, FAINT)
+	_text_right(Loc.t("col.evaluation"), C_EVAL_R, hy, 11, FAINT)
 	_text_right("WAR", C_WAR_R, hy, 11, FAINT)
-	_text_right("球速", C_VELO_R, hy, 11, FAINT)
-	_text_right("球質", C_STUFF_R, hy, 11, FAINT)
-	_text_right("制球", C_CTRL_R, hy, 11, FAINT)
-	_text_right("スタ", C_STAM_R, hy, 11, FAINT)
-	_text_right("登板", C_G_R, hy, 11, FAINT)
-	_text_right("勝", C_W_R, hy, 11, FAINT)
-	_text_right("敗", C_L_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.velocity"), C_VELO_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.stuff"), C_STUFF_R, hy, 11, FAINT)
+	_text_right(Loc.t("rating.control"), C_CTRL_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.stamina_short"), C_STAM_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.appearances"), C_G_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.wins"), C_W_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.losses"), C_L_R, hy, 11, FAINT)
 	_text_right("S", C_SV_R, hy, 11, FAINT)
 	_text_right("H", C_HLD_R, hy, 11, FAINT)
-	_text_right("投球回", C_IP_R, hy, 11, FAINT)
-	_text_right("防御率", C_ERA_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.innings"), C_IP_R, hy, 11, FAINT)
+	_text_right(Loc.t("stat.era"), C_ERA_R, hy, 11, FAINT)
 	_text_right("FIP", C_FIP_R, hy, 11, FAINT)
 	_text_right("WHIP", C_WHIP_R, hy, 11, FAINT)
 	_text_right("K/9", C_K9_R, hy, 11, FAINT)
@@ -279,7 +280,7 @@ func _draw_pitcher_table() -> void:
 		shown += 1
 
 	if rows.is_empty():
-		_text("一軍に登録された投手がいません", Vector2(C_ROLE_X, y + 6), 13, MUTED)
+		_text(Loc.t("rotation.no_active_pitchers"), Vector2(C_ROLE_X, y + 6), 13, MUTED)
 	elif shown > 0:
 		# 能力ブロック(球速..スタ)と成績ブロック(登板..K/9)の境界を縦ヘアラインで区切る。
 		_line(Vector2(C_BLOCK_SEP_X, header_rule_y), Vector2(C_BLOCK_SEP_X, y - 18.0), HAIRLINE, 1.0)
@@ -326,15 +327,15 @@ func _draw_rating(value: int, right_x: float, y: float) -> void:
 # --- 先発ローテ ---
 
 func _draw_rotation_panel() -> void:
-	_panel(ROTATION_PANEL, "先発ローテ")
+	_panel(ROTATION_PANEL, Loc.t("rotation.rotation_panel"))
 	var px: float = ROTATION_PANEL.position.x
 	var hy: float = ROTATION_PANEL.position.y + 56
-	_text("番手", Vector2(px + R_NUM_X, hy), 11, FAINT)
-	_text("選手", Vector2(px + R_SLOT_X, hy), 11, FAINT)
-	_text("疲労", Vector2(px + R_FAT_DOT_X, hy), 11, FAINT)
-	_text_right("防御率", px + R_ERA_R, hy, 11, FAINT)
+	_text(Loc.t("col.rotation_slot"), Vector2(px + R_NUM_X, hy), 11, FAINT)
+	_text(Loc.t("col.player"), Vector2(px + R_SLOT_X, hy), 11, FAINT)
+	_text(Loc.t("col.fatigue"), Vector2(px + R_FAT_DOT_X, hy), 11, FAINT)
+	_text_right(Loc.t("stat.era"), px + R_ERA_R, hy, 11, FAINT)
 	_text_right("WAR", px + R_WAR_R, hy, 11, FAINT)
-	_text_right("評価", px + R_EVAL_R, hy, 11, FAINT)
+	_text_right(Loc.t("col.evaluation"), px + R_EVAL_R, hy, 11, FAINT)
 	_line(Vector2(px + R_NUM_X, ROTATION_PANEL.position.y + 66), Vector2(ROTATION_PANEL.end.x - 16, ROTATION_PANEL.position.y + 66), BORDER, 1.5)
 
 	for i in range(ROTATION_SIZE):
@@ -369,19 +370,19 @@ func _draw_slot_card(rect: Rect2, record: PSPlayerSeasonRecord, target: Dictiona
 	_round(rect, bg, border, 7, 2 if is_target else 0)
 	var ty: float = rect.position.y + rect.size.y * 0.68
 	if record == null:
-		_text("ここにドラッグ", Vector2(rect.position.x + 12, ty), 12, FAINT)
+		_text(Loc.t("rotation.drop_here"), Vector2(rect.position.x + 12, ty), 12, FAINT)
 		return
 	var label: String = record.name
 	if record.jersey_number > 0:
 		label = "%d  %s" % [record.jersey_number, record.name]
 	_text(label, Vector2(rect.position.x + 12, ty), 14, TEXT, rect.size.x - 70, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right("評%d" % PlayerValueEvaluator.overall_score(record), rect.end.x - 12, ty, 12, MUTED, 56)
+	_text_right(Loc.t("rotation.eval_short", {"n": PlayerValueEvaluator.overall_score(record)}), rect.end.x - 12, ty, 12, MUTED, 56)
 
 
 # --- リリーフ起用法 (レーン式・複数可) ---
 
 func _draw_relief_panel() -> void:
-	_panel(RELIEF_PANEL, "リリーフ起用法")
+	_panel(RELIEF_PANEL, Loc.t("rotation.relief_panel"))
 	_chip_hits = []
 	var px: float = RELIEF_PANEL.position.x
 	for i in range(RELIEF_LANES.size()):
@@ -392,8 +393,8 @@ func _draw_relief_panel() -> void:
 			_line(Vector2(px + 16, lane_y), Vector2(RELIEF_PANEL.end.x - 16, lane_y), HAIRLINE, 1.0)
 		var color: Color = lane["color"] as Color
 		_round(Rect2(px + 16, lane_y + (lane_h - 28) * 0.5 - 12, 124, 28), Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.55), 7)
-		_text(str(lane["label"]), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 7), 13, color, 124, HORIZONTAL_ALIGNMENT_CENTER)
-		_text(str(lane["desc"]), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 34), 11, FAINT, 150)
+		_text(Loc.t(str(lane["label"])), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 7), 13, color, 124, HORIZONTAL_ALIGNMENT_CENTER)
+		_text(Loc.t(str(lane["desc"])), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 34), 11, FAINT, 150)
 		_draw_relief_lane(i, str(lane["key"]))
 
 
@@ -422,7 +423,7 @@ func _draw_relief_lane(i: int, role: String) -> void:
 
 	var ids: Array = _relief[role] as Array
 	if ids.is_empty():
-		_text("ここにドラッグ" + ("で追加" if role != "closer" else ""), Vector2(zone.position.x + 12, zone.position.y + zone.size.y * 0.62), 12, FAINT)
+		_text(Loc.t("rotation.drop_here_to_add") if role != "closer" else Loc.t("rotation.drop_here"), Vector2(zone.position.x + 12, zone.position.y + zone.size.y * 0.62), 12, FAINT)
 		return
 	var cx: float = zone.position.x + 10.0
 	var cy: float = zone.position.y + 6.0
@@ -475,9 +476,9 @@ func _drop_match(target: Dictionary) -> bool:
 
 func _build_chrome_buttons() -> void:
 	_build_nav_buttons()
-	_add_button("auto", "自動編成", Rect2(1486, 22, 132, 42), _on_auto_pressed, "action")
-	_add_button("reset", "リセット", Rect2(1628, 22, 112, 42), _load_initial_state, "action")
-	_add_button("save", "保存", Rect2(1750, 22, 132, 42), _on_save_pressed, "primary")
+	_add_button("auto", Loc.t("common.auto_arrange"), Rect2(1486, 22, 132, 42), _on_auto_pressed, "action")
+	_add_button("reset", Loc.t("common.reset"), Rect2(1628, 22, 112, 42), _load_initial_state, "action")
+	_add_button("save", Loc.t("common.save"), Rect2(1750, 22, 132, 42), _on_save_pressed, "primary")
 
 
 # ============================================================ data load
@@ -486,12 +487,12 @@ func _load_initial_state() -> void:
 	var season: PSSeason = AppState.current_season
 	_team_id = AppState.selected_team_id
 	if season == null or _team_id <= 0:
-		_set_status("チームが選択されていません", true)
+		_set_status(Loc.t("sim.error.no_team"), true)
 		queue_redraw()
 		return
 	var team: PSTeam = GameDb.get_team(_team_id)
 	if team == null:
-		_set_status("チーム情報が取得できません", true)
+		_set_status(Loc.t("error.team_not_found"), true)
 		queue_redraw()
 		return
 
@@ -514,9 +515,9 @@ func _load_initial_state() -> void:
 		_relief = _relief_from_roles(relief_roles)
 
 	if saved.is_empty():
-		_set_status("保存された設定がありません。自動編成を表示しています。", false)
+		_set_status(Loc.t("rotation.status.no_saved"), false)
 	else:
-		_set_status("保存された投手起用を表示しています (%s 更新)" % SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0))), false)
+		_set_status(Loc.t("rotation.status.showing_saved", {"day": SeasonCalendar.day_status_label(season, int(saved.get("updated_at_day", 0)))}), false)
 	queue_redraw()
 
 
@@ -623,20 +624,20 @@ func _on_auto_pressed() -> void:
 		return
 	var preview: Dictionary = GameSimulator.preview_rotation(season, _team_id)
 	if not bool(preview.get("ok", false)):
-		_set_status("自動編成に失敗しました: %s" % str(preview.get("message", "")), true)
+		_set_status(Loc.t("common.auto_arrange_failed", {"reason": str(preview.get("message", ""))}), true)
 		queue_redraw()
 		return
 	_preview = preview
 	_apply_rotation_ids((preview.get("pitcher_ids", []) as Array).duplicate())
 	_relief = _auto_relief()
-	_set_status("自動編成を表示中 (未保存)", false)
+	_set_status(Loc.t("common.auto_arrange_unsaved"), false)
 	queue_redraw()
 
 
 func _on_save_pressed() -> void:
 	var season: PSSeason = AppState.current_season
 	if season == null or _team_id <= 0:
-		_set_status("シーズン未開始のため保存できません", true)
+		_set_status(Loc.t("common.cannot_save_before_season"), true)
 		queue_redraw()
 		return
 	var stored: Dictionary = season.get_rotation(_team_id).duplicate(true)
@@ -649,7 +650,7 @@ func _on_save_pressed() -> void:
 	season.set_rotation(_team_id, stored)
 	SaveService.save_state(AppState)
 	_preview = GameSimulator.preview_rotation(season, _team_id)
-	_set_status("保存しました (%s)" % SeasonCalendar.day_status_label(season, season.current_day), false)
+	_set_status(Loc.t("common.saved_at", {"day": SeasonCalendar.day_status_label(season, season.current_day)}), false)
 	queue_redraw()
 
 
@@ -682,11 +683,11 @@ func _role_group(record: PSPlayerSeasonRecord, rotation_set: Dictionary, closer_
 func _role_chip(record: PSPlayerSeasonRecord, rotation_set: Dictionary, closer_id: int) -> Dictionary:
 	match _role_group(record, rotation_set, closer_id):
 		0:
-			return {"text": "先発", "color": PINK}
+			return {"text": Loc.t("role.starter"), "color": PINK}
 		2:
-			return {"text": "抑え", "color": CLOSER_RED}
+			return {"text": Loc.t("role.closer_short"), "color": CLOSER_RED}
 		_:
-			return {"text": "中継", "color": RED}
+			return {"text": Loc.t("role.middle_short"), "color": RED}
 
 
 func _rotation_index(player_id: int) -> int:

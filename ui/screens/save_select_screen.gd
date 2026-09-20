@@ -43,18 +43,18 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
 	_round(Rect2(0, 0, BASE.x, 4), Color(BLUE.r, BLUE.g, BLUE.b, 0.85), Color.TRANSPARENT, 0, 0)
 
-	_text("セーブデータ", Vector2(LIST_X, 96), 34, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text("読み込むセーブを選択してください。削除は取り消せません。", Vector2(LIST_X, 128), 15, MUTED)
+	_text(Loc.t("options.save.panel"), Vector2(LIST_X, 96), 34, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("save_select.instructions"), Vector2(LIST_X, 128), 15, MUTED)
 
 	var rows: Array = _page_rows()
 	if rows.is_empty():
-		_text("セーブデータがありません", Vector2(0, LIST_TOP + 120.0), 18, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
+		_text(Loc.t("save.none"), Vector2(0, LIST_TOP + 120.0), 18, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 	for i in range(rows.size()):
 		_draw_save_row(rows[i] as Dictionary, LIST_TOP + float(i) * (ROW_H + ROW_GAP))
 
 	# ページ表示
 	if _saves.size() > PAGE_SIZE:
-		_text("%d / %d ページ (全%d件)" % [_page + 1, _max_page() + 1, _saves.size()],
+		_text(Loc.t("common.page_indicator", {"page": _page + 1, "pages": _max_page() + 1, "total": _saves.size()}),
 			Vector2(0, LIST_TOP + float(PAGE_SIZE) * (ROW_H + ROW_GAP) + 34.0), 14, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
 
 	_text(_app_version_label(), Vector2(28, BASE.y - 28), 13, FAINT)
@@ -76,30 +76,30 @@ func _draw_save_row(meta: Dictionary, y: float) -> void:
 	_text(_format_save_id(str(meta.get("save_id", ""))), Vector2(x, y + 36.0), 19, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var chip_x: float = x + 250.0
 	if is_active:
-		_chip(Rect2(chip_x, y + 18.0, 64.0, 24.0), "使用中", BLUE)
+		_chip(Rect2(chip_x, y + 18.0, 64.0, 24.0), Loc.t("save_select.active_chip"), BLUE)
 		chip_x += 74.0
 	var saved_version: String = str(meta.get("app_version", ""))
 	if _is_other_version(meta):
-		_chip(Rect2(chip_x, y + 18.0, 120.0, 24.0), "別バージョン", AMBER)
+		_chip(Rect2(chip_x, y + 18.0, 120.0, 24.0), Loc.t("save_select.other_version_chip"), AMBER)
 
 	# 2行目: ゲーム内メタ (球団 / 年目 / ゲーム内日付 / 最終更新)
-	var parts: Array = []
+	var parts: PackedStringArray = []
 	var team_name: String = str(meta.get("team_name", ""))
 	if not team_name.is_empty():
 		parts.append(team_name)
 	if meta.has("season_number"):
-		parts.append("%d年目" % int(meta.get("season_number", 1)))
+		parts.append(Loc.t("common.season_number", {"n": int(meta.get("season_number", 1))}))
 	var date_text: String = str(meta.get("date", ""))
 	if not date_text.is_empty():
 		parts.append(_format_date_long(date_text))
 	if bool(meta.get("offseason_active", false)):
-		parts.append("オフシーズン")
+		parts.append(Loc.t("common.offseason"))
 	var updated: String = str(meta.get("updated_at", ""))
 	if not updated.is_empty():
-		parts.append("最終セーブ %s" % updated)
+		parts.append(Loc.t("save_select.last_saved", {"time": updated}))
 	if not saved_version.is_empty():
 		parts.append(AppVersion.label(saved_version))
-	var detail: String = "  ・  ".join(parts) if not parts.is_empty() else "詳細情報なし"
+	var detail: String = Loc.t("common.dot_separator").join(parts) if not parts.is_empty() else Loc.t("save_select.no_detail")
 	_text(detail, Vector2(x, y + 66.0), 14, MUTED, LIST_W - 320.0)
 
 
@@ -116,25 +116,25 @@ func _is_other_version(meta: Dictionary) -> bool:
 func _build_buttons() -> void:
 	_clear_buttons()
 
-	_add_button("back", "戻る", Rect2(LIST_X + LIST_W - 120.0, 74.0, 120.0, 42.0), _go_back, "action")
+	_add_button("back", Loc.t("common.back"), Rect2(LIST_X + LIST_W - 120.0, 74.0, 120.0, 42.0), _go_back, "action")
 
 	var rows: Array = _page_rows()
 	for i in range(rows.size()):
 		var meta: Dictionary = rows[i] as Dictionary
 		var save_id: String = str(meta.get("save_id", ""))
 		var y: float = LIST_TOP + float(i) * (ROW_H + ROW_GAP)
-		_add_button("load_%s" % save_id, "ロード", Rect2(LIST_X + LIST_W - 264.0, y + 24.0, 110.0, 44.0),
+		_add_button("load_%s" % save_id, Loc.t("save_select.load"), Rect2(LIST_X + LIST_W - 264.0, y + 24.0, 110.0, 44.0),
 			func() -> void: _load_save(save_id), "primary")
 		var deleting: bool = _confirm_delete_id == save_id
-		_add_button("del_%s" % save_id, "本当に削除?" if deleting else "削除",
+		_add_button("del_%s" % save_id, Loc.t("save_select.confirm_delete") if deleting else Loc.t("common.delete"),
 			Rect2(LIST_X + LIST_W - 140.0, y + 24.0, 114.0, 44.0),
 			func() -> void: _delete_save(save_id), "chip_active" if deleting else "action")
 
 	if _saves.size() > PAGE_SIZE:
 		var pager_y: float = LIST_TOP + float(PAGE_SIZE) * (ROW_H + ROW_GAP) + 50.0
-		_add_button("prev", "前のページ", Rect2(BASE.x * 0.5 - 190.0, pager_y, 170.0, 44.0),
+		_add_button("prev", Loc.t("common.prev_page"), Rect2(BASE.x * 0.5 - 190.0, pager_y, 170.0, 44.0),
 			func() -> void: _set_page(_page - 1), "action")
-		_add_button("next", "次のページ", Rect2(BASE.x * 0.5 + 20.0, pager_y, 170.0, 44.0),
+		_add_button("next", Loc.t("common.next_page"), Rect2(BASE.x * 0.5 + 20.0, pager_y, 170.0, 44.0),
 			func() -> void: _set_page(_page + 1), "action")
 
 	_layout_buttons()
@@ -162,11 +162,11 @@ func _load_save(save_id: String) -> void:
 	_confirm_delete_id = ""
 	var payload: Dictionary = SaveService.load_save(save_id)
 	if payload.is_empty():
-		_set_status("セーブデータの読み込みに失敗しました。", true)
+		_set_status(Loc.t("save_select.load_failed"), true)
 		_refresh_saves()
 		return
 	if not AppState.restore_from_save(payload):
-		_set_status("セーブデータの復元に失敗しました。", true)
+		_set_status(Loc.t("save_select.restore_failed"), true)
 		_refresh_saves()
 
 
@@ -174,7 +174,7 @@ func _load_save(save_id: String) -> void:
 func _delete_save(save_id: String) -> void:
 	if _confirm_delete_id != save_id:
 		_confirm_delete_id = save_id
-		_set_status("もう一度「本当に削除?」を押すと削除します。", false)
+		_set_status(Loc.t("save_select.confirm_delete_hint"), false)
 		_build_buttons()
 		queue_redraw()
 		return
@@ -182,10 +182,10 @@ func _delete_save(save_id: String) -> void:
 	_confirm_delete_id = ""
 	var was_active: bool = save_id == SaveContext.active_save_id()
 	if SaveService.delete_save(save_id):
-		var note: String = " 使用中のセーブだったため、次回セーブ時に新しいフォルダが作られます。" if was_active else ""
-		_set_status("削除しました: %s。%s" % [_format_save_id(save_id), note], false)
+		var note: String = Loc.t("save_select.deleted_active_note") if was_active else ""
+		_set_status(Loc.t("save_select.deleted", {"save": _format_save_id(save_id), "note": note}), false)
 	else:
-		_set_status("削除に失敗しました。", true)
+		_set_status(Loc.t("save_select.delete_failed"), true)
 	_refresh_saves()
 
 

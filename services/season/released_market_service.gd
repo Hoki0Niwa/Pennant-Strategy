@@ -129,38 +129,38 @@ static func create_released_market_state(players: Array, _teams: Array, season: 
 # 上限チェックより前に確定させる必要がある。
 static func submit_user_released_decision(state: Dictionary, players: Array, teams: Array, season: PSSeason, candidate_id: int, action: String, track: String = "") -> Dictionary:
 	if bool(state.get("complete", false)):
-		return {"ok": false, "message": "戦力外獲得市場は既に完了しています。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.already_complete"), "state": state}
 	_sync_available_contract_salaries(state, players)
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var entry: Dictionary = _state_entry_by_player_id(state, candidate_id)
 	if entry.is_empty() or not bool(entry.get("available", true)):
-		return {"ok": false, "message": "その自由契約候補は選択できません。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.candidate_unavailable"), "state": state}
 	if action == "sign" and not _can_sign_entry(players, entry):
 		entry["available"] = false
-		return {"ok": false, "message": "引退済み選手は戦力外獲得できません。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.retired"), "state": state}
 	if int(entry.get("from_team", 0)) == user_team_id:
-		return {"ok": false, "message": "自球団が戦力外にした選手は今オフ再獲得できません。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.own_released_player"), "state": state}
 
 	if action == "skip":
 		entry["user_skipped"] = true
 		_advance_released_state_if_done(state, players, teams, season)
 		return {"ok": true, "state": state}
 	if action != "sign":
-		return {"ok": false, "message": "不正な戦力外獲得操作です。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.invalid_action"), "state": state}
 	if track == TRACK_CONTROLLED or track == TRACK_DEVELOPMENT:
 		entry["track"] = track
 	elif not track.is_empty():
-		return {"ok": false, "message": "不正な契約区分です。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.invalid_track"), "state": state}
 	if _controlled_track_limit_reached(state, user_team_id, entry):
-		return {"ok": false, "message": "今オフの支配下での戦力外獲得上限に達しています。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.controlled_limit"), "state": state}
 	if not _can_team_accept_candidate(players, user_team_id, entry):
-		return {"ok": false, "message": "支配下枠または外国人枠が不足しています。", "state": state}
+		return {"ok": false, "message": Loc.t("released.error.no_roster_room"), "state": state}
 	if not _can_team_afford_release(players, teams, user_team_id, entry):
 		var team: PSTeam = _find_team_by_id(teams, user_team_id)
 		var room: int = TeamFinance.budget_room(team.funds, TeamFinance.team_payroll(players, user_team_id)) if team != null else 0
-		return {"ok": false, "message": "予算が不足しているため戦力外選手を獲得できません(残額 %d万円 / 年俸 %d万円)。" % [room, int(entry.get("salary", 0))], "state": state}
+		return {"ok": false, "message": Loc.t("released.error.over_budget", {"room": room, "salary": int(entry.get("salary", 0))}), "state": state}
 	_apply_signing(state, players, season, entry, user_team_id, "user")
 	_advance_released_state_if_done(state, players, teams, season)
 	return {"ok": true, "acquired": true, "state": state}
@@ -169,7 +169,7 @@ static func submit_user_released_decision(state: Dictionary, players: Array, tea
 static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	if user_team_id <= 0:
-		return {"ok": false, "message": "自球団が選択されていません。", "state": state}
+		return {"ok": false, "message": Loc.t("error.no_user_team"), "state": state}
 	var candidates: Array = available_user_candidates(state, players, teams)
 	# デプスチャートと即戦力基準は1度だけ作って使い回す (候補ごとに作り直すと O(n^2) になる)。
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
