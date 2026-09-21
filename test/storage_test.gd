@@ -115,15 +115,20 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 		"complete": false,
 		"candidates": [{"player_id": 101, "team_id": team.id, "value": 72.5, "decided": true, "years": 3, "salary": 18000}],
 	}
+	# メジャー挑戦の頻度 (オプション) もセーブ単位で保持する。
+	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_HIGH
 
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	var payload: Dictionary = SaveService.load_state()
 	assert_bool(payload.has("team_auto_lineup")).is_true()
 	assert_bool(payload.has("contract_years_state")).is_true()
+	assert_str(str(payload.get("overseas_challenge_frequency", ""))).is_equal(OverseasService.FREQUENCY_HIGH)
 
 	team.auto_lineup = true
 	AppState.contract_years_state = {}
+	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_STANDARD
 	assert_bool(AppState.restore_from_save(payload)).is_true()
+	assert_str(AppState.overseas_challenge_frequency).is_equal(OverseasService.FREQUENCY_HIGH)
 	team = GameDb.get_team(team.id)
 	assert_bool(team.auto_lineup).is_false()
 	assert_str(JSON.stringify(AppState.contract_years_state)).is_equal(JSON.stringify(payload["contract_years_state"]))
@@ -136,9 +141,16 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 	team.auto_lineup = false
 	assert_bool(SaveService.is_state_current(AppState)).is_true()
+	# 頻度を変えたら未保存扱い (終了時の保存確認が出る)。
+	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_OFF
+	assert_bool(SaveService.is_state_current(AppState)).is_false()
+	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_HIGH
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
 	AppState.contract_years_state["year"] = 2027
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 
+	# オプションは _capture_app_state の対象外なので、後続テストへ漏らさないよう既定へ戻す。
+	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_STANDARD
 	_restore_app_state(old_state, test_save_id)
 
 
@@ -492,6 +504,10 @@ func test_retired_player_final_season_stats_survive_offseason_save_reload() -> v
 	assert_bool(bool(result.get("ok", false))).is_true()
 	# FA宣言した選手は同オフ引退しない仕様なので、判定を決定的にするため宣言印を外してから進める。
 	target_player.source_data.erase("fa_declared_year")
+	# FA宣言 → メジャー挑戦 → 引退判定。48歳は挑戦の年齢上限外なので、海外へは出ていかない。
+	var overseas_step: Dictionary = AppState.advance_offseason()
+	assert_bool(bool(overseas_step.get("ok", false))).is_true()
+	assert_str(AppState.offseason_step).is_equal(AppState.OFFSEASON_STEP_OVERSEAS)
 	var retirement_step: Dictionary = AppState.advance_offseason()
 	assert_bool(bool(retirement_step.get("ok", false))).is_true()
 	assert_str(AppState.offseason_step).is_equal(AppState.OFFSEASON_STEP_RETIREMENT)

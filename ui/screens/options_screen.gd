@@ -96,9 +96,8 @@ func _layout_rects() -> Dictionary:
 	var right_w: float = INNER_R - right_x
 
 	var save_panel: Rect2 = Rect2(left_x, CONTENT_TOP, left_w, 150.0)
-	# 高さはトグル行数 x 標準行高を基準にした目安 (自動トレード行・ドラフト完全ウェーバー制行・
-	# CSアドバンテージ行は説明が長く2行分になる分を加味)。
-	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, 560.0)
+	# 高さは行の積み上げから求める (説明が長い行は2行分の高さ)。下の開発ツール欄は残りを使う。
+	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, _settings_panel_height())
 
 	var rects: Dictionary = {
 		"save_panel": save_panel,
@@ -117,13 +116,14 @@ func _layout_rects() -> Dictionary:
 		if _has_session():
 			rects["team_dropdown"] = Rect2(dx0 + 116.0, dy0, dev_panel.size.x - 36.0 - 116.0, 40.0)
 		else:
+			# 4 つを 1 行に並べる (設定パネルが行数に合わせて伸びるので、この欄の高さは余りに依存する)。
 			var dgap: float = 12.0
-			var dbw: float = (dev_panel.size.x - 36.0 - dgap) / 2.0
+			var dbw: float = (dev_panel.size.x - 36.0 - dgap * 3.0) / 4.0
 			var dbh: float = 46.0
 			rects["dev_balance"] = Rect2(dx0, dy0, dbw, dbh)
-			rects["dev_probe"] = Rect2(dx0 + dbw + dgap, dy0, dbw, dbh)
-			rects["dev_draft"] = Rect2(dx0, dy0 + dbh + dgap, dbw, dbh)
-			rects["dev_reload"] = Rect2(dx0 + dbw + dgap, dy0 + dbh + dgap, dbw, dbh)
+			rects["dev_probe"] = Rect2(dx0 + (dbw + dgap), dy0, dbw, dbh)
+			rects["dev_draft"] = Rect2(dx0 + (dbw + dgap) * 2.0, dy0, dbw, dbh)
+			rects["dev_reload"] = Rect2(dx0 + (dbw + dgap) * 3.0, dy0, dbw, dbh)
 
 			# 右カラム: 初期選手再生成 + 能力分布グラフ (開始前のみ)。
 			var regen_panel: Rect2 = Rect2(right_x, CONTENT_TOP, right_w, 300.0)
@@ -151,6 +151,26 @@ func _toggle_row_height(desc: String) -> float:
 	return TOGGLE_ROW_WIDE_H if desc.length() > TOGGLE_ROW_WIDE_THRESHOLD else TOGGLE_ROW_H
 
 
+# 設定パネルの高さ = 見出し + 全行 (行間込み) + 下余白。
+func _settings_panel_height() -> float:
+	var rows: Array = _toggle_rows()
+	var h: float = 76.0
+	for i in range(rows.size()):
+		h += _toggle_row_height(str((rows[i] as Dictionary)["desc"]))
+		if i < rows.size() - 1:
+			h += TOGGLE_ROW_GAP
+	return h + 16.0
+
+
+# 選択肢行 ("choices" を持つ行) のチップ寸法。ON/OFF チップの代わりに右端へ横並びにする。
+const CHOICE_CHIP_W: float = 64.0
+const CHOICE_CHIP_GAP: float = 6.0
+
+
+func _choice_chips_width(choices: Array) -> float:
+	return float(choices.size()) * CHOICE_CHIP_W + float(maxi(0, choices.size() - 1)) * CHOICE_CHIP_GAP
+
+
 # 設定パネル内の i 番目のトグル行 (base 座標)。行高は説明文の長さで可変なので、
 # i 番目の位置は先行する行の高さを積み上げて求める。
 func _toggle_row_rect(panel: Rect2, i: int) -> Rect2:
@@ -171,7 +191,17 @@ func _toggle_rows() -> Array:
 		{"id": "dh2", "label": Loc.t("options.toggle.dh2.label"), "desc": Loc.t("options.toggle.dh.desc"), "on": AppState.is_dh_enabled_for_league("league2")},
 		{"id": "draftwaiver", "label": Loc.t("options.toggle.draftwaiver.label"), "desc": Loc.t("options.toggle.draftwaiver.desc"), "on": AppState.draft_full_waiver},
 		{"id": "csadvantage", "label": Loc.t("options.toggle.csadvantage.label"), "desc": Loc.t("options.toggle.csadvantage.desc"), "on": AppState.cs_advantage_rule == PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026},
+		# 選択肢行: "choices" を持つ行は ON/OFF の代わりに選択肢チップを並べる (_on_choice)。
+		{"id": "overseas", "label": Loc.t("options.choice.overseas.label"), "desc": Loc.t("options.choice.overseas.desc"),
+			"choices": _overseas_frequency_choices(), "value": AppState.overseas_challenge_frequency},
 	]
+
+
+func _overseas_frequency_choices() -> Array:
+	var choices: Array = []
+	for frequency in OverseasService.FREQUENCY_ORDER:
+		choices.append({"value": frequency, "label": Loc.t("options.choice.overseas.%s" % frequency)})
+	return choices
 
 
 # ============================================================ panels
@@ -191,7 +221,9 @@ func _draw_settings_panel(panel: Rect2) -> void:
 		var rect: Rect2 = _toggle_row_rect(panel, i)
 		_text(str(row["label"]), Vector2(rect.position.x + 4, rect.position.y + 20), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		# 説明文は長さに応じて _toggle_row_height が2行分の高さを確保しているので、折返し描画にする。
-		_multiline(str(row["desc"]), Vector2(rect.position.x + 4, rect.position.y + 40), FS_LABEL, MUTED, rect.size.x - 90)
+		# 右端のチップ (ON/OFF 1 個 or 選択肢の横並び) に掛からない幅で折り返す。
+		var chips_w: float = _choice_chips_width(row["choices"] as Array) + 14.0 if row.has("choices") else 90.0
+		_multiline(str(row["desc"]), Vector2(rect.position.x + 4, rect.position.y + 40), FS_LABEL, MUTED, rect.size.x - chips_w)
 		if i < rows.size() - 1:
 			_line(Vector2(rect.position.x, rect.end.y + 4), Vector2(rect.end.x, rect.end.y + 4), HAIRLINE, 1.0)
 
@@ -272,8 +304,20 @@ func _build_buttons() -> void:
 	for i in range(rows.size()):
 		var spec: Dictionary = rows[i] as Dictionary
 		var id: String = str(spec["id"])
-		var on: bool = bool(spec["on"])
 		var row: Rect2 = _toggle_row_rect(settings_panel, i)
+		if spec.has("choices"):
+			# 選択肢行: 右端から選択肢チップを横並びにし、選ばれている値だけを active にする。
+			var choices: Array = spec["choices"] as Array
+			var x: float = row.end.x - 4.0 - _choice_chips_width(choices)
+			for choice_row in choices:
+				var choice: Dictionary = choice_row as Dictionary
+				var value: String = str(choice["value"])
+				_add_button("ch_%s_%s" % [id, value], str(choice["label"]), Rect2(x, row.position.y + 4.0, CHOICE_CHIP_W, 32.0),
+					func(target: String = id, picked: String = value) -> void: _on_choice(target, picked),
+					"chip_active" if value == str(spec["value"]) else "chip")
+				x += CHOICE_CHIP_W + CHOICE_CHIP_GAP
+			continue
+		var on: bool = bool(spec["on"])
 		_add_button("tg_%s" % id, Loc.t("common.enabled") if on else Loc.t("common.disabled"), Rect2(row.end.x - 80.0, row.position.y + 4.0, 76.0, 32.0),
 			func(target: String = id) -> void: _on_toggle(target), "chip_active" if on else "chip")
 
@@ -443,6 +487,19 @@ func _on_toggle(id: String) -> void:
 			AppState.cs_advantage_rule = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026 if use_2026 else PSPostseasonResult.CS_ADVANTAGE_RULE_LEGACY
 			_save_and_status(Loc.t("options.status.csadvantage_saved"))
 	# チップの ON/OFF 表示とスタイルを更新するため、ボタンを作り直す。
+	_build_buttons()
+	queue_redraw()
+
+
+func _on_choice(id: String, value: String) -> void:
+	match id:
+		"overseas":
+			AppState.overseas_challenge_frequency = OverseasService.normalize_frequency(value)
+			# 「なし」は新規の流出だけを止める。海外にいる選手が取り残されないことを明示する。
+			if AppState.overseas_challenge_frequency == OverseasService.FREQUENCY_OFF:
+				_save_and_status(Loc.t("options.status.overseas_off_saved"))
+			else:
+				_save_and_status(Loc.t("options.status.overseas_saved", {"level": Loc.t("options.choice.overseas.%s" % AppState.overseas_challenge_frequency)}))
 	_build_buttons()
 	queue_redraw()
 

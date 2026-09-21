@@ -14,6 +14,7 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 # ステップの挿入・並べ替えはこの配列の編集だけで完結する (番号の振り直しは存在しない)。
 # offseason_results のキーもこのIDをそのまま使う。
 const OFFSEASON_STEP_FA_DECLARATION: String = "fa_declaration"
+const OFFSEASON_STEP_OVERSEAS: String = "overseas"
 const OFFSEASON_STEP_RETIREMENT: String = "retirement"
 const OFFSEASON_STEP_RELEASE_EDIT: String = "release_edit"
 const OFFSEASON_STEP_RELEASE_COMMIT: String = "release_commit"
@@ -30,6 +31,9 @@ const OFFSEASON_STEP_GROWTH: String = "growth"
 const OFFSEASON_STEP_CONTRACT_RENEWAL: String = "contract_renewal"
 const OFFSEASON_STEP_ORDER: Array[String] = [
 	OFFSEASON_STEP_FA_DECLARATION,
+	# メジャー挑戦 (海外移籍と復帰) は戦力外・ドラフトより前。流出/復帰をここで確定させると
+	# 在籍人数が変わり、放出計画と指名数がその増減をそのまま吸収する (OverseasService 冒頭)。
+	OFFSEASON_STEP_OVERSEAS,
 	OFFSEASON_STEP_RETIREMENT,
 	OFFSEASON_STEP_RELEASE_EDIT,
 	OFFSEASON_STEP_RELEASE_COMMIT,
@@ -144,6 +148,9 @@ var draft_full_waiver: bool = false
 # CS ファイナルのアドバンテージ規定 (PSPostseasonResult.CS_ADVANTAGE_RULE_*)。オプション画面から操作。
 # 既定は 2026年規定 (条件付きで2勝アドバンテージ/5勝先取)。次回のポストシーズン生成から適用する。
 var cs_advantage_rule: String = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026
+# メジャー挑戦の頻度 (OverseasService.FREQUENCY_*)。オプション画面から操作し、次のオフから適用する。
+# "off" は新規の流出だけを止める (海外にいる選手の加齢と復帰は続く)。
+var overseas_challenge_frequency: String = OverseasService.FREQUENCY_STANDARD
 # 進行消失を避けるため、新規ゲームの自動セーブは既定で有効。
 const DEFAULT_AUTO_SAVE_ENABLED: bool = true
 var auto_save_enabled: bool = DEFAULT_AUTO_SAVE_ENABLED
@@ -755,6 +762,11 @@ func advance_offseason() -> Dictionary:
 	var has_result_to_store: bool = true
 
 	match next_step:
+		OFFSEASON_STEP_OVERSEAS:
+			# 海外移籍/復帰は確定離脱・確定加入なので、FA宣言と違ってこの場でロースターへ適用する。
+			step_result = OverseasService.process_overseas_challenge(GameDb.players, GameDb.teams, current_season, overseas_challenge_frequency)
+			step_result["title"] = Loc.t("offseason.step.overseas")
+			GameDb.rebuild_player_indices()
 		OFFSEASON_STEP_RETIREMENT:
 			# 怪我の越冬回復をオフ冒頭で確定させる。player.injury_days を書き換えるのはここだけで、
 			# シーズン中は record 側しか動かないため、**戦力外/育成降格より前に**適用しないと
@@ -2096,6 +2108,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	auto_trade_for_user_team = bool(data.get("auto_trade_for_user_team", false))
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
 	cs_advantage_rule = PSPostseasonResult.normalize_cs_advantage_rule(data.get("cs_advantage_rule", PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026))
+	overseas_challenge_frequency = OverseasService.normalize_frequency(str(data.get("overseas_challenge_frequency", OverseasService.FREQUENCY_STANDARD)))
 	auto_save_enabled = bool(data.get("auto_save_enabled", DEFAULT_AUTO_SAVE_ENABLED))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary
 	league_dh_enabled = {

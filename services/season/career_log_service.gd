@@ -21,6 +21,9 @@ const TYPE_FOREIGN_JOIN: String = "foreign_join"
 const TYPE_FOREIGN_STAY: String = "foreign_stay"
 const TYPE_FOREIGN_MOVE: String = "foreign_move"
 const TYPE_FOREIGN_DEPART: String = "foreign_depart"
+const TYPE_OVERSEAS_DEPART: String = "overseas_depart"
+const TYPE_OVERSEAS_RETURN: String = "overseas_return"
+const TYPE_OVERSEAS_RETIRED: String = "overseas_retired"
 const TYPE_DEV_DEMOTE: String = "dev_demote"
 const TYPE_DEV_PROMOTE: String = "dev_promote"
 const TYPE_RETIRED: String = "retired"
@@ -100,6 +103,21 @@ static func log_foreign_depart(player: PSPlayer, year: int, team_id: int) -> voi
 	append(player, {"y": year, "t": TYPE_FOREIGN_DEPART, "f": team_id})
 
 
+# メジャー挑戦で NPB を離れた。route は OverseasService.ROUTE_POSTING / ROUTE_FA で、
+# ポスティングのときだけ譲渡金 (v) が付く。
+static func log_overseas_depart(player: PSPlayer, year: int, team_id: int, route: String, fee: int) -> void:
+	append(player, {"y": year, "t": TYPE_OVERSEAS_DEPART, "f": team_id, "v": fee, "s": route})
+
+
+static func log_overseas_return(player: PSPlayer, year: int, team_id: int, salary: int) -> void:
+	append(player, {"y": year, "t": TYPE_OVERSEAS_RETURN, "o": team_id, "v": salary})
+
+
+# 海外にいるまま現役を終えた (NPB へ戻らなかった)。
+static func log_overseas_retired(player: PSPlayer, year: int, team_id: int, age: int) -> void:
+	append(player, {"y": year, "t": TYPE_OVERSEAS_RETIRED, "f": team_id, "v": age})
+
+
 static func log_dev_demote(player: PSPlayer, year: int, team_id: int) -> void:
 	append(player, {"y": year, "t": TYPE_DEV_DEMOTE, "o": team_id})
 
@@ -163,6 +181,15 @@ static func describe(entry: Dictionary) -> Dictionary:
 			return {"year": year_text, "label": Loc.t("career.label.foreign_move"), "detail": _with_note(move, _money(value))}
 		TYPE_FOREIGN_DEPART:
 			return {"year": year_text, "label": Loc.t("career.label.foreign_depart"), "detail": from_name}
+		TYPE_OVERSEAS_DEPART:
+			var route_key: String = "career.label.overseas_posting" if str(entry.get("s", "")) == "posting" else "career.label.overseas_fa"
+			var destination: String = Loc.t("career.detail.overseas_destination", {"from": from_name})
+			var depart_detail: String = _with_note(destination, _money(value)) if value > 0 else destination
+			return {"year": year_text, "label": Loc.t(route_key), "detail": depart_detail}
+		TYPE_OVERSEAS_RETURN:
+			return {"year": year_text, "label": Loc.t("career.label.overseas_return"), "detail": _with_note(to_name, _money(value))}
+		TYPE_OVERSEAS_RETIRED:
+			return {"year": year_text, "label": Loc.t("career.label.overseas_retired"), "detail": Loc.t("common.age_value", {"age": value})}
 		TYPE_DEV_DEMOTE:
 			return {"year": year_text, "label": Loc.t("career.label.dev_demote"), "detail": to_name}
 		TYPE_DEV_PROMOTE:

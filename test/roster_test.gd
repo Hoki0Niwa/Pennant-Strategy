@@ -3950,3 +3950,365 @@ func test_compensation_signing_team_submits_two_protect_lists() -> void:
 	assert_bool(bool(CompensationService.submit_protect_list(state, players, teams, season, list2).get("ok", false))).is_true()
 	assert_bool(bool(state.get("complete", false))).is_true()
 	assert_int(int(CompensationService.finalize_compensation(state).get("case_count", 0))).is_equal(2)
+
+
+# --- メジャー挑戦 (海外移籍) -------------------------------------------------
+
+# 挑戦資格を持つ主力級の日本人選手。service_days (一軍登録日数) が経路を決める。
+func _overseas_candidate(player_id: int, team_id: int, service_days: int, age: int = 28) -> PSPlayer:
+	var z: Dictionary = {}
+	for key in ALL_Z_KEYS:
+		z[key] = 2.2
+	return _player({
+		"id": player_id, "team_id": team_id, "age": age, "years": 9,
+		"salary": 15000, "position": 3, "role": "fielder",
+		"z_abilities": z,
+		"position_aptitudes": {3: 95, 7: 80},
+		# 国内FA権 7 年 (大卒/社会人) に固定。ポスティングの窓はこれの 1 年前になる。
+		"fa_eligible_years": PSPlayer.FA_ELIGIBLE_YEARS_OTHER,
+		"source_data": {"fa_nissuu": service_days},
+	})
+
+
+# ポスティングの窓の先頭 (国内FA権の 1 年前) の日数。
+func _posting_window_start_days(fa_eligible_years: int) -> int:
+	return (fa_eligible_years - OverseasService.POSTING_YEARS_BEFORE_DOMESTIC_FA) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+
+
+func _overseas_season(year: int) -> PSSeason:
+	var season: PSSeason = PSSeason.new()
+	season.year = year
+	season.season_number = 1
+	return season
+
+
+# 資格年数の境界。台帳は国内FAと共有 (source_data.fa_nissuu) で、閾値だけが別。
+# ポスティングは国内FA権の 1 年前の窓 (大卒 6 年目 / 高卒 7 年目) で、国内FA権を得た後は
+# 海外FA権 (9 年) まで経路が無い。
+func test_overseas_route_uses_service_day_thresholds() -> void:
+	var per_year: int = PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	var posting_start: int = _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER)
+	var short_service: PSPlayer = _overseas_candidate(9600, 1, posting_start - 1)
+	assert_str(OverseasService.challenge_route(short_service)).is_equal("")
+
+	var posting: PSPlayer = _overseas_candidate(9601, 1, posting_start)
+	assert_str(OverseasService.challenge_route(posting)).is_equal(OverseasService.ROUTE_POSTING)
+	var posting_last_day: PSPlayer = _overseas_candidate(9602, 1, PSPlayer.FA_ELIGIBLE_YEARS_OTHER * per_year - 1)
+	assert_str(OverseasService.challenge_route(posting_last_day)).is_equal(OverseasService.ROUTE_POSTING)
+
+	# 国内FA権を得た瞬間に窓が閉じ、海外FA権まで経路が無い。
+	var domestic_fa: PSPlayer = _overseas_candidate(9603, 1, PSPlayer.FA_ELIGIBLE_YEARS_OTHER * per_year)
+	assert_bool(domestic_fa.is_fa_eligible()).is_true()
+	assert_str(OverseasService.challenge_route(domestic_fa)).is_equal("")
+	var before_overseas_fa: PSPlayer = _overseas_candidate(9604, 1, OverseasService.OVERSEAS_FA_YEARS * per_year - 1)
+	assert_str(OverseasService.challenge_route(before_overseas_fa)).is_equal("")
+
+	var overseas_fa: PSPlayer = _overseas_candidate(9605, 1, OverseasService.OVERSEAS_FA_YEARS * per_year)
+	assert_str(OverseasService.challenge_route(overseas_fa)).is_equal(OverseasService.ROUTE_FA)
+
+	# 高卒は国内FA権が 8 年なので、窓が 1 年後ろへずれる (7 年目)。
+	var high_school: PSPlayer = _overseas_candidate(9606, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER))
+	high_school.fa_eligible_years = PSPlayer.FA_ELIGIBLE_YEARS_HIGH_SCHOOL
+	assert_str(OverseasService.challenge_route(high_school)).is_equal("")
+	high_school.source_data["fa_nissuu"] = _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_HIGH_SCHOOL)
+	assert_str(OverseasService.challenge_route(high_school)).is_equal(OverseasService.ROUTE_POSTING)
+
+
+# 母集団の除外条件。FA宣言者を外すのは国内FA市場と二重に動かさないため。
+func test_overseas_candidate_pool_excludes_declared_foreign_and_locked() -> void:
+	var year: int = 2099
+	var days: int = OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	var plain: PSPlayer = _overseas_candidate(9610, 1, days)
+	assert_int(Offseason.player_value_score(plain)).is_greater_equal(OverseasService.MIN_CHALLENGE_VALUE)
+	assert_bool(OverseasService.is_challenge_candidate(plain, year)).is_true()
+
+	var declared: PSPlayer = _overseas_candidate(9611, 1, days)
+	declared.source_data["fa_declared_year"] = year
+	assert_bool(OverseasService.is_challenge_candidate(declared, year)).is_false()
+
+	var foreign: PSPlayer = _overseas_candidate(9612, 1, days)
+	foreign.foreign_player = true
+	assert_bool(OverseasService.is_challenge_candidate(foreign, year)).is_false()
+
+	var locked: PSPlayer = _overseas_candidate(9613, 1, days)
+	locked.source_data["contract_end_year"] = year + 2
+	assert_bool(OverseasService.is_challenge_candidate(locked, year)).is_false()
+
+	var old_player: PSPlayer = _overseas_candidate(9614, 1, days, OverseasService.MAX_CHALLENGE_AGE + 1)
+	assert_bool(OverseasService.is_challenge_candidate(old_player, year)).is_false()
+
+	# 主力級に届かない選手は志願しない (足切り)。
+	var fringe: PSPlayer = _player({
+		"id": 9615, "team_id": 1, "age": 28, "years": 9,
+		"source_data": {"fa_nissuu": days},
+	})
+	assert_bool(OverseasService.is_challenge_candidate(fringe, year)).is_false()
+
+
+# MLB の関心は能力 × 年齢。若いほど・能力が高いほど高く、譲渡金もそれに比例する。
+func test_overseas_mlb_interest_prefers_young_and_able_players() -> void:
+	var prime: int = OverseasService.MLB_PRIME_AGE
+	# 基準点ちょうどのプライム年齢が 1.0。
+	assert_float(OverseasService.mlb_interest(OverseasService.INTEREST_REFERENCE_VALUE, prime)).is_equal_approx(1.0, 0.0001)
+	# 同じ能力なら若いほど高い (プライム以下は上乗せ、超えると目減り)。
+	var value: int = OverseasService.INTEREST_REFERENCE_VALUE + 10
+	assert_float(OverseasService.mlb_interest(value, prime - 3)).is_greater(OverseasService.mlb_interest(value, prime))
+	assert_float(OverseasService.mlb_interest(value, prime)).is_greater(OverseasService.mlb_interest(value, prime + 4))
+	# 同じ年齢なら能力が高いほど高い。
+	assert_float(OverseasService.mlb_interest(value + 5, prime)).is_greater(OverseasService.mlb_interest(value, prime))
+	# 年齢の倍率は上下限で頭打ち。
+	assert_float(OverseasService.age_interest(18)).is_equal_approx(OverseasService.MAX_AGE_INTEREST, 0.0001)
+	assert_float(OverseasService.age_interest(OverseasService.MAX_CHALLENGE_AGE)).is_greater_equal(OverseasService.MIN_AGE_INTEREST)
+	# 譲渡金は関心に比例し、上下限に収まる。
+	assert_int(OverseasService.posting_fee_for_interest(1.0)).is_equal(OverseasService.POSTING_FEE_MIN)
+	assert_int(OverseasService.posting_fee_for_interest(2.0)).is_greater(OverseasService.POSTING_FEE_MIN)
+	assert_int(OverseasService.posting_fee_for_interest(99.0)).is_equal(OverseasService.POSTING_FEE_MAX)
+
+
+# 母集団 (上位 CHALLENGE_POOL_SIZE 人) は能力順ではなく関心順。能力で勝る年長の海外FA組が
+# 枠を埋めていても、若いポスティング組が母集団に入る (能力順だと初期シードでポスティングが
+# 5 年間 0 件になった)。
+func test_overseas_pool_ranks_by_interest_not_value() -> void:
+	var players: Array = []
+	for i in range(OverseasService.CHALLENGE_POOL_SIZE):
+		players.append(_overseas_candidate(9700 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 32))
+	var young: PSPlayer = _overseas_candidate(9799, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 24)
+	for key in ALL_Z_KEYS:
+		young.z_abilities[key] = 1.9
+	players.append(young)
+	var young_value: int = Offseason.player_value_score(young)
+	assert_int(young_value).is_greater_equal(OverseasService.MIN_CHALLENGE_VALUE)
+	assert_int(young_value).is_less(Offseason.player_value_score(players[0] as PSPlayer))
+
+	Rng.set_seed_value(1)
+	var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(2099))
+	assert_int(int(result.get("eligible_count", 0))).is_equal(OverseasService.CHALLENGE_POOL_SIZE + 1)
+	assert_int(int(result.get("candidates_posting_count", 0))).is_equal(1)
+
+
+# 較正は診断列の期待流出から基礎確率を逆算する (project_overseas_challenge) ので、期待値が
+# 実際の抽選と一致していることを押さえる。同じ母集団を 400 回抽選して実現数と比べる。
+func test_overseas_expected_departures_match_realized_draws() -> void:
+	var trials: int = 400
+	var realized: int = 0
+	var realized_posting: int = 0
+	var expected: float = 0.0
+	var expected_posting: float = 0.0
+	for seed_value in range(1, trials + 1):
+		var players: Array = []
+		for i in range(3):
+			players.append(_overseas_candidate(9800 + i, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 25))
+			players.append(_overseas_candidate(9810 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 30))
+		Rng.set_seed_value(seed_value)
+		var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(2099))
+		realized += int(result.get("departed_count", 0))
+		for entry_row in result.get("departed", []) as Array:
+			if str((entry_row as Dictionary).get("route", "")) == OverseasService.ROUTE_POSTING:
+				realized_posting += 1
+		expected += float(result.get("expected_departures", 0.0))
+		expected_posting += float(result.get("expected_posting_departures", 0.0))
+	# 1 回あたり 1 人前後なので 400 回の標準誤差は期待値の数 % 程度。年間上限の打ち切りで実現側が
+	# わずかに下振れするぶんも含めて幅を取る。
+	assert_float(float(realized)).is_between(expected * 0.85, expected * 1.15)
+	assert_float(float(realized_posting)).is_between(expected_posting * 0.8, expected_posting * 1.2)
+
+
+# 頻度オプション: 期待流出が倍率どおりに増減する (倍率は上限クランプの後に掛かる)。
+func test_overseas_frequency_scales_expected_departures() -> void:
+	var expected_by_frequency: Dictionary = {}
+	for frequency in OverseasService.FREQUENCY_ORDER:
+		var players: Array = []
+		for i in range(3):
+			players.append(_overseas_candidate(9820 + i, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 25))
+			players.append(_overseas_candidate(9830 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 30))
+		Rng.set_seed_value(1)
+		var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(2099), frequency)
+		expected_by_frequency[frequency] = float(result.get("expected_departures", 0.0))
+		assert_str(str(result.get("frequency", ""))).is_equal(frequency)
+	var standard: float = float(expected_by_frequency[OverseasService.FREQUENCY_STANDARD])
+	assert_float(standard).is_greater(0.0)
+	assert_float(float(expected_by_frequency[OverseasService.FREQUENCY_OFF])).is_equal(0.0)
+	assert_float(float(expected_by_frequency[OverseasService.FREQUENCY_LOW])).is_equal_approx(standard * 0.5, 0.0001)
+	assert_float(float(expected_by_frequency[OverseasService.FREQUENCY_HIGH])).is_equal_approx(standard * 2.0, 0.0001)
+	# 未知の値 (壊れたセーブ等) は標準として扱う。
+	assert_str(OverseasService.normalize_frequency("bogus")).is_equal(OverseasService.FREQUENCY_STANDARD)
+
+
+# 頻度「なし」は新規の流出だけを止める。海外にいる選手の加齢と復帰は続く (途中で切っても
+# 海外組が取り残されない)。
+func test_overseas_frequency_off_stops_departures_but_keeps_returns() -> void:
+	var year: int = 2099
+	var returned_any: bool = false
+	for seed_value in range(1, 200):
+		var players: Array = []
+		for i in range(3):
+			players.append(_overseas_candidate(9840 + i, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 25))
+			players.append(_overseas_candidate(9850 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 28))
+		var abroad: PSPlayer = _overseas_candidate(9860, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 34)
+		abroad.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = year - OverseasService.RETURN_MIN_SEASONS
+		abroad.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+		abroad.source_data["retired"] = true
+		players.append(abroad)
+		Rng.set_seed_value(seed_value)
+		var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(year), OverseasService.FREQUENCY_OFF)
+		assert_int(int(result.get("departed_count", 0))).is_equal(0)
+		if int(result.get("returned_count", 0)) > 0:
+			returned_any = true
+			assert_int(abroad.team_id).is_equal(1)
+		else:
+			# 復帰しなかった年も海外で年を取る。
+			assert_int(abroad.age).is_equal(35)
+	assert_bool(returned_any).is_true()
+
+
+# 流出の適用。ロースターから抜け、ポスティングなら譲渡金が元球団の funds へ入る。
+func test_overseas_posting_departure_leaves_roster_and_pays_fee() -> void:
+	var year: int = 2099
+	var applied: bool = false
+	# 志願は確率判定なので、成立するシードを探してから効果を検証する。
+	for seed_value in range(1, 200):
+		var player: PSPlayer = _overseas_candidate(9620, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER))
+		var team: PSTeam = _team(1)
+		var funds_before: int = team.funds
+		Rng.set_seed_value(seed_value)
+		var result: Dictionary = OverseasService.process_overseas_challenge([player], [team], _overseas_season(year))
+		if int(result.get("departed_count", 0)) == 0:
+			continue
+		applied = true
+		assert_int(player.team_id).is_equal(0)
+		assert_bool(player.is_retired()).is_true()
+		assert_bool(player.is_overseas()).is_true()
+		assert_int(int(player.source_data.get(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR, 0))).is_equal(year)
+		assert_int(int(player.source_data.get(OverseasService.SOURCE_KEY_OVERSEAS_TEAM, 0))).is_equal(1)
+		assert_str(str(player.source_data.get(OverseasService.SOURCE_KEY_OVERSEAS_ROUTE, ""))).is_equal(OverseasService.ROUTE_POSTING)
+		# 譲渡金は元球団の funds へ (FA の金銭補償と同じく、そのオフの補強予算だけが動く)。
+		var fee: int = int(result.get("posting_fee_total", 0))
+		assert_int(fee).is_greater_equal(OverseasService.POSTING_FEE_MIN)
+		assert_int(team.funds).is_equal(funds_before + fee)
+		# 支配下の計数からも消える = 放出計画がこの空きをそのまま吸収する。
+		assert_int(TeamFinance.controlled_count([player], 1)).is_equal(0)
+		break
+	assert_bool(applied).is_true()
+
+
+# 海外FAは球団が拒否できず、補償も無い。
+func test_overseas_fa_departure_pays_no_fee() -> void:
+	var year: int = 2099
+	var applied: bool = false
+	for seed_value in range(1, 200):
+		var player: PSPlayer = _overseas_candidate(9630, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
+		var team: PSTeam = _team(1)
+		var funds_before: int = team.funds
+		Rng.set_seed_value(seed_value)
+		var result: Dictionary = OverseasService.process_overseas_challenge([player], [team], _overseas_season(year))
+		if int(result.get("departed_count", 0)) == 0:
+			continue
+		applied = true
+		assert_str(str(player.source_data.get(OverseasService.SOURCE_KEY_OVERSEAS_ROUTE, ""))).is_equal(OverseasService.ROUTE_FA)
+		assert_int(int(result.get("posting_fee_total", 0))).is_equal(0)
+		assert_int(team.funds).is_equal(funds_before)
+		break
+	assert_bool(applied).is_true()
+
+
+# 海外にいる間も年を取り、能力が動く。通常経路 (advance_players_one_year / process_growth_decay)
+# は retired を除外するので、ここが抜けると滞在中だけ時間が止まる。
+func test_overseas_players_age_while_abroad() -> void:
+	var player: PSPlayer = _overseas_candidate(9640, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 29)
+	player.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = 2098
+	player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+	player.source_data["retired"] = true
+	var age_before: int = player.age
+	var years_before: int = player.years
+
+	var result: Dictionary = OverseasService.process_overseas_challenge([player], [_team(1)], _overseas_season(2099))
+
+	assert_int(player.age).is_equal(age_before + 1)
+	assert_int(player.years).is_equal(years_before + 1)
+	assert_bool(player.is_overseas()).is_true()
+	assert_int(int(result.get("overseas_active_count", 0))).is_equal(1)
+	# 最低滞在年数に届かないうちは復帰しない。
+	assert_int(int(result.get("returned_count", 0))).is_equal(0)
+
+
+# 復帰は古巣へ。前年の NPB 成績が無いので、契約更改はこの年俸を据え置く。
+func test_overseas_return_restores_player_to_home_team() -> void:
+	var year: int = 2099
+	var applied: bool = false
+	for seed_value in range(1, 200):
+		var player: PSPlayer = _overseas_candidate(9650, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 34)
+		player.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = year - OverseasService.RETURN_MIN_SEASONS
+		player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+		player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_SALARY] = 20000
+		player.source_data["retired"] = true
+		Rng.set_seed_value(seed_value)
+		var result: Dictionary = OverseasService.process_overseas_challenge([player], [_team(1)], _overseas_season(year))
+		if int(result.get("returned_count", 0)) == 0:
+			continue
+		applied = true
+		assert_int(player.team_id).is_equal(1)
+		assert_bool(player.is_retired()).is_false()
+		assert_bool(player.is_overseas()).is_false()
+		assert_int(player.salary).is_equal(
+			Offseason.round_salary_2sig(int(round(20000.0 * OverseasService.RETURN_SALARY_MULT)))
+		)
+		assert_int(int(player.source_data.get(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR, 0))).is_equal(year)
+		# 復帰した年は加齢の対象外 (以後は通常の advance_players_one_year が担当する)。
+		assert_int(player.age).is_equal(34)
+		break
+	assert_bool(applied).is_true()
+
+
+# 古巣の支配下が埋まっていれば復帰は翌オフへ持ち越す (70枠を溢れさせない)。
+func test_overseas_return_waits_when_home_roster_is_full() -> void:
+	var year: int = 2099
+	# 1シードごとに作り直す (同じ選手を回し続けると加齢で年齢上限に当たってしまう)。
+	for seed_value in range(1, 30):
+		var players: Array = _support_players(1, TeamFinance.CONTROLLED_LIMIT)
+		var player: PSPlayer = _overseas_candidate(9660, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 36)
+		player.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = year - OverseasService.RETURN_MIN_SEASONS - 2
+		player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+		player.source_data["retired"] = true
+		players.append(player)
+		Rng.set_seed_value(seed_value)
+		var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(year))
+		assert_int(int(result.get("returned_count", 0))).is_equal(0)
+		assert_bool(player.is_overseas()).is_true()
+
+
+# 復帰しないまま年齢上限に達したら海外で現役を終える (印を落として通常の引退者になる)。
+func test_overseas_player_retires_abroad_at_age_limit() -> void:
+	var player: PSPlayer = _overseas_candidate(9670, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, OverseasService.RETURN_GIVEUP_AGE)
+	player.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = 2090
+	player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+	player.source_data["retired"] = true
+
+	var result: Dictionary = OverseasService.process_overseas_challenge([player], [_team(1)], _overseas_season(2099))
+
+	assert_int(int(result.get("overseas_retired_count", 0))).is_equal(1)
+	assert_bool(player.is_retired()).is_true()
+	assert_bool(player.is_overseas()).is_false()
+	assert_int(int(result.get("overseas_active_count", 0))).is_equal(0)
+
+
+# 復帰選手を契約更改の査定に通すと、前年の NPB 成績が無いぶん市場価値 floor まで落ちる
+# (ドラフト新人と同じ罠)。復帰年は据え置き、翌オフから通常の査定に戻る。
+func test_contract_renewal_keeps_overseas_return_salary() -> void:
+	var returnee: PSPlayer = _player({
+		"id": 9680, "team_id": 1, "salary": 24000, "years": 12, "age": 34,
+		"source_data": {OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR: 2099},
+	})
+	assert_bool(Offseason._contract_salary_is_locked(returnee, 2099)).is_true()
+	Offseason.process_contract_renewal([returnee], [], _overseas_season(2099))
+	assert_int(returnee.salary).is_equal(24000)
+	assert_bool(Offseason._contract_salary_is_locked(returnee, 2100)).is_false()
+
+
+# 流出/復帰は戦力外・ドラフトより前に確定する。放出数もドラフト指名数も在籍人数から逆算するので、
+# 後ろに置くと抜けた穴がその年の編成計画に入らない。
+func test_overseas_step_is_settled_before_the_release_step() -> void:
+	var order: Array = AppState.OFFSEASON_STEP_ORDER
+	var overseas_index: int = order.find(AppState.OFFSEASON_STEP_OVERSEAS)
+	assert_int(overseas_index).is_greater(order.find(AppState.OFFSEASON_STEP_FA_DECLARATION))
+	assert_int(overseas_index).is_less(order.find(AppState.OFFSEASON_STEP_RELEASE_EDIT))
+	assert_int(overseas_index).is_less(order.find(AppState.OFFSEASON_STEP_DRAFT_MAIN))

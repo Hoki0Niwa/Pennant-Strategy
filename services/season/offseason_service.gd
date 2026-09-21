@@ -1606,7 +1606,9 @@ static func _detail_dict_has_delta(rows: Dictionary) -> bool:
 	return false
 
 
-static func _mutate_abilities(player: PSPlayer) -> Dictionary:
+# positive_scale は**伸びにだけ**掛かる (衰えは等倍)。海外挑戦中の選手に 1.0 未満を渡すのが
+# 唯一の用途で、NPB の成長はすべて既定の 1.0 で通る。
+static func _mutate_abilities(player: PSPlayer, positive_scale: float = 1.0) -> Dictionary:
 	var growth_kind: String = _choose_growth_kind(player)
 	var talent_outlier: bool = growth_kind == GROWTH_KIND_AWAKENING \
 		and Rng.roll_float() < AWAKENING_OUTLIER_SHARE
@@ -1617,6 +1619,8 @@ static func _mutate_abilities(player: PSPlayer) -> Dictionary:
 	for key_variant in keys_to_mutate:
 		var key: String = str(key_variant)
 		var d_z: float = _growth_delta_z(growth_kind, player.age, key, talent_outlier)
+		if d_z > 0.0 and positive_scale != 1.0:
+			d_z *= positive_scale
 		if absf(d_z) < 0.005:
 			continue
 		var current: float = float(player.z_abilities.get(key, 0.0))
@@ -1625,6 +1629,8 @@ static func _mutate_abilities(player: PSPlayer) -> Dictionary:
 		net_z_delta += d_z
 	if player.is_pitcher():
 		raw_velocity_delta = _growth_delta_velocity(growth_kind, player.age)
+		if raw_velocity_delta > 0 and positive_scale != 1.0:
+			raw_velocity_delta = int(round(float(raw_velocity_delta) * positive_scale))
 		if raw_velocity_delta != 0:
 			var current_velocity: int = int(round(float(player.raw_abilities.get("max_velocity", _generated_max_velocity_from_z(player.z_abilities)))))
 			player.raw_abilities["max_velocity"] = clampi(current_velocity + raw_velocity_delta, RAW_MAX_VELOCITY_MIN, RAW_MAX_VELOCITY_MAX)
@@ -1645,6 +1651,14 @@ static func _mutate_abilities(player: PSPlayer) -> Dictionary:
 		"raw_velocity_delta": raw_velocity_delta,
 		"talent_outlier": talent_outlier,
 	}
+
+
+# 海外挑戦中の選手の年次成長。process_growth_decay は retired を除外するので、OverseasService が
+# ここから同じ成長/衰えを適用する (伸びだけ positive_scale で縮める)。
+static func apply_overseas_growth(player: PSPlayer, positive_scale: float) -> Dictionary:
+	if player == null:
+		return {}
+	return _mutate_abilities(player, positive_scale)
 
 
 static func _development_keys_for_player(player: PSPlayer) -> Array:
@@ -2387,7 +2401,10 @@ static func _contract_salary_is_locked(player: PSPlayer, year: int) -> bool:
 	var drafted_this_offseason: bool = int(player.source_data.get("draft_year", 0)) == year
 	var fa_locked: bool = int(player.source_data.get("fa_signed_year", 0)) == year and player.source_data.has("fa_contract_salary")
 	var released_locked: bool = int(player.source_data.get("released_signed_year", 0)) == year and player.source_data.has("released_contract_salary")
-	return drafted_this_offseason or fa_locked or released_locked or player.is_multi_year_locked_offseason(year)
+	# 今オフ海外から復帰した選手。前年の NPB 成績が無いので、査定に通すと市場価値 floor まで
+	# 落ちる (ドラフト新人と同じ罠)。復帰時に決めた年俸をそのまま来季の契約額にする。
+	var overseas_return_locked: bool = int(player.source_data.get(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR, 0)) == year
+	return drafted_this_offseason or fa_locked or released_locked or overseas_return_locked or player.is_multi_year_locked_offseason(year)
 
 
 # 1軍登録日数と FA閾値から contract_status を決める。

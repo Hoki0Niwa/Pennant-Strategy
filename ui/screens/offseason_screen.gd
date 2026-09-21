@@ -691,7 +691,8 @@ func _build_candidate_tabs(rows: Array, active_tab: String, callback: Callable, 
 
 func _build_result_people_tabs() -> void:
 	var step: String = str(_view.get("step", ""))
-	if step != AppState.OFFSEASON_STEP_RETIREMENT and step != AppState.OFFSEASON_STEP_RELEASE_COMMIT:
+	if step != AppState.OFFSEASON_STEP_RETIREMENT and step != AppState.OFFSEASON_STEP_RELEASE_COMMIT \
+		and step != AppState.OFFSEASON_STEP_OVERSEAS:
 		return
 	var result: Dictionary = _view.get("result", {}) as Dictionary
 	if result.is_empty():
@@ -701,6 +702,10 @@ func _build_result_people_tabs() -> void:
 		people = []
 		people.append_array(result.get("released", []) as Array)
 		people.append_array(result.get("demoted", []) as Array)
+	elif step == AppState.OFFSEASON_STEP_OVERSEAS:
+		people = []
+		people.append_array(result.get("departed", []) as Array)
+		people.append_array(result.get("returned", []) as Array)
 	var counts: Dictionary = _people_pitcher_fielder_counts(people)
 	_build_player_tabs("result_people", _result_people_tab, int(counts.get(PLAYER_TAB_PITCHER, 0)), int(counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 
@@ -1251,6 +1256,8 @@ func _step_name(step: String) -> String:
 	match step:
 		AppState.OFFSEASON_STEP_FA_DECLARATION:
 			return Loc.t("offseason.header.fa_declaration")
+		AppState.OFFSEASON_STEP_OVERSEAS:
+			return Loc.t("offseason.step.overseas")
 		AppState.OFFSEASON_STEP_RETIREMENT:
 			return Loc.t("offseason.header.retirement")
 		AppState.OFFSEASON_STEP_RELEASE_EDIT:
@@ -1898,6 +1905,8 @@ func _draw_results(rect: Rect2) -> void:
 	match step:
 		AppState.OFFSEASON_STEP_FA_DECLARATION:
 			_draw_fa_declaration_result(rect, result)
+		AppState.OFFSEASON_STEP_OVERSEAS:
+			_draw_overseas_result(rect, result)
 		AppState.OFFSEASON_STEP_RETIREMENT:
 			_draw_people_result(rect, Loc.t("offseason.result.retired_title"), result, "retired", Loc.t("offseason.result.retired_empty"))
 		AppState.OFFSEASON_STEP_CONTRACT_YEARS:
@@ -1932,6 +1941,62 @@ func _draw_results(rect: Rect2) -> void:
 func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, key: String, empty_text: String) -> void:
 	var people: Array = result.get(key, []) as Array
 	_draw_people_player_table(rect, Loc.t("offseason.result.title_count", {"title": title_text, "n": people.size()}), people, _result_people_tab, key == "retired", empty_text, "result", true, true)
+
+
+# メジャー挑戦の結果。上=今オフ海外へ出た選手 / 下=海外から復帰した選手。
+# 復帰が無い年は上だけを全面に出す (戦力外+育成降格と同じ組み方)。
+# 表は "overseas_result" モード = 移籍元→移籍先の 2 列 (海外側は「MLB」) + 区分 (経路/復帰)。
+func _draw_overseas_result(rect: Rect2, result: Dictionary) -> void:
+	var departed: Array = result.get("departed", []) as Array
+	var returned: Array = result.get("returned", []) as Array
+	var posting_n: int = 0
+	for entry_row in departed:
+		if str((entry_row as Dictionary).get("route", "")) == OverseasService.ROUTE_POSTING:
+			posting_n += 1
+	var heading_args: Dictionary = {
+		"n": departed.size(), "posting": posting_n, "fa": departed.size() - posting_n,
+		"abroad": int(result.get("overseas_active_count", 0)),
+	}
+	var fee_total: int = int(result.get("posting_fee_total", 0))
+	var heading: String = Loc.t("offseason.result.overseas_departed_heading", heading_args)
+	if fee_total > 0:
+		heading_args["fee"] = _format_money_exact(fee_total)
+		heading = Loc.t("offseason.result.overseas_departed_heading_fee", heading_args)
+	var pitcher_tab: bool = _result_people_tab == PLAYER_TAB_PITCHER
+	var departed_rows: Array = _overseas_result_rows(departed, true)
+	var empty_text: String = Loc.t("offseason.result.overseas_departed_empty")
+	if str(result.get("frequency", "")) == OverseasService.FREQUENCY_OFF:
+		empty_text = Loc.t("offseason.result.overseas_disabled")
+	if returned.is_empty():
+		_draw_player_record_table(rect, heading, departed_rows, pitcher_tab, "", "overseas_%s" % _result_people_tab, "", 0,
+			empty_text, true, false, "overseas_result", true)
+		return
+	var half: float = (rect.size.y - 50.0) / 2.0
+	_draw_player_record_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), heading, departed_rows, pitcher_tab,
+		"", "overseas_%s" % _result_people_tab, "", 0, empty_text, true, false, "overseas_result", true)
+	var lower: Rect2 = Rect2(rect.position.x, rect.position.y + half + 56.0, rect.size.x, half - 6.0)
+	_draw_player_record_table(lower, Loc.t("offseason.result.overseas_returned_heading", {"n": returned.size()}), _overseas_result_rows(returned, false), pitcher_tab,
+		"", "overseas2_%s" % _result_people_tab, "", 0, "", false, false, "overseas_result", true)
+
+
+# メジャー挑戦の結果行。サービスの entry は team_id = NPB 側の球団 (流出=移籍元 / 復帰=復帰先) なので、
+# 反対側を 0 (= MLB) にした移籍元/移籍先へ組み替え、区分ラベルを付ける。
+func _overseas_result_rows(entries: Array, departing: bool) -> Array:
+	var moves: Array = []
+	for entry_row in entries:
+		var move: Dictionary = (entry_row as Dictionary).duplicate(true)
+		var npb_team: int = int(move.get("team_id", 0))
+		move["from_team"] = npb_team if departing else 0
+		move["to_team"] = 0 if departing else npb_team
+		if not departing:
+			move["outcome_label"] = Loc.t("offseason.outcome.overseas_return")
+		elif str(move.get("route", "")) == OverseasService.ROUTE_POSTING:
+			move["outcome_label"] = Loc.t("offseason.outcome.posting")
+			move["outcome_color"] = BLUE
+		else:
+			move["outcome_label"] = Loc.t("offseason.outcome.overseas_fa")
+		moves.append(move)
+	return _result_signing_player_rows(moves)
 
 
 func _draw_release_result(rect: Rect2, result: Dictionary) -> void:
@@ -2468,8 +2533,8 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	var entry: Dictionary = row.get("entry", {}) as Dictionary
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
 	if _is_move_team_column_mode(team_mode):
-		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
-		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
+		_text(_move_team_short(int(entry.get("from_team", 0)), team_mode), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
+		_text(_move_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id))), team_mode), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
 	_role_badge(Rect2(float(xs["role_x"]), y - 16.0, 52.0, 22.0), record, _entry_development_flag(entry, record))
@@ -2514,8 +2579,8 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	var entry: Dictionary = row.get("entry", {}) as Dictionary
 	var xs: Dictionary = _player_table_x(rect, team_mode, show_salary, show_offer_years)
 	if _is_move_team_column_mode(team_mode):
-		_text(_team_short(int(entry.get("from_team", 0))), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
-		_text(_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id)))), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
+		_text(_move_team_short(int(entry.get("from_team", 0)), team_mode), Vector2(float(xs["team_from_x"]), y), 12, MUTED, 52.0)
+		_text(_move_team_short(int(entry.get("to_team", entry.get("team_id", record.team_id))), team_mode), Vector2(float(xs["team_to_x"]), y), 12, TEXT, 52.0)
 	elif team_mode == "team" or team_mode == "contract_years_result" or team_mode == "fa_declaration" or team_mode == "fgc_market_away":
 		_text(_team_short(int(entry.get("team_id", record.team_id))), Vector2(float(xs["team_x"]), y), 12, MUTED, 52.0)
 	_position_badge(Rect2(float(xs["role_x"]), y - 16.0, 40.0, 22.0), record.position, _entry_development_flag(entry, record))
@@ -2640,7 +2705,7 @@ func _outcome_slot_label(team_mode: String, default_label: String) -> String:
 	match team_mode:
 		"fgc_result", "fa_declaration":
 			return Loc.t("offseason.col.outcome")
-		"released_result":
+		"released_result", "overseas_result":
 			return Loc.t("col.category")
 		"fgc_market", "fgc_market_away", "contract_years":
 			return Loc.t("offseason.col.current_salary")
@@ -2650,13 +2715,21 @@ func _outcome_slot_label(team_mode: String, default_label: String) -> String:
 # 移籍元/移籍先の2列 (旧球団→新球団) を出す team_mode。
 func _is_move_team_column_mode(team_mode: String) -> bool:
 	return team_mode == "move" or team_mode == "fa_result" \
-		or team_mode == "fgc_result" or team_mode == "released_result"
+		or team_mode == "fgc_result" or team_mode == "released_result" \
+		or team_mode == "overseas_result"
+
+
+# 移籍元/移籍先の列に出す球団略称。メジャー挑戦の結果だけは海外側 (team_id 0) を「MLB」と出す。
+func _move_team_short(team_id: int, team_mode: String) -> String:
+	if team_id <= 0 and team_mode == "overseas_result":
+		return Loc.t("offseason.team.mlb")
+	return _team_short(team_id)
 
 
 # WHIP (投手) / OAA (野手) 枠へ、成績ではなく entry のラベル (去就・契約区分) を描く team_mode。
 func _is_outcome_slot_mode(team_mode: String) -> bool:
 	return team_mode == "fgc_result" or team_mode == "fa_declaration" \
-		or team_mode == "released_result"
+		or team_mode == "released_result" or team_mode == "overseas_result"
 
 
 # 前方2列目 (offer_years_r 枠) の見出し。契約提示系だけ金額を出すのでモードごとに呼び分ける。

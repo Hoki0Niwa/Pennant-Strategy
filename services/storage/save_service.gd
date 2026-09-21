@@ -83,6 +83,7 @@ static func save_state(app_state) -> bool:
 		"auto_trade_for_user_team": app_state.auto_trade_for_user_team,
 		"draft_full_waiver": app_state.draft_full_waiver,
 		"cs_advantage_rule": app_state.cs_advantage_rule,
+		"overseas_challenge_frequency": app_state.overseas_challenge_frequency,
 		"auto_save_enabled": app_state.auto_save_enabled,
 		"league_dh_enabled": app_state.dh_settings_for_schedule(),
 	}
@@ -385,6 +386,7 @@ static func _current_state_snapshot(app_state) -> Dictionary:
 		"auto_trade_for_user_team": app_state.auto_trade_for_user_team,
 		"draft_full_waiver": app_state.draft_full_waiver,
 		"cs_advantage_rule": app_state.cs_advantage_rule,
+		"overseas_challenge_frequency": app_state.overseas_challenge_frequency,
 		"auto_save_enabled": app_state.auto_save_enabled,
 		"league_dh_enabled": app_state.dh_settings_for_schedule(),
 	}
@@ -424,6 +426,7 @@ static func _state_fingerprint(snapshot: Dictionary) -> int:
 		"auto_trade_for_user_team": snapshot.get("auto_trade_for_user_team", false),
 		"draft_full_waiver": snapshot.get("draft_full_waiver", false),
 		"cs_advantage_rule": snapshot.get("cs_advantage_rule", PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026),
+		"overseas_challenge_frequency": snapshot.get("overseas_challenge_frequency", OverseasService.FREQUENCY_STANDARD),
 		"auto_save_enabled": snapshot.get("auto_save_enabled", true),
 		"league_dh_enabled": snapshot.get("league_dh_enabled", {}),
 	}

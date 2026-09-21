@@ -529,6 +529,11 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 	# (app_state.start_offseason) と同じく引退より前に走らせる。
 	var declaration_result: Dictionary = FaMarketService.create_declaration_state(GameDb.players, GameDb.teams, season)
 
+	# メジャー挑戦 (実フローと同じく FA宣言の直後 = 戦力外/ドラフトより前)。流出と復帰で在籍人数が
+	# 動くので、放出計画が読む前に確定させる。
+	var overseas_result: Dictionary = OverseasService.process_overseas_challenge(GameDb.players, GameDb.teams, season)
+	GameDb.rebuild_player_indices()
+
 	# 怪我の越冬回復 (実フローと同じく引退判定と同じ位置)。戦力外/育成降格が読む
 	# player.injury_days を今季の値へ更新するので、必ず戦力外ステップより前に走らせる。
 	var injury_carryover: Dictionary = OffseasonService.process_injury_carryover(GameDb.players, season)
@@ -758,6 +763,24 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"decayers_count": int(growth_result.get("decayers_count", 0)),
 		"growth_kind_counts": (growth_result.get("growth_kind_counts", {}) as Dictionary).duplicate(true),
 		"new_fa_count": int(declaration_result.get("new_fa_count", 0)),
+		# メジャー挑戦。mlb_departed_count が MAX_DEPARTURES_PER_YEAR に毎年張り付いていたら
+		# 志願確率が高すぎる (分散を見る列であって、上限は安全弁)。
+		# mlb_abroad_count は「そのオフ終了時点で海外にいる人数」= 流出と復帰の釣り合いの指標。
+		"mlb_departed_count": int(overseas_result.get("departed_count", 0)),
+		# うちポスティング。実 NPB の近年の MLB 移籍はポスティングが大半 (概算で 7 割強)。
+		"mlb_posting_count": _overseas_route_count(overseas_result, OverseasService.ROUTE_POSTING),
+		# 志願の母集団と、確率の合計 (= 上限が無いときの期待流出数)。
+		# expected が MAX_DEPARTURES_PER_YEAR に迫っていたら確率側が高すぎる。
+		"mlb_candidates_count": int(overseas_result.get("candidates_count", 0)),
+		# 母集団の内訳 (ポスティング窓の人数) と、上位で絞る前の資格者数。
+		"mlb_candidates_posting_count": int(overseas_result.get("candidates_posting_count", 0)),
+		"mlb_eligible_count": int(overseas_result.get("eligible_count", 0)),
+		"mlb_eligible_posting_count": int(overseas_result.get("eligible_posting_count", 0)),
+		"mlb_expected_departures": _round_float(float(overseas_result.get("expected_departures", 0.0)), 2),
+		"mlb_expected_posting": _round_float(float(overseas_result.get("expected_posting_departures", 0.0)), 2),
+		"mlb_returned_count": int(overseas_result.get("returned_count", 0)),
+		"mlb_retired_abroad_count": int(overseas_result.get("overseas_retired_count", 0)),
+		"mlb_abroad_count": int(overseas_result.get("overseas_active_count", 0)),
 		"over_budget_count": over_budget_count,
 		"contract_renewal_raises": int(contract_result.get("raises_count", 0)),
 		"contract_renewal_cuts": int(contract_result.get("cuts_count", 0)),
@@ -832,6 +855,15 @@ func _teams_without_released_signing(released_market_result: Dictionary) -> int:
 		if team != null and not signed_teams.has(team.id):
 			zero_teams += 1
 	return zero_teams
+
+
+# メジャー挑戦の流出のうち、指定経路 (ポスティング/海外FA) の人数。
+func _overseas_route_count(overseas_result: Dictionary, route: String) -> int:
+	var count: int = 0
+	for row in overseas_result.get("departed", []) as Array:
+		if str((row as Dictionary).get("route", "")) == route:
+			count += 1
+	return count
 
 
 # 「30歳以上・当季出場ゼロ・入団3年目以降」で支配下に残った日本人選手の一覧。

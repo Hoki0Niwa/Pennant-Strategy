@@ -28,6 +28,10 @@ const FA_SERVICE_DAYS_PER_YEAR: int = 145
 const FOREIGN_SLOT_EXEMPT_YEARS: int = 8
 # 高卒のデビュー年齢 (これ以下なら高卒出身と推定)。初期シード選手は draft_source 列が無いため。
 const HIGH_SCHOOL_DEBUT_AGE: int = 18
+# メジャー挑戦 (海外移籍) 中を表す source_data の印 = 離脱したオフの年。
+# 離脱中は retired=true / team_id=0 と併用し、NPB の全集計から外れる (外国人の帰国と同じ扱い)。
+# 「引退」と区別したい箇所だけが is_overseas() を見る。制度の詳細は OverseasService。
+const SOURCE_KEY_OVERSEAS_YEAR: String = "overseas_year"
 
 # z-score 内部能力値の正準キー。能力計算は raw z を直接読み、UI 表示だけ z_display() で変換する。
 const Z_BATTER_ABILITY_KEYS = {
@@ -233,6 +237,12 @@ func is_pitcher() -> bool:
 
 func is_retired() -> bool:
 	return bool(source_data.get("retired", false))
+
+
+# メジャー挑戦で NPB を離れている最中か。is_retired() も同時に true になるので、集計・ロースター・
+# 予算はすべて「居ない」として扱う。引退と区別したい表示・年次変動だけがこれを見る。
+func is_overseas() -> bool:
+	return int(source_data.get(SOURCE_KEY_OVERSEAS_YEAR, 0)) > 0
 
 
 # 複数年契約は source_data.contract_end_year (契約がカバーする最終シーズン年) で表す。
