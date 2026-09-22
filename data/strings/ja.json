@@ -1685,7 +1685,7 @@
 	"options.dev.draft": "ドラフト検証",
 	"options.dev.reload": "データ再読込",
 	"options.regen.panel": "初期選手の再生成",
-	"options.regen.desc": "指定年数だけペナントを自動進行し、その時点の球団・選手を初期データ(CSV)へ書き出します。現在の initial_players.csv を上書きするため、反映には再起動または新規ペナント開始を推奨。",
+	"options.regen.desc": "指定年数だけペナントを自動進行し、その時点の球団・選手 (海外挑戦中の選手を含む) と、選手が開始前に残した成績を初期データへ書き出します。現在の initial_players.csv などを上書きするため、反映には再起動または新規ペナント開始を推奨。",
 	"options.regen.seasons": "年数",
 	"options.regen.seed": "シード",
 	"options.regen.run": "初期選手を再生成",

@@ -392,6 +392,11 @@ func start_new_season() -> bool:
 
 	current_season = SeasonService.create_new_season(GameDb.teams, selected_team_id, SeasonService.DEFAULT_START_YEAR, dh_settings_for_schedule())
 	RecordStore.clear_records()
+	# 初期世界の選手が開始前に残した成績 (長いプロ歴の選手も開幕時点で過去成績を持つ)。
+	var initial_history: Dictionary = GameDb.load_initial_history(current_season.year)
+	RecordStore.seed_initial_history(
+		initial_history.get("records", []) as Array, initial_history.get("seasons", []) as Array
+	)
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players)
 	# 新シーズンは現在のロースター/能力でスタメン・打順を選び直すため、テンプレキャッシュをリセット。
 	PSDefenseAlignmentProfile.reset_cache()

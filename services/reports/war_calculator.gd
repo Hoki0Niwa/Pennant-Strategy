@@ -34,6 +34,11 @@ const BENCHMARK_RELIEVER_IP: float = 60.0   # 「平均的フル稼働救援」�
 
 # 当該シーズンのリーグ全体集計からリーグコンテキストを構築する。
 static func build_league_context(year: int, season_number: int, meta: Dictionary = {}) -> Dictionary:
+	# 開始前の季 (初期世界のシード) は母集団が生き残った選手だけなので測り直さない。
+	# ここで測ると WAR プールを少ない打席で割ることになり、1 人あたりの WAR が膨らむ。
+	var seeded: Dictionary = RecordStore.seeded_war_context(year, season_number)
+	if not seeded.is_empty():
+		return seeded.duplicate(true)
 	var total_pa: int = 0
 	var total_woba_num: float = 0.0
 	var total_woba_denom: int = 0

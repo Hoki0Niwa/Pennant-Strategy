@@ -1,19 +1,25 @@
 extends Node
 
-# 本ゲームのペナントを N 年（既定 40）自動進行させ、その時点の球団・選手を
-# 初期データ用 CSV として書き出す。初期選手を本ゲーム由来のシードで用意するためのツール。
+# 本ゲームのペナントを N 年（既定 40）自動進行させ、その時点の球団・選手と、選手が開始前に残した
+# 成績を初期データとして書き出す。初期選手を本ゲーム由来のシードで用意するためのツール。
 #
-# 進化ロジックは PSLongAutoplayReporter を keep_world=true で再利用する（復元せず最終状態を残す）。
+# 進化ロジックは PSLongAutoplayReporter を keep_world=true / collect_history=true で再利用し
+# （復元せず最終状態を残す）、書き出しは PSSeedWorldExporter に任せる。
 #
 # 使い方:
 #   godot --headless --path . --scene res://tools/run_export_seed_world.tscn -- --seasons=40 --seed=20260528
-# 出力:
-#   data/initial_players.csv / data/initial_teams.csv（既定）
+# 出力（既定）:
+#   data/initial_players.csv / data/initial_teams.csv / data/initial_player_records.csv /
+#   data/initial_seasons.json
 
 const ReporterScript = preload("res://services/reports/long_autoplay_reporter.gd")
-
-const DEFAULT_PLAYERS_PATH: String = "res://data/initial_players.csv"
-const DEFAULT_TEAMS_PATH: String = "res://data/initial_teams.csv"
+# 出力先の上書き (コマンドライン引数のキー → PSSeedWorldExporter.DEFAULT_PATHS のキー)。
+const PATH_OPTIONS: Dictionary = {
+	"players": "players",
+	"teams": "teams",
+	"records": "player_records",
+	"seasons_history": "seasons",
+}
 
 
 func _ready() -> void:
@@ -25,15 +31,18 @@ func _ready() -> void:
 
 	var seasons: int = int(options.get("seasons", 40))
 	var seed_value: int = int(options.get("seed", 20260528))
-	var players_path: String = str(options.get("players", DEFAULT_PLAYERS_PATH))
-	var teams_path: String = str(options.get("teams", DEFAULT_TEAMS_PATH))
+	var paths: Dictionary = {}
+	for option_key in PATH_OPTIONS.keys():
+		if options.has(option_key):
+			paths[PATH_OPTIONS[option_key]] = str(options[option_key])
 
 	print("Export seed world: evolving %d seasons (seed=%d) ..." % [seasons, seed_value])
-	var reporter: Object = ReporterScript.new()
+	var reporter: PSLongAutoplayReporter = ReporterScript.new()
 	var report: Dictionary = reporter.run({
 		"seasons": seasons,
 		"seed": seed_value,
 		"keep_world": true,
+		"collect_history": true,
 	})
 
 	var completed: int = int(report.get("seasons_completed", 0))
@@ -42,20 +51,24 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 
-	var player_dicts: Array = PSPlayerCsvIo.normalize_initial_seed_players(
-		_active_player_dicts(),
-		SeasonService.DEFAULT_START_YEAR
-	)
-	var team_dicts: Array = _team_dicts()
-
-	var players_ok: bool = PSPlayerCsvIo.write_players(players_path, player_dicts)
-	var teams_ok: bool = PSPlayerCsvIo.write_teams(teams_path, team_dicts)
+	var exported: Dictionary = PSSeedWorldExporter.export_world(reporter, int(report.get("end_year", 0)), paths)
+	var written_paths: Dictionary = exported.get("paths", {}) as Dictionary
 
 	print("Seasons completed: %d/%d (end_year=%d)" % [
 		completed, int(report.get("seasons_requested", 0)), int(report.get("end_year", 0)),
 	])
-	print("Exported players: %d -> %s" % [player_dicts.size(), ProjectSettings.globalize_path(players_path)])
-	print("Exported teams:   %d -> %s" % [team_dicts.size(), ProjectSettings.globalize_path(teams_path)])
+	print("Exported players: %d (overseas %d) -> %s" % [
+		int(exported.get("players", 0)), int(exported.get("overseas_players", 0)),
+		ProjectSettings.globalize_path(str(written_paths.get("players", ""))),
+	])
+	print("Exported teams:   %d -> %s" % [
+		int(exported.get("teams", 0)), ProjectSettings.globalize_path(str(written_paths.get("teams", ""))),
+	])
+	print("Exported records: %d player-seasons, %d seasons (from %d, year offset %d) -> %s" % [
+		int(exported.get("player_records", 0)), int(exported.get("seasons", 0)),
+		int(exported.get("first_year", 0)), int(exported.get("year_offset", 0)),
+		ProjectSettings.globalize_path(str(written_paths.get("player_records", ""))),
+	])
 	var final_roster: Dictionary = report.get("final_roster_after_last_offseason", {}) as Dictionary
 	print("Final roster: active %d  draft ratio %.1f%%  avg overall %.1f  avg age %.1f" % [
 		int(final_roster.get("active_players", 0)),
@@ -64,47 +77,13 @@ func _ready() -> void:
 		float(final_roster.get("average_age", 0.0)),
 	])
 
-	get_tree().quit(0 if players_ok and teams_ok else 1)
-
-
-# 球団に所属し現役の選手のみをシード対象にする（PSLongAutoplayReporter._is_active_roster_player 相当）。
-func _active_player_dicts() -> Array:
-	var rows: Array = []
-	for player_row in GameDb.players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id <= 0:
-			continue
-		if player.is_retired():
-			continue
-		rows.append(player.to_dict())
-	rows.sort_custom(func(a, b) -> bool:
-		var ta: int = int((a as Dictionary).get("team_id", 0))
-		var tb: int = int((b as Dictionary).get("team_id", 0))
-		if ta == tb:
-			return int((a as Dictionary).get("id", 0)) < int((b as Dictionary).get("id", 0))
-		return ta < tb
-	)
-	return rows
-
-
-func _team_dicts() -> Array:
-	# 予算はシードに焼き込まず常に固定額で書き出す (進化後の funds をそのまま出すと球団ごとに
-	# バラバラな値がシードへ入り、新規ペナントで固定予算制が崩れる)。
-	TeamFinance.apply_fixed_budget(GameDb.teams)
-	var rows: Array = []
-	for team_row in GameDb.teams:
-		var team: PSTeam = team_row as PSTeam
-		if team != null:
-			rows.append(team.to_dict())
-	return rows
+	get_tree().quit(0 if bool(exported.get("ok", false)) else 1)
 
 
 func _parse_args() -> Dictionary:
 	var options: Dictionary = {
 		"seasons": 40,
 		"seed": 20260528,
-		"players": DEFAULT_PLAYERS_PATH,
-		"teams": DEFAULT_TEAMS_PATH,
 	}
 	var args: Array = []
 	for user_arg in OS.get_cmdline_user_args():
@@ -123,6 +102,10 @@ func _parse_args() -> Dictionary:
 			options["players"] = arg.get_slice("=", 1)
 		elif arg.begins_with("--teams="):
 			options["teams"] = arg.get_slice("=", 1)
+		elif arg.begins_with("--records="):
+			options["records"] = arg.get_slice("=", 1)
+		elif arg.begins_with("--seasons-history="):
+			options["seasons_history"] = arg.get_slice("=", 1)
 	return options
 
 
@@ -134,3 +117,5 @@ func _print_usage() -> void:
 	print("  --seed=N       乱数シード (既定 20260528)")
 	print("  --players=PATH 出力先 (既定 res://data/initial_players.csv)")
 	print("  --teams=PATH   出力先 (既定 res://data/initial_teams.csv)")
+	print("  --records=PATH 開始前の選手成績の出力先 (既定 res://data/initial_player_records.csv)")
+	print("  --seasons-history=PATH 開始前の季の履歴の出力先 (既定 res://data/initial_seasons.json)")

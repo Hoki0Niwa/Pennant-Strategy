@@ -50,9 +50,14 @@ static func simulate_day(
 		for local_index in range(indices.size()):
 			calc_results[local_index] = calculate(season, int(indices[local_index]), local_index, rule_groups)
 	else:
+		# 一軍と同じく、並列中は選手評価キャッシュを凍結して worker からの書き込みを封じる。
+		# 打順・出場シェアの評価 (PSBatterForm.regular_z など) が過去季の標本と基準分布を引くので、
+		# 凍結しないと複数スレッドが同じ静的 Dictionary を同時に埋めにかかり、プロセスごと落ちる。
+		PSPerformanceReference.set_frozen(true)
 		var task: Callable = _calc_task_body.bind(season, indices, calc_results, rule_groups)
 		var group_id: int = WorkerThreadPool.add_group_task(task, indices.size(), -1, GameSimulator.DAY_TASKS_HIGH_PRIORITY)
 		WorkerThreadPool.wait_for_group_task_completion(group_id)
+		PSPerformanceReference.set_frozen(false)
 
 	var applied: Array = []
 	var cancelled: int = 0
@@ -183,12 +188,21 @@ static func _calc_task_body(
 static func _prewarm_profiles(season: PSSeason, indices: Array) -> bool:
 	if not RecordStore.prepare_team_player_index():
 		return false
+	# 選手評価の基準分布と過去季の標本も main thread で確定させる。二軍戦は一軍より先に回るので、
+	# 一軍側のプリウォーム (GameSimulator._prewarm_day_profiles) を当てにできない。
+	PSPerformanceReference.prewarm(season.year, season.season_number)
 	var loaded_batting: Dictionary = {}
 	var loaded_defense: Dictionary = {}
+	var loaded_form_teams: Dictionary = {}
 	for index_value in indices:
 		var game: Dictionary = season.farm_schedule[int(index_value)] as Dictionary
 		var dh_enabled: bool = bool(game.get("dh_enabled", true))
 		for team_id in [int(game.get("away_team_id", 0)), int(game.get("home_team_id", 0))]:
+			if not loaded_form_teams.has(team_id):
+				var records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+				PSBatterForm.prewarm_past_samples(records)
+				PSPitcherForm.prewarm_past_samples(records)
+				loaded_form_teams[team_id] = true
 			var batting_key: String = "%d_%d" % [team_id, 1 if dh_enabled else 0]
 			if not loaded_batting.has(batting_key):
 				PSBattingOrderProfile.load_for_team(team_id, dh_enabled)

@@ -8,9 +8,6 @@ extends "res://ui/components/dashboard_screen.gd"
 const ProgressOverlayScript = preload("res://ui/components/progress_overlay.gd")
 const LongAutoplayReporterScript = preload("res://services/reports/long_autoplay_reporter.gd")
 
-const SEED_PLAYERS_PATH: String = "res://data/initial_players.csv"
-const SEED_TEAMS_PATH: String = "res://data/initial_teams.csv"
-
 const CONTENT_TOP: float = 108.0
 const CONTENT_BOTTOM: float = 1056.0
 
@@ -592,11 +589,12 @@ func _on_regenerate_initial_players() -> void:
 		"seasons": _regen_seasons,
 		"seed": _regen_seed,
 		"keep_world": true,
+		"collect_history": true,
 		"scene_tree": get_tree(),
 		"cancel_token": cancel_token,
 		"progress_callback": update_overlay,
 	}
-	var reporter: Object = LongAutoplayReporterScript.new()
+	var reporter: PSLongAutoplayReporter = LongAutoplayReporterScript.new()
 	var report_value: Variant = await reporter.call("run_async", options)
 	var report: Dictionary = report_value as Dictionary
 
@@ -610,18 +608,16 @@ func _on_regenerate_initial_players() -> void:
 		_finish_regen(Loc.t("options.regen.failed"))
 		return
 
-	var players: Array = PSPlayerCsvIo.normalize_initial_seed_players(_active_player_dicts(), SeasonService.DEFAULT_START_YEAR)
-	var teams: Array = _team_dicts()
-	var ok_players: bool = PSPlayerCsvIo.write_players(SEED_PLAYERS_PATH, players)
-	var ok_teams: bool = PSPlayerCsvIo.write_teams(SEED_TEAMS_PATH, teams)
+	var exported: Dictionary = PSSeedWorldExporter.export_world(reporter, int(report.get("end_year", 0)))
 
 	# 進化中は永続化を suspend したままなので戻し、新シードで GameDb を再読込する。
 	RecordStore.resume_persistence()
 	GameDb.load_initial_data()
 
-	if ok_players and ok_teams:
+	if bool(exported.get("ok", false)):
 		_finish_regen(Loc.t("options.regen.done", {
-			"players": players.size(), "teams": teams.size(), "years": int(report.get("end_year", 0)),
+			"players": int(exported.get("players", 0)), "teams": int(exported.get("teams", 0)),
+			"years": int(report.get("end_year", 0)),
 		}))
 	else:
 		_finish_regen(Loc.t("options.regen.write_failed"))
@@ -637,35 +633,6 @@ func _finish_regen(message: String) -> void:
 	if _regen_button != null:
 		_regen_button.disabled = false
 	queue_redraw()
-
-
-func _active_player_dicts() -> Array:
-	var rows: Array = []
-	for player_row in GameDb.players:
-		var player: PSPlayer = player_row as PSPlayer
-		if player == null or player.team_id <= 0 or player.is_retired():
-			continue
-		rows.append(player.to_dict())
-	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
-		var ta: int = int((a as Dictionary).get("team_id", 0))
-		var tb: int = int((b as Dictionary).get("team_id", 0))
-		if ta == tb:
-			return int((a as Dictionary).get("id", 0)) < int((b as Dictionary).get("id", 0))
-		return ta < tb
-	)
-	return rows
-
-
-func _team_dicts() -> Array:
-	# 予算はシードに焼き込まず常に固定額で書き出す (進化後の funds をそのまま出すと球団ごとに
-	# バラバラな値がシードへ入り、新規ペナントで固定予算制が崩れる)。
-	TeamFinance.apply_fixed_budget(GameDb.teams)
-	var rows: Array = []
-	for team_row in GameDb.teams:
-		var team: PSTeam = team_row as PSTeam
-		if team != null:
-			rows.append(team.to_dict())
-	return rows
 
 
 # ============================================================ debug: distribution graph

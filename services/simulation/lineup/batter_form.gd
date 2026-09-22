@@ -192,7 +192,8 @@ static func _past_stat_samples(
 	for k in range(1, lookback + 1):
 		var past_year: int = record.year - k
 		var past_season_number: int = record.season_number - k
-		if past_year <= 0 or past_season_number <= 0:
+		# 年で止める。開始前の季 (初期世界のシード) は season_number が 0 以下でも記録を持つ。
+		if past_year <= 0:
 			break
 		var past: PSPlayerSeasonRecord = RecordStore.get_player_record(
 			record.player_id, past_year, past_season_number

@@ -4312,3 +4312,52 @@ func test_overseas_step_is_settled_before_the_release_step() -> void:
 	assert_int(overseas_index).is_greater(order.find(AppState.OFFSEASON_STEP_FA_DECLARATION))
 	assert_int(overseas_index).is_less(order.find(AppState.OFFSEASON_STEP_RELEASE_EDIT))
 	assert_int(overseas_index).is_less(order.find(AppState.OFFSEASON_STEP_DRAFT_MAIN))
+
+
+# 初期世界のシードには海外組も入る (以前は retired として書き出しで落ち、開始時点で MLB に
+# 居る選手が 1 人もいなかった)。引退者とファーム専用球団の選手は入れない。
+func test_seed_world_export_keeps_overseas_players() -> void:
+	var active: PSPlayer = _overseas_candidate(9701, 2, 0)
+	var overseas: PSPlayer = _overseas_candidate(9702, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR)
+	overseas.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = 2063
+	overseas.source_data["retired"] = true
+	var retired: PSPlayer = _overseas_candidate(9703, 0, 0)
+	retired.source_data["retired"] = true
+	var farm: PSPlayer = _overseas_candidate(9704, int(PSFarmLeague.farm_club_ids()[0]), 0)
+
+	var rows: Array = PSSeedWorldExporter.seed_player_dicts([overseas, active, retired, farm])
+	var ids: Array = rows.map(func(row: Variant) -> int: return int((row as Dictionary).get("id", 0)))
+	# 海外組は末尾 (players の先頭は球団所属の現役、という並びを崩さない)。
+	assert_array(ids).is_equal([9701, 9702])
+
+
+# 海外組の離脱年は経歴ログと同じ世界共通オフセットでずれる。ずれないと滞在年数が負になり、
+# 開始後いつまでも復帰の抽選に入らない。復帰年も同様で、開始年以降に残るものは落とす。
+func test_normalize_initial_seed_players_shifts_overseas_years() -> void:
+	var rows: Array = [
+		{"years": 9, "source_data": {"career_log": [{"y": 2065, "t": "salary", "v": 12000}]}},
+		{
+			"years": 8,
+			"source_data": {
+				"retired": true,
+				PSPlayer.SOURCE_KEY_OVERSEAS_YEAR: 2063,
+				OverseasService.SOURCE_KEY_OVERSEAS_TEAM: 3,
+				"career_log": [{"y": 2063, "t": PSCareerLog.TYPE_OVERSEAS_DEPART, "f": 3}],
+			},
+		},
+		{"years": 12, "source_data": {OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR: 2065}},
+	]
+	var out: Array = PSPlayerCsvIo.normalize_initial_seed_players(rows, 2026)
+	var abroad: Dictionary = (out[1] as Dictionary)["source_data"] as Dictionary
+	assert_int(int(abroad.get(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR, 0))).is_equal(2023)
+	assert_int(int(abroad.get(OverseasService.SOURCE_KEY_OVERSEAS_TEAM, 0))).is_equal(3)
+	var returned: Dictionary = (out[2] as Dictionary)["source_data"] as Dictionary
+	assert_int(int(returned.get(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR, 0))).is_equal(2025)
+	# 読み込み時の再正規化 (オフセット 0) では動かない。
+	var again: Array = PSPlayerCsvIo.normalize_initial_seed_players(out, 2026)
+	assert_int(int(((again[1] as Dictionary)["source_data"] as Dictionary).get(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR, 0))).is_equal(2023)
+	# 開始年以降に残る復帰年は「まだ起きていない」ので落とす。
+	var single: Dictionary = PSPlayerCsvIo.normalize_initial_seed_player(
+		{"years": 3, "source_data": {OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR: 2030}}, 2026
+	)
+	assert_bool((single["source_data"] as Dictionary).has(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR)).is_false()

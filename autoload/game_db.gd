@@ -8,6 +8,9 @@ const SQLITE_DATA_PATH = "res://data/pennant_strategy.sqlite"
 # 本ゲーム由来のシード。存在すれば CSV を最優先し、無ければ SQLite/JSON へフォールバックする。
 const CSV_PLAYER_PATH = "res://data/initial_players.csv"
 const CSV_TEAM_PATH = "res://data/initial_teams.csv"
+# 初期世界の「開始前の年」の履歴 (PSSeedHistoryIo)。無ければ過去成績なしで始まる。
+const CSV_PLAYER_RECORDS_PATH = "res://data/initial_player_records.csv"
+const SEASONS_HISTORY_PATH = "res://data/initial_seasons.json"
 
 
 var data_loaded_ok: bool = false
@@ -119,6 +122,22 @@ func _overlay_phase1_fields_from_json() -> void:
 			player.allowed_slots = _normalize_slot_list(row.get("allowed_slots", []))
 		if row.has("preferred_slots"):
 			player.preferred_slots = _normalize_slot_list(row.get("preferred_slots", []))
+
+
+# 初期世界の「開始前の年」の履歴を読み、いまの players に対応付けて返す。
+# {"records": Array[PSPlayerSeasonRecord], "seasons": Array[Dictionary]}。新規ゲームの開始時にだけ
+# 読む (起動時に読まないのは、数千行の CSV で起動が遅くなるため)。
+func load_initial_history(initial_year: int) -> Dictionary:
+	var records_path: String = ModManager.resolve_data_path("initial_player_records", CSV_PLAYER_RECORDS_PATH)
+	var seasons_path: String = ModManager.resolve_data_path("initial_seasons", SEASONS_HISTORY_PATH)
+	return {
+		"records": PSSeedHistoryIo.build_records(
+			PSSeedHistoryIo.read_records(records_path), players_by_id, initial_year
+		),
+		"seasons": PSSeedHistoryIo.normalize_season_entries(
+			PSSeedHistoryIo.read_seasons(seasons_path), initial_year
+		),
+	}
 
 
 func _normalize_slot_list(source: Variant) -> Array[int]:

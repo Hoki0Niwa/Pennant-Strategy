@@ -132,6 +132,19 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int, ca
 	else:
 		source.erase("development_since_year")
 
+	# 海外組 (メジャー挑戦中) の離脱年も経歴ログと同じオフセットでずらす。未来年のままだと滞在年数
+	# (OverseasService.seasons_abroad) が負になり、開始後いつまでも復帰の抽選に入らない。
+	# 復帰した年 (契約更改の査定ロック用) は開始年以降に残るなら「まだ起きていない」ので落とす。
+	if source.has(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR):
+		var departed_year: int = int(source.get(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR, 0)) - career_year_offset
+		source[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = mini(departed_year, initial_year - 1)
+	if source.has(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR):
+		var returned_year: int = int(source.get(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR, 0)) - career_year_offset
+		if returned_year >= initial_year:
+			source.erase(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR)
+		else:
+			source[OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR] = returned_year
+
 	# career_log の y も未来年のまま残ると経歴タブに未来年が表示される。世界共通オフセット
 	# (career_log_year_offset) で一括シフトする。シフト後も開始年以降に残るエントリ
 	# (オフセット 0 の単独呼び出しに紛れた未来年など) は年を偽装できないので落とす。

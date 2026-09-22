@@ -20,6 +20,10 @@ var _player_record_keys_by_year: Dictionary = {}
 var _indexed_player_record_count: int = 0
 var _team_records: Dictionary = {}
 var _season_archives: Array = []
+# 初期世界のシードが持ち込んだ「開始前の季」ごとのリーグ文脈 ("year:season_number" -> 季の履歴)。
+# 開始前の季は母集団が現役・海外組だけで欠けているため、WAR のリーグ文脈と選手評価の基準分布は
+# 測り直さずにここの値を使う (PSSeedHistoryIo 冒頭)。ゲーム開始後の季は持たない。
+var _season_contexts: Dictionary = {}
 
 var player_records: Dictionary:
 	get:
@@ -306,8 +310,53 @@ func clear_records() -> void:
 	_clear_team_player_record_index()
 	_team_records.clear()
 	_season_archives.clear()
+	_season_contexts.clear()
 	_records_loaded = true
 	records_changed.emit()
+
+
+# 新規ゲームの開始時に、初期世界の「開始前の季」の履歴を流し込む (clear_records の直後に呼ぶ)。
+# records は PSSeedHistoryIo.build_records、season_entries は PSSeedHistoryIo.normalize_season_entries の
+# 戻り値。球団の年度成績は team_records へ、リーグ文脈は _season_contexts へ分けて持つ。
+func seed_initial_history(records: Array, season_entries: Array) -> void:
+	ensure_loaded()
+	for record_value in records:
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record != null:
+			_player_records[_season_key(record.player_id, record.year, record.season_number)] = record
+	for entry_value in season_entries:
+		var entry: Dictionary = (entry_value as Dictionary).duplicate()
+		for team_value in entry.get(PSSeedHistoryIo.SEASON_KEY_TEAM_RECORDS, []) as Array:
+			var team_record: PSTeamSeasonRecord = PSTeamSeasonRecord.from_dict(team_value as Dictionary)
+			_team_records[_season_key(team_record.team_id, team_record.year, team_record.season_number)] = team_record
+		entry.erase(PSSeedHistoryIo.SEASON_KEY_TEAM_RECORDS)
+		_season_contexts[_season_context_key(int(entry.get("year", 0)), int(entry.get("season_number", 0)))] = entry
+	mark_all_records_dirty()
+	_rebuild_team_player_record_index()
+	PSPerformanceReference.reset_cache()
+	records_changed.emit()
+
+
+# 開始前の季の WAR リーグ文脈 (PSWarCalculator.build_league_context と同じ形)。無ければ空。
+func seeded_war_context(year: int, season_number: int) -> Dictionary:
+	var entry: Dictionary = _season_contexts.get(_season_context_key(year, season_number), {}) as Dictionary
+	return entry.get(PSSeedHistoryIo.SEASON_KEY_WAR_CONTEXT, {}) as Dictionary
+
+
+# 開始前の季の選手評価の基準分布 (PSPerformanceReference.for_season と同じ形)。無ければ空。
+func seeded_reference(year: int, season_number: int, level: int) -> Dictionary:
+	var entry: Dictionary = _season_contexts.get(_season_context_key(year, season_number), {}) as Dictionary
+	var references: Dictionary = entry.get(PSSeedHistoryIo.SEASON_KEY_REFERENCES, {}) as Dictionary
+	return references.get(PSSeedHistoryIo.reference_level_key(level), {}) as Dictionary
+
+
+# その季の選手レコードが 1 件でもあるか。過去季を遡る処理が「記録の始まり」で止まるために使う。
+func has_player_records_for_season(year: int, season_number: int) -> bool:
+	ensure_loaded()
+	if _indexed_player_record_count != _player_records.size():
+		_rebuild_team_player_record_index()
+	var seasons_by_number: Dictionary = _player_record_keys_by_year.get(year, {}) as Dictionary
+	return not (seasons_by_number.get(season_number, []) as Array).is_empty()
 
 
 func add_season_archive(archive: PSSeasonArchive, persist: bool = true) -> void:
@@ -332,6 +381,7 @@ func to_dict() -> Dictionary:
 		"player_records": [],
 		"team_records": [],
 		"season_archives": [],
+		"season_contexts": _season_contexts.values(),
 	}
 
 	for record_row in _player_records.values():
@@ -357,6 +407,7 @@ func load_from_dict(payload: Dictionary) -> void:
 	_clear_team_player_record_index()
 	_team_records.clear()
 	_season_archives.clear()
+	_season_contexts.clear()
 
 	var player_rows: Array = payload.get("player_records", []) as Array
 	for row in player_rows:
@@ -376,6 +427,7 @@ func load_from_dict(payload: Dictionary) -> void:
 		var archive_dict: Dictionary = row as Dictionary
 		var archive: PSSeasonArchive = PSSeasonArchive.from_dict(archive_dict)
 		_season_archives.append(archive)
+	_load_season_contexts(payload.get("season_contexts", []) as Array)
 
 	_records_loaded = true
 	records_changed.emit()
@@ -495,6 +547,7 @@ func _persist_payload(partial: bool) -> Dictionary:
 		"player_records": [],
 		"team_records": [],
 		"season_archives": [],
+		"season_contexts": _season_contexts.values(),
 		"unchanged_player_record_keys": [],
 	}
 	for record_row in _player_records.values():
@@ -521,6 +574,7 @@ func load_records() -> void:
 	_clear_team_player_record_index()
 	_team_records.clear()
 	_season_archives.clear()
+	_season_contexts.clear()
 	_records_loaded = true
 
 	# 実データ保護: DB ファイルが存在するのに開けない (ロック等の一時故障) 場合、「セーブが空」と
@@ -598,6 +652,20 @@ func _load_team_and_archives_from_blob(blob_payload: Dictionary) -> void:
 		var archive_dict: Dictionary = row as Dictionary
 		var archive: PSSeasonArchive = PSSeasonArchive.from_dict(archive_dict)
 		_season_archives.append(archive)
+	_load_season_contexts(blob_payload.get("season_contexts", []) as Array)
+
+
+# 保存を通ると JSON で型が崩れる (整数キーが文字列になる) ので、シードと同じ正規化を通して戻す。
+func _load_season_contexts(entries: Array) -> void:
+	for entry_value in entries:
+		if not (entry_value is Dictionary):
+			continue
+		var entry: Dictionary = PSSeedHistoryIo.normalize_season_entry(entry_value as Dictionary)
+		_season_contexts[_season_context_key(int(entry.get("year", 0)), int(entry.get("season_number", 0)))] = entry
+
+
+func _season_context_key(year: int, season_number: int) -> String:
+	return "%d:%d" % [year, season_number]
 
 
 func _season_key(entity_id: int, year: int, season_number: int) -> String:

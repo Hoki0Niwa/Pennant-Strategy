@@ -49,6 +49,12 @@ func _dh_settings_from_options(options: Dictionary) -> Dictionary:
 	}
 
 
+# シード書き出し用の履歴 (options.collect_history=true のときだけ集める)。PSSeedWorldExporter が読む。
+# history_records: player_id -> Array[PSSeedHistoryIo.record_row] / history_seasons: Array[季の履歴]
+var history_records: Dictionary = {}
+var history_seasons: Array = []
+
+
 func run(options: Dictionary = {}) -> Dictionary:
 	if GameDb.teams.is_empty() or GameDb.players.is_empty():
 		GameDb.load_initial_data()
@@ -64,6 +70,10 @@ func run(options: Dictionary = {}) -> Dictionary:
 	# keep_world=true のとき、進化後の GameDb（最終年ロスター）を復元せずに残す。
 	# シード生成ツール (run_export_seed_world) が最終状態を CSV へ書き出すために使う。
 	var keep_world: bool = bool(options.get("keep_world", false))
+	# collect_history=true のとき、各季末の成績とリーグ文脈を history_* へ控える (シード書き出し用)。
+	var collect_history: bool = bool(options.get("collect_history", false))
+	history_records = {}
+	history_seasons = []
 
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var original_player_rows: Array = _snapshot_players()
@@ -108,9 +118,13 @@ func run(options: Dictionary = {}) -> Dictionary:
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
 		var trades_summary: Dictionary = _trade_summary(season)
 		var farm_club_summary: Dictionary = _farm_club_season_summary(season)
+		if collect_history:
+			_collect_season_history(season)
 		var offseason_result: Dictionary = _run_auto_offseason(season, selected_team_id)
 		GameDb.advance_players_one_year()
 		GameDb.rebuild_player_indices()
+		if collect_history:
+			_prune_season_history()
 		var roster_after: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
 
 		completed_seasons += 1
@@ -199,6 +213,10 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var outer_progress_cb: Callable = options.get("progress_callback", Callable())
 	# keep_world=true のとき進化後の GameDb（最終年ロスター）を復元せず残す（シード生成用）。
 	var keep_world: bool = bool(options.get("keep_world", false))
+	# collect_history=true のとき、各季末の成績とリーグ文脈を history_* へ控える (シード書き出し用)。
+	var collect_history: bool = bool(options.get("collect_history", false))
+	history_records = {}
+	history_seasons = []
 	var cancel_token: Dictionary = options.get("cancel_token", {})
 
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
@@ -255,11 +273,15 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		var leaderboards: Dictionary = _leaderboards_for_season(season)
 		var trades_summary: Dictionary = _trade_summary(season)
 		var farm_club_summary: Dictionary = _farm_club_season_summary(season)
+		if collect_history:
+			_collect_season_history(season)
 		if outer_progress_cb.is_valid():
 			outer_progress_cb.call(progress_base + season_total_games, total_progress_units, "offseason %d" % season.year)
 		var offseason_result: Dictionary = _run_auto_offseason(season, selected_team_id)
 		GameDb.advance_players_one_year()
 		GameDb.rebuild_player_indices()
+		if collect_history:
+			_prune_season_history()
 		var roster_after: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
 
 		completed_seasons += 1
@@ -1617,6 +1639,42 @@ func _active_player_id_set(players: Array) -> Dictionary:
 		if _is_active_roster_player(player):
 			ids[player.id] = true
 	return ids
+
+
+# 季末 (オフの前) の成績と、その季のリーグ文脈をシード用に控える。オフより前に取るのは、
+# リーグ文脈を測る母集団 (その季に出場した全員) が引退で欠ける前に測るため (PSSeedHistoryIo 冒頭)。
+func _collect_season_history(season: PSSeason) -> void:
+	for record_value in RecordStore.get_player_records_for_season(season.year, season.season_number):
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		var rows: Array = history_records.get(record.player_id, []) as Array
+		rows.append(PSSeedHistoryIo.record_row(record))
+		history_records[record.player_id] = rows
+	var team_rows: Array = []
+	for team_value in RecordStore.team_records.values():
+		var team_record: PSTeamSeasonRecord = team_value as PSTeamSeasonRecord
+		if team_record != null and team_record.year == season.year and team_record.season_number == season.season_number:
+			team_rows.append(team_record.to_dict())
+	history_seasons.append(PSSeedHistoryIo.season_entry(
+		season.year,
+		season.season_number,
+		team_rows,
+		PSWarCalculator.build_league_context(season.year, season.season_number),
+		PSPerformanceReference.measure_completed_season(season.year, season.season_number)
+	))
+
+
+# 二度とシードに入らない選手 (引退・帰国) の履歴を捨て、進化の全季ぶんを溜め込まないようにする。
+# 戦力外で未契約の選手 (released) は後の市場で拾われ得るので、海外組は復帰するので残す。
+func _prune_season_history() -> void:
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or not player.is_retired() or player.is_overseas():
+			continue
+		if bool(player.source_data.get("released", false)):
+			continue
+		history_records.erase(player.id)
 
 
 func _snapshot_players() -> Array:

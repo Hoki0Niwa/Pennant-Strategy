@@ -166,10 +166,30 @@ static func for_season(year: int, season_number: int, level: int = LEVEL_FIRST) 
 	var key: String = _cache_key(year, season_number, level)
 	if _cache.has(key):
 		return _cache[key] as Dictionary
-	var measured: Dictionary = _measure_season(year, season_number, level, {})
+	# 開始前の季 (初期世界のシード) は母集団が生き残った選手だけなので、書き出し時に測った値を使う。
+	var measured: Dictionary = RecordStore.seeded_reference(year, season_number, level)
+	if measured.is_empty():
+		measured = _measure_season(year, season_number, level, {})
 	if not _frozen:
 		_cache[key] = measured
 	return measured
+
+
+# 全試合を終えた季の基準 (一軍/二軍) を、キャッシュにも進行中フラグにも残さずに測る。
+# シード書き出し (長期自動プレイの各季末) が、母集団が揃っているうちに開始前の季の基準を残すために使う。
+# 返り値のキーは PSSeedHistoryIo.reference_level_key(level)。
+static func measure_completed_season(year: int, season_number: int) -> Dictionary:
+	var saved_in_progress: String = _in_progress_season
+	_in_progress_season = ""
+	var first: Dictionary = _measure_season(year, season_number, LEVEL_FIRST, {})
+	var farm: Dictionary = _measure_season(year, season_number, LEVEL_FARM, first)
+	_in_progress_season = saved_in_progress
+	# 測る途中で評価関数がキャッシュを埋めた可能性がある (進行中フラグを外した状態の値)。
+	reset_cache()
+	return {
+		PSSeedHistoryIo.reference_level_key(LEVEL_FIRST): first,
+		PSSeedHistoryIo.reference_level_key(LEVEL_FARM): farm,
+	}
 
 
 static func _cache_key(year: int, season_number: int, level: int) -> String:
@@ -224,10 +244,11 @@ static func _measure_season(year: int, season_number: int, level: int, ability_s
 static func prewarm(year: int, season_number: int, lookback: int = -1) -> void:
 	var depth: int = lookback if lookback >= 0 else max_past_season_lookback()
 	for k in range(depth + 1):
-		if season_number - k <= 0:
-			break
 		var past_year: int = year - k
 		var past_season_number: int = season_number - k
+		# 記録の始まりで止まる。開始前の季 (初期世界のシード、season_number が 0 以下) も記録があれば温める。
+		if k > 0 and not RecordStore.has_player_records_for_season(past_year, past_season_number):
+			break
 		var fresh_first: Dictionary = {}
 		if not _cache.has(_cache_key(past_year, past_season_number, LEVEL_FIRST)):
 			fresh_first = for_season(past_year, past_season_number)
@@ -408,7 +429,8 @@ static func _resolve_stats(
 	year: int, season_number: int, ratings_reference: Dictionary, own_records: Array, level: int = LEVEL_FIRST
 ) -> Dictionary:
 	for k in range(1 if _is_in_progress_season(year, season_number) else 0, STAT_REFERENCE_LOOKBACK + 1):
-		if season_number - k <= 0:
+		# 年で止める (開始前の季は season_number が 0 以下になる。記録が無い季は標本 0 で素通りする)。
+		if year - k <= 0:
 			break
 		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k, level)
 		var measured: Dictionary = _measure_stats(source, ratings_reference, level)
@@ -595,7 +617,8 @@ static func _resolve_pitcher_stats(
 ) -> Dictionary:
 	# 打者側 (_resolve_stats) と同じく、進行中のシーズンは自分の成績を飛ばす。
 	for k in range(1 if _is_in_progress_season(year, season_number) else 0, STAT_REFERENCE_LOOKBACK + 1):
-		if season_number - k <= 0:
+		# 年で止める (開始前の季は season_number が 0 以下になる。記録が無い季は標本 0 で素通りする)。
+		if year - k <= 0:
 			break
 		var source: Array = own_records if k == 0 else _season_records(year - k, season_number - k, level)
 		var measured: Dictionary = _measure_pitcher_stats(source, ratings_reference, role, level)

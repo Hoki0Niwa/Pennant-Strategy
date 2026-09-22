@@ -373,6 +373,7 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 		"version": blob_payload.get("version", 2),
 		"team_records": blob_payload.get("team_records", []),
 		"season_archives": blob_payload.get("season_archives", []),
+		"season_contexts": blob_payload.get("season_contexts", []),
 	}
 	var value_json: String = JSON.stringify(slim_blob)
 	var blob_sql: String = "INSERT OR REPLACE INTO runtime_blobs (key, value_json, updated_at) VALUES (?, ?, datetime('now'))"
@@ -1328,7 +1329,7 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 		"CREATE TABLE IF NOT EXISTS runtime_blobs (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 		# --- 永続化スキーマ v1: 年度別選手記録の正規化テーブル ---
 		# 選手年度レコードはここが真実。blob (runtime_blobs.record_store) 側には
-		# team_records / season_archives だけを残す。
+		# team_records / season_archives / season_contexts だけを残す。
 		"""CREATE TABLE IF NOT EXISTS player_season_records (
 			player_id INTEGER NOT NULL,
 			year INTEGER NOT NULL,

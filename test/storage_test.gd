@@ -741,6 +741,84 @@ func test_player_season_stats_round_trip_through_normalized_tables() -> void:
 	_restore_app_state(old_state, test_save_id)
 
 
+func test_new_game_loads_initial_history_and_keeps_it_through_save() -> void:
+	# 初期世界の「開始前の年」の履歴 (PSSeedHistoryIo) が新規ゲームで RecordStore に入り、
+	# セーブを往復しても残ること。季のリーグ文脈は JSON を通っても整数キーへ戻ること。
+	var old_state: Dictionary = _capture_app_state()
+	var old_overrides: Dictionary = ModManager._data_overrides.duplicate()
+	var test_save_id: String = ""
+	var records_path: String = "user://test_seed_player_records.csv"
+	var seasons_path: String = "user://test_seed_seasons.json"
+	var start_year: int = SeasonService.DEFAULT_START_YEAR
+	var team: PSTeam = GameDb.teams[0] as PSTeam
+	var veteran: PSPlayer = null
+	for player_value in GameDb.players:
+		var candidate: PSPlayer = player_value as PSPlayer
+		if candidate.team_id == team.id and not candidate.is_retired() and candidate.position != 1:
+			veteran = candidate
+			break
+	assert_object(veteran).is_not_null()
+
+	var past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(veteran, start_year - 1, 0)
+	past.batter_stats.games = 140
+	past.batter_stats.plate_appearances = 600
+	past.batter_stats.hits = 170
+	past.batter_stats.home_runs = 31
+	# 開始年の行は「開始前」ではないので捨てられ、当季のレコードは空から始まる。
+	var not_past: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(veteran, start_year, 1)
+	not_past.batter_stats.hits = 999
+	assert_bool(PSSeedHistoryIo.write_records(records_path, [
+		PSSeedHistoryIo.record_row(past), PSSeedHistoryIo.record_row(not_past),
+	])).is_true()
+	var team_row: Dictionary = PSTeamSeasonRecord.from_team(team, start_year - 1, 0).to_dict()
+	(team_row["stats"] as Dictionary)["games"] = 143
+	# 文脈は実物と同じ形 (空の季を測った既定値) に目印の値を入れる。開幕処理が各キーを読むため。
+	RecordStore.clear_records()
+	var references: Dictionary = PSPerformanceReference.measure_completed_season(start_year - 1, 0)
+	var first_key: String = PSSeedHistoryIo.reference_level_key(PSPerformanceReference.LEVEL_FIRST)
+	((references[first_key] as Dictionary)["regulars"] as Dictionary)["by_position"] = {6: 1.25}
+	var war_context: Dictionary = PSWarCalculator.build_league_context(start_year - 1, 0)
+	war_context["replacement_runs_per_pa"] = 0.0123
+	assert_bool(PSSeedHistoryIo.write_seasons(seasons_path, [PSSeedHistoryIo.season_entry(
+		start_year - 1, 0, [team_row], war_context, references
+	)])).is_true()
+	ModManager._data_overrides["initial_player_records"] = records_path
+	ModManager._data_overrides["initial_seasons"] = seasons_path
+
+	AppState.select_team(team.id)
+	AppState.start_new_season()
+	test_save_id = SaveContext.active_save_id()
+	AppState.auto_save_enabled = false
+	_assert_seeded_history(veteran.id, team.id, start_year)
+
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	RecordStore.load_records()
+	_assert_seeded_history(veteran.id, team.id, start_year)
+
+	ModManager._data_overrides = old_overrides
+	DirAccess.remove_absolute(records_path)
+	DirAccess.remove_absolute(seasons_path)
+	_restore_app_state(old_state, test_save_id)
+	PSPerformanceReference.reset_cache()
+
+
+func _assert_seeded_history(player_id: int, team_id: int, start_year: int) -> void:
+	var seeded: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, start_year - 1, 0)
+	assert_object(seeded).is_not_null()
+	assert_int(seeded.batter_stats.hits).is_equal(170)
+	assert_int(seeded.batter_stats.home_runs).is_equal(31)
+	assert_int(RecordStore.get_player_record(player_id, start_year, 1).batter_stats.hits).is_equal(0)
+	assert_int(RecordStore.get_player_career_batter_stats(player_id).hits).is_equal(170)
+	assert_int(RecordStore.get_team_record(team_id, start_year - 1, 0).stats.games).is_equal(143)
+	var war_context: Dictionary = PSWarCalculator.build_league_context(start_year - 1, 0)
+	assert_float(float(war_context.get("replacement_runs_per_pa", 0.0))).is_equal_approx(0.0123, 0.000001)
+	PSPerformanceReference.reset_cache()
+	var regulars: Dictionary = PSPerformanceReference.for_season(start_year - 1, 0)["regulars"] as Dictionary
+	var by_position: Dictionary = regulars["by_position"] as Dictionary
+	assert_bool(by_position.has(6)).is_true()
+	assert_float(float(by_position[6])).is_equal_approx(1.25, 0.000001)
+
+
 func test_player_game_history_appends_in_place_and_keeps_replacements_sorted() -> void:
 	var season: PSSeason = PSSeason.new()
 	var player_id: int = 42
