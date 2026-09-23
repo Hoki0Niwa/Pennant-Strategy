@@ -214,6 +214,9 @@ const CLOSER_RED: Color = Color(0.92, 0.24, 0.30)
 
 const PLAYER_TAB_PITCHER: String = "pitcher"
 const PLAYER_TAB_FIELDER: String = "fielder"
+# 選手表の区分ラベル (ポスティング / 復帰 / 支配下 など) の枠幅。投手表の区分は FIP 枠の右端から
+# 80px 右にあるので、これより広げると FIP と重なる。「ポスティング」(13px で約 78px) が収まる幅。
+const OUTCOME_LABEL_BOX: float = 80.0
 
 # ---------------------------------------------------------------------------
 # 状態
@@ -240,6 +243,10 @@ var selected_release_ids: Dictionary = {}
 var selected_demote_ids: Dictionary = {}
 var last_release_meta: int = 0
 var release_war_by_id: Dictionary = {}
+# 当季以外の季のレコードの WAR ("player_id:year:season_number" -> war dict) と、
+# その季のリーグ文脈 ("year:season_number" -> ctx)。_other_season_war_dict が埋める。
+var _other_season_war_by_key: Dictionary = {}
+var _other_season_war_ctx: Dictionary = {}
 var _release_confirm_dialog: ConfirmationDialog = null
 var _release_rows: Array = []
 var _release_summary_text: String = ""
@@ -2564,7 +2571,7 @@ func _draw_pitcher_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	else:
 		_text_cell(_fip_text(record, career_stats), float(xs["fip_r"]), y, 13, MUTED, 54.0)
 	if _is_outcome_slot_mode(team_mode):
-		_text_cell(str(entry.get("outcome_label", "")), float(xs["whip_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, 58.0)
+		_text_cell(str(entry.get("outcome_label", "")), float(xs["whip_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, OUTCOME_LABEL_BOX)
 	elif _is_contract_offer_mode(team_mode):
 		_text_cell(str(entry.get("fgc_current_salary_text", "-")), float(xs["whip_r"]), y, 13, MUTED, 58.0)
 	else:
@@ -2618,7 +2625,7 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 		_text_cell(_rate_short(ad.woba()) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
 		_text_cell(str(int(round(ad.wrc_plus()))) if played else "-", float(xs["wrc_r"]), y, 13, MUTED, 56.0)
 	if _is_outcome_slot_mode(team_mode):
-		_text_cell(str(entry.get("outcome_label", "")), float(xs["oaa_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, 54.0)
+		_text_cell(str(entry.get("outcome_label", "")), float(xs["oaa_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, OUTCOME_LABEL_BOX)
 	elif _is_contract_offer_mode(team_mode):
 		_text_cell(str(entry.get("fgc_current_salary_text", "-")), float(xs["oaa_r"]), y, 13, MUTED, 54.0)
 	else:
@@ -5582,29 +5589,21 @@ func _entry_is_pitcher(entry: Dictionary) -> bool:
 
 
 func _record_for_people_entry(entry: Dictionary) -> PSPlayerSeasonRecord:
-	var pid: int = int(entry.get("player_id", 0))
-	if pid <= 0:
-		return null
-	var season: PSSeason = AppState.current_season
-	if season != null:
-		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(pid, season.year, season.season_number)
-		if record != null:
-			return record
-	var records: Array = RecordStore.get_player_records(pid)
-	if not records.is_empty():
-		return records[records.size() - 1] as PSPlayerSeasonRecord
-	var player: PSPlayer = GameDb.get_player(pid)
-	if player == null:
-		return null
-	return PSPlayerSeasonRecord.from_player(
-		player,
-		season.year if season != null else 0,
-		season.season_number if season != null else 0
-	)
+	return _display_record_for_player_id(int(entry.get("player_id", 0)), 0, 0)
 
 
 func _record_for_market_candidate(candidate: Dictionary) -> PSPlayerSeasonRecord:
-	var pid: int = int(candidate.get("player_id", 0))
+	return _display_record_for_player_id(
+		int(candidate.get("player_id", 0)), int(candidate.get("year", 0)), int(candidate.get("season_number", 0))
+	)
+
+
+# 選手表の 1 行ぶんのレコード。当季のレコードがあればそれを使う。
+# 当季に NPB で出場していない選手 (海外からの復帰など) は、能力・年齢・所属をいまの選手から取り、
+# 成績を最後に NPB でプレーした季のレコードから重ねる (_record_with_latest_stats)。
+# どの記録も無い選手 (ドラフト新人・新外国人) は成績 0 の当季レコードを作る。
+# fallback_year / fallback_season_number は当季が無いときに作るレコードの季。
+func _display_record_for_player_id(pid: int, fallback_year: int, fallback_season_number: int) -> PSPlayerSeasonRecord:
 	if pid <= 0:
 		return null
 	var season: PSSeason = AppState.current_season
@@ -5612,17 +5611,32 @@ func _record_for_market_candidate(candidate: Dictionary) -> PSPlayerSeasonRecord
 		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(pid, season.year, season.season_number)
 		if record != null:
 			return record
+	var player: PSPlayer = GameDb.get_player(pid)
 	var records: Array = RecordStore.get_player_records(pid)
 	if not records.is_empty():
-		return records[records.size() - 1] as PSPlayerSeasonRecord
-	var player: PSPlayer = GameDb.get_player(pid)
+		var latest: PSPlayerSeasonRecord = records[records.size() - 1] as PSPlayerSeasonRecord
+		return _record_with_latest_stats(player, latest) if player != null else latest
 	if player == null:
 		return null
 	return PSPlayerSeasonRecord.from_player(
 		player,
-		season.year if season != null else int(candidate.get("year", 0)),
-		season.season_number if season != null else int(candidate.get("season_number", 0))
+		season.year if season != null else fallback_year,
+		season.season_number if season != null else fallback_season_number
 	)
+
+
+# いまの選手 (能力・年齢・所属) に、最後に NPB でプレーした季の成績を重ねた表示用レコード。
+# year / season_number は成績の季に合わせるので、WAR/FIP はその季のリーグ文脈で測られる
+# (_season_war_dict)。成績オブジェクトは latest と共有する (表示専用で書き換えない)。
+func _record_with_latest_stats(player: PSPlayer, latest: PSPlayerSeasonRecord) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, latest.year, latest.season_number)
+	record.batter_stats = latest.batter_stats
+	record.pitcher_stats = latest.pitcher_stats
+	record.advanced_stats = latest.advanced_stats
+	record.farm_batter_stats = latest.farm_batter_stats
+	record.farm_pitcher_stats = latest.farm_pitcher_stats
+	record.farm_advanced_stats = latest.farm_advanced_stats
+	return record
 
 
 func _current_record_for_player(player: PSPlayer) -> PSPlayerSeasonRecord:
@@ -5776,9 +5790,15 @@ func _fip_text(record: PSPlayerSeasonRecord, career_stats: bool) -> String:
 	return "%0.2f" % float(fip) if fip != null and record.pitcher_stats.outs_pitched > 0 else "-.--"
 
 
+# 表示中のレコードの季の WAR (war / fip)。当季は全選手ぶんを一度に作った表 (release_war_by_id) から引く。
+# 当季以外の季のレコード (_record_with_latest_stats) はその季のリーグ文脈で測る — 当季の表を
+# player_id で引くと、別の季の成績に対して WAR 0 / FIP 無しが出る。
 func _season_war_dict(record: PSPlayerSeasonRecord) -> Dictionary:
 	if record == null:
 		return {}
+	var season: PSSeason = AppState.current_season
+	if season == null or record.year != season.year or record.season_number != season.season_number:
+		return _other_season_war_dict(record)
 	if release_war_by_id.is_empty():
 		release_war_by_id = _build_release_war_map()
 	var entry: Variant = release_war_by_id.get(record.player_id, {})
@@ -5787,6 +5807,20 @@ func _season_war_dict(record: PSPlayerSeasonRecord) -> Dictionary:
 	if entry is float or entry is int:
 		return {"war": float(entry)}
 	return {}
+
+
+# 当季以外の季の WAR。表は毎フレーム描き直すので、選手×季ごとに一度だけ測って画面の寿命のあいだ持つ
+# (過去の季の成績とリーグ文脈はオフの間に変わらない)。
+func _other_season_war_dict(record: PSPlayerSeasonRecord) -> Dictionary:
+	var key: String = "%d:%d:%d" % [record.player_id, record.year, record.season_number]
+	if _other_season_war_by_key.has(key):
+		return _other_season_war_by_key[key] as Dictionary
+	var ctx_key: String = "%d:%d" % [record.year, record.season_number]
+	if not _other_season_war_ctx.has(ctx_key):
+		_other_season_war_ctx[ctx_key] = PSWarCalculator.build_league_context(record.year, record.season_number)
+	var war: Dictionary = PSWarCalculator.season_war(record, _other_season_war_ctx[ctx_key] as Dictionary)
+	_other_season_war_by_key[key] = war
+	return war
 
 
 func _career_war_value(player_id: int) -> float:

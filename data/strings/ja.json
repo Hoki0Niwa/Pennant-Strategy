@@ -753,7 +753,7 @@
 	"offseason.team.mlb": "MLB",
 	"offseason.result.overseas_departed_empty": "今オフ、メジャーへ移籍した選手はいません。",
 	"offseason.result.overseas_disabled": "メジャー挑戦はオプションで「なし」に設定されています (海外にいる選手の復帰は続きます)。",
-	"offseason.result.overseas_returned_heading": "メジャーから復帰: {n}人",
+	"offseason.result.overseas_returned_heading": "メジャーから復帰: {n}人 (成績は渡米前の NPB 最終年)",
 	"offseason.result.release_heading": "戦力外通告: {n}人",
 	"offseason.result.release_heading_detail": "戦力外通告: {n}人 (自軍{user}人 / 他球団 {cpu}人 / 外国人 {foreign}人)",
 	"offseason.result.release_empty": "今オフは戦力外通告がありませんでした。",

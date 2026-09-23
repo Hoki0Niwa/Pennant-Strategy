@@ -1214,8 +1214,12 @@ func test_farm_screen_and_player_detail_farm_tab_build() -> void:
 	assert_int(_row_stat_by_year(farm_rows, year_label, "pa")).is_equal(probe_farm_pa)
 	var total_row: Dictionary = farm_rows[farm_rows.size() - 1] as Dictionary
 	assert_bool(bool(total_row.get("is_total", false))).is_true()
-	# 通算行は farm_* だけを合算する (RecordStore の career API は一軍成績しか持たないので自前計算)。
-	assert_int(int(total_row.get("pa", -1))).is_equal(probe_farm_pa)
+	# 通算行は farm_* だけを全季ぶん合算する (RecordStore の career API は一軍成績しか持たないので自前計算)。
+	# 初期世界の選手は開始前の季の二軍成績も持つので、期待値もその選手の全レコードから作る。
+	var probe_farm_career_pa: int = 0
+	for record_value in RecordStore.get_player_records(probe_id):
+		probe_farm_career_pa += (record_value as PSPlayerSeasonRecord).farm_batter_stats.plate_appearances
+	assert_int(int(total_row.get("pa", -1))).is_equal(probe_farm_career_pa)
 	# 過去成績タブは一軍成績のまま (混ざっていない)。
 	detail._active_tab = "stats"
 	assert_int(_row_stat_by_year(detail._rows_for_tab(), year_label, "pa")).is_equal(probe_first_pa)
@@ -1931,6 +1935,57 @@ func test_offseason_screen_draws_fa_declaration_result() -> void:
 	AppState.offseason_active = old_active
 	AppState.offseason_step = old_step
 	AppState.offseason_results = old_results
+
+
+# 当季に NPB で出場していない選手 (海外からの復帰など) の行は、いまの能力・年齢に最後の NPB 季の成績を
+# 重ねて出し、WAR/FIP もその季のリーグ文脈で測る。当季の WAR 表を player_id で引くと、
+# 別の季の成績に対して WAR 0.0 / FIP "-.--" が出る。
+func test_offseason_row_without_current_record_shows_last_npb_season_war() -> void:
+	var old_season: PSSeason = AppState.current_season
+	var old_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var pitcher: PSPlayer = null
+	for player_value in GameDb.players:
+		var candidate: PSPlayer = player_value as PSPlayer
+		if candidate.is_pitcher() and not candidate.is_retired():
+			pitcher = candidate
+			break
+	assert_object(pitcher).is_not_null()
+	var season: PSSeason = PSSeason.new()
+	season.year = 2031
+	season.season_number = 6
+	AppState.current_season = season
+	RecordStore.clear_records()
+	var last_npb: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(pitcher, 2028, 3)
+	last_npb.age = pitcher.age - 3
+	last_npb.pitcher_stats.games = 25
+	last_npb.pitcher_stats.starts = 25
+	last_npb.pitcher_stats.outs_pitched = 480
+	last_npb.pitcher_stats.batters_faced = 650
+	last_npb.pitcher_stats.hits_allowed = 140
+	last_npb.pitcher_stats.home_runs_allowed = 12
+	last_npb.pitcher_stats.walks = 40
+	last_npb.pitcher_stats.strikeouts = 150
+	last_npb.pitcher_stats.runs_allowed = 55
+	last_npb.pitcher_stats.earned_runs = 50
+	RecordStore.set_player_record(last_npb)
+
+	var screen: Control = (load("res://ui/screens/offseason_screen.gd") as GDScript).new()
+	var shown: PSPlayerSeasonRecord = screen.call("_record_for_people_entry", {"player_id": pitcher.id}) as PSPlayerSeasonRecord
+	var expected: Dictionary = PSWarCalculator.season_war(last_npb, PSWarCalculator.build_league_context(2028, 3))
+	var shown_war: float = float(screen.call("_war_value", shown, false))
+	var shown_fip: String = str(screen.call("_fip_text", shown, false))
+	screen.free()
+	RecordStore.load_from_dict(old_records)
+	AppState.current_season = old_season
+	PSPerformanceReference.reset_cache()
+
+	# 成績と季は最後の NPB 季、年齢はいまの選手。
+	assert_int(shown.year).is_equal(2028)
+	assert_int(shown.age).is_equal(pitcher.age)
+	assert_int(shown.pitcher_stats.outs_pitched).is_equal(480)
+	assert_float(absf(float(expected["war"]))).is_greater(0.0)
+	assert_float(shown_war).is_equal_approx(float(expected["war"]), 0.0001)
+	assert_str(shown_fip).is_equal("%0.2f" % float(expected["fip"]))
 
 
 func test_offseason_salary_table_layout_and_market_salary_priority() -> void:
