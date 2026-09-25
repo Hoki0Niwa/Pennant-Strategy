@@ -217,6 +217,11 @@ const PLAYER_TAB_FIELDER: String = "fielder"
 # 選手表の区分ラベル (ポスティング / 復帰 / 支配下 など) の枠幅。投手表の区分は FIP 枠の右端から
 # 80px 右にあるので、これより広げると FIP と重なる。「ポスティング」(13px で約 78px) が収まる幅。
 const OUTCOME_LABEL_BOX: float = 80.0
+# 表示用レコードの source_data に立てる印と、そこに載せる MLB の指標 (_record_with_mlb_stats)。
+const MLB_STATS_RECORD_KEY: String = "mlb_stats_row"
+const MLB_METRICS_KEY: String = "mlb_metrics"
+# メジャー挑戦の結果表で、MLB で現役を終えた選手の移籍先に置く球団 ID (球団が無いので「-」と出る)。
+const OVERSEAS_RETIRED_TO_TEAM: int = -1
 
 # ---------------------------------------------------------------------------
 # 状態
@@ -1950,12 +1955,13 @@ func _draw_people_result(rect: Rect2, title_text: String, result: Dictionary, ke
 	_draw_people_player_table(rect, Loc.t("offseason.result.title_count", {"title": title_text, "n": people.size()}), people, _result_people_tab, key == "retired", empty_text, "result", true, true)
 
 
-# メジャー挑戦の結果。上=今オフ海外へ出た選手 / 下=海外から復帰した選手。
-# 復帰が無い年は上だけを全面に出す (戦力外+育成降格と同じ組み方)。
-# 表は "overseas_result" モード = 移籍元→移籍先の 2 列 (海外側は「MLB」) + 区分 (経路/復帰)。
+# メジャー挑戦の結果。上=今オフ海外へ出た選手 / 下=海外から復帰した選手と MLB で現役を終えた選手。
+# 復帰も引退も無い年は上だけを全面に出す (戦力外+育成降格と同じ組み方)。
+# 表は "overseas_result" モード = 移籍元→移籍先の 2 列 (海外側は「MLB」、引退は「-」) + 区分 (経路/復帰/引退)。
 func _draw_overseas_result(rect: Rect2, result: Dictionary) -> void:
 	var departed: Array = result.get("departed", []) as Array
 	var returned: Array = result.get("returned", []) as Array
+	var retired: Array = result.get("overseas_retired", []) as Array
 	var posting_n: int = 0
 	for entry_row in departed:
 		if str((entry_row as Dictionary).get("route", "")) == OverseasService.ROUTE_POSTING:
@@ -1974,7 +1980,7 @@ func _draw_overseas_result(rect: Rect2, result: Dictionary) -> void:
 	var empty_text: String = Loc.t("offseason.result.overseas_departed_empty")
 	if str(result.get("frequency", "")) == OverseasService.FREQUENCY_OFF:
 		empty_text = Loc.t("offseason.result.overseas_disabled")
-	if returned.is_empty():
+	if returned.is_empty() and retired.is_empty():
 		_draw_player_record_table(rect, heading, departed_rows, pitcher_tab, "", "overseas_%s" % _result_people_tab, "", 0,
 			empty_text, true, false, "overseas_result", true)
 		return
@@ -1982,13 +1988,17 @@ func _draw_overseas_result(rect: Rect2, result: Dictionary) -> void:
 	_draw_player_record_table(Rect2(rect.position.x, rect.position.y, rect.size.x, half + 50.0), heading, departed_rows, pitcher_tab,
 		"", "overseas_%s" % _result_people_tab, "", 0, empty_text, true, false, "overseas_result", true)
 	var lower: Rect2 = Rect2(rect.position.x, rect.position.y + half + 56.0, rect.size.x, half - 6.0)
-	_draw_player_record_table(lower, Loc.t("offseason.result.overseas_returned_heading", {"n": returned.size()}), _overseas_result_rows(returned, false), pitcher_tab,
+	var lower_heading: String = Loc.t("offseason.result.overseas_returned_heading", {"n": returned.size()})
+	if not retired.is_empty():
+		lower_heading = Loc.t("offseason.result.overseas_returned_retired_heading", {"n": returned.size(), "retired": retired.size()})
+	_draw_player_record_table(lower, lower_heading, _overseas_result_rows(returned, false, retired), pitcher_tab,
 		"", "overseas2_%s" % _result_people_tab, "", 0, "", false, false, "overseas_result", true)
 
 
 # メジャー挑戦の結果行。サービスの entry は team_id = NPB 側の球団 (流出=移籍元 / 復帰=復帰先) なので、
 # 反対側を 0 (= MLB) にした移籍元/移籍先へ組み替え、区分ラベルを付ける。
-func _overseas_result_rows(entries: Array, departing: bool) -> Array:
+# retired (MLB で現役を終えた選手) は MLB → 無し (OVERSEAS_RETIRED_TO_TEAM = 「-」) で、年俸は出さない。
+func _overseas_result_rows(entries: Array, departing: bool, retired: Array = []) -> Array:
 	var moves: Array = []
 	for entry_row in entries:
 		var move: Dictionary = (entry_row as Dictionary).duplicate(true)
@@ -2002,6 +2012,14 @@ func _overseas_result_rows(entries: Array, departing: bool) -> Array:
 			move["outcome_color"] = BLUE
 		else:
 			move["outcome_label"] = Loc.t("offseason.outcome.overseas_fa")
+		moves.append(move)
+	for entry_row in retired:
+		var move: Dictionary = (entry_row as Dictionary).duplicate(true)
+		move["from_team"] = 0
+		move["to_team"] = OVERSEAS_RETIRED_TO_TEAM
+		move["outcome_label"] = Loc.t("offseason.outcome.overseas_retired")
+		move["outcome_color"] = AMBER
+		move["salary_text"] = "-"
 		moves.append(move)
 	return _result_signing_player_rows(moves)
 
@@ -2619,11 +2637,18 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 	if not xs.has("salary_r"):
 		_text_cell(_rate_short(bs.on_base_percentage()), float(xs["obp_r"]), y, 13, MUTED, 62.0)
 	_text_cell(_rate_short(bs.ops()), float(xs["ops_r"]), y, 13, TEXT, 54.0)
+	var woba_text: String = _rate_short(ad.woba()) if played else "-"
+	var wrc_text: String = str(int(round(ad.wrc_plus()))) if played else "-"
+	# MLB の成績の行は高度指標を持たないので、MLB のリーグ平均に対して測った指標を出す。
+	var mlb_metrics: Dictionary = {} if career_stats else _mlb_metrics_of(record)
+	if mlb_metrics.has("woba"):
+		woba_text = _rate_short(float(mlb_metrics["woba"]))
+		wrc_text = str(int(round(float(mlb_metrics.get("wrc_plus", 0.0)))))
 	if xs.has("salary_r"):
-		_text_cell(str(int(round(ad.wrc_plus()))) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
+		_text_cell(wrc_text, float(xs["woba_r"]), y, 13, MUTED, 60.0)
 	else:
-		_text_cell(_rate_short(ad.woba()) if played else "-", float(xs["woba_r"]), y, 13, MUTED, 60.0)
-		_text_cell(str(int(round(ad.wrc_plus()))) if played else "-", float(xs["wrc_r"]), y, 13, MUTED, 56.0)
+		_text_cell(woba_text, float(xs["woba_r"]), y, 13, MUTED, 60.0)
+		_text_cell(wrc_text, float(xs["wrc_r"]), y, 13, MUTED, 56.0)
 	if _is_outcome_slot_mode(team_mode):
 		_text_cell(str(entry.get("outcome_label", "")), float(xs["oaa_r"]), y, 13, entry.get("outcome_color", TEXT) as Color, OUTCOME_LABEL_BOX)
 	elif _is_contract_offer_mode(team_mode):
@@ -2646,7 +2671,9 @@ func _draw_identity_cells(record: PSPlayerSeasonRecord, player: PSPlayer, entry:
 			_text_cell(str(entry.get("fgc_years_text", Loc.t("offseason.years_value", {"n": int(entry.get("fgc_years", 1))}))),
 				float(xs["salary_r"]), y, 13, entry.get("fgc_years_color", TEXT) as Color, 44.0)
 		else:
-			_text_cell(_comma(_player_table_salary(entry, record)), float(xs["salary_r"]), y, 13, TEXT, 76.0)
+			# salary_text は年俸を持たない行 (MLB で引退した選手など) の表示の上書き。
+			var salary_text: String = str(entry["salary_text"]) if entry.has("salary_text") else _comma(_player_table_salary(entry, record))
+			_text_cell(salary_text, float(xs["salary_r"]), y, 13, TEXT, 76.0)
 	if xs.has("offer_years_r"):
 		if fgc_market:
 			_text_cell(str(entry.get("market_salary_text", "-")), float(xs["offer_years_r"]), y, 13, TEXT, 66.0)
@@ -2726,9 +2753,10 @@ func _is_move_team_column_mode(team_mode: String) -> bool:
 		or team_mode == "overseas_result"
 
 
-# 移籍元/移籍先の列に出す球団略称。メジャー挑戦の結果だけは海外側 (team_id 0) を「MLB」と出す。
+# 移籍元/移籍先の列に出す球団略称。メジャー挑戦の結果だけは海外側 (team_id 0) を「MLB」と出す
+# (MLB で引退した選手の移籍先 OVERSEAS_RETIRED_TO_TEAM は球団が無いので「-」)。
 func _move_team_short(team_id: int, team_mode: String) -> String:
-	if team_id <= 0 and team_mode == "overseas_result":
+	if team_id == 0 and team_mode == "overseas_result":
 		return Loc.t("offseason.team.mlb")
 	return _team_short(team_id)
 
@@ -5599,8 +5627,9 @@ func _record_for_market_candidate(candidate: Dictionary) -> PSPlayerSeasonRecord
 
 
 # 選手表の 1 行ぶんのレコード。当季のレコードがあればそれを使う。
-# 当季に NPB で出場していない選手 (海外からの復帰など) は、能力・年齢・所属をいまの選手から取り、
-# 成績を最後に NPB でプレーした季のレコードから重ねる (_record_with_latest_stats)。
+# 当季に NPB で出場していない選手は、能力・年齢・所属をいまの選手から取り、成績を最後にプレーした季から
+# 重ねる。海外 (MLB) の季のほうが新しければ MLB の成績 (_record_with_mlb_stats、海外からの復帰)、
+# そうでなければ最後に NPB でプレーした季のレコード (_record_with_latest_stats)。
 # どの記録も無い選手 (ドラフト新人・新外国人) は成績 0 の当季レコードを作る。
 # fallback_year / fallback_season_number は当季が無いときに作るレコードの季。
 func _display_record_for_player_id(pid: int, fallback_year: int, fallback_season_number: int) -> PSPlayerSeasonRecord:
@@ -5613,8 +5642,13 @@ func _display_record_for_player_id(pid: int, fallback_year: int, fallback_season
 			return record
 	var player: PSPlayer = GameDb.get_player(pid)
 	var records: Array = RecordStore.get_player_records(pid)
-	if not records.is_empty():
-		var latest: PSPlayerSeasonRecord = records[records.size() - 1] as PSPlayerSeasonRecord
+	var latest: PSPlayerSeasonRecord = null if records.is_empty() else records[records.size() - 1] as PSPlayerSeasonRecord
+	var mlb_seasons: Array = OverseasService.mlb_seasons(player)
+	if not mlb_seasons.is_empty():
+		var last_mlb: Dictionary = mlb_seasons[mlb_seasons.size() - 1] as Dictionary
+		if latest == null or int(last_mlb["year"]) > latest.year:
+			return _record_with_mlb_stats(player, last_mlb)
+	if latest != null:
 		return _record_with_latest_stats(player, latest) if player != null else latest
 	if player == null:
 		return null
@@ -5637,6 +5671,27 @@ func _record_with_latest_stats(player: PSPlayer, latest: PSPlayerSeasonRecord) -
 	record.farm_pitcher_stats = latest.farm_pitcher_stats
 	record.farm_advanced_stats = latest.farm_advanced_stats
 	return record
+
+
+# いまの選手に、海外 (MLB) の 1 季の成績 (OverseasService.mlb_seasons の 1 件) を重ねた表示用レコード。
+# WAR / FIP / wOBA / wRC+ は MLB のリーグ平均に対して測った値 (metrics) を出す (_mlb_metrics_of)。
+# NPB の高度指標 (OAA など) は持たない。
+func _record_with_mlb_stats(player: PSPlayer, mlb_season: Dictionary) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, int(mlb_season["year"]), 0)
+	record.source_data = {MLB_STATS_RECORD_KEY: true, MLB_METRICS_KEY: mlb_season.get("metrics", {})}
+	record.batter_stats = mlb_season["batting"] as PSBatterStats
+	record.pitcher_stats = mlb_season["pitching"] as PSPitcherStats
+	return record
+
+
+func _is_mlb_stats_record(record: PSPlayerSeasonRecord) -> bool:
+	return record != null and bool(record.source_data.get(MLB_STATS_RECORD_KEY, false))
+
+
+func _mlb_metrics_of(record: PSPlayerSeasonRecord) -> Dictionary:
+	if not _is_mlb_stats_record(record):
+		return {}
+	return record.source_data.get(MLB_METRICS_KEY, {}) as Dictionary
 
 
 func _current_record_for_player(player: PSPlayer) -> PSPlayerSeasonRecord:
@@ -5760,7 +5815,10 @@ func _k9_str(ps: PSPitcherStats) -> String:
 	return "-.-" if ps == null or ps.outs_pitched <= 0 else "%0.1f" % ps.strikeouts_per_nine()
 
 
+# MLB の成績の行は MLB のリーグ平均に対して測った WAR (PSMlbSeasonSimulator)。通算 (career_stats) は NPB の通算。
 func _war_text(record: PSPlayerSeasonRecord, career_stats: bool) -> String:
+	if not career_stats and _is_mlb_stats_record(record) and not _mlb_metrics_of(record).has("war"):
+		return "-"
 	return "%0.1f" % _war_value(record, career_stats)
 
 
@@ -5769,6 +5827,8 @@ func _war_value(record: PSPlayerSeasonRecord, career_stats: bool) -> float:
 		return 0.0
 	if career_stats:
 		return _career_war_value(record.player_id)
+	if _is_mlb_stats_record(record):
+		return float(_mlb_metrics_of(record).get("war", 0.0))
 	return float(_season_war_dict(record).get("war", 0.0))
 
 
@@ -5786,6 +5846,9 @@ func _fip_text(record: PSPlayerSeasonRecord, career_stats: bool) -> String:
 	if career_stats:
 		var career: Dictionary = _career_pitcher_fip(record.player_id)
 		return "%0.2f" % float(career.get("fip", 0.0)) if bool(career.get("has_fip", false)) else "-.--"
+	if _is_mlb_stats_record(record):
+		var mlb_metrics: Dictionary = _mlb_metrics_of(record)
+		return "%0.2f" % float(mlb_metrics["fip"]) if mlb_metrics.has("fip") and record.pitcher_stats.outs_pitched > 0 else "-.--"
 	var fip: Variant = _season_war_dict(record).get("fip", null)
 	return "%0.2f" % float(fip) if fip != null and record.pitcher_stats.outs_pitched > 0 else "-.--"
 
@@ -5794,7 +5857,7 @@ func _fip_text(record: PSPlayerSeasonRecord, career_stats: bool) -> String:
 # 当季以外の季のレコード (_record_with_latest_stats) はその季のリーグ文脈で測る — 当季の表を
 # player_id で引くと、別の季の成績に対して WAR 0 / FIP 無しが出る。
 func _season_war_dict(record: PSPlayerSeasonRecord) -> Dictionary:
-	if record == null:
+	if record == null or _is_mlb_stats_record(record):
 		return {}
 	var season: PSSeason = AppState.current_season
 	if season == null or record.year != season.year or record.season_number != season.season_number:

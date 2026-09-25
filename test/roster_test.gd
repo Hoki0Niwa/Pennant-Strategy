@@ -372,6 +372,30 @@ func test_initial_seed_csv_career_log_has_no_future_years() -> void:
 	assert_int(dated_entries).is_greater(0)
 
 
+# 初期シードの海外組は、海外で過ごした開始前の季ごとに MLB 成績を持つ (渡米した翌年〜開始年の前年)。
+# 欠けると、開始後に戻ってきた選手の選手詳細で海外時代が空白になる。
+func test_initial_seed_csv_overseas_players_have_mlb_seasons_for_each_season_abroad() -> void:
+	var start_year: int = SeasonService.DEFAULT_START_YEAR
+	var rows: Array = PSPlayerCsvIo.normalize_initial_seed_players(
+		PSPlayerCsvIo.read_players(GameDb.CSV_PLAYER_PATH), start_year
+	)
+	var checked: int = 0
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		var source: Dictionary = row.get("source_data", {}) as Dictionary
+		if not source.has(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR):
+			continue
+		var expected: Array = range(int(source[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR]) + 1, start_year)
+		var years: Array = (source.get(OverseasService.SOURCE_KEY_MLB_SEASONS, []) as Array).map(
+			func(season: Variant) -> int: return int((season as Dictionary).get("y", 0))
+		)
+		assert_array(years).override_failure_message(
+			"海外組 %s の MLB 成績の年 %s (期待 %s)" % [str(row.get("name", "?")), str(years), str(expected)]
+		).is_equal(expected)
+		checked += 1 if not expected.is_empty() else 0
+	assert_int(checked).is_greater(0)
+
+
 # --- 初期シード投手の変化球アーセナル ----------------------------------------
 # 初期シードの投手も arsenal を実データとして持つ。arsenal が空だと球種が z 派生表示になり、
 # 球種構成に個性が出ず、ドラフト/外国人の生成投手とも扱いが変わってしまう。
@@ -3970,9 +3994,10 @@ func _overseas_candidate(player_id: int, team_id: int, service_days: int, age: i
 	})
 
 
-# ポスティングの窓の先頭 (国内FA権の 1 年前) の日数。
-func _posting_window_start_days(fa_eligible_years: int) -> int:
-	return (fa_eligible_years - OverseasService.POSTING_YEARS_BEFORE_DOMESTIC_FA) * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+# ポスティングの候補に使う一軍登録日数 (国内FA権の手前。ポスティングの可否は日数ではなく
+# 入団年数と NPB での順位で決まるので、海外FA権に届かない値なら何でもよい)。
+func _posting_service_days() -> int:
+	return 5 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
 
 
 func _overseas_season(year: int) -> PSSeason:
@@ -3982,36 +4007,57 @@ func _overseas_season(year: int) -> PSSeason:
 	return season
 
 
-# 資格年数の境界。台帳は国内FAと共有 (source_data.fa_nissuu) で、閾値だけが別。
-# ポスティングは国内FA権の 1 年前の窓 (大卒 6 年目 / 高卒 7 年目) で、国内FA権を得た後は
-# 海外FA権 (9 年) まで経路が無い。
-func test_overseas_route_uses_service_day_thresholds() -> void:
+# 経路の境界。海外FA権は一軍登録日数 (国内FAと共有の台帳) だけで決まり、成績の条件は無い。
+# ポスティングは国内FA権の有無や時期に関係なく、入団 POSTING_MIN_YEARS 年目を終え、NPB の順位 (野手/投手それぞれ) が
+# POSTING_MAX_RANK 位以内なら同じ条件で挑戦できる (大谷・佐々木型の若手も、国内FA権を得た後の岡本・今井型も)。
+# NPB の成績を見ない (順位 0) ときは入団年数だけで決まる。
+func test_overseas_route_uses_years_rank_and_service_days() -> void:
 	var per_year: int = PSPlayer.FA_SERVICE_DAYS_PER_YEAR
-	var posting_start: int = _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER)
-	var short_service: PSPlayer = _overseas_candidate(9600, 1, posting_start - 1)
-	assert_str(OverseasService.challenge_route(short_service)).is_equal("")
+	var young: PSPlayer = _overseas_candidate(9600, 1, 3 * per_year, 23)
+	young.years = OverseasService.POSTING_MIN_YEARS
+	assert_str(OverseasService.challenge_route(young, 1)).is_equal(OverseasService.ROUTE_POSTING)
+	assert_str(OverseasService.challenge_route(young, OverseasService.POSTING_MAX_RANK)).is_equal(OverseasService.ROUTE_POSTING)
+	assert_str(OverseasService.challenge_route(young, OverseasService.POSTING_MAX_RANK + 1)).is_equal("")
+	assert_str(OverseasService.challenge_route(young, OverseasService.PERFORMANCE_UNRANKED)).is_equal("")
+	assert_str(OverseasService.challenge_route(young)).is_equal(OverseasService.ROUTE_POSTING)
+	young.years = OverseasService.POSTING_MIN_YEARS - 1
+	assert_str(OverseasService.challenge_route(young, 1)).is_equal("")
 
-	var posting: PSPlayer = _overseas_candidate(9601, 1, posting_start)
-	assert_str(OverseasService.challenge_route(posting)).is_equal(OverseasService.ROUTE_POSTING)
-	var posting_last_day: PSPlayer = _overseas_candidate(9602, 1, PSPlayer.FA_ELIGIBLE_YEARS_OTHER * per_year - 1)
-	assert_str(OverseasService.challenge_route(posting_last_day)).is_equal(OverseasService.ROUTE_POSTING)
+	# 国内FA権の手前・国内FA権を得た後・海外FA権の直前のどこでも、同じ条件でポスティングできる。
+	for days in [PSPlayer.FA_ELIGIBLE_YEARS_OTHER * per_year - 1, PSPlayer.FA_ELIGIBLE_YEARS_OTHER * per_year, OverseasService.OVERSEAS_FA_YEARS * per_year - 1]:
+		var player: PSPlayer = _overseas_candidate(9601, 1, int(days), 29)
+		assert_str(OverseasService.challenge_route(player, 3)).is_equal(OverseasService.ROUTE_POSTING)
+		assert_str(OverseasService.challenge_route(player, OverseasService.POSTING_MAX_RANK + 1)).is_equal("")
 
-	# 国内FA権を得た瞬間に窓が閉じ、海外FA権まで経路が無い。
-	var domestic_fa: PSPlayer = _overseas_candidate(9603, 1, PSPlayer.FA_ELIGIBLE_YEARS_OTHER * per_year)
-	assert_bool(domestic_fa.is_fa_eligible()).is_true()
-	assert_str(OverseasService.challenge_route(domestic_fa)).is_equal("")
-	var before_overseas_fa: PSPlayer = _overseas_candidate(9604, 1, OverseasService.OVERSEAS_FA_YEARS * per_year - 1)
-	assert_str(OverseasService.challenge_route(before_overseas_fa)).is_equal("")
-
+	# 海外FA権があれば順位に関係なく海外FA。
 	var overseas_fa: PSPlayer = _overseas_candidate(9605, 1, OverseasService.OVERSEAS_FA_YEARS * per_year)
 	assert_str(OverseasService.challenge_route(overseas_fa)).is_equal(OverseasService.ROUTE_FA)
+	assert_str(OverseasService.challenge_route(overseas_fa, OverseasService.PERFORMANCE_UNRANKED)).is_equal(OverseasService.ROUTE_FA)
 
-	# 高卒は国内FA権が 8 年なので、窓が 1 年後ろへずれる (7 年目)。
-	var high_school: PSPlayer = _overseas_candidate(9606, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER))
-	high_school.fa_eligible_years = PSPlayer.FA_ELIGIBLE_YEARS_HIGH_SCHOOL
-	assert_str(OverseasService.challenge_route(high_school)).is_equal("")
-	high_school.source_data["fa_nissuu"] = _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_HIGH_SCHOOL)
-	assert_str(OverseasService.challenge_route(high_school)).is_equal(OverseasService.ROUTE_POSTING)
+
+# NPB の最上位の若手は、国内FA権がまだ遠くても MLB へ移れる。譲渡金も元球団へ入る。
+func test_young_npb_star_can_be_posted() -> void:
+	var year: int = 2099
+	var performance: Dictionary = {9911: {"rank": 1, "war": 6.0, "pitcher": false}}
+	var applied: bool = false
+	for seed_value in range(1, 200):
+		var star: PSPlayer = _overseas_candidate(9911, 1, 3 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 23)
+		star.years = OverseasService.POSTING_MIN_YEARS
+		var team: PSTeam = _team(1)
+		var funds_before: int = team.funds
+		var departed: Array = []
+		Rng.set_seed_value(seed_value)
+		var stats: Dictionary = OverseasService._resolve_departures([star], [team], year, departed, OverseasService.frequency_setting(OverseasService.FREQUENCY_STANDARD), performance)
+		if departed.is_empty():
+			continue
+		applied = true
+		var entry: Dictionary = departed[0] as Dictionary
+		assert_str(str(entry.get("route", ""))).is_equal(OverseasService.ROUTE_POSTING)
+		assert_bool(star.is_overseas()).is_true()
+		assert_int(team.funds).is_equal(funds_before + int(stats.get("fee_total", 0)))
+		assert_int(int(stats.get("fee_total", 0))).is_greater_equal(OverseasService.POSTING_FEE_MIN)
+		break
+	assert_bool(applied).is_true()
 
 
 # 母集団の除外条件。FA宣言者を外すのは国内FA市場と二重に動かさないため。
@@ -4065,6 +4111,93 @@ func test_overseas_mlb_interest_prefers_young_and_able_players() -> void:
 	assert_int(OverseasService.posting_fee_for_interest(99.0)).is_equal(OverseasService.POSTING_FEE_MAX)
 
 
+# MLB の関心は NPB での働き (野手/投手それぞれの中の順位) で大きく変わる。実際の移籍組は NPB の上位 10 人が
+# 7 割で、投手が 3 分の 2。NPB の成績が全く無いとき (順位 0) は働きを見ない。
+func test_mlb_interest_follows_npb_performance() -> void:
+	assert_float(OverseasService.performance_interest(0)).is_equal(1.0)
+	assert_float(OverseasService.performance_interest(1)).is_equal_approx(1.0, 0.0001)
+	assert_float(OverseasService.performance_interest(5)).is_greater(OverseasService.performance_interest(10))
+	assert_float(OverseasService.performance_interest(10)).is_greater(OverseasService.performance_interest(20))
+	assert_float(OverseasService.performance_interest(20)).is_greater(OverseasService.performance_interest(50))
+	assert_float(OverseasService.performance_interest(OverseasService.PERFORMANCE_UNRANKED)).is_equal_approx(OverseasService.PERFORMANCE_FLOOR, 0.001)
+	assert_float(OverseasService.mlb_interest(85, 27, 1, true)).is_equal_approx(
+		OverseasService.mlb_interest(85, 27, 1, false) * OverseasService.PITCHER_INTEREST_MULT, 0.0001
+	)
+	# NPB の上位の主力は毎年それなりの確率で声が掛かり、20 位の野手はまれ。若いエース投手は上限に届く。
+	var star: float = OverseasService.challenge_chance(OverseasService.ROUTE_POSTING, OverseasService.mlb_interest(85, 27, 3, false))
+	var depth: float = OverseasService.challenge_chance(OverseasService.ROUTE_POSTING, OverseasService.mlb_interest(85, 27, 20, false))
+	assert_float(star).is_greater(depth * 8.0)
+	assert_float(depth).is_less_equal(0.05)
+	var young_ace: float = OverseasService.challenge_chance(OverseasService.ROUTE_POSTING, OverseasService.mlb_interest(85, 24, 1, true))
+	assert_float(young_ace).is_equal_approx(OverseasService.MAX_CHALLENGE_CHANCE, 0.0001)
+	assert_int(OverseasService.performance_rank({}, 5)).is_equal(0)
+	assert_int(OverseasService.performance_rank({7: {"rank": 3}}, 5)).is_equal(OverseasService.PERFORMANCE_UNRANKED)
+	assert_int(OverseasService.performance_rank({7: {"rank": 3}}, 7)).is_equal(3)
+
+
+# 同じ能力・年齢なら、NPB で上位の選手のほうに MLB から声が掛かる (60 位の選手はポスティングの条件
+# POSTING_MAX_RANK の外なので、そもそも挑戦できない)。
+func test_top_npb_performer_is_the_one_mlb_calls() -> void:
+	var year: int = 2099
+	var days: int = _posting_service_days()
+	var performance: Dictionary = {9951: {"rank": 2, "war": 5.0, "pitcher": false}, 9952: {"rank": 60, "war": 0.5, "pitcher": false}}
+	var star_departures: int = 0
+	var depth_departures: int = 0
+	for seed_value in range(1, 101):
+		var star: PSPlayer = _overseas_candidate(9951, 1, days, 27)
+		var depth: PSPlayer = _overseas_candidate(9952, 1, days, 27)
+		var departed: Array = []
+		Rng.set_seed_value(seed_value)
+		OverseasService._resolve_departures([star, depth], [_team(1)], year, departed, OverseasService.frequency_setting(OverseasService.FREQUENCY_STANDARD), performance)
+		star_departures += 1 if star.is_overseas() else 0
+		depth_departures += 1 if depth.is_overseas() else 0
+	assert_int(star_departures).is_greater(15)
+	assert_int(depth_departures).is_equal(0)
+
+
+# NPB での働きの順位は、今季の WAR で野手と投手を別々に並べる (前季のレコードがあれば 2:1 で平均)。
+func test_npb_performance_ranks_batters_and_pitchers_separately() -> void:
+	var saved: Dictionary = RecordStore.to_dict().duplicate(true)
+	RecordStore.clear_records()
+	var year: int = 2098
+	var season_number: int = 90
+	var lines: Array = [[9961, 0.420], [9962, 0.300], [9963, 0.360]]
+	for line_value in lines:
+		var line: Array = line_value as Array
+		var batter: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({"id": int(line[0]), "team_id": 1, "position": 7}), year, season_number)
+		batter.advanced_stats.plate_appearances = 500
+		batter.advanced_stats.woba_denominator = 480
+		batter.advanced_stats.woba_numerator = float(line[1]) * 480.0
+		batter.batter_stats.plate_appearances = 500
+		RecordStore.set_player_record(batter)
+	var pitches: Array = [[9971, 90, 30, 25], [9972, 200, 30, 8]]
+	for pitch_value in pitches:
+		var pitch: Array = pitch_value as Array
+		var pitcher: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({"id": int(pitch[0]), "team_id": 1, "position": 1, "role": "starter"}), year, season_number)
+		pitcher.pitcher_stats.games = 25
+		pitcher.pitcher_stats.starts = 25
+		pitcher.pitcher_stats.outs_pitched = 480
+		pitcher.pitcher_stats.batters_faced = 660
+		pitcher.pitcher_stats.strikeouts = int(pitch[1])
+		pitcher.pitcher_stats.walks = int(pitch[2])
+		pitcher.pitcher_stats.home_runs_allowed = int(pitch[3])
+		RecordStore.set_player_record(pitcher)
+
+	var performance: Dictionary = OverseasService.npb_performance(year, season_number)
+	RecordStore.load_from_dict(saved)
+	PSPerformanceReference.reset_cache()
+
+	assert_int(int((performance[9961] as Dictionary)["rank"])).is_equal(1)
+	assert_int(int((performance[9963] as Dictionary)["rank"])).is_equal(2)
+	assert_int(int((performance[9962] as Dictionary)["rank"])).is_equal(3)
+	assert_int(int((performance[9972] as Dictionary)["rank"])).is_equal(1)
+	assert_int(int((performance[9971] as Dictionary)["rank"])).is_equal(2)
+	assert_bool(bool((performance[9972] as Dictionary)["pitcher"])).is_true()
+	assert_bool(bool((performance[9961] as Dictionary)["pitcher"])).is_false()
+	# 今季のレコードが無い季は空 (関心は働きを見ない)。
+	assert_bool(OverseasService.npb_performance(year + 50, season_number + 50).is_empty()).is_true()
+
+
 # 母集団 (上位 CHALLENGE_POOL_SIZE 人) は能力順ではなく関心順。能力で勝る年長の海外FA組が
 # 枠を埋めていても、若いポスティング組が母集団に入る (能力順だと初期シードでポスティングが
 # 5 年間 0 件になった)。
@@ -4072,7 +4205,7 @@ func test_overseas_pool_ranks_by_interest_not_value() -> void:
 	var players: Array = []
 	for i in range(OverseasService.CHALLENGE_POOL_SIZE):
 		players.append(_overseas_candidate(9700 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 32))
-	var young: PSPlayer = _overseas_candidate(9799, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 24)
+	var young: PSPlayer = _overseas_candidate(9799, 1, _posting_service_days(), 24)
 	for key in ALL_Z_KEYS:
 		young.z_abilities[key] = 1.9
 	players.append(young)
@@ -4096,9 +4229,10 @@ func test_overseas_expected_departures_match_realized_draws() -> void:
 	var expected_posting: float = 0.0
 	for seed_value in range(1, trials + 1):
 		var players: Array = []
-		for i in range(3):
-			players.append(_overseas_candidate(9800 + i, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 25))
-			players.append(_overseas_candidate(9810 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 30))
+		# 志願確率が上限 (MAX_CHALLENGE_CHANCE) に当たらない年齢にして、期待値どおりの抽選を見る。
+		for i in range(2):
+			players.append(_overseas_candidate(9800 + i, 1, _posting_service_days(), 33))
+			players.append(_overseas_candidate(9810 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 34))
 		Rng.set_seed_value(seed_value)
 		var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(2099))
 		realized += int(result.get("departed_count", 0))
@@ -4118,9 +4252,10 @@ func test_overseas_frequency_scales_expected_departures() -> void:
 	var expected_by_frequency: Dictionary = {}
 	for frequency in OverseasService.FREQUENCY_ORDER:
 		var players: Array = []
+		# 倍率の効きを見るので、「多め」でも倍率後の上限 (MAX_SCALED_CHALLENGE_CHANCE) に当たらない年齢にする。
 		for i in range(3):
-			players.append(_overseas_candidate(9820 + i, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 25))
-			players.append(_overseas_candidate(9830 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 30))
+			players.append(_overseas_candidate(9820 + i, 1, _posting_service_days(), 34))
+			players.append(_overseas_candidate(9830 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 34))
 		Rng.set_seed_value(1)
 		var result: Dictionary = OverseasService.process_overseas_challenge(players, [_team(1)], _overseas_season(2099), frequency)
 		expected_by_frequency[frequency] = float(result.get("expected_departures", 0.0))
@@ -4142,7 +4277,7 @@ func test_overseas_frequency_off_stops_departures_but_keeps_returns() -> void:
 	for seed_value in range(1, 200):
 		var players: Array = []
 		for i in range(3):
-			players.append(_overseas_candidate(9840 + i, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER), 25))
+			players.append(_overseas_candidate(9840 + i, 1, _posting_service_days(), 25))
 			players.append(_overseas_candidate(9850 + i, 1, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 28))
 		var abroad: PSPlayer = _overseas_candidate(9860, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 34)
 		abroad.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = year - OverseasService.RETURN_MIN_SEASONS
@@ -4167,7 +4302,7 @@ func test_overseas_posting_departure_leaves_roster_and_pays_fee() -> void:
 	var applied: bool = false
 	# 志願は確率判定なので、成立するシードを探してから効果を検証する。
 	for seed_value in range(1, 200):
-		var player: PSPlayer = _overseas_candidate(9620, 1, _posting_window_start_days(PSPlayer.FA_ELIGIBLE_YEARS_OTHER))
+		var player: PSPlayer = _overseas_candidate(9620, 1, _posting_service_days())
 		var team: PSTeam = _team(1)
 		var funds_before: int = team.funds
 		Rng.set_seed_value(seed_value)
@@ -4249,8 +4384,11 @@ func test_overseas_return_restores_player_to_home_team() -> void:
 		assert_int(player.team_id).is_equal(1)
 		assert_bool(player.is_retired()).is_false()
 		assert_bool(player.is_overseas()).is_false()
-		assert_int(player.salary).is_equal(
-			Offseason.round_salary_2sig(int(round(20000.0 * OverseasService.RETURN_SALARY_MULT)))
+		# 年俸は MLB の成績から決まり (return_salary)、離脱時の年俸 × 下限倍率を割らない。
+		var entry: Dictionary = (result.get("returned", []) as Array)[0] as Dictionary
+		assert_int(player.salary).is_equal(int(entry.get("salary", 0)))
+		assert_int(player.salary).is_greater_equal(
+			Offseason.round_salary_2sig(int(round(20000.0 * OverseasService.RETURN_SALARY_FLOOR_MULT)))
 		)
 		assert_int(int(player.source_data.get(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR, 0))).is_equal(year)
 		# 復帰した年は加齢の対象外 (以後は通常の advance_players_one_year が担当する)。
@@ -4286,6 +4424,7 @@ func test_overseas_player_retires_abroad_at_age_limit() -> void:
 	var result: Dictionary = OverseasService.process_overseas_challenge([player], [_team(1)], _overseas_season(2099))
 
 	assert_int(int(result.get("overseas_retired_count", 0))).is_equal(1)
+	assert_str(str(((result.get("overseas_retired", []) as Array)[0] as Dictionary).get("reason", ""))).is_equal(OverseasService.RETIRE_REASON_AGE)
 	assert_bool(player.is_retired()).is_true()
 	assert_bool(player.is_overseas()).is_false()
 	assert_int(int(result.get("overseas_active_count", 0))).is_equal(0)
@@ -4342,6 +4481,7 @@ func test_normalize_initial_seed_players_shifts_overseas_years() -> void:
 				"retired": true,
 				PSPlayer.SOURCE_KEY_OVERSEAS_YEAR: 2063,
 				OverseasService.SOURCE_KEY_OVERSEAS_TEAM: 3,
+				OverseasService.SOURCE_KEY_MLB_SEASONS: [{"y": 2064, "b": {"hits": 90}}, {"y": 2065, "b": {"hits": 120}}],
 				"career_log": [{"y": 2063, "t": PSCareerLog.TYPE_OVERSEAS_DEPART, "f": 3}],
 			},
 		},
@@ -4351,6 +4491,11 @@ func test_normalize_initial_seed_players_shifts_overseas_years() -> void:
 	var abroad: Dictionary = (out[1] as Dictionary)["source_data"] as Dictionary
 	assert_int(int(abroad.get(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR, 0))).is_equal(2023)
 	assert_int(int(abroad.get(OverseasService.SOURCE_KEY_OVERSEAS_TEAM, 0))).is_equal(3)
+	# 海外での年度成績も同じオフセットでずれる。
+	var mlb_years: Array = (abroad.get(OverseasService.SOURCE_KEY_MLB_SEASONS, []) as Array).map(
+		func(season: Variant) -> int: return int((season as Dictionary).get("y", 0))
+	)
+	assert_array(mlb_years).is_equal([2024, 2025])
 	var returned: Dictionary = (out[2] as Dictionary)["source_data"] as Dictionary
 	assert_int(int(returned.get(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR, 0))).is_equal(2025)
 	# 読み込み時の再正規化 (オフセット 0) では動かない。
@@ -4361,3 +4506,262 @@ func test_normalize_initial_seed_players_shifts_overseas_years() -> void:
 		{"years": 3, "source_data": {OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR: 2030}}, 2026
 	)
 	assert_bool((single["source_data"] as Dictionary).has(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR)).is_false()
+
+
+# 海外にいる投手 (先発)。質の能力キーを一軍上位並みにしておく。
+func _overseas_pitcher(player_id: int, overseas_year: int) -> PSPlayer:
+	var z: Dictionary = {}
+	for key in PSReferencePopulation.PITCHER_LEVEL_KEYS:
+		z[key] = 2.2
+	var player: PSPlayer = _player({
+		"id": player_id, "team_id": 0, "age": 29, "years": 9,
+		"salary": 20000, "position": 1, "role": "starter",
+		"z_abilities": z,
+		"source_data": {"retired": true, PSPlayer.SOURCE_KEY_OVERSEAS_YEAR: overseas_year, OverseasService.SOURCE_KEY_OVERSEAS_TEAM: 1},
+	})
+	return player
+
+
+# 今季を海外で過ごした選手は、オフのメジャー挑戦ステップで今季の MLB 成績を持つ。
+# 今オフ出ていった選手は今季を NPB で過ごしたので MLB 成績は付かない。
+func test_overseas_players_get_this_seasons_mlb_stats() -> void:
+	var year: int = 2099
+	var batter: PSPlayer = _overseas_candidate(9711, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 29)
+	batter.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = year - 1
+	batter.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+	batter.source_data["retired"] = true
+	var pitcher: PSPlayer = _overseas_pitcher(9712, year - 2)
+	var just_left: PSPlayer = _overseas_pitcher(9713, year)
+
+	var result: Dictionary = OverseasService.process_overseas_challenge([batter, pitcher, just_left], [_team(1)], _overseas_season(year))
+
+	assert_int(int(result.get("mlb_played_count", 0))).is_equal(2)
+	var batting_seasons: Array = OverseasService.mlb_seasons(batter)
+	assert_int(batting_seasons.size()).is_equal(1)
+	assert_int(int((batting_seasons[0] as Dictionary)["year"])).is_equal(year)
+	var batting: PSBatterStats = (batting_seasons[0] as Dictionary)["batting"] as PSBatterStats
+	assert_int(batting.plate_appearances).is_greater(100)
+	assert_int(batting.games).is_greater(0)
+	assert_int(batting.hits).is_greater(0)
+	var batting_metrics: Dictionary = (batting_seasons[0] as Dictionary)["metrics"] as Dictionary
+	for key in ["woba", "wrc_plus", "bsr", "fielding", "war"]:
+		assert_bool(batting_metrics.has(key)).override_failure_message("batting metrics lacks %s" % key).is_true()
+	var pitching_season: Dictionary = OverseasService.mlb_seasons(pitcher)[0] as Dictionary
+	var pitching: PSPitcherStats = pitching_season["pitching"] as PSPitcherStats
+	assert_int(pitching.starts).is_greater(10)
+	assert_int(pitching.games).is_equal(pitching.starts)
+	assert_int(pitching.outs_pitched).is_greater(pitching.starts * 12)
+	assert_int(pitching.wins + pitching.losses).is_greater(0)
+	assert_bool((pitching_season["metrics"] as Dictionary).has("fip")).is_true()
+	assert_bool((pitching_season["metrics"] as Dictionary).has("war")).is_true()
+	assert_int(OverseasService.mlb_seasons(just_left).size()).is_equal(0)
+
+
+# MLB の成績は選手・年ごとの専用の乱数列で作る。共有の乱数列を消費しないので NPB 側の結果を
+# 動かさず、同じ世界 seed なら同じ成績になる。
+func test_mlb_season_uses_its_own_random_stream() -> void:
+	var league: Dictionary = PSMlbSeasonSimulator.build_league()
+	var pitcher: PSPlayer = _overseas_pitcher(9721, 2097)
+	Rng.set_seed_value(4242)
+	var state_before: int = Rng.generator.state
+	var first: Dictionary = PSMlbSeasonSimulator.simulate_season([pitcher], 2099, league)
+	assert_int(Rng.generator.state).is_equal(state_before)
+	var second: Dictionary = PSMlbSeasonSimulator.simulate_season([pitcher], 2099, league)
+	var first_stats: PSPitcherStats = (first[pitcher.id] as Dictionary)["pitching"] as PSPitcherStats
+	var second_stats: PSPitcherStats = (second[pitcher.id] as Dictionary)["pitching"] as PSPitcherStats
+	assert_dict(first_stats.to_dict()).is_equal(second_stats.to_dict())
+	assert_int(first_stats.outs_pitched).is_greater(0)
+
+
+# MLB の指標は MLB のリーグ平均に対して測る。リーグ平均の率ちょうどの選手が wRC+ 100 / FIP− 100 で、
+# 季を回した FIP は率から見込んだ値のまわりに出る。能力が高い打者ほど wRC+ と WAR と打席が多い。
+func test_mlb_metrics_are_measured_against_the_mlb_league() -> void:
+	var league: Dictionary = PSMlbSeasonSimulator.build_league()
+	assert_float(float(league["lg_woba"])).is_between(0.28, 0.36)
+	assert_float(float(league["lg_era"])).is_between(3.9, 4.5)
+	var league_batting: Dictionary = PSMlbSeasonSimulator.MLB_LEAGUE_RATES.duplicate()
+	league_batting.merge(PSMlbSeasonSimulator._batter_fixed_rates(PSMlbSeasonSimulator.BATTER_LEAGUE_Z), true)
+	assert_float(PSMlbSeasonSimulator.expected_wrc_plus(league_batting, league)).is_equal_approx(100.0, 0.01)
+	var league_pitching: Dictionary = PSMlbSeasonSimulator.MLB_LEAGUE_RATES.duplicate()
+	league_pitching["hit_by_pitch"] = PSMlbSeasonSimulator.PITCHER_HIT_BY_PITCH_RATE
+	assert_float(PSMlbSeasonSimulator.expected_fip_minus(league_pitching, league)).is_equal_approx(100.0, 0.01)
+
+	var pitcher: PSPlayer = _player({
+		"id": 9731, "team_id": 0, "age": 29, "position": 1, "role": "starter",
+		"z_abilities": PSMlbSeasonSimulator.PITCHER_LEAGUE_Z.duplicate(),
+	})
+	var expected_fip: float = PSMlbSeasonSimulator.expected_fip_minus(
+		PSMlbSeasonSimulator.pitching_rates(pitcher.z_abilities, league), league
+	) * float(league["lg_era"]) / 100.0
+	var fip_total: float = 0.0
+	for year in range(2090, 2100):
+		var result: Dictionary = PSMlbSeasonSimulator.simulate_season([pitcher], year, league)[pitcher.id] as Dictionary
+		fip_total += float((result["metrics"] as Dictionary)["fip"])
+	assert_float(fip_total / 10.0).is_equal_approx(expected_fip, 0.35)
+
+	var strong: Dictionary = PSMlbSeasonSimulator.BATTER_LEAGUE_Z.duplicate()
+	var weak: Dictionary = PSMlbSeasonSimulator.BATTER_LEAGUE_Z.duplicate()
+	for key in PSReferencePopulation.BATTER_LEVEL_KEYS:
+		strong[key] = float(strong.get(key, 0.0)) + 1.5
+		weak[key] = float(weak.get(key, 0.0)) - 0.5
+	var strong_batter: PSPlayer = _player({"id": 9732, "team_id": 0, "position": 7, "z_abilities": strong})
+	var weak_batter: PSPlayer = _player({"id": 9733, "team_id": 0, "position": 7, "z_abilities": weak})
+	var results: Dictionary = PSMlbSeasonSimulator.simulate_season([strong_batter, weak_batter], 2099, league)
+	var strong_metrics: Dictionary = (results[strong_batter.id] as Dictionary)["metrics"] as Dictionary
+	var weak_metrics: Dictionary = (results[weak_batter.id] as Dictionary)["metrics"] as Dictionary
+	assert_float(float(strong_metrics["wrc_plus"])).is_greater(float(weak_metrics["wrc_plus"]) + 30.0)
+	assert_float(float(strong_metrics["war"])).is_greater(float(weak_metrics["war"]))
+	assert_int(((results[strong_batter.id] as Dictionary)["batting"] as PSBatterStats).plate_appearances).is_greater(
+		((results[weak_batter.id] as Dictionary)["batting"] as PSBatterStats).plate_appearances
+	)
+
+
+# NPB → MLB の換算の向き (実際に移った選手の前後の成績の変化)。NPB のリーグ平均の打者は MLB では
+# MLB のリーグ平均より三振が多く、四球と本塁打とインプレーの安打が少ない。NPB のリーグ平均の投手は
+# 奪三振が少なく、与四球・被本塁打が多い。NPB での平均との差 (ロジット) はそのまま MLB へ持ち越す。
+func test_npb_to_mlb_translation_follows_real_movers() -> void:
+	var league: Dictionary = PSMlbSeasonSimulator.build_league()
+	var mlb: Dictionary = PSMlbSeasonSimulator.MLB_LEAGUE_RATES
+	var average_batter: Dictionary = PSMlbSeasonSimulator.batting_rates(PSMlbSeasonSimulator.BATTER_LEAGUE_Z, league)
+	assert_float(float(average_batter["k"])).is_greater(float(mlb["k"]))
+	assert_float(float(average_batter["bb"])).is_less(float(mlb["bb"]))
+	assert_float(float(average_batter["hr"])).is_less(float(mlb["hr"]))
+	assert_float(float(average_batter["babip"])).is_less(float(mlb["babip"]))
+	var average_pitcher: Dictionary = PSMlbSeasonSimulator.pitching_rates(PSMlbSeasonSimulator.PITCHER_LEAGUE_Z, league)
+	assert_float(float(average_pitcher["k"])).is_less(float(mlb["k"]))
+	assert_float(float(average_pitcher["bb"])).is_greater(float(mlb["bb"]))
+	assert_float(float(average_pitcher["hr"])).is_greater(float(mlb["hr"]))
+	# NPB の平均級は MLB では平均に届かない (MLB の相手が強い)。
+	assert_float(PSMlbSeasonSimulator.expected_wrc_plus(average_batter, league)).is_less(90.0)
+	assert_float(PSMlbSeasonSimulator.expected_fip_minus(average_pitcher, league)).is_greater(110.0)
+	# NPB で平均より本塁打の多い打者は、MLB でも同じロジット差だけ多い。
+	var slugger: Dictionary = PSMlbSeasonSimulator.BATTER_LEAGUE_Z.duplicate()
+	slugger["Bat_Impact"] = float(slugger["Bat_Impact"]) + 1.0
+	var slugger_rates: Dictionary = PSMlbSeasonSimulator.batting_rates(slugger, league)
+	var hr_advantage: float = float(PSMlbSeasonSimulator.BATTER_RATE_MODELS["hr"]["Bat_Impact"])
+	var logit: Callable = func(p: float) -> float: return log(p / (1.0 - p))
+	assert_float(float(logit.call(float(slugger_rates["hr"]))) - float(logit.call(float(average_batter["hr"])))).is_equal_approx(hr_advantage, 0.0001)
+
+
+# 海外にいる野手。wars は今の滞在の MLB 各季の WAR (古い順)、成績は WAR に見合う出場を付ける。
+func _abroad_with_mlb_wars(player_id: int, year: int, age: int, wars: Array) -> PSPlayer:
+	var player: PSPlayer = _overseas_candidate(player_id, 0, OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, age)
+	player.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = year - wars.size()
+	player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_TEAM] = 1
+	player.source_data[OverseasService.SOURCE_KEY_OVERSEAS_SALARY] = 20000
+	player.source_data["retired"] = true
+	for i in range(wars.size()):
+		var war: float = float(wars[i])
+		var batting: PSBatterStats = PSBatterStats.new()
+		batting.games = 150 if war >= 1.0 else 40
+		batting.plate_appearances = batting.games * 4
+		batting.at_bats = batting.plate_appearances - int(batting.games / 3.0)
+		batting.hits = int(batting.at_bats * (0.29 if war >= 1.0 else 0.2))
+		batting.home_runs = int(maxf(0.0, war) * 6.0)
+		batting.runs_batted_in = batting.home_runs * 3
+		OverseasService.append_mlb_season(player, year - wars.size() + 1 + i, batting, null, {"war": war})
+	return player
+
+
+# 直近の MLB 成績は今の滞在の直近 3 季を新しい順に 3:2:1 で平均する。前の滞在の季と WAR の無い季は
+# 使わず、成績が無ければ中立点 (= 年齢だけで決まる復帰確率のまま)。通算は全季の和。
+func test_mlb_recent_war_weights_the_latest_seasons_of_this_stint() -> void:
+	var player: PSPlayer = _abroad_with_mlb_wars(9741, 2099, 30, [9.0, 1.0, 2.0, 4.0])
+	assert_float(OverseasService.mlb_recent_war(player)).is_equal_approx((4.0 * 3.0 + 2.0 * 2.0 + 1.0) / 6.0, 0.0001)
+	assert_float(OverseasService.mlb_career_war(player)).is_equal_approx(16.0, 0.0001)
+	# 前の滞在 (今の離脱年より前) の季は直近の成績に入らない。
+	player.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = 2097
+	assert_float(OverseasService.mlb_recent_war(player)).is_equal_approx((4.0 * 3.0 + 2.0 * 2.0) / 5.0, 0.0001)
+	assert_float(OverseasService.mlb_career_war(player)).is_equal_approx(16.0, 0.0001)
+	var no_record: PSPlayer = _abroad_with_mlb_wars(9742, 2099, 30, [])
+	assert_float(OverseasService.mlb_recent_war(no_record)).is_equal(OverseasService.RETURN_NEUTRAL_WAR)
+	assert_int(OverseasService.mlb_market_value(no_record)).is_equal(-1)
+
+
+# 復帰確率は MLB の成績で動く。活躍するほど下がり (MLB に残る)、不振ほど上がる。中立点では年齢だけの確率。
+# 不振の選手は最低滞在を待たずに抽選に入る。
+func test_return_chance_follows_mlb_form() -> void:
+	var neutral: float = OverseasService.return_chance(30)
+	assert_float(OverseasService.return_chance(30, OverseasService.RETURN_NEUTRAL_WAR)).is_equal_approx(neutral, 0.0001)
+	assert_float(neutral).is_equal_approx(OverseasService.RETURN_BASE_CHANCE, 0.0001)
+	assert_float(OverseasService.return_chance(30, -1.0)).is_greater(neutral)
+	assert_float(OverseasService.return_chance(30, 4.0)).is_less(neutral)
+	assert_float(OverseasService.return_chance(30, 4.0)).is_greater(0.0)
+	# 年齢で上がる向きは成績に依らない。
+	assert_float(OverseasService.return_chance(36, 4.0)).is_greater(OverseasService.return_chance(30, 4.0))
+	assert_float(OverseasService.return_chance(37, -5.0)).is_less_equal(OverseasService.RETURN_MAX_CHANCE)
+	assert_int(OverseasService.return_min_seasons(OverseasService.STRUGGLING_WAR - 0.5)).is_equal(OverseasService.STRUGGLING_MIN_SEASONS)
+	assert_int(OverseasService.return_min_seasons(OverseasService.RETURN_NEUTRAL_WAR)).is_equal(OverseasService.RETURN_MIN_SEASONS)
+
+
+# MLB 1 年目で不振なら翌オフに戻ってくることがある。活躍していれば最低滞在までは戻らない。
+func test_struggling_mlb_player_can_return_after_one_season() -> void:
+	var year: int = 2099
+	var returned_any: bool = false
+	for seed_value in range(1, 200):
+		var struggling: PSPlayer = _abroad_with_mlb_wars(9751, year, 29, [-1.5])
+		var thriving: PSPlayer = _abroad_with_mlb_wars(9752, year, 29, [4.0])
+		var returned: Array = []
+		var retired: Array = []
+		Rng.set_seed_value(seed_value)
+		OverseasService._resolve_returns([struggling, thriving], year, returned, retired)
+		assert_bool(thriving.is_overseas()).is_true()
+		if not struggling.is_overseas():
+			returned_any = true
+			assert_int(struggling.team_id).is_equal(1)
+			assert_int(int((returned[0] as Dictionary).get("seasons_abroad", 0))).is_equal(1)
+			break
+	assert_bool(returned_any).is_true()
+
+
+# 復帰年俸は MLB の成績を NPB の年俸査定にかけた額 × プレミアムで、離脱時の年俸 × 下限倍率を割らない。
+# MLB の成績が無ければ離脱時の年俸 × プレミアム。
+func test_return_salary_follows_mlb_performance() -> void:
+	var star: PSPlayer = _abroad_with_mlb_wars(9761, 2099, 33, [4.0, 5.0, 5.5])
+	var struggling: PSPlayer = _abroad_with_mlb_wars(9762, 2099, 33, [-1.0, -0.5])
+	var no_record: PSPlayer = _abroad_with_mlb_wars(9763, 2099, 33, [])
+	var floor_salary: int = Offseason.round_salary_2sig(int(round(20000.0 * OverseasService.RETURN_SALARY_FLOOR_MULT)))
+	assert_int(OverseasService.return_salary(struggling)).is_equal(floor_salary)
+	assert_int(OverseasService.return_salary(star)).is_greater(20000)
+	assert_int(OverseasService.return_salary(star)).is_equal(
+		Offseason.round_salary_2sig(int(round(float(OverseasService.mlb_market_value(star)) * OverseasService.RETURN_SALARY_MULT)))
+	)
+	assert_int(OverseasService.return_salary(no_record)).is_equal(
+		Offseason.round_salary_2sig(int(round(20000.0 * OverseasService.RETURN_SALARY_MULT)))
+	)
+
+
+# MLB で大きな功績を残したベテランは、MLB を去るときに古巣へ戻らず MLB で引退することがある。
+# 若いうち (MLB_FAREWELL_MIN_AGE 未満) や功績が小さければ必ず戻る。
+func test_mlb_legend_may_retire_in_mlb_instead_of_returning() -> void:
+	assert_float(OverseasService.mlb_farewell_chance(OverseasService.MLB_FAREWELL_MIN_AGE - 1, 60.0)).is_equal(0.0)
+	assert_float(OverseasService.mlb_farewell_chance(36, OverseasService.MLB_FAREWELL_WAR_START)).is_equal(0.0)
+	assert_float(OverseasService.mlb_farewell_chance(36, 25.0)).is_equal_approx(0.5, 0.0001)
+	assert_float(OverseasService.mlb_farewell_chance(36, 100.0)).is_equal(OverseasService.MLB_FAREWELL_MAX_CHANCE)
+	var year: int = 2099
+	var farewells: int = 0
+	var returns: int = 0
+	for seed_value in range(1, 200):
+		# 通算 WAR 48 (ほぼ確実に MLB で引退) で、直近は衰えて復帰の抽選に当たりやすい 36 歳。
+		var legend: PSPlayer = _abroad_with_mlb_wars(9771, year, 36, [8.0, 8.0, 8.0, 8.0, 8.0, 7.0, 3.0, -1.0, -1.0])
+		var young_legend: PSPlayer = _abroad_with_mlb_wars(9772, year, 32, [8.0, 8.0, 8.0, 8.0, 8.0, 7.0, 3.0, -1.0, -1.0])
+		var returned: Array = []
+		var retired: Array = []
+		Rng.set_seed_value(seed_value)
+		OverseasService._resolve_returns([legend, young_legend], year, returned, retired)
+		assert_bool(young_legend.is_retired() and not young_legend.is_overseas()).is_false()
+		if legend.is_overseas():
+			continue
+		if legend.team_id == 1:
+			returns += 1
+			continue
+		farewells += 1
+		assert_bool(legend.is_retired()).is_true()
+		assert_int(legend.team_id).is_equal(0)
+		var entry: Dictionary = retired[0] as Dictionary
+		assert_str(str(entry.get("reason", ""))).is_equal(OverseasService.RETIRE_REASON_FAREWELL)
+		assert_float(float(entry.get("mlb_career_war", 0.0))).is_equal_approx(48.0, 0.0001)
+		# MLB 成績は引退後も残る (選手詳細の MLB 通算)。
+		assert_int(OverseasService.mlb_seasons(legend).size()).is_equal(9)
+	assert_int(farewells).is_greater(returns)
+	assert_int(farewells).is_greater(0)

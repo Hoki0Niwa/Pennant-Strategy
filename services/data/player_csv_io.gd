@@ -144,6 +144,17 @@ static func normalize_initial_seed_player(row: Dictionary, initial_year: int, ca
 			source.erase(OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR)
 		else:
 			source[OverseasService.SOURCE_KEY_OVERSEAS_RETURN_YEAR] = returned_year
+	# 海外での年度成績も同じオフセットでずらす。開始年以降に残る季は「まだ起きていない」ので落とす。
+	if source.has(OverseasService.SOURCE_KEY_MLB_SEASONS):
+		var kept_seasons: Array = []
+		for season_value in source.get(OverseasService.SOURCE_KEY_MLB_SEASONS, []) as Array:
+			var mlb_season: Dictionary = (season_value as Dictionary).duplicate(true)
+			var season_year: int = int(mlb_season.get("y", 0)) - career_year_offset
+			if season_year <= 0 or season_year >= initial_year:
+				continue
+			mlb_season["y"] = season_year
+			kept_seasons.append(mlb_season)
+		source[OverseasService.SOURCE_KEY_MLB_SEASONS] = kept_seasons
 
 	# career_log の y も未来年のまま残ると経歴タブに未来年が表示される。世界共通オフセット
 	# (career_log_year_offset) で一括シフトする。シフト後も開始年以降に残るエントリ

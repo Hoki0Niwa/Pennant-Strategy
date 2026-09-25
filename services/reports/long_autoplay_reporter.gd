@@ -53,6 +53,9 @@ func _dh_settings_from_options(options: Dictionary) -> Dictionary:
 # history_records: player_id -> Array[PSSeedHistoryIo.record_row] / history_seasons: Array[季の履歴]
 var history_records: Dictionary = {}
 var history_seasons: Array = []
+# メジャー挑戦の較正用: 今オフ海外へ出た選手の NPB 最終季の成績 (player_id -> _npb_line)。翌オフに MLB 1 年目の
+# 成績が付いたら mlb_first_season_pairs として並べて出す。
+var _mlb_departure_lines: Dictionary = {}
 
 
 func run(options: Dictionary = {}) -> Dictionary:
@@ -74,6 +77,7 @@ func run(options: Dictionary = {}) -> Dictionary:
 	var collect_history: bool = bool(options.get("collect_history", false))
 	history_records = {}
 	history_seasons = []
+	_mlb_departure_lines = {}
 
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
 	var original_player_rows: Array = _snapshot_players()
@@ -217,6 +221,7 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 	var collect_history: bool = bool(options.get("collect_history", false))
 	history_records = {}
 	history_seasons = []
+	_mlb_departure_lines = {}
 	var cancel_token: Dictionary = options.get("cancel_token", {})
 
 	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
@@ -553,8 +558,15 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 
 	# メジャー挑戦 (実フローと同じく FA宣言の直後 = 戦力外/ドラフトより前)。流出と復帰で在籍人数が
 	# 動くので、放出計画が読む前に確定させる。
-	var overseas_result: Dictionary = OverseasService.process_overseas_challenge(GameDb.players, GameDb.teams, season)
+	# 流出した選手の NPB 内の順位 (野手は wRAA / 投手は FIP 基準の失点抑止) を測るため、今季の WAR 表を先に取る。
+	var war_context: Dictionary = PSWarCalculator.build_league_context(season.year, season.season_number)
+	var war_table: Array = PSWarCalculator.season_war_table(season.year, season.season_number, war_context)
+	var overseas_result: Dictionary = OverseasService.process_overseas_challenge(
+		GameDb.players, GameDb.teams, season, OverseasService.FREQUENCY_STANDARD, true
+	)
 	GameDb.rebuild_player_indices()
+	var overseas_departed_details: Array = _overseas_departed_details(overseas_result, war_table, war_context, season)
+	var mlb_first_season_pairs: Array = _mlb_first_season_pairs(season)
 
 	# 怪我の越冬回復 (実フローと同じく引退判定と同じ位置)。戦力外/育成降格が読む
 	# player.injury_days を今季の値へ更新するので、必ず戦力外ステップより前に走らせる。
@@ -802,7 +814,19 @@ func _run_auto_offseason(season: PSSeason, selected_team_id: int) -> Dictionary:
 		"mlb_expected_posting": _round_float(float(overseas_result.get("expected_posting_departures", 0.0)), 2),
 		"mlb_returned_count": int(overseas_result.get("returned_count", 0)),
 		"mlb_retired_abroad_count": int(overseas_result.get("overseas_retired_count", 0)),
+		# うち MLB での功績で MLB に残って引退した人数 (残りは年齢上限)。
+		"mlb_farewell_count": _overseas_retired_reason_count(overseas_result, OverseasService.RETIRE_REASON_FAREWELL),
+		# 復帰者ごとの [年齢, 滞在季数, 直近 MLB WAR, 復帰年俸, 離脱時年俸]。MLB 成績と復帰の連動の較正用。
+		"mlb_return_details": _overseas_return_details(overseas_result),
+		# 流出者ごとの {年齢, 経路, 評価, 野手/投手, NPB 内の順位, 今季の成績}。挑戦年齢と NPB 内の水準の較正用。
+		"mlb_departed_details": overseas_departed_details,
+		# 去年流出した選手の {NPB 最終季, MLB 1 年目}。NPB → MLB の成績の変化の較正用。
+		"mlb_first_season_pairs": mlb_first_season_pairs,
+		# 挑戦の経路がある全員の {評価, 年齢, 経路, 投手か, NPB での順位}。関心の式をオフラインで較正する材料。
+		"mlb_eligible_details": overseas_result.get("eligible_details", []),
 		"mlb_abroad_count": int(overseas_result.get("overseas_active_count", 0)),
+		# 今季を海外で過ごし MLB 成績を作った人数 (PSMlbSeasonSimulator の計算量はこれにほぼ比例する)。
+		"mlb_played_count": int(overseas_result.get("mlb_played_count", 0)),
 		"over_budget_count": over_budget_count,
 		"contract_renewal_raises": int(contract_result.get("raises_count", 0)),
 		"contract_renewal_cuts": int(contract_result.get("cuts_count", 0)),
@@ -886,6 +910,140 @@ func _overseas_route_count(overseas_result: Dictionary, route: String) -> int:
 		if str((row as Dictionary).get("route", "")) == route:
 			count += 1
 	return count
+
+
+func _overseas_retired_reason_count(overseas_result: Dictionary, reason: String) -> int:
+	var count: int = 0
+	for row in overseas_result.get("overseas_retired", []) as Array:
+		if str((row as Dictionary).get("reason", "")) == reason:
+			count += 1
+	return count
+
+
+# 流出者ごとの較正用の行。rank は同じ季の野手 (wRAA) / 投手 (FIP 基準の失点抑止 raa) の中での順位 (1 始まり、
+# 出場した全員の中で)。実 NPB の移籍組と同じ物差しで「NPB の何番手が出ていくか」を見る。
+# NPB 最終季の成績は翌オフの _mlb_first_season_pairs で MLB 1 年目と並べるので控えておく。
+func _overseas_departed_details(overseas_result: Dictionary, war_table: Array, war_context: Dictionary, season: PSSeason) -> Array:
+	var batter_rank: Dictionary = _war_rank(war_table, "batter", "wraa")
+	var pitcher_rank: Dictionary = _war_rank(war_table, "pitcher", "raa")
+	var war_by_id: Dictionary = {}
+	for row_value in war_table:
+		var row: Dictionary = row_value as Dictionary
+		war_by_id[int(row.get("player_id", 0))] = row
+	var details: Array = []
+	for entry_value in overseas_result.get("departed", []) as Array:
+		var entry: Dictionary = entry_value as Dictionary
+		var player_id: int = int(entry.get("player_id", 0))
+		var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player_id, season.year, season.season_number)
+		var pitcher: bool = record != null and record.is_pitcher() and record.pitcher_stats.outs_pitched > 0
+		var war_row: Dictionary = war_by_id.get(player_id, {}) as Dictionary
+		var ranks: Dictionary = pitcher_rank if pitcher else batter_rank
+		var line: Dictionary = _npb_line(record, war_row, war_context, pitcher)
+		line["year"] = season.year
+		_mlb_departure_lines[player_id] = line
+		details.append({
+			"age": int(entry.get("age", 0)),
+			"years": int(entry.get("years", 0)),
+			"route": str(entry.get("route", "")),
+			"value": int(entry.get("overall", 0)),
+			"group": "P" if pitcher else "B",
+			"rank": int(ranks.get(player_id, 0)),
+			"group_size": ranks.size(),
+			"war": _round_float(float(war_row.get("war", 0.0)), 1),
+		})
+	return details
+
+
+# 役割 (batter / pitcher) ごとに key の大きい順の順位 (player_id -> 1 始まり)。
+func _war_rank(war_table: Array, role: String, key: String) -> Dictionary:
+	var rows: Array = war_table.filter(func(row: Variant) -> bool: return str((row as Dictionary).get("role", "")) == role)
+	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return float((a as Dictionary).get(key, 0.0)) > float((b as Dictionary).get(key, 0.0))
+	)
+	var ranks: Dictionary = {}
+	for i in range(rows.size()):
+		ranks[int((rows[i] as Dictionary).get("player_id", 0))] = i + 1
+	return ranks
+
+
+# NPB の 1 季の成績 (較正用の生の数と、その季のリーグの基準)。
+func _npb_line(record: PSPlayerSeasonRecord, war_row: Dictionary, war_context: Dictionary, pitcher: bool) -> Dictionary:
+	if record == null:
+		return {"pitcher": pitcher}
+	var line: Dictionary = _counting_line(record.batter_stats, record.pitcher_stats, pitcher)
+	line["war"] = _round_float(float(war_row.get("war", 0.0)), 2)
+	if pitcher:
+		line["fip"] = _round_float(float(war_row.get("fip", 0.0)), 3)
+		line["raa"] = _round_float(float(war_row.get("raa", 0.0)), 2)
+		line["lg_era"] = _round_float(float(war_context.get("lg_era", 0.0)), 3)
+		line["lg_k"] = int(war_context.get("lg_k", 0))
+		line["lg_bb"] = int(war_context.get("lg_bb", 0))
+		line["lg_hr"] = int(war_context.get("lg_hr", 0))
+		line["lg_bf"] = int(war_context.get("lg_batters_faced", 0))
+	else:
+		line["wraa"] = _round_float(float(war_row.get("wraa", 0.0)), 2)
+		line["lg_woba"] = _round_float(float(war_context.get("lg_woba", 0.0)), 4)
+		line["woba_scale"] = _round_float(float(war_context.get("woba_scale", 0.0)), 3)
+		line["lg_runs"] = int(war_context.get("lg_runs", 0))
+		line["lg_bf"] = int(war_context.get("lg_batters_faced", 0))
+		line["lg_k"] = int(war_context.get("lg_k", 0))
+		line["lg_bb"] = int(war_context.get("lg_bb", 0))
+		line["lg_hr"] = int(war_context.get("lg_hr", 0))
+	return line
+
+
+# 去年流出した選手の MLB 1 年目 (今オフのステップ 0 で付いた成績) を、控えておいた NPB 最終季と並べる。
+func _mlb_first_season_pairs(season: PSSeason) -> Array:
+	var pairs: Array = []
+	var finished: Array = []
+	for player_id_value in _mlb_departure_lines.keys():
+		var line: Dictionary = _mlb_departure_lines[player_id_value] as Dictionary
+		var departed_year: int = int(line.get("year", 0))
+		if departed_year >= season.year:
+			continue
+		finished.append(player_id_value)
+		if departed_year != season.year - 1:
+			continue
+		var player: PSPlayer = GameDb.get_player(int(player_id_value))
+		for mlb_value in OverseasService.mlb_seasons(player):
+			var mlb: Dictionary = mlb_value as Dictionary
+			if int(mlb.get("year", 0)) != season.year:
+				continue
+			var pitcher: bool = bool(line.get("pitcher", false))
+			var mlb_line: Dictionary = _counting_line(mlb.get("batting") as PSBatterStats, mlb.get("pitching") as PSPitcherStats, pitcher)
+			mlb_line.merge(mlb.get("metrics", {}) as Dictionary, true)
+			pairs.append({"npb": line, "mlb": mlb_line})
+	for player_id_value in finished:
+		_mlb_departure_lines.erase(player_id_value)
+	return pairs
+
+
+func _counting_line(batting: PSBatterStats, pitching: PSPitcherStats, pitcher: bool) -> Dictionary:
+	if pitcher:
+		var ps: PSPitcherStats = pitching if pitching != null else PSPitcherStats.new()
+		return {
+			"pitcher": true, "g": ps.games, "gs": ps.starts, "bf": ps.batters_faced, "outs": ps.outs_pitched,
+			"k": ps.strikeouts, "bb": ps.walks, "hbp": ps.hit_batters, "hr": ps.home_runs_allowed, "h": ps.hits_allowed,
+			"er": ps.earned_runs,
+		}
+	var bs: PSBatterStats = batting if batting != null else PSBatterStats.new()
+	return {
+		"pitcher": false, "g": bs.games, "pa": bs.plate_appearances, "ab": bs.at_bats, "h": bs.hits, "2b": bs.doubles,
+		"3b": bs.triples, "hr": bs.home_runs, "bb": bs.walks, "hbp": bs.hit_by_pitches, "k": bs.strikeouts,
+		"sf": bs.sacrifice_flies, "sb": bs.stolen_bases,
+	}
+
+
+func _overseas_return_details(overseas_result: Dictionary) -> Array:
+	var details: Array = []
+	for row_value in overseas_result.get("returned", []) as Array:
+		var row: Dictionary = row_value as Dictionary
+		details.append([
+			int(row.get("age", 0)), int(row.get("seasons_abroad", 0)),
+			_round_float(float(row.get("mlb_recent_war", 0.0)), 1),
+			int(row.get("salary", 0)), int(row.get("departure_salary", 0)),
+		])
+	return details
 
 
 # 「30歳以上・当季出場ゼロ・入団3年目以降」で支配下に残った日本人選手の一覧。

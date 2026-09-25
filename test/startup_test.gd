@@ -1988,6 +1988,147 @@ func test_offseason_row_without_current_record_shows_last_npb_season_war() -> vo
 	assert_str(shown_fip).is_equal("%0.2f" % float(expected["fip"]))
 
 
+# 海外から戻った選手の行は、渡米前の NPB 季ではなく海外 (MLB) の今季の成績を出す。
+# WAR / FIP は MLB のリーグ平均に対して測った値 (MLB 成績と一緒に持っている指標)。
+func test_offseason_row_for_mlb_returnee_shows_mlb_season() -> void:
+	var old_season: PSSeason = AppState.current_season
+	var old_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var pitcher: PSPlayer = null
+	for player_value in GameDb.players:
+		var candidate: PSPlayer = player_value as PSPlayer
+		if candidate.is_pitcher() and not candidate.is_retired():
+			pitcher = candidate
+			break
+	assert_object(pitcher).is_not_null()
+	var old_source: Dictionary = pitcher.source_data.duplicate(true)
+	var season: PSSeason = PSSeason.new()
+	season.year = 2031
+	season.season_number = 6
+	AppState.current_season = season
+	RecordStore.clear_records()
+	var last_npb: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(pitcher, 2028, 3)
+	last_npb.pitcher_stats.outs_pitched = 480
+	RecordStore.set_player_record(last_npb)
+	var mlb: PSPitcherStats = PSPitcherStats.new()
+	mlb.games = 30
+	mlb.starts = 30
+	mlb.wins = 14
+	mlb.outs_pitched = 555
+	mlb.earned_runs = 60
+	OverseasService.append_mlb_season(pitcher, 2031, null, mlb, {"fip": 3.21, "war": 3.4})
+
+	var screen: Control = (load("res://ui/screens/offseason_screen.gd") as GDScript).new()
+	var shown: PSPlayerSeasonRecord = screen.call("_record_for_people_entry", {"player_id": pitcher.id}) as PSPlayerSeasonRecord
+	var war_text: String = str(screen.call("_war_text", shown, false))
+	var fip_text: String = str(screen.call("_fip_text", shown, false))
+	screen.free()
+	pitcher.source_data = old_source
+	RecordStore.load_from_dict(old_records)
+	AppState.current_season = old_season
+	PSPerformanceReference.reset_cache()
+
+	assert_int(shown.year).is_equal(2031)
+	assert_int(shown.pitcher_stats.outs_pitched).is_equal(555)
+	assert_int(shown.pitcher_stats.wins).is_equal(14)
+	assert_str(war_text).is_equal("3.4")
+	assert_str(fip_text).is_equal("3.21")
+
+
+# メジャー挑戦の結果表の下段は、復帰した選手と MLB で現役を終えた選手を並べる。引退の行は
+# MLB → 「-」・区分「引退」で、年俸は出さない (NPB と契約していない)。
+func test_offseason_overseas_rows_include_mlb_retirees() -> void:
+	var picked: Array = []
+	for player_value in GameDb.players:
+		var candidate: PSPlayer = player_value as PSPlayer
+		if not candidate.is_retired() and candidate.team_id > 0:
+			picked.append(candidate)
+		if picked.size() >= 2:
+			break
+	var returnee: PSPlayer = picked[0] as PSPlayer
+	var legend: PSPlayer = picked[1] as PSPlayer
+	var screen: Control = (load("res://ui/screens/offseason_screen.gd") as GDScript).new()
+	var rows: Array = screen.call("_overseas_result_rows",
+		[{"player_id": returnee.id, "team_id": 1, "position": returnee.position, "role": returnee.role, "salary": 12000}],
+		false,
+		[{"player_id": legend.id, "team_id": 2, "position": legend.position, "role": legend.role, "reason": OverseasService.RETIRE_REASON_FAREWELL}]
+	) as Array
+	var mlb_label: String = str(screen.call("_move_team_short", 0, "overseas_result"))
+	var retired_label: String = str(screen.call("_move_team_short", -1, "overseas_result"))
+	screen.free()
+
+	assert_int(rows.size()).is_equal(2)
+	var by_player: Dictionary = {}
+	for row_value in rows:
+		var entry: Dictionary = (row_value as Dictionary)["entry"] as Dictionary
+		by_player[int(entry["player_id"])] = entry
+	var returned_entry: Dictionary = by_player[returnee.id] as Dictionary
+	assert_int(int(returned_entry["from_team"])).is_equal(0)
+	assert_int(int(returned_entry["to_team"])).is_equal(1)
+	assert_str(str(returned_entry["outcome_label"])).is_equal(Loc.t("offseason.outcome.overseas_return"))
+	assert_bool(returned_entry.has("salary_text")).is_false()
+	var retired_entry: Dictionary = by_player[legend.id] as Dictionary
+	assert_int(int(retired_entry["from_team"])).is_equal(0)
+	assert_int(int(retired_entry["to_team"])).is_less(0)
+	assert_str(str(retired_entry["outcome_label"])).is_equal(Loc.t("offseason.outcome.overseas_retired"))
+	assert_str(str(retired_entry["salary_text"])).is_equal("-")
+	assert_str(mlb_label).is_equal(Loc.t("offseason.team.mlb"))
+	assert_str(retired_label).is_equal("-")
+
+
+# 選手詳細の過去成績は、海外 (MLB) の季を球団「MLB」の行として年の順に挟み、通算を NPB と MLB で分ける。
+func test_player_detail_stats_rows_include_mlb_seasons() -> void:
+	var batter: PSPlayer = null
+	for player_value in GameDb.players:
+		var candidate: PSPlayer = player_value as PSPlayer
+		if not candidate.is_pitcher() and not candidate.is_retired():
+			batter = candidate
+			break
+	assert_object(batter).is_not_null()
+	var old_source: Dictionary = batter.source_data.duplicate(true)
+	var npb_2028: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(batter, 2028, 3)
+	npb_2028.batter_stats.hits = 150
+	var npb_2031: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(batter, 2031, 6)
+	npb_2031.batter_stats.hits = 40
+	for mlb_year in [2029, 2030]:
+		var mlb: PSBatterStats = PSBatterStats.new()
+		mlb.hits = 100 + (mlb_year - 2029) * 10
+		mlb.plate_appearances = 500
+		OverseasService.append_mlb_season(batter, mlb_year, mlb, null, {"woba": 0.330, "wrc_plus": 110.0, "bsr": 1.0, "fielding": 2.0, "war": 2.5 + float(mlb_year - 2029)})
+
+	var detail: Control = (load("res://ui/screens/player_detail_screen.gd") as GDScript).new()
+	detail.set("_player_id", batter.id)
+	detail.set("_record", npb_2031)
+	detail.set("_records", [npb_2028, npb_2031])
+	detail.call("_build_basic_rows")
+	var rows: Array = detail.get("_basic_rows") as Array
+	detail.call("_ensure_advanced")
+	var advanced_rows: Array = detail.get("_advanced_rows") as Array
+	detail.free()
+	batter.source_data = old_source
+
+	var summary: Array = rows.map(func(row: Variant) -> String:
+		return "%s %s %d" % [str((row as Dictionary)["year"]), str((row as Dictionary)["team"]), int((row as Dictionary)["h"])]
+	)
+	var npb_team: String = GameDb.get_any_team(batter.team_id).short_name
+	var npb_career_hits: int = RecordStore.get_player_career_batter_stats(batter.id).hits
+	assert_array(summary).is_equal([
+		"2028年 %s 150" % npb_team,
+		"2029年 MLB 100",
+		"2030年 MLB 110",
+		"2031年 %s 40" % npb_team,
+		"NPB通算  %d" % npb_career_hits,
+		"MLB通算  210",
+	])
+	# 指標タブにも MLB の季と MLB 通算が入り、WAR は MLB 成績と一緒に持っている指標から出る。
+	var advanced_summary: Array = advanced_rows.map(func(row: Variant) -> String:
+		return "%s %s %.1f" % [str((row as Dictionary)["year"]), str((row as Dictionary)["team"]), float((row as Dictionary)["war"])]
+	)
+	assert_str(str(advanced_summary[1])).is_equal("2029年 MLB 2.5")
+	assert_str(str(advanced_summary[2])).is_equal("2030年 MLB 3.5")
+	assert_str(str(advanced_summary[advanced_summary.size() - 2])).starts_with("NPB通算")
+	assert_str(str(advanced_summary[advanced_summary.size() - 1])).is_equal("MLB通算  6.0")
+
+
 func test_offseason_salary_table_layout_and_market_salary_priority() -> void:
 	var script: GDScript = load("res://ui/screens/offseason_screen.gd") as GDScript
 	var screen: Control = script.new()

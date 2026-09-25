@@ -1263,10 +1263,17 @@ func _refresh() -> void:
 
 
 # 成績/指標タブ共用の行データ (1シーズン分の全ボックススコア項目) + 通算行。
+# 海外 (MLB) でプレーした季は球団「MLB」の行として年の順に挟み、通算は NPB と MLB を分けて出す
+# (MLB の成績は OverseasService.mlb_seasons にあり、RecordStore の通算には入っていない)。
 func _build_basic_rows() -> void:
 	var pitcher: bool = _record.is_pitcher()
+	var mlb_seasons: Array = OverseasService.mlb_seasons(GameDb.get_player(_player_id))
+	var mlb_index: int = 0
 	for record_value in _records:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		while mlb_index < mlb_seasons.size() and int((mlb_seasons[mlb_index] as Dictionary)["year"]) < record.year:
+			_basic_rows.append(_mlb_basic_row(mlb_seasons[mlb_index] as Dictionary, pitcher))
+			mlb_index += 1
 		var team: String = _team_short(record.team_id)
 		var row: Dictionary
 		if pitcher:
@@ -1274,10 +1281,34 @@ func _build_basic_rows() -> void:
 		else:
 			row = _batter_basic_dict(Loc.t("common.year_value", {"year": record.year}), team, record.batter_stats, false)
 		_basic_rows.append(row)
+	for index in range(mlb_index, mlb_seasons.size()):
+		_basic_rows.append(_mlb_basic_row(mlb_seasons[index] as Dictionary, pitcher))
+	var npb_total_label: String = Loc.t("player_detail.career_total") if mlb_seasons.is_empty() else Loc.t("player_detail.career_total_npb")
 	if pitcher:
-		_basic_rows.append(_pitcher_basic_dict(Loc.t("player_detail.career_total"),"", RecordStore.get_player_career_pitcher_stats(_player_id), true))
+		_basic_rows.append(_pitcher_basic_dict(npb_total_label, "", RecordStore.get_player_career_pitcher_stats(_player_id), true))
 	else:
-		_basic_rows.append(_batter_basic_dict(Loc.t("player_detail.career_total"),"", RecordStore.get_player_career_batter_stats(_player_id), true))
+		_basic_rows.append(_batter_basic_dict(npb_total_label, "", RecordStore.get_player_career_batter_stats(_player_id), true))
+	if mlb_seasons.is_empty():
+		return
+	var mlb_batter: PSBatterStats = PSBatterStats.new()
+	var mlb_pitcher: PSPitcherStats = PSPitcherStats.new()
+	for season_value in mlb_seasons:
+		mlb_batter.add_from((season_value as Dictionary)["batting"] as PSBatterStats)
+		mlb_pitcher.add_from((season_value as Dictionary)["pitching"] as PSPitcherStats)
+	var mlb_total_label: String = Loc.t("player_detail.career_total_mlb")
+	if pitcher:
+		_basic_rows.append(_pitcher_basic_dict(mlb_total_label, "", mlb_pitcher, true))
+	else:
+		_basic_rows.append(_batter_basic_dict(mlb_total_label, "", mlb_batter, true))
+
+
+# 海外 (MLB) の 1 季の行 (OverseasService.mlb_seasons の 1 件)。
+func _mlb_basic_row(mlb_season: Dictionary, pitcher: bool) -> Dictionary:
+	var year_label: String = Loc.t("common.year_value", {"year": int(mlb_season["year"])})
+	var team: String = Loc.t("player_detail.team_mlb")
+	if pitcher:
+		return _pitcher_basic_dict(year_label, team, mlb_season["pitching"] as PSPitcherStats, false)
+	return _batter_basic_dict(year_label, team, mlb_season["batting"] as PSBatterStats, false)
 
 
 # 二軍成績タブの行。**farm_* コンテナからのみ**積む (一軍成績と混ざってはいけない)。
@@ -1631,8 +1662,13 @@ func _ensure_advanced() -> void:
 	var pit_career: PSPitcherStats = PSPitcherStats.new()
 	var fip_weighted: float = 0.0
 	var fip_weight: float = 0.0
+	var mlb_seasons: Array = OverseasService.mlb_seasons(GameDb.get_player(_player_id))
+	var mlb_index: int = 0
 	for record_value in _records:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		while mlb_index < mlb_seasons.size() and int((mlb_seasons[mlb_index] as Dictionary)["year"]) < record.year:
+			_advanced_rows.append(_mlb_advanced_row(mlb_seasons[mlb_index] as Dictionary, pitcher))
+			mlb_index += 1
 		var ctx: Dictionary = _league_ctx_for(record.year, record.season_number)
 		var war: Dictionary = WarCalculator.season_war(record, ctx)
 		var team: String = _team_short(record.team_id)
@@ -1653,16 +1689,103 @@ func _ensure_advanced() -> void:
 				if record.advanced_stats.plate_appearances > 0:
 					war_sum += float(war.get("war", 0.0))
 		_advanced_rows.append(row)
-	# 通算行は一番下。
+	for index in range(mlb_index, mlb_seasons.size()):
+		_advanced_rows.append(_mlb_advanced_row(mlb_seasons[index] as Dictionary, pitcher))
+	# 通算行は一番下。MLB の季があれば NPB と MLB を分ける。
 	if _records.is_empty():
 		return
+	var npb_label: String = Loc.t("player_detail.career_total") if mlb_seasons.is_empty() else Loc.t("player_detail.career_total_npb")
 	if pitcher:
-		_advanced_rows.append(_pitcher_advanced_career(pit_career, war_sum, fip_weighted, fip_weight))
+		_advanced_rows.append(_pitcher_advanced_career(pit_career, war_sum, fip_weighted, fip_weight, npb_label))
 	else:
-		_advanced_rows.append(_batter_advanced_career(ad_career, bat_career, war_sum))
+		_advanced_rows.append(_batter_advanced_career(ad_career, bat_career, war_sum, npb_label))
+	if not mlb_seasons.is_empty():
+		_advanced_rows.append(_mlb_advanced_career(mlb_seasons, pitcher))
 
 
-func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: float) -> Dictionary:
+# 海外 (MLB) の 1 季の指標行。WAR / wOBA / wRC+ / BsR / FIP は MLB のリーグ平均に対して測った値
+# (PSMlbSeasonSimulator)、守備得点は能力からの見積もりを UZR / DRS の列に出す。打球の記録から測る指標
+# (xwOBA / RE24 / OAA など) は無いので "-"。
+func _mlb_advanced_row(mlb_season: Dictionary, pitcher: bool) -> Dictionary:
+	var year_label: String = Loc.t("common.year_value", {"year": int(mlb_season["year"])})
+	var team: String = Loc.t("player_detail.team_mlb")
+	var metrics: Dictionary = mlb_season.get("metrics", {}) as Dictionary
+	if pitcher:
+		return _mlb_pitcher_advanced_dict(year_label, team, mlb_season["pitching"] as PSPitcherStats, metrics.get("fip", "-"), float(metrics.get("war", 0.0)), false)
+	var bs: PSBatterStats = mlb_season["batting"] as PSBatterStats
+	return _mlb_batter_advanced_dict(year_label, team, bs, metrics, false)
+
+
+func _mlb_batter_advanced_dict(year_label: String, team: String, bs: PSBatterStats, metrics: Dictionary, is_total: bool) -> Dictionary:
+	var has_pa: bool = bs.plate_appearances > 0
+	var fielding: Variant = metrics.get("fielding", "-")
+	@warning_ignore("incompatible_ternary")
+	return {
+		"year": year_label, "team": team, "is_total": is_total,
+		"pa": bs.plate_appearances,
+		"ppa": (float(bs.pitches_seen) / float(bs.plate_appearances)) if has_pa else "-",
+		"woba": metrics.get("woba", "-"), "xwoba": "-", "wrcplus": metrics.get("wrc_plus", "-"),
+		"re24": "-", "bsr": metrics.get("bsr", "-"), "war": float(metrics.get("war", 0.0)),
+		"chances": "-", "oaa": "-", "oaa_if": "-", "oaa_of": "-", "rngr": "-", "errr": "-", "dpr": "-",
+		"uzr": fielding, "drs": fielding, "def_runs": "-", "pos_adj": "-",
+	}
+
+
+func _mlb_pitcher_advanced_dict(year_label: String, team: String, ps: PSPitcherStats, fip: Variant, war: float, is_total: bool) -> Dictionary:
+	var has_ip: bool = ps.outs_pitched > 0
+	var ip: float = ps.innings_pitched()
+	@warning_ignore("incompatible_ternary")
+	return {
+		"year": year_label, "team": team, "is_total": is_total,
+		"ip": ip, "fip": fip if has_ip else "-", "war": war,
+		"k9": ps.strikeouts_per_nine() if has_ip else "-",
+		"bb9": (float(ps.walks) * 9.0 / ip) if has_ip else "-",
+		"hr9": (float(ps.home_runs_allowed) * 9.0 / ip) if has_ip else "-",
+		"ppbf": (float(ps.pitches_thrown) / float(ps.batters_faced)) if ps.batters_faced > 0 else "-",
+		"ppi": (float(ps.pitches_thrown) / ip) if has_ip else "-",
+		"bf": ps.batters_faced, "pit": ps.pitches_thrown, "rel": ps.relief_appearances,
+	}
+
+
+# MLB 通算の指標行。WAR・BsR・守備得点は合計、wOBA / wRC+ は打席、FIP は投球回で重み付けした平均。
+func _mlb_advanced_career(mlb_seasons: Array, pitcher: bool) -> Dictionary:
+	var label: String = Loc.t("player_detail.career_total_mlb")
+	var war_sum: float = 0.0
+	var batting: PSBatterStats = PSBatterStats.new()
+	var pitching: PSPitcherStats = PSPitcherStats.new()
+	var sums: Dictionary = {"woba": 0.0, "wrc_plus": 0.0, "bsr": 0.0, "fielding": 0.0, "fip": 0.0}
+	var weight_total: float = 0.0
+	for season_value in mlb_seasons:
+		var mlb_season: Dictionary = season_value as Dictionary
+		var metrics: Dictionary = mlb_season.get("metrics", {}) as Dictionary
+		war_sum += float(metrics.get("war", 0.0))
+		if pitcher:
+			var ps: PSPitcherStats = mlb_season["pitching"] as PSPitcherStats
+			pitching.add_from(ps)
+			if metrics.has("fip"):
+				sums["fip"] = float(sums["fip"]) + float(metrics["fip"]) * ps.innings_pitched()
+				weight_total += ps.innings_pitched()
+		else:
+			var bs: PSBatterStats = mlb_season["batting"] as PSBatterStats
+			batting.add_from(bs)
+			sums["bsr"] = float(sums["bsr"]) + float(metrics.get("bsr", 0.0))
+			sums["fielding"] = float(sums["fielding"]) + float(metrics.get("fielding", 0.0))
+			if metrics.has("woba"):
+				sums["woba"] = float(sums["woba"]) + float(metrics["woba"]) * float(bs.plate_appearances)
+				sums["wrc_plus"] = float(sums["wrc_plus"]) + float(metrics.get("wrc_plus", 0.0)) * float(bs.plate_appearances)
+				weight_total += float(bs.plate_appearances)
+	if pitcher:
+		@warning_ignore("incompatible_ternary")
+		var fip: Variant = (float(sums["fip"]) / weight_total) if weight_total > 0.0 else "-"
+		return _mlb_pitcher_advanced_dict(label, "", pitching, fip, war_sum, true)
+	var career_metrics: Dictionary = {"war": war_sum, "bsr": sums["bsr"], "fielding": sums["fielding"]}
+	if weight_total > 0.0:
+		career_metrics["woba"] = float(sums["woba"]) / weight_total
+		career_metrics["wrc_plus"] = float(sums["wrc_plus"]) / weight_total
+	return _mlb_batter_advanced_dict(label, "", batting, career_metrics, true)
+
+
+func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: float, label: String = "") -> Dictionary:
 	var has_pa: bool = ad.plate_appearances > 0
 	var ad_dict: Dictionary = ad.to_dict()
 	var chances: int = int(ad_dict.get("fielding_chances", 0))
@@ -1672,7 +1795,7 @@ func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: f
 		return float(ad_dict.get(key, 0.0)) if has_field else "-"
 	@warning_ignore("incompatible_ternary")
 	return {
-		"year": Loc.t("player_detail.career_total"), "team": "", "is_total": true,
+		"year": label if not label.is_empty() else Loc.t("player_detail.career_total"), "team": "", "is_total": true,
 		"pa": ad.plate_appearances,
 		"ppa": (float(bat.pitches_seen) / float(bat.plate_appearances)) if bat.plate_appearances > 0 else "-",
 		"woba": ad.woba() if has_pa else "-",
@@ -1688,12 +1811,12 @@ func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: f
 	}
 
 
-func _pitcher_advanced_career(pit: PSPitcherStats, war_sum: float, fip_weighted: float, fip_weight: float) -> Dictionary:
+func _pitcher_advanced_career(pit: PSPitcherStats, war_sum: float, fip_weighted: float, fip_weight: float, label: String = "") -> Dictionary:
 	var has_ip: bool = pit.outs_pitched > 0
 	var ip: float = pit.innings_pitched()
 	@warning_ignore("incompatible_ternary")
 	return {
-		"year": Loc.t("player_detail.career_total"), "team": "", "is_total": true,
+		"year": label if not label.is_empty() else Loc.t("player_detail.career_total"), "team": "", "is_total": true,
 		"ip": ip,
 		"fip": (fip_weighted / fip_weight) if fip_weight > 0.0 else "-",
 		"war": war_sum,
