@@ -58,6 +58,8 @@ static func simulate_game(
 		PSBullpenManager.substitute_reliever(home_setup, inning, result)
 		var home_inning_pitcher_id: int = int((home_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 		_record_substitution(result, inning, "top", home_team_id, "pitching", home_prev_pitcher_id, home_inning_pitcher_id, 1, -1)
+		if home_inning_pitcher_id != home_prev_pitcher_id:
+			record_relief_entry(result, home_inning_pitcher_id, inning, "top", 0, [], 0)
 		var away_runs: int = simulate_half_inning(away_setup, home_setup, inning, result, inning, "top", 0, pa_cache)
 		result["away_score"] = int(result["away_score"]) + away_runs
 
@@ -73,6 +75,8 @@ static func simulate_game(
 			PSBullpenManager.substitute_reliever(away_setup, inning, result)
 			away_inning_pitcher_id = int((away_setup["pitcher"] as PSPlayerSeasonRecord).player_id)
 			_record_substitution(result, inning, "bottom", away_team_id_sub, "pitching", away_prev_pitcher_id, away_inning_pitcher_id, 1, -1)
+			if away_inning_pitcher_id != away_prev_pitcher_id:
+				record_relief_entry(result, away_inning_pitcher_id, inning, "bottom", 0, [], 0)
 			var home_run_limit: int = bottom_half_walkoff_run_limit(result, inning)
 			home_runs = simulate_half_inning(
 				home_setup,
@@ -672,7 +676,7 @@ static func apply_in_game_injuries_after_plate(
 	batter: PSPlayerSeasonRecord,
 	outcome: Dictionary,
 	outs: int,
-	_bases: Array,
+	bases: Array,
 	runs: int
 ) -> void:
 	var hit_by_pitch: bool = str(outcome.get("category", "")) == "hit_by_pitch"
@@ -700,6 +704,8 @@ static func apply_in_game_injuries_after_plate(
 			game_result, inning, half, int(defense.get("team_id", 0)), "pitching",
 			pitcher.player_id, 0 if new_pitcher == null else new_pitcher.player_id, 1, -1
 		)
+		if new_pitcher != null and new_pitcher != pitcher:
+			record_relief_entry(game_result, new_pitcher.player_id, inning, half, outs, bases, runs)
 		update_active_pitcher_outing_end(defense, game_result, inning, half, runs)
 
 
@@ -729,7 +735,32 @@ static func maybe_change_pitcher_after_pa(
 		return
 	finish_active_pitcher_outing(defense, game_result, inning, half, current_half_runs)
 	ensure_pitcher_outing(defense, game_result, inning, half, bases, current_half_runs, outs)
-	_record_substitution(game_result, inning, half, int(defense.get("team_id", 0)), "pitching", old_pitcher.player_id, int((defense.get("pitcher", null) as PSPlayerSeasonRecord).player_id), 1, -1)
+	var new_pitcher_id: int = int((defense.get("pitcher", null) as PSPlayerSeasonRecord).player_id)
+	_record_substitution(game_result, inning, half, int(defense.get("team_id", 0)), "pitching", old_pitcher.player_id, new_pitcher_id, 1, -1)
+	record_relief_entry(game_result, new_pitcher_id, inning, half, outs, bases, current_half_runs)
+
+
+# 救援が登板した場面の Leverage Index を投手の高度指標へ記録する (WAR の gmLI になる)。
+# current_half_runs はこの半イニングに攻撃側が挙げた得点。スコアへは半イニング終了時に加算されるので
+# ここで足して登板時点の点差にする。
+static func record_relief_entry(
+	game_result: Dictionary,
+	pitcher_id: int,
+	inning: int,
+	half: String,
+	outs: int,
+	bases: Array,
+	current_half_runs: int
+) -> void:
+	if pitcher_id <= 0 or not game_result.has("advanced_stats"):
+		return
+	var is_bottom: bool = half == "bottom"
+	var home_minus_away: int = int(game_result.get("home_score", 0)) - int(game_result.get("away_score", 0))
+	home_minus_away += current_half_runs if is_bottom else -current_half_runs
+	var leverage: float = PSLeverageIndex.for_state(
+		inning, is_bottom, home_minus_away, outs, PSLeverageIndex.occupied_bases_mask(bases)
+	)
+	PSAdvancedStatReducer.apply_relief_entry(game_result["advanced_stats"] as Dictionary, pitcher_id, leverage)
 
 
 static func defensive_score_state(defense: Dictionary, game_result: Dictionary, half: String, current_half_runs: int) -> Dictionary:

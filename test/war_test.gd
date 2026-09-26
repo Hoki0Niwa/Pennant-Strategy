@@ -74,6 +74,48 @@ func test_war_allocation_uses_fangraphs_pools_and_role_order() -> void:
 	assert_float(avg_starter).is_greater(avg_reliever)
 	assert_float(avg_reliever).is_greater_equal(0.0)
 
+	# 救援 (登板の半分以上が救援) の内訳。救援は 60IP×6、先発は 160IP×5 (両チーム同じ)。
+	var relief: Dictionary = summary.get("relief", {}) as Dictionary
+	assert_float(float(relief.get("ip_share", 0.0))).is_equal_approx(360.0 / 1160.0, 0.01)
+	assert_float(float(relief.get("war_share", 0.0))).is_between(0.01, 0.5)
+	assert_float(float(relief.get("fip_minus_starter_fip", 1.0))).is_equal_approx(0.0, 0.15)
+	assert_float(float(relief.get("gmli_ip_weighted", 0.0))).is_equal_approx(
+		WarCalculator.estimated_pitcher_gmli(_make_pitcher(1, 1, 180, 0, 50, "reliever").pitcher_stats), 0.001)
+
+
+# 救援の WAR は登板場面の重さで (1 + gmLI) / 2 倍になる。試合で測った gmLI があればそれを使い、
+# 無い記録 (開始前の季・海外リーグ) は S / H の割合から推定する。
+func test_reliever_leverage_uses_measured_gmli() -> void:
+	var ctx: Dictionary = _pitcher_ctx()
+	var high: PSPlayerSeasonRecord = _make_pitcher(1, 92101, 180, 0, 50, "reliever")
+	var low: PSPlayerSeasonRecord = _make_pitcher(1, 92102, 180, 0, 50, "reliever")
+	_set_relief_entries(high, 50, 1.9)
+	_set_relief_entries(low, 50, 0.7)
+	var high_war: Dictionary = WarCalculator.calculate_pitcher_war(high, ctx)
+	var low_war: Dictionary = WarCalculator.calculate_pitcher_war(low, ctx)
+	assert_float(float(high_war.get("gmli", 0.0))).is_equal_approx(1.9, 0.001)
+	assert_float(float(high_war.get("leverage_multiplier", 0.0))).is_equal_approx(1.45, 0.001)
+	assert_float(float(low_war.get("leverage_multiplier", 0.0))).is_equal_approx(0.85, 0.001)
+	assert_float(float(high_war.get("war", 0.0))).is_greater(float(low_war.get("war", 0.0)))
+
+	# 先発だけの投手は場面の補正を受けない。
+	var starter: PSPlayerSeasonRecord = _make_pitcher(1, 92103, 480, 20, 20, "starter")
+	assert_float(float(WarCalculator.calculate_pitcher_war(starter, ctx).get("leverage_multiplier", 0.0))).is_equal(1.0)
+
+	# 実測が無ければ S / H の割合で推定する: 抑え > セットアッパー > 敗戦処理、敗戦処理は平均未満。
+	var closer: PSPlayerSeasonRecord = _make_pitcher(1, 92104, 180, 0, 50, "reliever")
+	closer.pitcher_stats.saves = 30
+	var setup: PSPlayerSeasonRecord = _make_pitcher(1, 92105, 180, 0, 50, "reliever")
+	setup.pitcher_stats.holds = 25
+	var mop_up: PSPlayerSeasonRecord = _make_pitcher(1, 92106, 180, 0, 50, "reliever")
+	var closer_gmli: float = WarCalculator.pitcher_gmli(closer)
+	var setup_gmli: float = WarCalculator.pitcher_gmli(setup)
+	var mop_up_gmli: float = WarCalculator.pitcher_gmli(mop_up)
+	print("WARTEST gmLI estimate closer=%.2f setup=%.2f mop_up=%.2f" % [closer_gmli, setup_gmli, mop_up_gmli])
+	assert_float(closer_gmli).is_greater(setup_gmli)
+	assert_float(setup_gmli).is_greater(mop_up_gmli)
+	assert_float(mop_up_gmli).is_less(1.0)
+
 
 # wRAA=0 の平均的な野手は replacement 水準の上積みを得ること。
 func test_average_batter_is_above_replacement() -> void:
@@ -93,7 +135,21 @@ func test_average_batter_is_above_replacement() -> void:
 
 
 func test_pitcher_fangraphs_replacement_is_role_sensitive() -> void:
-	var ctx: Dictionary = {
+	var ctx: Dictionary = _pitcher_ctx()
+	var starter_record: PSPlayerSeasonRecord = _make_pitcher(1, 92001, 180, 5, 5, "starter")
+	var reliever_record: PSPlayerSeasonRecord = _make_pitcher(1, 92002, 180, 0, 50, "reliever")
+	var starter_war: Dictionary = WarCalculator.calculate_pitcher_war(starter_record, ctx)
+	var reliever_war: Dictionary = WarCalculator.calculate_pitcher_war(reliever_record, ctx)
+	assert_str(str(starter_war.get("run_metric_name", ""))).is_equal("FIPR9")
+	assert_float(float(starter_war.get("role_replacement_runs_per_9", 0.0))).is_greater(
+		float(reliever_war.get("role_replacement_runs_per_9", 0.0))
+	)
+	assert_float(float(starter_war.get("war", 0.0))).is_greater(float(reliever_war.get("war", 0.0)))
+
+
+# 平均的な失点環境の投手用リーグ context (リーグ補正なし)。
+func _pitcher_ctx() -> Dictionary:
+	return {
 		"rpw": 8.0,
 		"lg_era": 3.7,
 		"lg_ra9": 4.0,
@@ -104,15 +160,15 @@ func test_pitcher_fangraphs_replacement_is_role_sensitive() -> void:
 		"lg_fipr9": 4.0,
 		"pitcher_war_ip_correction": 0.0,
 	}
-	var starter_record: PSPlayerSeasonRecord = _make_pitcher(1, 92001, 180, 5, 5, "starter")
-	var reliever_record: PSPlayerSeasonRecord = _make_pitcher(1, 92002, 180, 0, 50, "reliever")
-	var starter_war: Dictionary = WarCalculator.calculate_pitcher_war(starter_record, ctx)
-	var reliever_war: Dictionary = WarCalculator.calculate_pitcher_war(reliever_record, ctx)
-	assert_str(str(starter_war.get("run_metric_name", ""))).is_equal("FIPR9")
-	assert_float(float(starter_war.get("role_replacement_runs_per_9", 0.0))).is_greater(
-		float(reliever_war.get("role_replacement_runs_per_9", 0.0))
-	)
-	assert_float(float(starter_war.get("war", 0.0))).is_greater(float(reliever_war.get("war", 0.0)))
+
+
+# 救援登板 entries 回を、すべて同じ LI の場面で記録した状態にする。
+func _set_relief_entries(record: PSPlayerSeasonRecord, entries: int, leverage: float) -> void:
+	var advanced: PSAdvancedStats = PSAdvancedStats.new()
+	advanced.player_id = record.player_id
+	for _i in range(entries):
+		advanced.add_relief_entry(leverage)
+	record.advanced_stats = advanced
 
 
 func _make_batter(team_id: int, p_id: int, pa: int, woba: float, bsr: float) -> PSPlayerSeasonRecord:

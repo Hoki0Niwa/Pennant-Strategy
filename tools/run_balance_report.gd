@@ -252,6 +252,15 @@ func _print_war_allocation(war_alloc: Dictionary) -> void:
 		float(benchmarks.get("avg_starter_war_per_162_ip", 0.0)),
 		float(benchmarks.get("avg_reliever_war_per_60_ip", 0.0)),
 	])
+	var relief: Dictionary = war_alloc.get("relief", {}) as Dictionary
+	print("WAR relief: share %.0f%% of pitching (IP %.0f%%) / %.2f per team / max %.2f / gmLI %.2f / FIP vs starters %+.2f" % [
+		float(relief.get("war_share", 0.0)) * 100.0,
+		float(relief.get("ip_share", 0.0)) * 100.0,
+		float(relief.get("war_per_team_season", 0.0)),
+		float(relief.get("war_max", 0.0)),
+		float(relief.get("gmli_ip_weighted", 0.0)),
+		float(relief.get("fip_minus_starter_fip", 0.0)),
+	])
 	print("WAR negatives: pitchers %d/%d (%.0f%%) / batters %d/%d (%.0f%%)" % [
 		int(war_alloc.get("negative_pitchers", 0)), int(war_alloc.get("pitcher_count", 0)), float(war_alloc.get("negative_pitcher_rate", 0.0)) * 100.0,
 		int(war_alloc.get("negative_batters", 0)), int(war_alloc.get("batter_count", 0)), float(war_alloc.get("negative_batter_rate", 0.0)) * 100.0,

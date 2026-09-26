@@ -44,6 +44,9 @@ var errr_by_position: Dictionary = {}
 var dpr_by_position: Dictionary = {}
 var uzr_by_position: Dictionary = {}
 var drs_by_position: Dictionary = {}
+# 救援登板の回数と、登板した場面の Leverage Index の合計。gmLI = 合計 / 回数。
+var relief_entries: int = 0
+var relief_entry_leverage_sum: float = 0.0
 
 
 func load_from_dict(data: Dictionary) -> void:
@@ -70,6 +73,8 @@ func load_from_dict(data: Dictionary) -> void:
 	dpr_by_position = _float_map(data.get("dpr_by_position", {}))
 	uzr_by_position = _float_map(data.get("uzr_by_position", {}))
 	drs_by_position = _float_map(data.get("drs_by_position", {}))
+	relief_entries = int(data.get("relief_entries", 0))
+	relief_entry_leverage_sum = float(data.get("relief_entry_leverage_sum", 0.0))
 
 	if fielding_chances_by_position.is_empty() and fielding_chances > 0 and data.has("uzr"):
 		var fallback_position: String = str(int(data.get("primary_uzr_position", data.get("uzr_position", 0))))
@@ -104,6 +109,18 @@ func add_plate_result(
 
 func add_baserunning(value: float) -> void:
 	bsr_sum += value
+
+
+func add_relief_entry(leverage: float) -> void:
+	relief_entries += 1
+	relief_entry_leverage_sum += leverage
+
+
+# 救援登板時点の平均 Leverage Index。救援登板が無ければ 0。
+func gmli() -> float:
+	if relief_entries <= 0:
+		return 0.0
+	return relief_entry_leverage_sum / float(relief_entries)
 
 
 func add_fielding(
@@ -178,6 +195,8 @@ func add_from(other) -> void:
 	_merge_float_map(dpr_by_position, other.dpr_by_position)
 	_merge_float_map(uzr_by_position, other.uzr_by_position)
 	_merge_float_map(drs_by_position, other.drs_by_position)
+	relief_entries += other.relief_entries
+	relief_entry_leverage_sum += other.relief_entry_leverage_sum
 
 
 func woba() -> float:
@@ -281,6 +300,9 @@ func to_dict() -> Dictionary:
 		"fielding_runs": _round_float(fielding_runs, 3),
 		"positional_adjustment_runs": _round_float(positional_adjustment, 3),
 		"def_runs": _round_float(fielding_runs + positional_adjustment, 3),
+		"relief_entries": relief_entries,
+		"relief_entry_leverage_sum": _round_float(relief_entry_leverage_sum, 3),
+		"gmli": _round_float(gmli(), 3),
 	}
 
 

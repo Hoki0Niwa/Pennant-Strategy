@@ -109,6 +109,15 @@ static func apply_play_event(advanced_stats: Dictionary, play_event: Dictionary)
 		_apply_fielding_event(advanced_stats, fielding_event_value as Dictionary)
 
 
+# 救援登板 1 回分を投手の記録へ加える。leverage は登板した場面の Leverage Index。
+static func apply_relief_entry(advanced_stats: Dictionary, pitcher_id: int, leverage: float) -> void:
+	if pitcher_id <= 0:
+		return
+	_ensure_shape(advanced_stats)
+	var stats = _record_for(advanced_stats, BUCKET_PITCHERS, pitcher_id)
+	stats.add_relief_entry(leverage)
+
+
 # 解決済みプレーを直接集計する。表示用イベントを作らず、数式と加算順序はログ経路と共用する。
 static func apply_resolved_play(
 	advanced_stats: Dictionary,

@@ -2102,6 +2102,96 @@ func test_pitcher_stamina_affects_starter_fatigue_and_long_relief_usage() -> voi
 		PSPitcherUsageModel.long_relief_target_pitches(low_stamina))
 
 
+# 救援は 1 イニング分 (15 球前後) では能力を落とさず、疲労開始を過ぎてから落ちる。
+# 登板直後から落ちる形にすると、救援が同じ投手の先発時より打たれて救援の価値が消える。
+func test_reliever_fatigue_starts_after_a_normal_inning() -> void:
+	var average: PSPlayerSeasonRecord = _pitcher(807, "Average Arm", 0.0)
+	var durable: PSPlayerSeasonRecord = _pitcher(808, "Durable Arm", 0.0)
+	durable.z_abilities_snapshot["Pit_FatigueResist"] = 2.0
+
+	assert_float(PSFatigueCalculator.factor_for_pitcher(average, true, 0)).is_equal(1.0)
+	assert_float(PSFatigueCalculator.factor_for_pitcher(average, true, 18)).is_equal(1.0)
+	assert_float(PSFatigueCalculator.factor_for_pitcher(average, true, 40)).is_less(0.95)
+	var limit: int = int(ceil(PSFatigueCalculator.reliever_limit_pitches(average)))
+	assert_float(PSFatigueCalculator.factor_for_pitcher(average, true, limit)).is_equal(0.0)
+	assert_float(PSFatigueCalculator.factor_for_pitcher(durable, true, 45)).is_greater(
+		PSFatigueCalculator.factor_for_pitcher(average, true, 45) + 0.05)
+	var usage: Dictionary = PSPitcherUsageModel.create_outing(average, PSPitcherUsageModel.ROLE_SHORT_RELIEF)
+	for pitches in [0, 18, 40, limit]:
+		assert_float(PSFatigueCalculator.factor_for_outing(average, usage, pitches)).is_equal_approx(
+			PSFatigueCalculator.factor_for_pitcher(average, true, pitches), 0.000001)
+
+
+# LI 表: 終盤の接戦ほど高く、大差・序盤ほど低い。抑えの場面は 1 点差 > 2 点差 > 3 点差。
+func test_leverage_index_orders_late_close_states() -> void:
+	assert_float(PSLeverageIndex.for_state(1, false, 0, 0, 0)).is_between(0.6, 1.0)
+	assert_float(PSLeverageIndex.for_state(9, true, -1, 2, 7)).is_greater(8.0)
+	var save_one: float = PSLeverageIndex.for_state(9, false, 1, 0, 0)
+	var save_two: float = PSLeverageIndex.for_state(9, false, 2, 0, 0)
+	var save_three: float = PSLeverageIndex.for_state(9, false, 3, 0, 0)
+	assert_float(save_one).is_between(1.8, 3.2)
+	assert_float(save_one).is_greater(save_two)
+	assert_float(save_two).is_greater(save_three)
+	assert_float(PSLeverageIndex.for_state(7, false, 0, 2, 7)).is_greater(
+		PSLeverageIndex.for_state(7, false, 0, 0, 0) * 2.0)
+	# 表の範囲外の点差・回は端の値で引く。
+	assert_float(PSLeverageIndex.for_state(5, true, 15, 0, 0)).is_equal(PSLeverageIndex.for_state(5, true, 6, 0, 0))
+	assert_float(PSLeverageIndex.for_state(5, true, 15, 0, 0)).is_less(0.2)
+	assert_float(PSLeverageIndex.for_state(14, false, 0, 0, 0)).is_equal(PSLeverageIndex.for_state(12, false, 0, 0, 0))
+	var runner: PSPlayerSeasonRecord = _pitcher(809, "Runner", 0.0)
+	assert_int(PSLeverageIndex.occupied_bases_mask([null, runner, runner])).is_equal(6)
+	assert_int(PSLeverageIndex.occupied_bases_mask([runner, null, null])).is_equal(1)
+
+
+# 救援登板ごとに登板場面の LI が記録され、WAR の gmLI はその平均になる。
+func test_relief_entries_record_leverage_for_each_relief_appearance() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	var old_season: PSSeason = AppState.current_season
+	var old_save_id: String = SaveContext.active_save_id()
+
+	Rng.set_seed_value(20260925)
+	AppState.select_team((GameDb.teams[0] as PSTeam).id)
+	AppState.start_new_season()
+	var season: PSSeason = AppState.current_season
+	var test_save_id: String = SaveContext.active_save_id()
+	for _day in range(4):
+		GameSimulator.simulate_current_day(season, false)
+
+	var relievers: int = 0
+	var mismatched: int = 0
+	var gmli_mismatched: int = 0
+	var entries: int = 0
+	var leverage_sum: float = 0.0
+	for team_value in GameDb.teams:
+		var team: PSTeam = team_value as PSTeam
+		for record_value in RecordStore.get_team_player_records(team.id, season.year, season.season_number):
+			var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+			if record == null or record.pitcher_stats == null or record.pitcher_stats.relief_appearances <= 0:
+				continue
+			relievers += 1
+			var ad: PSAdvancedStats = record.advanced_stats
+			var recorded: int = 0 if ad == null else ad.relief_entries
+			if recorded != record.pitcher_stats.relief_appearances:
+				mismatched += 1
+			if recorded <= 0:
+				continue
+			entries += recorded
+			leverage_sum += ad.relief_entry_leverage_sum
+			if absf(PSWarCalculator.pitcher_gmli(record) - ad.gmli()) > 0.000001:
+				gmli_mismatched += 1
+
+	AppState.selected_team_id = old_team_id
+	AppState.current_season = old_season
+	if not test_save_id.is_empty() and test_save_id != old_save_id:
+		SaveContext.delete_current_save_data()
+
+	print("RELIEFLI relievers=%d entries=%d mean_li=%.2f" % [relievers, entries, leverage_sum / float(maxi(entries, 1))])
+	assert_int(relievers).is_greater(20)
+	assert_int(mismatched).is_equal(0)
+	assert_int(gmli_mismatched).is_equal(0)
+	assert_float(leverage_sum / float(entries)).is_between(0.7, 1.8)
+
+
 func _contact_quality_average_ev(batter_delta: float, pitcher_delta: float) -> float:
 	Rng.set_seed_value(24680)
 	var total_ev: float = 0.0

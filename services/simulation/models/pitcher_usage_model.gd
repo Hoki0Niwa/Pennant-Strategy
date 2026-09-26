@@ -186,7 +186,7 @@ static func create_outing(
 		record,
 		resolved_role != ROLE_STARTER
 	)
-	var fatigue_limit_pitches: float = float(workload_pitches)
+	var fatigue_limit_pitches: float = PSFatigueCalculator.reliever_limit_pitches(record)
 	if resolved_role == ROLE_STARTER:
 		fatigue_limit_pitches = float(max(int(fatigue_start_pitches) + 1, workload_pitches))
 	return {
@@ -197,7 +197,6 @@ static func create_outing(
 		"workload_pitches": workload_pitches,
 		"fatigue_start_pitches": fatigue_start_pitches,
 		"fatigue_limit_pitches": fatigue_limit_pitches,
-		"fatigue_width": PSFatigueCalculator.width(record),
 		"pitches": 0,
 		"batters_faced": 0,
 		"outs": 0,

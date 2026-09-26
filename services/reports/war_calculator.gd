@@ -23,6 +23,14 @@ const PITCHER_WAR_POOL_FULL_SEASON: float = 430.0
 const PITCHER_STARTER_REPLACEMENT_WPG: float = 0.12
 const PITCHER_RELIEVER_REPLACEMENT_WPG: float = 0.03
 
+# 登板時 LI の実測が無い記録 (開始前の季・海外リーグ) の gmLI 推定。救援登板あたりの S / H の割合から
+# base + per_save × S割合 + per_hold × H割合 で求める。係数は試合シムの実測 gmLI への回帰。
+const GMLI_ESTIMATE_BASE: float = 0.38
+const GMLI_ESTIMATE_PER_SAVE_SHARE: float = 1.82
+const GMLI_ESTIMATE_PER_HOLD_SHARE: float = 1.75
+const GMLI_ESTIMATE_MIN: float = 0.3
+const GMLI_ESTIMATE_MAX: float = 2.2
+
 # Statcast Fielding Run Value の OAA→runs 変換。捕手固有指標は未保持のため range 相当のみ扱う。
 const OAA_INFIELD_RUNS_PER_OUT: float = 0.75
 const OAA_OUTFIELD_RUNS_PER_OUT: float = 0.90
@@ -345,8 +353,17 @@ static func _pitcher_replacement_wpg(starter_share: float) -> float:
 	return PITCHER_STARTER_REPLACEMENT_WPG * starter_share + PITCHER_RELIEVER_REPLACEMENT_WPG * (1.0 - starter_share)
 
 
-static func _estimated_pitcher_gmli(record: PSPlayerSeasonRecord) -> float:
-	var ps: PSPitcherStats = record.pitcher_stats
+# 救援登板時点の平均 LI。試合シムで測った値があればそれを、無ければ S / H の割合からの推定を使う。
+static func pitcher_gmli(record: PSPlayerSeasonRecord) -> float:
+	if record == null:
+		return 1.0
+	var ad: PSAdvancedStats = record.advanced_stats
+	if ad != null and ad.relief_entries > 0:
+		return ad.gmli()
+	return estimated_pitcher_gmli(record.pitcher_stats)
+
+
+static func estimated_pitcher_gmli(ps: PSPitcherStats) -> float:
 	if ps == null:
 		return 1.0
 	var relief_games: int = max(0, ps.games - ps.starts)
@@ -354,17 +371,20 @@ static func _estimated_pitcher_gmli(record: PSPlayerSeasonRecord) -> float:
 		return 1.0
 	var save_share: float = clamp(float(ps.saves) / float(relief_games), 0.0, 1.0)
 	var hold_share: float = clamp(float(ps.holds) / float(relief_games), 0.0, 1.0)
-	var role_base: float = 1.05
-	if record.role == "closer":
-		role_base = 1.55
-	return clamp(role_base + 0.25 * hold_share + 0.35 * save_share, 0.85, 1.90)
+	return clamp(
+		GMLI_ESTIMATE_BASE + GMLI_ESTIMATE_PER_SAVE_SHARE * save_share + GMLI_ESTIMATE_PER_HOLD_SHARE * hold_share,
+		GMLI_ESTIMATE_MIN,
+		GMLI_ESTIMATE_MAX
+	)
 
 
+# 救援は (1 + gmLI) / 2 を掛ける。場面の重さの半分だけを本人の価値とし、残り半分は
+# 「抑えが抜けてもブルペンが繰り上がって埋める」分として平均へ戻す。先発分は 1 倍。
 static func _pitcher_leverage_multiplier(record: PSPlayerSeasonRecord, starter_share: float) -> float:
 	var reliever_share: float = 1.0 - starter_share
 	if reliever_share <= 0.0:
 		return 1.0
-	var reliever_multiplier: float = (1.0 + _estimated_pitcher_gmli(record)) / 2.0
+	var reliever_multiplier: float = (1.0 + pitcher_gmli(record)) / 2.0
 	return starter_share + reliever_share * reliever_multiplier
 
 
@@ -425,6 +445,7 @@ static func _pitcher_war_components(record: PSPlayerSeasonRecord, league_ctx: Di
 		"wins_above_avg_per_game": wins_above_avg_per_game,
 		"replacement_wpg": replacement_wpg,
 		"role_replacement_runs_per_9": replacement_wpg * dynamic_rpw,
+		"gmli": pitcher_gmli(record) if gs_share < 1.0 else 1.0,
 		"leverage_multiplier": leverage_multiplier,
 		"war_before_correction": war_before_correction,
 		"war_correction": correction,
@@ -531,6 +552,7 @@ static func calculate_pitcher_war(record: PSPlayerSeasonRecord, league_ctx: Dict
 	result["dynamic_rpw"] = _round3(dynamic_rpw)
 	result["role_replacement_runs_per_9"] = _round3(role_replacement_runs_per_9)
 	result["replacement_wpg"] = _round3(float(components.get("replacement_wpg", 0.0)))
+	result["gmli"] = _round3(float(components.get("gmli", 1.0)))
 	result["leverage_multiplier"] = _round3(float(components.get("leverage_multiplier", 1.0)))
 	result["war_before_correction"] = _round3(float(components.get("war_before_correction", 0.0)))
 	result["war_correction"] = _round3(float(components.get("war_correction", 0.0)))
@@ -580,6 +602,12 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 	var batting_pa_total: int = 0
 	var pitching_ip_total: float = 0.0
 	var team_ids: Dictionary = {}
+	# 登板の半分以上が救援の投手を救援として、先発と分けて集計する。
+	var relief_war_total: float = 0.0
+	var relief_war_max: float = 0.0
+	var relief_gmli_ip_sum: float = 0.0
+	var relief_pitching: PSPitcherStats = PSPitcherStats.new()
+	var starter_pitching: PSPitcherStats = PSPitcherStats.new()
 	for record_value in RecordStore.get_player_records_for_season(year, season_number):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null:
@@ -600,6 +628,13 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 			pitching_ip_total += ip
 			if war < 0.0:
 				negative_pitchers += 1
+			if float(war_row.get("gs_share", 0.0)) < 0.5:
+				relief_war_total += war
+				relief_war_max = maxf(relief_war_max, war)
+				relief_gmli_ip_sum += float(war_row.get("gmli", 1.0)) * ip
+				relief_pitching.add_from(record.pitcher_stats)
+			else:
+				starter_pitching.add_from(record.pitcher_stats)
 		else:
 			var pa: int = int(war_row.get("pa", 0))
 			if pa <= 0:
@@ -614,6 +649,7 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 	var num_teams: int = int(meta.get("num_teams", ctx.get("num_teams", team_ids.size())))
 	var games_per_team: float = float(meta.get("games_per_team", ctx.get("games_per_team", 0.0)))
 	var team_divisor: float = float(max(1, num_teams))
+	var relief_ip: float = relief_pitching.innings_pitched()
 	return {
 		"year": year,
 		"season_number": season_number,
@@ -633,9 +669,21 @@ static func league_war_summary(year: int, season_number: int, league_ctx: Dictio
 		"pitching_ip_total": _round3(pitching_ip_total),
 		"negative_batters": negative_batters,
 		"negative_pitchers": negative_pitchers,
+		"relief": {
+			"war_total": _round3(relief_war_total),
+			"war_share": _round3(relief_war_total / pitching_war_total) if pitching_war_total > 0.0 else 0.0,
+			"war_max": _round3(relief_war_max),
+			"ip_share": _round3(relief_ip / pitching_ip_total) if pitching_ip_total > 0.0 else 0.0,
+			"gmli_ip_weighted": _round3(relief_gmli_ip_sum / relief_ip) if relief_ip > 0.0 else 0.0,
+			"fip_minus_starter_fip": _round3(_raw_fip(relief_pitching) - _raw_fip(starter_pitching)),
+		},
 		"benchmarks": average_player_war_benchmarks(ctx),
 		"method": ctx.get("war_method", {}) as Dictionary,
 	}
+
+
+static func _raw_fip(ps: PSPitcherStats) -> float:
+	return _fip_raw_from_counts(ps.home_runs_allowed, ps.walks, ps.hit_batters, ps.strikeouts, ps.innings_pitched())
 
 
 # 計測: 平均的な選手の参照 WAR をリーグ context から解析的に求める。

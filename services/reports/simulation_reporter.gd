@@ -559,6 +559,7 @@ func _merge_war_row_into(row: Dictionary, war_row: Dictionary, is_batter: bool) 
 		row["war_run_metric_name"] = str(war_row.get("run_metric_name", ""))
 		row["war_raa"] = float(war_row.get("raa", 0.0))
 		row["war_replacement_factor"] = float(war_row.get("replacement_factor", 0.0))
+		row["war_gmli"] = float(war_row.get("gmli", 1.0))
 		row["war_leverage_multiplier"] = float(war_row.get("leverage_multiplier", 1.0))
 		row["war_correction"] = float(war_row.get("war_correction", 0.0))
 
@@ -581,8 +582,15 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 	var bench_starter: float = 0.0
 	var bench_reliever: float = 0.0
 	var method: Dictionary = {}
+	# 救援の指標は季ごとの値の平均。war_max だけは全季の最大。
+	var relief_sums: Dictionary = {"war_total": 0.0, "war_share": 0.0, "ip_share": 0.0, "gmli_ip_weighted": 0.0, "fip_minus_starter_fip": 0.0}
+	var relief_war_max: float = 0.0
 	for season_value in seasons:
 		var s: Dictionary = season_value as Dictionary
+		var relief: Dictionary = s.get("relief", {}) as Dictionary
+		for key in relief_sums.keys():
+			relief_sums[key] = float(relief_sums[key]) + float(relief.get(key, 0.0))
+		relief_war_max = maxf(relief_war_max, float(relief.get("war_max", 0.0)))
 		batting_war += float(s.get("batting_war_total", 0.0))
 		pitching_war += float(s.get("pitching_war_total", 0.0))
 		batter_count += int(s.get("batter_count", 0))
@@ -606,6 +614,10 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 	var total_pool_reference: float = WarCalculator.TOTAL_WAR_POOL_FULL_SEASON * war_pool_scale
 	var batting_pool_reference: float = WarCalculator.POSITION_PLAYER_WAR_POOL_FULL_SEASON * war_pool_scale
 	var pitching_pool_reference: float = WarCalculator.PITCHER_WAR_POOL_FULL_SEASON * war_pool_scale
+	var relief_summary: Dictionary = {"war_max": _round_float(relief_war_max, 2)}
+	for key in relief_sums.keys():
+		relief_summary[key] = _round_float(float(relief_sums[key]) / float(n), 3)
+	relief_summary["war_per_team_season"] = _round_float(float(relief_sums["war_total"]) / float(max(1, num_teams)) / float(n), 2)
 	return {
 		"seasons": n,
 		"num_teams": num_teams,
@@ -622,6 +634,7 @@ func _aggregate_war_allocation(seasons: Array) -> Dictionary:
 		"negative_pitchers": negative_pitchers,
 		"negative_batter_rate": _round_float(_safe_div(negative_batters, batter_count), 3),
 		"negative_pitcher_rate": _round_float(_safe_div(negative_pitchers, pitcher_count), 3),
+		"relief": relief_summary,
 		"avg_rpw": _round_float(rpw_sum / float(n), 2),
 		"reference": {
 			"replacement_win_pct": WarCalculator.REPLACEMENT_WIN_PCT,
