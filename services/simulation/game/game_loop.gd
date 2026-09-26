@@ -581,6 +581,10 @@ static func ensure_pitcher_outing(
 		"exit_score_against": int(score.get("score_against", 0)),
 		"active": true,
 	}
+	if role != PSPitcherUsageModel.ROLE_STARTER:
+		# 救援の登板場面の重さと、その日に割り当てられていた役割 (起用の検証で登板単位に集計する)。
+		new_outing["entry_leverage"] = entry_leverage(game_result, inning, half, current_outs, bases, current_half_runs)
+		new_outing["relief_lane"] = PSBullpenManager.relief_lane_for_pitcher(defense, pitcher)
 	outings.append(new_outing)
 	game_result["pitcher_outings"] = outings
 	defense["active_pitcher_outing_index"] = outings.size() - 1
@@ -706,7 +710,9 @@ static func apply_in_game_injuries_after_plate(
 		)
 		if new_pitcher != null and new_pitcher != pitcher:
 			record_relief_entry(game_result, new_pitcher.player_id, inning, half, outs, bases, runs)
-		update_active_pitcher_outing_end(defense, game_result, inning, half, runs)
+		# 代わった投手の登板はこの場面 (アウト・走者・点差) から始める。
+		finish_active_pitcher_outing(defense, game_result, inning, half, runs)
+		ensure_pitcher_outing(defense, game_result, inning, half, bases, runs, outs)
 
 
 static func maybe_change_pitcher_after_pa(
@@ -741,8 +747,6 @@ static func maybe_change_pitcher_after_pa(
 
 
 # 救援が登板した場面の Leverage Index を投手の高度指標へ記録する (WAR の gmLI になる)。
-# current_half_runs はこの半イニングに攻撃側が挙げた得点。スコアへは半イニング終了時に加算されるので
-# ここで足して登板時点の点差にする。
 static func record_relief_entry(
 	game_result: Dictionary,
 	pitcher_id: int,
@@ -754,13 +758,24 @@ static func record_relief_entry(
 ) -> void:
 	if pitcher_id <= 0 or not game_result.has("advanced_stats"):
 		return
+	var leverage: float = entry_leverage(game_result, inning, half, outs, bases, current_half_runs)
+	PSAdvancedStatReducer.apply_relief_entry(game_result["advanced_stats"] as Dictionary, pitcher_id, leverage)
+
+
+# 半イニングの途中の場面の Leverage Index。current_half_runs はこの半イニングに攻撃側が挙げた得点で、
+# スコアへは半イニング終了時に加算されるのでここで足して現時点の点差にする。
+static func entry_leverage(
+	game_result: Dictionary,
+	inning: int,
+	half: String,
+	outs: int,
+	bases: Array,
+	current_half_runs: int
+) -> float:
 	var is_bottom: bool = half == "bottom"
 	var home_minus_away: int = int(game_result.get("home_score", 0)) - int(game_result.get("away_score", 0))
 	home_minus_away += current_half_runs if is_bottom else -current_half_runs
-	var leverage: float = PSLeverageIndex.for_state(
-		inning, is_bottom, home_minus_away, outs, PSLeverageIndex.occupied_bases_mask(bases)
-	)
-	PSAdvancedStatReducer.apply_relief_entry(game_result["advanced_stats"] as Dictionary, pitcher_id, leverage)
+	return PSLeverageIndex.for_state(inning, is_bottom, home_minus_away, outs, PSLeverageIndex.occupied_bases_mask(bases))
 
 
 static func defensive_score_state(defense: Dictionary, game_result: Dictionary, half: String, current_half_runs: int) -> Dictionary:

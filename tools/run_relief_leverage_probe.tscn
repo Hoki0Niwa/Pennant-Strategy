@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/run_relief_leverage_probe.gd" id="1_run_relief_leverage_probe"]
+
+[node name="RunReliefLeverageProbe" type="Node"]
+script = ExtResource("1_run_relief_leverage_probe")

@@ -149,13 +149,16 @@ static func balance_health(report: Dictionary) -> Dictionary:
 	# 本リーグのエースは 6 人ローテで ~165IP のため IP 比 (~0.79) で換算しリーダー帯 ~4.5-7.1。
 	_add_range_check(checks, "pitcher_war_max", _dist_value(pitcher_dist, "war", "max"), 4.0, 7.5, 2.8, 9.0, "qualified pitcher WAR leader")
 	# 救援 (登板の半分以上が救援)。MLB fWAR 2021-25 実測: 救援は投球回の 41-43% で投手 WAR の 24-27%、
-	# 救援 FIP は先発より 0.08-0.22 低く、救援の IP 加重 gmLI は 1.07-1.09、救援の年間最高は 2.7-3.0。
-	# 本リーグは先発が長く救援の投球回が 3 割前後なので WAR 比率は ~18% 前後、最高は 12 球団・143 試合換算で ~2.1-2.4。
+	# 救援 FIP は先発より 0.08-0.22 低く、救援の年間最高は 2.7-3.0。本リーグは先発が長く救援の投球回が
+	# 3 割前後なので WAR 比率は ~18% 前後、最高は 12 球団・143 試合換算で ~2.1-2.4。
+	# 救援の IP 加重 gmLI (投手ごとの gmLI をその投手の投球回で加重) は起用の構造で決まるので NPB を
+	# 基準にする: NPB 2025 = 0.98 / 2019 = 0.98 (全試合の試合経過から実測)。MLB (同じ定義で 1.09) は
+	# 先発が短く救援が接戦の中盤も担うぶん高い。
 	var relief: Dictionary = (report.get("war_allocation", {}) as Dictionary).get("relief", {}) as Dictionary
 	if not relief.is_empty():
 		_add_range_check(checks, "relief_war_share", float(relief.get("war_share", 0.0)), 0.12, 0.28, 0.05, 0.38, "reliever share of pitcher WAR")
 		_add_range_check(checks, "relief_fip_minus_starter_fip", float(relief.get("fip_minus_starter_fip", 0.0)), -0.40, -0.02, -0.70, 0.15, "relievers should allow fewer FIP runs than starters")
-		_add_range_check(checks, "relief_gmli_ip_weighted", float(relief.get("gmli_ip_weighted", 0.0)), 0.95, 1.25, 0.80, 1.45, "reliever leverage at entry")
+		_add_range_check(checks, "relief_gmli_ip_weighted", float(relief.get("gmli_ip_weighted", 0.0)), 0.90, 1.07, 0.80, 1.18, "reliever leverage at entry")
 		_add_range_check(checks, "relief_war_max", float(relief.get("war_max", 0.0)), 1.6, 3.2, 1.0, 4.0, "reliever WAR leader")
 	_add_max_check(checks, "complete_game_rate", complete_game_rate, 0.12, 0.22, "complete games per start")
 	_add_max_check(checks, "shutout_complete_game_ratio", shutout_cg_ratio, 0.75, 0.90, "shutout share of complete games")

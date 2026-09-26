@@ -71,6 +71,9 @@ const RELIEF_ROLE_LONG: String = "long"
 const RELIEF_ROLE_MIDDLE: String = "middle"
 const RELIEF_ROLE_SETUP: String = "setup"
 const RELIEF_ROLE_CLOSER: String = "closer"
+# 既定の役割レーンでロングを置くブルペン人数の下限 (1 人目 / 2 人目)。
+const DEFAULT_ONE_LONG_BULLPEN_SIZE: int = 5
+const DEFAULT_TWO_LONG_BULLPEN_SIZE: int = 8
 
 
 # 二軍のローテ序列は `farm_pitcher_ids` に分けて持つ。**`last_start_day_by_pitcher`
@@ -739,9 +742,15 @@ static func relief_role_by_pitcher(saved: Dictionary, available_relievers: Array
 	return roles
 
 
+# 起用法を保存していない球団の役割レーン。ブルペン順 [7回, 8回, 9回, 4番手, 5番手, ...] の先頭 3 人を
+# セット / セット / 抑え、最後尾の default_long_reliever_count 人をロング (早期降板の穴埋めと敗戦処理)、
+# その間を全員ミドル (6-7 回・僅差・勝ちパターンの代役) にする。NPB の一軍ブルペンは勝ちパターン 3 人 +
+# 中継ぎ 3-4 人 + ロング 1-2 人で、5 番手以降を全員ロングにすると中継ぎが敗戦処理ばかりになる。
 static func default_relief_role_by_pitcher(available_relievers: Array) -> Dictionary:
 	var roles: Dictionary = {}
-	for i in range(available_relievers.size()):
+	var size: int = available_relievers.size()
+	var first_long_index: int = size - default_long_reliever_count(size)
+	for i in range(size):
 		var record: PSPlayerSeasonRecord = available_relievers[i] as PSPlayerSeasonRecord
 		if record == null:
 			continue
@@ -749,11 +758,20 @@ static func default_relief_role_by_pitcher(available_relievers: Array) -> Dictio
 			roles[record.player_id] = RELIEF_ROLE_CLOSER
 		elif i <= 1:
 			roles[record.player_id] = RELIEF_ROLE_SETUP
-		elif i == 3:
-			roles[record.player_id] = RELIEF_ROLE_MIDDLE
-		else:
+		elif i >= first_long_index:
 			roles[record.player_id] = RELIEF_ROLE_LONG
+		else:
+			roles[record.player_id] = RELIEF_ROLE_MIDDLE
 	return roles
+
+
+# 既定のロングの人数。4 人以下のブルペンはロング無し、5-7 人は 1 人、8 人以上は 2 人。
+static func default_long_reliever_count(bullpen_size: int) -> int:
+	if bullpen_size < DEFAULT_ONE_LONG_BULLPEN_SIZE:
+		return 0
+	if bullpen_size < DEFAULT_TWO_LONG_BULLPEN_SIZE:
+		return 1
+	return 2
 
 
 static func relief_role_order_ids(saved: Dictionary) -> Array:

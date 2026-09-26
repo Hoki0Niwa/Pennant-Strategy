@@ -50,6 +50,32 @@ const STARTER_MOPUP_DEFICIT: int = 6
 # 登板前に想定する「その登板で投げる球数 / workload」。expected_post_game_fatigue_gain 用。
 const EXPECTED_OUTING_PITCH_RATIO: float = 0.85
 
+# 接戦の早めの継投 (should_pull_after_plate_appearance の leverage)。EARLY_HOOK_EARLIEST_INNING 回以降、
+# 走者を背負った場面の LI がしきい値以上なら、先発は疲労係数が STARTER_EARLY_HOOK_FATIGUE 以下のとき、
+# 勝ちパターン以外の救援は RELIEVER_EARLY_HOOK_REACHED 人続けて出塁させたときに代える。
+# 目標は NPB 2025: 先発の降板の 25% がイニング途中 (その半分は接戦 6-9 回、LI ~2)、
+# 救援→救援の途中継投が全登板の 7.5% (LI 1.8、平均 2 アウト)。しきい値を下げるほど途中継投が増える。
+const EARLY_HOOK_EARLIEST_INNING: int = 6
+const STARTER_EARLY_HOOK_LEVERAGE: float = 1.5
+const STARTER_EARLY_HOOK_FATIGUE: float = 0.85
+# ローテ上位 (hook_tolerance あり) の先発の同じ判定。0.85 のままだと球数のかさむ奪三振型のエースほど
+# 早く降り、規定投球回の投手の K/9 上位が 8.6 → 8.2 前後まで下がる。
+const STARTER_EARLY_HOOK_FATIGUE_TOP_ROTATION: float = 0.70
+const RELIEVER_EARLY_HOOK_LEVERAGE: float = 2.4
+const RELIEVER_EARLY_HOOK_REACHED: int = 2
+# 回の途中から入った救援 (火消し) は、EARLY_HOOK_EARLIEST_INNING 回以降ならその回で降ろし、次の回は
+# その回の担当 (勝ちパターン等) に渡す。NPB の回途中の登板は平均 2.35 アウトで、次の回まで引っ張ると
+# 3.3 アウト前後まで伸びる。usage にこのキーが true で入っていれば回の途中からの登板。
+const USAGE_ENTERED_MID_INNING_KEY: String = "entered_mid_inning"
+# 短い救援を回の途中で球数を理由に降ろす目安 (workload 比 / 球数)。NPB の救援は 25 球前後でも
+# 回を投げ切ることが多い。下げるほど救援→救援の回途中の継投 (低い場面のもの) が増える。
+const SHORT_RELIEF_MID_INNING_PULL_RATIO: float = 1.25
+const SHORT_RELIEF_MID_INNING_PULL_PITCHES: int = 32
+# この点差以上で負けている試合では、1 回を MOPUP_SECOND_INNING_MAX_PITCHES 球以内で終えた短い救援に
+# 2 回目も投げさせる。NPB の 4 点以上ビハインドの救援登板は平均 3.8 アウト (他の場面は 2.8-3.1)。
+const MOPUP_SECOND_INNING_DEFICIT: int = 3
+const MOPUP_SECOND_INNING_MAX_PITCHES: int = 22
+
 const TROUBLE_ALERT: float = 4.0
 const MELTDOWN_THRESHOLD: float = 6.5
 const TROUBLE_MAX: float = 10.0
@@ -538,7 +564,14 @@ static func should_pull_for_next_half(
 		if outs >= 3 and inning >= 6:
 			return true
 		return ratio >= 1.0 or (pitches >= 30 and trouble >= MELTDOWN_THRESHOLD) or inning >= 9
-	return int(usage.get("outs", 0)) >= 3 or ratio >= 0.95 or pitches >= 28 or trouble >= MELTDOWN_THRESHOLD
+	if bool(usage.get(USAGE_ENTERED_MID_INNING_KEY, false)) and inning > EARLY_HOOK_EARLIEST_INNING:
+		return true
+	var outs: int = int(usage.get("outs", 0))
+	# 大差で負けている試合は、球数に余裕のある救援にもう 1 回投げさせてブルペンを温存する。
+	if defense_lead <= -MOPUP_SECOND_INNING_DEFICIT and outs >= 3 and outs < 6 \
+			and pitches <= MOPUP_SECOND_INNING_MAX_PITCHES and trouble < TROUBLE_ALERT:
+		return false
+	return outs >= 3 or ratio >= 0.95 or pitches >= 28 or trouble >= MELTDOWN_THRESHOLD
 
 
 static func should_pull_after_plate_appearance(
@@ -548,7 +581,8 @@ static func should_pull_after_plate_appearance(
 	outs: int,
 	bases: Array,
 	runs_allowed: int,
-	defense_lead: int
+	defense_lead: int,
+	leverage: float = 0.0
 ) -> bool:
 	if record == null or usage.is_empty() or outs >= 3:
 		return false
@@ -591,6 +625,13 @@ static func should_pull_after_plate_appearance(
 			return true
 		if trouble >= MELTDOWN_THRESHOLD + 1.5 and runners_on >= 2:
 			return true
+		# 接戦の終盤に走者を出したら、疲れの見え始めた先発は回の途中でも勝ちパターンへ渡す。
+		# ローテ上位 (炎上降板の猶予がある先発) はもう一段疲れるまで任せる。
+		var early_hook_fatigue: float = STARTER_EARLY_HOOK_FATIGUE_TOP_ROTATION if tolerance > 0 else STARTER_EARLY_HOOK_FATIGUE
+		if inning >= EARLY_HOOK_EARLIEST_INNING and runners_on >= 1 and leverage >= STARTER_EARLY_HOOK_LEVERAGE \
+				and not complete_game_chase \
+				and PSFatigueCalculator.factor_for_outing(record, usage, pitches) <= early_hook_fatigue:
+			return true
 		return false
 
 	if role == ROLE_LONG_RELIEF:
@@ -600,11 +641,16 @@ static func should_pull_after_plate_appearance(
 			return true
 		return trouble >= MELTDOWN_THRESHOLD and runners_on >= 1
 
-	if ratio >= 1.04 or pitches >= 30:
+	if ratio >= SHORT_RELIEF_MID_INNING_PULL_RATIO or pitches >= SHORT_RELIEF_MID_INNING_PULL_PITCHES:
 		return true
 	if trouble >= MELTDOWN_THRESHOLD:
 		return true
 	if high_leverage and consecutive_reached >= 3:
+		return true
+	# 勝ちパターン以外の救援が接戦の終盤に走者を背負ったら、打者ごとにでも次へ渡す (NPB は救援の
+	# 3 人対戦義務を採らないので、救援から救援への回の途中の継投が全登板の 7-12% ある)。
+	if inning >= EARLY_HOOK_EARLIEST_INNING and runners_on >= 1 and leverage >= RELIEVER_EARLY_HOOK_LEVERAGE \
+			and consecutive_reached >= RELIEVER_EARLY_HOOK_REACHED:
 		return true
 	return false
 

@@ -18,6 +18,23 @@ const LONG_RELIEF_PREFERRED_BEFORE_INNING: int = 6
 # 昇格した救援は、クローザー/セットの役割優先を崩さない範囲で最初の登板機会を得やすくする。
 # 上げたまま一度も使わず再抹消するロスター運用を防ぐための場面スコア加点。
 const CALLUP_AUDITION_BONUS: float = 75.0
+# 調整登板: 勝ちパターン (セット/クローザー) が TUNE_UP_REST_TEAM_GAMES 試合投げていなければ、
+# TUNE_UP_MAX_DEFICIT 点差以内のビハインドの終盤でも優先して出す。NPB の上位救援は 1-3 点ビハインドの
+# 6-8 回にも登板の 12-16% で出ている (2019/2025 の試合経過から実測)。
+# クローザーは登板間隔が空きやすいので、セットより長く空いたときだけ 9 回に限って調整登板させる
+# (NPB の筆頭救援がビハインドで投げるのは登板の 3-5%)。
+const TUNE_UP_REST_TEAM_GAMES: int = 3
+const CLOSER_TUNE_UP_REST_TEAM_GAMES: int = 4
+const TUNE_UP_MAX_DEFICIT: int = 3
+const SETUP_TUNE_UP_EARLIEST_INNING: int = 6
+const CLOSER_TUNE_UP_EARLIEST_INNING: int = 9
+const TUNE_UP_BONUS: float = 200.0
+# 7 回のリード/同点は中継ぎとセットで分け合い、一番手のセット (その日の能力最上位) は 8 回に残す。
+# NPB の 7 回 1-3 点リードは 4-6 番手の救援が 40%、2-3 番手が 33% (8 回は 2-3 番手が 52%)。
+const SEVENTH_INNING_TOP_SETUP_RESERVE: float = 70.0
+const SETUP_SEVENTH_LEAD_BONUS: float = 160.0
+const SETUP_SEVENTH_TIE_BONUS: float = 135.0
+const MIDDLE_SEVENTH_BONUS: float = 135.0
 
 # 次に打席へ入る打者の打席左右を守備側の setup へ書き写す。継投の相性判断はここだけを見るので、
 # 継投を検討する直前に GameLoop が呼ぶ。攻撃側の打順と batting_index から数えるため、
@@ -127,6 +144,7 @@ static func force_pitcher_change_for_injury(
 	setup["pitcher"] = reliever
 	var role: String = _outing_role_for_reliever(setup, reliever, prefer_long)
 	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
+	pitcher_usage_for(setup, reliever)[PSPitcherUsageModel.USAGE_ENTERED_MID_INNING_KEY] = true
 	return true
 
 
@@ -147,7 +165,8 @@ static func substitute_reliever_mid_inning(
 	var usage: Dictionary = pitcher_usage_for(setup, current, PSPitcherUsageModel.ROLE_STARTER if current == starter else "")
 	var runs_allowed: int = int(setup.get("game_runs_allowed", 0)) + current_half_runs
 	var defense_lead: int = score_margin_for_setup(setup, game_result) - current_half_runs
-	if not PSPitcherUsageModel.should_pull_after_plate_appearance(current, usage, inning, outs, bases, runs_allowed, defense_lead):
+	var leverage: float = _leverage_for_early_hook(setup, current, starter, inning, outs, bases, defense_lead, game_result)
+	if not PSPitcherUsageModel.should_pull_after_plate_appearance(current, usage, inning, outs, bases, runs_allowed, defense_lead, leverage):
 		return false
 
 	var prefer_long: bool = current == starter and should_prefer_long_relief_for_starter_exit(inning)
@@ -159,7 +178,31 @@ static func substitute_reliever_mid_inning(
 	setup["pitcher"] = reliever
 	var role: String = _outing_role_for_reliever(setup, reliever, prefer_long)
 	mark_reliever_appeared(setup, reliever, int(setup.get("team_games_played_before", 0)), role)
+	pitcher_usage_for(setup, reliever)[PSPitcherUsageModel.USAGE_ENTERED_MID_INNING_KEY] = true
 	return true
+
+
+# 早めの継投の判断に使う、今の場面の Leverage Index。勝ちパターン (セット/クローザー) は自分の回を
+# 投げ切らせるので 0 を返し、場面による交代の対象にしない。
+static func _leverage_for_early_hook(
+	setup: Dictionary,
+	current: PSPlayerSeasonRecord,
+	starter: PSPlayerSeasonRecord,
+	inning: int,
+	outs: int,
+	bases: Array,
+	defense_lead: int,
+	game_result: Dictionary
+) -> float:
+	if game_result.is_empty():
+		return 0.0
+	if current != starter:
+		var lane: String = relief_lane_for_pitcher(setup, current)
+		if lane == PSRotationPlanner.RELIEF_ROLE_SETUP or lane == PSRotationPlanner.RELIEF_ROLE_CLOSER:
+			return 0.0
+	var defense_is_visitor: bool = _is_visitor_setup(setup, game_result)
+	var home_minus_away: int = -defense_lead if defense_is_visitor else defense_lead
+	return PSLeverageIndex.for_state(inning, defense_is_visitor, home_minus_away, outs, PSLeverageIndex.occupied_bases_mask(bases))
 
 
 # 救援登板時の公式出場記録と連投カウンタを更新する。
@@ -306,19 +349,27 @@ static func _is_visitor_setup(setup: Dictionary, game_result: Dictionary) -> boo
 	return int(setup.get("team_id", 0)) == int(game_result.get("away_team_id", 0))
 
 
-# 役割別のハードな登板可否 (ユーザー指定):
+# 役割別のハードな登板可否:
 # - セット: 7回以降かつビハインドでない。5点差以上のリードでは温存 (ミドルへ)。
 # - クローザー: 9回以降かつビハインドでない。同点はホームなら9回から、ビジターは12回(最終回)まで温存。
 #   5点差以上では温存。4点差は前日(直前のチーム試合)に登板していなければ可、連投ならミドルへ回す。
+# - セット/クローザーの調整登板: 登板間隔が空いていれば (セット TUNE_UP_REST_TEAM_GAMES 試合 /
+#   クローザー CLOSER_TUNE_UP_REST_TEAM_GAMES 試合)、1-3 点ビハインドの終盤 (セット 6 回以降 /
+#   クローザー 9 回以降) にも出られる。
 # - ミドル/ロング/未設定: 常時可。
 static func _role_eligible_in_spot(setup: Dictionary, reliever: PSPlayerSeasonRecord, inning: int, score_margin: int, is_visitor: bool, team_games_played_before: int) -> bool:
-	match _relief_role_for_pitcher(setup, reliever):
+	var lane: String = relief_lane_for_pitcher(setup, reliever)
+	match lane:
 		PSRotationPlanner.RELIEF_ROLE_SETUP:
 			if score_margin >= BLOWOUT_LEAD_MARGIN:
 				return false
-			return inning >= SETUP_EARLIEST_INNING and score_margin >= 0
+			if score_margin < 0:
+				return _is_tune_up_candidate(setup, reliever, lane, inning, score_margin, team_games_played_before)
+			return inning >= SETUP_EARLIEST_INNING
 		PSRotationPlanner.RELIEF_ROLE_CLOSER:
-			if score_margin < 0 or inning < CLOSER_EARLIEST_INNING:
+			if score_margin < 0:
+				return _is_tune_up_candidate(setup, reliever, lane, inning, score_margin, team_games_played_before)
+			if inning < CLOSER_EARLIEST_INNING:
 				return false
 			if score_margin >= BLOWOUT_LEAD_MARGIN:
 				return false
@@ -336,6 +387,38 @@ static func _pitched_previous_game(
 	reliever: PSPlayerSeasonRecord, team_games_played_before: int, farm: bool = false
 ) -> bool:
 	return PSPitcherUsageModel.next_consecutive_appearance_count(reliever, team_games_played_before, farm) >= 2
+
+
+# 直近 rest_team_games 試合 (チーム試合) 続けて投げていない。勝ちパターンの投手は間隔が空くと
+# 負けている場面でも調整のために投げさせる。
+static func is_due_for_tune_up(
+	reliever: PSPlayerSeasonRecord, team_games_played_before: int, rest_team_games: int, farm: bool = false
+) -> bool:
+	if reliever == null:
+		return false
+	var last_game: int = reliever.farm_last_pitched_team_game if farm else reliever.last_pitched_team_game
+	if last_game <= 0:
+		return true
+	return team_games_played_before - last_game >= rest_team_games
+
+
+# 勝ちパターンの投手が、この場面で調整登板の対象か。
+static func _is_tune_up_candidate(
+	setup: Dictionary, reliever: PSPlayerSeasonRecord, role: String, inning: int, score_margin: int, team_games_played_before: int
+) -> bool:
+	var farm: bool = _is_farm_setup(setup)
+	match role:
+		PSRotationPlanner.RELIEF_ROLE_SETUP:
+			return _is_tune_up_spot(inning, score_margin, SETUP_TUNE_UP_EARLIEST_INNING) \
+				and is_due_for_tune_up(reliever, team_games_played_before, TUNE_UP_REST_TEAM_GAMES, farm)
+		PSRotationPlanner.RELIEF_ROLE_CLOSER:
+			return _is_tune_up_spot(inning, score_margin, CLOSER_TUNE_UP_EARLIEST_INNING) \
+				and is_due_for_tune_up(reliever, team_games_played_before, CLOSER_TUNE_UP_REST_TEAM_GAMES, farm)
+	return false
+
+
+static func _is_tune_up_spot(inning: int, score_margin: int, earliest_inning: int) -> bool:
+	return score_margin < 0 and score_margin >= -TUNE_UP_MAX_DEFICIT and inning >= earliest_inning
 
 
 # ビジターが同点で延長に入ったときの逆算継投。クローザーは12回まで温存されここには来ないので、
@@ -399,13 +482,14 @@ static func _reliever_ability_score(
 static func _find_role_in(setup: Dictionary, candidates: Array, role: String) -> PSPlayerSeasonRecord:
 	for reliever_row in candidates:
 		var reliever: PSPlayerSeasonRecord = reliever_row as PSPlayerSeasonRecord
-		if reliever != null and _relief_role_for_pitcher(setup, reliever) == role:
+		if reliever != null and relief_lane_for_pitcher(setup, reliever) == role:
 			return reliever
 	return null
 
 
 # 選抜スコアのうち場面に依らない部分は、その試合の setup に持たせて使い回す (登板・故障で作り直す)。
 const RELIEVER_SCORE_PARTS_KEY: String = "_reliever_score_parts"
+const TOP_SETUP_ID_KEY: String = "_top_setup_id"
 
 
 static func _reliever_score_parts_cache(setup: Dictionary) -> Dictionary:
@@ -441,12 +525,36 @@ static func reliever_selection_score_for_setup(
 	# 次に回ってくる打者との左右の相性。役割補正 (100-300点) より 1 桁小さいので、抑えや
 	# セットの担当場面を奪うことはなく、同じ役割帯の中の並びだけを動かす。
 	score += matchup_bonus_for_reliever(setup, reliever)
+	if not prefer_long and score_margin < 0 and _is_tune_up_candidate(setup, reliever, role, inning, score_margin, team_games_played_before):
+		score += TUNE_UP_BONUS
+	if role == PSRotationPlanner.RELIEF_ROLE_SETUP and inning == SETUP_EARLIEST_INNING and score_margin >= 0 \
+			and reliever.player_id == _top_setup_id(setup):
+		score -= SEVENTH_INNING_TOP_SETUP_RESERVE
 	return score + relief_role_context_bonus(role, prefer_long, inning, close_game, score_margin)
 
 
-# 保存された役割と試合状況の噛み合わせ (リード時などの優先度付け)。セットは7-8回の4点以内リード/同点、
-# クローザーは9回以降の4点以内リード/同点、ロングは早期降板/敗戦処理、ミドルはそれ以外を担当する。
-# 回・ビハインドのハードな登板可否 (セット7回以降/クローザー9回以降/ビハインド除外/ビジター同点温存) は
+# その日のセットのうち能力 (疲労を含まない) が最上位の投手。8 回を任せる。試合中は変わらないので setup に持つ。
+static func _top_setup_id(setup: Dictionary) -> int:
+	if setup.has(TOP_SETUP_ID_KEY):
+		return int(setup[TOP_SETUP_ID_KEY])
+	var best_id: int = 0
+	var best_score: int = -2147483648
+	for reliever_value in setup.get("relievers", []) as Array:
+		var reliever: PSPlayerSeasonRecord = reliever_value as PSPlayerSeasonRecord
+		if reliever == null or relief_lane_for_pitcher(setup, reliever) != PSRotationPlanner.RELIEF_ROLE_SETUP:
+			continue
+		var value: int = PSPlayerValueEvaluator.pitching_score_without_fatigue(reliever)
+		if value > best_score or (value == best_score and reliever.player_id < best_id):
+			best_score = value
+			best_id = reliever.player_id
+	setup[TOP_SETUP_ID_KEY] = best_id
+	return best_id
+
+
+# 保存された役割と試合状況の噛み合わせ (リード時などの優先度付け)。セットは8回の4点以内リード/同点が本職で
+# 7回はミドルと分け合う、クローザーは9回以降の4点以内リード/同点、ロングは早期降板/敗戦処理、
+# ミドルはそれ以外を担当する。
+# 回・ビハインドのハードな登板可否 (セット7回以降/クローザー9回以降/調整登板以外のビハインド除外/ビジター同点温存) は
 # pick_reliever_for_context の _role_eligible_in_spot 側が担うので、ここは絞り込み後の優先度のみ扱う。
 # close_game は基礎スコア用に使われ、この補正側では参照しない (符号付き score_margin で判定するため)。
 static func relief_role_context_bonus(role: String, prefer_long: bool, inning: int, _close_game: bool, score_margin: int) -> float:
@@ -473,9 +581,9 @@ static func relief_role_context_bonus(role: String, prefer_long: bool, inning: i
 			if prefer_long or mop_up_spot:
 				return -130.0
 			if setup_spot:
-				return 215.0
+				return 215.0 if inning > SETUP_EARLIEST_INNING else SETUP_SEVENTH_LEAD_BONUS
 			if setup_tie_spot:
-				return 165.0
+				return 165.0 if inning > SETUP_EARLIEST_INNING else SETUP_SEVENTH_TIE_BONUS
 			if closer_save_spot:
 				return 15.0
 			if closer_four_run_spot:
@@ -488,6 +596,8 @@ static func relief_role_context_bonus(role: String, prefer_long: bool, inning: i
 		PSRotationPlanner.RELIEF_ROLE_MIDDLE:
 			if prefer_long:
 				return -40.0
+			if (setup_spot or setup_tie_spot) and inning <= SETUP_EARLIEST_INNING:
+				return MIDDLE_SEVENTH_BONUS
 			if setup_spot or setup_tie_spot or closer_spot or closer_tie_spot:
 				return -45.0
 			if mop_up_spot:
@@ -515,7 +625,7 @@ static func _can_relax_availability_for_late_role(
 	game_day: int,
 	team_games_played_before: int
 ) -> bool:
-	var role: String = _relief_role_for_pitcher(setup, reliever)
+	var role: String = relief_lane_for_pitcher(setup, reliever)
 	if role == PSRotationPlanner.RELIEF_ROLE_CLOSER:
 		# 4点差は連投なら回避する方針なので relax (連投上限の緩和) 対象から外す。本物のセーブ場面
 		# (1〜3点差) と同点 (ホーム9回/ビジター12回) のみ 3連投目まで候補に残す。
@@ -535,7 +645,8 @@ static func _is_farm_setup(setup: Dictionary) -> bool:
 	return int(setup.get("level", PSTeamSetupBuilder.LEVEL_FIRST)) == PSTeamSetupBuilder.LEVEL_FARM
 
 
-static func _relief_role_for_pitcher(setup: Dictionary, reliever: PSPlayerSeasonRecord) -> String:
+# その日の役割レーン (closer / setup / middle / long)。割り当てが無ければ空文字。
+static func relief_lane_for_pitcher(setup: Dictionary, reliever: PSPlayerSeasonRecord) -> String:
 	if reliever == null:
 		return ""
 	var role_by_pitcher: Dictionary = setup.get("relief_role_by_pitcher", {}) as Dictionary
