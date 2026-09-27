@@ -451,7 +451,7 @@ static func _eligible_details(players: Array, year: int, performance: Dictionary
 			continue
 		details.append({
 			"value": OffseasonService.player_value_score(player), "age": player.age, "years": player.years, "route": route,
-			"pitcher": player.is_pitcher(), "role": player.role,
+			"pitcher": player.is_pitcher(), "role": player.role, "position": player.position,
 			"rank": rank, "war": snappedf(float(perf.get("war", 0.0)), 0.01),
 		})
 	return details

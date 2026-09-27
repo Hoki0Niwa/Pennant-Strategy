@@ -947,6 +947,7 @@ func _overseas_departed_details(overseas_result: Dictionary, war_table: Array, w
 			"route": str(entry.get("route", "")),
 			"value": int(entry.get("overall", 0)),
 			"group": "P" if pitcher else "B",
+			"position": int(entry.get("position", 0)),
 			"rank": int(ranks.get(player_id, 0)),
 			"group_size": ranks.size(),
 			"war": _round_float(float(war_row.get("war", 0.0)), 1),
@@ -1024,7 +1025,7 @@ func _counting_line(batting: PSBatterStats, pitching: PSPitcherStats, pitcher: b
 		return {
 			"pitcher": true, "g": ps.games, "gs": ps.starts, "bf": ps.batters_faced, "outs": ps.outs_pitched,
 			"k": ps.strikeouts, "bb": ps.walks, "hbp": ps.hit_batters, "hr": ps.home_runs_allowed, "h": ps.hits_allowed,
-			"er": ps.earned_runs,
+			"er": ps.earned_runs, "sv": ps.saves, "hld": ps.holds,
 		}
 	var bs: PSBatterStats = batting if batting != null else PSBatterStats.new()
 	return {

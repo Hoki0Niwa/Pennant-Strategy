@@ -22,7 +22,8 @@ class_name PSMlbSeasonSimulator
 # 出場機会 (試合 / 先発 / 登板) を MLB での見込み (率から出した wRC+ / FIP−) から決め、打席・対戦打者ごとに
 # 率で結果を引いて数えるので季ごとにばらつく。得点・打点・自責点は結果の内訳から一次式で出す (NPB の年度成績に
 # 当てはめた係数に、MLB の得点水準へ合わせる倍率 MLB_RUNS_SCALE / MLB_EARNED_RUNS_SCALE を掛ける)。
-# 勝敗はピタゴラス勝率、セーブ・ホールドは登板のうちリード場面の割合で近似する。
+# 勝敗はピタゴラス勝率、セーブ・ホールドは登板のうちリード場面の割合で近似する。救援のうち抑えを任されるのは
+# MLB での見込み (FIP−) が抑えの水準にある投手と、前の季に抑えだった投手 (is_mlb_closer)。
 #
 # ## 指標
 # 野手は wOBA / wRC+ / BsR / 守備 / 守備位置補正 / 代替水準から WAR、投手は FIP から WAR を、
@@ -75,6 +76,18 @@ const INNINGS_PER_START_PER_Z: float = 0.5
 const MIN_INNINGS_PER_START: float = 4.3
 const MAX_INNINGS_PER_START: float = 7.2
 const RELIEF_OUTS_PER_APPEARANCE: int = 3
+
+# --- 救援の役割 (is_mlb_closer) ---
+# MLB の抑えは各球団の救援の最上位で、FanGraphs 2021-25 の抑え (20 セーブ以上) の FIP− は平均 77、
+# セットアッパー (15 ホールド以上) は 83。見込みの FIP− が CLOSER_FIP_MINUS 以下なら抑えを任される。
+# 前の季に MLB で抑えだった投手 (INCUMBENT_CLOSER_MLB_SAVES セーブ以上) と、今の滞在の 1 季目で渡米直前の
+# NPB の季に抑えだった投手 (INCUMBENT_CLOSER_NPB_SAVES セーブ以上) は実績で任されるので、見込みが
+# INCUMBENT_CLOSER_FIP_MINUS までなら抑えのまま。NPB の救援の見込みは上位でも 82〜100 前後なので、
+# 実績の無い投手が抑えになるのは NPB で抜けていた投手に限られる。
+const CLOSER_FIP_MINUS: float = 85.0
+const INCUMBENT_CLOSER_FIP_MINUS: float = 95.0
+const INCUMBENT_CLOSER_MLB_SAVES: int = 10
+const INCUMBENT_CLOSER_NPB_SAVES: int = 20
 
 # --- 率の近似式 (ロジット = intercept + Σ 係数 × z) ---
 # 打者: k / bb / hr は 1 打席あたり、babip はインプレー打球あたり、double_share / triple_share は
@@ -155,7 +168,9 @@ const POSITIONAL_RUNS: Dictionary = {2: 12.5, 3: -12.5, 4: 2.5, 5: 2.5, 6: 7.5, 
 # 投手の代替水準 (9 回あたりの勝利)。先発と救援を先発比率で按分する。
 const STARTER_REPLACEMENT_WINS_PER_9: float = 0.12
 const RELIEVER_REPLACEMENT_WINS_PER_9: float = 0.03
-# 救援の起用場面の重さ (gmLI)。WAR は (1 + gmLI) / 2 倍になる。
+# 救援の起用場面の重さ (gmLI)。WAR は (1 + gmLI) / 2 倍になる。抑え (is_mlb_closer) は CLOSER_LEVERAGE、
+# それ以外の救援は RELIEVER_LEVERAGE。MLB の実測 (FanGraphs 2021-25) は抑え 1.74 / セットアッパー 1.40 /
+# 中継ぎ 1.0 前後で、渡米する救援は NPB の上位なのでセットアッパー寄りに置いてある。
 const CLOSER_LEVERAGE: float = 1.8
 const RELIEVER_LEVERAGE: float = 1.2
 
@@ -230,7 +245,7 @@ static func simulate_season(players: Array, year: int, league: Dictionary) -> Di
 		if player == null:
 			continue
 		Rng.begin_game_stream(-1, hash([Rng.current_seed, year, "mlb", player.id]))
-		results[player.id] = simulate_pitcher(player, league) if player.is_pitcher() else simulate_batter(player, year, league)
+		results[player.id] = simulate_pitcher(player, year, league) if player.is_pitcher() else simulate_batter(player, year, league)
 		Rng.end_game_stream()
 	return results
 
@@ -353,12 +368,14 @@ static func _batter_metrics(player: PSPlayer, year: int, stats: PSBatterStats, s
 
 # --- 投手 ---
 
-static func simulate_pitcher(player: PSPlayer, league: Dictionary) -> Dictionary:
+static func simulate_pitcher(player: PSPlayer, year: int, league: Dictionary) -> Dictionary:
 	var z: Dictionary = player.z_abilities
 	var rates: Dictionary = pitching_rates(z, league)
-	var share: float = play_share(100.0 - expected_fip_minus(rates, league), PLAY_SHARE_PER_FIP_MINUS)
+	var fip_minus: float = expected_fip_minus(rates, league)
+	var share: float = play_share(100.0 - fip_minus, PLAY_SHARE_PER_FIP_MINUS)
 	var stats: PSPitcherStats = PSPitcherStats.new()
 	var starter: bool = player.role == "starter"
+	var closer: bool = not starter and is_mlb_closer(player, year, fip_minus)
 	var innings_per_start: float = 0.0
 	if starter:
 		stats.starts = _binomial(MLB_STARTS, share)
@@ -407,8 +424,33 @@ static func simulate_pitcher(player: PSPlayer, league: Dictionary) -> Dictionary
 	if starter:
 		_assign_starter_decisions(stats, innings_per_start, era, league)
 	else:
-		_assign_relief_decisions(stats, player.role == "closer", era, league)
-	return {"pitching": stats, "metrics": _pitcher_metrics(stats, player.role, league)}
+		_assign_relief_decisions(stats, closer, era, league)
+	return {"pitching": stats, "metrics": _pitcher_metrics(stats, starter, closer, league)}
+
+
+# 救援がこの季に MLB で抑えを任されるか (冒頭の「救援の役割」)。expected_fip_minus は MLB での見込み。
+static func is_mlb_closer(player: PSPlayer, year: int, expected_fip_minus: float) -> bool:
+	if player == null or player.role == "starter":
+		return false
+	if expected_fip_minus <= CLOSER_FIP_MINUS:
+		return true
+	return expected_fip_minus <= INCUMBENT_CLOSER_FIP_MINUS and _was_closer_last_season(player, year)
+
+
+# 前の季に抑えだったか。前の季を MLB で過ごしていればその季のセーブ、今の滞在の 1 季目なら渡米直前の
+# NPB の季 (overseas_year 以前で最後の年度レコード) のセーブで見る。
+static func _was_closer_last_season(player: PSPlayer, year: int) -> bool:
+	for season_value in OverseasService.mlb_seasons(player):
+		var season: Dictionary = season_value as Dictionary
+		if int(season["year"]) == year - 1:
+			return (season["pitching"] as PSPitcherStats).saves >= INCUMBENT_CLOSER_MLB_SAVES
+	var left_year: int = int(player.source_data.get(PSPlayer.SOURCE_KEY_OVERSEAS_YEAR, 0))
+	var last_npb: PSPlayerSeasonRecord = null
+	for record_value in RecordStore.get_player_records(player.id):
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record != null and record.year <= left_year and record.pitcher_stats != null:
+			last_npb = record
+	return last_npb != null and last_npb.pitcher_stats.saves >= INCUMBENT_CLOSER_NPB_SAVES
 
 
 static func _assign_starter_decisions(stats: PSPitcherStats, innings_per_start: float, era: float, league: Dictionary) -> void:
@@ -442,7 +484,7 @@ static func _assign_relief_decisions(stats: PSPitcherStats, closer: bool, era: f
 	stats.wins = _binomial(stats.relief_appearances, RELIEF_WIN_RATE)
 
 
-static func _pitcher_metrics(stats: PSPitcherStats, role: String, league: Dictionary) -> Dictionary:
+static func _pitcher_metrics(stats: PSPitcherStats, starter: bool, closer: bool, league: Dictionary) -> Dictionary:
 	if stats.outs_pitched <= 0:
 		return {}
 	var innings: float = float(stats.outs_pitched) / 3.0
@@ -455,9 +497,9 @@ static func _pitcher_metrics(stats: PSPitcherStats, role: String, league: Dictio
 	var starter_share: float = float(stats.starts) / float(maxi(1, stats.games))
 	var replacement: float = RELIEVER_REPLACEMENT_WINS_PER_9 * (1.0 - starter_share) + STARTER_REPLACEMENT_WINS_PER_9 * starter_share
 	var leverage: float = 1.0
-	if role == "closer":
+	if closer:
 		leverage = (1.0 + CLOSER_LEVERAGE) / 2.0
-	elif role != "starter":
+	elif not starter:
 		leverage = (1.0 + RELIEVER_LEVERAGE) / 2.0
 	var war: float = ((lg_ra9 - fip_r9) / dynamic_rpw + replacement) * innings / 9.0 * leverage
 	return {"fip": _round(fip, 2), "war": _round(war, 1)}

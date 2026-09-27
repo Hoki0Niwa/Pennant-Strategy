@@ -4573,6 +4573,86 @@ func test_mlb_season_uses_its_own_random_stream() -> void:
 	assert_int(first_stats.outs_pitched).is_greater(0)
 
 
+# 救援のうち MLB で抑えを任されるのは、見込みの FIP− が抑えの水準にある投手と、前の季に抑えだった投手
+# (前の季が MLB ならその季のセーブ、今の滞在の 1 季目なら渡米直前の NPB の季のセーブ)。
+# 抑えにはセーブ、それ以外の救援にはホールドが付き、WAR の起用場面の重さは抑えの方が大きい。
+func test_mlb_closer_is_picked_by_projection_and_incumbency() -> void:
+	var league: Dictionary = PSMlbSeasonSimulator.build_league()
+	var year: int = 2099
+	var elite_z: Dictionary = _reliever_z_for_mlb_fip_minus(league, 78.0)
+	var solid_z: Dictionary = _reliever_z_for_mlb_fip_minus(league, 90.0)
+	var solid_fip_minus: float = PSMlbSeasonSimulator.expected_fip_minus(PSMlbSeasonSimulator.pitching_rates(solid_z, league), league)
+	assert_float(solid_fip_minus).is_between(PSMlbSeasonSimulator.CLOSER_FIP_MINUS, PSMlbSeasonSimulator.INCUMBENT_CLOSER_FIP_MINUS)
+	var elite: PSPlayer = _mlb_reliever(9741, year - 1, elite_z)
+	var solid: PSPlayer = _mlb_reliever(9742, year - 1, solid_z)
+	assert_bool(PSMlbSeasonSimulator.is_mlb_closer(elite, year, 78.0)).is_true()
+	assert_bool(PSMlbSeasonSimulator.is_mlb_closer(solid, year, solid_fip_minus)).is_false()
+
+	# 前の季に MLB で抑えだった投手は、同じ見込みでも抑えのまま。中継ぎだった投手は抑えにならない。
+	var incumbent: PSPlayer = _mlb_reliever(9743, year - 3, solid_z)
+	OverseasService.append_mlb_season(incumbent, year - 1, null, _relief_line(30, 0))
+	assert_bool(PSMlbSeasonSimulator.is_mlb_closer(incumbent, year, solid_fip_minus)).is_true()
+	var setup_man: PSPlayer = _mlb_reliever(9744, year - 3, solid_z)
+	OverseasService.append_mlb_season(setup_man, year - 1, null, _relief_line(2, 25))
+	assert_bool(PSMlbSeasonSimulator.is_mlb_closer(setup_man, year, solid_fip_minus)).is_false()
+	# 見込みが並 (INCUMBENT_CLOSER_FIP_MINUS より上) なら、前の季が抑えでも任されない。
+	assert_bool(PSMlbSeasonSimulator.is_mlb_closer(incumbent, year, PSMlbSeasonSimulator.INCUMBENT_CLOSER_FIP_MINUS + 5.0)).is_false()
+
+	# 今の滞在の 1 季目: 渡米直前の NPB の季に抑えだった投手は任される。
+	var npb_closer: PSPlayer = _mlb_reliever(9745, year - 1, solid_z)
+	var npb_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(npb_closer, year - 1, 1)
+	npb_record.pitcher_stats = _relief_line(32, 3)
+	var record_key: String = "mlbcloser_%d" % npb_closer.id
+	RecordStore.set_player_record(npb_record, record_key)
+	var npb_closer_picked: bool = PSMlbSeasonSimulator.is_mlb_closer(npb_closer, year, solid_fip_minus)
+	RecordStore.erase_player_record_by_key(record_key)
+	assert_bool(npb_closer_picked).is_true()
+
+	var results: Dictionary = PSMlbSeasonSimulator.simulate_season([elite, solid], year, league)
+	var elite_stats: PSPitcherStats = (results[elite.id] as Dictionary)["pitching"] as PSPitcherStats
+	var solid_stats: PSPitcherStats = (results[solid.id] as Dictionary)["pitching"] as PSPitcherStats
+	assert_int(elite_stats.saves).is_greater(PSMlbSeasonSimulator.INCUMBENT_CLOSER_MLB_SAVES)
+	assert_int(elite_stats.holds).is_equal(0)
+	assert_int(solid_stats.holds).is_greater(0)
+	assert_int(solid_stats.saves).is_equal(0)
+	var as_closer: float = float(PSMlbSeasonSimulator._pitcher_metrics(elite_stats, false, true, league)["war"])
+	var as_setup: float = float(PSMlbSeasonSimulator._pitcher_metrics(elite_stats, false, false, league)["war"])
+	assert_float(as_setup).is_greater(0.0)
+	assert_float(as_closer).is_greater(as_setup)
+
+
+# 見込みの MLB の FIP− が target 以下になるまで、NPB 一軍平均の投手から質キーを上げた z。
+func _reliever_z_for_mlb_fip_minus(league: Dictionary, target: float) -> Dictionary:
+	var z: Dictionary = PSMlbSeasonSimulator.PITCHER_LEAGUE_Z.duplicate()
+	for step in range(0, 400):
+		var candidate: Dictionary = PSMlbSeasonSimulator.PITCHER_LEAGUE_Z.duplicate()
+		for key in PSReferencePopulation.PITCHER_LEVEL_KEYS:
+			candidate[key] = float(candidate.get(key, 0.0)) + float(step) * 0.01
+		z = candidate
+		if PSMlbSeasonSimulator.expected_fip_minus(PSMlbSeasonSimulator.pitching_rates(z, league), league) <= target:
+			break
+	return z
+
+
+func _mlb_reliever(player_id: int, overseas_year: int, z: Dictionary) -> PSPlayer:
+	return _player({
+		"id": player_id, "team_id": 0, "age": 29, "years": 9,
+		"salary": 20000, "position": 1, "role": "reliever",
+		"z_abilities": z,
+		"source_data": {"retired": true, PSPlayer.SOURCE_KEY_OVERSEAS_YEAR: overseas_year, OverseasService.SOURCE_KEY_OVERSEAS_TEAM: 1},
+	})
+
+
+func _relief_line(saves: int, holds: int) -> PSPitcherStats:
+	var stats: PSPitcherStats = PSPitcherStats.new()
+	stats.games = 60
+	stats.relief_appearances = 60
+	stats.outs_pitched = 180
+	stats.saves = saves
+	stats.holds = holds
+	return stats
+
+
 # MLB の指標は MLB のリーグ平均に対して測る。リーグ平均の率ちょうどの選手が wRC+ 100 / FIP− 100 で、
 # 季を回した FIP は率から見込んだ値のまわりに出る。能力が高い打者ほど wRC+ と WAR と打席が多い。
 func test_mlb_metrics_are_measured_against_the_mlb_league() -> void:
