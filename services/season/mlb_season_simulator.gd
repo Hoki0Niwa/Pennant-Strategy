@@ -165,6 +165,19 @@ const REPLACEMENT_RUNS_PER_PA: float = 20.0 / 600.0
 const FIELDING_RUNS_PER_10_POINTS: float = 4.0
 # 守備位置補正 (162 試合あたりの得点、守備位置番号 2〜9)。
 const POSITIONAL_RUNS: Dictionary = {2: 12.5, 3: -12.5, 4: 2.5, 5: 2.5, 6: 7.5, 7: -7.5, 8: 2.5, 9: -7.5}
+
+# --- MLB で守る位置 (mlb_position) ---
+# MLB は日本人の二遊間の守備を簡単には信用しない (西岡・中島・松井稼頭央が二遊間で苦しんだ例が続き、
+# 2013 年以降に MLB へ移った日本人野手は外野と一塁・三塁・DH だけ)。MLB_TRUSTED_DEFENSE の位置は、守備の
+# 表示能力 (PSPlayerVisibleRatings.fielder_defense) がその値に届く選手だけが守る。届かない選手は打力で使われ、
+# サブポジション (適性が CampService.SECONDARY_READY_APTITUDE_BY_POSITION 以上で、その位置の基準も満たす) のうち
+# 守備位置補正の大きい位置 (同点は適性の余裕が大きい方) で守り、守れる位置が無ければ MLB_FALLBACK_POSITION。
+# 基準の無い位置 (捕手・三塁・中堅・両翼・一塁) の選手は NPB の位置のまま。捕手はサブポジションを持たないので捕手で使う。
+# 基準は初期世界の各位置の評価上位 24 人 (主力) の守備: 遊撃は中央値 82・上位 4 分の 1 が 86、二塁は中央値 78・
+# 上位 4 分の 1 が 86。遊撃は上位 4 分の 1 近く、二塁は中央値の少し上に届けばその位置で使われ、NPB の遊撃の主力の
+# 多くは二塁に回る (松井稼頭央型)。上げると二遊間に残る選手が減る。
+const MLB_TRUSTED_DEFENSE: Dictionary = {6: 85, 4: 80}
+const MLB_FALLBACK_POSITION: int = 3
 # 投手の代替水準 (9 回あたりの勝利)。先発と救援を先発比率で按分する。
 const STARTER_REPLACEMENT_WINS_PER_9: float = 0.12
 const RELIEVER_REPLACEMENT_WINS_PER_9: float = 0.03
@@ -236,7 +249,7 @@ static func build_league(records: Array = []) -> Dictionary:
 
 # 海外にいる選手全員の 1 シーズン。
 # {player_id: {"batting": PSBatterStats, "pitching": PSPitcherStats, "metrics": Dictionary}}。
-# 投手は pitching だけ、野手は batting だけを持つ。metrics は野手 {woba, wrc_plus, bsr, fielding, war}、
+# 投手は pitching だけ、野手は batting だけを持つ。metrics は野手 {woba, wrc_plus, bsr, fielding, war, pos (MLB で守った位置)}、
 # 投手 {fip, war}。
 static func simulate_season(players: Array, year: int, league: Dictionary) -> Dictionary:
 	var results: Dictionary = {}
@@ -352,9 +365,12 @@ static func _batter_metrics(player: PSPlayer, year: int, stats: PSBatterStats, s
 	var baserunning: float = float(stats.stolen_bases) * RUN_STOLEN_BASE + float(caught) * RUN_CAUGHT_STEALING \
 		- float(league["lg_steal_runs_per_opportunity"]) * float(opportunities)
 	var season_share: float = float(stats.games) / float(MLB_GAMES)
-	var defense: float = float(PSPlayerVisibleRatings.fielder_defense(PSPlayerSeasonRecord.from_player(player, year, 0)))
+	var position: int = mlb_position(player)
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, year, 0)
+	record.position = position
+	var defense: float = float(PSPlayerVisibleRatings.fielder_defense(record))
 	var fielding: float = (defense - float(league["defense"])) / 10.0 * FIELDING_RUNS_PER_10_POINTS * season_share
-	var positional: float = float(POSITIONAL_RUNS.get(player.position, 0.0)) * season_share
+	var positional: float = float(POSITIONAL_RUNS.get(position, 0.0)) * season_share
 	var replacement: float = REPLACEMENT_RUNS_PER_PA * float(pa)
 	var war: float = (batting_runs + baserunning + fielding + positional + replacement) / float(league["runs_per_win"])
 	return {
@@ -363,7 +379,45 @@ static func _batter_metrics(player: PSPlayer, year: int, stats: PSBatterStats, s
 		"bsr": _round(baserunning, 1),
 		"fielding": _round(fielding, 1),
 		"war": _round(war, 1),
+		"pos": position,
 	}
+
+
+# MLB で守る位置 (冒頭の「MLB で守る位置」)。NPB の位置の基準を満たせばそのまま。
+static func mlb_position(player: PSPlayer) -> int:
+	if player == null:
+		return 0
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(player, 0, 0)
+	if is_trusted_at(record, player.position):
+		return player.position
+	var best: int = MLB_FALLBACK_POSITION
+	var best_runs: float = -INF
+	var best_margin: int = -1
+	for position_value in CampService.SECONDARY_READY_APTITUDE_BY_POSITION.keys():
+		var position: int = int(position_value)
+		if position == player.position or not is_trusted_at(record, position):
+			continue
+		var key: String = str(PSPlayerValueEvaluator.POSITION_APTITUDE_KEYS.get(position, ""))
+		var margin: int = int(player.position_aptitudes.get(key, 0)) - int(CampService.SECONDARY_READY_APTITUDE_BY_POSITION[position_value])
+		if margin < 0:
+			continue
+		var runs: float = float(POSITIONAL_RUNS.get(position, 0.0))
+		if runs > best_runs or (runs == best_runs and margin > best_margin):
+			best = position
+			best_runs = runs
+			best_margin = margin
+	return best
+
+
+# MLB がその位置を任せるか (MLB_TRUSTED_DEFENSE の基準。基準の無い位置は誰でも)。
+static func is_trusted_at(record: PSPlayerSeasonRecord, position: int) -> bool:
+	if not MLB_TRUSTED_DEFENSE.has(position):
+		return true
+	var saved_position: int = record.position
+	record.position = position
+	var defense: int = PSPlayerVisibleRatings.fielder_defense(record)
+	record.position = saved_position
+	return defense >= int(MLB_TRUSTED_DEFENSE[position])
 
 
 # --- 投手 ---

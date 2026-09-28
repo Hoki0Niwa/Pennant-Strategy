@@ -922,6 +922,7 @@ func _overseas_retired_reason_count(overseas_result: Dictionary, reason: String)
 
 # 流出者ごとの較正用の行。rank は同じ季の野手 (wRAA) / 投手 (FIP 基準の失点抑止 raa) の中での順位 (1 始まり、
 # 出場した全員の中で)。実 NPB の移籍組と同じ物差しで「NPB の何番手が出ていくか」を見る。
+# mlb_position は野手が MLB で守る位置 (投手は 1)、relief は登板の半分以上が救援だった投手。
 # NPB 最終季の成績は翌オフの _mlb_first_season_pairs で MLB 1 年目と並べるので控えておく。
 func _overseas_departed_details(overseas_result: Dictionary, war_table: Array, war_context: Dictionary, season: PSSeason) -> Array:
 	var batter_rank: Dictionary = _war_rank(war_table, "batter", "wraa")
@@ -948,6 +949,8 @@ func _overseas_departed_details(overseas_result: Dictionary, war_table: Array, w
 			"value": int(entry.get("overall", 0)),
 			"group": "P" if pitcher else "B",
 			"position": int(entry.get("position", 0)),
+			"mlb_position": 1 if pitcher else PSMlbSeasonSimulator.mlb_position(GameDb.get_player(player_id)),
+			"relief": pitcher and float(war_row.get("gs_share", 1.0)) < 0.5,
 			"rank": int(ranks.get(player_id, 0)),
 			"group_size": ranks.size(),
 			"war": _round_float(float(war_row.get("war", 0.0)), 1),

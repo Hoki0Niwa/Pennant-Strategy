@@ -4020,6 +4020,9 @@ func test_overseas_route_uses_years_rank_and_service_days() -> void:
 	assert_str(OverseasService.challenge_route(young, OverseasService.POSTING_MAX_RANK + 1)).is_equal("")
 	assert_str(OverseasService.challenge_route(young, OverseasService.PERFORMANCE_UNRANKED)).is_equal("")
 	assert_str(OverseasService.challenge_route(young)).is_equal(OverseasService.ROUTE_POSTING)
+	# 救援は救援の中の順位で、条件は RELIEVER_POSTING_MAX_RANK 位以内。
+	assert_str(OverseasService.challenge_route(young, OverseasService.RELIEVER_POSTING_MAX_RANK, true)).is_equal(OverseasService.ROUTE_POSTING)
+	assert_str(OverseasService.challenge_route(young, OverseasService.RELIEVER_POSTING_MAX_RANK + 1, true)).is_equal("")
 	young.years = OverseasService.POSTING_MIN_YEARS - 1
 	assert_str(OverseasService.challenge_route(young, 1)).is_equal("")
 
@@ -4038,7 +4041,7 @@ func test_overseas_route_uses_years_rank_and_service_days() -> void:
 # NPB の最上位の若手は、国内FA権がまだ遠くても MLB へ移れる。譲渡金も元球団へ入る。
 func test_young_npb_star_can_be_posted() -> void:
 	var year: int = 2099
-	var performance: Dictionary = {9911: {"rank": 1, "war": 6.0, "pitcher": false}}
+	var performance: Dictionary = {9911: {"rank": 1, "war": 6.0, "pitcher": false, "bat_rank": 1}}
 	var applied: bool = false
 	for seed_value in range(1, 200):
 		var star: PSPlayer = _overseas_candidate(9911, 1, 3 * PSPlayer.FA_SERVICE_DAYS_PER_YEAR, 23)
@@ -4123,6 +4126,9 @@ func test_mlb_interest_follows_npb_performance() -> void:
 	assert_float(OverseasService.mlb_interest(85, 27, 1, true)).is_equal_approx(
 		OverseasService.mlb_interest(85, 27, 1, false) * OverseasService.PITCHER_INTEREST_MULT, 0.0001
 	)
+	assert_float(OverseasService.mlb_interest(85, 27, 1, true, true)).is_equal_approx(
+		OverseasService.mlb_interest(85, 27, 1, false) * OverseasService.RELIEVER_INTEREST_MULT, 0.0001
+	)
 	# NPB の上位の主力は毎年それなりの確率で声が掛かり、20 位の野手はまれ。若いエース投手は上限に届く。
 	var star: float = OverseasService.challenge_chance(OverseasService.ROUTE_POSTING, OverseasService.mlb_interest(85, 27, 3, false))
 	var depth: float = OverseasService.challenge_chance(OverseasService.ROUTE_POSTING, OverseasService.mlb_interest(85, 27, 20, false))
@@ -4135,12 +4141,15 @@ func test_mlb_interest_follows_npb_performance() -> void:
 	assert_int(OverseasService.performance_rank({7: {"rank": 3}}, 7)).is_equal(3)
 
 
-# 同じ能力・年齢なら、NPB で上位の選手のほうに MLB から声が掛かる (60 位の選手はポスティングの条件
-# POSTING_MAX_RANK の外なので、そもそも挑戦できない)。
+# 同じ能力・年齢なら、NPB で上位の選手のほうに MLB から声が掛かる (打撃 60 位の野手は打撃の前提
+# BATTER_BATTING_RANK_LIMIT の外なので、そもそも挑戦できない)。
 func test_top_npb_performer_is_the_one_mlb_calls() -> void:
 	var year: int = 2099
 	var days: int = _posting_service_days()
-	var performance: Dictionary = {9951: {"rank": 2, "war": 5.0, "pitcher": false}, 9952: {"rank": 60, "war": 0.5, "pitcher": false}}
+	var performance: Dictionary = {
+		9951: {"rank": 2, "war": 5.0, "pitcher": false, "bat_rank": 2},
+		9952: {"rank": 60, "war": 0.5, "pitcher": false, "bat_rank": 60},
+	}
 	var star_departures: int = 0
 	var depth_departures: int = 0
 	for seed_value in range(1, 101):
@@ -4155,8 +4164,78 @@ func test_top_npb_performer_is_the_one_mlb_calls() -> void:
 	assert_int(depth_departures).is_equal(0)
 
 
-# NPB での働きの順位は、今季の WAR で野手と投手を別々に並べる (前季のレコードがあれば 2:1 で平均)。
-func test_npb_performance_ranks_batters_and_pitchers_separately() -> void:
+# 野手は NPB の打撃がトップクラス (BATTER_BATTING_RANK_LIMIT 位以内) であることが経路に依らない前提。守備込みの働きが
+# 2 位でも打撃が前提の外の捕手には、海外FA 権があっても声が掛からない。前提を満たした野手の関心は守備込みの働きの順位で決まる。
+func test_mlb_calls_only_top_npb_hitters_then_weighs_the_glove() -> void:
+	var year: int = 2099
+	var fa_days: int = OverseasService.OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR
+	var limit: int = OverseasService.BATTER_BATTING_RANK_LIMIT
+	var performance: Dictionary = {
+		9941: {"rank": 2, "war": 6.0, "pitcher": false, "group": OverseasService.GROUP_BATTER, "bat_rank": limit + 1},
+		9942: {"rank": 6, "war": 4.5, "pitcher": false, "group": OverseasService.GROUP_BATTER, "bat_rank": 1},
+	}
+	var catcher_departures: int = 0
+	var hitter_departures: int = 0
+	for seed_value in range(1, 101):
+		var catcher: PSPlayer = _overseas_candidate(9941, 1, fa_days, 29)
+		catcher.position = 2
+		var hitter: PSPlayer = _overseas_candidate(9942, 2, fa_days, 29)
+		Rng.set_seed_value(seed_value)
+		OverseasService._resolve_departures([catcher, hitter], [_team(1), _team(2)], year, [], OverseasService.frequency_setting(OverseasService.FREQUENCY_STANDARD), performance)
+		catcher_departures += 1 if catcher.is_overseas() else 0
+		hitter_departures += 1 if hitter.is_overseas() else 0
+	assert_int(catcher_departures).is_equal(0)
+	assert_int(hitter_departures).is_greater(10)
+	var sample: PSPlayer = _overseas_candidate(9942, 1, fa_days)
+	assert_bool(OverseasService.meets_batting_bar(performance, sample)).is_true()
+	assert_bool(OverseasService.meets_batting_bar(performance, _overseas_candidate(9941, 1, fa_days))).is_false()
+	assert_bool(OverseasService.meets_batting_bar(performance, _overseas_candidate(9943, 1, fa_days))).is_false()
+	assert_bool(OverseasService.meets_batting_bar({}, sample)).is_true()
+	assert_bool(OverseasService.meets_batting_bar(performance, _overseas_reliever(9944, fa_days))).is_true()
+	# 打撃の前提を満たした選手どうしでは、守備込みの働きの順位が上の選手の関心が高い。
+	assert_float(OverseasService.mlb_interest(85, 29, 3)).is_greater(OverseasService.mlb_interest(85, 29, 15))
+
+
+# 救援は救援の中の順位で条件と関心が決まるので、NPB の救援の最上位 (投手全体では 30 位前後) にも声が掛かる。
+# 救援の中で RELIEVER_POSTING_MAX_RANK 位より下の救援はポスティングできない。
+func test_top_npb_reliever_can_be_called_to_mlb() -> void:
+	var year: int = 2099
+	var days: int = _posting_service_days()
+	var performance: Dictionary = {
+		9991: {"rank": 1, "war": 2.0, "pitcher": true, "group": OverseasService.GROUP_RELIEVER},
+		9992: {"rank": OverseasService.RELIEVER_POSTING_MAX_RANK + 1, "war": 1.2, "pitcher": true, "group": OverseasService.GROUP_RELIEVER},
+	}
+	assert_int(OverseasService.mlb_view_value(_overseas_reliever(9991, days))).is_greater_equal(OverseasService.MIN_CHALLENGE_VALUE)
+	var closer_departures: int = 0
+	var setup_departures: int = 0
+	for seed_value in range(1, 101):
+		var closer: PSPlayer = _overseas_reliever(9991, days)
+		var setup: PSPlayer = _overseas_reliever(9992, days)
+		var departed: Array = []
+		Rng.set_seed_value(seed_value)
+		OverseasService._resolve_departures([closer, setup], [_team(1)], year, departed, OverseasService.frequency_setting(OverseasService.FREQUENCY_STANDARD), performance)
+		closer_departures += 1 if closer.is_overseas() else 0
+		setup_departures += 1 if setup.is_overseas() else 0
+	assert_int(closer_departures).is_greater(5)
+	assert_int(setup_departures).is_equal(0)
+
+
+func _overseas_reliever(player_id: int, service_days: int) -> PSPlayer:
+	var z: Dictionary = {}
+	for key in PITCHER_Z_KEYS:
+		z[key] = 2.2
+	return _player({
+		"id": player_id, "team_id": 1, "age": 28, "years": 9,
+		"salary": 15000, "position": 1, "role": "reliever",
+		"z_abilities": z,
+		"fa_eligible_years": PSPlayer.FA_ELIGIBLE_YEARS_OTHER,
+		"source_data": {"fa_nissuu": service_days},
+	})
+
+
+# NPB での働きの順位は、今季の WAR で野手・先発・救援を別々に並べる (前季のレコードがあれば 2:1 で平均)。
+# 救援の働きは先発より小さいが、救援の中で順位が付くので最上位の救援は 1 位になる。
+func test_npb_performance_ranks_batters_starters_and_relievers_separately() -> void:
 	var saved: Dictionary = RecordStore.to_dict().duplicate(true)
 	RecordStore.clear_records()
 	var year: int = 2098
@@ -4182,6 +4261,17 @@ func test_npb_performance_ranks_batters_and_pitchers_separately() -> void:
 		pitcher.pitcher_stats.walks = int(pitch[2])
 		pitcher.pitcher_stats.home_runs_allowed = int(pitch[3])
 		RecordStore.set_player_record(pitcher)
+	var relief_lines: Array = [[9981, 50, 12, 6], [9982, 75, 12, 2]]
+	for relief_value in relief_lines:
+		var relief: Array = relief_value as Array
+		var reliever: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({"id": int(relief[0]), "team_id": 1, "position": 1, "role": "reliever"}), year, season_number)
+		reliever.pitcher_stats.games = 55
+		reliever.pitcher_stats.outs_pitched = 165
+		reliever.pitcher_stats.batters_faced = 220
+		reliever.pitcher_stats.strikeouts = int(relief[1])
+		reliever.pitcher_stats.walks = int(relief[2])
+		reliever.pitcher_stats.home_runs_allowed = int(relief[3])
+		RecordStore.set_player_record(reliever)
 
 	var performance: Dictionary = OverseasService.npb_performance(year, season_number)
 	RecordStore.load_from_dict(saved)
@@ -4190,10 +4280,26 @@ func test_npb_performance_ranks_batters_and_pitchers_separately() -> void:
 	assert_int(int((performance[9961] as Dictionary)["rank"])).is_equal(1)
 	assert_int(int((performance[9963] as Dictionary)["rank"])).is_equal(2)
 	assert_int(int((performance[9962] as Dictionary)["rank"])).is_equal(3)
+	# 野手は打撃 (wRAA) の順位も付く (打撃の前提に使う)。投手には無い。
+	assert_int(int((performance[9961] as Dictionary)["bat_rank"])).is_equal(1)
+	assert_int(int((performance[9963] as Dictionary)["bat_rank"])).is_equal(2)
+	assert_int(int((performance[9962] as Dictionary)["bat_rank"])).is_equal(3)
+	assert_bool((performance[9972] as Dictionary).has("bat_rank")).is_false()
 	assert_int(int((performance[9972] as Dictionary)["rank"])).is_equal(1)
 	assert_int(int((performance[9971] as Dictionary)["rank"])).is_equal(2)
+	assert_int(int((performance[9982] as Dictionary)["rank"])).is_equal(1)
+	assert_int(int((performance[9981] as Dictionary)["rank"])).is_equal(2)
+	assert_float(float((performance[9982] as Dictionary)["war"])).is_less(float((performance[9972] as Dictionary)["war"]))
 	assert_bool(bool((performance[9972] as Dictionary)["pitcher"])).is_true()
+	assert_bool(bool((performance[9982] as Dictionary)["pitcher"])).is_true()
 	assert_bool(bool((performance[9961] as Dictionary)["pitcher"])).is_false()
+	assert_str(str((performance[9961] as Dictionary)["group"])).is_equal(OverseasService.GROUP_BATTER)
+	assert_str(str((performance[9972] as Dictionary)["group"])).is_equal(OverseasService.GROUP_STARTER)
+	assert_str(str((performance[9982] as Dictionary)["group"])).is_equal(OverseasService.GROUP_RELIEVER)
+	assert_str(OverseasService.performance_group(performance, _player({"id": 9982, "position": 1, "role": "starter"}))).is_equal(OverseasService.GROUP_RELIEVER)
+	# NPB で投げていない投手は役割で決まる。
+	assert_str(OverseasService.performance_group(performance, _player({"id": 9983, "position": 1, "role": "reliever"}))).is_equal(OverseasService.GROUP_RELIEVER)
+	assert_str(OverseasService.performance_group(performance, _player({"id": 9984, "position": 1, "role": "starter"}))).is_equal(OverseasService.GROUP_STARTER)
 	# 今季のレコードが無い季は空 (関心は働きを見ない)。
 	assert_bool(OverseasService.npb_performance(year + 50, season_number + 50).is_empty()).is_true()
 
@@ -4619,6 +4725,127 @@ func test_mlb_closer_is_picked_by_projection_and_incumbency() -> void:
 	var as_setup: float = float(PSMlbSeasonSimulator._pitcher_metrics(elite_stats, false, false, league)["war"])
 	assert_float(as_setup).is_greater(0.0)
 	assert_float(as_closer).is_greater(as_setup)
+
+
+const MLB_TEST_IF_KEYS: Array = ["IF_Reach", "IF_Secure", "IF_ThrowAccuracy", "IF_Exchange", "IF_PositionFit", "IF_ThrowPower"]
+
+
+# 内野の守備能力を if_z に揃えた z (他は base_z)。守備の表示能力は 50 + 12.5 × z。
+func _mlb_glove_z(if_z: float, base_z: float = 1.5) -> Dictionary:
+	var z: Dictionary = {}
+	for key in ALL_Z_KEYS:
+		z[key] = base_z
+	for key in MLB_TEST_IF_KEYS:
+		z[key] = if_z
+	return z
+
+
+# MLB で守る位置は守備で決まる: 二遊間は守備 (表示能力) が MLB_TRUSTED_DEFENSE に届けばそのまま、届かなければ
+# 基準を満たすサブポジションのうち守備位置補正の大きい位置 (遊撃の多くは二塁へ)、守れる位置が無ければ一塁。
+# 捕手はサブポジションを持たないので守備に関係なく捕手。三塁・中堅・両翼・一塁の選手は NPB の位置のまま。
+func test_mlb_position_follows_the_glove() -> void:
+	var ready: Dictionary = CampService.SECONDARY_READY_APTITUDE_BY_POSITION
+	var trusted: Dictionary = PSMlbSeasonSimulator.MLB_TRUSTED_DEFENSE
+	var elite_z: float = (float(trusted[6]) + 3.0 - 50.0) / 12.5
+	var solid_z: float = (float(trusted[4]) + 2.0 - 50.0) / 12.5
+	var weak_z: float = (float(trusted[4]) - 20.0 - 50.0) / 12.5
+	var all_subs: Dictionary = {"shortstop": 95, "second": int(ready[4]) + 5, "left": int(ready[7]) + 3, "right": int(ready[9]) + 10}
+	var glove: PSPlayer = _player({"id": 9751, "position": 6, "position_aptitudes": all_subs, "z_abilities": _mlb_glove_z(elite_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(glove)).is_equal(6)
+	# 遊撃の基準には届かないが二塁の基準に届く遊撃手は二塁 (松井稼頭央型)。二塁を守れなければ両翼。
+	var solid: PSPlayer = _player({"id": 9752, "position": 6, "position_aptitudes": all_subs, "z_abilities": _mlb_glove_z(solid_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(solid)).is_equal(4)
+	var solid_no_second: PSPlayer = _player({"id": 9753, "position": 6, "position_aptitudes": {"shortstop": 95, "left": int(ready[7]) + 3}, "z_abilities": _mlb_glove_z(solid_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(solid_no_second)).is_equal(7)
+	# 守備の苦手な打撃型は二遊間を守らない: 守れる両翼のうち適性の余裕が大きい右翼、無ければ一塁。
+	var slugger: PSPlayer = _player({"id": 9754, "position": 6, "position_aptitudes": all_subs, "z_abilities": _mlb_glove_z(weak_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(slugger)).is_equal(9)
+	var slugger_second: PSPlayer = _player({"id": 9755, "position": 4, "position_aptitudes": {"second": 95, "third": int(ready[5]) + 2}, "z_abilities": _mlb_glove_z(weak_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(slugger_second)).is_equal(5)
+	var slugger_no_subs: PSPlayer = _player({"id": 9756, "position": 6, "position_aptitudes": {"shortstop": 95}, "z_abilities": _mlb_glove_z(weak_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(slugger_no_subs)).is_equal(PSMlbSeasonSimulator.MLB_FALLBACK_POSITION)
+	var catcher: PSPlayer = _player({"id": 9757, "position": 2, "position_aptitudes": {"catcher": 95, "left": int(ready[7]) + 5}, "z_abilities": _mlb_glove_z(weak_z)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(catcher)).is_equal(2)
+	for native_position in [3, 5, 7, 8, 9]:
+		var native: PSPlayer = _player({"id": 9758, "position": native_position, "position_aptitudes": {"first": 95}, "z_abilities": _mlb_glove_z(weak_z)})
+		assert_int(PSMlbSeasonSimulator.mlb_position(native)).is_equal(native_position)
+
+
+# MLB の目で見た働き: 捕手・二遊間で使われる選手は MLB_DEFENSE_DOUBT_RUNS だけ割り引かれ、難しい位置ほど下がる
+# (捕手 > 遊撃 > 二塁)。二遊間を守らせてもらえず一塁・両翼へ移る選手は、NPB での守備位置補正と守備得点を失うので
+# 同じ位置に残る守備の良い選手より下がる。三塁・中堅・両翼の選手と投手は WAR のまま。
+func test_mlb_view_war_penalizes_harder_positions_more() -> void:
+	var trusted: Dictionary = PSMlbSeasonSimulator.MLB_TRUSTED_DEFENSE
+	var glove_z: Dictionary = _mlb_glove_z((float(trusted[6]) + 3.0 - 50.0) / 12.5)
+	var penalties: Dictionary = {}
+	for position in [2, 6, 4, 8, 5, 7]:
+		var player: PSPlayer = _player({"id": 9760 + position, "position": position, "z_abilities": glove_z})
+		penalties[position] = 5.0 - OverseasService.mlb_view_war(_mlb_war_row(position, 0.0), player)
+	assert_float(float(penalties[2])).is_greater(float(penalties[6]))
+	assert_float(float(penalties[6])).is_greater(float(penalties[4]))
+	assert_float(float(penalties[4])).is_greater(0.0)
+	for kept in [8, 5, 7]:
+		assert_float(float(penalties[kept])).is_equal(0.0)
+	# 同じ位置に残る選手は NPB での守備得点をそのまま数え、左翼へ移る選手は数えない。
+	var left_ready: int = int(CampService.SECONDARY_READY_APTITUDE_BY_POSITION[7]) + 5
+	var glove: PSPlayer = _player({"id": 9770, "position": 6, "position_aptitudes": {"left": left_ready}, "z_abilities": glove_z})
+	var slugger: PSPlayer = _player({"id": 9771, "position": 6, "position_aptitudes": {"left": left_ready}, "z_abilities": _mlb_glove_z(0.0)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(slugger)).is_equal(7)
+	var glove_kept: float = OverseasService.mlb_view_war(_mlb_war_row(6, 6.0), glove) - OverseasService.mlb_view_war(_mlb_war_row(6, 0.0), glove)
+	assert_float(glove_kept).is_equal_approx(6.0 / 9.0, 0.0001)
+	var slugger_kept: float = OverseasService.mlb_view_war(_mlb_war_row(6, 6.0), slugger) - OverseasService.mlb_view_war(_mlb_war_row(6, 0.0), slugger)
+	assert_float(slugger_kept).is_equal_approx(0.0, 0.0001)
+	assert_float(OverseasService.mlb_view_war(_mlb_war_row(6, 0.0), slugger)).is_less(OverseasService.mlb_view_war(_mlb_war_row(6, 0.0), glove))
+	var pitcher_row: Dictionary = {"role": "pitcher", "war": 4.0}
+	assert_float(OverseasService.mlb_view_war(pitcher_row, glove)).is_equal(4.0)
+
+
+# 守備得点を除いて WAR 5.0・得点換算 9・守備イニングの 88% をその位置で守った NPB の季の WAR の行。
+func _mlb_war_row(position: int, fielding_runs: float) -> Dictionary:
+	return {
+		"role": "batter", "war": 5.0 + fielding_runs / 9.0, "rpw": 9.0, "fielding_runs": fielding_runs,
+		"pos_adj": float(PSMlbSeasonSimulator.POSITIONAL_RUNS[position]) * 0.88,
+	}
+
+
+# MLB の目で見た評価 (関心と足切りの能力): 二遊間を守らせてもらえない選手は MLB で守る位置で評価し直すので、
+# NPB の二遊間の守備は評価に乗らない (内野の守備だけが違う 2 人の打撃型の遊撃手は同じ評価)。二遊間に残る
+# 守備の良い選手と、元の位置のまま守る選手は NPB の評価のまま。
+func test_mlb_view_value_counts_the_position_played_in_mlb() -> void:
+	var left_ready: int = int(CampService.SECONDARY_READY_APTITUDE_BY_POSITION[7]) + 5
+	var aptitudes: Dictionary = {"shortstop": 95, "left": left_ready}
+	var steady: PSPlayer = _player({"id": 9772, "position": 6, "position_aptitudes": aptitudes, "z_abilities": _mlb_glove_z(2.0)})
+	var shaky: PSPlayer = _player({"id": 9773, "position": 6, "position_aptitudes": aptitudes, "z_abilities": _mlb_glove_z(0.0)})
+	assert_int(PSMlbSeasonSimulator.mlb_position(steady)).is_equal(7)
+	assert_int(OffseasonService.player_value_score(steady)).is_greater(OffseasonService.player_value_score(shaky))
+	assert_int(OverseasService.mlb_view_value(steady)).is_equal(OverseasService.mlb_view_value(shaky))
+	assert_int(OverseasService.mlb_view_value(steady)).is_less(OffseasonService.player_value_score(steady))
+	var trusted: Dictionary = PSMlbSeasonSimulator.MLB_TRUSTED_DEFENSE
+	var glove: PSPlayer = _player({"id": 9774, "position": 6, "position_aptitudes": aptitudes, "z_abilities": _mlb_glove_z((float(trusted[6]) + 3.0 - 50.0) / 12.5)})
+	assert_int(OverseasService.mlb_view_value(glove)).is_equal(OffseasonService.player_value_score(glove))
+	var left_fielder: PSPlayer = _player({"id": 9775, "position": 7, "position_aptitudes": {"left": 95}, "z_abilities": _mlb_glove_z(1.5)})
+	assert_int(OverseasService.mlb_view_value(left_fielder)).is_equal(OffseasonService.player_value_score(left_fielder))
+
+
+# MLB での野手の指標は MLB で守った位置で数える。守備が遊撃の基準に届かずサブポジションの左翼へ移った遊撃手は、同じ選手を左翼手として
+# 回したときと同じ守備位置補正・守備得点・WAR になり、metrics に守った位置が残る。
+func test_mlb_batter_metrics_use_the_position_played_in_mlb() -> void:
+	var league: Dictionary = PSMlbSeasonSimulator.build_league()
+	var left_ready: int = int(CampService.SECONDARY_READY_APTITUDE_BY_POSITION[7]) + 5
+	var z: Dictionary = PSMlbSeasonSimulator.BATTER_LEAGUE_Z.duplicate()
+	for key in MLB_TEST_IF_KEYS:
+		z[key] = 0.0
+	var batter: PSPlayer = _player({
+		"id": 9771, "team_id": 0, "age": 27, "position": 6,
+		"position_aptitudes": {"shortstop": 95, "left": left_ready},
+		"z_abilities": z,
+	})
+	var as_shortstop: Dictionary = (PSMlbSeasonSimulator.simulate_season([batter], 2099, league)[batter.id] as Dictionary)["metrics"] as Dictionary
+	batter.position = 7
+	var as_left_fielder: Dictionary = (PSMlbSeasonSimulator.simulate_season([batter], 2099, league)[batter.id] as Dictionary)["metrics"] as Dictionary
+	assert_int(int(as_shortstop["pos"])).is_equal(7)
+	assert_float(float(as_shortstop["war"])).is_equal(float(as_left_fielder["war"]))
+	assert_float(float(as_shortstop["fielding"])).is_equal(float(as_left_fielder["fielding"]))
 
 
 # 見込みの MLB の FIP− が target 以下になるまで、NPB 一軍平均の投手から質キーを上げた z。

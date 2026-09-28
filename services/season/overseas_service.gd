@@ -5,14 +5,15 @@ class_name OverseasService
 # 海外からの復帰・海外組の年次変動をまとめて解決する。
 #
 # ## 流出は 2 経路 (資格と補償が違うだけの同じ判定)
-#   ポスティング — 入団 POSTING_MIN_YEARS 年目を終え、NPB でトップクラスの働き (野手/投手それぞれの順位が
-#                  POSTING_MAX_RANK 位以内) をした選手が、国内FA権の有無や時期に関係なく同じ条件で挑戦できる。
-#                  成立すると譲渡金が元球団へ入る。
-#   海外FA       — 一軍登録 145日 × OVERSEAS_FA_YEARS。成績の条件は無く、補償も無い。
+#   ポスティング — 入団 POSTING_MIN_YEARS 年目を終え、NPB でトップクラスの働き (先発/救援それぞれの順位が
+#                  POSTING_MAX_RANK 位以内、救援は RELIEVER_POSTING_MAX_RANK 位以内。野手は下の打撃の前提) をした
+#                  選手が、国内FA権の有無や時期に関係なく同じ条件で挑戦できる。成立すると譲渡金が元球団へ入る。
+#   海外FA       — 一軍登録 145日 × OVERSEAS_FA_YEARS。投手は成績の条件が無い。補償は無い。
 # **志願すれば必ず成立する** (自軍も CPU も球団は承認するものとする — ユーザー決定)。
+# 野手は経路に依らず NPB の打撃がトップクラス (BATTER_BATTING_RANK_LIMIT 位以内) であることが前提。
 # 誰に声が掛かるかは経路に依らず MLB の関心 (mlb_interest = 能力 × NPB での働き × 年齢 × 投手の上乗せ) で
-# 決まる。実際に MLB へ移った日本人と同じく、NPB の野手/投手の上位 10 人が 7 割を占め、投手が 3 分の 2 になる
-# (下の「MLB の関心」)。
+# 決まる。実際に MLB へ移った日本人と同じく、NPB の野手/投手の上位 10 人が 7 割を占め、投手が 3 分の 2、
+# 投手の 2 割前後が救援になる (下の「MLB の関心」)。
 #
 # ## 海外にいる間の表現
 # `source_data.overseas_year` を立てて `retired=true` / `team_id=0` にする
@@ -46,15 +47,25 @@ class_name OverseasService
 # --- 資格 ---
 # 海外FA権。実 NPB は国内FA (7/8年) と別枠で一律 9 年。台帳は国内FAと同じ source_data.fa_nissuu。
 const OVERSEAS_FA_YEARS: int = 9
-# ポスティングの条件: 入団 POSTING_MIN_YEARS 年目を終え、NPB での働きの順位 (npb_performance、野手/投手それぞれ) が
-# POSTING_MAX_RANK 位以内。国内FA権の有無や時期は問わない (実際のポスティングは 5〜14 年目と幅があり、
-# 大谷・佐々木は 5 年目、山本・ダルビッシュ・田中は 7 年目を終えて、岡本・今井は国内FA権を得た後に移籍した)。
-# 実際の移籍組は移籍前の季に NPB の上位 10 位以内が 7 割、上位 20 位以内が 8 割。
+# ポスティングの条件: 入団 POSTING_MIN_YEARS 年目を終え、NPB での働きの順位 (npb_performance、先発/救援
+# それぞれ) が POSTING_MAX_RANK 位以内 (救援は RELIEVER_POSTING_MAX_RANK 位以内)。野手の順位の条件は
+# BATTER_BATTING_RANK_LIMIT (経路に依らない前提) が担う。国内FA権の有無や時期は問わない
+# (実際のポスティングは 5〜14 年目と幅があり、大谷・佐々木は 5 年目、山本・ダルビッシュ・田中は 7 年目を終えて、
+# 岡本・今井は国内FA権を得た後に移籍した)。
+# 実際の移籍組は移籍前の季に NPB の上位 10 位以内が 7 割、上位 20 位以内が 8 割。救援の移籍は抑え・セットアッパーの
+# 上位に限られ、ほとんどが海外FA (平野・澤村・松井。ポスティングは牧田だけ) なので、救援の順位の条件は狭い。
 # RANK を広げる / YEARS を下げるほど流出が増え、若い選手・中堅の主力も出ていく。
 # NPB の成績が全く無いとき (順位 0、テストなど) は順位の条件を見ない。
 const POSTING_MIN_YEARS: int = 5
 const POSTING_MAX_RANK: int = 20
-# 志願の足切り (OffseasonService.player_value_score)。これ未満の選手には MLB から声が掛からない。
+const RELIEVER_POSTING_MAX_RANK: int = 3
+# 野手の前提: NPB の打撃 (wRAA を今季と前季で PERFORMANCE_SEASON_WEIGHTS の平均) の順位 (npb_performance の bat_rank) が
+# BATTER_BATTING_RANK_LIMIT 位以内でなければ、経路 (ポスティング・海外FA) に関係なく MLB から声が掛からない。
+# 実際の移籍組の野手は移籍前の季に全員 NPB の wRAA 上位 10 位以内 (2018〜2025 の 6 人)。この前提を満たした選手の中で
+# 誰に声が掛かるかは、守備 (MLB で守る位置・サブポジション) まで含めた MLB の目で見た働き (mlb_view_war) の順位で決まる。
+# 広げるほど野手の流出が増え、打撃が一段落ちる捕手・二遊間も出ていく。
+const BATTER_BATTING_RANK_LIMIT: int = 10
+# 志願の足切り (MLB の目で見た評価 mlb_view_value)。これ未満の選手には MLB から声が掛からない。
 # 誰が行くかを決めているのは下の関心 (NPB での働きが主) で、足切りは「能力の低い選手が 1 年の好成績だけで
 # 行く」のを止める下限。上げると能力の高い選手だけに絞られ、流出も減る。
 const MIN_CHALLENGE_VALUE: int = 75
@@ -74,10 +85,11 @@ const CHALLENGE_POOL_SIZE: int = 20
 # 実測 (2018〜2025 に MLB へ移った日本人 20 人の移籍前の季、FanGraphs): NPB の野手 (wRAA) / 投手
 # (FIP 基準の失点抑止) の中の順位は 1〜5 位 40% / 6〜10 位 30% / 11〜20 位 10% / 51 位以下 20%
 # (51 位以下は救援と、能力を買われた先発)。投手は 2010〜2025 の 34 人の 68%。
-# 能力: 基準点 (INTEREST_REFERENCE_VALUE) を超えた 1 点ごとに関心が VALUE_INTEREST_PER_POINT ずつ
-# 増える (基準点ちょうど = 1.0)。
+# 能力: MLB の目で見た評価 (mlb_view_value) が基準点 (INTEREST_REFERENCE_VALUE) を超えた 1 点ごとに関心が
+# VALUE_INTEREST_PER_POINT ずつ増える (基準点ちょうど = 1.0)。
 const VALUE_INTEREST_PER_POINT: float = 0.15
-# NPB での働き: 今季と前季の WAR を PERFORMANCE_SEASON_WEIGHTS で平均し、野手 / 投手それぞれの中で付けた
+# NPB での働き: 今季と前季の WAR (野手は MLB の目で見た値、mlb_view_war) を
+# PERFORMANCE_SEASON_WEIGHTS で平均し、野手 / 先発 / 救援それぞれの中で付けた
 # 順位 (npb_performance) の関数。1 位で 1.0、PERFORMANCE_RANK_SCALE 位の少し下で半分になり、
 # 下位は PERFORMANCE_FLOOR まで。EXPONENT を上げると上位 10 人とそれ以下の差が急になる。
 # 今季の NPB のレコードが全く無いとき (テストなど) は働きを見ない (1.0)。
@@ -87,8 +99,26 @@ const PERFORMANCE_RANK_EXPONENT: float = 3.0
 const PERFORMANCE_FLOOR: float = 0.02
 # NPB で出場していない選手の順位 (performance_rank)。関心は PERFORMANCE_FLOOR 近くになる。
 const PERFORMANCE_UNRANKED: int = 999
+# 働きの順位を付ける群 (npb_performance)。投手は今季 (無ければ前季) の登板の半分以上が先発なら先発。
+const GROUP_BATTER: String = "batter"
+const GROUP_STARTER: String = "starter"
+const GROUP_RELIEVER: String = "reliever"
+# MLB の目で見た働き (mlb_view_war) で、MLB が日本人の守備を割り引く量 (162 試合あたりの得点、MLB で守る位置ごと)。
+# 捕手・二遊間で使われる選手は、NPB での守備が良くても働きをこれだけ低く見積もられる。難しい位置ほど大きい
+# (遊撃は守備位置補正 +7.5 と同じ、二塁は +2.5 の倍)。捕手は投手陣との意思疎通まで含めて最も信用されず
+# (実際の日本人捕手の移籍は 2005 年オフの城島が最後)、守備位置補正 +12.5 を打ち消して両翼並み (−7.5) に見られる。
+# 上げるとその位置の選手に声が掛かりにくくなるが、打撃の前提を満たす捕手は NPB の打撃の最上位級 (WAR 7〜9) なので、
+# 捕手の 10 → 20 で捕手の流出は 25〜40% 減にとどまる (長期自動プレイ 12 季 × 2 本の資格者で見積もり)。
+const MLB_DEFENSE_DOUBT_RUNS: Dictionary = {2: 20.0, 6: 7.5, 4: 5.0}
 # 投手への上乗せ。MLB は NPB の投手をより多く獲る (上の実測で移籍組の 3 分の 2 が投手)。
-const PITCHER_INTEREST_MULT: float = 3.5
+# 野手は打撃の前提 (BATTER_BATTING_RANK_LIMIT) で母集団が絞られるので、上乗せ 2.0 で投手 7 割 / 野手 3 割になる。
+# 救援は RELIEVER_INTEREST_MULT。救援の働きは先発より小さいので、同じ群で並べると救援の最上位でも投手全体の
+# 30 位前後にしかならず声が掛からない。順位を救援の中で付けたうえで上乗せを別にし、実際の日本人投手の移籍の
+# 2 割前後 (2017〜2025 の 16 人中 平野・牧田・澤村・松井の 4 人) が救援になるよう合わせてある。救援の上位は
+# 評価も先発の上位と大差ない (80 前後) ので、野手より小さい上乗せ (0.8) で流出投手の 2 割になる
+# (長期自動プレイ 12 季 × 2 本の資格者で見積もり)。上げるほど救援の割合が増える (1.0 で 25%)。
+const PITCHER_INTEREST_MULT: float = 2.0
+const RELIEVER_INTEREST_MULT: float = 0.8
 # 年齢: MLB は長く使える若手を強く評価する (実例の移籍年齢は大谷 23 / 佐々木 23 / 山本 25 /
 # 鈴木誠也 27 / 吉田正尚 29 / 今永 30)。プライム以下は上乗せ、超えると 1 歳ごとに目減りする。
 # これが無いと、能力だけで勝るピーク期のベテラン (海外FA 組) が関心を独占し、若いうちに出ていく選手
@@ -103,12 +133,12 @@ const MAX_AGE_INTEREST: float = 1.3
 # --- 志願確率 = 経路の基礎確率 × mlb_interest (上限 MAX_CHALLENGE_CHANCE) ---
 # ポスティングは条件を満たす限り入団 5 年目から海外FA権までの毎年が機会になるので 1 年あたりの確率を低く、
 # 海外FA は 30 歳前後からの数年だけなので高くしてある (実際の移籍組はポスティングが 7 割前後で、
-# 上位の選手でも海外FA まで待つ例がある)。評価 85・27 歳の選手の 1 年あたりの確率:
-# ポスティングは NPB 1 位で野手 0.21 / 投手 0.5 (上限)、10 位で 0.09 / 0.31、20 位で 0.02 / 0.07 (24 歳以下は 1.3 倍)。
-# 海外FA (31 歳) は 1 位の野手 0.5 / 10 位で 0.21。流出の期待値は年 2.4 人
+# 上位の選手でも海外FA まで待つ例がある)。評価 85・27 歳の選手の 1 年あたりの確率 (野手は打撃の前提を満たした場合):
+# ポスティングは NPB 1 位で野手 0.28 / 投手 0.5 (上限)、10 位で 0.12 / 0.23、20 位で 0.02 / 0.05 (24 歳以下は 1.3 倍)。
+# 海外FA (31 歳) は 1 位の野手 0.5 / 10 位で 0.28。流出の期待値は年 2.45 人 (野手 0.68 人)
 # (2012〜2026 の実際は年 2.1 人、2018〜2026 は 2.6 人)。基礎確率に比例して増減する。
-const POSTING_BASE_CHANCE: float = 0.065
-const OVERSEAS_FA_BASE_CHANCE: float = 0.3
+const POSTING_BASE_CHANCE: float = 0.085
+const OVERSEAS_FA_BASE_CHANCE: float = 0.39
 const MAX_CHALLENGE_CHANCE: float = 0.5
 # リーグ全体の年間流出上限。**安全弁であって目標ではない** — ここに毎年張り付いていたら
 # 確率側が高すぎる (同じ失敗が FA 宣言率で起きた → project_fa_market_v1_5)。
@@ -223,7 +253,7 @@ const SOURCE_KEY_MLB_SEASONS: String = "mlb_seasons"
 
 # オフの「メジャー挑戦」ステップ本体。players / teams を直接書き換え、結果サマリを返す。
 # frequency は FREQUENCY_* (オプション設定)。未知の値は標準として扱う。
-# diagnostics = true なら較正用に、挑戦の経路がある全員の {評価, 年齢, 経路, NPB での順位} を
+# diagnostics = true なら較正用に、挑戦の経路がある全員の {評価 (MLB の目で見た値), 年齢, 経路, NPB での順位} を
 # eligible_details に入れる (長期自動プレイのレポート用)。
 static func process_overseas_challenge(players: Array, teams: Array, season: PSSeason, frequency: String = FREQUENCY_STANDARD, diagnostics: bool = false) -> Dictionary:
 	var year: int = season.year if season != null else 0
@@ -284,22 +314,24 @@ static func seasons_abroad(player: PSPlayer, year: int) -> int:
 
 
 # 挑戦の経路。"" = 資格なし。日数台帳は国内FAと共有 (PSPlayer.fa_service_days)。
-# performance_rank は npb_performance の順位 (0 = 成績を見ない)。
-static func challenge_route(player: PSPlayer, performance_rank: int = 0) -> String:
+# performance_rank は npb_performance の順位 (0 = 成績を見ない)、reliever は救援の群で順位を付けた投手か。
+static func challenge_route(player: PSPlayer, performance_rank: int = 0, reliever: bool = false) -> String:
 	if player == null:
 		return ""
 	if player.fa_service_days() >= OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR:
 		return ROUTE_FA
-	if is_posting_eligible(player, performance_rank):
+	if is_posting_eligible(player, performance_rank, reliever):
 		return ROUTE_POSTING
 	return ""
 
 
-# ポスティングの条件 (POSTING_MIN_YEARS 年目を終え、NPB の順位が POSTING_MAX_RANK 位以内)。
-static func is_posting_eligible(player: PSPlayer, performance_rank: int) -> bool:
+# ポスティングの条件 (POSTING_MIN_YEARS 年目を終え、NPB の順位が POSTING_MAX_RANK 位以内。救援は
+# RELIEVER_POSTING_MAX_RANK 位以内)。順位 0 は順位の条件を見ない (NPB の成績が無いときと、打撃の前提で見る野手)。
+static func is_posting_eligible(player: PSPlayer, performance_rank: int, reliever: bool = false) -> bool:
 	if player == null or player.years < POSTING_MIN_YEARS:
 		return false
-	return performance_rank == 0 or (performance_rank > 0 and performance_rank <= POSTING_MAX_RANK)
+	var max_rank: int = RELIEVER_POSTING_MAX_RANK if reliever else POSTING_MAX_RANK
+	return performance_rank == 0 or (performance_rank > 0 and performance_rank <= max_rank)
 
 
 # 志願の母集団。FA宣言者を外すのは、国内FA市場と海外挑戦で同じ選手を二重に動かさないため
@@ -317,7 +349,20 @@ static func is_challenge_candidate(player: PSPlayer, year: int) -> bool:
 		return false
 	if player.age > MAX_CHALLENGE_AGE:
 		return false
-	return OffseasonService.player_value_score(player) >= MIN_CHALLENGE_VALUE
+	return mlb_view_value(player) >= MIN_CHALLENGE_VALUE
+
+
+# MLB の目で見た評価。MLB で別の位置 (PSMlbSeasonSimulator.mlb_position) を守る野手は、その位置で守る前提で
+# 評価し直す (二遊間の守備の上手さは乗らず、打力とサブポジションの守備で決まる)。投手と、NPB の位置のまま
+# MLB で守る野手は NPB の評価 (OffseasonService.player_value_score) のまま。捕手・二遊間の守備の割り引き
+# (MLB_DEFENSE_DOUBT_RUNS) は働きの側 (mlb_view_war) で見る。
+static func mlb_view_value(player: PSPlayer) -> int:
+	if player == null:
+		return 0
+	var mlb_position: int = PSMlbSeasonSimulator.mlb_position(player)
+	if player.is_pitcher() or mlb_position == player.position:
+		return OffseasonService.player_value_score(player)
+	return PSPlayerValueEvaluator.overall_score_at_position(PSPlayerSeasonRecord.from_player(player, 0, 0), mlb_position)
 
 
 # 年齢による関心の倍率。プライム以下は若いほど上乗せ、超えると 1 歳ごとに目減りする。
@@ -329,12 +374,14 @@ static func age_interest(age: int) -> float:
 
 
 # MLB の関心 = 能力 × NPB での働き × 年齢 × 投手の上乗せ。基準点ちょうどのプライム年齢の野手で、
-# NPB の最上位 (performance_rank 1) なら 1.0。performance_rank は npb_performance の順位で、
+# NPB の最上位 (performance_rank 1) なら 1.0。performance_rank は npb_performance の順位 (救援は救援の中の順位) で、
 # 0 は「NPB の成績を見ない」(レコードが全く無いとき)。
-static func mlb_interest(value: int, age: int, performance_rank: int = 0, pitcher: bool = false) -> float:
+static func mlb_interest(value: int, age: int, performance_rank: int = 0, pitcher: bool = false, reliever: bool = false) -> float:
 	var ability: float = 1.0 + float(maxi(0, value - INTEREST_REFERENCE_VALUE)) * VALUE_INTEREST_PER_POINT
 	var interest: float = ability * age_interest(age) * performance_interest(performance_rank)
-	return interest * PITCHER_INTEREST_MULT if pitcher else interest
+	if not pitcher:
+		return interest
+	return interest * (RELIEVER_INTEREST_MULT if reliever else PITCHER_INTEREST_MULT)
 
 
 # NPB での働きの倍率 (1 位で 1.0、下位は PERFORMANCE_FLOOR まで)。rank 0 は 1.0 (成績を見ない)。
@@ -385,9 +432,12 @@ static func mlb_farewell_chance(age: int, career_war: float) -> float:
 
 # --- NPB での成績 ---
 
-# NPB での今季の働き。今季と前季の WAR を PERFORMANCE_SEASON_WEIGHTS で平均した値 (前季のレコードが
-# 無ければ今季だけ) で、野手 / 投手それぞれの中の順位 (1 始まり) を付ける。
-# {player_id: {"war": float, "rank": int, "pitcher": bool}}。今季のレコードが無ければ空。
+# NPB での今季の働き。今季と前季の MLB の目で見た WAR (mlb_view_war) を PERFORMANCE_SEASON_WEIGHTS で
+# 平均した値 (前季のレコードが無ければ今季だけ) で、野手 / 先発 / 救援 (GROUP_*) それぞれの中の順位 (1 始まり) を付ける。
+# 投手の群は今季 (無ければ前季) の登板の内訳で決める。野手は同じ重みで平均した打撃 (wRAA) の順位 bat_rank も付ける
+# (BATTER_BATTING_RANK_LIMIT の前提に使う)。
+# {player_id: {"war": float, "rank": int, "pitcher": bool, "group": String, (野手のみ) "bat_runs": float, "bat_rank": int}}。
+# 今季のレコードが無ければ空。
 static func npb_performance(year: int, season_number: int) -> Dictionary:
 	var totals: Dictionary = {}
 	for i in range(PERFORMANCE_SEASON_WEIGHTS.size()):
@@ -397,26 +447,70 @@ static func npb_performance(year: int, season_number: int) -> Dictionary:
 			var player_id: int = int(row.get("player_id", 0))
 			if player_id <= 0:
 				continue
-			var total: Dictionary = totals.get(player_id, {"sum": 0.0, "weight": 0.0, "pitcher": str(row.get("role", "")) == "pitcher"}) as Dictionary
-			total["sum"] = float(total["sum"]) + float(row.get("war", 0.0)) * weight
+			var total: Dictionary = totals.get(player_id, {"sum": 0.0, "bat_sum": 0.0, "weight": 0.0, "group": _war_row_group(row)}) as Dictionary
+			total["sum"] = float(total["sum"]) + mlb_view_war(row, GameDb.get_player(player_id)) * weight
+			total["bat_sum"] = float(total["bat_sum"]) + float(row.get("wraa", 0.0)) * weight
 			total["weight"] = float(total["weight"]) + weight
 			totals[player_id] = total
 		if i == 0 and totals.is_empty():
 			return {}
-	var groups: Dictionary = {true: [], false: []}
+	var groups: Dictionary = {GROUP_BATTER: [], GROUP_STARTER: [], GROUP_RELIEVER: []}
 	for player_id in totals.keys():
 		var total: Dictionary = totals[player_id] as Dictionary
-		(groups[bool(total["pitcher"])] as Array).append({"id": player_id, "war": float(total["sum"]) / float(total["weight"])})
+		(groups[str(total["group"])] as Array).append({
+			"id": player_id,
+			"war": float(total["sum"]) / float(total["weight"]),
+			"bat_runs": float(total["bat_sum"]) / float(total["weight"]),
+		})
 	var performance: Dictionary = {}
-	for pitcher in groups.keys():
-		var rows: Array = groups[pitcher] as Array
+	for group in groups.keys():
+		var rows: Array = groups[group] as Array
 		rows.sort_custom(func(a: Variant, b: Variant) -> bool:
 			return float((a as Dictionary)["war"]) > float((b as Dictionary)["war"])
 		)
 		for i in range(rows.size()):
 			var row: Dictionary = rows[i] as Dictionary
-			performance[int(row["id"])] = {"war": float(row["war"]), "rank": i + 1, "pitcher": bool(pitcher)}
+			performance[int(row["id"])] = {"war": float(row["war"]), "rank": i + 1, "pitcher": group != GROUP_BATTER, "group": group}
+	var batters: Array = (groups[GROUP_BATTER] as Array).duplicate()
+	batters.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return float((a as Dictionary)["bat_runs"]) > float((b as Dictionary)["bat_runs"])
+	)
+	for i in range(batters.size()):
+		var batter: Dictionary = batters[i] as Dictionary
+		var entry: Dictionary = performance[int(batter["id"])] as Dictionary
+		entry["bat_runs"] = float(batter["bat_runs"])
+		entry["bat_rank"] = i + 1
 	return performance
+
+
+static func _war_row_group(war_row: Dictionary) -> String:
+	if str(war_row.get("role", "")) != "pitcher":
+		return GROUP_BATTER
+	return GROUP_STARTER if float(war_row.get("gs_share", 0.0)) >= 0.5 else GROUP_RELIEVER
+
+
+# MLB の目で見た 1 季の働き (WAR)。野手は MLB で守る位置 (PSMlbSeasonSimulator.mlb_position) で数え直す:
+# - NPB の位置と違えば、NPB での守備位置補正と守備得点を外し、MLB で守る位置の守備位置補正に置き換える
+#   (守備イニングの割合は NPB の守備位置補正から逆算する)。二遊間から一塁・両翼へ移る選手ほど失う補正が大きい。
+# - MLB で守る位置が捕手・二遊間なら、MLB_DEFENSE_DOUBT_RUNS を同じ割合で引く。
+# 投手と、それ以外の位置のまま MLB で守る野手は WAR のまま。
+static func mlb_view_war(war_row: Dictionary, player: PSPlayer) -> float:
+	var war: float = float(war_row.get("war", 0.0))
+	if player == null or str(war_row.get("role", "")) == "pitcher":
+		return war
+	var mlb_position: int = PSMlbSeasonSimulator.mlb_position(player)
+	var doubt: float = float(MLB_DEFENSE_DOUBT_RUNS.get(mlb_position, 0.0))
+	var npb_runs: float = float(PSMlbSeasonSimulator.POSITIONAL_RUNS.get(player.position, 0.0))
+	var rpw: float = float(war_row.get("rpw", 0.0))
+	if (mlb_position == player.position and doubt == 0.0) or npb_runs == 0.0 or rpw <= 0.0:
+		return war
+	var npb_positional: float = float(war_row.get("pos_adj", 0.0))
+	var defensive_share: float = clampf(npb_positional / npb_runs, 0.0, 1.0)
+	var lost_runs: float = doubt * defensive_share
+	if mlb_position != player.position:
+		var mlb_positional: float = float(PSMlbSeasonSimulator.POSITIONAL_RUNS.get(mlb_position, 0.0)) * defensive_share
+		lost_runs += npb_positional + float(war_row.get("fielding_runs", 0.0)) - mlb_positional
+	return war - lost_runs / rpw
 
 
 # 関心に使う順位。npb_performance が空 (今季の NPB のレコードが全く無い) なら 0 = 成績を見ない。
@@ -429,9 +523,32 @@ static func performance_rank(performance: Dictionary, player_id: int) -> int:
 	return int((performance[player_id] as Dictionary).get("rank", PERFORMANCE_UNRANKED))
 
 
-# 較正用: 挑戦できるかもしれない全員 (年齢上限の少し上まで、評価の足切り前) の {評価, 年齢, 入団年数,
-# 海外FA権があれば route = "fa" (無ければ ""), NPB での順位}。ポスティングの条件 (POSTING_*) をオフラインで
-# 振れるよう、海外FA権が無くても NPB の上位 DIAGNOSTIC_RANK_LIMIT 位以内・入団 3 年目以降なら入れる。
+# 順位を付けた群 (GROUP_*)。NPB で出場していない (npb_performance に無い) 投手は役割で決める。
+static func performance_group(performance: Dictionary, player: PSPlayer) -> String:
+	if player == null:
+		return GROUP_BATTER
+	if performance.has(player.id):
+		return str((performance[player.id] as Dictionary).get("group", GROUP_BATTER))
+	if not player.is_pitcher():
+		return GROUP_BATTER
+	return GROUP_RELIEVER if player.role == "reliever" else GROUP_STARTER
+
+
+# 野手の前提 (打撃の順位が BATTER_BATTING_RANK_LIMIT 位以内)。投手と、npb_performance が空 (成績を見ない) のときは
+# 満たす扱い。NPB で打席に立っていない野手は満たさない。
+static func meets_batting_bar(performance: Dictionary, player: PSPlayer) -> bool:
+	if player == null:
+		return false
+	if player.is_pitcher() or performance.is_empty():
+		return true
+	var bat_rank: int = int((performance.get(player.id, {}) as Dictionary).get("bat_rank", 0))
+	return bat_rank > 0 and bat_rank <= BATTER_BATTING_RANK_LIMIT
+
+
+# 較正用: 挑戦できるかもしれない全員 (年齢上限の少し上まで、評価の足切り前・野手の打撃の前提の前) の {評価, 年齢,
+# 入団年数, 海外FA権があれば route = "fa" (無ければ ""), NPB での順位, 野手の打撃の順位 bat_rank}。ポスティングの条件
+# (POSTING_* / BATTER_BATTING_RANK_LIMIT) をオフラインで振れるよう、海外FA権が無くても NPB の順位か打撃の順位が
+# DIAGNOSTIC_RANK_LIMIT 位以内・入団 3 年目以降なら入れる。
 const DIAGNOSTIC_RANK_LIMIT: int = 30
 
 static func _eligible_details(players: Array, year: int, performance: Dictionary) -> Array:
@@ -447,12 +564,16 @@ static func _eligible_details(players: Array, year: int, performance: Dictionary
 		var route: String = ROUTE_FA if player.fa_service_days() >= OVERSEAS_FA_YEARS * PSPlayer.FA_SERVICE_DAYS_PER_YEAR else ""
 		var perf: Dictionary = performance.get(player.id, {}) as Dictionary
 		var rank: int = int(perf.get("rank", 0))
-		if route.is_empty() and (rank <= 0 or rank > DIAGNOSTIC_RANK_LIMIT or player.years < 3):
+		var bat_rank: int = int(perf.get("bat_rank", 0))
+		var ranked: bool = (rank > 0 and rank <= DIAGNOSTIC_RANK_LIMIT) or (bat_rank > 0 and bat_rank <= DIAGNOSTIC_RANK_LIMIT)
+		if route.is_empty() and (not ranked or player.years < 3):
 			continue
 		details.append({
-			"value": OffseasonService.player_value_score(player), "age": player.age, "years": player.years, "route": route,
+			"value": mlb_view_value(player), "age": player.age, "years": player.years, "route": route,
 			"pitcher": player.is_pitcher(), "role": player.role, "position": player.position,
-			"rank": rank, "war": snappedf(float(perf.get("war", 0.0)), 0.01),
+			"mlb_position": PSMlbSeasonSimulator.mlb_position(player) if not player.is_pitcher() else 1,
+			"group": performance_group(performance, player),
+			"rank": rank, "bat_rank": bat_rank, "war": snappedf(float(perf.get("war", 0.0)), 0.01),
 		})
 	return details
 
@@ -468,12 +589,17 @@ static func _resolve_departures(players: Array, teams: Array, year: int, departe
 		var player: PSPlayer = player_row as PSPlayer
 		if not is_challenge_candidate(player, year):
 			continue
+		if not meets_batting_bar(performance, player):
+			continue
 		var rank: int = performance_rank(performance, player.id)
-		var route: String = challenge_route(player, rank)
+		var group: String = performance_group(performance, player)
+		var reliever: bool = group == GROUP_RELIEVER
+		# 野手のポスティングの順位の条件は打撃の前提 (meets_batting_bar) が担うので、経路には順位を渡さない。
+		var route: String = challenge_route(player, 0 if group == GROUP_BATTER else rank, reliever)
 		if route.is_empty():
 			continue
 		var value: int = OffseasonService.player_value_score(player)
-		var interest: float = mlb_interest(value, player.age, rank, player.is_pitcher())
+		var interest: float = mlb_interest(mlb_view_value(player), player.age, rank, player.is_pitcher(), reliever)
 		eligible.append({"player": player, "route": route, "value": value, "interest": interest})
 	eligible.sort_custom(func(a: Variant, b: Variant) -> bool:
 		var da: Dictionary = a as Dictionary
@@ -693,7 +819,7 @@ static func append_mlb_season(player: PSPlayer, year: int, batting: PSBatterStat
 
 # 選手の MLB 成績 (年の古い順)。
 # [{"year": int, "batting": PSBatterStats, "pitching": PSPitcherStats, "metrics": Dictionary}]。
-# metrics は野手 {woba, wrc_plus, bsr, fielding, war}、投手 {fip, war} (PSMlbSeasonSimulator)。
+# metrics は野手 {woba, wrc_plus, bsr, fielding, war, pos}、投手 {fip, war} (PSMlbSeasonSimulator)。
 static func mlb_seasons(player: PSPlayer) -> Array:
 	var seasons: Array = []
 	if player == null:

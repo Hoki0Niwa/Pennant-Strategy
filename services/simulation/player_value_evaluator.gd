@@ -101,6 +101,19 @@ static func _fielder_starter_score(record: PSPlayerSeasonRecord, apply_fatigue_p
 	return _visible_score(float(offense) * offense_weight + float(best_defense) * defense_weight)
 
 
+# 指定した守備位置で守る前提の野手の評価 (overall_score と同じ尺度・重み)。overall_score は最も得意な位置で
+# 数えるが、こちらは守る位置を固定する (MLB で別の位置を守る選手の評価に使う)。
+static func overall_score_at_position(record: PSPlayerSeasonRecord, position: int) -> int:
+	if record == null:
+		return 0
+	var offense: int = _batting_score(record, false)
+	var defense: int = defensive_score_for_position(record, position)
+	return _visible_score(
+		float(offense) * starter_offense_weight_for_position(position)
+		+ float(defense) * starter_defense_weight_for_position(position)
+	)
+
+
 static func batting_score(record: PSPlayerSeasonRecord) -> int:
 	return _batting_score(record, true)
 
