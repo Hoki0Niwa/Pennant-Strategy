@@ -7,7 +7,13 @@ class_name PSMlbSeasonSimulator
 # 打者の K% / BB% / HR% / BABIP など、投手の被 K% / 被 BB% / 被 HR% / 被 BABIP を、能力 z の一次式を
 # ロジットに通して出す (BATTER_RATE_MODELS / PITCHER_RATE_MODELS)。係数は NPB の試合エンジンが出した
 # 年度成績 (初期世界の開始前の年、打者 200 打席以上・投手 150 打者以上) に当てはめた値で、
-# 「この能力ならこの成績」という試合エンジンの傾向を写している。
+# 「この能力ならこの成績」という試合エンジンの傾向を写している。打者の hr だけは、現行エンジンで回した
+# 一軍成績 (初期世界の 1 季 × 6 seed) のうち長打力 (Bat_Impact + 0.5×Bat_Loft) 3.0 以上の打者に当てはめてある。
+# エンジンの本塁打は長打力の低い側で急に減るので、全打者に一次式を当てはめると傾きが下側で決まり、
+# MLB へ行く長打力上位の本塁打を 2 倍以上に見積もる。その代わり長打力の低い打者の MLB での本塁打は
+# NPB でのエンジンの値より多めに出る。
+# **試合エンジンの能力 → 成績の応答を変えたら、当てはめ直して係数を揃える** (揃っていないと、NPB で
+# 打っている率と MLB の成績の出発点がずれ、移籍組の NPB→MLB の変化が換算の狙いから外れる)。
 #
 # ## NPB → MLB の換算
 # K% / BB% / HR% / BABIP は「NPB のリーグ平均に対する本人の差」を MLB のリーグ平均に乗せ、MLB の相手が強いぶん
@@ -96,7 +102,7 @@ const INCUMBENT_CLOSER_NPB_SAVES: int = 20
 const BATTER_RATE_MODELS: Dictionary = {
 	"k": {"intercept": -1.0771, "Bat_KAvoid": -0.3743, "Bat_Impact": 0.0649, "Bat_Aggression": -0.0346, "Run_Judgment": -0.0173},
 	"bb": {"intercept": -3.1576, "Bat_BBCreate": 0.3732, "Bat_KAvoid": 0.0493, "Run_Judgment": 0.0206},
-	"hr": {"intercept": -5.0526, "Bat_Impact": 0.3468, "Bat_Loft": 0.2347, "Bat_Barrel": 0.1163, "Bat_BBCreate": -0.0866},
+	"hr": {"intercept": -5.226, "Bat_Impact": 0.477, "Bat_Loft": 0.232, "Bat_Barrel": 0.034, "Bat_BBCreate": 0.02},
 	"babip": {"intercept": -1.262, "Bat_Impact": 0.1154, "Bat_Barrel": 0.0259, "Run_Speed": 0.0731},
 	"double_share": {"intercept": -1.5411, "Bat_Impact": 0.0671},
 	"triple_share": {"intercept": -4.6726, "Run_Speed": 0.3501, "Bat_Barrel": 0.0348, "Bat_Loft": 0.0507},

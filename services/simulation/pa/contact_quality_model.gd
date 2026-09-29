@@ -9,7 +9,7 @@ class_name PSContactQualityModel
 # 同じ z カーブと重みを打者は加点、投手は減点に使うため、両者の水準が一緒に下がる環境でも
 # 対戦の相対差が維持される。正側の最上位だけは打者・投手別の固定上限で飽和させる。
 # 基準値と上限は母集団から動的に算出しない。
-const EV_BASE: float = 94.25                 # 打球初速の基準値(mph)。
+const EV_BASE: float = 94.85                 # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
 # 長打力カーブが高いほど EV を上げる量(mph)。
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
@@ -40,6 +40,20 @@ const POWER_IDEAL_LA_TARGET: float = 28.0
 const POWER_IDEAL_LA_EV_BOOST: float = 1.4
 const POWER_IDEAL_LA_EXTRA_EV: float = 1.45
 const POWER_IDEAL_CARRY_BONUS: float = 0.070
+# 理想角の打球の飛距離の伸びが長打力カーブに比例する割合。理想角は長打力の上位ほど引くので、
+# 上げると主に最上位の本塁打が増える。
+const IDEAL_POWER_CURVE_CARRY_WEIGHT: float = 0.13
+# 長打力カーブが負 (長打力がカーブ中心より低い) 打者の、本塁打になりうる打ち上げ (打球角
+# WEAK_POWER_CARRY_MIN_LA 以上) の失速の強さ。飛距離を カーブ × この値 だけ縮める (カーブ -0.5 なら 6.5%)。
+# ゴロとライナーには掛けないので、長打力の低い巧打者の安打は変えずに本塁打だけを減らせる。
+# カーブが正の打者には掛けない (上位の本塁打は EV と理想角の上積みが持つ)。上げると長打力の低い打者の
+# 本塁打が減る。最低角を下げるとライナーも失速し、長打力の低い打者の打率まで下がる。
+const WEAK_POWER_CARRY_WEIGHT: float = 0.13
+const WEAK_POWER_CARRY_MIN_LA: float = 20.0
+# 飛距離倍率 (carry) の範囲。物理側 (PSBattedBallPhysicsResolver) も同じ範囲でクランプする。
+# 上限を下げると長打力の最上位の理想角の打球が同じ飛距離で頭打ちになり、本塁打数が横並びになる。
+const CARRY_MULTIPLIER_MIN: float = 0.76
+const CARRY_MULTIPLIER_MAX: float = 1.25
 
 # 詰まり/芯外し(mishit)の発生率と、その際のEV低下・角度の散らばり。
 const MISHIT_BASE_RATE: float = 0.100
@@ -103,13 +117,20 @@ const PITCH_VELOCITY_BASE: float = 145.0
 # 同種の、ただのチューニング定数。母集団の実測値を追跡・更新する仕組みではない)。
 const BAT_CONTACT_CURVE_CENTER: float = 0.9995
 const BAT_GAP_CURVE_CENTER: float = 1.3568
-const BAT_HR_CURVE_CENTER: float = 2.0017
+# 長打力カーブだけは母集団平均より上 (一軍の規定打者の中位の少し下) に置き、カーブの急な部分を
+# 一軍の打者の帯へ合わせる。下げるとリーグ全体の本塁打と打球速度が増え、長打力の低い打者と
+# 中位の打者の本塁打の差が縮む。
+const BAT_HR_CURVE_CENTER: float = 2.55
 const BAT_AVOID_K_CURVE_CENTER: float = 0.7213
 const PIT_STUFF_CURVE_CENTER: float = 1.5804
 const CURVE_WIDTH_Z: float = 1.6          # 能力カーブの標準的な幅（z スケール）。
 const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭めの幅。
-# 打球品質を直接動かすカーブの正側上位だけを漸近圧縮し、強打者・エースの差が無制限に重ならないようにする。
+# 長打力(本塁打)カーブの幅。広げるほど長打力の上位でもカーブが飽和せず、本塁打が長打力の
+# 最上位へ集まる。狭めると上位の本塁打数が横並びになる。
+const BAT_HR_CURVE_WIDTH_Z: float = 1.8
+# 接触カーブの正側上位だけを漸近圧縮し、芯を捉える打者とエースの差が無制限に重ならないようにする。
 # 低〜中位と負側は同じカーブ・重みのままなので、能力帯が下がった環境での投打相殺は維持される。
+# 長打力カーブには掛けない (本塁打は実勢でも上位ほど突出するので、上限は幅と下の天井で決める)。
 # 投手側は K/BB の差も別経路で重なるため、stuff の正側上限を打者側より低くする。
 const BATTER_QUALITY_CURVE_TAIL_PIVOT: float = 0.65
 const BATTER_QUALITY_CURVE_TAIL_SPAN: float = 0.25
@@ -118,17 +139,24 @@ const PITCHER_STUFF_CURVE_TAIL_SPAN: float = 0.2
 # 打球品質を動かす「打者カーブ - 投手カーブ」の飽和点。上のテール圧縮が能力の絶対値に掛かるのに対し、
 # こちらは**対戦の差**に掛かる。両者が同じだけ弱くなれば差は動かないので得点環境は移動せず
 # (レベル不変)、同水準どうしの能力差も残り、極端なミスマッチだけが飽和する。
-# EV / 芯 / 詰まり / 理想角の4経路は投打の重みが対称なので同じ差を共有する。
+# 芯 / 詰まりの2経路 (接触 vs 球威) と EV / 理想角の2経路 (長打力 vs 球威) は、それぞれ投打の重みが
+# 対称なので経路の組ごとに同じ差を共有する。
 #
-# **天井は投打で非対称** (差が正 = 打者優位)。打者優位側 (0.55+0.25=0.80) を投手優位側
-# (0.28+0.12=0.40) より高くしてある。同じ天井にすると、本塁打王を実勢 (30-40本) へ戻したときに
-# 規定 ERA 1点台の投手が帯 (3人以下) を超える — 失点は 0 で下げ止まるが打撃の上振れには
-# 同じ頭打ちが無いという実勢の非対称を、そのまま天井の差として持たせている。
+# **天井は投打で非対称** (差が正 = 打者優位)。打者優位側を投手優位側より高くしてある。
+# 同じ天井にすると規定 ERA 1点台の投手が帯 (3人以下) を超える — 失点は 0 で下げ止まるが
+# 打撃の上振れには同じ頭打ちが無いという実勢の非対称を、そのまま天井の差として持たせている。
+# 投手優位側は両経路で共通。投手優位側を広げると長打力の低い打者の打球速度がゴロ・ライナーまで
+# 落ちて打率が下がるので、長打力の低い打者の本塁打は WEAK_POWER_CARRY_* で減らす。
 # 検証は tools/run_balance_report の 3 シードと tools/run_farm_report --seasons=3 の勝率ゲート。
 const MATCHUP_CURVE_PIVOT: float = 0.55
 const MATCHUP_CURVE_SPAN: float = 0.25
 const MATCHUP_CURVE_PITCHER_PIVOT: float = 0.28
 const MATCHUP_CURVE_PITCHER_SPAN: float = 0.12
+# 長打力 vs 球威 (EV / 理想角の経路) の打者優位側の飽和点。接触 vs 球威 (芯 / 詰まり) は上の値を使う。
+# 本塁打は打者ごとの差が接触より大きい (NPB 規定打者の HR/PA は p10 .005 〜 p90 .045) ので接触より
+# 広く取る。上げると長打力上位の本塁打が増える (下げると上位の本塁打数が横並びになる)。
+const POWER_MATCHUP_CURVE_PIVOT: float = 1.2
+const POWER_MATCHUP_CURVE_SPAN: float = 0.3
 
 
 # 1試合の間は変わらない係数。rule_values() がルール辞書から読み、試合キャッシュ
@@ -143,6 +171,7 @@ class RuleValues:
 	var pit_stuff_curve_center: float = 0.0
 	var curve_width_z: float = 0.0
 	var avoid_k_curve_width_z: float = 0.0
+	var bat_hr_curve_width_z: float = 0.0
 	var batter_quality_curve_tail_pivot: float = 0.0
 	var batter_quality_curve_tail_span: float = 0.0
 	var pitcher_stuff_curve_tail_pivot: float = 0.0
@@ -151,6 +180,8 @@ class RuleValues:
 	var matchup_curve_span: float = 0.0
 	var matchup_curve_pitcher_pivot: float = 0.0
 	var matchup_curve_pitcher_span: float = 0.0
+	var power_matchup_curve_pivot: float = 0.0
+	var power_matchup_curve_span: float = 0.0
 	var ev_base: float = 0.0
 	var ev_home_run_power_weight: float = 0.0
 	var ev_stuff_weight: float = 0.0
@@ -217,6 +248,8 @@ class RuleValues:
 	var ev_max: float = 0.0
 	var power_ideal_carry_bonus: float = 0.0
 	var ideal_power_curve_carry_weight: float = 0.0
+	var weak_power_carry_weight: float = 0.0
+	var weak_power_carry_min_la: float = 0.0
 	var spray_pull_probability_base: float = 0.0
 	var spray_pull_inside_bias: float = 0.0
 	var spray_pull_outside_bias: float = 0.0
@@ -246,6 +279,7 @@ static func rule_values(rules: Dictionary) -> RuleValues:
 	values.pit_stuff_curve_center = _rule_float(rules, "pit_stuff_curve_center", PIT_STUFF_CURVE_CENTER)
 	values.curve_width_z = _rule_float(rules, "curve_width_z", CURVE_WIDTH_Z)
 	values.avoid_k_curve_width_z = _rule_float(rules, "avoid_k_curve_width_z", AVOID_K_CURVE_WIDTH_Z)
+	values.bat_hr_curve_width_z = _rule_float(rules, "bat_hr_curve_width_z", BAT_HR_CURVE_WIDTH_Z)
 	values.batter_quality_curve_tail_pivot = _rule_float(rules, "batter_quality_curve_tail_pivot", BATTER_QUALITY_CURVE_TAIL_PIVOT)
 	values.batter_quality_curve_tail_span = _rule_float(rules, "batter_quality_curve_tail_span", BATTER_QUALITY_CURVE_TAIL_SPAN)
 	values.pitcher_stuff_curve_tail_pivot = _rule_float(rules, "pitcher_stuff_curve_tail_pivot", PITCHER_STUFF_CURVE_TAIL_PIVOT)
@@ -254,6 +288,8 @@ static func rule_values(rules: Dictionary) -> RuleValues:
 	values.matchup_curve_span = _rule_float(rules, "matchup_curve_span", MATCHUP_CURVE_SPAN)
 	values.matchup_curve_pitcher_pivot = _rule_float(rules, "matchup_curve_pitcher_pivot", MATCHUP_CURVE_PITCHER_PIVOT)
 	values.matchup_curve_pitcher_span = _rule_float(rules, "matchup_curve_pitcher_span", MATCHUP_CURVE_PITCHER_SPAN)
+	values.power_matchup_curve_pivot = _rule_float(rules, "power_matchup_curve_pivot", POWER_MATCHUP_CURVE_PIVOT)
+	values.power_matchup_curve_span = _rule_float(rules, "power_matchup_curve_span", POWER_MATCHUP_CURVE_SPAN)
 	values.ev_base = _rule_float(rules, "ev_base", EV_BASE)
 	values.ev_home_run_power_weight = _rule_float(rules, "ev_home_run_power_weight", EV_HOME_RUN_POWER_WEIGHT)
 	values.ev_stuff_weight = _rule_float(rules, "ev_stuff_weight", EV_STUFF_WEIGHT)
@@ -319,7 +355,9 @@ static func rule_values(rules: Dictionary) -> RuleValues:
 	values.ev_min = _rule_float(rules, "ev_min", EV_MIN)
 	values.ev_max = _rule_float(rules, "ev_max", EV_MAX)
 	values.power_ideal_carry_bonus = _rule_float(rules, "power_ideal_carry_bonus", POWER_IDEAL_CARRY_BONUS)
-	values.ideal_power_curve_carry_weight = _rule_float(rules, "ideal_power_curve_carry_weight", 0.090)
+	values.ideal_power_curve_carry_weight = _rule_float(rules, "ideal_power_curve_carry_weight", IDEAL_POWER_CURVE_CARRY_WEIGHT)
+	values.weak_power_carry_weight = _rule_float(rules, "weak_power_carry_weight", WEAK_POWER_CARRY_WEIGHT)
+	values.weak_power_carry_min_la = _rule_float(rules, "weak_power_carry_min_la", WEAK_POWER_CARRY_MIN_LA)
 	values.spray_pull_probability_base = _rule_float(rules, "spray_pull_probability_base", SPRAY_PULL_PROBABILITY_BASE)
 	values.spray_pull_inside_bias = _rule_float(rules, "spray_pull_inside_bias", SPRAY_PULL_INSIDE_BIAS)
 	values.spray_pull_outside_bias = _rule_float(rules, "spray_pull_outside_bias", SPRAY_PULL_OUTSIDE_BIAS)
@@ -383,7 +421,7 @@ static func generate_with_rule_values(
 	# 各能力 z を [-1, 1] のカーブへ変換する（接触/ギャップ/本塁打/三振回避/球威）。
 	var contact_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_contact_z", 0.0)), bat_contact_curve_center, curve_width_z)
 	var gap_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_gap_z", 0.0)), bat_gap_curve_center, curve_width_z)
-	var home_run_curve: float = PSBalanceProfile.ability_curve_z(batter_hr_z, bat_hr_curve_center, curve_width_z)
+	var home_run_curve: float = PSBalanceProfile.ability_curve_z(batter_hr_z, bat_hr_curve_center, values.bat_hr_curve_width_z)
 	var avoid_k_curve: float = PSBalanceProfile.ability_curve_z(float(precomp.get("batter_avoid_k_z", 0.0)), bat_avoid_k_curve_center, values.avoid_k_curve_width_z)
 	var stuff_curve: float = PSBalanceProfile.ability_curve_z(pitcher_stuff_z, pit_stuff_curve_center, curve_width_z)
 	var batter_tail_pivot: float = values.batter_quality_curve_tail_pivot
@@ -391,19 +429,23 @@ static func generate_with_rule_values(
 	var pitcher_tail_pivot: float = values.pitcher_stuff_curve_tail_pivot
 	var pitcher_tail_span: float = values.pitcher_stuff_curve_tail_span
 	contact_curve = PSBalanceProfile.compress_z_tail(contact_curve, batter_tail_pivot, batter_tail_span)
-	home_run_curve = PSBalanceProfile.compress_z_tail(home_run_curve, batter_tail_pivot, batter_tail_span)
 	stuff_curve = PSBalanceProfile.compress_z_tail(stuff_curve, pitcher_tail_pivot, pitcher_tail_span)
 	# 打球品質へ効く投打の差を1度だけ作り、飽和させてから各経路で使い回す。
-	# power 系 (EV / 理想角) は長打力 vs 球威、contact 系 (芯 / 詰まり) は接触 vs 球威。
-	var matchup_pivot: float = values.matchup_curve_pivot
-	var matchup_span: float = values.matchup_curve_span
-	var matchup_pitcher_pivot: float = values.matchup_curve_pitcher_pivot
-	var matchup_pitcher_span: float = values.matchup_curve_pitcher_span
+	# power 系 (EV / 理想角) は長打力 vs 球威、contact 系 (芯 / 詰まり) は接触 vs 球威で、
+	# 飽和点はそれぞれ POWER_MATCHUP_* / MATCHUP_* を使う。
 	var power_delta: float = PSBalanceProfile.compress_matchup_advantage(
-		home_run_curve - stuff_curve, matchup_pivot, matchup_span, matchup_pitcher_pivot, matchup_pitcher_span
+		home_run_curve - stuff_curve,
+		values.power_matchup_curve_pivot,
+		values.power_matchup_curve_span,
+		values.matchup_curve_pitcher_pivot,
+		values.matchup_curve_pitcher_span
 	)
 	var contact_delta: float = PSBalanceProfile.compress_matchup_advantage(
-		contact_curve - stuff_curve, matchup_pivot, matchup_span, matchup_pitcher_pivot, matchup_pitcher_span
+		contact_curve - stuff_curve,
+		values.matchup_curve_pivot,
+		values.matchup_curve_span,
+		values.matchup_curve_pitcher_pivot,
+		values.matchup_curve_pitcher_span
 	)
 
 	# 投球結果(球速・コース・ゾーン内外・2ストライク防御・強制アウト)を取り出す。
@@ -526,7 +568,8 @@ static func generate_with_rule_values(
 	# 理想角を引いたら EV を上乗せし、角度を理想角へ寄せる。
 	var ideal_power_launch: bool = Rng.roll_float() < ideal_power_chance
 	if ideal_power_launch:
-		ev += values.power_ideal_la_ev_boost + max(0.0, home_run_curve) * values.power_ideal_la_extra_ev
+		# 上積みは長打力カーブに比例させ、長打力の低い打者 (カーブが負) ほど小さくする。
+		ev += values.power_ideal_la_ev_boost + home_run_curve * values.power_ideal_la_extra_ev
 		var ideal_angle: float = values.power_ideal_la_target
 		la = lerp(la, ideal_angle, values.power_ideal_la_pull)
 
@@ -540,15 +583,19 @@ static func generate_with_rule_values(
 	var spray_gap_curve: float = gap_curve if la >= 8.0 and la <= 24.0 else min(0.0, gap_curve)
 	var spray: float = _generate_spray(batter, pitcher, location_height, spray_gap_curve, chase, variance_multiplier, values)
 	var carry_multiplier: float = 1.0
+	if la >= values.weak_power_carry_min_la:
+		carry_multiplier += min(0.0, home_run_curve) * values.weak_power_carry_weight
 	if ideal_power_launch:
-		carry_multiplier += values.power_ideal_carry_bonus + max(0.0, home_run_curve) * values.ideal_power_curve_carry_weight
+		# 飛距離の伸びも長打力カーブに比例し、カーブが負の打者ほど伸びが小さい。上限 CARRY_MULTIPLIER_MAX を
+		# 低くすると長打力の上位どうしの飛距離が同じになり、本塁打数が横並びになる。
+		carry_multiplier += values.power_ideal_carry_bonus + home_run_curve * values.ideal_power_curve_carry_weight
 
 	# 確定した打球の質(EV/LA/spray/carry と状況フラグ)を辞書で返す。
 	return {
 		"exit_velocity": _round_float(ev, 2),
 		"launch_angle": _round_float(la, 2),
 		"spray_angle": _round_float(spray, 2),
-		"carry_multiplier": _round_float(clamp(carry_multiplier, 0.76, 1.10), 3),
+		"carry_multiplier": _round_float(clamp(carry_multiplier, CARRY_MULTIPLIER_MIN, CARRY_MULTIPLIER_MAX), 3),
 		"gap_liner_pull": _round_float(gap_liner_pull, 3),
 		"ideal_power_launch": ideal_power_launch,
 		"protective_out": protective_out,

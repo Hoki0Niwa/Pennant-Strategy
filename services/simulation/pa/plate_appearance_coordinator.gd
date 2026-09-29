@@ -36,8 +36,13 @@ const PITCHER_OUTPUT_TAIL_PIVOT: float = 1.7843
 const PITCHER_OUTPUT_TAIL_SPAN: float = 100.0
 const PITCHER_STUFF_TAIL_PIVOT: float = 2.0684
 const PITCHER_STUFF_TAIL_SPAN: float = 100.0
+# 本塁打の長打力は span を広く取って実質的に圧縮しない。長打力の上位ほど本塁打が突出する形は
+# PSContactQualityModel の長打力カーブの幅と POWER_MATCHUP_* の天井で決める。
 const BATTER_HR_TAIL_PIVOT: float = 2.6190
-const BATTER_HR_TAIL_SPAN: float = 1.20
+const BATTER_HR_TAIL_SPAN: float = 100.0
+# 打者 z ビューに載せる本塁打の長打力 (Bat_Impact + 0.5 × Bat_Loft、左右の相性込み)。
+# Impact のテール圧縮より前の値で作る。能力キーではないので他の計算は読まない。
+const BATTER_HR_POWER_KEY: String = "_hr_power"
 const BATTER_AVOID_K_TAIL_PIVOT: float = 1.1550
 const BATTER_AVOID_K_TAIL_SPAN: float = 0.80
 const BATTER_CONTACT_TAIL_PIVOT: float = 1.4678
@@ -780,7 +785,11 @@ static func _apply_pitcher_tail_limits(pitcher_z: Dictionary, pivot: float, span
 
 
 static func _limited_batter_hr_z(batter_z: Dictionary, pivot: float, span: float) -> float:
-	var raw: float = float(batter_z.get("Bat_Impact", 0.0)) + 0.5 * float(batter_z.get("Bat_Loft", 0.0))
+	var raw: float
+	if batter_z.has(BATTER_HR_POWER_KEY):
+		raw = float(batter_z[BATTER_HR_POWER_KEY])
+	else:
+		raw = float(batter_z.get("Bat_Impact", 0.0)) + 0.5 * float(batter_z.get("Bat_Loft", 0.0))
 	return PSBalanceProfile.compress_z_tail(raw, pivot, span)
 
 
@@ -880,6 +889,7 @@ static func _build_batter_z_view(
 	platoon_sign: float
 ) -> Dictionary:
 	var view: Dictionary = PSZAbilityAdapter.batter_view(record)
+	var uncompressed_impact: float = float(view.get("Bat_Impact", 0.0))
 	# ⚠️ 順序が重要: **テール圧縮を先に掛け、左右のシフトは後から足す。**
 	# 圧縮は「その打者の能力がどこで頭打ちになるか」の較正で、左右の相性は対戦ごとの
 	# マッチアップ効果なので、圧縮の対象にすると
@@ -888,12 +898,19 @@ static func _build_batter_z_view(
 	#      (打力四分位ごとの平均スプリット .057 → .096 → .111 → .119)
 	# の 2 つが起きる。2026-09-08 に後入れへ変更した ([[project_platoon_usage]])。
 	_apply_batter_tail_limits(view, rules)
+	var compressed_impact: float = float(view.get("Bat_Impact", 0.0))
 	PSPlatoonMatchup.apply_batter_shift(
 		view,
 		record,
 		platoon_sign,
 		_rule_float(rules, "platoon_ability_shift_z", PSPlatoonMatchup.ABILITY_SHIFT_Z)
 	)
+	# 本塁打の長打力は Impact の二塁打向けテール圧縮 (batter_gap_tail_*) を通さずに作る。
+	# 通すと Impact の上位が 3.0 付近で頭打ちになり、長打力の最上位どうしで本塁打数の差が出なくなる。
+	# 左右のシフトは Impact に足された量をそのまま載せる。
+	var platoon_impact_shift: float = float(view.get("Bat_Impact", 0.0)) - compressed_impact
+	view[BATTER_HR_POWER_KEY] = uncompressed_impact + platoon_impact_shift \
+		+ 0.5 * float(view.get("Bat_Loft", 0.0))
 	return view
 
 

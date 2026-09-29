@@ -20,7 +20,11 @@ static func compute(quality: Dictionary) -> Dictionary:
 	var ev: float = float(quality.get("exit_velocity", 80.0))
 	var la: float = float(quality.get("launch_angle", 10.0))
 	var spray: float = float(quality.get("spray_angle", 0.0))
-	var carry_multiplier: float = clamp(float(quality.get("carry_multiplier", 1.0)), 0.70, 1.15)
+	var carry_multiplier: float = clamp(
+		float(quality.get("carry_multiplier", 1.0)),
+		PSContactQualityModel.CARRY_MULTIPLIER_MIN,
+		PSContactQualityModel.CARRY_MULTIPLIER_MAX
+	)
 
 	var trajectory: String = _trajectory(la)
 	var distance: float = _distance(ev, la, trajectory) * carry_multiplier

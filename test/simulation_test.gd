@@ -1523,6 +1523,82 @@ func test_pa_precomp_limits_pitcher_and_batter_tails() -> void:
 	assert_float(float(average_precomp.get("pitcher_stuff_z", 0.0))).is_equal(0.0)
 
 
+# 本塁打の長打力は二塁打向けの Impact テール圧縮を通さない。通すと Impact の上位が 3.0 付近で
+# 頭打ちになり、長打力の最上位どうしで本塁打数の差が出なくなる。二塁打の経路は圧縮後の値を使う。
+func test_batter_hr_power_skips_gap_tail_compression() -> void:
+	var slugger: PSPlayerSeasonRecord = _fielder(819, "Slugger", 1.0)
+	slugger.z_abilities_snapshot["Bat_Impact"] = 3.8
+	slugger.z_abilities_snapshot["Bat_Loft"] = 3.0
+	var pitcher: PSPlayerSeasonRecord = _pitcher(809, "Unknown Hand Pitcher", 0.0)
+	pitcher.throwing_hand = ""
+	var precomp: Dictionary = PSPlateAppearanceCoordinator._build_precomp(slugger, pitcher, {}, {}, false)
+	assert_float(float(precomp.get("batter_gap_z", 0.0))).override_failure_message(
+		"二塁打の経路の Impact がテール圧縮されていない"
+	).is_less(3.0)
+	var hr_span: float = ModManager.rule_float(
+		"simulation.plate_appearance.batter_hr_tail_span", PSPlateAppearanceCoordinator.BATTER_HR_TAIL_SPAN
+	)
+	var hr_pivot: float = ModManager.rule_float(
+		"simulation.plate_appearance.batter_hr_tail_pivot", PSPlateAppearanceCoordinator.BATTER_HR_TAIL_PIVOT
+	)
+	var expected: float = PSBalanceProfile.compress_z_tail(3.8 + 0.5 * 3.0, hr_pivot, hr_span)
+	assert_float(float(precomp.get("batter_hr_z", 0.0))).override_failure_message(
+		"本塁打の長打力が圧縮前の Impact から作られていない"
+	).is_equal_approx(expected, 0.001)
+
+
+# 長打力の最上位どうしでも打球速度の差が残る。長打力カーブや天井が上位で飽和すると、
+# 長打力 +1.0σ と +2.5σ の打者が同じだけ本塁打を打つようになる。
+func test_contact_quality_power_keeps_separating_top_sluggers() -> void:
+	var old_seed: int = Rng.current_seed
+	var old_state: int = Rng.generator.state
+	var strong_ev: float = _contact_quality_average_power_ev(1.0)
+	var elite_ev: float = _contact_quality_average_power_ev(2.5)
+	Rng.current_seed = old_seed
+	Rng.generator.seed = old_seed
+	Rng.generator.state = old_state
+	print("POWER_TOP_EV strong=%.2f elite=%.2f gap=%.2f" % [strong_ev, elite_ev, elite_ev - strong_ev])
+	assert_float(elite_ev - strong_ev).override_failure_message(
+		"長打力の最上位で打球速度の差が飽和している"
+	).is_greater(1.5)
+
+
+# 打球の伸び (carry) は長打力で変わる。長打力の低い打者の本塁打になりうる打ち上げは失速し
+# (ゴロ・ライナーは変えない)、最上位の打者の理想角の打球は飛距離倍率の上限で頭打ちにならない。
+func test_contact_quality_carry_follows_power() -> void:
+	var old_seed: int = Rng.current_seed
+	var old_state: int = Rng.generator.state
+	var weak: Array = _contact_quality_power_samples(-1.5, 800)
+	var elite: Array = _contact_quality_power_samples(2.5, 800)
+	Rng.current_seed = old_seed
+	Rng.generator.seed = old_seed
+	Rng.generator.state = old_state
+
+	var weak_airborne: int = 0
+	for quality_value in weak:
+		var quality: Dictionary = quality_value as Dictionary
+		if bool(quality["ideal_power_launch"]):
+			continue
+		var carry: float = float(quality["carry_multiplier"])
+		var min_la: float = ModManager.rule_float(
+			"simulation.contact_quality.weak_power_carry_min_la", PSContactQualityModel.WEAK_POWER_CARRY_MIN_LA
+		)
+		if float(quality["launch_angle"]) < min_la:
+			assert_float(carry).override_failure_message("ゴロ・ライナーの飛距離まで長打力で縮んでいる").is_equal(1.0)
+		else:
+			weak_airborne += 1
+			assert_float(carry).override_failure_message("長打力の低い打者の打ち上げた打球が失速していない").is_less(1.0)
+	assert_int(weak_airborne).is_greater(100)
+	var elite_ideal_max: float = 0.0
+	for quality_value in elite:
+		var quality: Dictionary = quality_value as Dictionary
+		if bool(quality["ideal_power_launch"]):
+			elite_ideal_max = maxf(elite_ideal_max, float(quality["carry_multiplier"]))
+	assert_float(elite_ideal_max).override_failure_message(
+		"最上位の打者の理想角の打球が飛距離の上限で頭打ちになっている"
+	).is_greater(1.12)
+
+
 func test_pa_game_cache_reuses_static_views_and_keeps_pitcher_adjustment_local() -> void:
 	var batter: PSPlayerSeasonRecord = _fielder(814, "Cached Batter", 0.8)
 	var pitcher: PSPlayerSeasonRecord = _pitcher(804, "Cached Pitcher", 0.6)
@@ -1855,10 +1931,10 @@ func test_contact_quality_preserves_matchup_balance_when_both_levels_drop() -> v
 	).is_less(1.0)
 
 
-# 対戦優位の天井は**投打で非対称** (打者優位側 0.80 / 投手優位側 0.40)。
+# 対戦優位の天井は**投打で非対称** (打者優位側は接触 0.80 / 長打力 1.50、投手優位側は共通の 0.40)。
 # 大きなミスマッチでだけ差が出て、±0.8σ 程度の通常域では対称のまま
 # (test_contact_quality_preserves_matchup_balance_when_both_levels_drop が固定している)。
-# 同じ天井に戻すと、本塁打王を実勢へ戻したときに規定 ERA 1点台の投手が増えすぎる。
+# 同じ天井にすると、本塁打王を実勢へ戻したときに規定 ERA 1点台の投手が増えすぎる。
 func test_contact_quality_matchup_ceiling_is_asymmetric_for_large_mismatches() -> void:
 	var old_seed: int = Rng.current_seed
 	var old_state: int = Rng.generator.state
@@ -2281,6 +2357,42 @@ func _contact_quality_average_ev(batter_delta: float, pitcher_delta: float) -> f
 		})
 		total_ev += float(quality.get("exit_velocity", 0.0))
 	return total_ev / float(n)
+
+
+# 長打力 (batter_hr_z) だけを動かし、他の打者能力と球威はカーブ中心に置いた平均打球速度。
+func _contact_quality_average_power_ev(hr_delta: float) -> float:
+	var total_ev: float = 0.0
+	var samples: Array = _contact_quality_power_samples(hr_delta, 2400)
+	for quality_value in samples:
+		total_ev += float((quality_value as Dictionary).get("exit_velocity", 0.0))
+	return total_ev / float(samples.size())
+
+
+# 長打力 (batter_hr_z) だけを動かし、他の打者能力と球威はカーブ中心に置いた打球品質の標本。
+func _contact_quality_power_samples(hr_delta: float, n: int) -> Array:
+	Rng.set_seed_value(13579)
+	var samples: Array = []
+	var pitch_outcome: Dictionary = {
+		"pitch_velocity": 145,
+		"in_zone": true,
+		"location_height": "middle",
+		"two_strike_protective": false,
+		"protective_out": false,
+	}
+	for _i in range(n):
+		samples.append(PSContactQualityModel.generate(null, null, pitch_outcome, {}, {
+			"batter_contact_z": PSContactQualityModel.BAT_CONTACT_CURVE_CENTER,
+			"batter_gap_z": PSContactQualityModel.BAT_GAP_CURVE_CENTER,
+			"batter_hr_z": PSContactQualityModel.BAT_HR_CURVE_CENTER + hr_delta,
+			"batter_avoid_k_z": PSContactQualityModel.BAT_AVOID_K_CURVE_CENTER,
+			"pitcher_stuff_z": PSContactQualityModel.PIT_STUFF_CURVE_CENTER,
+			"batter_fatigue": 0,
+			"batter_is_pitcher": false,
+			"pitcher_contact_damage": 0.0,
+			"pitcher_gb_bias": 0.0,
+			"pitcher_hr_bias": 0.0,
+		}))
+	return samples
 
 
 func test_starter_stamina_window_varies_by_pitcher() -> void:
