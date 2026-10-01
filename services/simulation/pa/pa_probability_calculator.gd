@@ -23,8 +23,8 @@ const OUTCOMES: Array[String] = [OUTCOME_STRIKEOUT, OUTCOME_WALK, OUTCOME_HIT_BY
 # raw z から実測母平均を引いてから重みを掛けていたものを代数的に1つの logit 定数へ畳み込んだ値
 # (K_LOGIT_BASE = logit(0.34) - Pit_KCreate母平均*K_CREATE_WEIGHT + Bat_KAvoid母平均*K_AVOID_WEIGHT 等)。
 # BIP だけは能力補正を持たないため、確率のまま(較正で直接いじる基準率)。
-const K_LOGIT_BASE: float = -0.54
-const BB_LOGIT_BASE: float = -1.0
+const K_LOGIT_BASE: float = -0.50
+const BB_LOGIT_BASE: float = -1.03
 const HBP_LOGIT_BASE: float = -3.1010
 const LEAGUE_BIP_BASE: float = 0.72  # インプレー(打球)の基準率。上げると三振・四球が相対的に減る。
 # K スコア係数: 個々の能力(z)が三振 logit を動かす強さ。

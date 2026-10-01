@@ -1098,7 +1098,7 @@ static func _apply_archetype(z: Dictionary, _position: int, archetype: String) -
 	for key_value in bonuses.keys():
 		var key: String = str(key_value)
 		if z.has(key):
-			z[key] = clampf(float(z[key]) + float(bonuses[key]), -3.5, 4.0)
+			z[key] = maxf(float(z[key]) + float(bonuses[key]), -3.5)
 	# 捕手・内野・外野で存在しない守備群のボーナスは無視される。
 
 
@@ -1112,7 +1112,7 @@ static func _scouted_player_data(data: Dictionary, estimate_downside: int, estim
 		var key: String = str(key_value)
 		# 表示値−真値を [-upside, downside] に置く。高額帯は downside のみなので表示が天井になる。
 		var display_shift: float = -z_upside + Rng.roll_float() * (z_downside + z_upside)
-		noisy_z[key] = clampf(float(noisy_z[key]) + display_shift, -3.5, 4.0)
+		noisy_z[key] = maxf(float(noisy_z[key]) + display_shift, -3.5)
 	display["z_abilities"] = noisy_z
 	display["raw_abilities"] = OffseasonService.generated_raw_abilities(int(data.get("position", 1)), noisy_z)
 	return display

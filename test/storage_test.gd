@@ -468,9 +468,7 @@ func test_ensure_season_records_keeps_retired_record_but_erases_fully_removed_pl
 # 引退選手の最終シーズン成績が正規化テーブルから消えないことを見る。
 func test_retired_player_final_season_stats_survive_offseason_save_reload() -> void:
 	var old_state: Dictionary = _capture_app_state()
-	var old_player_rows: Array = []
-	for player_value in GameDb.players:
-		old_player_rows.append((player_value as PSPlayer).to_dict())
+	var old_player_rows: Array = _player_rows_snapshot()
 	var test_save_id: String = ""
 	var team: PSTeam = GameDb.teams[0] as PSTeam
 	var target_player: PSPlayer = null
@@ -527,9 +525,7 @@ func test_retired_player_final_season_stats_survive_offseason_save_reload() -> v
 
 func test_start_offseason_archives_season_without_postseason() -> void:
 	var old_state: Dictionary = _capture_app_state()
-	var old_player_rows: Array = []
-	for player_value in GameDb.players:
-		old_player_rows.append((player_value as PSPlayer).to_dict())
+	var old_player_rows: Array = _player_rows_snapshot()
 	var test_save_id: String = ""
 	var team: PSTeam = GameDb.teams[0] as PSTeam
 
@@ -1264,7 +1260,7 @@ func test_players_are_saved_as_rows_and_only_changed_players_are_written() -> vo
 	if not SQLiteStoreService.is_available():
 		return
 	var old_state: Dictionary = _capture_app_state()
-	var old_player_rows: Array = SaveService._players_to_dicts()
+	var old_player_rows: Array = _player_rows_snapshot()
 	AppState.select_team((GameDb.teams[0] as PSTeam).id)
 	AppState.start_new_season()
 	var test_save_id: String = SaveContext.active_save_id()
@@ -1320,7 +1316,7 @@ func test_retired_players_are_skipped_in_season_and_checked_on_safety_triggers()
 	if not SQLiteStoreService.is_available():
 		return
 	var old_state: Dictionary = _capture_app_state()
-	var old_player_rows: Array = SaveService._players_to_dicts()
+	var old_player_rows: Array = _player_rows_snapshot()
 	AppState.select_team((GameDb.teams[0] as PSTeam).id)
 	AppState.start_new_season()
 	var test_save_id: String = SaveContext.active_save_id()
@@ -1370,7 +1366,7 @@ func test_in_season_days_do_not_modify_retired_players() -> void:
 	if not SQLiteStoreService.is_available():
 		return
 	var old_state: Dictionary = _capture_app_state()
-	var old_player_rows: Array = SaveService._players_to_dicts()
+	var old_player_rows: Array = _player_rows_snapshot()
 	AppState.select_team((GameDb.teams[0] as PSTeam).id)
 	AppState.start_new_season()
 	var test_save_id: String = SaveContext.active_save_id()
@@ -1508,6 +1504,15 @@ func test_save_selection_list_load_delete() -> void:
 	assert_bool(SaveContext.has_active_save()).is_false()
 
 	_restore_app_state(old_state, "")
+
+
+# GameDb.players の復元用スナップショット。PSPlayer.to_dict() は source_data を参照のまま返すので、
+# 深いコピーにしないとテスト中の引退判定などの書き込みがスナップショットにも残り、復元しても戻らない。
+func _player_rows_snapshot() -> Array:
+	var rows: Array = []
+	for player_value in GameDb.players:
+		rows.append((player_value as PSPlayer).to_dict().duplicate(true))
+	return rows
 
 
 func _capture_app_state() -> Dictionary:

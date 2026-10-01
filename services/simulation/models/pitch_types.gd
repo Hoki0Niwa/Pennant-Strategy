@@ -137,13 +137,12 @@ const GENERATED_TOP_MASTERY_BONUS: float = 0.35
 const GENERATED_MASTERY_STEP: float = 0.5
 const GENERATED_MASTERY_NOISE: float = 0.9
 const MASTERY_MIN: float = -2.0
-const MASTERY_MAX: float = 2.8
 
 
 # z 能力 + seed から arsenal を生成する (ドラフト/外国人/初期シード投手の単一ソース)。
 #  - 直球を必ず1本含み、残りは投手リーン(K vs ムーブ)に応じた変化球から割当 (assign_types)。
 #  - mastery は stuff 系 z (KCreate/BarrelDeny/EdgeRate) にアンカーしノイズを足す
-#    (→ エースは良い球種を持ちやすく z と矛盾しない)。スケールは synth mastery と同じ [-2.0, 2.8]。
+#    (→ エースは良い球種を持ちやすく z と矛盾しない)。下限は MASTERY_MIN、上限は置かない。
 # derive_from_z との違い: あちらは z から一意に決まる「派生表示」で個性が無い。こちらは seed_value で
 # 球種数・構成・完成度が散るので、**保存される実データ**を作るときはこちらを使う。
 # 乱数はローカル RandomNumberGenerator に閉じるため、同じ seed_value なら常に同じアーセナルになる
@@ -169,7 +168,7 @@ static func generate_arsenal(z_abilities: Dictionary, seed_value: int) -> Array:
 		var mastery: float = anchor + GENERATED_TOP_MASTERY_BONUS - float(i) * GENERATED_MASTERY_STEP + noise
 		arsenal.append({
 			"type": str(types[i]) if i < types.size() else FOUR_SEAM,
-			"mastery": clampf(mastery, MASTERY_MIN, MASTERY_MAX),
+			"mastery": maxf(mastery, MASTERY_MIN),
 		})
 	return arsenal
 
@@ -250,7 +249,7 @@ static func display_name(type_key: String) -> String:
 
 
 # 完成度(mastery z) を S〜D の5段階へ変換する (UI 表示用)。
-# mastery は概ね [-2.0, 2.8]、実戦級閾値は EFFECTIVE_PITCH_Z(=-0.4)。
+# mastery は概ね -2.0〜3 (上限は置かない)、実戦級閾値は EFFECTIVE_PITCH_Z(=-0.4)。
 const MASTERY_GRADE_S_MIN: float = 1.6   # 決め球級 (display ≈70+)
 const MASTERY_GRADE_A_MIN: float = 0.8   # 武器になる (display ≈60+)
 const MASTERY_GRADE_B_MIN: float = 0.0   # 平均 (display ≈50+)

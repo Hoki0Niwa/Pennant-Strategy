@@ -94,11 +94,14 @@ const FARM_CLUB_CANDIDATE_MAX_AGE: int = 26
 # 実 NPB の指名は年1〜3人 (2024年の2人が初) で、いずれも育成指名だった。
 #
 # ⚠️ 効きは急。CPU の候補スコアが `bucket_grade` (= bucket 内順位の百分位) 由来で、
-# 割引が順位を動かすと候補密度の高い帯を一気に通過するため。実測 (seed 12345、ボード10人):
-#   1.00 → **9人指名** (うち3人が支配下・1巡目もあり) / 0.88 → 3人 (支配下1) /
-#   0.84 → 2〜3人で全員が育成指名 / 0.76 → 0人。下げ過ぎると指名ゼロになる。
-# 較正ガードは `test_farm_club_prospects_are_drafted_at_a_realistic_rate` (1〜3人 + 育成1人以上)。
-const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.885
+# 割引が順位を動かすと候補密度の高い帯を一気に通過するため。1.00 だと 9人前後が指名され
+# (支配下・1巡目を含む)、0.76 前後で指名ゼロになる。
+# ⚠️ 指名数は割引よりも**専用球団の初期ロスターの当たり外れ**で大きく振れる (同じ割引で 0〜6人)。
+# 初期ロスターは固定 seed (FarmClubService.INITIAL_ROSTER_SEED) の 1 実現で、ドラフト候補の生成が
+# 乱数を引く回数を変えるだけで別の実現になる。較正は初期ロスターの seed を変えた多数の実現の平均で行う
+# (24 実現の平均: 0.885 → 3.8人 / 0.86 → 3.4人)。
+# 較正ガードは `test_farm_club_prospects_are_drafted_at_a_realistic_rate` (複数実現の平均 + 育成1人以上)。
+const FARM_CLUB_DRAFT_GRADE_SCALE: float = 0.86
 # 候補 ID の名前空間。生成候補は 1..CANDIDATE_POOL_SIZE を使うので衝突しない値から始める。
 const FARM_CLUB_CANDIDATE_ID_BASE: int = 100000
 
@@ -1412,6 +1415,7 @@ static func _candidate_player_data(candidate_id: int, name: String, age: int, po
 	var ability_variance: int = int(quality.get("ability_variance", 12))
 	var z_abilities: Dictionary = Offseason.generated_z_abilities(position, center, 70, ability_variance)
 	_tune_draft_generated_z_abilities(z_abilities, position)
+	_apply_draft_strengths(z_abilities, position)
 	var raw_abilities: Dictionary = Offseason.generated_raw_abilities(position, z_abilities)
 	var arsenal: Array = Offseason.generated_arsenal(position, z_abilities)
 	var data: Dictionary = {
@@ -1483,7 +1487,9 @@ static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> v
 		_shift_z(z, "Bat_KAvoid", -0.24, -2.4, 3.2)
 		_shift_z(z, "Run_Speed", -0.16, -2.4, 3.2)
 	elif roll <= 70:
-		power_center += _rng_delta_z(0, 5)
+		# 長打型でも巧打型でもない約半数の打者。この上積みが長打力の分布の中位を決める —
+		# 下げるほど中位の打者の本塁打が減り、長打型と得意 "power" の打者だけが上位へ抜ける。
+		power_center += _rng_delta_z(-3, 2)
 		_set_z(z, "Bat_Impact", power_center + _rng_delta_z(-2, 3), -2.0, 3.2)
 		_set_z(z, "Bat_Loft", power_center + _rng_delta_z(-3, 3), -2.0, 3.2)
 	else:
@@ -1495,6 +1501,74 @@ static func _tune_draft_generated_z_abilities(z: Dictionary, position: int) -> v
 
 	_apply_position_ability_bias(z, position)
 	# 打撃再ロール後にも C/SS の打撃テール上限 (守備スペクトラム制約) を保証する。
+	Offseason.apply_fielder_bat_spectrum_cap(z, position)
+
+
+# 野手のドラフト候補の「得意」(尖り)。候補は 0〜2 個の得意を持ち、得意に含まれる能力だけを
+# 指数分布の幅 b で引き上げ、打撃・走塁の残りの能力をそれぞれ b × DRAFT_STRENGTH_TRADEOFF 下げる。
+# 総合の平均はほぼ動かさず、選手内の能力差と各能力の上側の裾を広げる。
+# 得意の能力は通常の生成上限 (max_display 70) を越え、DRAFT_STRENGTH_MAX_Z へ漸近する。
+# ⚠️ 投手には付けない。付けると (成長の得意集中と重なって) 世代交代後の世界で先発の上位が突出し、
+# 規定の防御率 1 点台が増え、救援の FIP が先発より悪くなる (report_health の
+# relief_fip_minus_starter_fip / pitcher_era_under_2_count が fail する)。投手の尖りは成長側だけで作る。
+#   DRAFT_STRENGTH_COUNT_WEIGHTS: 得意の数 0/1/2 の重み (%)。1/2 を増やすと尖った候補が増える。
+#   DRAFT_STRENGTH_SCALE_Z: b の平均 (z)。指数分布なので b が平均の 2.5 倍を超えるのは約 8%。
+#     上げると一芸だけ突出した候補 (リーグ最上位級の単能力の卵) が増える。
+#   DRAFT_STRENGTH_TRADEOFF: 残りの能力 1 つあたりの差し引き (b に対する比)。上げると得意以外が弱い
+#     「一芸型」になり、0 だと得意のぶん総合が純増する。
+const DRAFT_STRENGTH_COUNT_WEIGHTS: Array = [45, 40, 15]
+const DRAFT_STRENGTH_SCALE_Z: float = 0.4
+const DRAFT_STRENGTH_TRADEOFF: float = 0.12
+const DRAFT_STRENGTH_MAX_Z: float = 2.8
+# 守備の得意の漸近先。守備型ポジションの守備能力は位置バイアスで既に 3 前後まであるため、
+# 打撃・走塁の得意と同じ上限では伸びない。
+const DRAFT_DEFENSE_STRENGTH_MAX_Z: float = 3.36
+# 野手の得意。"defense" は守備位置の守備能力 (_defense_keys_for_position) を指す。
+const DRAFT_BATTER_STRENGTH_GROUPS: Dictionary = {
+	"power": ["Bat_Impact", "Bat_Loft"],
+	"contact": ["Bat_KAvoid", "Bat_Barrel"],
+	"eye": ["Bat_BBCreate"],
+	"speed": ["Run_Speed", "Run_Steal", "Run_Judgment"],
+	"defense": [],
+}
+# 野手の差し引き先。守備の得意もここから差し引く (守備で突出した候補は打撃が弱い)。
+const DRAFT_BATTER_TRADEOFF_KEYS: Array = [
+	"Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Spray",
+	"Run_Speed", "Run_Judgment", "Run_Steal",
+]
+
+
+static func _apply_draft_strengths(z: Dictionary, position: int) -> void:
+	if position == 1:
+		return
+	var roll: int = Rng.roll_percent()
+	var count: int = 0
+	var cumulative: int = 0
+	for i in range(DRAFT_STRENGTH_COUNT_WEIGHTS.size()):
+		cumulative += int(DRAFT_STRENGTH_COUNT_WEIGHTS[i])
+		if roll <= cumulative:
+			count = i
+			break
+	if count <= 0:
+		return
+	var group_names: Array = DRAFT_BATTER_STRENGTH_GROUPS.keys()
+	var strength_keys: Array = []
+	var total_boost: float = 0.0
+	for _i in range(mini(count, group_names.size())):
+		var group_name: String = str(group_names.pop_at(Rng.range_int(0, group_names.size() - 1)))
+		var is_defense: bool = group_name == "defense"
+		var keys: Array = _defense_keys_for_position(position) if is_defense else DRAFT_BATTER_STRENGTH_GROUPS[group_name] as Array
+		var ceiling: float = DRAFT_DEFENSE_STRENGTH_MAX_Z if is_defense else DRAFT_STRENGTH_MAX_Z
+		var boost: float = -DRAFT_STRENGTH_SCALE_Z * log(maxf(0.000001, 1.0 - Rng.roll_float()))
+		total_boost += boost
+		for key in keys:
+			var before: float = _z_value(z, key)
+			# 既に漸近域にある能力を引き上げで下げないよう、元の値を下限にする。
+			z[key] = maxf(before, PSAbilityScale.soft_clamp_z(before + boost, Offseason.Z_ABILITY_MIN, ceiling))
+			strength_keys.append(key)
+	for key in DRAFT_BATTER_TRADEOFF_KEYS:
+		if not strength_keys.has(key):
+			_shift_z(z, key, -total_boost * DRAFT_STRENGTH_TRADEOFF, -2.4, 3.36)
 	Offseason.apply_fielder_bat_spectrum_cap(z, position)
 
 
@@ -1658,7 +1732,7 @@ static func _candidate_quality(_source_type: String, age: int) -> Dictionary:
 	return {
 		"center": int(clamp(center, 35, 68)),
 		"potential_bonus": int(clamp(potential_bonus, 2, 28)),
-		"ability_variance": int(clamp(10 + volatility, 8, 18)),
+		"ability_variance": int(clamp(8 + volatility, 6, 16)),
 	}
 
 

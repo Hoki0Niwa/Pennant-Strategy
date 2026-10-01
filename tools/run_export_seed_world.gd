@@ -53,6 +53,12 @@ func _ready() -> void:
 
 	var exported: Dictionary = PSSeedWorldExporter.export_world(reporter, int(report.get("end_year", 0)), paths)
 	var written_paths: Dictionary = exported.get("paths", {}) as Dictionary
+	if options.has("report"):
+		# 進化 run の季ごとの記録 (long_autoplay と同じ形)。世界が定常に届いているかを季の推移で確かめる。
+		var report_file: FileAccess = FileAccess.open(ProjectSettings.globalize_path(str(options["report"])), FileAccess.WRITE)
+		if report_file != null:
+			report_file.store_string(JSON.stringify(report))
+			report_file.close()
 
 	print("Seasons completed: %d/%d (end_year=%d)" % [
 		completed, int(report.get("seasons_requested", 0)), int(report.get("end_year", 0)),
@@ -106,6 +112,8 @@ func _parse_args() -> Dictionary:
 			options["records"] = arg.get_slice("=", 1)
 		elif arg.begins_with("--seasons-history="):
 			options["seasons_history"] = arg.get_slice("=", 1)
+		elif arg.begins_with("--report="):
+			options["report"] = arg.get_slice("=", 1)
 	return options
 
 
@@ -119,3 +127,4 @@ func _print_usage() -> void:
 	print("  --teams=PATH   出力先 (既定 res://data/initial_teams.csv)")
 	print("  --records=PATH 開始前の選手成績の出力先 (既定 res://data/initial_player_records.csv)")
 	print("  --seasons-history=PATH 開始前の季の履歴の出力先 (既定 res://data/initial_seasons.json)")
+	print("  --report=PATH  進化 run の季ごとの記録 (long_autoplay と同じ JSON) の出力先 (省略時は書かない)")

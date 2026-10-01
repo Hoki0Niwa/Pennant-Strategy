@@ -1189,7 +1189,7 @@ static func _pitch_values_from_profile(record: PSPlayerSeasonRecord, profile: Di
 
 
 static func _profile_grade(record: PSPlayerSeasonRecord, weights: Dictionary) -> float:
-	return clampf(_weighted_z(record, weights), -4.0, 4.0)
+	return maxf(_weighted_z(record, weights), -4.0)
 
 
 static func _weighted_z(record: PSPlayerSeasonRecord, weights: Dictionary) -> float:

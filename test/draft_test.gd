@@ -97,6 +97,104 @@ func test_generation_role_ratio_roughly_balanced() -> void:
 	assert_float(frac).is_between(0.35, 0.55)
 
 
+const PITCHER_CORE_KEYS: Array = [
+	"Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_LoftControl", "Pit_BarrelDeny",
+	"Pit_Efficiency", "Pit_Stamina", "Pit_FatigueResist", "Pit_HoldRunner",
+]
+
+
+# 生成の上限 (max_display 70) へは soft_clamp_z で漸近するので、上限ちょうどの値に候補が並ばない。
+# clampf で切ると、投手の各能力の約 2% が上限値 (z 1.6) に同値で張り付く。
+func test_generated_candidates_do_not_pile_up_at_generation_cap() -> void:
+	Rng.set_seed_value(20260930)
+	var cap_z: float = PSAbilityScale.display_to_z(70)
+	var values: int = 0
+	var at_cap: int = 0
+	for i in range(1500):
+		var candidate: Dictionary = DraftService._generate_candidate(i + 1)
+		if int(candidate.get("position", 0)) != 1:
+			continue
+		var z: Dictionary = (candidate["player_template"] as Dictionary)["z_abilities"] as Dictionary
+		for key in PITCHER_CORE_KEYS:
+			values += 1
+			if absf(float(z[key]) - cap_z) < 0.0005:
+				at_cap += 1
+	assert_int(values).is_greater(5000)
+	assert_float(float(at_cap) / float(values)).override_failure_message(
+		"生成上限ちょうどに張り付いた能力が多すぎる: %d / %d" % [at_cap, values]
+	).is_less(0.002)
+
+
+# 得意 (尖り): 得意の区分の能力だけが上がり、打撃・走塁の残りの能力は全て同じだけ下がる。
+# 1 能力の上がり幅は 1 能力あたりの差し引きより大きい (総合を保ったまま一芸が立つ)。
+# 得意を持つ野手候補は約半数。投手には得意を付けない。
+func test_draft_strength_raises_its_group_and_trades_off_the_rest() -> void:
+	Rng.set_seed_value(20260930)
+	var bat_keys: Array = DraftService.DRAFT_BATTER_TRADEOFF_KEYS
+	var keys: Array = bat_keys + DraftService._defense_keys_for_position(9)
+	var spiky: int = 0
+	for _i in range(200):
+		var z: Dictionary = {}
+		for key in keys:
+			z[key] = 0.5
+		DraftService._apply_draft_strengths(z, 9)
+		var raised: Array = []
+		var lowered: Array = []
+		for key in keys:
+			if float(z[key]) > 0.5 + 1e-9:
+				raised.append(key)
+			elif float(z[key]) < 0.5 - 1e-9:
+				lowered.append(key)
+		if raised.is_empty():
+			assert_int(lowered.size()).is_equal(0)
+			continue
+		spiky += 1
+		for key in bat_keys:
+			assert_bool(raised.has(key) or lowered.has(key)).is_true()
+		var cut: float = 0.5 - float(z[lowered[0]])
+		var largest_gain: float = 0.0
+		for key in lowered:
+			assert_bool(bat_keys.has(key)).is_true()
+			assert_float(0.5 - float(z[key])).is_equal_approx(cut, 1e-6)
+		for key in raised:
+			largest_gain = maxf(largest_gain, float(z[key]) - 0.5)
+		assert_float(largest_gain).is_greater(cut)
+	# DRAFT_STRENGTH_COUNT_WEIGHTS の 0 個以外 = 55%。
+	assert_int(spiky).is_between(90, 130)
+
+	var pitcher_z: Dictionary = {}
+	for key in PITCHER_CORE_KEYS:
+		pitcher_z[key] = 0.5
+	for _i in range(50):
+		DraftService._apply_draft_strengths(pitcher_z, 1)
+	for key in PITCHER_CORE_KEYS:
+		assert_float(float(pitcher_z[key])).is_equal(0.5)
+
+
+# 得意の能力は通常の生成上限 (表示 70) を越えて伸びるので、上限より上に候補がいる。
+# 越えた分も DRAFT_STRENGTH_MAX_Z へ漸近し、そこで並ばない。
+func test_draft_strengths_reach_above_the_usual_generation_cap() -> void:
+	Rng.set_seed_value(20260930)
+	var cap_z: float = PSAbilityScale.display_to_z(70)
+	var fielders: int = 0
+	var above_cap: int = 0
+	var highest: float = -99.0
+	for i in range(1500):
+		var candidate: Dictionary = DraftService._generate_candidate(i + 1)
+		if int(candidate.get("position", 0)) == 1:
+			continue
+		fielders += 1
+		var z: Dictionary = (candidate["player_template"] as Dictionary)["z_abilities"] as Dictionary
+		var best: float = -99.0
+		for key in ["Bat_KAvoid", "Bat_BBCreate", "Bat_Barrel", "Run_Speed", "Run_Steal", "Run_Judgment"]:
+			best = maxf(best, float(z[key]))
+		highest = maxf(highest, best)
+		if best > cap_z + 0.05:
+			above_cap += 1
+	assert_float(float(above_cap) / float(fielders)).is_between(0.02, 0.30)
+	assert_float(highest).is_less(DraftService.DRAFT_STRENGTH_MAX_Z)
+
+
 func test_main_and_development_segments_split() -> void:
 	# 在籍55 (外国人0) の球団は指名枠 (6〜7) をそのまま使い、在籍68の球団は hard 空き2までに縮む。
 	var teams: Array = [

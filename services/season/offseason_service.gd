@@ -147,8 +147,10 @@ const GROWTH_KIND_LABELS: Dictionary = {
 	"major_decline": "growth.kind.major_decline",
 }
 # 成長/衰え時の 1 キーあたり z 変化量の一律スケール。値を上げるほどオフごとの能力の振れが大きくなる。
-# z は Z_ABILITY_MIN/MAX (±4) でクランプされるため暴走しない。年齢別の成長/劣化バランス
-# (_growth_kind_probabilities) は確率側で決まり、このスケールには線形なので交差年齢は変わらない。
+# 年齢別の成長/劣化バランス (_growth_kind_probabilities) は確率側で決まり、このスケールには線形なので
+# 交差年齢は変わらない。
+# z は下側だけ Z_ABILITY_MIN でクランプし、上限は置かない (最上位の能力は伸びたぶんだけ伸び、
+# 上限に同値の山ができない)。1 年の伸びは有限なので、上位の広がりは成長の年数で決まる。
 const GROWTH_DELTA_SCALE: float = 1.8
 # 覚醒の一部は、多数の関連能力が同時に伸びる稀な突出成長になる。
 # 値を上げるほど正規的な母集団から離れたスターが増える。
@@ -156,7 +158,32 @@ const AWAKENING_OUTLIER_SHARE: float = 0.20
 const AWAKENING_OUTLIER_DELTA_MIN: float = 0.45
 const AWAKENING_OUTLIER_DELTA_MAX: float = 0.70
 const Z_ABILITY_MIN: float = -4.0
-const Z_ABILITY_MAX: float = 4.0
+# 伸びを選手内の得意へ寄せる偏り。区分 (GROWTH_STRENGTH_GROUPS) ごとに、能力 k の伸びへ
+# 1 + GROWTH_STRENGTH_BIAS × max(0, z_k − 区分内の平均) を掛け、区分内の倍率の平均が 1 になるよう
+# 割り戻す (伸びにだけ掛け、衰えは等倍)。区分全体の伸びの総量は変わらず、得意だけが上へ伸び、
+# 残りは少しずつ控えめに伸びる — 各能力の分布は下側を広げずに上側の裾だけが伸びる (右に歪む)。
+#   GROWTH_STRENGTH_BIAS: 上げると得意への集中が強まり、一芸型と各能力の上側の裾が増える。
+#   GROWTH_STRENGTH_MULTIPLIER_MAX: 1 能力の倍率の上限。
+const GROWTH_STRENGTH_BIAS: float = 0.35
+const GROWTH_STRENGTH_MULTIPLIER_MAX: float = 1.6
+# 得意の判定で差し引く、区分内での各能力の標準的な高さ (12球団の在籍選手の平均の、区分平均からの差)。
+# 能力ごとに標準の高さが違うので、生の z で比べると Bat_Impact のように元々高い能力が誰にとっても
+# 「得意」になり、その能力だけがリーグ全体で底上げされる。載っていない能力は 0。
+const GROWTH_STRENGTH_TYPICAL_OFFSET_Z: Dictionary = {
+	"Bat_KAvoid": -0.25, "Bat_BBCreate": -0.15, "Bat_Impact": 0.40, "Bat_Loft": 0.30, "Bat_Barrel": 0.0,
+	"Bat_Spray": -0.30, "Run_Speed": 0.25, "Run_Judgment": -0.15, "Run_Steal": -0.15,
+	"Pit_KCreate": 0.20, "Pit_BBPrevent": 0.20, "Pit_ImpactLimit": -0.10, "Pit_LoftControl": 0.15,
+	"Pit_BarrelDeny": 0.0, "Pit_Efficiency": -0.15, "Pit_Stamina": -0.10, "Pit_FatigueResist": -0.10,
+	"Pit_HoldRunner": -0.10,
+}
+# 得意を比べる区分。スタイル軸 (Bat_Aggression / Bat_Platoon / Pit_EdgeRate) は優劣ではないので入れない。
+const GROWTH_STRENGTH_GROUPS: Array = [
+	["Bat_KAvoid", "Bat_BBCreate", "Bat_Impact", "Bat_Loft", "Bat_Barrel", "Bat_Spray", "Run_Speed", "Run_Judgment", "Run_Steal"],
+	["Pit_KCreate", "Pit_BBPrevent", "Pit_ImpactLimit", "Pit_LoftControl", "Pit_BarrelDeny", "Pit_Efficiency", "Pit_Stamina", "Pit_FatigueResist", "Pit_HoldRunner"],
+	["C_Framing", "C_Blocking", "C_Throw", "C_GameCall", "C_FieldSecure"],
+	["IF_Reach", "IF_Secure", "IF_ThrowPower", "IF_ThrowAccuracy", "IF_Exchange", "IF_PositionFit"],
+	["OF_Reach", "OF_Route", "OF_Secure", "OF_ArmPower", "OF_ArmAccuracy", "OF_Release", "OF_PositionFit"],
+]
 
 # 越冬 (シーズン終了〜翌春キャンプ) で回復する怪我日数。長期離脱 (トミー・ジョン等) を
 # 翌季へ正しく持ち越すための減算量。tunable (較正フェーズで調整)。詳細 [[project_injury_system]]。
@@ -1616,17 +1643,20 @@ static func _mutate_abilities(player: PSPlayer, positive_scale: float = 1.0) -> 
 	var changed_keys: int = 0
 	var net_z_delta: float = 0.0
 	var raw_velocity_delta: int = 0
+	# 得意の判定は今年の成長を当てる前の能力で行う (キーの処理順で結果が変わらないように)。
+	var strength_multipliers: Dictionary = _growth_strength_multipliers(player.z_abilities)
 	for key_variant in keys_to_mutate:
 		var key: String = str(key_variant)
+		var current: float = float(player.z_abilities.get(key, 0.0))
 		var d_z: float = _growth_delta_z(growth_kind, player.age, key, talent_outlier)
-		if d_z > 0.0 and positive_scale != 1.0:
-			d_z *= positive_scale
+		if d_z > 0.0:
+			d_z *= positive_scale * float(strength_multipliers.get(key, 1.0))
 		if absf(d_z) < 0.005:
 			continue
-		var current: float = float(player.z_abilities.get(key, 0.0))
-		player.z_abilities[key] = clamp(current + d_z, Z_ABILITY_MIN, Z_ABILITY_MAX)
+		var next_value: float = maxf(current + d_z, Z_ABILITY_MIN)
+		player.z_abilities[key] = next_value
 		changed_keys += 1
-		net_z_delta += d_z
+		net_z_delta += next_value - current
 	if player.is_pitcher():
 		raw_velocity_delta = _growth_delta_velocity(growth_kind, player.age)
 		if raw_velocity_delta > 0 and positive_scale != 1.0:
@@ -1943,6 +1973,37 @@ static func _generated_max_velocity_from_z(z_abilities: Dictionary) -> int:
 	if Rng.roll_percent() <= 2:
 		velocity += float(Rng.range_int(8, 17))
 	return clampi(int(round(velocity)), GEN_MAX_VELOCITY_MIN, GEN_MAX_VELOCITY_MAX)
+
+
+# GROWTH_STRENGTH_GROUPS の各能力 → 伸びに掛ける倍率。標準の高さ (GROWTH_STRENGTH_TYPICAL_OFFSET_Z)
+# を差し引いた値が区分内の平均を上回る分に比例して大きくし、区分内の倍率の平均が 1 になるよう割り戻す。
+# 区分の能力が 2 つ未満しか無い選手は載せない (倍率 1)。
+static func _growth_strength_multipliers(z: Dictionary) -> Dictionary:
+	var multipliers: Dictionary = {}
+	for group_value in GROWTH_STRENGTH_GROUPS:
+		var keys: Array = []
+		var total: float = 0.0
+		for key in group_value as Array:
+			if z.has(key):
+				keys.append(key)
+				total += _strength_relative_z(z, key)
+		if keys.size() < 2:
+			continue
+		var mean: float = total / float(keys.size())
+		var raw: Dictionary = {}
+		var raw_total: float = 0.0
+		for key in keys:
+			var weight: float = 1.0 + GROWTH_STRENGTH_BIAS * maxf(0.0, _strength_relative_z(z, key) - mean)
+			raw[key] = weight
+			raw_total += weight
+		var norm: float = raw_total / float(keys.size())
+		for key in keys:
+			multipliers[key] = minf(float(raw[key]) / norm, GROWTH_STRENGTH_MULTIPLIER_MAX)
+	return multipliers
+
+
+static func _strength_relative_z(z: Dictionary, key: String) -> float:
+	return float(z[key]) - float(GROWTH_STRENGTH_TYPICAL_OFFSET_Z.get(key, 0.0))
 
 
 static func _growth_key_multiplier(kind: String, age: int, key: String) -> float:
@@ -2580,16 +2641,17 @@ static func _rand_z_normal(center: int, sd: int, min_value: int = 25, max_value:
 	var u2: float = Rng.roll_float()
 	var gauss: float = clampf(sqrt(-2.0 * log(u1)) * cos(TAU * u2), -3.0, 3.0)
 	var value_z: float = PSAbilityScale.display_to_z(center) + gauss * float(sd) / PSAbilityScale.DISPLAY_STDEV
-	return clampf(value_z, PSAbilityScale.display_to_z(min_value), PSAbilityScale.display_to_z(max_value))
+	return PSAbilityScale.soft_clamp_z(value_z, PSAbilityScale.display_to_z(min_value), PSAbilityScale.display_to_z(max_value))
 
 
 static func _rand_z(center: int, variance: int = 12, min_value: int = 25, max_value: int = 88) -> float:
 	# center/variance/min/max は 1-100 の talent authoring 入力。生成される能力値そのものは
 	# z 空間で直接抽選し、1-100 の中間能力値を作らない (シミュは z 能力のみ使用)。
+	# min/max は soft_clamp_z の漸近先なので、抽選が限界を超えても限界値に同値の山はできない。
 	var center_z: float = PSAbilityScale.display_to_z(center)
 	var variance_z: float = float(variance) / PSAbilityScale.DISPLAY_STDEV
 	var value_z: float = center_z + (Rng.roll_float() * 2.0 - 1.0) * variance_z
-	return clampf(value_z, PSAbilityScale.display_to_z(min_value), PSAbilityScale.display_to_z(max_value))
+	return PSAbilityScale.soft_clamp_z(value_z, PSAbilityScale.display_to_z(min_value), PSAbilityScale.display_to_z(max_value))
 
 
 static func _range_float(min_value: float, max_value: float) -> float:

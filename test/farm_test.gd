@@ -825,26 +825,48 @@ func test_farm_club_prospects_are_drafted_at_a_realistic_rate() -> void:
 	# `FARM_CLUB_DRAFT_GRADE_SCALE` の較正ガード。実 NPB の指名は年1〜3人で、大半が育成指名。
 	# 割引が効かなくなると専用球団の候補がボード上位を占め、10人中10人が指名される
 	# (割引 1.00 での実測)。**この帯は「野球として成立するか」ではなく較正の再現性を張っている。**
-	_reload_world()
-	Rng.set_seed_value(20260815)
-	var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 0)
-	DraftService.complete_automatically(state)
-	var result: Dictionary = DraftService.finalize_draft(state, GameDb.players)
-
+	# 指名数は専用球団の初期ロスターの当たり外れで 0〜6人と振れるので、初期ロスターの seed を
+	# 変えた複数の実現で平均を見る (1 実現だと、候補生成の乱数の引き方が変わるだけで帯を出入りする)。
+	var roster_seeds: Array = [FarmClubService.INITIAL_ROSTER_SEED]
+	for i in range(1, 8):
+		roster_seeds.append(1000 + i * 37)
 	var picked: int = 0
 	var development_picked: int = 0
-	for rookie_row in result.get("rookies", []) as Array:
-		var rookie: Dictionary = rookie_row as Dictionary
-		if str(rookie.get("source_type", "")) != DraftService.FARM_CLUB_SOURCE_TYPE:
-			continue
-		picked += 1
-		if bool(rookie.get("development_player", false)):
-			development_picked += 1
-	assert_int(picked).override_failure_message(
-		"farm club picks = %d (expected 1..3; check FARM_CLUB_DRAFT_GRADE_SCALE)" % picked
-	).is_between(1, 3)
+	for roster_seed in roster_seeds:
+		_reload_world_with_farm_roster_seed(int(roster_seed))
+		Rng.set_seed_value(20260815)
+		var state: Dictionary = DraftService.create_draft_state(GameDb.players, GameDb.teams, null, 0)
+		DraftService.complete_automatically(state)
+		var result: Dictionary = DraftService.finalize_draft(state, GameDb.players)
+		for rookie_row in result.get("rookies", []) as Array:
+			var rookie: Dictionary = rookie_row as Dictionary
+			if str(rookie.get("source_type", "")) != DraftService.FARM_CLUB_SOURCE_TYPE:
+				continue
+			picked += 1
+			if bool(rookie.get("development_player", false)):
+				development_picked += 1
+	var mean_picks: float = float(picked) / float(roster_seeds.size())
+	assert_float(mean_picks).override_failure_message(
+		"farm club picks per draft = %.2f (expected 1.0..4.5; check FARM_CLUB_DRAFT_GRADE_SCALE)" % mean_picks
+	).is_between(1.0, 4.5)
 	assert_int(development_picked).is_greater(0)
 	_reload_world()
+
+
+# 専用球団の初期ロスターだけを別の seed で作り直した世界 (12球団側は initial_players.csv のまま)。
+func _reload_world_with_farm_roster_seed(roster_seed: int) -> void:
+	GameDb.load_initial_data()
+	if roster_seed == FarmClubService.INITIAL_ROSTER_SEED:
+		return
+	var kept: Array = []
+	for player_value in GameDb.players:
+		var player: PSPlayer = player_value as PSPlayer
+		if not PSFarmLeague.is_farm_club_id(player.team_id):
+			kept.append(player)
+	GameDb.players.clear()
+	GameDb.players.append_array(kept)
+	FarmClubService.ensure_initial_rosters(GameDb.players, PSSchedule.DEFAULT_YEAR_FOR_SCHEDULE, roster_seed)
+	GameDb.rebuild_player_indices()
 
 
 # ---- 二軍戦の実行 ----------------------------------------------------------

@@ -3359,6 +3359,67 @@ func test_rare_awakening_outlier_is_a_coherent_large_jump() -> void:
 	assert_float(float(deltas.min())).is_greater(0.80)
 
 
+# 伸びは選手内の得意 (標準の高さを差し引いて区分平均を上回る能力) へ寄り、区分内の倍率の平均は 1。
+# 能力ごとの標準の高さの違いだけでは得意にならない (Bat_Impact が誰にとっても得意にはならない)。
+func test_growth_concentrates_on_relative_strengths() -> void:
+	var keys: Array = Offseason.GROWTH_STRENGTH_GROUPS[0] as Array
+	var z: Dictionary = {}
+	for key in keys:
+		z[key] = 1.0 + float(Offseason.GROWTH_STRENGTH_TYPICAL_OFFSET_Z.get(key, 0.0))
+	var flat: Dictionary = Offseason._growth_strength_multipliers(z)
+	for key in keys:
+		assert_float(float(flat[key])).is_equal_approx(1.0, 0.0001)
+
+	z["Bat_Impact"] = float(z["Bat_Impact"]) + 1.5
+	var spiky: Dictionary = Offseason._growth_strength_multipliers(z)
+	var total: float = 0.0
+	for key in keys:
+		total += float(spiky[key])
+	assert_float(total / float(keys.size())).is_equal_approx(1.0, 0.0001)
+	assert_float(float(spiky["Bat_Impact"])).is_greater(1.3)
+	assert_float(float(spiky["Bat_KAvoid"])).is_less(1.0)
+
+
+# 能力に上限は無い: 表示 100 (z 4.0) 付近の選手も伸びたぶんだけ伸び、表示値も 100 を越える。
+# 下限 (Z_ABILITY_MIN) だけは残る。
+func test_growth_has_no_ability_ceiling() -> void:
+	var z: Dictionary = {}
+	for key in PSPlayer.Z_PITCHER_ABILITY_KEYS.keys():
+		z[key] = 3.9
+	var player: PSPlayer = _player({"id": 99001, "position": 1, "role": "starter", "age": 22, "z_abilities": z})
+	Rng.set_seed_value(20260930)
+	for _i in range(30):
+		Offseason._mutate_abilities(player)
+		player.age = 22
+	var highest: float = -99.0
+	for key in PSPlayer.Z_PITCHER_ABILITY_KEYS.keys():
+		highest = maxf(highest, float(player.z_abilities[key]))
+	assert_float(highest).is_greater(4.5)
+	assert_int(PSAbilityScale.z_to_display(4.4)).is_equal(105)
+	assert_int(PSAbilityScale.z_to_display(-9.0)).is_equal(PSAbilityScale.DISPLAY_MIN)
+
+	var weak: Dictionary = {}
+	for key in PSPlayer.Z_PITCHER_ABILITY_KEYS.keys():
+		weak[key] = -3.95
+	var declining: PSPlayer = _player({"id": 99002, "position": 1, "role": "starter", "age": 39, "z_abilities": weak})
+	for _i in range(10):
+		Offseason._mutate_abilities(declining)
+	for key in PSPlayer.Z_PITCHER_ABILITY_KEYS.keys():
+		assert_float(float(declining.z_abilities[key])).is_greater_equal(Offseason.Z_ABILITY_MIN)
+
+
+# soft_clamp_z: 限界から knee 以上内側はそのまま、外側は限界へ漸近して順序を保つ。
+func test_soft_clamp_z_keeps_order_and_never_reaches_the_bound() -> void:
+	assert_float(PSAbilityScale.soft_clamp_z(0.5, -2.0, 1.6)).is_equal(0.5)
+	var previous: float = -99.0
+	for i in range(40):
+		var value: float = PSAbilityScale.soft_clamp_z(0.8 + 0.05 * float(i), -2.0, 1.6)
+		assert_float(value).is_greater(previous)
+		assert_float(value).is_less(1.6)
+		previous = value
+	assert_float(PSAbilityScale.soft_clamp_z(-5.0, -2.0, 1.6)).is_greater(-2.0)
+
+
 # --- helpers -----------------------------------------------------------------
 
 func _depth_slot(players: Array, teams: Array, team_id: int, position: int) -> Dictionary:

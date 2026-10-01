@@ -46,7 +46,7 @@ const HR_LINE_KNEE_SPRAY: float = 20.0
 # 着地距離がフェンスより数m先である必要がある。ちょうどフェンス付近の打球は壁直撃(長打)になる。
 # リーグの本塁打総量のノブ (上げると全打者の本塁打が同じ割合で減る)。長打力による本塁打の偏りは
 # PSContactQualityModel の長打力カーブ (BAT_HR_CURVE_*)・POWER_MATCHUP_*・飛距離の伸び (*_CARRY_*) が持つ。
-const HR_WALL_CLEARANCE: float = 3.9
+const HR_WALL_CLEARANCE: float = 4.2
 
 # --- ゾーン内（横方向）難度 ---
 # 1球ごとの2D座標は持たず、spray を横軸として「担当野手の定位置からの横ズレ」で難度を表す。

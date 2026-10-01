@@ -3,9 +3,8 @@ class_name PSPlayerVisibleRatings
 
 # UI / reports 用の表示能力をここに集約する。
 # 打席シミュレーション本体は z_abilities を直接使い、ここには依存しない。
-# 戻り値は 1-100 の display rating で、球速だけ km/h の raw 表示を混ぜる。
+# 戻り値は 1 以上の display rating (上限なし。z = 4.0 で 100) で、球速だけ km/h の raw 表示を混ぜる。
 const MIN_RATING: int = 1
-const MAX_RATING: int = 100
 
 
 # record が投手か野手かを見て、画面表示用の能力セットを返す。
@@ -358,7 +357,7 @@ static func _velocity_z(record: PSPlayerSeasonRecord) -> float:
 
 
 static func _clamp_rating(value: float) -> int:
-	return clampi(int(round(value)), MIN_RATING, MAX_RATING)
+	return maxi(int(round(value)), MIN_RATING)
 
 
 # 呼び出し元がどちらのキーを読んでも同じ内容になるよう、display_ratings と ratings に同じ配列を入れる。

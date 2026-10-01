@@ -1136,6 +1136,8 @@ func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifi
 	var batter_strikeouts: Array = []
 	var batter_walk_rates: Array = []
 	var batter_strikeout_rates: Array = []
+	var batter_home_runs: Array = []
+	var batter_home_run_rates: Array = []
 	var pitcher_eras: Array = []
 	var pitcher_innings: Array = []
 	var pitcher_walks: Array = []
@@ -1171,6 +1173,8 @@ func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifi
 		batter_strikeouts.append(float(batter_stats.strikeouts))
 		batter_walk_rates.append(_safe_div(float(batter_stats.walks), float(batter_stats.plate_appearances)))
 		batter_strikeout_rates.append(_safe_div(float(batter_stats.strikeouts), float(batter_stats.plate_appearances)))
+		batter_home_runs.append(float(batter_stats.home_runs))
+		batter_home_run_rates.append(_safe_div(float(batter_stats.home_runs), float(batter_stats.plate_appearances)))
 	return {
 		"batters": {
 			"qualified_count": batting_averages.size(),
@@ -1186,6 +1190,11 @@ func _player_distributions_for_season(records: Array, qualifier_pa: int, qualifi
 			"ops_900_count": _count_at_least(batting_ops, 0.900),
 			"ops_950_count": _count_at_least(batting_ops, 0.950),
 			"ops_1000_count": _count_at_least(batting_ops, 1.000),
+			"home_runs": _distribution_summary(batter_home_runs, 0),
+			"home_run_rate": _distribution_summary(batter_home_run_rates, 4),
+			"home_runs_20_count": _count_at_least(batter_home_runs, 20.0),
+			"home_runs_30_count": _count_at_least(batter_home_runs, 30.0),
+			"home_runs_40_count": _count_at_least(batter_home_runs, 40.0),
 		},
 		"pitchers": {
 			"qualified_count": pitcher_eras.size(),
@@ -1409,6 +1418,8 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 	var pitcher_overalls: Array = []
 	var batter_abilities: Dictionary = _empty_ability_accumulator(BATTER_ABILITY_KEYS)
 	var pitcher_abilities: Dictionary = _empty_ability_accumulator(PITCHER_ABILITY_KEYS)
+	var batter_power_values: Array = []
+	var pitcher_kcreate_values: Array = []
 	var overall_values: Array = []
 	var age_values: Array = []
 	var source_counts: Dictionary = {}
@@ -1516,9 +1527,11 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 		if player.is_pitcher():
 			pitcher_overalls.append(overall)
 			_accumulate_player_abilities(pitcher_abilities, player, PITCHER_ABILITY_KEYS)
+			pitcher_kcreate_values.append(float(player.z_abilities.get("Pit_KCreate", 0.0)))
 		else:
 			batter_overalls.append(overall)
 			_accumulate_player_abilities(batter_abilities, player, BATTER_ABILITY_KEYS)
+			batter_power_values.append(float(player.z_abilities.get("Bat_Impact", 0.0)) + 0.5 * float(player.z_abilities.get("Bat_Loft", 0.0)))
 		by_team[str(player.team_id)] = int(by_team.get(str(player.team_id), 0)) + 1
 		var position_group: String = _position_group(player.position)
 		position_counts[position_group] = int(position_counts.get(position_group, 0)) + 1
@@ -1601,7 +1614,28 @@ func _roster_summary(players: Array, teams: Array, seed_cohort_ids: Dictionary =
 			"batters": _finalize_ability_accumulator(batter_abilities),
 			"pitchers": _finalize_ability_accumulator(pitcher_abilities),
 		},
+		# 能力分布の上側の形。長打力合成 (Bat_Impact + 0.5×Bat_Loft = 本塁打の経路の入力) と
+		# 奪三振能力の分位と上位 5 人。上位 5 人が近い値で並ぶほど、成績の上位も横並びになる。
+		"ability_shape": {
+			"batter_power": _ability_shape_summary(batter_power_values),
+			"pitcher_kcreate": _ability_shape_summary(pitcher_kcreate_values),
+		},
 	}
+
+
+func _ability_shape_summary(values: Array) -> Dictionary:
+	if values.is_empty():
+		return {"count": 0}
+	var summary: Dictionary = _distribution_summary(values, 3)
+	var sorted: Array = values.duplicate()
+	sorted.sort()
+	sorted.reverse()
+	summary["p99"] = _round_float(_percentile(values, 0.99), 3)
+	var top: Array = []
+	for i in range(mini(5, sorted.size())):
+		top.append(_round_float(float(sorted[i]), 3))
+	summary["top5"] = top
+	return summary
 
 
 func _empty_ability_accumulator(keys: Array) -> Dictionary:

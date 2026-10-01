@@ -227,11 +227,13 @@ const INITIAL_ROSTER_SEED: int = 20260811
 # 新規ワールド用。空の専用球団を目標人数まで生成選手で埋める。
 # **VETERAN_TARGET 人は元NPB相当のベテラン**として作る (プレイ中は戦力外市場から拾う層だが、
 # 世界生成の時点では市場が存在しないため)。残りが NPB 未経験の若手 = 初回ドラフトの指名対象。
-static func ensure_initial_rosters(players: Array, year: int) -> Dictionary:
+# seed_base は世界生成では常に INITIAL_ROSTER_SEED。別の値は較正で初期ロスターの実現を変えて
+# 平均を取るときだけに使う。
+static func ensure_initial_rosters(players: Array, year: int, seed_base: int = INITIAL_ROSTER_SEED) -> Dictionary:
 	var generated_total: int = 0
 	for club_id in PSFarmLeague.farm_club_ids():
 		generated_total += _fill_to_target(
-			players, int(club_id), year, INITIAL_ROSTER_SEED, VETERAN_TARGET, false
+			players, int(club_id), year, seed_base, VETERAN_TARGET, false
 		)
 		_normalize_pitcher_roles(players, int(club_id))
 	return {

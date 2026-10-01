@@ -20,7 +20,7 @@ const LATE_PINCH_HIT_START_INNING: int = 8
 const DEFENSIVE_REPLACEMENT_START_INNING: int = 7
 # 代打/守備固めの打力ライン。**母集団相対** — その年の支配下野手の打撃スコア分布から
 # mean + sigma*spread を引く (絶対値だとリーグ水準が動いただけで代打の出方が変わる)。
-# 実測 (1シーズン): 打撃スコア mean 71.95 / spread 12.21。
+# 実測 (初期ワールドの開幕時): 打撃スコア mean 70.3 / spread 13.0。
 # **_SCORE は母集団が取れないときのフォールバックなので、_SIGMA を動かしたら必ず一緒に直す**
 # (現行ワールドで σ ラインと一致していることを
 #  `test_decision_lines_track_population_not_absolute_constants` が検査している)。
@@ -30,8 +30,8 @@ const DEFENSIVE_REPLACEMENT_START_INNING: int = 7
 # SOLID_BATTER = 守備固めで**下げてよい打者**の下限 (-1.6σ)。下げるほど交代対象が広がる。
 const LOW_BATTER_SIGMA: float = -1.0
 const SOLID_BATTER_SIGMA: float = -1.6
-const LOW_BATTER_SCORE: int = 60
-const SOLID_BATTER_SCORE: int = 52
+const LOW_BATTER_SCORE: int = 57
+const SOLID_BATTER_SCORE: int = 50
 const IMPORTANT_PINCH_HIT_CHANCE_SCORE: int = 8
 const PINCH_HIT_MIN_GAIN: int = 8
 const PINCH_HIT_LATE_SCORE_MARGIN: int = 5

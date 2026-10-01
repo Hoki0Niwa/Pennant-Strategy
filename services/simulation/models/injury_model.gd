@@ -122,7 +122,6 @@ const VELOCITY_LOSS := {
 }
 const VELOCITY_FLOOR: float = 120.0
 const Z_ABILITY_MIN: float = -4.0
-const Z_ABILITY_MAX: float = 4.0
 
 # --- 部位 (region)。恒久損失で劣化する能力グループを決める。 ---
 const REGION_ARM: String = "arm"               # 投手の肘/肩
@@ -335,10 +334,10 @@ static func affected_keys(region: String, is_pitcher: bool) -> Array:
 static func _reduce_z(record: PSPlayerSeasonRecord, player: PSPlayer, key: String, amount: float) -> bool:
 	var touched: bool = false
 	if player != null and player.z_abilities.has(key):
-		player.z_abilities[key] = clampf(float(player.z_abilities[key]) - amount, Z_ABILITY_MIN, Z_ABILITY_MAX)
+		player.z_abilities[key] = maxf(float(player.z_abilities[key]) - amount, Z_ABILITY_MIN)
 		touched = true
 	if record.z_abilities_snapshot.has(key):
-		record.z_abilities_snapshot[key] = clampf(float(record.z_abilities_snapshot[key]) - amount, Z_ABILITY_MIN, Z_ABILITY_MAX)
+		record.z_abilities_snapshot[key] = maxf(float(record.z_abilities_snapshot[key]) - amount, Z_ABILITY_MIN)
 		touched = true
 	return touched
 

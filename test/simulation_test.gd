@@ -1599,6 +1599,31 @@ func test_contact_quality_carry_follows_power() -> void:
 	).is_greater(1.12)
 
 
+# 長打力が STAR_POWER_KNEE_Z を越えた分だけ、打ち上げ (理想角以外も) の飛距離が線形に伸びる。
+# 長打力カーブ (tanh) が飽和する最上位でも、長打力の差がそのまま飛距離の差になる。
+func test_contact_quality_star_power_carry_keeps_separating_the_top() -> void:
+	var knee: float = ModManager.rule_float("simulation.contact_quality.star_power_knee_z", PSContactQualityModel.STAR_POWER_KNEE_Z)
+	var weight: float = ModManager.rule_float("simulation.contact_quality.star_power_carry_weight", PSContactQualityModel.STAR_POWER_CARRY_WEIGHT)
+	var min_la: float = ModManager.rule_float("simulation.contact_quality.weak_power_carry_min_la", PSContactQualityModel.WEAK_POWER_CARRY_MIN_LA)
+	assert_float(weight).is_greater(0.0)
+	var old_seed: int = Rng.current_seed
+	var old_state: int = Rng.generator.state
+	var at_knee: Array = _contact_quality_power_samples(knee - PSContactQualityModel.BAT_HR_CURVE_CENTER, 400)
+	var star: Array = _contact_quality_power_samples(knee + 1.5 - PSContactQualityModel.BAT_HR_CURVE_CENTER, 400)
+	Rng.current_seed = old_seed
+	Rng.generator.seed = old_seed
+	Rng.generator.state = old_state
+	var checked: int = 0
+	for pair in [[at_knee, 1.0], [star, 1.0 + 1.5 * weight]]:
+		for quality_value in pair[0] as Array:
+			var quality: Dictionary = quality_value as Dictionary
+			if bool(quality["ideal_power_launch"]) or float(quality["launch_angle"]) < min_la:
+				continue
+			checked += 1
+			assert_float(float(quality["carry_multiplier"])).is_equal_approx(float(pair[1]), 0.001)
+	assert_int(checked).is_greater(100)
+
+
 func test_pa_game_cache_reuses_static_views_and_keeps_pitcher_adjustment_local() -> void:
 	var batter: PSPlayerSeasonRecord = _fielder(814, "Cached Batter", 0.8)
 	var pitcher: PSPlayerSeasonRecord = _pitcher(804, "Cached Pitcher", 0.6)

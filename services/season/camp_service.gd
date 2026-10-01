@@ -773,13 +773,13 @@ static func _add_top_pitch_mastery(player: PSPlayer, delta: float, season: PSSea
 			best_mastery = mastery
 			best_index = i
 	var entry: Dictionary = arsenal[best_index] as Dictionary
-	entry["mastery"] = clampf(float(entry.get("mastery", 0.0)) + delta, -2.0, 2.8)
+	entry["mastery"] = maxf(float(entry.get("mastery", 0.0)) + delta, PSPitchTypes.MASTERY_MIN)
 	arsenal[best_index] = entry
 	player.arsenal = arsenal
 
 
 static func _add_z(player: PSPlayer, key: String, delta: float) -> void:
-	player.z_abilities[key] = clampf(float(player.z_abilities.get(key, 0.0)) + delta, OffseasonService.Z_ABILITY_MIN, OffseasonService.Z_ABILITY_MAX)
+	player.z_abilities[key] = maxf(float(player.z_abilities.get(key, 0.0)) + delta, OffseasonService.Z_ABILITY_MIN)
 
 
 static func _build_team_profiles(players: Array, teams: Array, season: PSSeason) -> Dictionary:

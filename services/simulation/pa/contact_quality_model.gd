@@ -9,7 +9,7 @@ class_name PSContactQualityModel
 # 同じ z カーブと重みを打者は加点、投手は減点に使うため、両者の水準が一緒に下がる環境でも
 # 対戦の相対差が維持される。正側の最上位だけは打者・投手別の固定上限で飽和させる。
 # 基準値と上限は母集団から動的に算出しない。
-const EV_BASE: float = 94.85                 # 打球初速の基準値(mph)。
+const EV_BASE: float = 95.6                  # 打球初速の基準値(mph)。
 const EV_CONTACT_WEAK_PENALTY: float = 1.40  # 芯を外すほど EV を下げる重み。
 # 長打力カーブが高いほど EV を上げる量(mph)。
 # パワーによるHR差は、このEV経路と理想角(power_ideal_*)で表現する。
@@ -44,12 +44,19 @@ const POWER_IDEAL_CARRY_BONUS: float = 0.070
 # 上げると主に最上位の本塁打が増える。
 const IDEAL_POWER_CURVE_CARRY_WEIGHT: float = 0.13
 # 長打力カーブが負 (長打力がカーブ中心より低い) 打者の、本塁打になりうる打ち上げ (打球角
-# WEAK_POWER_CARRY_MIN_LA 以上) の失速の強さ。飛距離を カーブ × この値 だけ縮める (カーブ -0.5 なら 6.5%)。
+# WEAK_POWER_CARRY_MIN_LA 以上) の失速の強さ。飛距離を カーブ × この値 だけ縮める (カーブ -0.5 なら 4%)。
 # ゴロとライナーには掛けないので、長打力の低い巧打者の安打は変えずに本塁打だけを減らせる。
 # カーブが正の打者には掛けない (上位の本塁打は EV と理想角の上積みが持つ)。上げると長打力の低い打者の
 # 本塁打が減る。最低角を下げるとライナーも失速し、長打力の低い打者の打率まで下がる。
-const WEAK_POWER_CARRY_WEIGHT: float = 0.13
+const WEAK_POWER_CARRY_WEIGHT: float = 0.08
 const WEAK_POWER_CARRY_MIN_LA: float = 20.0
+# 長打力の最上位だけに効く、飽和しない飛距離の伸び。長打力カーブ (tanh) は上位で飽和し、最上位どうしの
+# 長打力の差が本塁打数に出ないので、長打力 (batter_hr_z) が STAR_POWER_KNEE_Z を越えた分に比例して
+# 打ち上げ (WEAK_POWER_CARRY_MIN_LA 以上) の飛距離を伸ばす。対戦投手には依らない。
+#   STAR_POWER_KNEE_Z: 効き始める長打力合成。規定打者の上位数% に置く。下げると中上位の本塁打まで増える。
+#   STAR_POWER_CARRY_WEIGHT: 越えた z 1 あたりの飛距離の伸び (比)。上げると本塁打王が 2 位以下から突出する。
+const STAR_POWER_KNEE_Z: float = 5.5
+const STAR_POWER_CARRY_WEIGHT: float = 0.04
 # 飛距離倍率 (carry) の範囲。物理側 (PSBattedBallPhysicsResolver) も同じ範囲でクランプする。
 # 上限を下げると長打力の最上位の理想角の打球が同じ飛距離で頭打ちになり、本塁打数が横並びになる。
 const CARRY_MULTIPLIER_MIN: float = 0.76
@@ -120,14 +127,14 @@ const BAT_GAP_CURVE_CENTER: float = 1.3568
 # 長打力カーブだけは母集団平均より上 (一軍の規定打者の中位の少し下) に置き、カーブの急な部分を
 # 一軍の打者の帯へ合わせる。下げるとリーグ全体の本塁打と打球速度が増え、長打力の低い打者と
 # 中位の打者の本塁打の差が縮む。
-const BAT_HR_CURVE_CENTER: float = 2.55
+const BAT_HR_CURVE_CENTER: float = 2.7
 const BAT_AVOID_K_CURVE_CENTER: float = 0.7213
 const PIT_STUFF_CURVE_CENTER: float = 1.5804
 const CURVE_WIDTH_Z: float = 1.6          # 能力カーブの標準的な幅（z スケール）。
 const AVOID_K_CURVE_WIDTH_Z: float = 1.44 # 三振回避カーブだけ少し狭めの幅。
 # 長打力(本塁打)カーブの幅。広げるほど長打力の上位でもカーブが飽和せず、本塁打が長打力の
 # 最上位へ集まる。狭めると上位の本塁打数が横並びになる。
-const BAT_HR_CURVE_WIDTH_Z: float = 1.8
+const BAT_HR_CURVE_WIDTH_Z: float = 2.2
 # 接触カーブの正側上位だけを漸近圧縮し、芯を捉える打者とエースの差が無制限に重ならないようにする。
 # 低〜中位と負側は同じカーブ・重みのままなので、能力帯が下がった環境での投打相殺は維持される。
 # 長打力カーブには掛けない (本塁打は実勢でも上位ほど突出するので、上限は幅と下の天井で決める)。
@@ -250,6 +257,8 @@ class RuleValues:
 	var ideal_power_curve_carry_weight: float = 0.0
 	var weak_power_carry_weight: float = 0.0
 	var weak_power_carry_min_la: float = 0.0
+	var star_power_knee_z: float = 0.0
+	var star_power_carry_weight: float = 0.0
 	var spray_pull_probability_base: float = 0.0
 	var spray_pull_inside_bias: float = 0.0
 	var spray_pull_outside_bias: float = 0.0
@@ -358,6 +367,8 @@ static func rule_values(rules: Dictionary) -> RuleValues:
 	values.ideal_power_curve_carry_weight = _rule_float(rules, "ideal_power_curve_carry_weight", IDEAL_POWER_CURVE_CARRY_WEIGHT)
 	values.weak_power_carry_weight = _rule_float(rules, "weak_power_carry_weight", WEAK_POWER_CARRY_WEIGHT)
 	values.weak_power_carry_min_la = _rule_float(rules, "weak_power_carry_min_la", WEAK_POWER_CARRY_MIN_LA)
+	values.star_power_knee_z = _rule_float(rules, "star_power_knee_z", STAR_POWER_KNEE_Z)
+	values.star_power_carry_weight = _rule_float(rules, "star_power_carry_weight", STAR_POWER_CARRY_WEIGHT)
 	values.spray_pull_probability_base = _rule_float(rules, "spray_pull_probability_base", SPRAY_PULL_PROBABILITY_BASE)
 	values.spray_pull_inside_bias = _rule_float(rules, "spray_pull_inside_bias", SPRAY_PULL_INSIDE_BIAS)
 	values.spray_pull_outside_bias = _rule_float(rules, "spray_pull_outside_bias", SPRAY_PULL_OUTSIDE_BIAS)
@@ -430,11 +441,17 @@ static func generate_with_rule_values(
 	var pitcher_tail_span: float = values.pitcher_stuff_curve_tail_span
 	contact_curve = PSBalanceProfile.compress_z_tail(contact_curve, batter_tail_pivot, batter_tail_span)
 	stuff_curve = PSBalanceProfile.compress_z_tail(stuff_curve, pitcher_tail_pivot, pitcher_tail_span)
+	# 長打力との対戦に使う球威カーブは長打力カーブと同じ幅で作る。幅が違うと投打が同じだけ弱くなった
+	# リーグ (二軍など) で打球速度の基準が動く (投打の水準差に不変でなくなる)。
+	var power_stuff_curve: float = PSBalanceProfile.compress_z_tail(
+		PSBalanceProfile.ability_curve_z(pitcher_stuff_z, pit_stuff_curve_center, values.bat_hr_curve_width_z),
+		pitcher_tail_pivot, pitcher_tail_span
+	)
 	# 打球品質へ効く投打の差を1度だけ作り、飽和させてから各経路で使い回す。
 	# power 系 (EV / 理想角) は長打力 vs 球威、contact 系 (芯 / 詰まり) は接触 vs 球威で、
 	# 飽和点はそれぞれ POWER_MATCHUP_* / MATCHUP_* を使う。
 	var power_delta: float = PSBalanceProfile.compress_matchup_advantage(
-		home_run_curve - stuff_curve,
+		home_run_curve - power_stuff_curve,
 		values.power_matchup_curve_pivot,
 		values.power_matchup_curve_span,
 		values.matchup_curve_pitcher_pivot,
@@ -585,6 +602,7 @@ static func generate_with_rule_values(
 	var carry_multiplier: float = 1.0
 	if la >= values.weak_power_carry_min_la:
 		carry_multiplier += min(0.0, home_run_curve) * values.weak_power_carry_weight
+		carry_multiplier += maxf(0.0, batter_hr_z - values.star_power_knee_z) * values.star_power_carry_weight
 	if ideal_power_launch:
 		# 飛距離の伸びも長打力カーブに比例し、カーブが負の打者ほど伸びが小さい。上限 CARRY_MULTIPLIER_MAX を
 		# 低くすると長打力の上位どうしの飛距離が同じになり、本塁打数が横並びになる。
