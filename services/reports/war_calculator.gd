@@ -286,12 +286,7 @@ static func _batter_war_components(record: PSPlayerSeasonRecord, league_ctx: Dic
 	var pa: int = ad.plate_appearances
 	if pa <= 0:
 		return {}
-	var lg_woba: float = float(league_ctx.get("lg_woba", 0.315))
-	var woba_denom: int = ad.woba_denominator
-	var woba: float = ad.woba()
-	var wraa: float = 0.0
-	if woba_denom > 0:
-		wraa = ((woba - lg_woba) / WOBA_SCALE) * float(pa)
+	var wraa: float = batter_wraa(ad, league_ctx)
 	var bsr: float = ad.bsr_sum - float(league_ctx.get("lg_bsr_per_pa", 0.0)) * float(pa)
 	var ad_dict: Dictionary = ad.to_dict()
 	var centered_fielding: Dictionary = recenter_fielding(ad_dict, league_ctx)
@@ -311,6 +306,71 @@ static func _batter_war_components(record: PSPlayerSeasonRecord, league_ctx: Dic
 		"performance_runs_no_league_adjustment": performance_runs_no_league_adjustment,
 		"performance_runs": performance_runs_no_league_adjustment + league_adjustment_runs,
 		"primary_uzr_position": int(ad_dict.get("primary_uzr_position", record.position)),
+	}
+
+
+# リーグ平均の打者を 0 とした打撃得点。WAR の打撃成分と画面の wRAA はどちらもこの値。
+# リーグの wOBA が測れていない文脈 (その季の打席がまだ無い) では 0。
+static func batter_wraa(ad: PSAdvancedStats, league_ctx: Dictionary) -> float:
+	if ad == null or ad.woba_denominator <= 0:
+		return 0.0
+	var lg_woba: float = float(league_ctx.get("lg_woba", 0.0))
+	if lg_woba <= 0.0:
+		return 0.0
+	return ((ad.woba() - lg_woba) / WOBA_SCALE) * float(ad.plate_appearances)
+
+
+# リーグ平均の打者を 100 とした打撃指標 (球場補正なし)。
+static func batter_wrc_plus(ad: PSAdvancedStats, league_ctx: Dictionary) -> float:
+	if ad == null or ad.woba_denominator <= 0:
+		return 0.0
+	return wrc_plus_from_woba(ad.woba(), float(league_ctx.get("lg_woba", 0.0)), league_runs_per_pa(league_ctx))
+
+
+# wOBA を wRC+ に直す。lg_runs_per_pa はリーグ平均の打者が 1 打席で生む得点。
+# リーグの wOBA か得点が測れていなければ 0。
+static func wrc_plus_from_woba(woba: float, lg_woba: float, lg_runs_per_pa: float) -> float:
+	if lg_woba <= 0.0 or lg_runs_per_pa <= 0.0:
+		return 0.0
+	return ((woba - lg_woba) / WOBA_SCALE + lg_runs_per_pa) / lg_runs_per_pa * 100.0
+
+
+# リーグ全体の 1 打席あたり得点 (失点の合計 ÷ 対戦打者数)。
+static func league_runs_per_pa(league_ctx: Dictionary) -> float:
+	var batters_faced: float = float(league_ctx.get("lg_batters_faced", 0))
+	if batters_faced <= 0.0:
+		return 0.0
+	return float(league_ctx.get("lg_runs", 0)) / batters_faced
+
+
+# 二軍の打撃指標 (wRAA / wRC+) 用のリーグ文脈。二軍成績のコンテナ (farm_*) だけから測り、
+# batter_wraa / batter_wrc_plus が読むキーだけを持つ。一軍の文脈を二軍成績に当てると、
+# 二軍のリーグ水準との差がそのまま全員の値に乗る。
+static func build_farm_batting_context(year: int, season_number: int) -> Dictionary:
+	var total_woba_num: float = 0.0
+	var total_woba_denom: int = 0
+	var total_runs_allowed: int = 0
+	var total_batters_faced: int = 0
+	for record_value in RecordStore.get_player_records_for_season(year, season_number):
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if record == null:
+			continue
+		var pitcher: PSPitcherStats = record.farm_pitcher_stats
+		var pitched: bool = pitcher != null and pitcher.outs_pitched > 0
+		# 投手の高度指標は被打席を持つので、打者の wOBA には混ぜない (一軍の文脈と同じ扱い)。
+		var ad: PSAdvancedStats = record.farm_advanced_stats
+		if ad != null and not (record.is_pitcher() and pitched):
+			total_woba_num += ad.woba_numerator
+			total_woba_denom += ad.woba_denominator
+		if pitched:
+			total_runs_allowed += pitcher.runs_allowed
+			total_batters_faced += pitcher.batters_faced
+	return {
+		"year": year,
+		"season_number": season_number,
+		"lg_woba": total_woba_num / float(total_woba_denom) if total_woba_denom > 0 else 0.0,
+		"lg_runs": total_runs_allowed,
+		"lg_batters_faced": total_batters_faced,
 	}
 
 
@@ -496,6 +556,7 @@ static func calculate_batter_war(record: PSPlayerSeasonRecord, league_ctx: Dicti
 	result["primary_uzr_position"] = int(components.get("primary_uzr_position", record.position))
 	result["pa"] = pa
 	result["wraa"] = _round3(wraa)
+	result["wrc_plus"] = _round3(batter_wrc_plus(record.advanced_stats, league_ctx))
 	result["bsr"] = _round3(bsr)
 	result["fielding_runs"] = _round3(fielding_runs)
 	result["oaa_runs"] = _round3(oaa_runs)

@@ -13,8 +13,11 @@ const DEFAULT_SELECTED_TEAM_ID: int = 1
 const DEFAULT_START_YEAR: int = 2026
 const BATTER_QUALIFIED_PLATE_APPEARANCES_PER_TEAM_GAME: float = 3.1
 const PITCHER_QUALIFIED_OUTS_PER_TEAM_GAME: int = 3
+# リーグ全体の集計と選手単体のプローブで wRC+ を測る固定の参照水準 (wOBA / 1 打席あたり得点)。
+# どちらも比べる相手のリーグが無い — リーグ全体を自分のリーグ平均で測ると常に 100 になり、
+# プローブは 1 人しか打たない — ので、参照水準からのズレとして読む。
+# 選手ごとの行はその季のリーグ文脈 (WarCalculator.batter_wrc_plus と同じ式) で測る。
 const ADVANCED_LEAGUE_WOBA: float = 0.315
-const ADVANCED_WOBA_SCALE: float = 1.24
 const ADVANCED_LEAGUE_RUNS_PER_PA: float = 0.115
 const POSITION_ADJUSTMENT_FULL_SEASON_OUTS: float = 162.0 * 27.0
 const POSITION_ADJUSTMENT_RUNS_PER_162: Dictionary = {
@@ -525,13 +528,13 @@ func _collect_player_stats(
 		if record.is_pitcher():
 			if _qualified_pitcher(record):
 				var pitcher_advanced_record: Dictionary = pitcher_advanced.get(str(record.player_id), {}) as Dictionary
-				var row: Dictionary = _pitcher_player_row(record, pitcher_advanced_record, fielding_advanced_record)
+				var row: Dictionary = _pitcher_player_row(record, pitcher_advanced_record, fielding_advanced_record, war_ctx)
 				_merge_war_row_into(row, war_row, false)
 				pitcher_players.append(row)
 			continue
 
 		if _qualified_batter(record):
-			var row: Dictionary = _batter_player_row(record, fielding_advanced_record)
+			var row: Dictionary = _batter_player_row(record, fielding_advanced_record, war_ctx)
 			_merge_war_row_into(row, war_row, true)
 			batter_players.append(row)
 
@@ -685,7 +688,7 @@ func _team_games_for_record(record: PSPlayerSeasonRecord) -> int:
 	return team_record.stats.games
 
 
-func _batter_player_row(record: PSPlayerSeasonRecord, advanced_record: Dictionary = {}) -> Dictionary:
+func _batter_player_row(record: PSPlayerSeasonRecord, advanced_record: Dictionary, war_ctx: Dictionary) -> Dictionary:
 	var stats: PSBatterStats = record.batter_stats
 	var row: Dictionary = {
 		"year": record.year,
@@ -732,11 +735,13 @@ func _batter_player_row(record: PSPlayerSeasonRecord, advanced_record: Dictionar
 	# 能力は z キー (pa_*) と表示能力 (display_*/visible_*) のみを出力する。
 	row.merge(_pa_ability_row(record), true)
 	row.merge(_display_rating_row(record), true)
-	row.merge(_advanced_batter_row(advanced_record), true)
+	row.merge(_advanced_batter_row(advanced_record, war_ctx), true)
 	return row
 
 
-func _pitcher_player_row(record: PSPlayerSeasonRecord, advanced_record: Dictionary = {}, fielding_advanced_record: Dictionary = {}) -> Dictionary:
+func _pitcher_player_row(
+	record: PSPlayerSeasonRecord, advanced_record: Dictionary, fielding_advanced_record: Dictionary, war_ctx: Dictionary
+) -> Dictionary:
 	var stats: PSPitcherStats = record.pitcher_stats
 	var row: Dictionary = {
 		"year": record.year,
@@ -782,7 +787,7 @@ func _pitcher_player_row(record: PSPlayerSeasonRecord, advanced_record: Dictiona
 	# 能力は z キー (pa_*) と表示能力 (display_*/visible_*) のみを出力する。
 	row.merge(_pa_ability_row(record), true)
 	row.merge(_display_rating_row(record), true)
-	row.merge(_advanced_pitcher_row(advanced_record), true)
+	row.merge(_advanced_pitcher_row(advanced_record, war_ctx), true)
 	row.merge(_advanced_fielding_row(fielding_advanced_record), true)
 	return row
 
@@ -852,12 +857,12 @@ func _z_value(record: PSPlayerSeasonRecord, key: String) -> float:
 	return _round_float(record.z_ability(key, 0.0), 3)
 
 
-func _advanced_batter_row(record: Dictionary) -> Dictionary:
+func _advanced_batter_row(record: Dictionary, war_ctx: Dictionary) -> Dictionary:
 	var row: Dictionary = {
 		"advanced_plate_appearances": int(record.get("plate_appearances", 0)),
 		"woba": float(record.get("woba", 0.0)),
 		"xwoba": float(record.get("xwoba", 0.0)),
-		"wrc_plus": float(record.get("wrc_plus", 0.0)),
+		"wrc_plus": _advanced_record_wrc_plus(record, war_ctx),
 		"re24": float(record.get("re24", 0.0)),
 		"bsr": float(record.get("bsr", 0.0)),
 	}
@@ -865,16 +870,17 @@ func _advanced_batter_row(record: Dictionary) -> Dictionary:
 	return row
 
 
-func _advanced_pitcher_row(record: Dictionary) -> Dictionary:
+func _advanced_pitcher_row(record: Dictionary, war_ctx: Dictionary) -> Dictionary:
+	var wrc_plus_allowed: float = _advanced_record_wrc_plus(record, war_ctx)
 	return {
 		"advanced_batters_faced": int(record.get("plate_appearances", 0)),
 		"woba_allowed": float(record.get("woba", 0.0)),
 		"xwoba_allowed": float(record.get("xwoba", 0.0)),
-		"wrc_plus_allowed": float(record.get("wrc_plus", 0.0)),
+		"wrc_plus_allowed": wrc_plus_allowed,
 		"re24_allowed": float(record.get("re24", 0.0)),
 		"woba": float(record.get("woba", 0.0)),
 		"xwoba": float(record.get("xwoba", 0.0)),
-		"wrc_plus": float(record.get("wrc_plus", 0.0)),
+		"wrc_plus": wrc_plus_allowed,
 		"re24": float(record.get("re24", 0.0)),
 	}
 
@@ -1189,10 +1195,20 @@ func _advanced_bucket_summary(raw: Dictionary) -> Dictionary:
 
 
 func _advanced_wrc_plus(woba: float, denominator: int) -> float:
-	if denominator <= 0 or ADVANCED_LEAGUE_RUNS_PER_PA <= 0.0:
+	if denominator <= 0:
 		return 0.0
-	var runs_per_pa: float = ((woba - ADVANCED_LEAGUE_WOBA) / ADVANCED_WOBA_SCALE) + ADVANCED_LEAGUE_RUNS_PER_PA
-	return runs_per_pa / ADVANCED_LEAGUE_RUNS_PER_PA * 100.0
+	return WarCalculator.wrc_plus_from_woba(woba, ADVANCED_LEAGUE_WOBA, ADVANCED_LEAGUE_RUNS_PER_PA)
+
+
+# 選手 1 人ぶんの高度指標の辞書 (PSAdvancedStats.to_dict) から、その季のリーグ文脈に対する wRC+ を出す。
+func _advanced_record_wrc_plus(record: Dictionary, war_ctx: Dictionary) -> float:
+	if int(record.get("woba_denominator", 0)) <= 0:
+		return 0.0
+	return _round_float(WarCalculator.wrc_plus_from_woba(
+		float(record.get("woba", 0.0)),
+		float(war_ctx.get("lg_woba", 0.0)),
+		WarCalculator.league_runs_per_pa(war_ctx)
+	), 1)
 
 
 func _batted_ball_aggregate_for_season(season: PSSeason) -> Dictionary:

@@ -507,7 +507,7 @@ func _batter_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Arra
 		{"label": "stat.obp", "value": _rate_short(bs.on_base_percentage())},
 		{"label": "OPS", "value": _rate_short(bs.ops())},
 		{"label": "wOBA", "value": _rate_short(ad.woba()) if played else "-"},
-		{"label": "wRC+", "value": str(int(round(ad.wrc_plus()))) if played else "-"},
+		{"label": "wRC+", "value": str(int(round(float(war.get("wrc_plus", 0.0))))) if played else "-"},
 		# 色は表示値 (_signed1 = 小数1桁) に合わせて丸めてから判定する。生値で判定すると
 		# "+0.0" と出ている OAA が緑/赤になる (基底 _pm_color は 0 ちょうどしか中立にしない)。
 		{"label": "OAA", "value": _signed1(oaa_total) if played else "-", "color": _pm_color(snappedf(oaa_total, 0.1))},

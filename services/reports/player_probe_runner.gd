@@ -841,7 +841,7 @@ func _advanced_summary_for_subject(advanced_stats: Dictionary, subject: PSPlayer
 	var summary: Dictionary = {
 		"advanced_plate_appearances": int(record.get("plate_appearances", 0)),
 		"woba": float(record.get("woba", 0.0)),
-		"wrc_plus": float(record.get("wrc_plus", 0.0)),
+		"wrc_plus": _reference_wrc_plus(record),
 		"re24": float(record.get("re24", 0.0)),
 		"bsr": float(record.get("bsr", 0.0)),
 		"xwoba": float(record.get("xwoba", 0.0)),
@@ -879,6 +879,17 @@ func _advanced_summary_for_subject(advanced_stats: Dictionary, subject: PSPlayer
 		summary["re24_allowed"] = summary["re24"]
 		summary["xwoba_allowed"] = summary["xwoba"]
 	return summary
+
+
+# プローブは対象の 1 人しか測らないのでリーグ平均が無い。wRC+ は固定の参照水準に対して出す。
+func _reference_wrc_plus(record: Dictionary) -> float:
+	if int(record.get("woba_denominator", 0)) <= 0:
+		return 0.0
+	return snappedf(PSWarCalculator.wrc_plus_from_woba(
+		float(record.get("woba", 0.0)),
+		SimulationReporter.ADVANCED_LEAGUE_WOBA,
+		SimulationReporter.ADVANCED_LEAGUE_RUNS_PER_PA
+	), 0.1)
 
 
 func _build_team_setup(team_id: int, game_index: int, dh_enabled: bool) -> Dictionary:

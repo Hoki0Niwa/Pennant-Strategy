@@ -849,7 +849,7 @@ func _batter_advanced_dict(record: PSPlayerSeasonRecord, war: Dictionary) -> Dic
 		"ppa": (float(bs.pitches_seen) / float(bs.plate_appearances)) if bs.plate_appearances > 0 else "-",
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
-		"wrcplus": ad.wrc_plus() if has_pa else "-",
+		"wrcplus": float(war.get("wrc_plus", 0.0)) if has_pa else "-",
 		"re24": ad.re24_sum if has_pa else "-",
 		"bsr": ad.bsr_sum if has_pa else "-",
 		"war": float(war.get("war", 0.0)) if has_pa else "-",

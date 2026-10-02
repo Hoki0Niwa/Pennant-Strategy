@@ -1,9 +1,8 @@
 extends RefCounted
 class_name PSAdvancedStats
 
-const LEAGUE_WOBA: float = 0.315
-const WOBA_SCALE: float = 1.24
-const LEAGUE_RUNS_PER_PA: float = 0.115
+# リーグ平均との比較が要る指標 (wRAA / wRC+ / WAR) はここでは出さない。その季のリーグ文脈を
+# 持つ PSWarCalculator が測る。
 const POSITION_ADJUSTMENT_FULL_SEASON_OUTS: float = 162.0 * 27.0
 const POSITION_ADJUSTMENT_RUNS_PER_162: Dictionary = {
 	2: 12.5,
@@ -211,19 +210,6 @@ func xwoba() -> float:
 	return xwoba_numerator / float(xwoba_denominator)
 
 
-func wraa() -> float:
-	if woba_denominator <= 0:
-		return 0.0
-	return ((woba() - LEAGUE_WOBA) / WOBA_SCALE) * float(woba_denominator)
-
-
-func wrc_plus() -> float:
-	if woba_denominator <= 0 or LEAGUE_RUNS_PER_PA <= 0.0:
-		return 0.0
-	var runs_per_pa: float = ((woba() - LEAGUE_WOBA) / WOBA_SCALE) + LEAGUE_RUNS_PER_PA
-	return runs_per_pa / LEAGUE_RUNS_PER_PA * 100.0
-
-
 func primary_uzr_position() -> int:
 	# 「出場の多い方」= 守備機会 (fielding_chances_by_position) を優先。
 	# defensive_outs_by_position は全ポジションに同じ outs が記録されがちで、特に集計時には
@@ -266,8 +252,6 @@ func to_dict() -> Dictionary:
 		"xwoba_numerator": _round_float(xwoba_numerator, 3),
 		"woba": _round_float(woba(), 3),
 		"xwoba": _round_float(xwoba(), 3),
-		"wraa": _round_float(wraa(), 3),
-		"wrc_plus": _round_float(wrc_plus(), 1),
 		"re24": _round_float(re24_sum, 3),
 		"bsr": _round_float(bsr_sum, 3),
 		"fielding_chances": fielding_chances,

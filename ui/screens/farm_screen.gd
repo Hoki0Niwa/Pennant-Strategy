@@ -520,7 +520,7 @@ func _refresh() -> void:
 
 	if _view == VIEW_STATS:
 		_collect_records(season)
-		_build_stat_rows()
+		_build_stat_rows(season)
 		_sort_rows()
 		_scroll["main"] = 0
 	else:
@@ -676,14 +676,16 @@ func _collect_records(season: PSSeason) -> void:
 			_filtered.append(record)
 
 
-func _build_stat_rows() -> void:
+func _build_stat_rows(season: PSSeason) -> void:
+	# wRAA は二軍のリーグ平均に対する値。文脈は表示中の球団に関係なく二軍の全選手から測る。
+	var farm_ctx: Dictionary = PSWarCalculator.build_farm_batting_context(season.year, season.season_number)
 	for record_row in _filtered:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		var row: Dictionary = _identity_fields(record)
 		if record.is_pitcher():
 			row.merge(_pitcher_stat_dict(record.farm_pitcher_stats, record.farm_advanced_stats), true)
 		else:
-			row.merge(_batter_stat_dict(record.farm_batter_stats, record.farm_advanced_stats), true)
+			row.merge(_batter_stat_dict(record.farm_batter_stats, record.farm_advanced_stats, farm_ctx), true)
 		_rows.append(row)
 
 
@@ -711,7 +713,7 @@ func _identity_fields(record: PSPlayerSeasonRecord) -> Dictionary:
 	return row
 
 
-func _batter_stat_dict(s: PSBatterStats, ad: PSAdvancedStats = null) -> Dictionary:
+func _batter_stat_dict(s: PSBatterStats, ad: PSAdvancedStats, farm_ctx: Dictionary) -> Dictionary:
 	var row: Dictionary = {
 		"g": s.games, "pa": s.plate_appearances, "ab": s.at_bats, "r": s.runs, "h": s.hits,
 		"d": s.doubles, "t": s.triples, "hr": s.home_runs, "rbi": s.runs_batted_in, "sb": s.stolen_bases,
@@ -726,7 +728,7 @@ func _batter_stat_dict(s: PSBatterStats, ad: PSAdvancedStats = null) -> Dictiona
 	row.merge({
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
-		"wraa": ad.wraa() if has_pa else "-",
+		"wraa": PSWarCalculator.batter_wraa(ad, farm_ctx) if has_pa else "-",
 		"bsr": ad.bsr_sum if has_pa else "-",
 		"oaa": float(ad_dict.get("oaa_total", 0.0)) if has_field else "-",
 		"uzr": float(ad_dict.get("uzr", 0.0)) if has_field else "-",

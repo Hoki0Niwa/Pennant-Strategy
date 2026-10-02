@@ -435,7 +435,7 @@ func _record_metric_value(record: PSPlayerSeasonRecord, key: String) -> float:
 		return 0.0
 	match key:
 		"woba": return record.advanced_stats.woba()
-		"wrc_plus": return record.advanced_stats.wrc_plus()
+		"wrc_plus": return WarCalculator.batter_wrc_plus(record.advanced_stats, _war_ctx_cache)
 		"woba_allowed": return record.advanced_stats.woba()
 	return 0.0
 

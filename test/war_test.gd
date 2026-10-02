@@ -122,7 +122,7 @@ func test_average_batter_is_above_replacement() -> void:
 	var ctx: Dictionary = {
 		"rpw": 8.3,
 		"lg_woba": 0.310,
-		"woba_scale": PSAdvancedStats.WOBA_SCALE,
+		"woba_scale": WarCalculator.WOBA_SCALE,
 		"replacement_runs_per_pa": 20.7 / 600.0,
 		"lg_bsr_per_pa": 0.0,
 		"batter_league_adjustment_runs_per_pa": 0.0,
@@ -132,6 +132,103 @@ func test_average_batter_is_above_replacement() -> void:
 	var war_row: Dictionary = WarCalculator.calculate_batter_war(record, ctx)
 	print("WARTEST avg_batter war=%.3f" % float(war_row.get("war", 0.0)))
 	assert_float(float(war_row.get("war", 0.0))).is_between(2.1, 2.6)
+
+
+# wRAA / wRC+ はその季のリーグ平均に対する値。リーグの wOBA が固定の参照値からどれだけ離れていても、
+# 打席で重み付けした wRC+ の平均は 100、wRAA の合計は 0 になる。
+func test_batting_metrics_are_relative_to_the_season_league() -> void:
+	var added_keys: Array = []
+	var batters: Array = []
+	var pid: int = 93000
+	for woba_value in [0.240, 0.260, 0.280, 0.340]:
+		pid += 1
+		var batter: PSPlayerSeasonRecord = _make_batter(1, pid, 500, float(woba_value), 0.0)
+		batters.append(batter)
+		RecordStore.set_player_record(batter, "wartest_%d" % pid)
+		added_keys.append("wartest_%d" % pid)
+	var pitcher: PSPlayerSeasonRecord = _make_pitcher(2, 93100, 480, 20, 20, "starter")
+	RecordStore.set_player_record(pitcher, "wartest_93100")
+	added_keys.append("wartest_93100")
+
+	var ctx: Dictionary = WarCalculator.build_league_context(TEST_YEAR, TEST_SEASON, {"num_teams": 2, "games_per_team": 143.0})
+	for k in added_keys:
+		RecordStore.erase_player_record_by_key(k)
+
+	assert_float(float(ctx.get("lg_woba", 0.0))).is_equal_approx(0.280, 0.0001)
+	var expected_runs_per_pa: float = float(pitcher.pitcher_stats.runs_allowed) / float(pitcher.pitcher_stats.batters_faced)
+	assert_float(WarCalculator.league_runs_per_pa(ctx)).is_equal_approx(expected_runs_per_pa, 0.0001)
+
+	var wraa_total: float = 0.0
+	var wrc_plus_weighted: float = 0.0
+	var pa_total: float = 0.0
+	for batter_value in batters:
+		var ad: PSAdvancedStats = (batter_value as PSPlayerSeasonRecord).advanced_stats
+		wraa_total += WarCalculator.batter_wraa(ad, ctx)
+		wrc_plus_weighted += WarCalculator.batter_wrc_plus(ad, ctx) * float(ad.plate_appearances)
+		pa_total += float(ad.plate_appearances)
+	assert_float(wraa_total).is_equal_approx(0.0, 0.001)
+	assert_float(wrc_plus_weighted / pa_total).is_equal_approx(100.0, 0.001)
+
+	# リーグ平均ちょうどの打者は wRAA 0 / wRC+ 100、平均より打てば上、打てなければ下。
+	var average: PSAdvancedStats = _make_batter(1, 93200, 500, 0.280, 0.0).advanced_stats
+	assert_float(WarCalculator.batter_wraa(average, ctx)).is_equal_approx(0.0, 0.001)
+	assert_float(WarCalculator.batter_wrc_plus(average, ctx)).is_equal_approx(100.0, 0.001)
+	var best: PSPlayerSeasonRecord = batters[3] as PSPlayerSeasonRecord
+	var worst: PSPlayerSeasonRecord = batters[0] as PSPlayerSeasonRecord
+	assert_float(WarCalculator.batter_wrc_plus(best.advanced_stats, ctx)).is_greater(100.0)
+	assert_float(WarCalculator.batter_wrc_plus(worst.advanced_stats, ctx)).is_less(100.0)
+	# 1 打席あたりの上積みは (wOBA 差 / wOBA scale)。wRC+ はそれをリーグの 1 打席あたり得点で割った比。
+	var best_runs_per_pa: float = (0.340 - 0.280) / WarCalculator.WOBA_SCALE
+	assert_float(WarCalculator.batter_wraa(best.advanced_stats, ctx)).is_equal_approx(best_runs_per_pa * 500.0, 0.001)
+	assert_float(WarCalculator.batter_wrc_plus(best.advanced_stats, ctx)).is_equal_approx(
+		(best_runs_per_pa + expected_runs_per_pa) / expected_runs_per_pa * 100.0, 0.001)
+
+	# WAR の行に載る値は画面が出す値と同じ。
+	var war_row: Dictionary = WarCalculator.calculate_batter_war(best, ctx)
+	assert_float(float(war_row.get("wraa", 0.0))).is_equal_approx(WarCalculator.batter_wraa(best.advanced_stats, ctx), 0.001)
+	assert_float(float(war_row.get("wrc_plus", 0.0))).is_equal_approx(WarCalculator.batter_wrc_plus(best.advanced_stats, ctx), 0.001)
+
+	# リーグ平均が測れていない文脈では比べる相手が無いので 0。
+	assert_float(WarCalculator.batter_wraa(best.advanced_stats, {})).is_equal(0.0)
+	assert_float(WarCalculator.batter_wrc_plus(best.advanced_stats, {})).is_equal(0.0)
+
+
+# 二軍の打撃指標は二軍成績だけから測ったリーグ平均に対する値。一軍の成績と、投手が持つ被打席の
+# wOBA は基準に混ざらない。
+func test_farm_batting_context_is_measured_from_farm_stats_only() -> void:
+	var added_keys: Array = []
+	var farm_wobas: Array = [0.250, 0.290, 0.330]
+	var farm_batters: Array = []
+	for index in range(farm_wobas.size()):
+		var record: PSPlayerSeasonRecord = _make_batter(1, 94001 + index, 600, 0.400, 0.0)
+		record.farm_advanced_stats.player_id = record.player_id
+		record.farm_advanced_stats.plate_appearances = 200
+		record.farm_advanced_stats.woba_denominator = 200
+		record.farm_advanced_stats.woba_numerator = float(farm_wobas[index]) * 200.0
+		farm_batters.append(record)
+		RecordStore.set_player_record(record, "wartest_%d" % record.player_id)
+		added_keys.append("wartest_%d" % record.player_id)
+	var pitcher: PSPlayerSeasonRecord = _make_pitcher(2, 94100, 480, 20, 20, "starter")
+	pitcher.farm_pitcher_stats.outs_pitched = 300
+	pitcher.farm_pitcher_stats.runs_allowed = 60
+	pitcher.farm_pitcher_stats.batters_faced = 600
+	pitcher.farm_advanced_stats.plate_appearances = 600
+	pitcher.farm_advanced_stats.woba_denominator = 600
+	pitcher.farm_advanced_stats.woba_numerator = 0.500 * 600.0
+	RecordStore.set_player_record(pitcher, "wartest_94100")
+	added_keys.append("wartest_94100")
+
+	var farm_ctx: Dictionary = WarCalculator.build_farm_batting_context(TEST_YEAR, TEST_SEASON)
+	for k in added_keys:
+		RecordStore.erase_player_record_by_key(k)
+
+	assert_float(float(farm_ctx.get("lg_woba", 0.0))).is_equal_approx(0.290, 0.0001)
+	assert_float(WarCalculator.league_runs_per_pa(farm_ctx)).is_equal_approx(0.1, 0.0001)
+	var middle: PSAdvancedStats = (farm_batters[1] as PSPlayerSeasonRecord).farm_advanced_stats
+	var top: PSAdvancedStats = (farm_batters[2] as PSPlayerSeasonRecord).farm_advanced_stats
+	assert_float(WarCalculator.batter_wraa(middle, farm_ctx)).is_equal_approx(0.0, 0.001)
+	assert_float(WarCalculator.batter_wrc_plus(middle, farm_ctx)).is_equal_approx(100.0, 0.001)
+	assert_float(WarCalculator.batter_wraa(top, farm_ctx)).is_equal_approx(0.040 / WarCalculator.WOBA_SCALE * 200.0, 0.001)
 
 
 func test_pitcher_fangraphs_replacement_is_role_sensitive() -> void:

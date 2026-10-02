@@ -91,6 +91,7 @@ var _usage_order_rows: Array = []          # 起用タブ右表 (打順別、遅
 var _usage_built: bool = false
 var _arsenal_types: Array = []             # 投手: 能力変遷表の変化球カラム順 (全シーズンの和集合)
 var _war_ctx_cache: Dictionary = {}        # "year-sn" -> league_ctx
+var _farm_ctx_cache: Dictionary = {}       # "year-sn" -> 二軍の打撃指標用リーグ文脈
 var _scroll_zones: Array = []              # [{rect, key, max}] ホイールスクロール領域
 var _scroll: Dictionary = {}
 
@@ -1319,6 +1320,9 @@ func _build_farm_rows() -> void:
 	var career_batter: PSBatterStats = PSBatterStats.new()
 	var career_pitcher: PSPitcherStats = PSPitcherStats.new()
 	var career_advanced: PSAdvancedStats = PSAdvancedStats.new()
+	# wRAA / wRC+ はその季の二軍のリーグ平均に対する値。通算は wRAA を合計し、wRC+ を打席で重み付けして平均する。
+	var career_wraa: float = 0.0
+	var career_wrc_plus_weighted: float = 0.0
 	var any_appearance: bool = false
 	for record_value in _records:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
@@ -1334,8 +1338,18 @@ func _build_farm_rows() -> void:
 		else:
 			var bs: PSBatterStats = record.farm_batter_stats
 			career_batter.add_from(bs)
+			var farm_ad: PSAdvancedStats = record.farm_advanced_stats
+			var wraa: float = 0.0
+			var wrc_plus: float = 0.0
+			# リーグ文脈はその季の全選手を走査して測るので、二軍の打席がある季だけ作る。
+			if farm_ad != null and farm_ad.plate_appearances > 0:
+				var farm_ctx: Dictionary = _farm_batting_ctx_for(record.year, record.season_number)
+				wraa = WarCalculator.batter_wraa(farm_ad, farm_ctx)
+				wrc_plus = WarCalculator.batter_wrc_plus(farm_ad, farm_ctx)
+				career_wraa += wraa
+				career_wrc_plus_weighted += wrc_plus * float(farm_ad.plate_appearances)
 			row = _batter_basic_dict(Loc.t("common.year_value", {"year": record.year}), team, bs, false)
-			row.merge(_farm_batter_advanced_fields(record.farm_advanced_stats), true)
+			row.merge(_farm_batter_advanced_fields(farm_ad, wraa, wrc_plus), true)
 			played = _batter_stats_has_any(bs)
 		if record.farm_advanced_stats != null:
 			career_advanced.add_from(record.farm_advanced_stats)
@@ -1353,11 +1367,21 @@ func _build_farm_rows() -> void:
 		career_row.merge(_farm_pitcher_advanced_fields(career_pitcher, career_advanced), true)
 	else:
 		career_row = _batter_basic_dict(Loc.t("player_detail.career_total"),"", career_batter, true)
-		career_row.merge(_farm_batter_advanced_fields(career_advanced), true)
+		var career_wrc_plus: float = 0.0
+		if career_advanced.plate_appearances > 0:
+			career_wrc_plus = career_wrc_plus_weighted / float(career_advanced.plate_appearances)
+		career_row.merge(_farm_batter_advanced_fields(career_advanced, career_wraa, career_wrc_plus), true)
 	_farm_rows.append(career_row)
 
 
-func _farm_batter_advanced_fields(ad: PSAdvancedStats) -> Dictionary:
+func _farm_batting_ctx_for(year: int, season_number: int) -> Dictionary:
+	var key: String = "%d-%d" % [year, season_number]
+	if not _farm_ctx_cache.has(key):
+		_farm_ctx_cache[key] = WarCalculator.build_farm_batting_context(year, season_number)
+	return _farm_ctx_cache[key] as Dictionary
+
+
+func _farm_batter_advanced_fields(ad: PSAdvancedStats, wraa: float, wrc_plus: float) -> Dictionary:
 	var has_pa: bool = ad != null and ad.plate_appearances > 0
 	var ad_dict: Dictionary = ad.to_dict() if ad != null else {}
 	var has_field: bool = int(ad_dict.get("fielding_chances", 0)) > 0
@@ -1365,8 +1389,8 @@ func _farm_batter_advanced_fields(ad: PSAdvancedStats) -> Dictionary:
 	return {
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
-		"wrcplus": ad.wrc_plus() if has_pa else "-",
-		"wraa": ad.wraa() if has_pa else "-",
+		"wrcplus": wrc_plus if has_pa else "-",
+		"wraa": wraa if has_pa else "-",
 		"re24": ad.re24_sum if has_pa else "-",
 		"bsr": ad.bsr_sum if has_pa else "-",
 		"oaa": float(ad_dict.get("oaa_total", 0.0)) if has_field else "-",
@@ -1662,6 +1686,8 @@ func _ensure_advanced() -> void:
 	var pit_career: PSPitcherStats = PSPitcherStats.new()
 	var fip_weighted: float = 0.0
 	var fip_weight: float = 0.0
+	# wRC+ は季ごとのリーグ平均に対する値なので、通算は各季の値を打席で重み付けして平均する。
+	var wrc_plus_weighted: float = 0.0
 	var mlb_seasons: Array = OverseasService.mlb_seasons(GameDb.get_player(_player_id))
 	var mlb_index: int = 0
 	for record_value in _records:
@@ -1688,6 +1714,7 @@ func _ensure_advanced() -> void:
 				bat_career.add_from(record.batter_stats)
 				if record.advanced_stats.plate_appearances > 0:
 					war_sum += float(war.get("war", 0.0))
+					wrc_plus_weighted += float(war.get("wrc_plus", 0.0)) * float(record.advanced_stats.plate_appearances)
 		_advanced_rows.append(row)
 	for index in range(mlb_index, mlb_seasons.size()):
 		_advanced_rows.append(_mlb_advanced_row(mlb_seasons[index] as Dictionary, pitcher))
@@ -1698,7 +1725,8 @@ func _ensure_advanced() -> void:
 	if pitcher:
 		_advanced_rows.append(_pitcher_advanced_career(pit_career, war_sum, fip_weighted, fip_weight, npb_label))
 	else:
-		_advanced_rows.append(_batter_advanced_career(ad_career, bat_career, war_sum, npb_label))
+		var career_wrc_plus: float = wrc_plus_weighted / float(ad_career.plate_appearances) if ad_career.plate_appearances > 0 else 0.0
+		_advanced_rows.append(_batter_advanced_career(ad_career, bat_career, war_sum, career_wrc_plus, npb_label))
 	if not mlb_seasons.is_empty():
 		_advanced_rows.append(_mlb_advanced_career(mlb_seasons, pitcher))
 
@@ -1785,7 +1813,7 @@ func _mlb_advanced_career(mlb_seasons: Array, pitcher: bool) -> Dictionary:
 	return _mlb_batter_advanced_dict(label, "", batting, career_metrics, true)
 
 
-func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: float, label: String = "") -> Dictionary:
+func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: float, wrc_plus: float, label: String = "") -> Dictionary:
 	var has_pa: bool = ad.plate_appearances > 0
 	var ad_dict: Dictionary = ad.to_dict()
 	var chances: int = int(ad_dict.get("fielding_chances", 0))
@@ -1800,7 +1828,7 @@ func _batter_advanced_career(ad: PSAdvancedStats, bat: PSBatterStats, war_sum: f
 		"ppa": (float(bat.pitches_seen) / float(bat.plate_appearances)) if bat.plate_appearances > 0 else "-",
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
-		"wrcplus": ad.wrc_plus() if has_pa else "-",
+		"wrcplus": wrc_plus if has_pa else "-",
 		"re24": ad.re24_sum if has_pa else "-",
 		"bsr": ad.bsr_sum if has_pa else "-",
 		"war": war_sum,
@@ -1936,7 +1964,7 @@ func _batter_advanced_dict(record: PSPlayerSeasonRecord, war: Dictionary, team: 
 		"ppa": (float(bs.pitches_seen) / float(bs.plate_appearances)) if bs.plate_appearances > 0 else "-",
 		"woba": ad.woba() if has_pa else "-",
 		"xwoba": ad.xwoba() if has_pa else "-",
-		"wrcplus": ad.wrc_plus() if has_pa else "-",
+		"wrcplus": float(war.get("wrc_plus", 0.0)) if has_pa else "-",
 		"re24": ad.re24_sum if has_pa else "-",
 		"bsr": ad.bsr_sum if has_pa else "-",
 		"war": float(war.get("war", 0.0)) if has_pa else "-",

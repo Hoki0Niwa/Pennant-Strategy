@@ -2638,7 +2638,7 @@ func _draw_fielder_player_row(rect: Rect2, row: Dictionary, y: float, team_mode:
 		_text_cell(_rate_short(bs.on_base_percentage()), float(xs["obp_r"]), y, 13, MUTED, 62.0)
 	_text_cell(_rate_short(bs.ops()), float(xs["ops_r"]), y, 13, TEXT, 54.0)
 	var woba_text: String = _rate_short(ad.woba()) if played else "-"
-	var wrc_text: String = str(int(round(ad.wrc_plus()))) if played else "-"
+	var wrc_text: String = str(int(round(_wrc_plus_value(record, career_stats)))) if played else "-"
 	# MLB の成績の行は高度指標を持たないので、MLB のリーグ平均に対して測った指標を出す。
 	var mlb_metrics: Dictionary = {} if career_stats else _mlb_metrics_of(record)
 	if mlb_metrics.has("woba"):
@@ -5910,6 +5910,26 @@ func _career_pitcher_fip(player_id: int) -> Dictionary:
 		weighted += float(war["fip"]) * ip
 		weight += ip
 	return {"has_fip": weight > 0.0, "fip": weighted / weight if weight > 0.0 else 0.0}
+
+
+# wRC+ はその季のリーグ平均に対する値。通算は各季の値を打席で重み付けして平均する
+# (季ごとにリーグ水準が違うので、通算の wOBA を 1 つのリーグ平均とは比べられない)。
+func _wrc_plus_value(record: PSPlayerSeasonRecord, career_stats: bool) -> float:
+	if record == null:
+		return 0.0
+	if not career_stats:
+		return float(_season_war_dict(record).get("wrc_plus", 0.0))
+	var weighted: float = 0.0
+	var weight: float = 0.0
+	for record_value in RecordStore.get_player_records(record.player_id):
+		var season_record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		var war: Dictionary = _season_war_dict(season_record)
+		if not war.has("wrc_plus"):
+			continue
+		var pa: float = float(season_record.advanced_stats.plate_appearances)
+		weighted += float(war["wrc_plus"]) * pa
+		weight += pa
+	return weighted / weight if weight > 0.0 else 0.0
 
 
 func _career_advanced_stats(player_id: int) -> PSAdvancedStats:

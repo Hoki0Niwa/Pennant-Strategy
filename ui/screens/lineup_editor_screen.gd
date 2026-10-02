@@ -624,7 +624,7 @@ func _draw_roster_row(record: PSPlayerSeasonRecord, y: float) -> void:
 	_text_right(_rate_short(bs.on_base_percentage()), C_OBP_R, y, 13, MUTED)
 	_text_right(_rate_short(bs.ops()), C_OPS_R, y, 13, TEXT)
 	_text_right(_rate_short(ad.woba()) if played else "-", C_WOBA_R, y, 13, MUTED)
-	_text_right(str(int(round(ad.wrc_plus()))) if played else "-", C_WRC_R, y, 13, MUTED)
+	_text_right(_wrc_plus_str(record) if played else "-", C_WRC_R, y, 13, MUTED)
 	_text_right(_oaa_str(ad) if played else "-", C_OAA_R, y, 13, _oaa_color(ad) if played else MUTED)
 
 
@@ -1471,6 +1471,11 @@ func _war_str(record: PSPlayerSeasonRecord) -> String:
 		return "0.0"
 	var w: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
 	return "%0.1f" % float(w.get("war", 0.0))
+
+
+func _wrc_plus_str(record: PSPlayerSeasonRecord) -> String:
+	var w: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
+	return str(int(round(float(w.get("wrc_plus", 0.0)))))
 
 
 func _war_color(record: PSPlayerSeasonRecord) -> Color:

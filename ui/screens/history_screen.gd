@@ -2036,7 +2036,7 @@ func _position_player_row(pid: int, starts: int, is_pitcher_group: bool) -> Dict
 		row["so"] = bs.strikeouts if bs != null else 0
 		row["played"] = played
 		row["woba"] = ad.woba() if played else 0.0
-		row["wrc_plus"] = ad.wrc_plus() if played else 0.0
+		row["wrc_plus"] = float(war.get("wrc_plus", 0.0)) if played else 0.0
 		row["oaa"] = (float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))) if played else 0.0
 	return row
 

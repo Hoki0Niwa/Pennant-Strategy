@@ -1917,7 +1917,7 @@ func test_player_record_round_trip_keeps_farm_stats() -> void:
 	assert_int(restored.farm_last_pitched_team_game).is_equal(41)
 	assert_float(restored.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
 	assert_float(restored.farm_advanced_stats.woba()).is_equal_approx(0.372, 0.001)
-	assert_float(restored.farm_advanced_stats.wraa()).is_equal_approx(4.596, 0.001)
+	assert_int(restored.farm_advanced_stats.plate_appearances).is_equal(100)
 	assert_float(float(restored.farm_advanced_stats.to_dict().get("oaa_total", 0.0))).is_equal_approx(2.5, 0.001)
 
 
@@ -1983,7 +1983,7 @@ func test_farm_stats_survive_a_sqlite_round_trip() -> void:
 	assert_int(found.farm_last_pitched_team_game).is_equal(41)
 	assert_float(found.farm_defensive_innings_at(8)).is_equal_approx(90.0, 0.001)
 	assert_float(found.farm_advanced_stats.woba()).is_equal_approx(0.372, 0.001)
-	assert_float(found.farm_advanced_stats.wraa()).is_equal_approx(4.596, 0.001)
+	assert_int(found.farm_advanced_stats.plate_appearances).is_equal(100)
 	assert_float(float(found.farm_advanced_stats.to_dict().get("oaa_total", 0.0))).is_equal_approx(2.5, 0.001)
 
 
