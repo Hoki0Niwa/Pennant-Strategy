@@ -532,6 +532,9 @@ func _new_injury_tracker() -> Dictionary:
 		# 交代の種別ごとの件数 (代打/代走/守備固め/守備位置変更/投手交代)。
 		# 実 NPB の内訳と比べる用 ([[reference_npb_usage_data]])。
 		"substitution_kinds": {},
+		# 守備に就く交代 (守備固め / 守備位置変更) の守備位置別件数。kind -> {position -> 件数}。
+		# 「控えを信頼できるか」の下限がどの守備位置で効いているかを見る用。
+		"substitution_positions": {},
 		"team_games_played": 0,
 		# 日ごとの離脱中人数。`_15plus` は中度以上 (= 実 NPB の故障者リストに載る水準) だけを数える。
 		"daily_batter": [],
@@ -585,6 +588,7 @@ func _sample_injuries(season: PSSeason, tracker: Dictionary) -> void:
 # 「1球団1試合あたり」に直すときは試合数×2 で割る。
 func _tally_substitution_kinds(day_result: Dictionary, tracker: Dictionary) -> void:
 	var kinds: Dictionary = tracker["substitution_kinds"] as Dictionary
+	var positions: Dictionary = tracker["substitution_positions"] as Dictionary
 	var games: int = 0
 	for result_value in (day_result.get("results", []) as Array):
 		# day_result.results[] は {ok, game, result, message}。交代ログは内側の `result` にある。
@@ -593,8 +597,14 @@ func _tally_substitution_kinds(day_result: Dictionary, tracker: Dictionary) -> v
 			continue
 		games += 1
 		for sub_value in (result.get("substitutions", []) as Array):
-			var kind: String = str((sub_value as Dictionary).get("kind", ""))
+			var sub: Dictionary = sub_value as Dictionary
+			var kind: String = str(sub.get("kind", ""))
 			kinds[kind] = int(kinds.get(kind, 0)) + 1
+			var position: int = int(sub.get("position", 0))
+			if position >= 2 and position <= 9:
+				var by_position: Dictionary = positions.get(kind, {}) as Dictionary
+				by_position[position] = int(by_position.get(position, 0)) + 1
+				positions[kind] = by_position
 	tracker["team_games_played"] = int(tracker["team_games_played"]) + games * 2
 
 
@@ -665,6 +675,16 @@ func _substitution_kind_rates(tracker: Dictionary) -> Dictionary:
 	var out: Dictionary = {"npb_position_change_reference": 0.85}
 	for kind_value in kinds.keys():
 		out[str(kind_value)] = _round2(float(int(kinds[kind_value])) / team_games)
+	# 守備位置別は件数が小さいので 1球団1シーズン (143 試合) あたりで出す。
+	var by_position: Dictionary = {}
+	var positions: Dictionary = tracker["substitution_positions"] as Dictionary
+	for kind_value in positions.keys():
+		var counts: Dictionary = positions[kind_value] as Dictionary
+		var row: Dictionary = {}
+		for position in range(2, 10):
+			row[POSITION_LABELS[position]] = _round2(float(int(counts.get(position, 0))) / team_games * 143.0)
+		by_position[str(kind_value)] = row
+	out["by_position_per_team_season"] = by_position
 	return out
 
 

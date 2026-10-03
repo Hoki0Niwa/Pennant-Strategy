@@ -710,7 +710,8 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		# 守備固めの対象は「守備が弱い」ことだけで決める。**年齢/経験年数では絞らない** —
 		# 実際の 守備固め は守備難のある若い強打者にも出るので、年齢や経験年数でゲートしない。
 		# 守備の質は下の 2 条件で担保する:
-		# 退く選手が信頼水準を下回っていること + 控えが DEFENSIVE_REPLACEMENT_MIN_GAIN 以上上回ること。
+		# 控えがその守備位置の信頼下限 (trusted_defense_line) を満たすこと +
+		# 退く選手を DEFENSIVE_REPLACEMENT_MIN_GAIN 以上上回ること。
 		var batting_score: int = pinch_hit_batting_score(outgoing)
 		if batting_score < batting_score_line(
 			outgoing, GameSimulator.SOLID_BATTER_SIGMA, GameSimulator.SOLID_BATTER_SCORE
@@ -720,8 +721,8 @@ static func defensive_replacement_option(setup: Dictionary, expected_plate_appea
 		# **退く選手の守備力に絶対の上限は置かない。** スタメンは守備込みで組まれるので
 		# 「一定水準を超える守備なら対象外」にすると大半のスタメンが除外され、控えに明確な
 		# 上位互換 (一軍控えの 44% は 22点以上の上積みを持つ) が居ても交代が成立しない。
-		# 「置き換える価値があるか」は下の defense_gain (相対差) と
-		# can_trust_fielder_for_position (控え側の絶対水準) の 2 つで足りる。
+		# 「置き換える価値があるか」は下の defense_gain (退く選手との差) と
+		# can_trust_fielder_for_position (控えがその守備位置の本職の中でどの水準か) の 2 つで足りる。
 		for bench_row in bench:
 			var candidate: PSPlayerSeasonRecord = bench_row as PSPlayerSeasonRecord
 			if candidate == null or candidate.injury_days > 0 or candidate.is_pitcher():
@@ -1124,7 +1125,22 @@ static func can_trust_fielder_for_position(
 	if (position == 2 or position == 6 or position == 8) and aptitude < 40:
 		return false
 	var score: int = defense_only_score(record, position) if evaluation == null else evaluation.score(record, position)
-	return score >= minimum_trusted_defense_score(position)
+	return score >= trusted_defense_line(record, position)
+
+
+# その守備位置を任せられる守備スコアの下限。その季にその守備位置を本職とする支配下野手の分布から引く
+# (mean + TRUSTED_DEFENDER_SIGMA × spread)。固定の点数で置くと、リーグの守備水準が動いたときに
+# 「誰でも通る位置」と「本職でもほとんど通らない位置」ができる。
+# 母集団が無い (year 未設定の合成レコード等) 場合は minimum_trusted_defense_score の絶対値へ落ちる。
+# 基準分布は PSPerformanceReference のキャッシュ (シーズン開始時にプリウォーム済み) を読むだけなので、
+# 試合日の並列実行から呼んでも書き込みは発生しない。
+static func trusted_defense_line(record: PSPlayerSeasonRecord, position: int) -> int:
+	if record == null or record.year <= 0 or position < 2 or position > 9:
+		return minimum_trusted_defense_score(position)
+	return int(round(PSPerformanceReference.score_threshold(
+		record.year, record.season_number, PSPerformanceReference.defense_score_key(position),
+		GameSimulator.TRUSTED_DEFENDER_SIGMA
+	)))
 
 
 static func defense_only_score(record: PSPlayerSeasonRecord, position: int) -> int:
@@ -1196,27 +1212,29 @@ static func defense_only_score(record: PSPlayerSeasonRecord, position: int) -> i
 	return 0
 
 
-# 閾値は z 化後の守備スコア。各ポジションの守備固め候補として信頼できる下限を表す。
+# trusted_defense_line が母集団を取れないときの下限 (守備スコアの絶対値)。
+# 現行のワールド生成で TRUSTED_DEFENDER_SIGMA のラインを測った値なので、sigma を動かしたら一緒に直す
+# (`test_decision_lines_track_population_not_absolute_constants` が両者の一致を検査している)。
 static func minimum_trusted_defense_score(position: int) -> int:
 	match position:
 		2:
-			return 145
+			return 218
 		3:
-			return 188
+			return 109
 		4:
-			return 118
+			return 218
 		5:
-			return 145
+			return 171
 		6:
-			return 125
+			return 250
 		7:
-			return 155
+			return 107
 		8:
-			return 175
+			return 190
 		9:
-			return 170
+			return 134
 		_:
-			return 145
+			return 171
 
 
 static func remove_from_bench(setup: Dictionary, record: PSPlayerSeasonRecord) -> void:

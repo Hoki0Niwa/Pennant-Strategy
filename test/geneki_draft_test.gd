@@ -25,7 +25,7 @@ func _make_player(id: int, team_id: int, position: int, salary: int, overrides: 
 		"age": int(overrides.get("age", 25)),
 		"years": int(overrides.get("years", 3)),
 		"salary": salary,
-		"z_abilities": {},
+		"z_abilities": (overrides.get("z_abilities", {}) as Dictionary).duplicate(),
 		"raw_abilities": {},
 		"source_data": source,
 	}
@@ -309,6 +309,90 @@ func test_user_team_picks_are_not_all_fielders() -> void:
 	assert_int(user_pitchers).override_failure_message(
 		"自軍の現役ドラフト獲得が野手偏重 (10ドラフトで投手 %d / 総獲得 %d)" % [user_pitchers, user_total]
 	).is_greater(0)
+
+
+# 2巡目の指名ラインは球団ごと・役割ごとの相対。同じ候補でも、主力が厚い球団は見送り、薄い球団は指名する。
+# 能力の絶対値で線を引くと、この 2 球団の判断が必ず同じになる。
+func test_round2_pick_line_is_relative_to_the_picking_team() -> void:
+	const DEEP_TEAM: int = 9001      # 投手 8 人が全員強い
+	const THIN_TEAM: int = 9002      # 投手 8 人が全員弱く、野手 8 人は全員強い
+	const SHORT_TEAM: int = 9003     # 投手が 3 人しか居ない
+	const MIXED_TEAM: int = 9004     # 強い投手 5 人 + 弱い投手 1 人
+	const OTHER_TEAM: int = 9005     # 候補と、MIXED が 1巡目で獲得する強い投手の所属
+	var players: Array = []
+	var next_id: int = 920000
+	for _i in range(8):
+		players.append(_ability_player(next_id, DEEP_TEAM, 1, 1.5))
+		players.append(_ability_player(next_id + 1, THIN_TEAM, 1, -0.5))
+		players.append(_ability_player(next_id + 2, THIN_TEAM, 7, 1.5))
+		next_id += 3
+	for _i in range(3):
+		players.append(_ability_player(next_id, SHORT_TEAM, 1, 1.5))
+		next_id += 1
+	for _i in range(5):
+		players.append(_ability_player(next_id, MIXED_TEAM, 1, 1.5))
+		next_id += 1
+	var mixed_weak: PSPlayer = _ability_player(next_id, MIXED_TEAM, 1, -0.5)
+	var gained_ace: PSPlayer = _ability_player(next_id + 1, OTHER_TEAM, 1, 1.5)
+	var pitcher_candidate: PSPlayer = _ability_player(next_id + 2, OTHER_TEAM, 1, 0.5)
+	var fielder_candidate: PSPlayer = _ability_player(next_id + 3, OTHER_TEAM, 7, 0.5)
+	players.append_array([mixed_weak, gained_ace, pitcher_candidate, fielder_candidate])
+
+	var strong_value: int = OffseasonService.player_value_score(gained_ace)
+	var weak_value: int = OffseasonService.player_value_score(mixed_weak)
+	var pitcher_value: int = OffseasonService.player_value_score(pitcher_candidate)
+	var fielder_value: int = OffseasonService.player_value_score(fielder_candidate)
+	# 前提: 候補は強い主力と弱い主力のあいだに居て、差は指名スコアのノイズ幅より大きい。
+	assert_float(float(strong_value - pitcher_value)).is_greater(GenekiDraftService.VOTE_NOISE)
+	assert_int(pitcher_value).is_greater(weak_value)
+
+	var pitcher_entry: Dictionary = {
+		"player_id": pitcher_candidate.id, "name": pitcher_candidate.name, "from_team_id": OTHER_TEAM,
+		"salary": 2500, "exception": false, "is_pitcher": true, "value": pitcher_value,
+	}
+	var fielder_entry: Dictionary = {
+		"player_id": fielder_candidate.id, "name": fielder_candidate.name, "from_team_id": OTHER_TEAM,
+		"salary": 2500, "exception": false, "is_pitcher": false, "value": fielder_value,
+	}
+	var state: Dictionary = {"seed": 1, "picked_round1": {}, "lost_round1": {}, "lost_round2": {}}
+
+	# 指名ライン = 自軍の同じ役割で上から ROUND2_PICK_CORE_RANK 番目。
+	var deep_lines: Dictionary = GenekiDraftService._round2_pick_lines(state, players, DEEP_TEAM)
+	var thin_lines: Dictionary = GenekiDraftService._round2_pick_lines(state, players, THIN_TEAM)
+	assert_float(float(deep_lines["pitcher"])).is_equal(float(strong_value))
+	assert_float(float(thin_lines["pitcher"])).is_equal(float(weak_value))
+	assert_float(float(thin_lines["fielder"]) - float(fielder_value)).is_greater(GenekiDraftService.VOTE_NOISE)
+
+	# 同じ投手候補を、主力が厚い球団は見送り、薄い球団は指名する。
+	assert_bool(GenekiDraftService._best_round2_entry(state, players, DEEP_TEAM, [pitcher_entry]).is_empty()).is_true()
+	assert_int(int(GenekiDraftService._best_round2_entry(state, players, THIN_TEAM, [pitcher_entry]).get("player_id", 0))).is_equal(pitcher_candidate.id)
+	# 役割ごとに測る: 投手が薄い球団でも、野手の主力が厚ければ野手の候補は取らない。
+	assert_bool(GenekiDraftService._best_round2_entry(state, players, THIN_TEAM, [fielder_entry]).is_empty()).is_true()
+	assert_int(int(GenekiDraftService._best_round2_entry(state, players, THIN_TEAM, [fielder_entry, pitcher_entry]).get("player_id", 0))).is_equal(pitcher_candidate.id)
+	# その役割の人数が足りない球団は誰でも主力になるので指名する。
+	assert_int(int(GenekiDraftService._best_round2_entry(state, players, SHORT_TEAM, [pitcher_entry]).get("player_id", 0))).is_equal(pitcher_candidate.id)
+
+	# 1巡目の出入りを反映する: 強い投手を獲得済みなら主力が埋まって見送り、弱い投手を放出済みなら人数不足で指名。
+	assert_int(int(GenekiDraftService._best_round2_entry(state, players, MIXED_TEAM, [pitcher_entry]).get("player_id", 0))).is_equal(pitcher_candidate.id)
+	var gained_state: Dictionary = state.duplicate(true)
+	(gained_state["picked_round1"] as Dictionary)[str(MIXED_TEAM)] = gained_ace.id
+	assert_bool(GenekiDraftService._best_round2_entry(gained_state, players, MIXED_TEAM, [pitcher_entry]).is_empty()).is_true()
+	var lost_state: Dictionary = gained_state.duplicate(true)
+	(lost_state["lost_round1"] as Dictionary)[str(MIXED_TEAM)] = mixed_weak.id
+	assert_float(float(GenekiDraftService._round2_pick_lines(lost_state, players, MIXED_TEAM)["pitcher"])).is_equal(float(strong_value))
+	(lost_state["picked_round1"] as Dictionary).erase(str(MIXED_TEAM))
+	assert_int(int(GenekiDraftService._best_round2_entry(lost_state, players, MIXED_TEAM, [pitcher_entry]).get("player_id", 0))).is_equal(pitcher_candidate.id)
+
+
+# 投打の主要能力を一律 z にした選手 (value が z に対して単調に動く)。
+func _ability_player(id: int, team_id: int, position: int, z: float) -> PSPlayer:
+	var abilities: Dictionary = {}
+	for key in [
+		"Pit_BBPrevent", "Pit_KCreate", "Pit_LoftControl", "Pit_Stamina", "Pit_EdgeRate",
+		"Bat_BBCreate", "Bat_Barrel", "Bat_Impact", "Bat_KAvoid", "Run_Speed",
+	]:
+		abilities[key] = z
+	return _make_player(id, team_id, position, 2500, {"z_abilities": abilities})
 
 
 func _geneki_entry(id: int, role_pct: float, ratio: float, age: int) -> Dictionary:

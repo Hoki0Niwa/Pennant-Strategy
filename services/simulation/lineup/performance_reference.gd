@@ -93,6 +93,25 @@ const DEFAULT_SCORE_REFERENCE: Dictionary = {
 const MIN_SCORE_SAMPLE: int = 60
 const MIN_SCORE_SPREAD: float = 3.0
 
+# 守備位置ごとの守備スコア (PSInGameSubstitutions.defense_only_score) の分布。母集団は
+# **その守備位置を登録ポジションにする支配下野手** — 「その位置を本職にする選手の中でどの水準か」を
+# 測る物差しで、試合中に控えへ守備を任せられるかの下限に使う。
+# 副ポジションで守れる選手まで母集団に入れると、適性の低さがそのまま分布の裾になり、
+# 副ポジションを持つ選手が増減しただけで物差しが動く。
+# 既定値は現行のワールド生成での実測 (母集団不足のときだけ使う)。
+const DEFAULT_DEFENSE_SCORE_REFERENCE: Dictionary = {
+	"defense_2": {"mean": 224.0, "spread": 27.0},
+	"defense_3": {"mean": 126.0, "spread": 68.0},
+	"defense_4": {"mean": 225.0, "spread": 27.0},
+	"defense_5": {"mean": 185.0, "spread": 55.0},
+	"defense_6": {"mean": 256.0, "spread": 26.0},
+	"defense_7": {"mean": 123.0, "spread": 61.0},
+	"defense_8": {"mean": 198.0, "spread": 31.0},
+	"defense_9": {"mean": 141.0, "spread": 29.0},
+}
+# 1 守備位置の本職は 12 球団で 40〜60 人なので、全野手ぶんの MIN_SCORE_SAMPLE とは別に下限を置く。
+const MIN_DEFENSE_SCORE_SAMPLE: int = 24
+
 # 実測を採用する最小条件。これを下回る母集団では既定値へフォールバックする。
 const MIN_RATING_SAMPLE: int = 60
 const MIN_STAT_SAMPLE: int = 40
@@ -527,11 +546,24 @@ static func score_threshold(year: int, season_number: int, key: String, sigma: f
 
 static func score_distribution(year: int, season_number: int, key: String) -> Dictionary:
 	var scores: Dictionary = for_season(year, season_number)["scores"] as Dictionary
-	return scores.get(key, DEFAULT_SCORE_REFERENCE[key]) as Dictionary
+	if scores.has(key):
+		return scores[key] as Dictionary
+	# 開始前の季の基準 (シード) は書き出した時点のキーしか持たない。無いキーは既定値で答える。
+	if DEFAULT_DEFENSE_SCORE_REFERENCE.has(key):
+		return DEFAULT_DEFENSE_SCORE_REFERENCE[key] as Dictionary
+	return DEFAULT_SCORE_REFERENCE[key] as Dictionary
+
+
+# 守備位置 (2〜9) の守備スコア分布のキー。
+static func defense_score_key(position: int) -> String:
+	return "defense_%d" % position
 
 
 static func _measure_scores(records: Array) -> Dictionary:
 	var samples: Dictionary = {"overall_batter": [], "overall_pitcher": [], "batting": []}
+	var defense_samples: Dictionary = {}
+	for key in DEFAULT_DEFENSE_SCORE_REFERENCE.keys():
+		defense_samples[key] = []
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		if record.development_player:
@@ -544,9 +576,19 @@ static func _measure_scores(records: Array) -> Dictionary:
 		(samples["batting"] as Array).append(
 			float(PSPlayerValueEvaluator.batting_score_without_fatigue(record))
 		)
-	return _distributions_or_default(
+		var defense_key: String = defense_score_key(record.position)
+		# 登録ポジションの適性が 0 の選手は守備スコアが番兵値になるので母集団に入れない。
+		if defense_samples.has(defense_key) and PSTeamSetupBuilder.position_aptitude(record, record.position) > 0:
+			(defense_samples[defense_key] as Array).append(
+				float(PSInGameSubstitutions.defense_only_score(record, record.position))
+			)
+	var scores: Dictionary = _distributions_or_default(
 		samples, DEFAULT_SCORE_REFERENCE, MIN_SCORE_SAMPLE, MIN_SCORE_SPREAD
 	)
+	scores.merge(_distributions_or_default(
+		defense_samples, DEFAULT_DEFENSE_SCORE_REFERENCE, MIN_DEFENSE_SCORE_SAMPLE, MIN_SCORE_SPREAD
+	))
+	return scores
 
 
 # --- 投手側の実測 (打者側と同じ機構: 実測分布 + alignment でゼロ点合わせ) ---

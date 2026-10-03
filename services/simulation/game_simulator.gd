@@ -37,6 +37,11 @@ const PINCH_HIT_MIN_GAIN: int = 8
 const PINCH_HIT_LATE_SCORE_MARGIN: int = 5
 const PINCH_HIT_IMPORTANT_SCORE_MARGIN: int = 5
 const DEFENSIVE_REPLACEMENT_MIN_GAIN: int = 22
+# 控えに守備を任せられる下限 (PSInGameSubstitutions.trusted_defense_line)。その守備位置を本職とする
+# 支配下野手の守備スコア分布で mean + sigma × spread。守備固め・玉突きの配置転換・代打/代走の
+# 守備の後始末・負傷退場の代役の全部が同じ下限を使う。
+# 上げる (0 に近づける) ほど任せられる控えが減り、守備に就く途中出場が減る。
+const TRUSTED_DEFENDER_SIGMA: float = -0.25
 # リードがこれを超えると守備固めを打ち切る…**わけではない**。大量リードの終盤は実際には
 # レギュラーを下げて控えを出すので、上限は「守る意味が無いほど離れた」水準まで上げてある。
 const FINAL_DEFENSE_MAX_LEAD: int = 10

@@ -62,10 +62,14 @@ const EXPOSE_PITCHER_BIAS: float = 1.1
 # 僅かな加点で接戦が全部投手に倒れるため。parity0→投手59% / parity1.5→88%)。ポジション需要も不可
 # (投手 need が構造的~0 で野手だけ加点され自軍が野手ばかりになる)。加点なしが最も NPB 的。
 const VOTE_NOISE: float = 2.0
-# 2巡目でCPUが「指名して参加」するスコア下限。value を素の能力 (player_value_score) にした scale に合わせ、
-# 晒される blocked talent (能力〜55-65) の上澄みだけが残っている場合のみ動く水準 (実際の2巡目指名が
-# 年0〜3人と少ないことに対応)。1巡目は各球団必ず1人指名 (=12人)、2巡目でこの閾値超えが数人。
-const ROUND2_PICK_MIN_SCORE: float = 70.0
+# 2巡目でCPUが指名する水準。候補のスコアが、**自軍の同じ役割 (投手/野手) の支配下で上から
+# ROUND2_PICK_CORE_RANK 番目の選手の value 以上**のときだけ指名する = 主力の一角に割って入れる選手だけを取る。
+# 2巡目の獲得は放出と対にならない純増なので、一軍の当落線上の選手では枠を使わない
+# (実際の2巡目指名は 2022〜2024 年の 3 回で 1 人)。
+# 能力の絶対値で線を引くと、晒される選手の水準が動いただけで全球団が毎年指名するか誰も指名しないかに振れる。
+# 球団ごとの順位で測れば、層の薄い球団ほど指名し、層の厚い球団は見送る。
+# 大きくするほど2巡目指名が増える (2巡目に残る最良の候補は、自軍の同じ役割で 5〜17 番手に当たる)。
+const ROUND2_PICK_CORE_RANK: int = 6
 
 const ROUND2_MODE_PICK: String = "pick"
 const ROUND2_MODE_OFFER_ONLY: String = "offer_only"
@@ -670,16 +674,71 @@ static func _prepare_round2_entry(state: Dictionary, players: Array, teams: Arra
 # CPUの2巡目参加形態: 支配下枠に収まり、明確に有用な選手が残っていれば「指名して参加」。
 # それ以外は「放出のみ参加」(リスト提出済みで追加コストが無く、余剰を引き取ってもらえる余地を残す)。
 static func _cpu_round2_mode(state: Dictionary, players: Array, team_id: int) -> String:
-	var best: Dictionary = _best_entry_for_team(state, team_id, round2_candidate_pool_preview(state, team_id))
+	var best: Dictionary = _best_round2_entry(state, players, team_id, round2_candidate_pool_preview(state, team_id))
 	if best.is_empty():
-		return ROUND2_MODE_OFFER_ONLY
-	var best_score: float = _entry_score_for_team(state, team_id, best)
-	if best_score < ROUND2_PICK_MIN_SCORE:
 		return ROUND2_MODE_OFFER_ONLY
 	var count: int = TeamFinance.controlled_count(players, team_id)
 	if count + 1 > TeamFinance.CONTROLLED_LIMIT:
 		return ROUND2_MODE_OFFER_ONLY
 	return ROUND2_MODE_PICK
+
+
+# 2巡目でCPUが指名する選手。自軍の指名ライン (_round2_pick_lines) を超える候補の中でスコア最大。
+# 超える候補が居なければ空 (= 指名しない)。
+static func _best_round2_entry(state: Dictionary, players: Array, team_id: int, entries: Array) -> Dictionary:
+	if entries.is_empty():
+		return {}
+	var lines: Dictionary = _round2_pick_lines(state, players, team_id)
+	var best: Dictionary = {}
+	var best_score: float = -INF
+	for entry_row in entries:
+		var entry: Dictionary = entry_row as Dictionary
+		var score: float = _entry_score_for_team(state, team_id, entry)
+		if score < float(lines["pitcher" if bool(entry.get("is_pitcher", false)) else "fielder"]):
+			continue
+		if score > best_score:
+			best_score = score
+			best = entry
+	return best
+
+
+# 球団の2巡目の指名ライン {pitcher, fielder}。その役割の支配下を value の高い順に並べた
+# ROUND2_PICK_CORE_RANK 番目の value。1巡目の出入り (獲得した選手・放出した選手) を反映した顔ぶれで測る
+# (移籍の実適用は finalize まで行われないので、players の team_id はまだ動いていない)。
+# その役割の支配下が ROUND2_PICK_CORE_RANK 人に満たない球団は誰を取っても主力に入るので、ラインは無い (-INF)。
+static func _round2_pick_lines(state: Dictionary, players: Array, team_id: int) -> Dictionary:
+	var team_key: String = str(team_id)
+	var gained_id: int = int((state.get("picked_round1", {}) as Dictionary).get(team_key, 0))
+	var lost_ids: Dictionary = {}
+	for lost_key in ["lost_round1", "lost_round2"]:
+		var lost_id: int = int((state.get(lost_key, {}) as Dictionary).get(team_key, 0))
+		if lost_id > 0:
+			lost_ids[lost_id] = true
+	var pitcher_values: Array = []
+	var fielder_values: Array = []
+	for player_row in players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or player.is_retired() or player.development_player:
+			continue
+		var on_roster: bool = player.team_id == team_id and not lost_ids.has(player.id)
+		if not on_roster and not (gained_id > 0 and player.id == gained_id):
+			continue
+		var value: int = OffseasonService.player_value_score(player)
+		if player.is_pitcher():
+			pitcher_values.append(value)
+		else:
+			fielder_values.append(value)
+	return {
+		"pitcher": _core_rank_value(pitcher_values),
+		"fielder": _core_rank_value(fielder_values),
+	}
+
+
+static func _core_rank_value(values: Array) -> float:
+	if values.size() < ROUND2_PICK_CORE_RANK:
+		return -INF
+	values.sort()
+	return float(values[values.size() - ROUND2_PICK_CORE_RANK])
 
 
 # 参加形態の決定前に使う「2巡目に残っていそうな選手」のプレビュー (全球団の残りリスト選手)。
@@ -737,9 +796,8 @@ static func round2_targets(state: Dictionary, picker_id: int) -> Array:
 
 
 static func _cpu_pick_round2(state: Dictionary, players: Array, teams: Array, picker_id: int) -> void:
-	var targets: Array = round2_targets(state, picker_id)
-	var best: Dictionary = _best_entry_for_team(state, picker_id, targets)
-	if best.is_empty() or _entry_score_for_team(state, picker_id, best) < ROUND2_PICK_MIN_SCORE:
+	var best: Dictionary = _best_round2_entry(state, players, picker_id, round2_targets(state, picker_id))
+	if best.is_empty():
 		_log(state, teams, Loc.t("geneki.log.round2_pass", {"team": _team_name(teams, picker_id)}))
 		return
 	# 支配下枠の再確認 (2巡目の獲得は純増。同巡で放出済みなら差し引きゼロ)。

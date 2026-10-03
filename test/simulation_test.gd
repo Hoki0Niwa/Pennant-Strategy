@@ -428,6 +428,73 @@ func test_decision_lines_track_population_not_absolute_constants() -> void:
 		report.append("%s=%.1f(旧%.0f)" % [str(key), float(row[0]), float(row[1])])
 	print("DECISIONLINE %s" % " ".join(PackedStringArray(report)))
 
+	# (3) 控えに守備を任せられる下限は、その守備位置を本職とする支配下野手の守備スコア分布から引く。
+	#     現行ワールドではフォールバックの絶対値と同じ位置に来る。
+	var defense_report: Array = []
+	var defense_lines: Dictionary = {}
+	for position in range(2, 10):
+		var primary_scores: Array = []
+		var primary_record: PSPlayerSeasonRecord = null
+		for team_value in GameDb.teams:
+			var team: PSTeam = team_value as PSTeam
+			for record_value in RecordStore.get_team_player_records(team.id, season.year, season.season_number, true):
+				var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+				if record == null or record.is_pitcher() or record.development_player or record.position != position:
+					continue
+				primary_scores.append(float(PSInGameSubstitutions.defense_only_score(record, position)))
+				primary_record = record
+		var primary_mean: float = 0.0
+		for value in primary_scores:
+			primary_mean += float(value)
+		primary_mean /= float(maxi(primary_scores.size(), 1))
+		var primary_variance: float = 0.0
+		for value in primary_scores:
+			primary_variance += pow(float(value) - primary_mean, 2.0)
+		var primary_spread: float = sqrt(primary_variance / float(maxi(primary_scores.size(), 1)))
+		var expected_line: int = int(round(primary_mean + GameSimulator.TRUSTED_DEFENDER_SIGMA * primary_spread))
+		var line: int = PSInGameSubstitutions.trusted_defense_line(primary_record, position)
+		var fallback: int = PSInGameSubstitutions.minimum_trusted_defense_score(position)
+		defense_lines[position] = [primary_scores.size(), line, expected_line, fallback]
+		defense_report.append("%d:%d(既定%d)" % [position, line, fallback])
+	print("DECISIONLINE trusted_defense %s" % " ".join(PackedStringArray(defense_report)))
+
+	# (4) リーグの守備水準が上がれば下限も上がり、同じ選手でも任せられなくなる。右翼手 30 人の合成リーグを
+	#     2 つ (守備能力が z で 1.0 違う) 差し込んで比べる。
+	var probe_team_id: int = (GameDb.teams[0] as PSTeam).id
+	var weak_year: int = season.year + 60
+	var strong_year: int = season.year + 61
+	var probe_season_number: int = season.season_number + 60
+	var inserted: Array = []
+	for league in [[weak_year, 0.0], [strong_year, 1.0]]:
+		for i in range(30):
+			var fielder: PSPlayerSeasonRecord = _defense_probe_outfielder(
+				910000 + i, float(league[1]) - 1.0 + 2.0 * float(i) / 29.0
+			)
+			fielder.team_id = probe_team_id
+			fielder.year = int(league[0])
+			fielder.season_number = probe_season_number
+			RecordStore.set_player_record(fielder)
+			inserted.append(fielder)
+	PSPerformanceReference.reset_cache()
+	var weak_candidate: PSPlayerSeasonRecord = _defense_probe_outfielder(919001, 0.5)
+	weak_candidate.year = weak_year
+	weak_candidate.season_number = probe_season_number
+	var strong_candidate: PSPlayerSeasonRecord = _defense_probe_outfielder(919002, 0.5)
+	strong_candidate.year = strong_year
+	strong_candidate.season_number = probe_season_number
+	var unseasoned_candidate: PSPlayerSeasonRecord = _defense_probe_outfielder(919003, 0.5)
+	var weak_line: int = PSInGameSubstitutions.trusted_defense_line(weak_candidate, 9)
+	var strong_line: int = PSInGameSubstitutions.trusted_defense_line(strong_candidate, 9)
+	var unseasoned_line: int = PSInGameSubstitutions.trusted_defense_line(unseasoned_candidate, 9)
+	var trusted_in_weak_league: bool = PSInGameSubstitutions.can_trust_fielder_for_position(weak_candidate, 9)
+	var trusted_in_strong_league: bool = PSInGameSubstitutions.can_trust_fielder_for_position(strong_candidate, 9)
+	var candidate_score: int = PSInGameSubstitutions.defense_only_score(weak_candidate, 9)
+	for record_row in inserted:
+		var inserted_record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
+		RecordStore.erase_player_record(inserted_record.player_id, inserted_record.year, inserted_record.season_number)
+	PSPerformanceReference.reset_cache()
+	print("DECISIONLINE trusted_defense probe weak=%d strong=%d candidate=%d" % [weak_line, strong_line, candidate_score])
+
 	AppState.selected_team_id = old_team_id
 	AppState.current_season = old_season
 	if not test_save_id.is_empty() and test_save_id != old_save_id:
@@ -436,6 +503,41 @@ func test_decision_lines_track_population_not_absolute_constants() -> void:
 	for key in lines.keys():
 		var row: Array = lines[key] as Array
 		assert_float(absf(float(row[0]) - float(row[1]))).is_less(float(row[2]))
+
+	for position in defense_lines.keys():
+		var row: Array = defense_lines[position] as Array
+		assert_int(int(row[0])).is_greater_equal(PSPerformanceReference.MIN_DEFENSE_SCORE_SAMPLE)
+		assert_int(int(row[1])).is_equal(int(row[2]))
+		assert_int(absi(int(row[1]) - int(row[3]))).override_failure_message(
+			"position %d: trusted line %d drifted from fallback %d" % [int(position), int(row[1]), int(row[3])]
+		).is_less(8)
+
+	# 右翼の守備スコアは z 1.0 あたり 43 点。リーグが z で 1.0 強くなれば下限もそのぶん上がる。
+	assert_int(strong_line - weak_line).is_between(42, 44)
+	assert_int(candidate_score).is_greater_equal(weak_line)
+	assert_int(candidate_score).is_less(strong_line)
+	assert_bool(trusted_in_weak_league).is_true()
+	assert_bool(trusted_in_strong_league).is_false()
+	# 季を持たない合成レコードは母集団を引けないので、絶対値のフォールバックで測る。
+	assert_int(unseasoned_line).is_equal(PSInGameSubstitutions.minimum_trusted_defense_score(9))
+
+
+# 外野の守備能力だけを持つ右翼手 (守備スコア = 120 + 43.125 × defense_z)。
+func _defense_probe_outfielder(player_id: int, defense_z: float) -> PSPlayerSeasonRecord:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+	record.player_id = player_id
+	record.name = "DEF%d" % player_id
+	record.position = 9
+	record.role = "fielder"
+	record.age = 27
+	record.position_aptitudes_snapshot = {"right": 100}
+	record.z_abilities_snapshot = {
+		"OF_Secure": defense_z,
+		"OF_Reach": defense_z,
+		"OF_ArmPower": defense_z,
+		"Run_Speed": 0.0,
+	}
+	return record
 
 
 # 打者指標は表示能力と成績のブレンド。同一能力なら成績で差が付き、今季成績の重みは打席数とともに
