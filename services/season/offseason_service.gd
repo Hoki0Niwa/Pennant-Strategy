@@ -81,19 +81,25 @@ const DEMOTE_JITTER: float = 0.07
 
 # 育成→支配下 昇格 (CPU 自動): 「現在能力」value が即戦力水準に達した育成を支配下に空きがある範囲で昇格。
 # 昇格は将来性ではなく「支配下で通用する準備度」= 現在能力で判断する。
-# 即戦力水準は **絶対値ではなく球団ごとの相対値** (first_team_ready_threshold): 自軍の一軍相当
-# (支配下を value 降順で並べた FIRST_TEAM_SIZE 番目=一軍下位レベル) と比較し、強豪は基準↑/再建は基準↓。
+# 即戦力水準は **絶対値ではなく球団ごとの相対値** (controlled_ready_threshold): 自軍の一軍の当落線
+# (支配下を value 降順で並べた FIRST_TEAM_SIZE 番目) × CONTROLLED_READY_RATIO。強豪は基準↑/再建は基準↓。
 # PROMOTE_TO_CONTROLLED_MIN_VALUE は支配下が居ない時のフォールバック基準値。
 const PROMOTE_TO_CONTROLLED_MIN_VALUE: int = 48
 const FIRST_TEAM_SIZE: int = 31   # 一軍登録上限 (active_roster_screen ROSTER_MAX と一致)
-# 相対基準のクランプ (極端化防止)。再建球団でも最低限の質を要求し、強豪でも青天井にしない。
-const PROMOTE_READY_FLOOR: float = 42.0
-const PROMOTE_READY_CEILING: float = 56.0
+# 一軍の当落線に対する即戦力水準の比率。支配下は 67 人前後で一軍枠はその半分なので、当落線そのものを
+# 基準にすると支配下の上半分に入る育成選手しか通らない。この比率で「支配下の末席クラス」まで下げる
+# (支配下の下から 5〜6 番目前後に当たる)。
+# 上げるほど育成からの昇格・当落線上の若手の育成降格・戦力外からの育成契約が減り、育成の整理が増える。
+# 育成→支配下の昇格 (オフ + 支配下登録期限の合計) はリーグ全体で 0.82 → 34 人 / 0.79 → 39 人 / 0.78 → 43 人/年。
+# 実 NPB は年 40 人前後 (2023-24 年の支配下登録: 育成入団のまま 39 人 + 支配下経験者 42 人)。
+# 固定の点数で上限・下限を掛けると、能力の水準がその外に出たときに全球団が同じ値に張り付いて球団差が消える。
+# 末席の順位で直接測ると、戦力外で人数が減った球団ほど末席の水準が上がり、枠の空いた球団ほど昇格しにくくなる。
+const CONTROLLED_READY_RATIO: float = 0.79
 
-# --- 育成→戦力外 整理 (CPU 自動): 育成は「一軍に上がれる見込み」の成長予測で判定する ---
+# --- 育成→戦力外 整理 (CPU 自動): 育成は「支配下に上がれる見込み」の成長予測で判定する ---
 # projected_ceiling = 現在能力 + 残り成長期待 (expected_development_score_bonus) × 上振れマージン。
-# これが球団の即戦力基準 (first_team_ready_threshold、一軍下位レベルの相対値) を下回ったら
-# 「どれだけ上振れしても一軍に届く見込みがほぼ無い」として放出する。若い選手は成長期待が
+# これが球団の即戦力基準 (controlled_ready_threshold、支配下の末席クラスの相対値) を下回ったら
+# 「どれだけ上振れしても支配下に届く見込みがほぼ無い」として放出する。若い選手は成長期待が
 # 大きく projected_ceiling が高く出るため自然に保持され、25歳前後で成長期待が萎むと
 # 届かなくなり放出される (= 年齢の固定上限ではなく見込みで決まる)。
 # 保持の例外: 入団/降格1年目 (years<=1)・降格/育成track獲得の同オフ (dev_demote_hold)・
@@ -611,7 +617,7 @@ const DOMESTIC_ROSTER_TARGET: int = TeamFinance.OPENING_ROSTER_TARGET - FOREIGN_
 # 年と球団によるので、見込みで先に枠を空けると「補強しなかった年に人数が足りない」状態になる。
 static func _release_expected_inflow(players: Array, team_id: int) -> int:
 	var promo_ready: int = 0
-	var ready_threshold: float = first_team_ready_threshold(players, team_id)
+	var ready_threshold: float = controlled_ready_threshold(players, team_id)
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id or player.is_retired():
@@ -760,8 +766,8 @@ static func compute_long_injury_demotion_candidates_for_team(players: Array, tea
 #      保護 (23歳以下/rookie) で生き残った、まさに当落線上の選手。
 #      ※ `would_release_player_for_team` を選手ごとに呼ぶとデプスチャートを毎回作り直して O(n²)
 #        になるため (実測で長期オートプレイが数十分単位に悪化)、評価は1球団1回だけ作って使い回す。
-#   2. `development_projected_ceiling` >= `first_team_ready_threshold` — 成長期待の楽観側まで見れば
-#      その球団の一軍下位水準に届く = 育成で伸ばす価値がある。昇格 (育成→支配下) と同じ物差し。
+#   2. `development_projected_ceiling` >= `controlled_ready_threshold` — 成長期待の楽観側まで見れば
+#      その球団の支配下の末席水準に届く = 育成で伸ばす価値がある。昇格 (育成→支配下) と同じ物差し。
 # どちらも球団相対なので、強豪は基準が上がり再建球団は下がる (他の編成AIと同じ挙動)。
 # 量のノブは持たない — デプスチャートの余剰と放出計画の差で自然に決まる。
 static func compute_prospect_demotion_candidates_for_team(
@@ -771,7 +777,7 @@ static func compute_prospect_demotion_candidates_for_team(
 	var evaluations: Dictionary = release_depth_chart_evaluations(players, team_id, season)
 	if evaluations.is_empty():
 		return []
-	var ready_threshold: float = first_team_ready_threshold(players, team_id)
+	var ready_threshold: float = controlled_ready_threshold(players, team_id)
 	var candidates: Array = []
 	for row in evaluations.values():
 		var data: Dictionary = row as Dictionary
@@ -851,8 +857,8 @@ static func _promote_ready_development(players: Array, teams: Array, excluded_te
 		var team: PSTeam = team_row as PSTeam
 		if team == null or team.id == excluded_team_id:
 			continue
-		# 即戦力基準は球団ごとの相対値 (一軍下位レベル)。1度だけ算出して使い回す。
-		var ready_threshold: float = first_team_ready_threshold(players, team.id)
+		# 即戦力基準は球団ごとの相対値 (支配下の末席クラス)。1度だけ算出して使い回す。
+		var ready_threshold: float = controlled_ready_threshold(players, team.id)
 		var devs: Array = []
 		for player_row in players:
 			var player: PSPlayer = player_row as PSPlayer
@@ -927,7 +933,7 @@ static func _should_release_development_player(dev: PSPlayer, ready_threshold: f
 	return true
 
 
-# 育成選手の「一軍に上がれる見込み」= 現在能力 + 残り成長期待の楽観側 (DEV_PROJECTION_OPTIMISM 倍)。
+# 育成選手の「支配下に上がれる見込み」= 現在能力 + 残り成長期待の楽観側 (DEV_PROJECTION_OPTIMISM 倍)。
 # 育成整理の判定と、保有目安超過分のトリム順 (低い順に放出) で同じ尺度を使う。
 static func development_projected_ceiling(dev: PSPlayer) -> float:
 	if dev == null:
@@ -940,7 +946,7 @@ static func development_projected_ceiling(dev: PSPlayer) -> float:
 # 自軍の戦力外エディタ推奨が**同じ関数**を使う — 自軍は process_development_releases から除外されるため、
 # ここを共有しないと「条件を満たす育成選手が自軍だけ永久に残る」ことになる。
 static func compute_development_release_candidates_for_team(players: Array, team_id: int, offseason_year: int) -> Array:
-	var ready_threshold: float = first_team_ready_threshold(players, team_id)
+	var ready_threshold: float = controlled_ready_threshold(players, team_id)
 	var ids: Array = []
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
@@ -953,7 +959,7 @@ static func compute_development_release_candidates_for_team(players: Array, team
 	return ids
 
 
-# CPU 自動: 育成選手の整理 (pipeline 循環)。「一軍に上がれる見込み」を成長予測から推定し、
+# CPU 自動: 育成選手の整理 (pipeline 循環)。「支配下に上がれる見込み」を成長予測から推定し、
 # projected_ceiling (現在能力+残り成長期待の楽観側) が球団の即戦力基準に届かない選手を放出する。
 # 高卒は猶予4年/大社3年は projected を問わず保持し、猶予明け以降 (25歳前後の中堅) は
 # 昇格見込みが無くなった時点で放出される。中堅以上 (>DEMOTE_PROSPECT_MAX_AGE) は
@@ -1158,11 +1164,12 @@ static func future_value_score(player: PSPlayer) -> float:
 	return current + growth - injury_value_penalty(player)
 
 
-# 即戦力 (支配下昇格相当) の球団別**相対**基準。支配下 (非育成・非引退) を value 降順に並べ、
-# 一軍枠 FIRST_TEAM_SIZE 番目 (= 一軍下位レベル) の value を基準にする。育成の value がこれ以上なら
-# 「自軍の一軍選手たちと比べて即戦力」。支配下が枠数未満なら最弱の value。floor/ceiling でクランプ。
+# 即戦力 (支配下昇格相当) の球団別**相対**基準 = 自軍の一軍の当落線 × CONTROLLED_READY_RATIO。
+# 当落線は支配下 (非育成・非引退) を value 降順に並べた FIRST_TEAM_SIZE 番目 (支配下が枠数未満なら最弱)。
+# 育成の value がこれ以上なら「自軍の支配下の末席クラスと比べて見劣りしない」= 支配下で通用する。
+# 当落線は名簿の中ほどの順位なので、戦力外や新人の加入で末席が入れ替わっても基準はほとんど動かない。
 # 同オフの昇格/降格判定中は球団構成がほぼ不変なので、各 process_* で球団ごとに1度算出して使い回す。
-static func first_team_ready_threshold(players: Array, team_id: int) -> float:
+static func controlled_ready_threshold(players: Array, team_id: int) -> float:
 	var values: Array = []
 	for player_row in players:
 		var p: PSPlayer = player_row as PSPlayer
@@ -1174,9 +1181,9 @@ static func first_team_ready_threshold(players: Array, team_id: int) -> float:
 	if values.is_empty():
 		return float(PROMOTE_TO_CONTROLLED_MIN_VALUE)
 	values.sort()  # 昇順
-	# 上位 FIRST_TEAM_SIZE の最下位 = 昇順 index (size - FIRST_TEAM_SIZE)。
-	var idx: int = max(0, values.size() - FIRST_TEAM_SIZE)
-	return clampf(float(values[idx]), PROMOTE_READY_FLOOR, PROMOTE_READY_CEILING)
+	# 一軍の当落線 = 上位 FIRST_TEAM_SIZE の最下位 = 昇順 index (size - FIRST_TEAM_SIZE)。
+	var first_team_idx: int = max(0, values.size() - FIRST_TEAM_SIZE)
+	return float(values[first_team_idx]) * CONTROLLED_READY_RATIO
 
 
 # 故障リスク減点。残存離脱日数 (injury_days) 30日ごとに ~1 点、上限 INJURY_PENALTY_CAP。

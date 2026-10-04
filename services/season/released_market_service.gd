@@ -52,7 +52,7 @@ const DEV_TRACK_PROSPECT_CHANCE_PER_YEAR: float = 0.10
 
 # --- 育成契約での獲得基準 ---
 # 育成契約は「今の実力を買う」のではなく「伸びしろに賭ける」もの。基準は
-# `development_projected_ceiling >= その球団の一軍下位水準 (first_team_ready_threshold)` を土台に、
+# `development_projected_ceiling >= その球団の支配下の末席水準 (controlled_ready_threshold)` を土台に、
 # 年齢で要求水準を動かす:
 #   - `DEV_SIGN_AGE_PIVOT` を超えた1歳ごとに `DEV_SIGN_AGE_PENALTY_PER_YEAR` だけ要求を上げる。
 #     ceiling は30代だと成長期待がゼロ clamp されて現在能力そのものになるため、これが無いと
@@ -577,7 +577,7 @@ static func _team_fit_evaluation(
 	if str(entry.get("track", TRACK_CONTROLLED)) == TRACK_DEVELOPMENT:
 		# 育成契約は支配下枠も獲得人数上限も消費しないので、「一軍当落線を上回るか」を要求しない。
 		# 代わりに **その球団が育成選手を保持し続ける基準と同じ物差し** を使う:
-		# 成長の楽観側 (development_projected_ceiling) がその球団の一軍下位水準に届くか
+		# 成長の楽観側 (development_projected_ceiling) がその球団の支配下の末席水準に届くか
 		# (= 翌オフの育成整理で即放出されない選手か)。昇格・育成整理と同一基準。
 		var ceiling: float = OffseasonService.development_projected_ceiling(player)
 		if ceiling < development_signing_threshold(float(ready_thresholds.get(team_id, INF)), player.age):
@@ -589,7 +589,7 @@ static func _team_fit_evaluation(
 	return evaluation if bool(evaluation.get("fit", false)) else {}
 
 
-# 育成契約で獲得するために ceiling が超えるべき水準。球団の一軍下位水準を土台に、
+# 育成契約で獲得するために ceiling が超えるべき水準。球団の支配下の末席水準を土台に、
 # 年齢で要求を上下させる (高齢ほど厳しく、素材年齢は緩く)。ready_threshold が INF (球団不明) の
 # ときはそのまま INF を返して不成立にする。
 static func development_signing_threshold(ready_threshold: float, age: int) -> float:
@@ -609,7 +609,7 @@ static func _build_ready_thresholds(players: Array, teams: Array) -> Dictionary:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue
-		thresholds[team.id] = OffseasonService.first_team_ready_threshold(players, team.id)
+		thresholds[team.id] = OffseasonService.controlled_ready_threshold(players, team.id)
 	return thresholds
 
 

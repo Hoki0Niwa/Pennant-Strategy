@@ -2211,19 +2211,51 @@ func test_registration_deadline_promotion_skips_unready_dev() -> void:
 
 # --- 即戦力基準は球団相対 --------------------------------------------------
 
-func test_first_team_ready_threshold_is_relative() -> void:
-	# 弱い一軍 (低能力支配下31人) は基準が floor、強い一軍 (高能力31人) は ceiling。
-	var weak: Array = []
-	for i in range(Offseason.FIRST_TEAM_SIZE):
-		weak.append(_player_with_z(3000 + i, 1, 3, false, -2.0))
-	var strong: Array = []
-	for i in range(Offseason.FIRST_TEAM_SIZE):
-		strong.append(_player_with_z(4000 + i, 2, 3, false, 2.5))
-	var weak_threshold: float = Offseason.first_team_ready_threshold(weak, 1)
-	var strong_threshold: float = Offseason.first_team_ready_threshold(strong, 2)
-	assert_float(weak_threshold).is_less(strong_threshold)
-	assert_float(weak_threshold).is_equal(Offseason.PROMOTE_READY_FLOOR)
-	assert_float(strong_threshold).is_equal(Offseason.PROMOTE_READY_CEILING)
+# 即戦力基準 = 自軍の一軍の当落線 (支配下を value 降順に並べた FIRST_TEAM_SIZE 番目) × CONTROLLED_READY_RATIO。
+# 固定の点数で上限・下限を掛けると、能力の水準がその外に出たときに全球団が同じ値になり球団差が消える。
+func test_controlled_ready_threshold_scales_with_the_own_first_team_line() -> void:
+	var ratio: float = Offseason.CONTROLLED_READY_RATIO
+	var weak_value: float = float(Offseason.player_value_score(_player_with_z(2990, 1, 3, false, -2.0)))
+	var solid_value: float = float(Offseason.player_value_score(_player_with_z(2992, 1, 3, false, 1.5)))
+	var strong_value: float = float(Offseason.player_value_score(_player_with_z(2993, 1, 3, false, 2.5)))
+	assert_float(weak_value).is_less(solid_value)
+	assert_float(solid_value).is_less(strong_value)
+
+	# team1: 主力が一軍枠より 1 人少なく、当落線 (FIRST_TEAM_SIZE 番目) は並の選手、その下に弱い選手が 30 人。
+	var players: Array = []
+	for i in range(Offseason.FIRST_TEAM_SIZE - 1):
+		players.append(_player_with_z(3000 + i, 1, 3, false, 2.5))
+	players.append(_player_with_z(3050, 1, 3, false, 1.5))
+	for i in range(30):
+		players.append(_player_with_z(3100 + i, 1, 3, false, -2.0))
+	assert_float(Offseason.controlled_ready_threshold(players, 1)).is_equal_approx(solid_value * ratio, 0.001)
+
+	# 末席の顔ぶれは基準を動かさない: 弱い選手がさらに 10 人増えても同じ。
+	var with_more_fringe: Array = players.duplicate()
+	for i in range(10):
+		with_more_fringe.append(_player_with_z(3200 + i, 1, 3, false, -2.0))
+	assert_float(Offseason.controlled_ready_threshold(with_more_fringe, 1)).is_equal_approx(solid_value * ratio, 0.001)
+
+	# team2 / team3: 全員が強い球団と全員が弱い球団は、それぞれ自軍の当落線に比例した基準になる
+	# (同じ値に丸められない)。
+	for i in range(50):
+		players.append(_player_with_z(4000 + i, 2, 3, false, 2.5))
+		players.append(_player_with_z(4100 + i, 3, 3, false, -2.0))
+	var strong_threshold: float = Offseason.controlled_ready_threshold(players, 2)
+	var weak_threshold: float = Offseason.controlled_ready_threshold(players, 3)
+	assert_float(strong_threshold).is_equal_approx(strong_value * ratio, 0.001)
+	assert_float(weak_threshold).is_equal_approx(weak_value * ratio, 0.001)
+	assert_float(strong_threshold - weak_threshold).is_equal_approx((strong_value - weak_value) * ratio, 0.001)
+
+	# team4: 支配下が一軍枠に満たない球団は、最弱の選手が当落線。
+	players.append(_player_with_z(4200, 4, 3, false, -2.0))
+	for i in range(10):
+		players.append(_player_with_z(4201 + i, 4, 3, false, 2.5))
+	assert_float(Offseason.controlled_ready_threshold(players, 4)).is_equal_approx(weak_value * ratio, 0.001)
+
+	# 育成選手と他球団の選手は数えない。支配下が 1 人も居なければフォールバック。
+	players.append(_player_with_z(4400, 6, 3, true, 2.5))
+	assert_float(Offseason.controlled_ready_threshold(players, 6)).is_equal(float(Offseason.PROMOTE_TO_CONTROLLED_MIN_VALUE))
 
 
 func test_promotion_respects_relative_threshold() -> void:
