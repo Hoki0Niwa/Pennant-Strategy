@@ -161,6 +161,11 @@ func _draw_sidebar() -> void:
 			_round(rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.16), Color(BLUE.r, BLUE.g, BLUE.b, 0.55), 7)
 			_round(Rect2(rect.position.x, rect.position.y + 6, 3, rect.size.y - 12), BLUE, Color.TRANSPARENT, 2, 0)
 		_icon(str(item.get("icon", "")), Rect2(rect.position.x + 14, rect.position.y + 9, 20, 20), TEXT if active else MUTED)
+		# 返事待ちのトレード提案があれば、項目の右端に件数を出す。
+		if str(item.get("id", "")) == "trade":
+			var offer_count: int = AppState.pending_trade_offer_count()
+			if offer_count > 0:
+				_chip(Rect2(rect.end.x - 40, rect.position.y + 9, 28, 20), str(offer_count), AMBER)
 
 	_text(_app_version_label(), Vector2(22, BASE.y - 24), 12, FAINT)
 
@@ -264,6 +269,8 @@ func _apply_button_style(button: Button, kind: String) -> void:
 			_style(button, BLUE, BLUE, TEXT, Color(0.360, 0.660, 1.0), Color(0.180, 0.430, 0.800))
 		"action":
 			_style(button, PANEL_3, BORDER, TEXT, Color(0.180, 0.220, 0.270), PANEL_2)
+		"alert":
+			_style(button, Color(AMBER.r, AMBER.g, AMBER.b, 0.14), AMBER, AMBER, Color(AMBER.r, AMBER.g, AMBER.b, 0.24), PANEL_2)
 		"chip_active":
 			_style(button, BLUE, BLUE, TEXT, Color(0.360, 0.660, 1.0), Color(0.180, 0.430, 0.800))
 			font_px = max(9, int(round(13.0 * _scale_f)))

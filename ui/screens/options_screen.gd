@@ -182,7 +182,8 @@ func _toggle_row_rect(panel: Rect2, i: int) -> Rect2:
 func _toggle_rows() -> Array:
 	return [
 		{"id": "autoswap", "label": Loc.t("options.toggle.autoswap.label"), "desc": Loc.t("options.toggle.autoswap.desc"), "on": AppState.auto_roster_swap_during_skip},
-		{"id": "autotrade", "label": Loc.t("options.toggle.autotrade.label"), "desc": Loc.t("options.toggle.autotrade.desc"), "on": AppState.auto_trade_for_user_team},
+		{"id": "autotrade", "label": Loc.t("options.choice.autotrade.label"), "desc": Loc.t("options.choice.autotrade.desc"),
+			"choices": _auto_trade_choices(), "value": _auto_trade_mode()},
 		{"id": "autosave", "label": Loc.t("options.toggle.autosave.label"), "desc": Loc.t("options.toggle.autosave.desc"), "on": AppState.auto_save_enabled},
 		{"id": "dh1", "label": Loc.t("options.toggle.dh1.label"), "desc": Loc.t("options.toggle.dh.desc"), "on": AppState.is_dh_enabled_for_league("league1")},
 		{"id": "dh2", "label": Loc.t("options.toggle.dh2.label"), "desc": Loc.t("options.toggle.dh.desc"), "on": AppState.is_dh_enabled_for_league("league2")},
@@ -192,6 +193,24 @@ func _toggle_rows() -> Array:
 		{"id": "overseas", "label": Loc.t("options.choice.overseas.label"), "desc": Loc.t("options.choice.overseas.desc"),
 			"choices": _overseas_frequency_choices(), "value": AppState.overseas_challenge_frequency},
 	]
+
+
+# AI が自軍のトレードを自動で成立させてよい場面。AppState の 2 つのフラグ
+# (auto_trade_for_user_team = 常時 / auto_trade_during_skip = スキップ中のみ) を 1 つの選択肢として見せる。
+const AUTO_TRADE_MODES: Array = ["off", "skip", "always"]
+
+
+func _auto_trade_choices() -> Array:
+	var choices: Array = []
+	for mode in AUTO_TRADE_MODES:
+		choices.append({"value": mode, "label": Loc.t("options.choice.autotrade.%s" % mode)})
+	return choices
+
+
+func _auto_trade_mode() -> String:
+	if AppState.auto_trade_for_user_team:
+		return "always"
+	return "skip" if AppState.auto_trade_during_skip else "off"
 
 
 func _overseas_frequency_choices() -> Array:
@@ -464,9 +483,6 @@ func _on_toggle(id: String) -> void:
 			if v and season != null and team_id > 0:
 				season.set_last_auto_swap_day(team_id, season.current_day - TeamAutoAI.SWAP_INTERVAL_DAYS)
 			_save_and_status(Loc.t("options.status.autoswap_saved"))
-		"autotrade":
-			AppState.auto_trade_for_user_team = not AppState.auto_trade_for_user_team
-			_save_and_status(Loc.t("options.status.autotrade_saved"))
 		"autosave":
 			AppState.auto_save_enabled = not AppState.auto_save_enabled
 			_save_and_status(Loc.t("options.status.autosave_saved"))
@@ -490,6 +506,10 @@ func _on_toggle(id: String) -> void:
 
 func _on_choice(id: String, value: String) -> void:
 	match id:
+		"autotrade":
+			AppState.auto_trade_for_user_team = value == "always"
+			AppState.auto_trade_during_skip = value == "skip"
+			_save_and_status(Loc.t("options.status.autotrade_saved"))
 		"overseas":
 			AppState.overseas_challenge_frequency = OverseasService.normalize_frequency(value)
 			# 「なし」は新規の流出だけを止める。海外にいる選手が取り残されないことを明示する。

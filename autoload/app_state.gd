@@ -142,6 +142,13 @@ var auto_roster_swap_during_skip: bool = true
 # 週次の自動トレード判断に自軍も参加させるか (有効時は自軍宛て提案を作らず、CPU間
 # マッチングと同じ基準で自軍のトレードもAIが自動成立させる)。オプション画面から操作。
 var auto_trade_for_user_team: bool = false
+# スキップ操作中に限って、自軍のトレードを AI が自動成立させてよいか。オプション画面から操作。
+# 無効ならスキップ中も自軍宛ての提案が届くだけで、返事はプレイヤーがする。
+var auto_trade_during_skip: bool = false
+# 試合消化中に自軍へ届いたトレード提案の数と、AI が成立させた自軍のトレード数。
+# 消化を終えたラッパーが _attach_trade_notice で結果メッセージへ載せて 0 に戻す。
+var _trade_offers_arrived: int = 0
+var _trade_auto_executed: int = 0
 # ドラフト完全ウェーバー制。ON のとき1巡目の入札・抽選を行わず、本指名の全巡を
 # 前年下位球団から順 (スネークなし) に指名する。次回のドラフト生成から適用。
 var draft_full_waiver: bool = false
@@ -1678,7 +1685,7 @@ func simulate_current_day(during_skip: bool = false) -> Dictionary:
 	var persist_progress: bool = auto_save_enabled
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = GameSimulator.simulate_current_day(current_season, persist_progress, _build_auto_swap_ctx(during_skip))
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	request_screen("home")
@@ -1692,7 +1699,7 @@ func simulate_remaining_season(during_skip: bool = false) -> Dictionary:
 	var persist_progress: bool = auto_save_enabled
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = GameSimulator.simulate_remaining_season(current_season, persist_progress, _build_auto_swap_ctx(during_skip))
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	request_screen("home")
@@ -1706,7 +1713,7 @@ func simulate_days(days: int, during_skip: bool = false) -> Dictionary:
 	var persist_progress: bool = auto_save_enabled
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = GameSimulator.simulate_days(current_season, days, persist_progress, _build_auto_swap_ctx(during_skip))
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -1721,7 +1728,7 @@ func simulate_until_team_game(during_skip: bool = false) -> Dictionary:
 	var persist_progress: bool = auto_save_enabled
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, persist_progress)
 	var result: Dictionary = GameSimulator.simulate_until_team_game(current_season, selected_team_id, persist_progress, _build_auto_swap_ctx(during_skip))
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -1747,7 +1754,7 @@ func simulate_current_day_async(
 		current_season, false, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -1769,7 +1776,7 @@ func simulate_remaining_season_async(
 		current_season, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	if return_to_home and not bool(result.get("cancelled", false)):
@@ -1847,7 +1854,7 @@ func _finish_standings_skip(result: Dictionary) -> void:
 	season_skip_active = false
 	season_skip_cancel_pending = false
 	_season_skip_cancel_token = {}
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	season_skip_finished.emit(result)
 	request_screen("home", false)
 
@@ -1943,7 +1950,7 @@ func simulate_days_async(
 		current_season, days, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -1966,7 +1973,7 @@ func simulate_until_team_game_async(
 		current_season, selected_team_id, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -1989,7 +1996,7 @@ func simulate_until_day_async(
 		current_season, end_day, persist_progress, _build_auto_swap_ctx(during_skip),
 		tree, progress_cb, cancel_token
 	)
-	last_status_message = str(result.get("message", ""))
+	last_status_message = _attach_trade_notice(result)
 	if bool(result.get("ok", false)):
 		_save_if_enabled()
 	return result
@@ -2001,10 +2008,45 @@ func _build_auto_swap_ctx(during_skip: bool) -> Dictionary:
 	return {
 		"user_team_id": selected_team_id,
 		"include_user_team": include_user,
-		# トレードは一二軍入替と別トグルで自軍参加を制御できる (どちらか一方が有効でも
-		# 自軍をCPU間マッチングへ含める)。未使用の呼び出し元では include_user_team にフォールバックする。
-		"include_user_trade": include_user or auto_trade_for_user_team,
+		# 自軍を CPU 間のトレードマッチングへ含めるかは、一二軍入替のトグルとは無関係にトレード用の
+		# 2 つのトグルだけで決まる (常時委任 / スキップ中のみ許可)。
+		"include_user_trade": auto_trade_for_user_team or (during_skip and auto_trade_during_skip),
+		"on_trade_check": _on_trade_check,
 	}
+
+
+# 週次のトレード判定の結果を受け取り、自軍に関わるもの (届いた提案 / AI が成立させたトレード) を数える。
+func _on_trade_check(trade_result: Dictionary) -> void:
+	for entry_value in trade_result.get("executed", []) as Array:
+		var entry: Dictionary = entry_value as Dictionary
+		if int(entry.get("team_a", 0)) == selected_team_id or int(entry.get("team_b", 0)) == selected_team_id:
+			_trade_auto_executed += 1
+	_trade_offers_arrived += maxi(0, int(trade_result.get("user_offers_added", 0)))
+
+
+# 消化結果の message の先頭に、消化中に起きた自軍のトレード関連の通知を足して返す
+# (result["message"] も同じ文言に書き換える)。通知が無ければ message はそのまま。
+func _attach_trade_notice(result: Dictionary) -> String:
+	var message: String = str(result.get("message", ""))
+	var parts: PackedStringArray = []
+	if _trade_offers_arrived > 0:
+		parts.append(Loc.t("trade.notice.offer_arrived", {"count": _trade_offers_arrived}))
+	if _trade_auto_executed > 0:
+		parts.append(Loc.t("trade.notice.auto_executed", {"count": _trade_auto_executed}))
+	_trade_offers_arrived = 0
+	_trade_auto_executed = 0
+	if parts.is_empty():
+		return message
+	if not message.is_empty():
+		parts.append(message)
+	message = " ".join(parts)
+	result["message"] = message
+	return message
+
+
+# 自軍が今すぐ返事できるトレード提案の数。サイドバーのバッジとホームの通知ボタンに使う。
+func pending_trade_offer_count() -> int:
+	return TradeService.actionable_user_offer_count(current_season)
 
 
 func _normalize_league_key(league: String) -> String:
@@ -2060,6 +2102,8 @@ func restore_from_save(data: Dictionary) -> bool:
 	season_skip_name = ""
 	_season_skip_cancel_token = {}
 	short_skip_active = false
+	_trade_offers_arrived = 0
+	_trade_auto_executed = 0
 	postseason_skip_active = false
 	postseason_skip_cancel_pending = false
 	postseason_skip_days = 0
@@ -2111,6 +2155,7 @@ func restore_from_save(data: Dictionary) -> bool:
 	auto_roster_swap_for_user_team = bool(data.get("auto_roster_swap_for_user_team", false))
 	auto_roster_swap_during_skip = bool(data.get("auto_roster_swap_during_skip", true))
 	auto_trade_for_user_team = bool(data.get("auto_trade_for_user_team", false))
+	auto_trade_during_skip = bool(data.get("auto_trade_during_skip", false))
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
 	cs_advantage_rule = PSPostseasonResult.normalize_cs_advantage_rule(data.get("cs_advantage_rule", PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026))
 	overseas_challenge_frequency = OverseasService.normalize_frequency(str(data.get("overseas_challenge_frequency", OverseasService.FREQUENCY_STANDARD)))

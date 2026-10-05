@@ -118,6 +118,8 @@ func _draw() -> void:
 		Vector2(INNER_L + 290.0, FILTER_Y + 19.0), 12, FAINT)
 	if AppState.auto_trade_for_user_team:
 		_chip(Rect2(INNER_R - 200.0, FILTER_Y + 1.0, 200.0, 24.0), Loc.t("trade.auto_delegated"), BLUE)
+	elif AppState.auto_trade_during_skip:
+		_chip(Rect2(INNER_R - 240.0, FILTER_Y + 1.0, 240.0, 24.0), Loc.t("trade.auto_delegated_skip"), BLUE)
 
 	_draw_stat_strip(TOP_STRIP, season, team, window_open)
 

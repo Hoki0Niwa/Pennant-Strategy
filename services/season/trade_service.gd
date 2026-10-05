@@ -147,6 +147,19 @@ static func pending_user_offers(season: PSSeason) -> Array:
 	return pending
 
 
+# 自軍が今すぐ受諾/拒否できる提案の数。交換期限を過ぎると受諾できないので、保留が残っていても 0。
+# 描画から毎フレーム呼ばれるので trade_state() を通さず読むだけにする (既定キーを書き足すと、
+# 画面を開いただけで season が未保存の変更ありになる)。
+static func actionable_user_offer_count(season: PSSeason) -> int:
+	if season == null or not is_trade_window_open(season):
+		return 0
+	var count: int = 0
+	for offer_value in season.trade_state.get("user_offers", []) as Array:
+		if str((offer_value as Dictionary).get("status", "pending")) == "pending":
+			count += 1
+	return count
+
+
 static func trades_count_for_team(season: PSSeason, team_id: int) -> int:
 	return int((trade_state(season).get("trades_by_team", {}) as Dictionary).get(str(team_id), 0))
 

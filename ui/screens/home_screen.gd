@@ -634,6 +634,11 @@ func _build_buttons() -> void:
 	_add_button("save", Loc.t("home.save"), Rect2(1652, 22, 88, 42), _save_game, "action")
 	var season_button: Button = _add_button("offseason", Loc.t("home.season_button.next_year"), Rect2(1750, 22, 150, 42), _on_offseason_pressed, "action")
 	_configure_offseason_button(season_button)
+	# 返事待ちのトレード提案があるあいだ、トレード画面への近道を出す。
+	var offer_count: int = AppState.pending_trade_offer_count()
+	if offer_count > 0:
+		_add_button("trade_offers", Loc.t("home.trade_offers", {"count": offer_count}), Rect2(1184, 22, 190, 42),
+			func() -> void: AppState.request_screen("trade"), "alert")
 
 	# サイドバー
 	_build_nav_buttons()

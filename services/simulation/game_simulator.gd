@@ -526,7 +526,8 @@ static func simulate_until_team_game(season: PSSeason, team_id: int, persist: bo
 
 
 # 各試合日終了後に呼ばれる自動入替フック。
-# ctx = { "user_team_id": int, "include_user_team": bool, "include_user_trade": bool }
+# ctx = { "user_team_id": int, "include_user_team": bool, "include_user_trade": bool,
+#         "on_trade_check": Callable(trade_result: Dictionary) (省略可) }
 static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dictionary) -> void:
 	var user_team_id: int = int(ctx.get("user_team_id", 0))
 	var include_user: bool = bool(ctx.get("include_user_team", false))
@@ -551,6 +552,10 @@ static func _run_periodic_roster_swap_hook(season: PSSeason, day: int, ctx: Dict
 	var trade_result: Dictionary = TradeService.run_periodic_trade_check(season, GameDb.players, GameDb.teams, day, trade_user_id)
 	if not (trade_result.get("executed", []) as Array).is_empty():
 		GameDb.rebuild_player_indices()
+	# 判定結果 (成立したトレードと自軍へ届いた提案の数) を呼び出し元へ渡す。通知とスキップ停止に使う。
+	var on_trade_check: Callable = ctx.get("on_trade_check", Callable()) as Callable
+	if on_trade_check.is_valid():
+		on_trade_check.call(trade_result)
 
 
 # day より後に試合が組まれている最も早い日 (無ければ -1)。日次フックの「期限内の最終試合日」判定用。

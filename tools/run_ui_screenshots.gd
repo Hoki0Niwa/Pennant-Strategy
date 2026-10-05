@@ -9,6 +9,7 @@ extends Node
 # 既存セーブを使わない: -- --newsave (使い捨てセーブを作って撮り、終了時に削除して元のアクティブ
 #   セーブへ戻す。**保存形式を変えた直後は旧セーブが読めない**ので (互換は持たない方針)、
 #   その場合はこれで撮る。ユーザーのセーブに一切触れない点でも安全)
+# 返事待ちのトレード提案がある状態で撮る: -- --tradeoffer
 #
 # 状態別撮影モード: -- --states
 #   通常の画面単位撮影とは別に、選手詳細/能力・成績一覧/チーム詳細のタブ・絞り込み違いや、
@@ -110,6 +111,9 @@ func _ready() -> void:
 			if not bool(result.get("ok", false)):
 				break
 
+	if _has_flag("--tradeoffer"):
+		_inject_trade_offer()
+
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUTPUT_DIR))
 
 	var main_scene: PackedScene = load("res://ui/main.tscn") as PackedScene
@@ -136,6 +140,37 @@ func _ready() -> void:
 
 	_delete_throwaway_save()
 	get_tree().quit(0)
+
+
+# --tradeoffer: 自軍宛ての返事待ちトレード提案を 1 件仕込む (サイドバーのバッジ、ホームの通知ボタン、
+# トレード画面の提案カードの撮影用)。交換期限内でないと通知は出ないので --simdays は 120 未満にする。
+func _inject_trade_offer() -> void:
+	var season: PSSeason = AppState.current_season
+	if season == null:
+		return
+	var user_player: PSPlayer = null
+	var cpu_player: PSPlayer = null
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player == null or not TradeService.is_tradeable(player, season.year):
+			continue
+		if player.team_id == AppState.selected_team_id:
+			if user_player == null:
+				user_player = player
+		elif cpu_player == null:
+			cpu_player = player
+	if user_player == null or cpu_player == null:
+		return
+	var state: Dictionary = TradeService.trade_state(season)
+	(state["user_offers"] as Array).append({
+		"id": int(state.get("next_offer_id", 1)), "status": "pending",
+		"day": season.current_day, "expires_day": season.current_day + TradeService.OFFER_EXPIRY_DAYS,
+		"cpu_team_id": cpu_player.team_id,
+		"cpu_player_ids": [cpu_player.id], "user_player_ids": [user_player.id],
+		"cpu_player_names": [cpu_player.name], "user_player_names": [user_player.name],
+	})
+	state["next_offer_id"] = int(state.get("next_offer_id", 1)) + 1
+	print("[trade] 返事待ちの提案を 1 件仕込みました")
 
 
 # --newsave: 既存セーブを読まず、その場で新規シーズンを作って撮る。

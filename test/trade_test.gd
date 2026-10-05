@@ -277,13 +277,16 @@ func test_trade_state_survives_save_round_trip() -> void:
 	assert_str(str(entry.get("source", ""))).is_equal("cpu")
 
 
-# auto_trade_for_user_team はスキップ中/自動入替とは独立に自軍をCPU間トレードマッチングへ
-# 含める (include_user_trade)。一二軍自動入替 (include_user_team) が無効でも、
-# トレードだけ自動委任できることを AppState 側の ctx 組み立てで確認する。
+# 自軍を CPU 間のトレードマッチングへ含めるか (include_user_trade) は、トレード用の 2 つのトグルだけで
+# 決まる: auto_trade_for_user_team (常時) と auto_trade_during_skip (スキップ中のみ)。
+# 一二軍の自動入替トグルはトレードを巻き込まない (スキップしただけで自軍の選手が出て行かない)。
 func test_build_auto_swap_ctx_includes_trade_flag_independently() -> void:
 	var old_swap: bool = AppState.auto_roster_swap_for_user_team
+	var old_swap_skip: bool = AppState.auto_roster_swap_during_skip
 	var old_trade: bool = AppState.auto_trade_for_user_team
+	var old_trade_skip: bool = AppState.auto_trade_during_skip
 	AppState.auto_roster_swap_for_user_team = false
+	AppState.auto_trade_during_skip = false
 	AppState.auto_trade_for_user_team = true
 	var ctx: Dictionary = AppState.call("_build_auto_swap_ctx", false)
 	assert_bool(bool(ctx.get("include_user_team", true))).is_false()
@@ -293,8 +296,68 @@ func test_build_auto_swap_ctx_includes_trade_flag_independently() -> void:
 	var ctx_off: Dictionary = AppState.call("_build_auto_swap_ctx", false)
 	assert_bool(bool(ctx_off.get("include_user_trade", true))).is_false()
 
+	# 入替トグルが有効でも、トレードのトグルが無効なら自軍はマッチングに入らない。
+	AppState.auto_roster_swap_for_user_team = true
+	AppState.auto_roster_swap_during_skip = true
+	assert_bool(bool((AppState.call("_build_auto_swap_ctx", false) as Dictionary).get("include_user_trade", true))).is_false()
+	var ctx_skip_off: Dictionary = AppState.call("_build_auto_swap_ctx", true)
+	assert_bool(bool(ctx_skip_off.get("include_user_team", false))).is_true()
+	assert_bool(bool(ctx_skip_off.get("include_user_trade", true))).is_false()
+
+	# スキップ中のみ許可: スキップの ctx だけ自軍を含める。
+	AppState.auto_trade_during_skip = true
+	assert_bool(bool((AppState.call("_build_auto_swap_ctx", true) as Dictionary).get("include_user_trade", false))).is_true()
+	assert_bool(bool((AppState.call("_build_auto_swap_ctx", false) as Dictionary).get("include_user_trade", true))).is_false()
+
 	AppState.auto_roster_swap_for_user_team = old_swap
+	AppState.auto_roster_swap_during_skip = old_swap_skip
 	AppState.auto_trade_for_user_team = old_trade
+	AppState.auto_trade_during_skip = old_trade_skip
+
+
+# 通知に使う件数: 返事待ち (pending) だけを数え、交換期限を過ぎたら保留が残っていても 0。
+# 数えるだけで trade_state に既定キーを書き足さない (画面を開いただけで未保存の変更にしない)。
+func test_actionable_user_offer_count_counts_pending_within_window() -> void:
+	var season: PSSeason = _season(10)
+	assert_int(TradeService.actionable_user_offer_count(season)).is_equal(0)
+	assert_bool(season.trade_state.is_empty()).is_true()
+	assert_int(TradeService.actionable_user_offer_count(null)).is_equal(0)
+
+	season.trade_state = {"user_offers": [
+		{"id": 1, "status": "pending", "expires_day": 24},
+		{"id": 2, "status": "declined", "expires_day": 24},
+		{"id": 3, "status": "pending", "expires_day": 24},
+	]}
+	assert_int(TradeService.actionable_user_offer_count(season)).is_equal(2)
+	season.current_day = 140
+	assert_int(TradeService.actionable_user_offer_count(season)).is_equal(0)
+
+
+# 週次判定の結果から自軍に関わるものだけを拾い、消化結果の message の先頭に通知を載せる。
+# 載せたら数え直しになる (次の消化に持ち越さない)。
+func test_trade_check_results_become_status_notice_once() -> void:
+	var old_team_id: int = AppState.selected_team_id
+	AppState.selected_team_id = 1
+	var ctx: Dictionary = AppState.call("_build_auto_swap_ctx", false)
+	var on_trade_check: Callable = ctx.get("on_trade_check", Callable()) as Callable
+	assert_bool(on_trade_check.is_valid()).is_true()
+
+	# 他球団同士の成立と、提案なしの判定は通知にならない。
+	on_trade_check.call({"executed": [{"team_a": 2, "team_b": 3}], "user_offers_added": 0})
+	var quiet: Dictionary = {"message": "消化しました"}
+	assert_str(str(AppState.call("_attach_trade_notice", quiet))).is_equal("消化しました")
+
+	on_trade_check.call({"executed": [{"team_a": 2, "team_b": 1}, {"team_a": 4, "team_b": 5}], "user_offers_added": 1})
+	var result: Dictionary = {"message": "消化しました"}
+	var message: String = str(AppState.call("_attach_trade_notice", result))
+	assert_str(message).contains(Loc.t("trade.notice.offer_arrived", {"count": 1}))
+	assert_str(message).contains(Loc.t("trade.notice.auto_executed", {"count": 1}))
+	assert_str(message).ends_with("消化しました")
+	assert_str(str(result.get("message", ""))).is_equal(message)
+
+	var after: Dictionary = {"message": "次の日"}
+	assert_str(str(AppState.call("_attach_trade_notice", after))).is_equal("次の日")
+	AppState.selected_team_id = old_team_id
 
 
 func test_surplus_keeps_position_leaders() -> void:
