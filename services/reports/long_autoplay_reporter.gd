@@ -379,16 +379,42 @@ func _auto_swap_ctx(selected_team_id: int) -> Dictionary:
 
 
 # 当季のシーズン中トレード集計 (source 別内訳つき)。
+# age_gap_* は交換した両側の平均年齢の差で、「ベテランと若手の交換」がどれだけ起きているかを見る
+# (球団方針が効いていないと同年代どうしの交換ばかりになる)。
 func _trade_summary(season: PSSeason) -> Dictionary:
 	var executed: Array = TradeService.executed_trades(season)
 	var by_source: Dictionary = {}
+	var age_gap_total: float = 0.0
+	var age_gap_wide: int = 0
 	for entry_value in executed:
-		var source: String = str((entry_value as Dictionary).get("source", ""))
+		var entry: Dictionary = entry_value as Dictionary
+		var source: String = str(entry.get("source", ""))
 		by_source[source] = int(by_source.get(source, 0)) + 1
+		var age_gap: float = absf(_average_age(entry.get("a_player_ids", []) as Array) - _average_age(entry.get("b_player_ids", []) as Array))
+		age_gap_total += age_gap
+		if age_gap >= TRADE_WIDE_AGE_GAP:
+			age_gap_wide += 1
 	return {
 		"count": executed.size(),
 		"by_source": by_source,
+		"age_gap_avg": age_gap_total / float(executed.size()) if not executed.is_empty() else 0.0,
+		"age_gap_wide": age_gap_wide,
 	}
+
+
+# この年齢差以上の交換を「ベテランと若手の交換」として数える。
+const TRADE_WIDE_AGE_GAP: float = 6.0
+
+
+func _average_age(player_ids: Array) -> float:
+	var total: float = 0.0
+	var counted: int = 0
+	for id_value in player_ids:
+		var player: PSPlayer = GameDb.get_player(int(id_value))
+		if player != null:
+			total += float(player.age)
+			counted += 1
+	return total / float(counted) if counted > 0 else 0.0
 
 
 func _farm_club_season_summary(season: PSSeason) -> Dictionary:

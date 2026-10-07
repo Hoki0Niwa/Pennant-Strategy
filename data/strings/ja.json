@@ -1100,6 +1100,10 @@
 	"team_detail.depth.note_grade": "全{n}球団の同じ枠を並べた中での位置（S=青 / A・B=緑 / C・D=黄 / E=赤）。将来性が D・E の枠が後継を要する枠。",
 
 	"trade.hint":"行クリック=選択（各球団最大{max}人） / 選手名を右クリックで選手詳細",
+	"trade.direction": "方針: {label}",
+	"team_direction.win_now": "即戦力重視",
+	"team_direction.balanced": "バランス",
+	"team_direction.future": "将来重視",
 	"trade.auto_delegated": "自動トレード: AI委任中",
 	"trade.auto_delegated_skip": "自動トレード: スキップ中のみAI委任",
 	"trade.mine_title": "自軍: {team}",

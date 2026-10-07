@@ -76,6 +76,8 @@ var _theirs_rows: Array = []
 # evaluate_user_proposal の結果キャッシュ。選択が変わるたび _refresh_proposal_eval で更新する
 # (毎フレーム呼ぶと重いので _draw では参照するだけ)。
 var _eval: Dictionary = {}
+# 全球団の編成方針 ({team_id: stance})。相手がどんな選手を高く買うかの手掛かりとして見出しに出す。
+var _stances: Dictionary = {}
 
 
 func _ready() -> void:
@@ -124,9 +126,11 @@ func _draw() -> void:
 	_draw_stat_strip(TOP_STRIP, season, team, window_open)
 
 	_draw_player_table(LEFT_RECT, Loc.t("trade.mine_title", {"team": team.name}), _mine_rows_filtered(), _give_ids, "mine")
+	_draw_direction_chip(LEFT_RECT, team.id)
 	_draw_center_block(CENTER_RECT, season, window_open)
 	var opponent: PSTeam = GameDb.get_team(_view_team_id)
 	_draw_player_table(RIGHT_RECT, _theirs_title(opponent), _theirs_rows, _receive_ids, "theirs")
+	_draw_direction_chip(RIGHT_RECT, _view_team_id)
 
 	_draw_offers_panel(OFFERS_RECT, season)
 	_draw_log_table(LOG_RECT, season)
@@ -179,6 +183,21 @@ func _draw_player_table(rect: Rect2, title: String, rows: Array, selected_ids: A
 			continue
 		if selected_ids.has(int(hit.get("meta", 0))):
 			_round(hit["rect"] as Rect2, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.75), 6, 2)
+
+
+# ロスター表の見出し右端に、その球団の編成方針を出す (即戦力重視 = ベテランを高く買う / 将来重視 = 若手を高く買う)。
+func _draw_direction_chip(rect: Rect2, team_id: int) -> void:
+	if not _stances.has(team_id):
+		return
+	var stance: float = float(_stances[team_id])
+	var color: Color = MUTED
+	match TeamDirection.kind_for(stance):
+		TeamDirection.KIND_WIN_NOW:
+			color = AMBER
+		TeamDirection.KIND_FUTURE:
+			color = GREEN
+	_chip(Rect2(rect.end.x - 18.0 - 150.0, rect.position.y + 12.0, 150.0, 22.0),
+		Loc.t("trade.direction", {"label": TeamDirection.label_for(stance)}), color)
 
 
 # --- トレードブロック (中央) ---
@@ -576,6 +595,7 @@ func _refresh_all() -> void:
 	if season == null:
 		return
 	_war_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	_stances = TradeService.build_team_stances(season, GameDb.players, GameDb.teams)
 	_load_mine(season)
 	_load_theirs(season)
 	_refresh_proposal_eval()

@@ -6,6 +6,8 @@ const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 # シーズン中トレード。「余剰と不足の交換」を成立させる。
 # - 交換期限 (7/31) までの試合日に、週次で CPU 間トレードと CPU→自軍提案を低頻度判定する。
 # - ユーザーはトレード画面から提案を作成でき、CPU は同じ評価軸 (future_value - 年俸負担 + 需要) で受諾判定する。
+# - 球団方針 (TeamDirection: 順位と戦力から決まる 即戦力重視⇔将来重視) で、同じ選手でも球団ごとに欲しさが変わる。
+#   即戦力重視の球団は若手を出してベテランを取り、将来重視の球団は主力のベテランも売りに出す。
 # - 対象は支配下の健康な日本人非新人のみ (外国人 / 育成 / 怪我人 / FA宣言中 / 入団初年は対象外)。
 # - 成立時は player.team_id / 当季 record.team_id / 両軍一軍ロスター / FA日数台帳を更新する。
 # 状態は season.trade_state に集約 (成立ログ / 自軍宛て提案 / 週次チェック日 / 球団別成立数)。
@@ -38,6 +40,15 @@ const CPU_ACCEPT_MIN_GAIN: float = 1.5
 const NEED_FIT_VALUE_WEIGHT: float = 0.35
 # 提案の人数制約 (1〜2人 対 1〜2人)。
 const MAX_PLAYERS_PER_SIDE: int = 2
+
+# 球団方針 (TeamDirection の stance、-1..+1) が成長期待の重みを振る幅。
+# 球団ごとの価値 = trade_value − stance × この値 × 成長期待。即戦力重視 (+) の球団は若手の伸び代も
+# ベテランの衰えも軽く見て、将来重視 (−) の球団は両方を重く見る。0 にすると方針が効かなくなり、
+# 上げると「ベテランと若手の交換」が成立しやすくなる。
+const STANCE_GROWTH_SWING: float = 0.3
+# stance がこの値以下の球団は、本職の主力でも SELL_VETERAN_MIN_AGE 歳以上なら出せる駒に含める。
+const SELL_VETERAN_STANCE: float = -0.35
+const SELL_VETERAN_MIN_AGE: int = 31
 
 # 余剰判定: 本職で上位2人 (捕手は3人) / 先発7番手以降 / 救援9番手以降を出せる駒とみなす。
 const SURPLUS_KEEP_FIELDERS: int = 2
@@ -198,6 +209,18 @@ static func trade_value(player: PSPlayer) -> float:
 	return OffseasonService.future_value_score(player) - TeamFinance.ai_acquisition_cost_penalty(player.salary)
 
 
+# 交換価値のうち年齢で決まる成長期待 (若手は正、ベテランは負)。球団方針が重みを振る対象。
+static func growth_value(player: PSPlayer) -> float:
+	if player == null:
+		return 0.0
+	return OffseasonService.expected_development_score_bonus(player.age, 6, player.position) * OffseasonService.FUTURE_GROWTH_WEIGHT
+
+
+# 方針 stance の球団から見た交換価値。stance 0 なら trade_value と同じ。
+static func stance_trade_value(player: PSPlayer, stance: float) -> float:
+	return trade_value(player) - stance * STANCE_GROWTH_SWING * growth_value(player)
+
+
 # 受け手球団にとっての需要フィット (need マップの該当スロット値)。
 static func need_fit(player: PSPlayer, team_need: Dictionary) -> float:
 	if player == null:
@@ -213,7 +236,21 @@ static func need_fit(player: PSPlayer, team_need: Dictionary) -> float:
 # (= 一軍枠の質のリーグ差) をそのまま使う。
 # 先発/救援の枠数はチャート側の FIRST_TEAM_SLOTS (先発5/救援6) が単一ソースになる。
 static func build_team_needs(players: Array, teams: Array, current_value_memo: Dictionary = {}) -> Dictionary:
+	return _needs_from_charts(TeamDepthChart.build_league(players, teams, false, current_value_memo))
+
+
+# 全球団の方針 ({team_id: stance})。トレード画面の表示用 (探索は需要と同じチャートから _league_context で作る)。
+static func build_team_stances(season: PSSeason, players: Array, teams: Array) -> Dictionary:
+	return TeamDirection.build_league(season, teams, TeamDepthChart.build_league(players, teams, false))
+
+
+# 需要と方針を 1 回のチャート構築から作る ({"need": {...}, "stance": {...}})。
+static func _league_context(season: PSSeason, players: Array, teams: Array, current_value_memo: Dictionary = {}) -> Dictionary:
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams, false, current_value_memo)
+	return {"need": _needs_from_charts(charts), "stance": TeamDirection.build_league(season, teams, charts)}
+
+
+static func _needs_from_charts(charts: Dictionary) -> Dictionary:
 	var need: Dictionary = {}
 	for team_id in charts.keys():
 		var chart: Dictionary = charts[team_id] as Dictionary
@@ -227,13 +264,21 @@ static func build_team_needs(players: Array, teams: Array, current_value_memo: D
 
 
 # 出せる駒 (余剰) の一覧。本職の上位 SURPLUS_KEEP_* 人は残す。
-static func build_surplus_candidates(players: Array, team_id: int, season_year: int = 0, current_value_memo: Dictionary = {}) -> Array:
+# stance が SELL_VETERAN_STANCE 以下 (将来重視) の球団は、SELL_VETERAN_MIN_AGE 歳以上を保護の頭数に数えず
+# 出せる駒に回す (主力のベテランを売り、残す枠は若い選手で埋める)。
+static func build_surplus_candidates(players: Array, team_id: int, season_year: int = 0, current_value_memo: Dictionary = {}, stance: float = 0.0) -> Array:
 	var fielders_by_pos: Dictionary = {}
 	var starters: Array = []
 	var relievers: Array = []
+	var surplus: Array = []
+	var sell_veterans: bool = stance <= SELL_VETERAN_STANCE
 	for player_row in players:
 		var player: PSPlayer = player_row as PSPlayer
 		if player == null or player.team_id != team_id or player.is_retired() or player.development_player:
+			continue
+		if sell_veterans and player.age >= SELL_VETERAN_MIN_AGE:
+			if is_tradeable(player, season_year):
+				surplus.append(player)
 			continue
 		if player.is_pitcher():
 			if player.is_starter_pitcher():
@@ -245,7 +290,6 @@ static func build_surplus_candidates(players: Array, team_id: int, season_year: 
 		pos_list.append(player)
 		fielders_by_pos[player.position] = pos_list
 
-	var surplus: Array = []
 	for pos in fielders_by_pos.keys():
 		var pos_list: Array = fielders_by_pos[pos] as Array
 		_sort_by_current_value(pos_list, current_value_memo)
@@ -271,7 +315,10 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 	# 評価値はこの探索内だけ共有する。成立後に提案を作る場合は、新しい所属と需要で別に探索する。
 	var current_value_memo: Dictionary = {}
 	var trade_value_memo: Dictionary = {}
-	var need: Dictionary = build_team_needs(players, teams, current_value_memo)
+	var growth_memo: Dictionary = {}
+	var context: Dictionary = _league_context(season, players, teams, current_value_memo)
+	var need: Dictionary = context["need"] as Dictionary
+	var stance: Dictionary = context["stance"] as Dictionary
 	var surplus_by_team: Dictionary = {}
 	var team_ids: Array = []
 	for team_row in teams:
@@ -281,7 +328,7 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 		if trades_count_for_team(season, team.id) >= MAX_TRADES_PER_TEAM:
 			continue
 		team_ids.append(team.id)
-		surplus_by_team[team.id] = build_surplus_candidates(players, team.id, season.year, current_value_memo)
+		surplus_by_team[team.id] = build_surplus_candidates(players, team.id, season.year, current_value_memo, float(stance.get(team.id, 0.0)))
 
 	var best: Dictionary = {}
 	var best_score: float = 0.0
@@ -292,55 +339,87 @@ static func _best_cpu_trade_pair(season: PSSeason, players: Array, teams: Array,
 			var candidate: Dictionary = _best_pair_between(
 				surplus_by_team[team_a] as Array, surplus_by_team[team_b] as Array,
 				need.get(team_a, {}) as Dictionary, need.get(team_b, {}) as Dictionary,
-				trade_value_memo
+				trade_value_memo, float(stance.get(team_a, 0.0)), float(stance.get(team_b, 0.0)), growth_memo
 			)
 			if candidate.is_empty():
 				continue
 			if float(candidate.get("score", 0.0)) > best_score:
+				var player_a_id: int = (candidate.get("player_a", null) as PSPlayer).id
+				var player_b_id: int = (candidate.get("player_b", null) as PSPlayer).id
+				# 探索は予算を見ないので、最良の組が年俸の増える側の予算で弾かれることがある
+				# (ベテランと若手の交換は年俸差が大きい)。通らない組は候補にせず、次点の球団ペアへ譲る。
+				if not bool(_validate_trade_sides(players, teams, team_a, [player_a_id], team_b, [player_b_id], season.year).get("ok", false)):
+					continue
 				best_score = float(candidate.get("score", 0.0))
 				best = {
 					"team_a": team_a,
 					"team_b": team_b,
-					"player_a": (candidate.get("player_a", null) as PSPlayer).id,
-					"player_b": (candidate.get("player_b", null) as PSPlayer).id,
+					"player_a": player_a_id,
+					"player_b": player_b_id,
 					"score": best_score,
 				}
 	return best
 
 
-# A の余剰×B の余剰から、双方の需要フィットが最低値以上かつ価値差が許容内の最良ペア。
-# B 側の需要フィットと価値は A の選手に依らないので、条件を満たす B の駒を先に 1 回だけ並べておく
-# (並び順は surplus_b のまま。最良の判定は同点なら先に見つけた組を残す)。
-static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary, trade_value_memo: Dictionary = {}) -> Dictionary:
+# A の余剰×B の余剰から、双方の動機が最低値以上かつ価値差が許容内の最良ペア。
+# 動機 = 受け取る選手の需要フィット + 方針による上積み。上積みは「受け取る選手と出す選手の成長期待の差」に
+# 方針を掛けたもので、即戦力重視 (stance > 0) の球団は若手を出してベテランを取る交換で増え、
+# 将来重視 (stance < 0) の球団はその逆で増える。stance が 0 なら需要フィットだけで決まる。
+# 価値差は方針を掛けない共通の trade_value で測る (片方だけが大きく損をする交換を通さない)。
+# 最良の判定は同点なら先に見つけた組を残す (surplus_a → surplus_b の並び順)。
+static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary, trade_value_memo: Dictionary = {}, stance_a: float = 0.0, stance_b: float = 0.0, growth_memo: Dictionary = {}) -> Dictionary:
 	var best: Dictionary = {}
 	var best_score: float = 0.0
-	var b_players: Array = []
-	var b_fits: PackedFloat64Array = []
-	var b_values: PackedFloat64Array = []
-	var b_ready: bool = false
+	if surplus_a.is_empty() or surplus_b.is_empty():
+		return best
+	var swing_a: float = stance_a * STANCE_GROWTH_SWING
+	var swing_b: float = stance_b * STANCE_GROWTH_SWING
+
+	# A の動機 = [fit_a(b) − swing_a × g(b)] + swing_a × g(a)。後ろの項は A の出す選手で決まるので、
+	# その最大値を足しても最低値に届かない B の駒は先に外す。
+	var a_growth: PackedFloat64Array = []
+	var a_bonus_max: float = -INF
 	for a_row in surplus_a:
-		var player_a: PSPlayer = a_row as PSPlayer
-		var fit_for_b: float = need_fit(player_a, need_b)
-		if fit_for_b < MIN_NEED_FIT:
+		var growth_a: float = _cached_growth_value(a_row as PSPlayer, growth_memo)
+		a_growth.append(growth_a)
+		a_bonus_max = maxf(a_bonus_max, swing_a * growth_a)
+	var b_players: Array = []
+	var b_motive_base: PackedFloat64Array = []
+	var b_values: PackedFloat64Array = []
+	var b_growth: PackedFloat64Array = []
+	var b_bonus_max: float = -INF
+	for b_row in surplus_b:
+		var player_b: PSPlayer = b_row as PSPlayer
+		var growth_b: float = _cached_growth_value(player_b, growth_memo)
+		var motive_base: float = need_fit(player_b, need_a) - swing_a * growth_b
+		if motive_base + a_bonus_max < MIN_NEED_FIT:
 			continue
-		if not b_ready:
-			b_ready = true
-			for b_row in surplus_b:
-				var player_b: PSPlayer = b_row as PSPlayer
-				var fit_for_a: float = need_fit(player_b, need_a)
-				if fit_for_a < MIN_NEED_FIT:
-					continue
-				b_players.append(player_b)
-				b_fits.append(fit_for_a)
-				b_values.append(_cached_trade_value(player_b, trade_value_memo))
-			if b_players.is_empty():
-				return best
+		b_players.append(player_b)
+		b_motive_base.append(motive_base)
+		b_values.append(_cached_trade_value(player_b, trade_value_memo))
+		b_growth.append(growth_b)
+		b_bonus_max = maxf(b_bonus_max, swing_b * growth_b)
+	if b_players.is_empty():
+		return best
+
+	for a_index in range(surplus_a.size()):
+		var player_a: PSPlayer = surplus_a[a_index] as PSPlayer
+		var a_motive_base: float = need_fit(player_a, need_b) - swing_b * a_growth[a_index]
+		if a_motive_base + b_bonus_max < MIN_NEED_FIT:
+			continue
+		var a_bonus: float = swing_a * a_growth[a_index]
 		var value_a: float = _cached_trade_value(player_a, trade_value_memo)
 		for b_index in range(b_players.size()):
+			var motive_a: float = b_motive_base[b_index] + a_bonus
+			if motive_a < MIN_NEED_FIT:
+				continue
+			var motive_b: float = a_motive_base + swing_b * b_growth[b_index]
+			if motive_b < MIN_NEED_FIT:
+				continue
 			var value_diff: float = absf(value_a - b_values[b_index])
 			if value_diff > VALUE_DIFF_TOLERANCE:
 				continue
-			var score: float = b_fits[b_index] + fit_for_b - value_diff * VALUE_DIFF_SCORE_PENALTY
+			var score: float = motive_a + motive_b - value_diff * VALUE_DIFF_SCORE_PENALTY
 			if score > best_score:
 				best_score = score
 				best = {"player_a": player_a, "player_b": b_players[b_index], "score": score}
@@ -353,8 +432,13 @@ static func _best_pair_between(surplus_a: Array, surplus_b: Array, need_a: Dicti
 static func _generate_user_offer(season: PSSeason, players: Array, teams: Array, user_team_id: int, day: int) -> Dictionary:
 	var current_value_memo: Dictionary = {}
 	var trade_value_memo: Dictionary = {}
-	var need: Dictionary = build_team_needs(players, teams, current_value_memo)
-	var user_surplus: Array = build_surplus_candidates(players, user_team_id, season.year, current_value_memo)
+	var growth_memo: Dictionary = {}
+	var context: Dictionary = _league_context(season, players, teams, current_value_memo)
+	var need: Dictionary = context["need"] as Dictionary
+	var stance: Dictionary = context["stance"] as Dictionary
+	# 自軍の方針も CPU 球団と同じ基準 (順位と戦力) で見立て、自軍にとっても筋の通る交換を持ちかける。
+	var user_stance: float = float(stance.get(user_team_id, 0.0))
+	var user_surplus: Array = build_surplus_candidates(players, user_team_id, season.year, current_value_memo, user_stance)
 	if user_surplus.is_empty():
 		return {}
 	var user_need: Dictionary = need.get(user_team_id, {}) as Dictionary
@@ -368,9 +452,10 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 			continue
 		if trades_count_for_team(season, team.id) >= MAX_TRADES_PER_TEAM:
 			continue
+		var cpu_stance: float = float(stance.get(team.id, 0.0))
 		var candidate: Dictionary = _best_pair_between(
-			build_surplus_candidates(players, team.id, season.year, current_value_memo), user_surplus,
-			need.get(team.id, {}) as Dictionary, user_need, trade_value_memo
+			build_surplus_candidates(players, team.id, season.year, current_value_memo, cpu_stance), user_surplus,
+			need.get(team.id, {}) as Dictionary, user_need, trade_value_memo, cpu_stance, user_stance, growth_memo
 		)
 		if candidate.is_empty():
 			continue
@@ -472,21 +557,24 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 	if trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:
 		return {"ok": true, "accepted": false, "cpu_gain": 0.0, "message": Loc.t("trade.error.user_limit")}
 
-	var need: Dictionary = build_team_needs(players, teams)
-	var cpu_need: Dictionary = need.get(cpu_team_id, {}) as Dictionary
+	var context: Dictionary = _league_context(season, players, teams)
+	var cpu_need: Dictionary = (context["need"] as Dictionary).get(cpu_team_id, {}) as Dictionary
+	# 相手球団は自分の方針で選手を値踏みする (即戦力重視ならベテランを高く、将来重視なら若手を高く買う)。
+	var cpu_stance: float = float((context["stance"] as Dictionary).get(cpu_team_id, 0.0))
 	var cpu_gain: float = 0.0
 	for id_value in give_ids:
 		var incoming: PSPlayer = _find_player_by_id(players, int(id_value))
-		cpu_gain += trade_value(incoming) + need_fit(incoming, cpu_need) * NEED_FIT_VALUE_WEIGHT
+		cpu_gain += stance_trade_value(incoming, cpu_stance) + need_fit(incoming, cpu_need) * NEED_FIT_VALUE_WEIGHT
 	for id_value in receive_ids:
 		var outgoing: PSPlayer = _find_player_by_id(players, int(id_value))
-		cpu_gain -= trade_value(outgoing) + need_fit(outgoing, cpu_need) * NEED_FIT_VALUE_WEIGHT
+		cpu_gain -= stance_trade_value(outgoing, cpu_stance) + need_fit(outgoing, cpu_need) * NEED_FIT_VALUE_WEIGHT
 	var accepted: bool = cpu_gain >= CPU_ACCEPT_MIN_GAIN
 	return {
 		"ok": true,
 		"accepted": accepted,
 		"cpu_gain": cpu_gain,
 		"cpu_team_id": cpu_team_id,
+		"cpu_stance": cpu_stance,
 		"message": "" if accepted else Loc.t("trade.declined_by_value"),
 	}
 
@@ -693,6 +781,12 @@ static func _cached_trade_value(player: PSPlayer, trade_value_memo: Dictionary) 
 	if not trade_value_memo.has(player):
 		trade_value_memo[player] = trade_value(player)
 	return float(trade_value_memo[player])
+
+
+static func _cached_growth_value(player: PSPlayer, growth_memo: Dictionary) -> float:
+	if not growth_memo.has(player):
+		growth_memo[player] = growth_value(player)
+	return float(growth_memo[player])
 
 
 static func _top_average(values: Array, count: int) -> float:

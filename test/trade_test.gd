@@ -472,6 +472,117 @@ func test_trade_pair_matches_exhaustive_search() -> void:
 	assert_bool(_exhaustive_best_pair(surplus_a, surplus_b, needs[2][0], needs[2][1]).is_empty()).is_true()
 
 
+# 球団方針: 開幕直後は戦力のリーグ内偏差だけで決まり、試合を消化すると順位 (CS 圏からのゲーム差) が効く。
+func test_team_direction_uses_strength_early_then_standings() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = []
+	var charts: Dictionary = {}
+	for team_id in range(1, 7):
+		teams.append(_team(team_id))
+		# 球団 1 が最弱、6 が最強。
+		charts[team_id] = {"slots": {"fielder:3": {"first_team_value": 50.0 + float(team_id) * 4.0, "first_team_slots": 1}}}
+		season.standings[team_id] = PSStats.new()
+
+	var early: Dictionary = TeamDirection.build_league(season, teams, charts)
+	assert_float(float(early[6])).is_greater(0.0)
+	assert_float(float(early[1])).is_less(0.0)
+	assert_float(float(early[6])).is_equal_approx(-float(early[1]), 0.0001)
+
+	# 最弱の球団 1 が独走、最強の球団 6 が大きく負け越す。順位が戦力の見立てを上書きする。
+	var records: Dictionary = {1: [45, 20], 2: [36, 29], 3: [33, 32], 4: [31, 34], 5: [28, 37], 6: [22, 43]}
+	for team_id in records.keys():
+		var stats: PSStats = season.standings[team_id] as PSStats
+		stats.wins = int((records[team_id] as Array)[0])
+		stats.losses = int((records[team_id] as Array)[1])
+	var mid: Dictionary = TeamDirection.build_league(season, teams, charts)
+	assert_str(TeamDirection.kind_for(float(mid[1]))).is_equal(TeamDirection.KIND_WIN_NOW)
+	assert_str(TeamDirection.kind_for(float(mid[6]))).is_equal(TeamDirection.KIND_FUTURE)
+	# CS 圏の最下位 (3位) は圏内なので、中立より即戦力重視に寄る。
+	assert_float(float(mid[3])).is_greater(float(mid[4]))
+	assert_float(float(mid[3])).is_greater(0.0)
+
+	# CS 圏が成り立たない小さなリーグと、成績の無い球団は順位を使わない。
+	var small: Dictionary = TeamDirection.build_league(season, [_team(1), _team(6)], charts)
+	assert_float(float(small[6])).is_greater(0.0)
+	assert_float(float(small[1])).is_less(0.0)
+
+
+# 方針は成長期待の重みを振る: 即戦力重視はベテランを高く・若手を低く見て、将来重視はその逆。
+func test_stance_trade_value_tilts_growth_component() -> void:
+	var veteran: PSPlayer = _player({"id": 1, "team_id": 1, "age": 34})
+	var prospect: PSPlayer = _player({"id": 2, "team_id": 1, "age": 21})
+	assert_float(TradeService.growth_value(veteran)).is_less(0.0)
+	assert_float(TradeService.growth_value(prospect)).is_greater(0.0)
+	assert_float(TradeService.stance_trade_value(veteran, 0.0)).is_equal(TradeService.trade_value(veteran))
+	assert_float(TradeService.stance_trade_value(veteran, 1.0)).is_greater(TradeService.trade_value(veteran))
+	assert_float(TradeService.stance_trade_value(veteran, -1.0)).is_less(TradeService.trade_value(veteran))
+	assert_float(TradeService.stance_trade_value(prospect, 1.0)).is_less(TradeService.trade_value(prospect))
+	assert_float(TradeService.stance_trade_value(prospect, -1.0)).is_greater(TradeService.trade_value(prospect))
+
+
+# ポジションの需要が無くても、即戦力重視の球団が若手を出して将来重視の球団のベテランを取る交換は成立する。
+# 方針が逆向き (即戦力重視が若手を取る側) や中立同士では成立しない。
+func test_trade_pair_stance_enables_veteran_for_prospect_swap() -> void:
+	var prospect: PSPlayer = _player_with_z(11, 1, 3, false, 0.0)
+	prospect.age = 21
+	var veteran: PSPlayer = _player_with_z(21, 2, 3, false, 0.0)
+	veteran.age = 34
+	# 同じ能力だと成長期待のぶん若手の価値が高い。年俸負担で価値差を許容内に揃える。
+	var gap: float = TradeService.trade_value(prospect) - TradeService.trade_value(veteran)
+	assert_float(gap).is_greater(TradeService.VALUE_DIFF_TOLERANCE)
+	prospect.salary += int(round(gap * TeamFinance.AI_SALARY_COST_PER_SCORE))
+	assert_float(absf(TradeService.trade_value(prospect) - TradeService.trade_value(veteran))).is_less(0.01)
+
+	var no_need: Dictionary = {}
+	assert_dict(TradeService._best_pair_between([prospect], [veteran], no_need, no_need)).is_empty()
+	var swap: Dictionary = TradeService._best_pair_between([prospect], [veteran], no_need, no_need, {}, 1.0, -1.0)
+	assert_object(swap.get("player_a")).is_same(prospect)
+	assert_object(swap.get("player_b")).is_same(veteran)
+	assert_dict(TradeService._best_pair_between([prospect], [veteran], no_need, no_need, {}, -1.0, 1.0)).is_empty()
+	# 片方だけが乗り気でも成立しない (相手に動機が無い)。
+	assert_dict(TradeService._best_pair_between([prospect], [veteran], no_need, no_need, {}, 1.0, 0.0)).is_empty()
+
+
+# 将来重視の球団は主力でもベテランを売りに出し、残す枠は若い選手で埋める。
+func test_surplus_sells_veteran_leaders_when_future_oriented() -> void:
+	var veteran_leader: PSPlayer = _player_with_z(11, 1, 3, false, 2.0)
+	veteran_leader.age = 33
+	var second: PSPlayer = _player_with_z(12, 1, 3, false, 1.0)
+	var third: PSPlayer = _player_with_z(13, 1, 3, false, 0.0)
+	var players: Array = [veteran_leader, second, third]
+	assert_array(TradeService.build_surplus_candidates(players, 1)).is_equal([third])
+	assert_array(TradeService.build_surplus_candidates(players, 1, 0, {}, TradeService.SELL_VETERAN_STANCE)).is_equal([veteran_leader])
+	assert_array(TradeService.build_surplus_candidates(players, 1, 0, {}, 1.0)).is_equal([third])
+
+
+# ユーザー提案の受諾判定も相手の方針で変わる: 同じ「若手を出してベテランを貰う」提案でも、
+# 相手が下位 (将来重視) のときのほうが相手の得が大きい。
+func test_evaluate_user_proposal_reflects_partner_direction() -> void:
+	var teams: Array = [_team(1), _team(2), _team(3), _team(4)]
+	var prospect: PSPlayer = _player_with_z(11, 1, 3, false, 0.0)
+	prospect.age = 21
+	var veteran: PSPlayer = _player_with_z(21, 2, 3, false, 0.0)
+	veteran.age = 34
+	var players: Array = [prospect, veteran]
+
+	var gains: Dictionary = {}
+	for partner_wins in [50, 15]:
+		var season: PSSeason = _season(10)
+		for team_id in range(1, 5):
+			var stats: PSStats = PSStats.new()
+			stats.wins = 32
+			stats.losses = 33
+			season.standings[team_id] = stats
+		(season.standings[2] as PSStats).wins = partner_wins
+		(season.standings[2] as PSStats).losses = 65 - partner_wins
+		var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [21])
+		assert_bool(bool(result.get("ok", false))).is_true()
+		gains[partner_wins] = result
+	assert_float(float((gains[50] as Dictionary)["cpu_stance"])).is_greater(0.0)
+	assert_float(float((gains[15] as Dictionary)["cpu_stance"])).is_less(0.0)
+	assert_float(float((gains[15] as Dictionary)["cpu_gain"])).is_greater(float((gains[50] as Dictionary)["cpu_gain"]))
+
+
 # ---- helpers -------------------------------------------------------------------
 
 func _exhaustive_best_pair(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary) -> Dictionary:
