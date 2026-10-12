@@ -438,6 +438,8 @@ func start_next_season() -> bool:
 		return false
 
 	GameDb.advance_players_one_year()
+	# 金銭の受け払い (トレードの金銭 / FA 補償金 / 譲渡金) が動かした予算は、そのシーズンとオフ限りで元へ戻す。
+	TeamFinance.apply_fixed_budget(GameDb.teams)
 	current_season = SeasonService.create_next_season(current_season, GameDb.teams, dh_settings_for_schedule())
 	RecordStore.ensure_season_records(current_season, GameDb.teams, GameDb.players, auto_save_enabled)
 	# 新シーズンは現在のロースター/能力でスタメン・打順を選び直すため、テンプレキャッシュをリセット。
@@ -2171,6 +2173,8 @@ func restore_from_save(data: Dictionary) -> bool:
 	current_awards = PSAwards.from_dict(awards_data) if not awards_data.is_empty() else null
 	var season_data: Dictionary = data.get("season", {}) as Dictionary
 	current_season = PSSeason.from_dict(season_data) if not season_data.is_empty() else null
+	# 今季のトレードで動いた金銭は固定額へ揃えたあとに載せ直す (ロードで消えないように)。
+	TradeService.apply_cash_ledger(current_season, GameDb.teams)
 	# 選手履歴は blob ではなく season_history テーブル側にある。
 	SaveService.hydrate_season_history(current_season)
 	_apply_dh_settings_to_current_schedule()

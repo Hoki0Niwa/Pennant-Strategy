@@ -50,6 +50,25 @@ const STANCE_GROWTH_SWING: float = 0.3
 const SELL_VETERAN_STANCE: float = -0.35
 const SELL_VETERAN_MIN_AGE: int = 31
 
+# --- 金銭トレード / 無償トレード ---
+# 金銭は球団予算 (team.funds) の付け替え: 払った球団の予算が減り、受け取った球団の予算が同額増える。
+# 効くのは今季の残りとそのオフの補強で、翌シーズンの開始時に全球団が固定額へ戻る
+# (season.trade_state の cash_by_team に台帳を持ち、ロード時は apply_cash_ledger で funds へ載せ直す)。
+#
+# 1 件で動かせる金銭の上限と刻み (万円)。上限を上げると金銭だけで主力級が動くようになる。
+const MAX_CASH_PER_TRADE: int = 30000
+const CASH_STEP: int = 100
+# 金銭と選手価値の換算 (何万円で価値 1 点か)。年俸負担の換算と同じ尺度。
+const CASH_PER_VALUE_POINT: float = TeamFinance.AI_SALARY_COST_PER_SCORE
+# 「ただで手に入る選手」の水準 = リーグの支配下選手の現在能力の下位からこの割合の位置。
+# 選手の資産価値は trade_value からこの水準を引いた値で、金銭の値付けと人数の違う交換の損得に使う
+# (引かないと「控え 2 人で主力 1 人」が価値の合計だけで通る)。上げると金銭の相場が下がり、
+# 無償で動く選手が増える。
+const REPLACEMENT_PERCENTILE: float = 0.3
+# CPU 球団が金銭/無償の譲渡を探す週次の発生率と、売り手・買い手それぞれに要求する最低の得。
+const CASH_TRADE_CHANCE_PER_CHECK: float = 0.08
+const CASH_DEAL_MIN_GAIN: float = 1.5
+
 # 余剰判定: 本職で上位2人 (捕手は3人) / 先発7番手以降 / 救援9番手以降を出せる駒とみなす。
 const SURPLUS_KEEP_FIELDERS: int = 2
 const SURPLUS_KEEP_CATCHERS: int = 3
@@ -97,6 +116,26 @@ static func run_periodic_trade_check(season: PSSeason, players: Array, teams: Ar
 			var offer: Dictionary = _generate_user_offer(season, players, teams, user_team_id, day)
 			if not offer.is_empty():
 				result["user_offers_added"] = 1
+
+	# 金銭トレード / 無償トレード (選手 1 人を金銭または無償で譲る)。自軍が絡む組は成立させず提案として届ける。
+	if Rng.roll_float() <= CASH_TRADE_CHANCE_PER_CHECK:
+		var deal: Dictionary = _best_cash_deal(season, players, teams, user_team_id)
+		if not deal.is_empty():
+			var seller_id: int = int(deal.get("seller", 0))
+			var buyer_id: int = int(deal.get("buyer", 0))
+			var sold: PSPlayer = deal.get("player", null) as PSPlayer
+			var cash: int = int(deal.get("cash", 0))
+			if user_team_id > 0 and (seller_id == user_team_id or buyer_id == user_team_id):
+				if pending_user_offers(season).size() < MAX_PENDING_USER_OFFERS:
+					if seller_id == user_team_id:
+						_store_user_offer(season, day, buyer_id, [], [sold], cash)
+					else:
+						_store_user_offer(season, day, seller_id, [sold], [], -cash)
+					result["user_offers_added"] = int(result["user_offers_added"]) + 1
+			else:
+				var cash_entry: Dictionary = execute_trade(season, players, seller_id, [sold.id], buyer_id, [], "cpu", -cash, teams)
+				if not cash_entry.is_empty():
+					(result["executed"] as Array).append(cash_entry)
 	return result
 
 
@@ -141,6 +180,8 @@ static func trade_state(season: PSSeason) -> Dictionary:
 		state["trades_by_team"] = {}
 	if not state.has("next_offer_id"):
 		state["next_offer_id"] = 1
+	if not state.has("cash_by_team"):
+		state["cash_by_team"] = {}
 	season.trade_state = state
 	return state
 
@@ -173,6 +214,36 @@ static func actionable_user_offer_count(season: PSSeason) -> int:
 
 static func trades_count_for_team(season: PSSeason, team_id: int) -> int:
 	return int((trade_state(season).get("trades_by_team", {}) as Dictionary).get(str(team_id), 0))
+
+
+# 今季のトレードで受け取った金銭の差し引き (万円。払った側は負)。
+static func cash_balance_for_team(season: PSSeason, team_id: int) -> int:
+	if season == null:
+		return 0
+	return int((season.trade_state.get("cash_by_team", {}) as Dictionary).get(str(team_id), 0))
+
+
+# 台帳の金銭を team.funds へ載せる。funds を固定額へ揃え直した直後 (セーブのロード) に 1 度だけ呼ぶ —
+# 成立時は execute_trade が funds を直接動かしているので、それ以外で呼ぶと二重に載る。
+static func apply_cash_ledger(season: PSSeason, teams: Array) -> void:
+	if season == null:
+		return
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null:
+			team.funds += cash_balance_for_team(season, team.id)
+
+
+static func _move_cash(season: PSSeason, teams: Array, from_team_id: int, to_team_id: int, amount: int) -> void:
+	var ledger: Dictionary = trade_state(season)["cash_by_team"] as Dictionary
+	ledger[str(from_team_id)] = int(ledger.get(str(from_team_id), 0)) - amount
+	ledger[str(to_team_id)] = int(ledger.get(str(to_team_id), 0)) + amount
+	var from_team: PSTeam = _find_team_by_id(teams, from_team_id)
+	var to_team: PSTeam = _find_team_by_id(teams, to_team_id)
+	if from_team != null:
+		from_team.funds -= amount
+	if to_team != null:
+		to_team.funds += amount
 
 
 static func prune_expired_offers(season: PSSeason, day: int) -> void:
@@ -221,6 +292,12 @@ static func stance_trade_value(player: PSPlayer, stance: float) -> float:
 	return trade_value(player) - stance * STANCE_GROWTH_SWING * growth_value(player)
 
 
+# 方針 stance の球団から見た資産価値 = 「ただで手に入る選手」(replacement) をどれだけ上回るか。
+# 負なら抱えているだけ損な選手 (能力のわりに年俸が重い) で、無償でも手放す理由になる。
+static func asset_value(player: PSPlayer, stance: float, replacement: float) -> float:
+	return stance_trade_value(player, stance) - replacement
+
+
 # 受け手球団にとっての需要フィット (need マップの該当スロット値)。
 static func need_fit(player: PSPlayer, team_need: Dictionary) -> float:
 	if player == null:
@@ -244,10 +321,27 @@ static func build_team_stances(season: PSSeason, players: Array, teams: Array) -
 	return TeamDirection.build_league(season, teams, TeamDepthChart.build_league(players, teams, false))
 
 
-# 需要と方針を 1 回のチャート構築から作る ({"need": {...}, "stance": {...}})。
+# 需要・方針・replacement 水準を 1 回のチャート構築から作る ({"need": {...}, "stance": {...}, "replacement": float})。
 static func _league_context(season: PSSeason, players: Array, teams: Array, current_value_memo: Dictionary = {}) -> Dictionary:
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams, false, current_value_memo)
-	return {"need": _needs_from_charts(charts), "stance": TeamDirection.build_league(season, teams, charts)}
+	return {
+		"need": _needs_from_charts(charts),
+		"stance": TeamDirection.build_league(season, teams, charts),
+		"replacement": _replacement_value(charts),
+	}
+
+
+# リーグの支配下選手の現在能力を並べ、下位から REPLACEMENT_PERCENTILE の位置の値を返す。
+static func _replacement_value(charts: Dictionary) -> float:
+	var values: Array = []
+	for chart_value in charts.values():
+		for slot_value in ((chart_value as Dictionary).get("slots", {}) as Dictionary).values():
+			for holder_value in (slot_value as Dictionary).get("holders", []) as Array:
+				values.append(float((holder_value as Dictionary).get("value", 0.0)))
+	if values.is_empty():
+		return 0.0
+	values.sort()
+	return float(values[clampi(int(float(values.size()) * REPLACEMENT_PERCENTILE), 0, values.size() - 1)])
 
 
 static func _needs_from_charts(charts: Dictionary) -> Dictionary:
@@ -466,8 +560,12 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 	if best.is_empty():
 		return {}
 
-	var cpu_player: PSPlayer = best.get("player_a", null) as PSPlayer
-	var user_player: PSPlayer = best.get("player_b", null) as PSPlayer
+	return _store_user_offer(season, day, best_cpu_team, [best.get("player_a", null)], [best.get("player_b", null)], 0)
+
+
+# 自軍宛ての提案を保存する。cpu_players / user_players はどちらかが空でもよい (金銭・無償の譲渡)。
+# cash_to_user は自軍が受け取る金銭 (万円。自軍が払うなら負)。
+static func _store_user_offer(season: PSSeason, day: int, cpu_team_id: int, cpu_players: Array, user_players: Array, cash_to_user: int) -> Dictionary:
 	var state: Dictionary = trade_state(season)
 	var offer_id: int = int(state.get("next_offer_id", 1))
 	state["next_offer_id"] = offer_id + 1
@@ -476,14 +574,67 @@ static func _generate_user_offer(season: PSSeason, players: Array, teams: Array,
 		"status": "pending",
 		"day": day,
 		"expires_day": day + OFFER_EXPIRY_DAYS,
-		"cpu_team_id": best_cpu_team,
-		"cpu_player_ids": [cpu_player.id],
-		"user_player_ids": [user_player.id],
-		"cpu_player_names": [cpu_player.name],
-		"user_player_names": [user_player.name],
+		"cpu_team_id": cpu_team_id,
+		"cpu_player_ids": _ids_of(cpu_players),
+		"user_player_ids": _ids_of(user_players),
+		"cpu_player_names": _names_of(cpu_players),
+		"user_player_names": _names_of(user_players),
+		"cash_to_user": cash_to_user,
 	}
 	(state["user_offers"] as Array).append(offer)
 	return offer
+
+
+# ---- 金銭 / 無償の譲渡 (CPU 発) ---------------------------------------------------
+
+# 選手 1 人を金銭または無償で譲る最良の組を探す。見つからなければ {}。
+# 戻り値 { seller, buyer, player (PSPlayer), cash (買い手→売り手、万円。0 なら無償), score }。
+# 売り手にとっての価値と買い手にとっての価値 (資産価値 + 需要フィット) の中間を値段にし、
+# 双方の得が CASH_DEAL_MIN_GAIN 以上の組だけを候補にする。値段が 0 以下になる選手 (抱えているだけ損) は無償。
+# 対象は売り手の出せる駒だけで、買い手はその守備位置/役割に需要がある球団に限る。
+# user_team_id > 0 のときは自軍も売り手/買い手の候補に入る (呼び出し側が提案として届ける)。
+static func _best_cash_deal(season: PSSeason, players: Array, teams: Array, _user_team_id: int) -> Dictionary:
+	var current_value_memo: Dictionary = {}
+	var context: Dictionary = _league_context(season, players, teams, current_value_memo)
+	var need: Dictionary = context["need"] as Dictionary
+	var stance: Dictionary = context["stance"] as Dictionary
+	var replacement: float = float(context["replacement"])
+	var team_ids: Array = []
+	for team_row in teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null and trades_count_for_team(season, team.id) < MAX_TRADES_PER_TEAM:
+			team_ids.append(team.id)
+
+	var max_price: float = float(MAX_CASH_PER_TRADE) / CASH_PER_VALUE_POINT
+	var best: Dictionary = {}
+	var best_score: float = 0.0
+	for seller_value in team_ids:
+		var seller: int = int(seller_value)
+		var seller_stance: float = float(stance.get(seller, 0.0))
+		var seller_need: Dictionary = need.get(seller, {}) as Dictionary
+		for player_row in build_surplus_candidates(players, seller, season.year, current_value_memo, seller_stance):
+			var player: PSPlayer = player_row as PSPlayer
+			var keep_value: float = asset_value(player, seller_stance, replacement) + need_fit(player, seller_need) * NEED_FIT_VALUE_WEIGHT
+			for buyer_value in team_ids:
+				var buyer: int = int(buyer_value)
+				if buyer == seller:
+					continue
+				var fit: float = need_fit(player, need.get(buyer, {}) as Dictionary)
+				if fit < MIN_NEED_FIT:
+					continue
+				var want_value: float = asset_value(player, float(stance.get(buyer, 0.0)), replacement) + fit * NEED_FIT_VALUE_WEIGHT
+				var score: float = want_value - keep_value
+				if score <= best_score:
+					continue
+				var cash: int = int(round(clampf((keep_value + want_value) * 0.5, 0.0, max_price) * CASH_PER_VALUE_POINT / float(CASH_STEP))) * CASH_STEP
+				var price: float = float(cash) / CASH_PER_VALUE_POINT
+				if want_value - price < CASH_DEAL_MIN_GAIN or price - keep_value < CASH_DEAL_MIN_GAIN:
+					continue
+				if not bool(_validate_trade_sides(players, teams, seller, [player.id], buyer, [], season.year, -cash).get("ok", false)):
+					continue
+				best_score = score
+				best = {"seller": seller, "buyer": buyer, "player": player, "cash": cash, "score": score}
+	return best
 
 
 static func accept_user_offer(season: PSSeason, players: Array, teams: Array, offer_id: int, user_team_id: int) -> Dictionary:
@@ -499,9 +650,10 @@ static func accept_user_offer(season: PSSeason, players: Array, teams: Array, of
 	if trades_count_for_team(season, cpu_team_id) >= MAX_TRADES_PER_TEAM or trades_count_for_team(season, user_team_id) >= MAX_TRADES_PER_TEAM:
 		offer["status"] = "invalid"
 		return {"ok": false, "message": Loc.t("trade.error.accept_limit")}
+	var cash_to_user: int = int(offer.get("cash_to_user", 0))
 	var validation: Dictionary = _validate_trade_sides(
-		players, teams, cpu_team_id, offer.get("cpu_player_ids", []) as Array,
-		user_team_id, offer.get("user_player_ids", []) as Array, season.year
+		players, teams, user_team_id, offer.get("user_player_ids", []) as Array,
+		cpu_team_id, offer.get("cpu_player_ids", []) as Array, season.year, -cash_to_user
 	)
 	if not bool(validation.get("ok", false)):
 		offer["status"] = "invalid"
@@ -510,7 +662,7 @@ static func accept_user_offer(season: PSSeason, players: Array, teams: Array, of
 		season, players,
 		cpu_team_id, offer.get("cpu_player_ids", []) as Array,
 		user_team_id, offer.get("user_player_ids", []) as Array,
-		"user_offer"
+		"user_offer", cash_to_user, teams
 	)
 	if entry.is_empty():
 		return {"ok": false, "message": Loc.t("trade.error.execute_failed")}
@@ -537,17 +689,20 @@ static func _pending_offer_by_id(season: PSSeason, offer_id: int) -> Dictionary:
 # ---- ユーザー提案 ---------------------------------------------------------------
 
 # 自軍 give_ids ↔ 相手球団 receive_ids の提案を CPU 視点で評価する (実行はしない)。
+# 片側は空でもよい: 相手に選手を求めず金銭だけ受け取る/払う (金銭トレード)、何も動かさない (無償トレード)。
+# cash_to_partner は自軍が相手へ払う金銭 (万円。相手から受け取るなら負)。
+# partner_team_id は receive_ids が空のときの相手球団 (選手がいれば所属から決まるので省略できる)。
 # 戻り値 { ok, accepted, cpu_gain, message }。
-static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Array, user_team_id: int, give_ids: Array, receive_ids: Array) -> Dictionary:
+static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Array, user_team_id: int, give_ids: Array, receive_ids: Array, cash_to_partner: int = 0, partner_team_id: int = 0) -> Dictionary:
 	if not is_trade_window_open(season):
 		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.deadline_passed")}
-	if give_ids.is_empty() or receive_ids.is_empty() \
+	if (give_ids.is_empty() and receive_ids.is_empty()) \
 			or give_ids.size() > MAX_PLAYERS_PER_SIDE or receive_ids.size() > MAX_PLAYERS_PER_SIDE:
 		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.side_size", {"max": MAX_PLAYERS_PER_SIDE})}
-	var cpu_team_id: int = _owner_team_of(players, receive_ids)
+	var cpu_team_id: int = partner_team_id if receive_ids.is_empty() else _owner_team_of(players, receive_ids)
 	if cpu_team_id <= 0 or cpu_team_id == user_team_id:
 		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.mixed_partner_teams")}
-	var validation: Dictionary = _validate_trade_sides(players, teams, user_team_id, give_ids, cpu_team_id, receive_ids, season.year)
+	var validation: Dictionary = _validate_trade_sides(players, teams, user_team_id, give_ids, cpu_team_id, receive_ids, season.year, cash_to_partner)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "accepted": false, "message": str(validation.get("message", ""))}
 	# 自軍も CPU 間トレードと同じ球団別年間上限 (MAX_TRADES_PER_TEAM) の対象とする。
@@ -561,13 +716,22 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 	var cpu_need: Dictionary = (context["need"] as Dictionary).get(cpu_team_id, {}) as Dictionary
 	# 相手球団は自分の方針で選手を値踏みする (即戦力重視ならベテランを高く、将来重視なら若手を高く買う)。
 	var cpu_stance: float = float((context["stance"] as Dictionary).get(cpu_team_id, 0.0))
-	var cpu_gain: float = 0.0
+	# 選手を受け取らない譲渡 (金銭・無償) では、相手は出せる駒しか手放さない (主力は金銭では売らない)。
+	if give_ids.is_empty():
+		var cpu_surplus: Array = build_surplus_candidates(players, cpu_team_id, season.year, {}, cpu_stance)
+		for id_value in receive_ids:
+			if not cpu_surplus.has(_find_player_by_id(players, int(id_value))):
+				return {"ok": true, "accepted": false, "cpu_gain": 0.0, "cpu_team_id": cpu_team_id, "cpu_stance": cpu_stance,
+					"message": Loc.t("trade.declined_core_player")}
+	# 損得は資産価値 (replacement 水準との差) で数えるので、人数の違う交換でも頭数が得にならない。
+	var replacement: float = float(context["replacement"])
+	var cpu_gain: float = float(cash_to_partner) / CASH_PER_VALUE_POINT
 	for id_value in give_ids:
 		var incoming: PSPlayer = _find_player_by_id(players, int(id_value))
-		cpu_gain += stance_trade_value(incoming, cpu_stance) + need_fit(incoming, cpu_need) * NEED_FIT_VALUE_WEIGHT
+		cpu_gain += asset_value(incoming, cpu_stance, replacement) + need_fit(incoming, cpu_need) * NEED_FIT_VALUE_WEIGHT
 	for id_value in receive_ids:
 		var outgoing: PSPlayer = _find_player_by_id(players, int(id_value))
-		cpu_gain -= stance_trade_value(outgoing, cpu_stance) + need_fit(outgoing, cpu_need) * NEED_FIT_VALUE_WEIGHT
+		cpu_gain -= asset_value(outgoing, cpu_stance, replacement) + need_fit(outgoing, cpu_need) * NEED_FIT_VALUE_WEIGHT
 	var accepted: bool = cpu_gain >= CPU_ACCEPT_MIN_GAIN
 	return {
 		"ok": true,
@@ -580,15 +744,15 @@ static func evaluate_user_proposal(season: PSSeason, players: Array, teams: Arra
 
 
 # 提案を評価し、受諾なら実行までまとめて行う。
-static func submit_user_proposal(season: PSSeason, players: Array, teams: Array, user_team_id: int, give_ids: Array, receive_ids: Array) -> Dictionary:
-	var evaluated: Dictionary = evaluate_user_proposal(season, players, teams, user_team_id, give_ids, receive_ids)
+static func submit_user_proposal(season: PSSeason, players: Array, teams: Array, user_team_id: int, give_ids: Array, receive_ids: Array, cash_to_partner: int = 0, partner_team_id: int = 0) -> Dictionary:
+	var evaluated: Dictionary = evaluate_user_proposal(season, players, teams, user_team_id, give_ids, receive_ids, cash_to_partner, partner_team_id)
 	if not bool(evaluated.get("ok", false)) or not bool(evaluated.get("accepted", false)):
 		return evaluated
 	var entry: Dictionary = execute_trade(
 		season, players,
 		user_team_id, give_ids,
 		int(evaluated.get("cpu_team_id", 0)), receive_ids,
-		"user_proposal"
+		"user_proposal", cash_to_partner, teams
 	)
 	if entry.is_empty():
 		return {"ok": false, "accepted": false, "message": Loc.t("trade.error.execute_failed")}
@@ -598,15 +762,21 @@ static func submit_user_proposal(season: PSSeason, players: Array, teams: Array,
 
 # ---- 成立処理 -------------------------------------------------------------------
 
-# 双方の選手を入れ替える。呼び出し前に対象妥当性を検証しておくこと
+# 双方の選手を入れ替え、金銭があれば予算を付け替える。呼び出し前に対象妥当性を検証しておくこと
 # (run_periodic_trade_check / accept_user_offer / submit_user_proposal 経由なら検証済み)。
-static func execute_trade(season: PSSeason, players: Array, team_a_id: int, a_out_ids: Array, team_b_id: int, b_out_ids: Array, source: String) -> Dictionary:
+# cash_a_to_b は球団 A が球団 B へ払う金銭 (万円。B が払うなら負)。金銭を動かすなら teams が要る。
+# どちらかの選手リストは空でもよい (金銭トレード / 無償トレード)。
+static func execute_trade(season: PSSeason, players: Array, team_a_id: int, a_out_ids: Array, team_b_id: int, b_out_ids: Array, source: String, cash_a_to_b: int = 0, teams: Array = []) -> Dictionary:
 	if season == null or team_a_id <= 0 or team_b_id <= 0 or team_a_id == team_b_id:
+		return {}
+	if a_out_ids.is_empty() and b_out_ids.is_empty():
 		return {}
 	var a_players: Array = _players_for_ids(players, a_out_ids)
 	var b_players: Array = _players_for_ids(players, b_out_ids)
 	if a_players.size() != a_out_ids.size() or b_players.size() != b_out_ids.size():
 		return {}
+	if cash_a_to_b != 0:
+		_move_cash(season, teams, team_a_id, team_b_id, cash_a_to_b)
 
 	_move_players(season, a_players, team_a_id, team_b_id)
 	_move_players(season, b_players, team_b_id, team_a_id)
@@ -627,9 +797,22 @@ static func execute_trade(season: PSSeason, players: Array, team_a_id: int, a_ou
 		"b_player_ids": b_out_ids.duplicate(),
 		"a_player_names": _names_of(a_players),
 		"b_player_names": _names_of(b_players),
+		"cash_a_to_b": cash_a_to_b,
 	}
 	(state["executed"] as Array).append(entry)
 	return entry
+
+
+const KIND_SWAP: String = "swap"
+const KIND_CASH: String = "cash"
+const KIND_FREE: String = "free"
+
+
+# 成立ログ 1 件の種別。片側しか選手が動かないものを、金銭の有無で金銭トレード / 無償トレードに分ける。
+static func trade_kind(entry: Dictionary) -> String:
+	if not (entry.get("a_player_ids", []) as Array).is_empty() and not (entry.get("b_player_ids", []) as Array).is_empty():
+		return KIND_SWAP
+	return KIND_CASH if int(entry.get("cash_a_to_b", 0)) != 0 else KIND_FREE
 
 
 static func _move_players(season: PSSeason, moving: Array, from_team_id: int, to_team_id: int) -> void:
@@ -677,9 +860,14 @@ static func _swap_active_roster_members(season: PSSeason, team_id: int, out_ids:
 # 人数不均等な提案 (例: 2対1) で受け側の支配下が70枠を超えないことも合わせて検証する
 # (1:1 固定の CPU間マッチングは常に人数が釣り合うため対象外だが、ユーザー提案は
 # MAX_PLAYERS_PER_SIDE まで非対称にできるため、ここでチェックしないと70枠を超過しうる)。
-# teams は年俸総額が増える側の予算ゲート (trade_payroll_ok) に使う。season_year は複数年契約
+# teams は年俸総額が増える側・金銭を払う側の予算ゲート (trade_payroll_ok) に使う。season_year は複数年契約
 # ロック判定に使う (0 なら season 不明としてロック判定をスキップ)。
-static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array, season_year: int = 0) -> Dictionary:
+# cash_a_to_b は球団 A が球団 B へ払う金銭 (万円。B が払うなら負)。
+static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, a_ids: Array, team_b_id: int, b_ids: Array, season_year: int = 0, cash_a_to_b: int = 0) -> Dictionary:
+	if a_ids.is_empty() and b_ids.is_empty():
+		return {"ok": false, "message": Loc.t("trade.error.side_size", {"max": MAX_PLAYERS_PER_SIDE})}
+	if absi(cash_a_to_b) > MAX_CASH_PER_TRADE:
+		return {"ok": false, "message": Loc.t("trade.error.cash_limit", {"max": MAX_CASH_PER_TRADE})}
 	for pair in [[team_a_id, a_ids], [team_b_id, b_ids]]:
 		var team_id: int = int((pair as Array)[0])
 		for id_value in (pair as Array)[1] as Array:
@@ -696,9 +884,9 @@ static func _validate_trade_sides(players: Array, teams: Array, team_a_id: int, 
 	var salary_b_out: int = _salary_total(players, b_ids)
 	var team_a: PSTeam = _find_team_by_id(teams, team_a_id)
 	var team_b: PSTeam = _find_team_by_id(teams, team_b_id)
-	if not TeamFinance.trade_payroll_ok(players, team_a, salary_a_out, salary_b_out):
+	if not TeamFinance.trade_payroll_ok(players, team_a, salary_a_out, salary_b_out, cash_a_to_b):
 		return {"ok": false, "message": Loc.t("trade.error.user_over_budget")}
-	if not TeamFinance.trade_payroll_ok(players, team_b, salary_b_out, salary_a_out):
+	if not TeamFinance.trade_payroll_ok(players, team_b, salary_b_out, salary_a_out, -cash_a_to_b):
 		return {"ok": false, "message": Loc.t("trade.error.partner_over_budget")}
 	return {"ok": true}
 
@@ -755,6 +943,13 @@ static func _find_team_by_id(teams: Array, team_id: int) -> PSTeam:
 		if team != null and team.id == team_id:
 			return team
 	return null
+
+
+static func _ids_of(moving: Array) -> Array:
+	var ids: Array = []
+	for player_row in moving:
+		ids.append((player_row as PSPlayer).id)
+	return ids
 
 
 static func _names_of(moving: Array) -> Array:

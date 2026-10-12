@@ -583,7 +583,146 @@ func test_evaluate_user_proposal_reflects_partner_direction() -> void:
 	assert_float(float((gains[15] as Dictionary)["cpu_gain"])).is_greater(float((gains[50] as Dictionary)["cpu_gain"]))
 
 
+# 金銭トレード: 選手は片側だけ動き、金銭は払った球団の予算から受け取った球団の予算へ移る。
+# 台帳は season に残るので、予算を固定額へ揃え直すロード後も apply_cash_ledger で同じ額に戻る。
+func test_cash_trade_moves_budget_and_survives_reload() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_funded_team(1, 400000), _funded_team(2, 400000)]
+	var sold: PSPlayer = _player_with_z(11, 1, 3, false, 1.0)
+	season.set_active_roster(1, {"player_ids": [11]})
+	season.set_active_roster(2, {"player_ids": []})
+
+	# 球団 2 が球団 1 へ 3000 万円払って選手を受け取る (cash_a_to_b は A が払う向きが正)。
+	var entry: Dictionary = TradeService.execute_trade(season, [sold], 1, [11], 2, [], "cpu", -3000, teams)
+	assert_str(TradeService.trade_kind(entry)).is_equal(TradeService.KIND_CASH)
+	assert_int(sold.team_id).is_equal(2)
+	assert_int((teams[0] as PSTeam).funds).is_equal(403000)
+	assert_int((teams[1] as PSTeam).funds).is_equal(397000)
+	assert_int(TradeService.cash_balance_for_team(season, 1)).is_equal(3000)
+	assert_int(TradeService.cash_balance_for_team(season, 2)).is_equal(-3000)
+	assert_int(TradeService.trades_count_for_team(season, 2)).is_equal(1)
+
+	var restored: PSSeason = PSSeason.from_dict(season.to_dict())
+	for team in teams:
+		(team as PSTeam).funds = 400000
+	TradeService.apply_cash_ledger(restored, teams)
+	assert_int((teams[0] as PSTeam).funds).is_equal(403000)
+	assert_int((teams[1] as PSTeam).funds).is_equal(397000)
+
+	# 金銭なしで片側だけ動けば無償トレード、両側に選手がいれば金銭が付いても交換。
+	var given: PSPlayer = _player_with_z(12, 1, 3, false, 0.0)
+	var free_entry: Dictionary = TradeService.execute_trade(season, [given], 1, [12], 2, [], "cpu", 0, teams)
+	assert_str(TradeService.trade_kind(free_entry)).is_equal(TradeService.KIND_FREE)
+	assert_str(TradeService.trade_kind({"a_player_ids": [1], "b_player_ids": [2], "cash_a_to_b": 500})).is_equal(TradeService.KIND_SWAP)
+	# 選手が 1 人も動かない取引は成立しない。
+	assert_dict(TradeService.execute_trade(season, [given], 1, [], 2, [], "cpu", 1000, teams)).is_empty()
+
+
+# 金銭を払う球団は、受け取る選手の年俸と金銭の両方が予算に収まらなければ払えない。上限を超える額も不可。
+func test_cash_trade_is_gated_by_budget_and_cap() -> void:
+	var teams: Array = [_funded_team(1, 400000), _funded_team(2, 1500)]
+	var sold: PSPlayer = _player_with_z(11, 1, 3, false, 1.0)
+	sold.salary = 1000
+	var players: Array = [sold]
+	assert_bool(bool(TradeService._validate_trade_sides(players, teams, 1, [11], 2, [], 0, -500).get("ok", false))).is_true()
+	var over: Dictionary = TradeService._validate_trade_sides(players, teams, 1, [11], 2, [], 0, -600)
+	assert_bool(bool(over.get("ok", true))).is_false()
+	assert_str(str(over.get("message", ""))).is_equal(Loc.t("trade.error.partner_over_budget"))
+	var capped: Dictionary = TradeService._validate_trade_sides(players, teams, 1, [11], 2, [], 0, TradeService.MAX_CASH_PER_TRADE + 100)
+	assert_str(str(capped.get("message", ""))).is_equal(Loc.t("trade.error.cash_limit", {"max": TradeService.MAX_CASH_PER_TRADE}))
+
+
+# ユーザー提案の金銭: 相手の得は金銭 1000 万円につき 1 点動く。選手を出さずに求める譲渡では、
+# 相手は主力を手放さず、抱えているだけ損な高年俸の控えなら無償でも手放す。
+func test_evaluate_user_proposal_prices_cash_and_protects_core_players() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_funded_team(1, 1000000), _funded_team(2, 1000000)]
+	var mine: PSPlayer = _player_with_z(11, 1, 6, false, 1.0)
+	var leader: PSPlayer = _player_with_z(21, 2, 3, false, 2.0)
+	var second: PSPlayer = _player_with_z(22, 2, 3, false, 1.0)
+	var overpaid: PSPlayer = _player_with_z(23, 2, 3, false, 0.0)
+	overpaid.salary = 200000
+	var players: Array = [mine, leader, second, overpaid]
+
+	var free_give: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [], 0, 2)
+	var paid_give: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [], -2000, 2)
+	assert_bool(bool(free_give.get("ok", false))).is_true()
+	assert_float(float(free_give["cpu_gain"]) - float(paid_give["cpu_gain"])).is_equal_approx(2000.0 / TradeService.CASH_PER_VALUE_POINT, 0.0001)
+
+	var core: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [], [21], 20000, 2)
+	assert_bool(bool(core.get("accepted", true))).is_false()
+	assert_str(str(core.get("message", ""))).is_equal(Loc.t("trade.declined_core_player"))
+
+	var dump: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [], [23], 0, 2)
+	assert_bool(bool(dump.get("ok", false))).is_true()
+	assert_bool(bool(dump.get("accepted", false))).is_true()
+
+	# 選手を 1 人も選ばない提案と、相手球団が決まらない提案は組めない。
+	assert_bool(bool(TradeService.evaluate_user_proposal(season, players, teams, 1, [], [], 1000, 2).get("ok", true))).is_false()
+	assert_bool(bool(TradeService.evaluate_user_proposal(season, players, teams, 1, [11], [], 0, 0).get("ok", true))).is_false()
+
+
+# 人数の違う交換は頭数では得にならない: 控え 2 人を並べても主力 1 人とは釣り合わない。
+func test_evaluate_user_proposal_does_not_reward_headcount() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_funded_team(1, 1000000), _funded_team(2, 1000000)]
+	var players: Array = [
+		_player_with_z(11, 1, 6, false, -1.0), _player_with_z(12, 1, 6, false, -1.0), _player_with_z(13, 1, 6, false, -1.0),
+		_player_with_z(21, 2, 3, false, 2.0), _player_with_z(22, 2, 3, false, 2.0), _player_with_z(23, 2, 3, false, 2.0),
+	]
+	var result: Dictionary = TradeService.evaluate_user_proposal(season, players, teams, 1, [11, 12], [23])
+	assert_bool(bool(result.get("ok", false))).is_true()
+	assert_bool(bool(result.get("accepted", true))).is_false()
+
+
+# CPU 発の金銭トレード: 売り手の出せる駒を、その守備位置に需要のある球団が買う。値段は双方が得をする額で、
+# 刻みの倍数になる。
+func test_best_cash_deal_sells_surplus_to_team_in_need() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_funded_team(1, 1000000), _funded_team(2, 1000000)]
+	var players: Array = [
+		_player_with_z(11, 1, 3, false, 2.0), _player_with_z(12, 1, 3, false, 1.5), _player_with_z(13, 1, 3, false, 1.0),
+		_player_with_z(21, 2, 3, false, -2.0),
+	]
+	var deal: Dictionary = TradeService._best_cash_deal(season, players, teams, 0)
+	assert_int(int(deal.get("seller", 0))).is_equal(1)
+	assert_int(int(deal.get("buyer", 0))).is_equal(2)
+	assert_object(deal.get("player")).is_same(players[2])
+	var cash: int = int(deal.get("cash", -1))
+	assert_int(cash).is_greater(0)
+	assert_int(cash % TradeService.CASH_STEP).is_equal(0)
+	assert_int(cash).is_less_equal(TradeService.MAX_CASH_PER_TRADE)
+	# 買い手の予算が足りなければ成立しない。
+	(teams[1] as PSTeam).funds = 0
+	assert_dict(TradeService._best_cash_deal(season, players, teams, 0)).is_empty()
+
+
+# 自軍宛ての金銭提案を受諾すると、選手が動き金銭が予算に載る。
+func test_accept_user_offer_with_cash() -> void:
+	var season: PSSeason = _season(10)
+	var teams: Array = [_funded_team(1, 400000), _funded_team(2, 400000)]
+	var mine: PSPlayer = _player_with_z(11, 1, 3, false, 1.0)
+	var players: Array = [mine]
+	season.set_active_roster(1, {"player_ids": [11]})
+	season.set_active_roster(2, {"player_ids": []})
+	var offer: Dictionary = TradeService._store_user_offer(season, 10, 2, [], [mine], 2000)
+	assert_int(TradeService.actionable_user_offer_count(season)).is_equal(1)
+	var accepted: Dictionary = TradeService.accept_user_offer(season, players, teams, int(offer["id"]), 1)
+	assert_bool(bool(accepted.get("ok", false))).is_true()
+	assert_int(mine.team_id).is_equal(2)
+	assert_int((teams[0] as PSTeam).funds).is_equal(402000)
+	assert_int((teams[1] as PSTeam).funds).is_equal(398000)
+	assert_str(TradeService.trade_kind(accepted["trade"] as Dictionary)).is_equal(TradeService.KIND_CASH)
+
+
 # ---- helpers -------------------------------------------------------------------
+
+func _funded_team(id: int, funds: int) -> PSTeam:
+	var team: PSTeam = _team(id)
+	team.funds = funds
+	return team
+
+
 
 func _exhaustive_best_pair(surplus_a: Array, surplus_b: Array, need_a: Dictionary, need_b: Dictionary) -> Dictionary:
 	var best: Dictionary = {}

@@ -259,13 +259,14 @@ static func ai_acquisition_cost_penalty(cost: int) -> float:
 	return float(maxi(0, cost)) / AI_SALARY_COST_PER_SCORE
 
 
-# トレードゲート: 年俸総額が増えない (out >= in) 交換は予算に関わらず常に許可する。
-# 増える交換は、増加後の payroll が funds に収まる場合のみ許可する。
-static func trade_payroll_ok(players: Array, team: PSTeam, out_salary_total: int, in_salary_total: int) -> bool:
+# トレードゲート: 金銭を払わず年俸総額も増えない (out >= in) 交換は予算に関わらず常に許可する。
+# 年俸総額が増えるか金銭を払う交換は、交換後の payroll が「金銭の受け払い後の funds」に収まる場合のみ許可する。
+# cash_out はこの球団が払う金銭 (受け取るなら負)。
+static func trade_payroll_ok(players: Array, team: PSTeam, out_salary_total: int, in_salary_total: int, cash_out: int = 0) -> bool:
 	if team == null:
 		return false
-	if in_salary_total <= out_salary_total:
+	if cash_out <= 0 and in_salary_total <= out_salary_total:
 		return true
 	var payroll: int = team_payroll(players, team.id)
 	var new_payroll: int = payroll - out_salary_total + in_salary_total
-	return new_payroll <= team.funds
+	return new_payroll <= team.funds - cash_out

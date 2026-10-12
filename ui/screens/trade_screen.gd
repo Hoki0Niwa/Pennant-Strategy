@@ -26,6 +26,13 @@ const SLOT_GAP: float = 6.0
 const HEADER_GAP: float = 10.0 # 見出しラベルからその直下の要素までの間隔 (同じ項目として近く保つ)
 const SECTION_GAP: float = 28.0 # トレードブロック内の異なるセクション間の縦間隔 (見出し直下の要素より明確に広くする)
 const OFFER_CARD_H: float = 130.0
+# トレードブロックの金銭行。« ‹ で受け取る側へ、› » で払う側へ動かす (大刻み / 小刻み、万円)。
+const CASH_ROW_GAP: float = 14.0
+const CASH_ROW_H: float = 30.0
+const CASH_CHIP_W: float = 34.0
+const CASH_CHIP_GAP: float = 4.0
+const CASH_STEP_SMALL: int = 100
+const CASH_STEP_LARGE: int = 1000
 const OFFER_CARD_GAP: float = 10.0
 
 # ポジション絞り込み (自軍ロスターのみ。相手球団はプルダウン切替のため対象外)。label は表示名のキー (Loc)。
@@ -62,6 +69,7 @@ var _scroll: Dictionary = {}
 var _view_team_id: int = 0     # 相手球団
 var _give_ids: Array = []      # 自軍から出す選手 id (最大 MAX_PLAYERS_PER_SIDE)
 var _receive_ids: Array = []   # 相手から受け取る選手 id
+var _cash: int = 0             # 自軍が相手へ払う金銭 (万円。相手から受け取るなら負)
 var _message: String = ""
 var _message_color: Color = MUTED
 
@@ -221,9 +229,11 @@ func _draw_center_block(rect: Rect2, season: PSSeason, window_open: bool) -> voi
 		_draw_trade_slot(Rect2(px, y, card_w, SLOT_H), _receive_ids[i] if i < _receive_ids.size() else 0, "receive_slot", season)
 		y += SLOT_H + SLOT_GAP
 
-	y += SECTION_GAP
+	y += CASH_ROW_GAP
+	_draw_cash_row(rect, y)
+	y += CASH_ROW_H + 22.0
 	y = _draw_trade_balance(rect, y, card_w)
-	y += 16.0
+	y += 6.0
 	_draw_trade_verdict(rect, y, window_open)
 
 
@@ -247,6 +257,37 @@ func _draw_trade_slot(rect: Rect2, player_id: int, kind: String, season: PSSeaso
 	_text_right(Loc.t("common.age_value", {"age": player.age}), rect.end.x - 8.0 - 76.0 - 6.0 - 34.0 - 6.0, mid_y, 12, MUTED, 40.0)
 	_text(player.name, Vector2(rect.position.x + 56.0, mid_y), 13, TEXT, rect.size.x - 56.0 - 76.0 - 34.0 - 40.0 - 30.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_row_hits.append({"rect": rect, "kind": kind, "meta": player.id})
+
+
+# 金銭行の上端 (base 座標)。描画とボタン配置の両方がここから位置を決める。
+func _cash_row_top() -> float:
+	return CENTER_RECT.position.y + 50.0 + (HEADER_GAP + float(TradeService.MAX_PLAYERS_PER_SIDE) * (SLOT_H + SLOT_GAP)) * 2.0 + SECTION_GAP + CASH_ROW_GAP
+
+
+# 金銭行: 見出し + 受け払いの向きと額。選手を片側しか選ばなければ金銭トレード (額 0 なら無償トレード) になる。
+func _draw_cash_row(rect: Rect2, y: float) -> void:
+	var mid_y: float = y + CASH_ROW_H * 0.5 + 5.0
+	_text(Loc.t("trade.cash"), Vector2(rect.position.x + 18.0, mid_y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var text: String = Loc.t("trade.cash.none")
+	var color: Color = FAINT
+	if _cash > 0:
+		text = Loc.t("trade.cash.pay", {"amount": _format_money_compact(_cash)})
+		color = RED
+	elif _cash < 0:
+		text = Loc.t("trade.cash.receive", {"amount": _format_money_compact(-_cash)})
+		color = GREEN
+	var chips_w: float = CASH_CHIP_W * 2.0 + CASH_CHIP_GAP
+	var left: float = rect.position.x + 18.0 + 44.0 + chips_w
+	var right: float = rect.end.x - 18.0 - chips_w
+	_text(text, Vector2(left, mid_y), 13, color, right - left, HORIZONTAL_ALIGNMENT_CENTER, true)
+
+
+func _adjust_cash(delta: int) -> void:
+	_cash = clampi(_cash + delta, -TradeService.MAX_CASH_PER_TRADE, TradeService.MAX_CASH_PER_TRADE)
+	_message = ""
+	_refresh_proposal_eval()
+	_build_buttons()
+	queue_redraw()
 
 
 # 左右バー + 戦力価値差 (trade_value 合計差, 自軍有利=GREEN/不利=RED) + 年俸差。戻り値は次の描画 y。
@@ -277,7 +318,7 @@ func _draw_trade_balance(rect: Rect2, y: float, w: float) -> float:
 func _draw_trade_verdict(rect: Rect2, y: float, window_open: bool) -> void:
 	var text: String
 	var color: Color
-	if _give_ids.is_empty() or _receive_ids.is_empty():
+	if _give_ids.is_empty() and _receive_ids.is_empty():
 		text = Loc.t("trade.verdict.select_players")
 		color = MUTED
 	elif not window_open:
@@ -319,8 +360,27 @@ func _draw_offer_card(rect: Rect2, offer: Dictionary, season: PSSeason) -> void:
 	_text(cpu_team.name if cpu_team != null else "?", Vector2(rect.position.x + 16.0, rect.position.y + 24.0), 15, TEXT, rect.size.x - 220.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text_right(Loc.t("trade.offer_expires", {"day": int(offer.get("expires_day", 0))}), rect.end.x - 16.0, rect.position.y + 20.0, 11, FAINT, 140.0)
 	_line(Vector2(rect.position.x + 16.0, rect.position.y + 32.0), Vector2(rect.end.x - 16.0, rect.position.y + 32.0), HAIRLINE, 1.0)
-	_text(Loc.t("trade.offer_receive", {"players": _offer_players_text(offer.get("cpu_player_ids", []) as Array, season)}), Vector2(rect.position.x + 16.0, rect.position.y + 56.0), 13, GREEN, rect.size.x - 32.0)
-	_text(Loc.t("trade.offer_give", {"players": _offer_players_text(offer.get("user_player_ids", []) as Array, season)}), Vector2(rect.position.x + 16.0, rect.position.y + 80.0), 13, RED, rect.size.x - 32.0)
+	var cash_to_user: int = int(offer.get("cash_to_user", 0))
+	_text(Loc.t("trade.offer_receive", {"players": _offer_side_text(offer.get("cpu_player_ids", []) as Array, maxi(0, cash_to_user), season)}), Vector2(rect.position.x + 16.0, rect.position.y + 56.0), 13, GREEN, rect.size.x - 32.0)
+	_text(Loc.t("trade.offer_give", {"players": _offer_side_text(offer.get("user_player_ids", []) as Array, maxi(0, -cash_to_user), season)}), Vector2(rect.position.x + 16.0, rect.position.y + 80.0), 13, RED, rect.size.x - 32.0)
+
+
+# 提案の片側 (選手 + その側が払う金銭)。選手も金銭も無ければ「なし」= 無償。
+func _offer_side_text(ids: Array, cash: int, season: PSSeason) -> String:
+	var parts: PackedStringArray = []
+	if not ids.is_empty():
+		parts.append(_offer_players_text(ids, season))
+	if cash > 0:
+		parts.append(Loc.t("trade.cash_amount", {"amount": _format_money_compact(cash)}))
+	return Loc.t("common.list_separator").join(parts) if not parts.is_empty() else Loc.t("trade.side_nothing")
+
+
+# 成立ログの片側 (選手名 + その側が払った金銭)。
+func _log_side_text(names: Array, cash: int) -> String:
+	var parts: PackedStringArray = PackedStringArray(names)
+	if cash > 0:
+		parts.append(Loc.t("trade.cash_amount", {"amount": _format_money_compact(cash)}))
+	return Loc.t("common.list_separator").join(parts) if not parts.is_empty() else Loc.t("trade.side_nothing")
 
 
 func _offer_players_text(ids: Array, season: PSSeason) -> String:
@@ -349,9 +409,9 @@ func _draw_log_table(rect: Rect2, season: PSSeason) -> void:
 		rows.append({
 			"day": int(entry.get("day", 0)),
 			"team_a": team_a.name if team_a != null else "?",
-			"a_gives": Loc.t("common.list_separator").join(PackedStringArray(entry.get("a_player_names", []) as Array)),
+			"a_gives": _log_side_text(entry.get("a_player_names", []) as Array, maxi(0, int(entry.get("cash_a_to_b", 0)))),
 			"team_b": team_b.name if team_b != null else "?",
-			"b_gives": Loc.t("common.list_separator").join(PackedStringArray(entry.get("b_player_names", []) as Array)),
+			"b_gives": _log_side_text(entry.get("b_player_names", []) as Array, maxi(0, -int(entry.get("cash_a_to_b", 0)))),
 			"source": _source_label(str(entry.get("source", ""))),
 		})
 	_draw_data_table(rect, LOG_COLUMNS, rows, {
@@ -402,6 +462,14 @@ func _build_buttons() -> void:
 	var propose_btn: Button = _add_button("propose", Loc.t("trade.propose"),
 		Rect2(CENTER_RECT.position.x + 18.0, CENTER_RECT.end.y - 46.0, 176.0, 36.0), _submit_proposal, "primary")
 	propose_btn.disabled = not _can_submit()
+	# 金銭の増減 (« ‹ = 受け取る側へ / › » = 払う側へ)。
+	var cash_y: float = _cash_row_top()
+	var cash_left: float = CENTER_RECT.position.x + 18.0 + 44.0
+	var cash_right: float = CENTER_RECT.end.x - 18.0 - CASH_CHIP_W * 2.0 - CASH_CHIP_GAP
+	_add_button("cash_dn_l", "«", Rect2(cash_left, cash_y, CASH_CHIP_W, CASH_ROW_H), func() -> void: _adjust_cash(-CASH_STEP_LARGE), "chip")
+	_add_button("cash_dn_s", "‹", Rect2(cash_left + CASH_CHIP_W + CASH_CHIP_GAP, cash_y, CASH_CHIP_W, CASH_ROW_H), func() -> void: _adjust_cash(-CASH_STEP_SMALL), "chip")
+	_add_button("cash_up_s", "›", Rect2(cash_right, cash_y, CASH_CHIP_W, CASH_ROW_H), func() -> void: _adjust_cash(CASH_STEP_SMALL), "chip")
+	_add_button("cash_up_l", "»", Rect2(cash_right + CASH_CHIP_W + CASH_CHIP_GAP, cash_y, CASH_CHIP_W, CASH_ROW_H), func() -> void: _adjust_cash(CASH_STEP_LARGE), "chip")
 	_add_button("clear_sel", Loc.t("common.clear"),
 		Rect2(CENTER_RECT.position.x + 202.0, CENTER_RECT.end.y - 46.0, 112.0, 36.0), func() -> void: _clear_selection(), "chip")
 
@@ -495,11 +563,12 @@ func _submit_proposal() -> void:
 	if season == null or not _can_submit():
 		return
 	var result: Dictionary = TradeService.submit_user_proposal(
-		season, GameDb.players, GameDb.teams, AppState.selected_team_id, _give_ids.duplicate(), _receive_ids.duplicate())
+		season, GameDb.players, GameDb.teams, AppState.selected_team_id, _give_ids.duplicate(), _receive_ids.duplicate(), _cash, _view_team_id)
 	if bool(result.get("accepted", false)):
 		GameDb.rebuild_player_indices()
 		_give_ids = []
 		_receive_ids = []
+		_cash = 0
 		_eval = {}
 		_refresh_all()
 		_message_color = GREEN
@@ -542,6 +611,7 @@ func _decline_offer(offer_id: int) -> void:
 func _clear_selection() -> void:
 	_give_ids = []
 	_receive_ids = []
+	_cash = 0
 	_message = ""
 	_eval = {}
 	_build_buttons()
@@ -552,7 +622,7 @@ func _can_submit() -> bool:
 	var season: PSSeason = AppState.current_season
 	if season == null or not TradeService.is_trade_window_open(season):
 		return false
-	if _give_ids.is_empty() or _receive_ids.is_empty():
+	if _give_ids.is_empty() and _receive_ids.is_empty():
 		return false
 	return bool(_eval.get("ok", false)) and bool(_eval.get("accepted", false))
 
@@ -582,10 +652,10 @@ func _toggle_selection(ids: Array, player_id: int) -> void:
 
 func _refresh_proposal_eval() -> void:
 	var season: PSSeason = AppState.current_season
-	if season == null or _give_ids.is_empty() or _receive_ids.is_empty():
+	if season == null or (_give_ids.is_empty() and _receive_ids.is_empty()):
 		_eval = {}
 		return
-	_eval = TradeService.evaluate_user_proposal(season, GameDb.players, GameDb.teams, AppState.selected_team_id, _give_ids.duplicate(), _receive_ids.duplicate())
+	_eval = TradeService.evaluate_user_proposal(season, GameDb.players, GameDb.teams, AppState.selected_team_id, _give_ids.duplicate(), _receive_ids.duplicate(), _cash, _view_team_id)
 
 
 # ============================================================ aggregation

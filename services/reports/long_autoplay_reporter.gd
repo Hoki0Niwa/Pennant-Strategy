@@ -154,6 +154,8 @@ func run(options: Dictionary = {}) -> Dictionary:
 		})
 
 		if season_index < season_count - 1:
+			# 実プレイ (AppState.start_next_season) と同じく、金銭の受け払いで動いた予算を年度替わりに戻す。
+			TeamFinance.apply_fixed_budget(GameDb.teams)
 			season = SeasonService.create_next_season(season, GameDb.teams, dh_by_league)
 
 	var final_roster: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
@@ -315,6 +317,8 @@ func run_async(options: Dictionary = {}) -> Dictionary:
 		if tree != null:
 			await tree.process_frame
 		if season_index < season_count - 1:
+			# 実プレイ (AppState.start_next_season) と同じく、金銭の受け払いで動いた予算を年度替わりに戻す。
+			TeamFinance.apply_fixed_budget(GameDb.teams)
 			season = SeasonService.create_next_season(season, GameDb.teams, dh_by_league)
 
 	var final_roster: Dictionary = _roster_summary(GameDb.players, GameDb.teams, seed_cohort_ids)
@@ -386,10 +390,20 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 	var by_source: Dictionary = {}
 	var age_gap_total: float = 0.0
 	var age_gap_wide: int = 0
+	var by_kind: Dictionary = {}
+	var cash_total: int = 0
+	var swaps: int = 0
 	for entry_value in executed:
 		var entry: Dictionary = entry_value as Dictionary
 		var source: String = str(entry.get("source", ""))
 		by_source[source] = int(by_source.get(source, 0)) + 1
+		var kind: String = TradeService.trade_kind(entry)
+		by_kind[kind] = int(by_kind.get(kind, 0)) + 1
+		cash_total += absi(int(entry.get("cash_a_to_b", 0)))
+		# 年齢差は選手どうしの交換だけで測る (片側が空の譲渡は差が定義できない)。
+		if kind != TradeService.KIND_SWAP:
+			continue
+		swaps += 1
 		var age_gap: float = absf(_average_age(entry.get("a_player_ids", []) as Array) - _average_age(entry.get("b_player_ids", []) as Array))
 		age_gap_total += age_gap
 		if age_gap >= TRADE_WIDE_AGE_GAP:
@@ -397,7 +411,10 @@ func _trade_summary(season: PSSeason) -> Dictionary:
 	return {
 		"count": executed.size(),
 		"by_source": by_source,
-		"age_gap_avg": age_gap_total / float(executed.size()) if not executed.is_empty() else 0.0,
+		# swap = 選手どうしの交換 / cash = 金銭トレード / free = 無償トレード。cash_total は動いた金銭の合計 (万円)。
+		"by_kind": by_kind,
+		"cash_total": cash_total,
+		"age_gap_avg": age_gap_total / float(swaps) if swaps > 0 else 0.0,
 		"age_gap_wide": age_gap_wide,
 	}
 
