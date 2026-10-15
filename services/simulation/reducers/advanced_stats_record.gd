@@ -198,6 +198,46 @@ func add_from(other) -> void:
 	relief_entry_leverage_sum += other.relief_entry_leverage_sum
 
 
+# 自分から other を差し引いた新インスタンスを返す (期間・在籍球団ごとの内訳用)。全項目が加算で
+# 積み上がるので、add_from の逆をそのまま行う。
+func subtract_from(other) -> PSAdvancedStats:
+	var diff: PSAdvancedStats = PSAdvancedStats.new()
+	diff.player_id = player_id
+	diff.add_from(self)
+	if other == null:
+		return diff
+	diff.plate_appearances -= other.plate_appearances
+	diff.woba_denominator -= other.woba_denominator
+	diff.xwoba_denominator -= other.xwoba_denominator
+	diff.woba_numerator -= other.woba_numerator
+	diff.xwoba_numerator -= other.xwoba_numerator
+	diff.re24_sum -= other.re24_sum
+	diff.bsr_sum -= other.bsr_sum
+	diff.fielding_chances -= other.fielding_chances
+	diff.fielding_outs -= other.fielding_outs
+	_subtract_map(diff.fielding_chances_by_position, other.fielding_chances_by_position)
+	_subtract_map(diff.fielding_chances_by_oaa_zone, other.fielding_chances_by_oaa_zone)
+	_subtract_map(diff.fielding_outs_by_position, other.fielding_outs_by_position)
+	_subtract_map(diff.fielding_outs_by_oaa_zone, other.fielding_outs_by_oaa_zone)
+	_subtract_map(diff.defensive_outs_by_position, other.defensive_outs_by_position)
+	_subtract_map(diff.defensive_outs_by_oaa_zone, other.defensive_outs_by_oaa_zone)
+	_subtract_map(diff.oaa_by_zone, other.oaa_by_zone)
+	_subtract_map(diff.oaa_by_position, other.oaa_by_position)
+	_subtract_map(diff.rngr_by_position, other.rngr_by_position)
+	_subtract_map(diff.errr_by_position, other.errr_by_position)
+	_subtract_map(diff.dpr_by_position, other.dpr_by_position)
+	_subtract_map(diff.uzr_by_position, other.uzr_by_position)
+	_subtract_map(diff.drs_by_position, other.drs_by_position)
+	diff.relief_entries -= other.relief_entries
+	diff.relief_entry_leverage_sum -= other.relief_entry_leverage_sum
+	return diff
+
+
+func _subtract_map(target: Dictionary, source: Dictionary) -> void:
+	for key in source.keys():
+		target[key] = target.get(key, 0) - source[key]
+
+
 func woba() -> float:
 	if woba_denominator <= 0:
 		return 0.0

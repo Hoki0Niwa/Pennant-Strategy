@@ -715,6 +715,112 @@ func test_accept_user_offer_with_cash() -> void:
 	assert_str(TradeService.trade_kind(accepted["trade"] as Dictionary)).is_equal(TradeService.KIND_CASH)
 
 
+# シーズン途中の移籍: レコードは通算のまま、移籍前の球団ごとの成績が別に残る。
+# 球団を指定した見え方 (stats_view_for_teams) はその球団に在籍中の成績だけになり、保存の往復でも消えない。
+func test_record_keeps_stats_per_team_across_midseason_move() -> void:
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player_with_z(11, 1, 3, false, 1.0), 2099, 1)
+	record.batter_stats.at_bats = 100
+	record.batter_stats.hits = 30
+	record.batter_stats.home_runs = 5
+	record.advanced_stats.plate_appearances = 110
+	record.advanced_stats.oaa_by_position["3"] = 2.0
+	assert_bool(record.has_team_stints()).is_false()
+	assert_object(record.stats_view_for_teams([1])).is_same(record)
+	assert_object(record.stats_view_for_teams([2])).is_null()
+
+	record.close_team_stint(60)
+	record.team_id = 2
+	record.batter_stats.at_bats += 50
+	record.batter_stats.hits += 10
+	record.batter_stats.home_runs += 1
+	record.advanced_stats.plate_appearances += 55
+	record.advanced_stats.oaa_by_position["3"] = 3.5
+
+	# 保存形式 (to_dict → from_dict) を通しても内訳が残る。
+	var restored: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(JSON.parse_string(JSON.stringify(record.to_dict())) as Dictionary)
+	for target in [record, restored]:
+		var rows: Array = (target as PSPlayerSeasonRecord).team_stint_rows()
+		assert_int(rows.size()).is_equal(2)
+		assert_int(int((rows[0] as Dictionary)["team_id"])).is_equal(1)
+		assert_int(int((rows[0] as Dictionary)["until_day"])).is_equal(60)
+		assert_int(((rows[0] as Dictionary)["batter_stats"] as PSBatterStats).hits).is_equal(30)
+		assert_int(int((rows[1] as Dictionary)["team_id"])).is_equal(2)
+		assert_int(((rows[1] as Dictionary)["batter_stats"] as PSBatterStats).hits).is_equal(10)
+		assert_int(((rows[1] as Dictionary)["batter_stats"] as PSBatterStats).at_bats).is_equal(50)
+		assert_int(((rows[1] as Dictionary)["advanced_stats"] as PSAdvancedStats).plate_appearances).is_equal(55)
+		assert_float(float(((rows[1] as Dictionary)["advanced_stats"] as PSAdvancedStats).oaa_by_position["3"])).is_equal_approx(1.5, 0.001)
+		# 通算はそのまま。
+		assert_int((target as PSPlayerSeasonRecord).batter_stats.hits).is_equal(40)
+
+	var old_team_view: PSPlayerSeasonRecord = record.stats_view_for_teams([1])
+	assert_bool(old_team_view.is_stint_view).is_true()
+	assert_int(old_team_view.team_id).is_equal(1)
+	assert_int(old_team_view.batter_stats.home_runs).is_equal(5)
+	assert_bool(old_team_view.has_team_stints()).is_false()
+	var new_team_view: PSPlayerSeasonRecord = record.stats_view_for_teams([2, 3])
+	assert_int(new_team_view.team_id).is_equal(2)
+	assert_int(new_team_view.batter_stats.home_runs).is_equal(1)
+	# 在籍した球団が全部入っていれば分けない (同じリーグ内の移籍は通算のまま)。
+	assert_object(record.stats_view_for_teams([1, 2, 3])).is_same(record)
+	assert_object(record.stats_view_for_teams([3])).is_null()
+	# 複製を作っても元のレコードは変わらない。
+	assert_int(record.batter_stats.hits).is_equal(40)
+	assert_bool(record.has_team_stints()).is_true()
+
+
+# トレードが成立すると、移籍前の成績は元の球団のチーム成績に残り、移籍先には加入後の成績だけが入る。
+func test_trade_splits_team_stat_records() -> void:
+	var original_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var season: PSSeason = _season(1)
+	var traded: PSPlayer = _player_with_z(11, 1, 3, false, 2.0)
+	var stays: PSPlayer = _player_with_z(12, 1, 4, false, 0.5)
+	var partner: PSPlayer = _player_with_z(21, 2, 6, false, 1.5)
+	var traded_record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(traded, season.year, season.season_number)
+	traded_record.batter_stats.hits = 30
+	RecordStore.load_from_dict({
+		"player_records": [
+			traded_record.to_dict(),
+			PSPlayerSeasonRecord.from_player(stays, season.year, season.season_number).to_dict(),
+			PSPlayerSeasonRecord.from_player(partner, season.year, season.season_number).to_dict(),
+		],
+		"team_records": [],
+		"season_archives": [],
+	})
+	season.set_active_roster(1, {"player_ids": [11]})
+	season.set_active_roster(2, {"player_ids": [21]})
+	season.current_day = 30
+	TradeService.execute_trade(season, [traded, partner], 1, [11], 2, [21], "cpu")
+	var live: PSPlayerSeasonRecord = RecordStore.get_player_record(11, season.year, season.season_number)
+	live.batter_stats.hits += 12
+
+	var hits_by_team: Dictionary = {}
+	var ids_by_team: Dictionary = {}
+	for team_id in [1, 2]:
+		var hits: int = 0
+		var stat_records: Array = RecordStore.get_team_stat_records(team_id, season.year, season.season_number)
+		for record_value in stat_records:
+			if (record_value as PSPlayerSeasonRecord).player_id == 11:
+				hits += (record_value as PSPlayerSeasonRecord).batter_stats.hits
+		hits_by_team[team_id] = hits
+		var ids: Array = _record_ids(stat_records)
+		ids.sort()
+		ids_by_team[team_id] = ids
+	var roster_ids_1: Array = _record_ids(RecordStore.get_team_player_records(1, season.year, season.season_number))
+	var until_day: int = int((live.team_stint_rows()[0] as Dictionary)["until_day"])
+	var total_hits: int = live.batter_stats.hits
+	RecordStore.load_from_dict(original_records)
+
+	assert_int(until_day).is_equal(30)
+	assert_int(total_hits).is_equal(42)
+	assert_int(int(hits_by_team[1])).is_equal(30)
+	assert_int(int(hits_by_team[2])).is_equal(12)
+	# チーム成績の母数は「その球団に在籍した全員」、ロスター (get_team_player_records) は今の所属だけ。
+	assert_array(ids_by_team[1]).is_equal([11, 12, 21])
+	assert_array(ids_by_team[2]).is_equal([11, 21])
+	roster_ids_1.sort()
+	assert_array(roster_ids_1).is_equal([12, 21])
+
+
 # ---- helpers -------------------------------------------------------------------
 
 func _funded_team(id: int, funds: int) -> PSTeam:

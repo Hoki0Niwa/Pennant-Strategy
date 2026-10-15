@@ -665,6 +665,7 @@ func _columns_for_tab() -> Array:
 			if pitcher:
 				return [
 					{"title": "col.date", "key": "date", "w": 82, "align": "l", "fmt": "str"},
+					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
 					{"title": "col.opponent", "key": "opp", "w": 58, "align": "l", "fmt": "str"},
 					{"title": "col.result", "key": "result", "w": 70, "align": "l", "fmt": "str"},
 					{"title": "col.route", "key": "route", "w": 72, "align": "l", "fmt": "str"},
@@ -683,6 +684,7 @@ func _columns_for_tab() -> Array:
 				]
 			return [
 				{"title": "col.date", "key": "date", "w": 82, "align": "l", "fmt": "str"},
+				{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
 				{"title": "col.opponent", "key": "opp", "w": 58, "align": "l", "fmt": "str"},
 				{"title": "col.result", "key": "result", "w": 70, "align": "l", "fmt": "str"},
 				{"title": "col.route", "key": "route", "w": 76, "align": "l", "fmt": "str"},
@@ -707,6 +709,7 @@ func _columns_for_tab() -> Array:
 			if pitcher:
 				return [
 					{"title": "col.month", "key": "month", "w": 68, "align": "l", "fmt": "str"},
+					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
 					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int"},
 					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
 					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int"},
@@ -727,6 +730,7 @@ func _columns_for_tab() -> Array:
 				]
 			return [
 				{"title": "col.month", "key": "month", "w": 68, "align": "l", "fmt": "str"},
+				{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
 				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int"},
 				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
 				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
@@ -1275,12 +1279,23 @@ func _build_basic_rows() -> void:
 		while mlb_index < mlb_seasons.size() and int((mlb_seasons[mlb_index] as Dictionary)["year"]) < record.year:
 			_basic_rows.append(_mlb_basic_row(mlb_seasons[mlb_index] as Dictionary, pitcher))
 			mlb_index += 1
+		var year_label: String = Loc.t("common.year_value", {"year": record.year})
+		# シーズン途中に移籍した年は、在籍した球団ごとの行を古い順に並べてから、その年の合計行を置く。
 		var team: String = _team_short(record.team_id)
+		if record.has_team_stints():
+			for stint_value in record.team_stint_rows():
+				var stint: Dictionary = stint_value as Dictionary
+				var stint_team: String = _team_short(int(stint["team_id"]))
+				if pitcher:
+					_basic_rows.append(_pitcher_basic_dict(year_label, stint_team, stint["pitcher_stats"] as PSPitcherStats, false))
+				else:
+					_basic_rows.append(_batter_basic_dict(year_label, stint_team, stint["batter_stats"] as PSBatterStats, false))
+			team = Loc.t("player_detail.year_total")
 		var row: Dictionary
 		if pitcher:
-			row = _pitcher_basic_dict(Loc.t("common.year_value", {"year": record.year}), team, record.pitcher_stats, false)
+			row = _pitcher_basic_dict(year_label, team, record.pitcher_stats, false)
 		else:
-			row = _batter_basic_dict(Loc.t("common.year_value", {"year": record.year}), team, record.batter_stats, false)
+			row = _batter_basic_dict(year_label, team, record.batter_stats, false)
 		_basic_rows.append(row)
 	for index in range(mlb_index, mlb_seasons.size()):
 		_basic_rows.append(_mlb_basic_row(mlb_seasons[index] as Dictionary, pitcher))
@@ -1327,36 +1342,24 @@ func _build_farm_rows() -> void:
 	for record_value in _records:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		var team: String = _team_short(record.team_id)
-		var row: Dictionary
-		var played: bool
+		# シーズン途中に移籍した年は、在籍した球団ごとの行を古い順に並べてから、その年の合計行を置く。
+		if record.has_team_stints():
+			for view_value in record.stint_view_records():
+				var view: PSPlayerSeasonRecord = view_value as PSPlayerSeasonRecord
+				_farm_rows.append(_farm_season_row(view, _team_short(view.team_id), pitcher)["row"])
+			team = Loc.t("player_detail.year_total")
+		var built: Dictionary = _farm_season_row(record, team, pitcher)
 		if pitcher:
-			var ps: PSPitcherStats = record.farm_pitcher_stats
-			career_pitcher.add_from(ps)
-			row = _pitcher_basic_dict(Loc.t("common.year_value", {"year": record.year}), team, ps, false)
-			row.merge(_farm_pitcher_advanced_fields(ps, record.farm_advanced_stats), true)
-			played = _pitcher_stats_has_any(ps)
+			career_pitcher.add_from(record.farm_pitcher_stats)
 		else:
-			var bs: PSBatterStats = record.farm_batter_stats
-			career_batter.add_from(bs)
-			var farm_ad: PSAdvancedStats = record.farm_advanced_stats
-			var wraa: float = 0.0
-			var wrc_plus: float = 0.0
-			# リーグ文脈はその季の全選手を走査して測るので、二軍の打席がある季だけ作る。
-			if farm_ad != null and farm_ad.plate_appearances > 0:
-				var farm_ctx: Dictionary = _farm_batting_ctx_for(record.year, record.season_number)
-				wraa = WarCalculator.batter_wraa(farm_ad, farm_ctx)
-				wrc_plus = WarCalculator.batter_wrc_plus(farm_ad, farm_ctx)
-				career_wraa += wraa
-				career_wrc_plus_weighted += wrc_plus * float(farm_ad.plate_appearances)
-			row = _batter_basic_dict(Loc.t("common.year_value", {"year": record.year}), team, bs, false)
-			row.merge(_farm_batter_advanced_fields(farm_ad, wraa, wrc_plus), true)
-			played = _batter_stats_has_any(bs)
+			career_batter.add_from(record.farm_batter_stats)
+			if record.farm_advanced_stats != null and record.farm_advanced_stats.plate_appearances > 0:
+				career_wraa += float(built["wraa"])
+				career_wrc_plus_weighted += float(built["wrc_plus"]) * float(record.farm_advanced_stats.plate_appearances)
 		if record.farm_advanced_stats != null:
 			career_advanced.add_from(record.farm_advanced_stats)
-		if not played:
-			row["__color"] = FAINT
-		any_appearance = any_appearance or played
-		_farm_rows.append(row)
+		any_appearance = any_appearance or bool(built["played"])
+		_farm_rows.append(built["row"])
 	# 二軍での出場が一度も無い選手は全ゼロの表を出さず、空表 (=「記録がありません」) にする。
 	if not any_appearance:
 		_farm_rows = []
@@ -1372,6 +1375,35 @@ func _build_farm_rows() -> void:
 			career_wrc_plus = career_wrc_plus_weighted / float(career_advanced.plate_appearances)
 		career_row.merge(_farm_batter_advanced_fields(career_advanced, career_wraa, career_wrc_plus), true)
 	_farm_rows.append(career_row)
+
+
+# 二軍成績タブの 1 行 (record の farm_* から)。戻り値 { row, played, wraa, wrc_plus }。
+# 二軍出場の無い行は FAINT で沈める。
+func _farm_season_row(record: PSPlayerSeasonRecord, team: String, pitcher: bool) -> Dictionary:
+	var year_label: String = Loc.t("common.year_value", {"year": record.year})
+	var row: Dictionary
+	var played: bool
+	var wraa: float = 0.0
+	var wrc_plus: float = 0.0
+	if pitcher:
+		var ps: PSPitcherStats = record.farm_pitcher_stats
+		row = _pitcher_basic_dict(year_label, team, ps, false)
+		row.merge(_farm_pitcher_advanced_fields(ps, record.farm_advanced_stats), true)
+		played = _pitcher_stats_has_any(ps)
+	else:
+		var bs: PSBatterStats = record.farm_batter_stats
+		var farm_ad: PSAdvancedStats = record.farm_advanced_stats
+		# リーグ文脈はその季の全選手を走査して測るので、二軍の打席がある行だけ作る。
+		if farm_ad != null and farm_ad.plate_appearances > 0:
+			var farm_ctx: Dictionary = _farm_batting_ctx_for(record.year, record.season_number)
+			wraa = WarCalculator.batter_wraa(farm_ad, farm_ctx)
+			wrc_plus = WarCalculator.batter_wrc_plus(farm_ad, farm_ctx)
+		row = _batter_basic_dict(year_label, team, bs, false)
+		row.merge(_farm_batter_advanced_fields(farm_ad, wraa, wrc_plus), true)
+		played = _batter_stats_has_any(bs)
+	if not played:
+		row["__color"] = FAINT
+	return {"row": row, "played": played, "wraa": wraa, "wrc_plus": wrc_plus}
 
 
 func _farm_batting_ctx_for(year: int, season_number: int) -> Dictionary:
@@ -1426,9 +1458,13 @@ func _build_current_season_log_rows(season: PSSeason) -> void:
 		return
 	var logs: Array = season.get_player_game_logs(_player_id)
 	var pitcher_view: bool = _record.is_pitcher()
+	# 月間成績は (月, 球団) ごとに 1 行。シーズン途中に移籍した月は球団ごとの 2 行に分かれる。
+	# 試合の無かった月も行を残すため、月の枠はその時点の所属球団で先に作っておく。
 	var monthly: Dictionary = {}
 	for month_key in _season_month_buckets(season):
-		monthly[int(month_key)] = {
+		var month_team_id: int = _record.team_id_on_day(_first_day_of_month_bucket(season, int(month_key)))
+		monthly[_monthly_key(int(month_key), month_team_id)] = {
+			"month": int(month_key), "team_id": month_team_id, "order": 0,
 			"batter": PSBatterStats.new(),
 			"pitcher": PSPitcherStats.new(),
 		}
@@ -1444,13 +1480,18 @@ func _build_current_season_log_rows(season: PSSeason) -> void:
 			if not _batter_stats_has_any(batter_stats):
 				continue
 			_game_rows.append(_batter_game_row(log_row, batter_stats, season))
-		var month_key: int = _month_bucket_for_log(log_row, season)
-		if not monthly.has(month_key):
-			monthly[month_key] = {
+		var log_day: int = int(log_row.get("day", 0))
+		var log_team_id: int = _record.team_id_on_day(log_day)
+		(_game_rows[_game_rows.size() - 1] as Dictionary)["team"] = _team_short(log_team_id)
+		var month: int = _month_bucket_for_log(log_row, season)
+		var bucket_key: String = _monthly_key(month, log_team_id)
+		if not monthly.has(bucket_key):
+			monthly[bucket_key] = {
+				"month": month, "team_id": log_team_id, "order": log_day,
 				"batter": PSBatterStats.new(),
 				"pitcher": PSPitcherStats.new(),
 			}
-		var bucket: Dictionary = monthly[month_key] as Dictionary
+		var bucket: Dictionary = monthly[bucket_key] as Dictionary
 		(bucket["batter"] as PSBatterStats).add_from(batter_stats)
 		(bucket["pitcher"] as PSPitcherStats).add_from(pitcher_stats)
 
@@ -1464,25 +1505,53 @@ func _build_current_season_log_rows(season: PSSeason) -> void:
 		return day_a > day_b
 	)
 
-	var month_keys: Array = monthly.keys()
-	month_keys.sort()
-	for key_value in month_keys:
-		var month_key: int = int(key_value)
-		var month_bucket: Dictionary = monthly[month_key] as Dictionary
+	# 月の順、同じ月の中は在籍の古い順 (order = その枠に最初に入った試合の season day。先に作った枠は 0)。
+	var month_buckets: Array = monthly.values()
+	month_buckets.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var bucket_a: Dictionary = a as Dictionary
+		var bucket_b: Dictionary = b as Dictionary
+		if int(bucket_a["month"]) == int(bucket_b["month"]):
+			return int(bucket_a["order"]) < int(bucket_b["order"])
+		return int(bucket_a["month"]) < int(bucket_b["month"])
+	)
+	for bucket_value in month_buckets:
+		var month_bucket: Dictionary = bucket_value as Dictionary
+		var month_key: int = int(month_bucket["month"])
+		var month_team: String = _team_short(int(month_bucket["team_id"]))
 		if pitcher_view:
 			var ps: PSPitcherStats = month_bucket["pitcher"] as PSPitcherStats
-			var prow: Dictionary = _pitcher_basic_dict("", "", ps, false)
+			var prow: Dictionary = _pitcher_basic_dict("", month_team, ps, false)
 			prow["month"] = _month_bucket_label(month_key)
 			if not _pitcher_stats_has_any(ps):
 				prow["__color"] = FAINT
 			_monthly_rows.append(prow)
 		else:
 			var bs: PSBatterStats = month_bucket["batter"] as PSBatterStats
-			var brow: Dictionary = _batter_basic_dict("", "", bs, false)
+			var brow: Dictionary = _batter_basic_dict("", month_team, bs, false)
 			brow["month"] = _month_bucket_label(month_key)
 			if not _batter_stats_has_any(bs):
 				brow["__color"] = FAINT
 			_monthly_rows.append(brow)
+
+
+func _monthly_key(month: int, team_id: int) -> String:
+	return "%d:%d" % [month, team_id]
+
+
+# 月の枠 (3・4 月は 1 つ) の最初の season day。試合の無かった月の行にどの球団を出すかを決めるのに使う。
+func _first_day_of_month_bucket(season: PSSeason, month_key: int) -> int:
+	var first_day: int = 0
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		var day: int = int(game.get("day", 1))
+		var date_text: String = str(game.get("date", ""))
+		if date_text.is_empty():
+			date_text = SeasonCalendar.date_for_season_day(season, day)
+		var parts: PackedStringArray = date_text.split("-")
+		var month: int = int(parts[1]) if parts.size() > 1 else 4
+		if (4 if month <= 4 else month) == month_key and (first_day == 0 or day < first_day):
+			first_day = day
+	return first_day
 
 
 func _batter_game_row(log_row: Dictionary, stats: PSBatterStats, season: PSSeason) -> Dictionary:
@@ -1698,6 +1767,15 @@ func _ensure_advanced() -> void:
 		var ctx: Dictionary = _league_ctx_for(record.year, record.season_number)
 		var war: Dictionary = WarCalculator.season_war(record, ctx)
 		var team: String = _team_short(record.team_id)
+		# シーズン途中に移籍した年は、在籍した球団ごとの行 (WAR などもその球団での成績から測る) を
+		# 古い順に並べてから、その年の合計行を置く。通算の集計には合計行だけを使う。
+		if record.has_team_stints():
+			for view_value in record.stint_view_records():
+				var view: PSPlayerSeasonRecord = view_value as PSPlayerSeasonRecord
+				var view_war: Dictionary = WarCalculator.season_war(view, ctx)
+				var view_team: String = _team_short(view.team_id)
+				_advanced_rows.append(_pitcher_advanced_dict(view, view_war, view_team) if pitcher else _batter_advanced_dict(view, view_war, view_team))
+			team = Loc.t("player_detail.year_total")
 		var row: Dictionary
 		if pitcher:
 			row = _pitcher_advanced_dict(record, war, team)

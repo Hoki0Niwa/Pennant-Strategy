@@ -20,30 +20,26 @@ static func calculate(season: PSSeason, teams: Array) -> PSAwards:
 	awards.year = season.year
 	awards.season_number = season.season_number
 
-	var team_by_id: Dictionary = {}
 	var team_ids_by_league: Dictionary = {"league1": [], "league2": []}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
 		if team != null:
-			team_by_id[team.id] = team
 			if team_ids_by_league.has(team.league):
 				(team_ids_by_league[team.league] as Array).append(team.id)
 
+	# タイトルと表彰はリーグごとに数える。リーグをまたいでシーズン途中に移籍した選手は、
+	# それぞれのリーグに在籍中の成績だけを持つ複製として両方のリーグに入る (同じリーグ内の移籍は通算のまま)。
 	var by_league: Dictionary = {"league1": [], "league2": []}
-	for record_row in RecordStore.player_records.values():
-		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
-		if record == null:
-			continue
-		if record.year != season.year or record.season_number != season.season_number:
-			continue
-		if record.team_id <= 0:
-			continue
-		var team: PSTeam = team_by_id.get(record.team_id, null) as PSTeam
-		if team == null:
-			continue
-		if not by_league.has(team.league):
-			continue
-		by_league[team.league].append(record)
+	var league_has_split: Dictionary = {}
+	for league_key in by_league.keys():
+		var league_records: Array = RecordStore.get_league_stat_records(
+			team_ids_by_league[league_key] as Array, season.year, season.season_number, true
+		)
+		by_league[league_key] = league_records
+		for record_row in league_records:
+			if (record_row as PSPlayerSeasonRecord).is_stint_view:
+				league_has_split[league_key] = true
+				break
 
 	var max_games: int = 0
 	for stats_team_id in season.standings.keys():
@@ -56,7 +52,9 @@ static func calculate(season: PSSeason, teams: Array) -> PSAwards:
 
 	for league_key in by_league.keys():
 		var league_records: Array = by_league[league_key] as Array
-		var team_ids: Array = team_ids_by_league.get(league_key, []) as Array
+		# 保存済みの成績表を SQL で引く経路は通算しか見えない。リーグ内に成績を分けた選手がいる年は
+		# team_ids を渡さず、分けた後のレコードをメモリ上で数える。
+		var team_ids: Array = [] if league_has_split.has(league_key) else team_ids_by_league.get(league_key, []) as Array
 		var batting_titles: Dictionary = _calculate_batting_titles(league_records, team_ids, season.year, season.season_number, qualifier_pa)
 		var pitching_titles: Dictionary = _calculate_pitching_titles(league_records, team_ids, season.year, season.season_number, qualifier_outs)
 		awards.batting_titles[league_key] = batting_titles

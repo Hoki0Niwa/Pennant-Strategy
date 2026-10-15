@@ -1180,13 +1180,20 @@ func _compute_team_era(season: PSSeason) -> Dictionary:
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		if record == null or record.year != season.year or record.season_number != season.season_number:
 			continue
-		var ps: PSPitcherStats = record.pitcher_stats
-		if ps == null or ps.outs_pitched <= 0:
+		if record.pitcher_stats == null or record.pitcher_stats.outs_pitched <= 0:
 			continue
-		var bucket: Dictionary = acc.get(record.team_id, {"er": 0, "outs": 0}) as Dictionary
-		bucket["er"] = int(bucket["er"]) + ps.earned_runs
-		bucket["outs"] = int(bucket["outs"]) + ps.outs_pitched
-		acc[record.team_id] = bucket
+		# シーズン途中に移籍した投手は、在籍した球団ごとに分けて足す。毎フレーム通るので、
+		# 移籍の無い大多数は内訳を組み立てずに通算をそのまま使う。
+		var stints: Array = record.team_stint_rows() if record.has_team_stints() \
+			else [{"team_id": record.team_id, "pitcher_stats": record.pitcher_stats}]
+		for stint_value in stints:
+			var stint: Dictionary = stint_value as Dictionary
+			var ps: PSPitcherStats = stint["pitcher_stats"] as PSPitcherStats
+			var stint_team_id: int = int(stint["team_id"])
+			var bucket: Dictionary = acc.get(stint_team_id, {"er": 0, "outs": 0}) as Dictionary
+			bucket["er"] = int(bucket["er"]) + ps.earned_runs
+			bucket["outs"] = int(bucket["outs"]) + ps.outs_pitched
+			acc[stint_team_id] = bucket
 	var out: Dictionary = {}
 	for team_id in acc.keys():
 		var bucket: Dictionary = acc[team_id] as Dictionary

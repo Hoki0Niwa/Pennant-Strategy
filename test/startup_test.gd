@@ -2076,6 +2076,105 @@ func test_offseason_overseas_rows_include_mlb_retirees() -> void:
 
 
 # 選手詳細の過去成績は、海外 (MLB) の季を球団「MLB」の行として年の順に挟み、通算を NPB と MLB で分ける。
+# シーズン途中に移籍した選手は、過去成績・指標 (WAR)・二軍成績が球団ごとの行 + 「計」行に分かれ、
+# 試合履歴は試合ごとの球団、月間成績は移籍した月が球団ごとの 2 行になる。
+func test_player_detail_splits_rows_by_team_for_midseason_move() -> void:
+	var batter: PSPlayer = null
+	for player_value in GameDb.players:
+		var candidate: PSPlayer = player_value as PSPlayer
+		if not candidate.is_pitcher() and not candidate.is_retired():
+			batter = candidate
+			break
+	assert_object(batter).is_not_null()
+	var old_team_id: int = 0
+	for team_value in GameDb.teams:
+		if (team_value as PSTeam).id != batter.team_id:
+			old_team_id = (team_value as PSTeam).id
+			break
+	var new_team: String = GameDb.get_any_team(batter.team_id).short_name
+	var old_team: String = GameDb.get_any_team(old_team_id).short_name
+
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(batter, 2099, 1)
+	record.team_id = old_team_id
+	record.batter_stats.plate_appearances = 220
+	record.batter_stats.at_bats = 200
+	record.batter_stats.hits = 60
+	record.advanced_stats.plate_appearances = 220
+	record.advanced_stats.woba_denominator = 220
+	record.advanced_stats.woba_numerator = 80.0
+	record.farm_batter_stats.games = 5
+	record.farm_batter_stats.at_bats = 20
+	record.farm_batter_stats.hits = 8
+	# day 40 の試合後に移籍。
+	record.close_team_stint(40)
+	record.team_id = batter.team_id
+	record.batter_stats.plate_appearances += 110
+	record.batter_stats.at_bats += 100
+	record.batter_stats.hits += 25
+	record.advanced_stats.plate_appearances += 110
+	record.advanced_stats.woba_denominator += 110
+	record.advanced_stats.woba_numerator += 35.0
+
+	var season: PSSeason = PSSeason.new()
+	season.year = 2099
+	season.season_number = 1
+	season.calendar_start_date = "2099-03-27"
+	# day 36 = 5/1、day 40 = 5/5 (移籍前の最後の試合)、day 45 = 5/10 (移籍後)。
+	for day in [36, 40, 45]:
+		season.schedule.append({"day": day, "played": true})
+		var log_stats: PSBatterStats = PSBatterStats.new()
+		log_stats.games = 1
+		log_stats.plate_appearances = 4
+		log_stats.at_bats = 4
+		log_stats.hits = 1 if day <= 40 else 3
+		season.append_player_game_log(batter.id, {"day": day, "game_index": day, "batter": log_stats.to_dict(), "pitcher": {}})
+
+	var detail: Control = (load("res://ui/screens/player_detail_screen.gd") as GDScript).new()
+	detail.set("_player_id", batter.id)
+	detail.set("_record", record)
+	detail.set("_records", [record])
+	detail.call("_build_basic_rows")
+	detail.call("_ensure_advanced")
+	detail.call("_build_farm_rows")
+	detail.call("_build_current_season_log_rows", season)
+	var basic_rows: Array = detail.get("_basic_rows") as Array
+	var advanced_rows: Array = detail.get("_advanced_rows") as Array
+	var farm_rows: Array = detail.get("_farm_rows") as Array
+	var game_rows: Array = detail.get("_game_rows") as Array
+	var monthly_rows: Array = detail.get("_monthly_rows") as Array
+	detail.free()
+
+	var total_label: String = Loc.t("player_detail.year_total")
+	var basic_summary: Array = basic_rows.slice(0, 3).map(func(row: Variant) -> String:
+		return "%s %d" % [str((row as Dictionary)["team"]), int((row as Dictionary)["h"])]
+	)
+	assert_array(basic_summary).is_equal(["%s 60" % old_team, "%s 25" % new_team, "%s 85" % total_label])
+
+	# 指標: 球団ごとの行はその球団での打席から測る。WAR は行ごとに出て、合計行と大きくは食い違わない。
+	assert_array(advanced_rows.slice(0, 3).map(func(row: Variant) -> String:
+		return "%s %d" % [str((row as Dictionary)["team"]), int((row as Dictionary)["pa"])]
+	)).is_equal(["%s 220" % old_team, "%s 110" % new_team, "%s 330" % total_label])
+	var war_split: float = float((advanced_rows[0] as Dictionary)["war"]) + float((advanced_rows[1] as Dictionary)["war"])
+	assert_float(war_split).is_equal_approx(float((advanced_rows[2] as Dictionary)["war"]), 0.3)
+
+	# 二軍成績: 移籍前にだけ出場している。
+	assert_array(farm_rows.slice(0, 3).map(func(row: Variant) -> String:
+		return "%s %d" % [str((row as Dictionary)["team"]), int((row as Dictionary)["h"])]
+	)).is_equal(["%s 8" % old_team, "%s 0" % new_team, "%s 8" % total_label])
+
+	# 試合履歴は新しい順。移籍当日 (day 40) までは移籍前の球団。
+	assert_array(game_rows.map(func(row: Variant) -> String:
+		return "%d %s" % [int((row as Dictionary)["day"]), str((row as Dictionary)["team"])]
+	)).is_equal(["45 %s" % new_team, "40 %s" % old_team, "36 %s" % old_team])
+
+	# 月間成績: 5 月が球団ごとの 2 行 (在籍の古い順)。
+	var may_label: String = Loc.t("date.month", {"month": 5})
+	var may_rows: Array = monthly_rows.filter(func(row: Variant) -> bool: return str((row as Dictionary)["month"]) == may_label)
+	assert_array(may_rows.map(func(row: Variant) -> String:
+		return "%s %d" % [str((row as Dictionary)["team"]), int((row as Dictionary)["h"])]
+	)).is_equal(["%s 2" % old_team, "%s 3" % new_team])
+
+
 func test_player_detail_stats_rows_include_mlb_seasons() -> void:
 	var batter: PSPlayer = null
 	for player_value in GameDb.players:

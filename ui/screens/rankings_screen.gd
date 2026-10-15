@@ -400,14 +400,19 @@ func _max_team_games(season: PSSeason) -> int:
 
 
 func _collect_records(season: PSSeason) -> Array:
-	var records: Array = []
+	# タイトルはリーグごとに数えるので、リーグをまたいで移籍した選手はそれぞれのリーグに在籍中の成績で現れる
+	# (同じリーグ内の移籍は通算のまま)。
+	var team_ids_by_league: Dictionary = {}
 	for team_row in GameDb.teams:
 		var team: PSTeam = team_row as PSTeam
 		if team == null:
 			continue
-		var team_records: Array = RecordStore.get_team_player_records(team.id, season.year, season.season_number)
-		for record_row in team_records:
-			records.append(record_row as PSPlayerSeasonRecord)
+		if not team_ids_by_league.has(team.league):
+			team_ids_by_league[team.league] = []
+		(team_ids_by_league[team.league] as Array).append(team.id)
+	var records: Array = []
+	for league_key in team_ids_by_league.keys():
+		records.append_array(RecordStore.get_league_stat_records(team_ids_by_league[league_key] as Array, season.year, season.season_number))
 	return records
 
 

@@ -224,6 +224,28 @@ func get_team_player_records(team_id: int, year: int, season_number: int, includ
 	return records
 
 
+# その球団で残した成績を持つレコードの一覧 (球団の打率・防御率などチーム成績の集計用)。
+# get_team_player_records (= 今の所属選手) と違い、シーズン途中に出て行った選手の在籍中の成績を含み、
+# 途中で来た選手は加入後の成績だけになる (どちらも stats_view_for_teams の複製)。移籍の無い選手はレコードそのもの。
+func get_team_stat_records(team_id: int, year: int, season_number: int, include_retired: bool = false) -> Array:
+	return get_league_stat_records([team_id], year, season_number, include_retired)
+
+
+# team_ids の球団 (1 球団でも、リーグの全球団でもよい) で残した成績を持つレコードの一覧。
+# リーグ単位で渡せば、リーグをまたいで移籍した選手はそれぞれのリーグに在籍中の成績だけで現れる
+# (タイトル・表彰・ランキングはリーグごとに数える)。同じリーグ内の移籍は通算のまま 1 件。
+func get_league_stat_records(team_ids: Array, year: int, season_number: int, include_retired: bool = false) -> Array:
+	var records: Array = []
+	for record_value in get_player_records_for_season(year, season_number):
+		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
+		if not include_retired and _record_marks_retired_at_season_end(record):
+			continue
+		var view: PSPlayerSeasonRecord = record.stats_view_for_teams(team_ids)
+		if view != null:
+			records.append(view)
+	return records
+
+
 func get_player_records_for_season(year: int, season_number: int) -> Array:
 	ensure_loaded()
 	if _indexed_player_record_count != _player_records.size():
@@ -247,11 +269,14 @@ func prepare_team_player_index() -> bool:
 	return true
 
 
+# 当季レコードの所属球団を付け替える。stint_until_day >= 0 なら、付け替える前にそれまでの球団での
+# 成績を締めて残す (シーズン途中の移籍。移籍前後の成績が球団ごとに分かれる)。
 func set_player_record_team(
 	player_id: int,
 	year: int,
 	season_number: int,
-	team_id: int
+	team_id: int,
+	stint_until_day: int = -1
 ) -> bool:
 	ensure_loaded()
 	var record: PSPlayerSeasonRecord = _player_records.get(
@@ -261,6 +286,8 @@ func set_player_record_team(
 		return false
 	if record.team_id == team_id:
 		return true
+	if stint_until_day >= 0:
+		record.close_team_stint(stint_until_day)
 	record.team_id = team_id
 	mark_record_dirty(record)
 	# 移籍は稀なので、全体挿入順と完全に同じbucket順を保つためindexを一括再構築する。
@@ -764,4 +791,7 @@ func _refreshed_player_record(record: PSPlayerSeasonRecord, player: PSPlayer) ->
 	refreshed.last_pitched_team_game = record.last_pitched_team_game
 	refreshed.farm_consecutive_appearances = record.farm_consecutive_appearances
 	refreshed.farm_last_pitched_team_game = record.farm_last_pitched_team_game
+	# 移籍前の球団ごとの成績は選手側の source_data に無いので、作り直しても落とさない。
+	if record.has_team_stints():
+		refreshed.source_data[PSPlayerSeasonRecord.TEAM_STINTS_KEY] = (record.source_data[PSPlayerSeasonRecord.TEAM_STINTS_KEY] as Array).duplicate(true)
 	return refreshed

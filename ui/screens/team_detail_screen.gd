@@ -884,7 +884,8 @@ func _build_metric_ranks(team: PSTeam, season: PSSeason) -> void:
 func _aggregate_team(team_id: int, season: PSSeason) -> Dictionary:
 	var batter: PSBatterStats = PSBatterStats.new()
 	var pitcher: PSPitcherStats = PSPitcherStats.new()
-	for record_row in RecordStore.get_team_player_records(team_id, season.year, season.season_number):
+	# チーム成績は「その球団で残した成績」の合計 (途中で出た選手の在籍分を含み、途中で来た選手は加入後だけ)。
+	for record_row in RecordStore.get_team_stat_records(team_id, season.year, season.season_number):
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		batter.add_from(record.batter_stats)
 		if record.is_pitcher():

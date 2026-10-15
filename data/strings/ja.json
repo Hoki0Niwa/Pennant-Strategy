@@ -1513,6 +1513,7 @@
 	"player_detail.usage.by_position": "守備位置別スタメン",
 	"player_detail.usage.by_order": "打順別スタメン",
 	"player_detail.career_total": "通算",
+	"player_detail.year_total": "計",
 	"player_detail.career_total_npb": "NPB通算",
 	"player_detail.career_total_mlb": "MLB通算",
 	"player_detail.team_mlb": "MLB",

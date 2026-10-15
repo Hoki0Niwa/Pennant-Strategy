@@ -188,6 +188,147 @@ func is_pitcher() -> bool:
 	return position == 1 or role == "starter" or role == "reliever" or role == "closer"
 
 
+# ---- シーズン途中の移籍: 球団ごとの成績 -------------------------------------------
+# レコードは 1 選手 1 シーズンで 1 個のまま (batter_stats などはシーズン通算)。移籍のたびに
+# 「それまで在籍した球団で残した成績」を source_data[TEAM_STINTS_KEY] へ古い順に積む
+# (source_data は保存対象の JSON 列に載るので、保存形式を変えずに済む)。
+# 今の球団での成績は「通算 − 積んである分の合計」で、どこにも保存しない。
+# 1 件 = { team_id, until_day, batter_stats, pitcher_stats, advanced_stats, farm_* } (成績は to_dict 形式)。
+const TEAM_STINTS_KEY: String = "team_stints"
+const STINT_STAT_KEYS: Array = ["batter_stats", "pitcher_stats", "advanced_stats", "farm_batter_stats", "farm_pitcher_stats", "farm_advanced_stats"]
+
+# stats_view_for_teams が作った複製なら true。在籍球団の一部ぶんの成績しか持たない読み取り用で、
+# RecordStore には入れない (保存もされない)。
+var is_stint_view: bool = false
+
+
+func has_team_stints() -> bool:
+	return not (source_data.get(TEAM_STINTS_KEY, []) as Array).is_empty()
+
+
+# 今の球団での成績を締めて積む。球団を付け替える直前に呼ぶ (until_day = 移籍した season day)。
+func close_team_stint(until_day: int) -> void:
+	var current: Dictionary = _open_stint_stats()
+	var stints: Array = (source_data.get(TEAM_STINTS_KEY, []) as Array).duplicate()
+	var entry: Dictionary = {"team_id": team_id, "until_day": until_day}
+	for key in STINT_STAT_KEYS:
+		entry[key] = current[key].to_dict()
+	stints.append(entry)
+	source_data[TEAM_STINTS_KEY] = stints
+
+
+# 在籍した球団ごとの成績 (古い順。最後の 1 件が今の球団で until_day = 0)。移籍が無ければ通算そのものが 1 件。
+# 各行 = { team_id, until_day, batter_stats: PSBatterStats, pitcher_stats, advanced_stats, farm_* }。
+func team_stint_rows() -> Array:
+	var rows: Array = []
+	for stint_value in source_data.get(TEAM_STINTS_KEY, []) as Array:
+		rows.append(_stint_row_from_dict(stint_value as Dictionary))
+	var open_row: Dictionary = _open_stint_stats(rows)
+	open_row["team_id"] = team_id
+	open_row["until_day"] = 0
+	rows.append(open_row)
+	return rows
+
+
+# team_ids の球団で残した成績だけを持つレコードを返す (球団別・リーグ別の集計用)。
+# - どの球団にも在籍していなければ null。
+# - 在籍した球団が全部 team_ids に入っていれば、分ける必要が無いので自分自身。
+# - 一部だけなら、その球団ぶんを合算した複製 (is_stint_view = true、team_id は該当する最後の球団)。
+func stats_view_for_teams(team_ids: Array) -> PSPlayerSeasonRecord:
+	if not has_team_stints():
+		return self if team_ids.has(team_id) else null
+	var matched: Array = []
+	var rows: Array = team_stint_rows()
+	for row_value in rows:
+		if team_ids.has(int((row_value as Dictionary)["team_id"])):
+			matched.append(row_value)
+	if matched.is_empty():
+		return null
+	if matched.size() == rows.size():
+		return self
+	return _view_from_stint_rows(matched)
+
+
+# 在籍ごと (team_stint_rows の 1 件ずつ) の成績だけを持つ複製を古い順に返す。球団別の行に WAR などの
+# 指標を出すときに、通常のレコードと同じ計算へそのまま渡せる。移籍が無ければ自分自身 1 件。
+func stint_view_records() -> Array:
+	if not has_team_stints():
+		return [self]
+	var views: Array = []
+	for row_value in team_stint_rows():
+		views.append(_view_from_stint_rows([row_value]))
+	return views
+
+
+# その season day の試合をどの球団でプレーしたか。移籍はその日の試合が終わってから成立するので、
+# until_day までの試合は移籍前の球団のもの。
+func team_id_on_day(day: int) -> int:
+	for stint_value in source_data.get(TEAM_STINTS_KEY, []) as Array:
+		var stint: Dictionary = stint_value as Dictionary
+		if day <= int(stint.get("until_day", 0)):
+			return int(stint.get("team_id", 0))
+	return team_id
+
+
+# matched (team_stint_rows の行の一部) を合算した読み取り用の複製。team_id は最後の行の球団。
+func _view_from_stint_rows(matched: Array) -> PSPlayerSeasonRecord:
+	var view: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_dict(to_dict())
+	view.is_stint_view = true
+	view.source_data.erase(TEAM_STINTS_KEY)
+	view.team_id = int((matched[matched.size() - 1] as Dictionary)["team_id"])
+	view.batter_stats = PSBatterStats.new()
+	view.pitcher_stats = PSPitcherStats.new()
+	view.advanced_stats = PSAdvancedStats.new()
+	view.farm_batter_stats = PSBatterStats.new()
+	view.farm_pitcher_stats = PSPitcherStats.new()
+	view.farm_advanced_stats = PSAdvancedStats.new()
+	view.advanced_stats.player_id = player_id
+	view.farm_advanced_stats.player_id = player_id
+	for row_value in matched:
+		var row: Dictionary = row_value as Dictionary
+		view.batter_stats.add_from(row["batter_stats"])
+		view.pitcher_stats.add_from(row["pitcher_stats"])
+		view.advanced_stats.add_from(row["advanced_stats"])
+		view.farm_batter_stats.add_from(row["farm_batter_stats"])
+		view.farm_pitcher_stats.add_from(row["farm_pitcher_stats"])
+		view.farm_advanced_stats.add_from(row["farm_advanced_stats"])
+	return view
+
+
+func _stint_row_from_dict(stint: Dictionary) -> Dictionary:
+	var advanced: PSAdvancedStats = PSAdvancedStats.new()
+	advanced.load_from_dict(stint.get("advanced_stats", {}) as Dictionary)
+	var farm_advanced: PSAdvancedStats = PSAdvancedStats.new()
+	farm_advanced.load_from_dict(stint.get("farm_advanced_stats", {}) as Dictionary)
+	return {
+		"team_id": int(stint.get("team_id", 0)),
+		"until_day": int(stint.get("until_day", 0)),
+		"batter_stats": PSBatterStats.from_dict(stint.get("batter_stats", {}) as Dictionary),
+		"pitcher_stats": PSPitcherStats.from_dict(stint.get("pitcher_stats", {}) as Dictionary),
+		"advanced_stats": advanced,
+		"farm_batter_stats": PSBatterStats.from_dict(stint.get("farm_batter_stats", {}) as Dictionary),
+		"farm_pitcher_stats": PSPitcherStats.from_dict(stint.get("farm_pitcher_stats", {}) as Dictionary),
+		"farm_advanced_stats": farm_advanced,
+	}
+
+
+# 通算から、締めてある在籍ぶん (closed_rows。省略時は source_data から読む) を引いた今の球団での成績。
+func _open_stint_stats(closed_rows: Array = []) -> Dictionary:
+	var rows: Array = closed_rows.duplicate()
+	if rows.is_empty():
+		for stint_value in source_data.get(TEAM_STINTS_KEY, []) as Array:
+			rows.append(_stint_row_from_dict(stint_value as Dictionary))
+	var open_stats: Dictionary = {
+		"batter_stats": batter_stats, "pitcher_stats": pitcher_stats, "advanced_stats": advanced_stats,
+		"farm_batter_stats": farm_batter_stats, "farm_pitcher_stats": farm_pitcher_stats, "farm_advanced_stats": farm_advanced_stats,
+	}
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		for key in STINT_STAT_KEYS:
+			open_stats[key] = open_stats[key].subtract_from(row[key])
+	return open_stats
+
+
 func position_experience_value(position_id: int, default_value: int = 0) -> int:
 	var key: String = PSPlayer.position_experience_key(position_id)
 	if key.is_empty():

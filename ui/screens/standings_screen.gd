@@ -603,7 +603,8 @@ func _build_interleague_rows(season: PSSeason) -> void:
 func _team_metrics(team_id: int, season: PSSeason) -> Dictionary:
 	var batter_stats: PSBatterStats = PSBatterStats.new()
 	var pitcher_stats: PSPitcherStats = PSPitcherStats.new()
-	var records: Array = RecordStore.get_team_player_records(team_id, season.year, season.season_number)
+	# チーム成績は「その球団で残した成績」の合計 (途中で出た選手の在籍分を含み、途中で来た選手は加入後だけ)。
+	var records: Array = RecordStore.get_team_stat_records(team_id, season.year, season.season_number)
 	for record_row in records:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		batter_stats.add_from(record.batter_stats)

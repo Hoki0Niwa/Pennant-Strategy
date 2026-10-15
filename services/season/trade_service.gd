@@ -827,7 +827,8 @@ static func _move_players(season: PSSeason, moving: Array, from_team_id: int, to
 			player.id,
 			season.year,
 			season.season_number,
-			to_team_id
+			to_team_id,
+			season.current_day
 		)
 
 
