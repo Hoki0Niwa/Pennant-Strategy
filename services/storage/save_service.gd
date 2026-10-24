@@ -25,6 +25,8 @@ static var _loaded_player_rows_db_path: String = ""
 
 
 static func save_state(app_state) -> bool:
+	if RecordStore.is_persistence_suspended():
+		return true
 	if not SaveContext.has_active_save():
 		if not SaveContext.begin_new_save():
 			push_error("Could not create save folder.")
@@ -91,7 +93,9 @@ static func save_state(app_state) -> bool:
 	payload.merge(ModManager.save_metadata())
 
 	var check_all_players: bool = _should_check_all_players(app_state)
-	if SQLiteStoreService.save_game_state_and_players(payload, GameDb.players, check_all_players):
+	var draft_changes: Dictionary = RecordStore.pending_draft_class_changes()
+	if SQLiteStoreService.save_game_state_and_players(payload, GameDb.players, check_all_players, draft_changes):
+		RecordStore.acknowledge_draft_classes_saved()
 		if check_all_players:
 			_player_saves_since_full_check = 0
 			_checked_players_generation = GameDb.players_generation
@@ -100,12 +104,15 @@ static func save_state(app_state) -> bool:
 		_write_save_meta(app_state)
 		_remember_saved_state(payload, SQLiteStoreService.saved_players_fingerprint(GameDb.players))
 		return true
+	if SQLiteStoreService.is_available() and not draft_changes.is_empty():
+		return false
 
 	# JSON fallback は SQLite 全体が使えない状況なので、履歴を分離したままでは
 	# 復元できない。blob から外していた場合は履歴込みの payload に差し替える。
 	if not history_in_blob and app_state.current_season != null:
 		payload["season"] = app_state.current_season.to_dict()
 	payload["players"] = _players_to_dicts()
+	payload["draft_classes"] = RecordStore.draft_classes_snapshot()
 
 	var save_path: String = SaveContext.game_state_path()
 	var file: FileAccess = FileAccess.open(save_path, FileAccess.WRITE)
@@ -114,6 +121,10 @@ static func save_state(app_state) -> bool:
 		return false
 
 	file.store_string(JSON.stringify(payload, "\t"))
+	file.flush()
+	if file.get_error() != OK:
+		return false
+	RecordStore.acknowledge_draft_classes_saved()
 	_write_save_meta(app_state)
 	_remember_saved_state(payload, _players_fingerprint())
 	return true
@@ -217,6 +228,8 @@ static func begin_new_game() -> bool:
 # 現在の進行状態が、同じセーブスロットへ最後に正常保存した内容と一致するかを返す。
 # 画面遷移はゲーム進行ではないため current_screen は比較対象に含めない。
 static func is_state_current(app_state) -> bool:
+	if RecordStore.has_unsaved_annual_history():
+		return false
 	if _saved_state_fingerprint == 0:
 		return false
 	if _saved_state_save_id != SaveContext.active_save_id():

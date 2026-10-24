@@ -245,6 +245,345 @@ func test_form_lookback_reaches_seeded_seasons() -> void:
 
 # ---- helpers -------------------------------------------------------------------
 
+func test_review_and_draft_class_payloads_are_detached() -> void:
+	var payload: Dictionary = {"year": 2031, "season_number": 6,
+		"teams": [{"team_id": 1, "controlled_count": 0, "development_count": 0}],
+		"picks": [{"player_id": 7, "name": "Same", "development": false}],
+		"player_facts": [{"player_id": 7, "total": {"war": 1.25}}]}
+	var review: PSSeasonReview = PSSeasonReview.from_dict(payload)
+	var draft_class: PSDraftClass = PSDraftClass.from_dict(payload)
+	payload["picks"][0]["name"] = "Changed"
+	payload["player_facts"][0]["total"]["war"] = 999.0
+	var exported: Dictionary = review.to_dict()
+	exported["player_facts"][0]["total"]["war"] = 0.0
+	var facts: Array = review.player_facts
+	facts[0]["total"]["war"] = -3.0
+	var picks: Array = draft_class.picks
+	picks[0]["name"] = "Reader changed"
+	assert_float(float(review.player_facts[0]["total"]["war"])).is_equal(1.25)
+	assert_str(str(draft_class.picks[0]["name"])).is_equal("Same")
+	assert_int(int(draft_class.teams[0]["controlled_count"])).is_equal(0)
+	var restored: PSDraftClass = PSDraftClass.from_dict(JSON.parse_string(JSON.stringify(draft_class.to_dict())) as Dictionary)
+	assert_int(restored.year).is_equal(2031)
+	assert_int(int(restored.picks[0]["player_id"])).is_equal(7)
+
+
+func test_season_review_freezes_first_team_counts_and_return_stints() -> void:
+	RecordStore.clear_records()
+	var season: PSSeason = PSSeason.new()
+	season.year = 2031
+	season.season_number = 6
+	var team_a: PSTeam = PSTeam.from_dict({"id": 1, "name": "A", "league": "league1"})
+	var team_b: PSTeam = PSTeam.from_dict({"id": 2, "name": "B", "league": "league1"})
+	season.standings = {1: PSStats.from_dict({"wins": 80, "losses": 60, "runs_scored": 500}),
+		2: PSStats.from_dict({"wins": 60, "losses": 80, "runs_scored": 400})}
+	var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({"id": 801, "team_id": 1, "name": "Original"}), 2031, 6)
+	record.batter_stats.games = 2
+	record.batter_stats.at_bats = 8
+	record.batter_stats.hits = 3
+	record.close_team_stint(10)
+	record.team_id = 2
+	record.batter_stats.games = 5
+	record.batter_stats.at_bats = 20
+	record.batter_stats.hits = 8
+	record.close_team_stint(20)
+	record.team_id = 1
+	record.batter_stats.games = 6
+	record.batter_stats.at_bats = 24
+	record.batter_stats.hits = 10
+	record.batter_stats.stolen_base_attempts = 4
+	record.pitcher_stats.relief_appearances = 2
+	record.pitcher_stats.quality_starts = 1
+	var farm_only: PSPlayerSeasonRecord = PSPlayerSeasonRecord.from_player(_player({"id": 802, "team_id": 1}), 2031, 6)
+	farm_only.farm_batter_stats.games = 30
+	RecordStore.seed_initial_history([record, farm_only], [])
+	var original: Dictionary = record.to_dict().duplicate(true)
+	var input_teams: Array = [team_b, team_a]
+	var review: PSSeasonReview = PSSeasonReviewService.build(season, input_teams)
+	assert_int((input_teams[0] as PSTeam).id).is_equal(2)
+	assert_bool(record.to_dict() == original).is_true()
+	assert_int(review.player_facts.size()).is_equal(1)
+	var fact: Dictionary = review.player_facts[0] as Dictionary
+	assert_int(int(fact["total"]["batter_stats"]["hits"])).is_equal(10)
+	assert_int(int(fact["total"]["batter_stats"]["stolen_base_attempts"])).is_equal(4)
+	assert_int(int(fact["total"]["pitcher_stats"]["relief_appearances"])).is_equal(2)
+	assert_int(int(fact["total"]["pitcher_stats"]["quality_starts"])).is_equal(1)
+	assert_int(int(fact["teams"]["1"]["batter_stats"]["hits"])).is_equal(5)
+	assert_int(int(fact["teams"]["2"]["batter_stats"]["hits"])).is_equal(5)
+	var context: Dictionary = PSWarCalculator.build_league_context(2031, 6)
+	assert_float(float(fact["total"]["war"])).is_equal(float(PSWarCalculator.season_war(record, context)["war"]))
+	assert_float(float(fact["teams"]["1"]["war"])).is_equal(float(PSWarCalculator.season_war(record.stats_view_for_teams([1]), context)["war"]))
+	record.name = "Changed"
+	record.role = "pitcher"
+	record.batter_stats.hits = 999
+	team_a.name = "Renamed"
+	season.standings[1].wins = 999
+	assert_str(str(review.player_facts[0]["name"])).is_equal("Original")
+	assert_int(int(review.player_facts[0]["total"]["batter_stats"]["hits"])).is_equal(10)
+	assert_str(review.completion_kind).is_equal("regular_season")
+	assert_int(int(review.teams[1]["rank"])).is_equal(1)
+	assert_int(int(review.teams[1]["standings"]["wins"])).is_equal(80)
+	assert_bool((review.teams[1]["previous_delta"] as Dictionary).is_empty()).is_true()
+	RecordStore.clear_records()
+
+
+func test_season_review_uses_postseason_rank_and_only_adjacent_previous_season() -> void:
+	RecordStore.clear_records()
+	var season: PSSeason = PSSeason.new()
+	season.year = 2032
+	season.season_number = 7
+	var team_a: PSTeam = PSTeam.from_dict({"id": 1, "name": "A", "league": "league1"})
+	var team_b: PSTeam = PSTeam.from_dict({"id": 2, "name": "B", "league": "league1"})
+	var teams: Array = [team_b, team_a]
+	season.standings = {1: PSStats.from_dict({"wins": 80, "losses": 60, "runs_scored": 500, "runs_allowed": 450}),
+		2: PSStats.from_dict({"wins": 40, "losses": 30})}
+	var previous: PSSeasonReview = PSSeasonReview.from_dict({"year": 2031, "season_number": 6,
+		"teams": [{"team_id": 1, "league": "league1", "rank": 2, "win_rate": 0.5, "war": 3.0,
+			"standings": {"wins": 70, "losses": 70, "draws": 3, "runs_scored": 460, "runs_allowed": 470}}]})
+	var review: PSSeasonReview = PSSeasonReviewService.build(season, teams, previous)
+	var ranked: Array = PostseasonService.league_standings(season, teams)["league1"] as Array
+	for row: Dictionary in review.teams:
+		assert_int(int(row["rank"])).is_equal(1 if (ranked[0] as PSTeam).id == int(row["team_id"]) else 2)
+	var row_a: Dictionary = review.teams[1] as Dictionary
+	assert_int(int(row_a["previous_delta"]["wins"])).is_equal(10)
+	assert_int(int(row_a["previous_delta"]["rank"])).is_equal(-1)
+	assert_int(int(row_a["previous_delta"]["run_difference"])).is_equal(60)
+	assert_float(float(row_a["previous_delta"]["war"])).is_equal(-3.0)
+	assert_int(int(row_a["run_difference"])).is_equal(50)
+	var detached: Dictionary = previous.to_dict()
+	detached["season_number"] = 5
+	var nonadjacent: PSSeasonReview = PSSeasonReviewService.build(season, teams, PSSeasonReview.from_dict(detached))
+	assert_bool((nonadjacent.teams[1]["previous_delta"] as Dictionary).is_empty()).is_true()
+	assert_int((teams[0] as PSTeam).id).is_equal(2)
+	RecordStore.clear_records()
+
+
+func test_review_contributors_are_stable_limited_and_preserve_negative_war() -> void:
+	var candidates: Array = []
+	for id in [5, 3, 2, 1, 4]:
+		candidates.append({"player_id": id, "role": "fielder", "war": -1.0,
+			"stats": {"batter_stats": {"plate_appearances": 20 if id == 5 else 10}}})
+	var candidates_snapshot: Array = candidates.duplicate(true)
+	var selected: Array = PSSeasonReviewService._select_contributors(candidates, false)
+	assert_int(selected.size()).is_equal(3)
+	assert_int(int(selected[0]["player_id"])).is_equal(5)
+	assert_int(int(selected[1]["player_id"])).is_equal(1)
+	assert_int(int(selected[2]["player_id"])).is_equal(2)
+	assert_float(float(selected[0]["war"])).is_equal(-1.0)
+	assert_bool(candidates == candidates_snapshot).is_true()
+	assert_int(PSSeasonReviewService._select_contributors(candidates, true).size()).is_equal(0)
+	var pitchers: Array = []
+	for role: String in ["starter", "reliever", "closer"]:
+		pitchers.append({"player_id": pitchers.size() + 1, "role": role, "position": 1, "war": 0.0,
+			"stats": {"pitcher_stats": {"outs_pitched": pitchers.size() * 3}}})
+	var selected_pitchers: Array = PSSeasonReviewService._select_contributors(pitchers, true)
+	assert_int(selected_pitchers.size()).is_equal(3)
+	assert_int(int(selected_pitchers[0]["player_id"])).is_equal(3)
+	assert_int(PSSeasonReviewService._select_contributors(pitchers, false).size()).is_equal(0)
+	var position_pitcher: Dictionary = pitchers[0].duplicate(true)
+	position_pitcher["role"] = "fielder"
+	assert_int(PSSeasonReviewService._select_contributors([position_pitcher], true).size()).is_equal(1)
+
+
+func test_review_metrics_comparison_uses_rates_and_missing_denominators() -> void:
+	RecordStore.clear_records()
+	var season: PSSeason = PSSeason.new()
+	season.year = 2032
+	season.season_number = 7
+	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "A", "league": "league2"})
+	season.standings = {1: PSStats.from_dict({"games": 100, "wins": 60, "losses": 40, "runs_scored": 400, "runs_allowed": 300})}
+	var previous: PSSeasonReview = PSSeasonReview.from_dict({"year": 2031, "season_number": 6,
+		"teams": [{"team_id": 1, "league": "league1", "rank": 2, "standings": {"games": 80, "wins": 40, "losses": 40, "runs_scored": 320, "runs_allowed": 320}}]})
+	var review: PSSeasonReview = PSSeasonReviewService.build(season, [team], previous)
+	var delta: Dictionary = review.teams[0]["previous_delta"] as Dictionary
+	assert_bool(delta.has("rank")).is_false()
+	assert_float(float(delta["win_rate"])).is_equal_approx(0.1, 0.000001)
+	assert_float(float(delta["runs_scored_per_game"])).is_equal(0.0)
+	assert_float(float(delta["runs_allowed_per_game"])).is_equal(-1.0)
+	assert_str(str(review.teams[0]["comparison_fact"]["key"])).is_equal("season_review.fact.comparison")
+	team.league = "league1"
+	var same_league: PSSeasonReview = PSSeasonReviewService.build(season, [team], previous)
+	var comparison: Dictionary = same_league.teams[0]["comparison_fact"] as Dictionary
+	assert_str(str(comparison["key"])).is_equal("season_review.fact.comparison_rank")
+	assert_str(str(comparison["params"]["rank"])).is_equal("-1")
+	assert_str(str(same_league.teams[0]["facts"][1]["key"])).is_equal("season_review.fact.comparison_rank")
+	var positive_rank: Dictionary = comparison.duplicate(true)
+	positive_rank["params"]["rank"] = "+1"
+	assert_str(PSSeasonReviewService._render(positive_rank)).contains("順位+1")
+	var empty: Dictionary = PSSeasonReviewService._metrics({}, 0.0)
+	assert_bool(empty["win_rate"] == null).is_true()
+	assert_bool(empty["runs_scored_per_game"] == null).is_true()
+	assert_bool(empty["runs_allowed_per_game"] == null).is_true()
+	assert_str(PSSeasonReviewService.team_view(review, 1)["postseason_text"]).is_equal(Loc.t("season_review.postseason.unavailable"))
+	RecordStore.clear_records()
+
+
+func test_review_view_renders_saved_facts_with_current_templates_only() -> void:
+	var row: Dictionary = {"team_id": 9, "team_name": "Frozen", "rank": 1,
+		"standings": {"wins": 60, "losses": 40, "draws": 0},
+		"metrics": {"runs_scored_per_game": 4.0, "runs_allowed_per_game": 3.0, "run_difference": 100},
+		"previous_delta": {"win_rate": 0.1, "runs_scored_per_game": 0.5, "runs_allowed_per_game": -0.2},
+		"contributors_pitcher": [{"player_id": 901, "name": "Saved", "role": "starter", "position": 1, "war": -0.5,
+			"stats": {"pitcher_stats": {"games": 2, "outs_pitched": 9}, "war": -0.5}}],
+		"contributors_fielder": [{"name": "Other", "war": 1.0}],
+		"awards": [{"name": "Saved", "label_key": "season_review.award.mvp", "player_id": 901}]}
+	row["facts"] = PSSeasonReviewService._sentence_facts(row)
+	assert_int((row["facts"] as Array).size()).is_equal(4)
+	assert_str(str(row["facts"][1]["key"])).is_equal("season_review.fact.comparison")
+	assert_str(str(row["facts"][2]["key"])).is_equal("season_review.fact.contributors")
+	assert_str(str(row["facts"][3]["key"])).is_equal("season_review.fact.awards")
+	row["contributors_fielder"] = []
+	row["facts"] = PSSeasonReviewService._sentence_facts(row)
+	var review: PSSeasonReview = PSSeasonReview.from_dict({"teams": [row]})
+	var frozen: Dictionary = review.to_dict()
+	var table: Dictionary = (Loc.get("_table") as Dictionary).duplicate(true)
+	var replacement: Dictionary = table.duplicate(true)
+	replacement["season_review.fact.contributor_pitcher"] = "Changed {name} / {war}"
+	Loc.set("_table", replacement)
+	var view: Dictionary = PSSeasonReviewService.team_view(review, 9)
+	Loc.set("_table", table)
+	assert_str(str(view["sentences"][2])).is_equal("Changed Saved / -0.5")
+	assert_str(str(view["sentences"][3])).contains("Saved")
+	assert_str(str(view["contributors_pitcher"][0]["entry"]["team_name"])).is_equal("Frozen")
+	assert_str(str(view["contributors_pitcher"][0]["presentation"])).is_equal("historical")
+	assert_int((view["contributors_pitcher"][0]["record"] as PSPlayerSeasonRecord).pitcher_stats.outs_pitched).is_equal(9)
+	assert_bool(review.to_dict() == frozen).is_true()
+	assert_bool(PSSeasonReviewService.team_view(review, 88).is_empty()).is_true()
+	var restored: PSSeasonReview = PSSeasonReview.from_dict(JSON.parse_string(JSON.stringify(review.to_dict())) as Dictionary)
+	var restored_view: Dictionary = PSSeasonReviewService.team_view(restored, 9)
+	var expected_record: String = Loc.t("season_review.fact.record", {"team": "Frozen", "wins": 60, "losses": 40, "draws": 0, "rank": 1})
+	assert_str(str(restored_view["sentences"][0])).is_equal(expected_record)
+	assert_str(str(restored_view["sentences"][3])).is_equal(Loc.t("season_review.fact.awards", {"names": "Saved", "count": 1}))
+	assert_bool(restored_view["sentences"] == PSSeasonReviewService.team_view(review, 9)["sentences"]).is_true()
+	restored_view["team"]["contributors_pitcher"][0]["name"] = "Reader changed"
+	restored_view["team"]["facts"][0]["params"]["wins"] = 999
+	assert_bool(review.to_dict() == frozen).is_true()
+	assert_str(str(PSSeasonReviewService.team_view(restored, 9)["sentences"][0])).is_equal(expected_record)
+
+
+func test_review_awards_and_postseason_are_detached_at_capture() -> void:
+	var archive: PSSeasonArchive = PSSeasonArchive.new()
+	archive.awards = PSAwards.from_dict({"mvp_league1_player_id": 901, "rookie_league1_player_id": 901,
+		"batting_titles": {"league1": {"home_runs": 901}}, "best_nine": {"league1": [{"pid": 901}]},
+		"golden_glove": {"league1": [{"pid": 901}]}})
+	archive.postseason = PSPostseasonResult.from_dict({"champion_team_id": 1,
+		"japan_series": {"top_id": 1, "challenger_id": 2, "winner_id": 1, "completed": true}})
+	var team: PSTeam = PSTeam.from_dict({"id": 1, "name": "Then", "league": "league1"})
+	var facts: Array = [{"player_id": 901, "name": "Original", "team_id": 1}]
+	var awards: Array = PSSeasonReviewService._awards(archive, team, facts)
+	var post: Dictionary = PSSeasonReviewService._postseason_fact(archive, 1)
+	archive.awards.mvp_league1_player_id = 0
+	archive.postseason.japan_series["winner_id"] = 2
+	facts[0]["name"] = "Changed"
+	team.name = "Now"
+	assert_int(awards.size()).is_equal(5)
+	assert_str(str(awards[0]["name"])).is_equal("Original")
+	assert_str(str(awards[0]["team_name"])).is_equal("Then")
+	assert_int(int(awards[0]["team_id"])).is_equal(1)
+	assert_str(str(post["key"])).is_equal("season_review.postseason.champion")
+	assert_int(int(post["stages"][0]["winner_id"])).is_equal(1)
+
+
+func test_draft_retrospective_uses_frozen_period_and_team_totals() -> void:
+	var draft_class: PSDraftClass = PSDraftClass.from_dict({"year": 2030, "season_number": 5,
+		"teams": [{"team_id": 1, "team_name": "Frozen"}], "picks": [
+			{"player_id": 3, "team_id": 1, "name": "Same", "round": 1, "development": true},
+			{"player_id": 2, "team_id": 1, "name": "Same", "round": 2, "development": false},
+			{"player_id": 1, "team_id": 1, "name": "Return", "round": 1, "development": false},
+			{"player_id": 4, "team_id": 2, "name": "Other", "round": 1, "development": false}]})
+	# 往復移籍の指名球団分は、全所属合計と異なる凍結値を持つ。
+	var review: PSSeasonReview = PSSeasonReview.from_dict({"year": 2031, "season_number": 6,
+		"player_facts": [{"player_id": 1, "name": "Renamed", "total": {
+			"batter_stats": {"games": 6, "at_bats": 24, "hits": 10},
+			"pitcher_stats": {"games": 2, "outs_pitched": 9}, "war": -0.75},
+			"teams": {"1": {"batter_stats": {"games": 3, "at_bats": 12, "hits": 5}, "war": -0.25},
+				"2": {"batter_stats": {"games": 3, "at_bats": 12, "hits": 5}, "war": 8.0}}},
+			{"player_id": 2, "total": {"batter_stats": {"games": 1, "at_bats": 0}, "war": 1.5}, "teams": {}},
+			{"player_id": 4, "total": {"batter_stats": {"games": 100}, "war": 999.0}}]})
+	var old: PSSeasonReview = PSSeasonReview.from_dict({"year": 2030, "season_number": 5,
+		"player_facts": [{"player_id": 1, "total": {"war": 100.0}}]})
+	var future: PSSeasonReview = PSSeasonReview.from_dict({"year": 2033, "season_number": 8,
+		"player_facts": [{"player_id": 1, "total": {"war": 100.0}}]})
+	var next: PSSeasonReview = PSSeasonReview.from_dict({"year": 2032, "season_number": 7,
+		"player_facts": [{"player_id": 1, "total": {"pitcher_stats": {"games": 1, "outs_pitched": 6}, "war": 2.0},
+			"teams": {"1": {"pitcher_stats": {"games": 1, "outs_pitched": 6}, "war": 0.5}}}]})
+	var future_year: PSSeasonReview = PSSeasonReview.from_dict({"year": 2034, "season_number": 7,
+		"player_facts": [{"player_id": 1, "total": {"war": 100.0}}]})
+	var before_year: PSSeasonReview = PSSeasonReview.from_dict({"year": 2030, "season_number": 6,
+		"player_facts": [{"player_id": 1, "total": {"war": 100.0}}]})
+	var future_number: PSSeasonReview = PSSeasonReview.from_dict({"year": 2032, "season_number": 9,
+		"player_facts": [{"player_id": 1, "total": {"war": 100.0}}]})
+	var reviews: Array = [future, review, old, next, review, future_year, before_year, future_number]
+	var draft_snapshot: Dictionary = draft_class.to_dict()
+	var review_snapshot: Dictionary = review.to_dict()
+	var result: Dictionary = PSDraftRetrospectiveService.build(draft_class, reviews, 2032, 7, 1)
+	assert_int(int(result["completed_seasons"])).is_equal(2)
+	assert_bool(bool(result["has_completed_season"])).is_true()
+	assert_int((result["missing_seasons"] as Array).size()).is_equal(0)
+	assert_str(str(result["team_name"])).is_equal("Frozen")
+	assert_int(int(result["summary"]["main_count"])).is_equal(2)
+	assert_int(int(result["summary"]["development_count"])).is_equal(1)
+	assert_int(int(result["summary"]["appeared_count"])).is_equal(2)
+	assert_float(float(result["summary"]["war"])).is_equal(2.75)
+	assert_float(float(result["summary"]["team_war"])).is_equal(0.25)
+	var players: Array = result["players"] as Array
+	assert_int(players.size()).is_equal(3)
+	assert_int(int(players[0]["identity"]["player_id"])).is_equal(1)
+	assert_int(int(players[1]["identity"]["player_id"])).is_equal(2)
+	assert_int(int(players[2]["identity"]["player_id"])).is_equal(3)
+	assert_int(int(players[0]["all"]["batter_stats"]["hits"])).is_equal(10)
+	assert_int(int(players[0]["team"]["batter_stats"]["hits"])).is_equal(5)
+	assert_int(int(players[0]["all"]["pitcher_stats"]["outs_pitched"])).is_equal(15)
+	assert_int(int(players[0]["years"][0]["season_number"])).is_equal(6)
+	assert_int(int(players[0]["years"][1]["season_number"])).is_equal(7)
+	assert_int(int(players[1]["all"]["batter_stats"]["at_bats"])).is_equal(0)
+	assert_int(int(players[1]["team"]["batter_stats"]["games"])).is_equal(0)
+	assert_int(int(players[2]["all"]["batter_stats"]["games"])).is_equal(0)
+	assert_int((players[2]["years"] as Array).size()).is_equal(2)
+	var restored_reviews: Array = []
+	for saved_review: PSSeasonReview in reviews:
+		restored_reviews.append(PSSeasonReview.from_dict(JSON.parse_string(JSON.stringify(saved_review.to_dict())) as Dictionary))
+	var restored_class: PSDraftClass = PSDraftClass.from_dict(JSON.parse_string(JSON.stringify(draft_class.to_dict())) as Dictionary)
+	var restored: Dictionary = PSDraftRetrospectiveService.build(restored_class, restored_reviews, 2032, 7, 1)
+	assert_bool(JSON.parse_string(JSON.stringify(restored)) == JSON.parse_string(JSON.stringify(result))).is_true()
+	players[0]["identity"]["name"] = "Reader changed"
+	players[0]["years"][0]["all"]["war"] = 500.0
+	assert_bool(draft_class.to_dict() == draft_snapshot).is_true()
+	assert_bool(review.to_dict() == review_snapshot).is_true()
+	assert_float(float(players[0]["all"]["war"])).is_equal(1.25)
+
+
+func test_draft_retrospective_distinguishes_missing_seasons_from_no_appearance() -> void:
+	var draft_class: PSDraftClass = PSDraftClass.from_dict({"year": 2030, "season_number": 5,
+		"picks": [{"player_id": 12, "team_id": 1, "round": 1, "development": false}]})
+	var complete: PSSeasonReview = PSSeasonReview.from_dict({"year": 2031, "season_number": 6,
+		"player_facts": [{"player_id": 12, "total": {"farm_batter_stats": {"games": 30, "hits": 40}}}]})
+	var immediately: Dictionary = PSDraftRetrospectiveService.build(draft_class, [complete], 2030, 5, 1)
+	assert_bool(bool(immediately["has_completed_season"])).is_false()
+	assert_int((immediately["players"] as Array).size()).is_equal(1)
+	assert_int((immediately["players"][0]["years"] as Array).size()).is_equal(0)
+	var result: Dictionary = PSDraftRetrospectiveService.build(draft_class, [complete], 2033, 8, 1)
+	assert_int(int(result["completed_seasons"])).is_equal(1)
+	assert_int((result["missing_seasons"] as Array).size()).is_equal(2)
+	assert_int(int(result["missing_seasons"][0]["year"])).is_equal(2032)
+	assert_int(int(result["missing_seasons"][0]["season_number"])).is_equal(7)
+	assert_int(int(result["players"][0]["years"][0]["all"]["batter_stats"]["games"])).is_equal(0)
+	assert_int(int(result["summary"]["appeared_count"])).is_equal(0)
+	var no_picks: Dictionary = PSDraftRetrospectiveService.build(draft_class, [complete], 2031, 6, 2)
+	assert_int((no_picks["players"] as Array).size()).is_equal(0)
+	assert_bool(bool(no_picks["has_completed_season"])).is_true()
+
+
+func test_draft_retrospective_pick_ties_use_order_then_identity() -> void:
+	var picks: Array = []
+	for id: int in [3, 2, 1]:
+		picks.append({"player_id": id, "team_id": 1, "round": 1, "pick_order": 2 if id == 3 else 1})
+	var draft_class: PSDraftClass = PSDraftClass.from_dict({"picks": picks})
+	var result: Dictionary = PSDraftRetrospectiveService.build(draft_class, [], 0, 1, 1)
+	for index in 3:
+		assert_int(int(result["players"][index]["identity"]["player_id"])).is_equal(index + 1)
+
+
 func _player(data: Dictionary) -> PSPlayer:
 	var payload: Dictionary = {
 		"age": 24,

@@ -72,6 +72,8 @@ const NAV_GROUPS: Array = [
 		{"id": "ability_stats", "label": "screen.ability_stats", "icon": "record"},
 		{"id": "farm", "label": "screen.farm", "icon": "farm"},
 		{"id": "history", "label": "screen.history", "icon": "history"},
+		{"id": "season_review", "label": "season_review.nav", "icon": "season_review"},
+		{"id": "draft_retrospective", "label": "draft_review.nav", "icon": "draft_history"},
 	]},
 	{"title": "nav.group.team_players", "items": [
 		{"id": "team_detail", "label": "screen.team_detail", "icon": "team"},
@@ -538,6 +540,26 @@ func _icon(icon_name: String, box: Rect2, color: Color) -> void:
 			draw_arc(pt.call(0.5, 0.5), 0.34 * r.size.x, 0, TAU, 24, color, w, true)
 			seg.call(0.5, 0.5, 0.5, 0.28)
 			seg.call(0.5, 0.5, 0.66, 0.58)
+		"season_review":
+			seg.call(0.18, 0.12, 0.82, 0.12)
+			seg.call(0.18, 0.12, 0.18, 0.88)
+			seg.call(0.82, 0.12, 0.82, 0.88)
+			seg.call(0.18, 0.88, 0.82, 0.88)
+			seg.call(0.32, 0.3, 0.68, 0.3)
+			seg.call(0.32, 0.72, 0.32, 0.58)
+			seg.call(0.5, 0.72, 0.5, 0.45)
+			seg.call(0.68, 0.72, 0.68, 0.52)
+		"draft_history":
+			seg.call(0.2, 0.2, 0.36, 0.2)
+			seg.call(0.64, 0.2, 0.8, 0.2)
+			seg.call(0.2, 0.2, 0.2, 0.9)
+			seg.call(0.8, 0.2, 0.8, 0.9)
+			seg.call(0.2, 0.9, 0.8, 0.9)
+			draw_rect(Rect2(pt.call(0.36, 0.1), Vector2(0.28 * r.size.x, 0.2 * r.size.y)), color, false, w)
+			for v in [0.46, 0.65]:
+				seg.call(0.32, v, 0.4, v + 0.05)
+				seg.call(0.4, v + 0.05, 0.48, v - 0.06)
+				seg.call(0.58, v, 0.7, v)
 		"team":
 			var sh: PackedVector2Array = PackedVector2Array([pt.call(0.5, 0.12), pt.call(0.85, 0.26), pt.call(0.8, 0.6), pt.call(0.5, 0.9), pt.call(0.2, 0.6), pt.call(0.15, 0.26)])
 			for i in range(sh.size()):

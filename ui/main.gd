@@ -28,6 +28,8 @@ const SCREEN_SCRIPT_PATHS: Dictionary = {
 	"postseason": "res://ui/screens/postseason_screen.gd",
 	"awards": "res://ui/screens/awards_screen.gd",
 	"history": "res://ui/screens/history_screen.gd",
+	"season_review": "res://ui/screens/season_review_screen.gd",
+	"draft_retrospective": "res://ui/screens/draft_retrospective_screen.gd",
 }
 
 # label は表示名のキー (Loc)。
@@ -39,6 +41,8 @@ const SIDEBAR_ITEMS: Array = [
 	{"name": "ability_stats", "label": "screen.ability_stats"},
 	{"name": "farm", "label": "screen.farm"},
 	{"name": "history", "label": "screen.history"},
+	{"name": "season_review", "label": "season_review.nav"},
+	{"name": "draft_retrospective", "label": "draft_review.nav"},
 	{"name": "team_detail", "label": "screen.team_detail"},
 	{"name": "player_detail", "label": "screen.player_detail"},
 	{"name": "lineup_editor", "label": "screen.lineup_editor"},
@@ -77,6 +81,8 @@ const FULL_BLEED_SCREENS: Dictionary = {
 	"ability_stats": true,
 	"farm": true,
 	"history": true,
+	"season_review": true,
+	"draft_retrospective": true,
 	"team_detail": true,
 	"player_detail": true,
 	"postseason": true,

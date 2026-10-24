@@ -7,6 +7,485 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
 
 
+class DraftMetadataProbe extends "res://ui/components/player_record_table.gd":
+	var displayed: Array = []
+	var columns: Array = []
+
+	func _draw_data_table(_rect: Rect2, table_columns: Array, rows: Array, _options: Dictionary = {}) -> void:
+		displayed = rows.duplicate(true)
+		columns = table_columns.duplicate(true)
+
+
+func test_draft_retrospective_metadata_tabs_and_read_only_state() -> void:
+	var old_view: Dictionary = AppState.draft_review_view_state.duplicate(true)
+	var backup: Dictionary = _review_test_backup()
+	var fixture: Node = load("res://tools/run_ui_screenshots.gd").new()
+	fixture._draft_review_fixture("normal")
+	fixture.free()
+	AppState.current_screen = "draft_retrospective"
+	AppState.draft_review_view_state = {}
+	var records_snapshot: Dictionary = RecordStore.to_dict().duplicate(true)
+	var players_before: Array = []
+	for player: PSPlayer in GameDb.players:
+		players_before.append(player.to_dict().duplicate(true))
+	var rng_before: int = Rng.generator.state
+	var team_before: int = AppState.selected_team_id
+	var screen: Control = load("res://ui/screens/draft_retrospective_screen.gd").new()
+	add_child(screen)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_str(screen._kind).is_equal("main")
+	assert_str(Loc.t("draft_review.nav")).is_equal("ドラフト履歴")
+	assert_str(Loc.t("draft_review.main")).is_equal("支配下")
+	var nav_icons: Dictionary = {}
+	for group: Dictionary in screen.NAV_GROUPS:
+		for item: Dictionary in group["items"]:
+			nav_icons[str(item["id"])] = str(item["icon"])
+	var used_icons: Array[String] = []
+	for icon_name: String in nav_icons.values():
+		assert_array(used_icons).not_contains(icon_name)
+		used_icons.append(icon_name)
+	assert_str(str(nav_icons["season_review"])).is_not_equal(str(nav_icons["draft_retrospective"]))
+	assert_str(str(nav_icons["season_review"])).is_not_equal(str(nav_icons["history"]))
+	assert_str(str(nav_icons["draft_retrospective"])).is_not_equal(str(nav_icons["history"]))
+	assert_int((screen._rows as Array).size()).is_equal(3)
+	var positions: Array = []
+	for row: Dictionary in screen._rows:
+		var record: PSPlayerSeasonRecord = row["record"]
+		assert_bool(record.development_player).is_false()
+		positions.append(record.position)
+	assert_bool(positions.has(1)).is_true()
+	assert_bool(positions.has(6)).is_true()
+	screen._select_player((GameDb.players[0] as PSPlayer).id)
+	assert_str(screen._details_text.text).not_contains("high_school")
+	assert_str(screen._details_text.text).not_contains("fielder")
+	assert_str(screen._details_text.text).not_contains("draft_review.")
+	assert_int((screen._rows[0]["record"] as PSPlayerSeasonRecord).batter_stats.hits).is_equal(200)
+	assert_float(float(screen._rows[0]["metrics"]["war"])).is_equal(2.5)
+	var probe: DraftMetadataProbe = DraftMetadataProbe.new()
+	probe._draw_player_record_table(Rect2(), "", screen._rows, false, "draft_player", "main", "", 0, "", true, false, "draft_history_mixed", false, false, true)
+	assert_int(probe.displayed.size()).is_equal(3)
+	assert_str(str(probe.displayed[0]["source"])).is_equal("高校")
+	assert_str(str(probe.displayed[0]["war"])).is_equal("2.5")
+	assert_str(str(probe.displayed[0]["games"])).is_equal("200")
+	assert_str(str(probe.displayed[0]["pa"])).is_equal("800")
+	assert_str(str(probe.displayed[0]["avg"])).is_equal(".286")
+	assert_str(str(probe.displayed[0]["ip"])).is_equal("-")
+	assert_str(str(probe.displayed[1]["appearances"])).is_equal("40")
+	assert_str(str(probe.displayed[1]["ip"])).is_equal("200.0")
+	assert_str(str(probe.displayed[1]["era"])).is_equal("2.88")
+	assert_str(str(probe.displayed[1]["avg"])).is_equal("-")
+	var keys: Array = []
+	for column: Dictionary in probe.columns:
+		keys.append(column["key"])
+	for key: String in ["war", "avg", "ops", "ip", "era"]:
+		assert_bool(keys.has(key)).is_true()
+	probe.free()
+	screen._set_kind("development")
+	assert_int((screen._rows as Array).size()).is_equal(2)
+	for row: Dictionary in screen._rows:
+		assert_bool((row["record"] as PSPlayerSeasonRecord).development_player).is_true()
+	screen._on_team_selected(1)
+	assert_int(AppState.selected_team_id).is_equal(team_before)
+	assert_int(Rng.generator.state).is_equal(rng_before)
+	assert_dict(RecordStore.to_dict()).is_equal(records_snapshot)
+	var players_after: Array = []
+	for player: PSPlayer in GameDb.players:
+		players_after.append(player.to_dict().duplicate(true))
+	assert_array(players_after).is_equal(players_before)
+	screen.queue_free()
+	await get_tree().process_frame
+	_review_test_restore(backup)
+	AppState.draft_review_view_state = old_view
+
+
+func test_draft_retrospective_player_back_and_save_switch() -> void:
+	var old_view: Dictionary = AppState.draft_review_view_state.duplicate(true)
+	var backup: Dictionary = _review_test_backup()
+	var fixture: Node = load("res://tools/run_ui_screenshots.gd").new()
+	fixture._draft_review_fixture("normal")
+	fixture.free()
+	AppState.show_draft_retrospective(2040, 15, AppState.selected_team_id)
+	var screen: Control = load("res://ui/screens/draft_retrospective_screen.gd").new()
+	add_child(screen)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	screen._set_kind("development")
+	screen._select_player((GameDb.players[1] as PSPlayer).id)
+	screen._set_scope("team")
+	screen._remember_view()
+	var remembered: Dictionary = AppState.draft_review_view_state.duplicate(true)
+	screen._open_player()
+	assert_str(AppState.current_screen).is_equal("player_detail")
+	screen.queue_free()
+	await get_tree().process_frame
+	assert_bool(AppState.go_back()).is_true()
+	assert_dict(AppState.draft_review_view_state).is_equal(remembered)
+	var returned: Control = load("res://ui/screens/draft_retrospective_screen.gd").new()
+	add_child(returned)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_str(returned._kind).is_equal("development")
+	assert_str(returned._scope).is_equal("team")
+	assert_int(returned._selected_player_id).is_equal((GameDb.players[1] as PSPlayer).id)
+	returned.queue_free()
+	await get_tree().process_frame
+	SaveContext._active_save_id = "save_other_draft_test"
+	SaveContext._active_loaded = true
+	var switched: Control = load("res://ui/screens/draft_retrospective_screen.gd").new()
+	add_child(switched)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_str(str(AppState.draft_review_view_state["save_id"])).is_equal("save_other_draft_test")
+	assert_str(switched._kind).is_equal("main")
+	assert_str(switched._scope).is_equal("all")
+	assert_int(switched._selected_player_id).is_equal(0)
+	switched.queue_free()
+	await get_tree().process_frame
+	_review_test_restore(backup)
+	AppState.draft_review_view_state = old_view
+
+
+func test_draft_retrospective_empty_and_current_status() -> void:
+	var old_view: Dictionary = AppState.draft_review_view_state.duplicate(true)
+	var backup: Dictionary = _review_test_backup()
+	var player: PSPlayer = GameDb.players[0] as PSPlayer
+	var old_source: Dictionary = player.source_data.duplicate(true)
+	var old_team: int = player.team_id
+	var fixture: Node = load("res://tools/run_ui_screenshots.gd").new()
+	for scenario: String in ["normal", "transferred", "just_drafted", "unplayed", "overseas", "retired", "zero_picks", "missing_roster"]:
+		RecordStore.clear_records()
+		player.team_id = old_team
+		player.source_data = old_source.duplicate(true)
+		fixture._draft_review_fixture(scenario)
+		AppState.current_screen = "draft_retrospective"
+		AppState.draft_review_view_state = {}
+		var screen: Control = load("res://ui/screens/draft_retrospective_screen.gd").new()
+		add_child(screen)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if scenario == "transferred":
+			assert_int((screen._rows[0]["record"] as PSPlayerSeasonRecord).batter_stats.hits).is_equal(200)
+			assert_float(float(screen._rows[0]["metrics"]["war"])).is_equal(2.5)
+			screen._set_scope("team")
+			assert_int((screen._rows[0]["record"] as PSPlayerSeasonRecord).batter_stats.hits).is_equal(20)
+			assert_float(float(screen._rows[0]["metrics"]["war"])).is_equal(0.5)
+		elif scenario == "just_drafted" or scenario == "unplayed":
+			assert_int((screen._rows as Array).size()).is_equal(3)
+			assert_int((screen._rows[0]["record"] as PSPlayerSeasonRecord).batter_stats.games).is_equal(0)
+			assert_float(float(screen._rows[0]["metrics"]["war"])).is_equal(0.0)
+			assert_bool(bool(screen._view["has_completed_season"])).is_equal(scenario == "unplayed")
+		elif scenario == "overseas" or scenario == "retired":
+			assert_bool(player.is_retired()).is_true()
+			assert_str(screen._current_status(player.id)).is_equal(Loc.t("draft_review." + scenario))
+		elif scenario == "zero_picks":
+			assert_object(screen._draft_class).is_not_null()
+			assert_bool((screen._rows as Array).is_empty()).is_true()
+		elif scenario == "missing_roster":
+			assert_object(screen._draft_class).is_null()
+			assert_dict(screen._view).is_empty()
+			assert_bool(screen._year_picker.disabled).is_true()
+		else:
+			assert_int((screen._view["players"] as Array).size()).is_equal(5)
+			assert_int(RecordStore.get_season_review_index().size()).is_equal(2)
+		screen.queue_free()
+		await get_tree().process_frame
+	fixture.free()
+	player.team_id = old_team
+	player.source_data = old_source
+	_review_test_restore(backup)
+	AppState.draft_review_view_state = old_view
+
+
+func _review_test_backup() -> Dictionary:
+	var backup: Dictionary = {"records": RecordStore.to_dict().duplicate(true), "suspended": RecordStore.is_persistence_suspended(),
+		"team": AppState.selected_team_id, "season": AppState.current_season, "screen": AppState.current_screen,
+		"view": AppState.season_review_view_state.duplicate(true), "target": AppState.history_review_target.duplicate(true),
+		"back": AppState._screen_history.duplicate(true), "forward": AppState._forward_history.duplicate(true),
+		"player": AppState.current_player_id, "save_id": SaveContext._active_save_id, "save_loaded": SaveContext._active_loaded}
+	RecordStore.suspend_persistence()
+	RecordStore.clear_records()
+	AppState.selected_team_id = (GameDb.teams[0] as PSTeam).id
+	AppState.current_season = PSSeason.new()
+	AppState.current_season.year = 2041
+	AppState.current_season.season_number = 16
+	AppState.current_screen = "season_review"
+	AppState.season_review_view_state = {}
+	AppState._screen_history.clear()
+	AppState._forward_history.clear()
+	return backup
+
+
+func _review_test_restore(backup: Dictionary) -> void:
+	RecordStore.load_from_dict(backup["records"] as Dictionary)
+	if not bool(backup["suspended"]):
+		RecordStore.resume_persistence()
+	AppState.selected_team_id = int(backup["team"])
+	AppState.current_season = backup["season"] as PSSeason
+	AppState.current_screen = str(backup["screen"])
+	AppState.current_player_id = int(backup["player"])
+	AppState.season_review_view_state = backup["view"] as Dictionary
+	AppState.history_review_target = backup["target"] as Dictionary
+	AppState._screen_history = backup["back"] as Array
+	AppState._forward_history = backup["forward"] as Array
+	SaveContext._active_save_id = str(backup["save_id"])
+	SaveContext._active_loaded = bool(backup["save_loaded"])
+
+
+func _review_test_fixture(year: int, number: int) -> PSSeasonReview:
+	var season: PSSeason = PSSeason.new()
+	season.year = year
+	season.season_number = number
+	var archive: PSSeasonArchive = PSSeasonArchive.new()
+	archive.year = year
+	archive.season_number = number
+	archive.awards = PSAwards.new()
+	var review: PSSeasonReview = PSSeasonReviewService.build(season, GameDb.teams, null, "regular_season", archive)
+	var payload: Dictionary = review.to_dict()
+	var team: Dictionary = payload["teams"][0] as Dictionary
+	team["contributors_fielder"] = [{"player_id": -99001, "name": "Frozen contributor", "team_id": team["team_id"],
+		"role": "fielder", "position": 6, "age": 22, "war": 2.75,
+		"stats": {"war": 2.75, "batter_stats": {"games": 12, "plate_appearances": 40, "at_bats": 32, "hits": 8}}}]
+	team["contributors_pitcher"] = [{"player_id": -99002, "name": "Frozen pitcher", "team_id": team["team_id"],
+		"role": "starter", "position": 1, "age": 25, "war": 1.25,
+		"stats": {"war": 1.25, "era": 2.0, "pitcher_stats": {"games": 3, "outs_pitched": 27, "earned_runs": 2}}}]
+	RecordStore.add_season_archive(archive, false)
+	review = PSSeasonReview.from_dict(JSON.parse_string(JSON.stringify(payload)) as Dictionary)
+	RecordStore.add_season_review(review)
+	return review
+
+
+func test_season_review_selection_historical_metrics_and_empty_state() -> void:
+	var backup: Dictionary = _review_test_backup()
+	_review_test_fixture(2040, 15)
+	_review_test_fixture(2041, 16)
+	var records_before: Dictionary = RecordStore.to_dict().duplicate(true)
+	var players_before: Array = []
+	for player: PSPlayer in GameDb.players:
+		players_before.append(player.to_dict().duplicate(true))
+	var rng_before: int = Rng.generator.state
+	var seed_before: int = Rng.current_seed
+	var team_before: int = AppState.selected_team_id
+	var screen: Control = load("res://ui/screens/season_review_screen.gd").new()
+	screen.size = Vector2(1920, 1080)
+	add_child(screen)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_int(screen._review.year).is_equal(2041)
+	assert_int(screen._selected_team).is_equal(AppState.selected_team_id)
+	screen._on_year_selected(0)
+	assert_int(screen._review.year).is_equal(2040)
+	var row: Dictionary = screen._view["contributors_fielder"][0] as Dictionary
+	assert_float(float(row["metrics"]["war"])).is_equal(2.75)
+	assert_int((row["record"] as PSPlayerSeasonRecord).batter_stats.hits).is_equal(8)
+	screen._set_player_tab("pitcher")
+	assert_str(screen._tab).is_equal("pitcher")
+	assert_float(float(screen._view["contributors_pitcher"][0]["metrics"]["war"])).is_equal(1.25)
+	screen._on_team_selected(1)
+	assert_int(screen._selected_team).is_not_equal(AppState.selected_team_id)
+	assert_int(AppState.selected_team_id).is_equal(team_before)
+	assert_int(Rng.generator.state).is_equal(rng_before)
+	assert_int(Rng.current_seed).is_equal(seed_before)
+	assert_dict(RecordStore.to_dict()).is_equal(records_before)
+	var players_after: Array = []
+	for player: PSPlayer in GameDb.players:
+		players_after.append(player.to_dict().duplicate(true))
+	assert_array(players_after).is_equal(players_before)
+	RecordStore.clear_records()
+	screen._refresh()
+	assert_bool(screen._year_picker.disabled).is_true()
+	assert_bool(screen._team_picker.disabled).is_true()
+	assert_dict(screen._view).is_empty()
+	screen.queue_free()
+	await get_tree().process_frame
+	_review_test_restore(backup)
+
+
+func test_season_review_back_preserves_selection_and_other_save_resets_it() -> void:
+	var backup: Dictionary = _review_test_backup()
+	var old_record_text: String = str(Loc._table["season_review.fact.record"])
+	Loc._table["season_review.fact.record"] = "{team} ".repeat(120)
+	_review_test_fixture(2040, 15)
+	_review_test_fixture(2041, 16)
+	AppState.show_season_review(2040, 15, AppState.selected_team_id)
+	AppState.season_review_view_state.merge({"tab": "pitcher", "scroll": {"review": 2}}, true)
+	var original: Control = load("res://ui/screens/season_review_screen.gd").new()
+	original.size = Vector2(1280, 720)
+	add_child(original)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	original._narrative_scroll.scroll_vertical = 30
+	original._remember_view()
+	assert_int(int(AppState.season_review_view_state["scroll_narrative"])).is_equal(30)
+	var selected: Dictionary = AppState.season_review_view_state.duplicate(true)
+	original._open_player((GameDb.players[0] as PSPlayer).id)
+	original.queue_free()
+	await get_tree().process_frame
+	assert_bool(AppState.go_back()).is_true()
+	assert_str(AppState.current_screen).is_equal("season_review")
+	assert_dict(AppState.season_review_view_state).is_equal(selected)
+	var returned: Control = load("res://ui/screens/season_review_screen.gd").new()
+	returned.size = Vector2(1280, 720)
+	add_child(returned)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_int(returned._review.year).is_equal(2040)
+	assert_str(returned._tab).is_equal("pitcher")
+	assert_int(returned._narrative_scroll.scroll_vertical).is_equal(30)
+	returned.queue_free()
+	await get_tree().process_frame
+	SaveContext._active_save_id = "save_other_review_test"
+	SaveContext._active_loaded = true
+	var screen: Control = load("res://ui/screens/season_review_screen.gd").new()
+	add_child(screen)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_int(screen._review.year).is_equal(2041)
+	assert_str(screen._tab).is_equal("fielder")
+	assert_str(str(AppState.season_review_view_state["save_id"])).is_equal("save_other_review_test")
+	var reset_scroll: Dictionary = AppState.season_review_view_state["scroll"] as Dictionary
+	assert_bool(reset_scroll.has("review")).is_false()
+	assert_int(int(reset_scroll.get("fielder", 0))).is_equal(0)
+	screen.queue_free()
+	await get_tree().process_frame
+	Loc._table["season_review.fact.record"] = old_record_text
+	_review_test_restore(backup)
+
+
+func test_season_review_routes_register_and_history_targets_selected_year() -> void:
+	var backup: Dictionary = _review_test_backup()
+	_review_test_fixture(2040, 15)
+	_review_test_fixture(2041, 16)
+	var main_script: GDScript = load("res://ui/main.gd") as GDScript
+	assert_str(str(main_script.SCREEN_SCRIPT_PATHS["season_review"])).is_equal("res://ui/screens/season_review_screen.gd")
+	assert_bool(main_script.FULL_BLEED_SCREENS.has("season_review")).is_true()
+	var dashboard: GDScript = load("res://ui/components/dashboard_screen.gd") as GDScript
+	var has_nav: bool = false
+	for group: Dictionary in dashboard.NAV_GROUPS:
+		for item: Dictionary in group["items"]:
+			if str(item["id"]) == "season_review":
+				has_nav = str(item["label"]) == "season_review.nav"
+	assert_bool(has_nav).is_true()
+	var awards: Control = load("res://ui/screens/awards_screen.gd").new()
+	add_child(awards)
+	var review_button: Button = null
+	for spec: Dictionary in awards._buttons:
+		if str(spec["id"]) == "season_review":
+			review_button = spec["button"] as Button
+	assert_object(review_button).is_not_null()
+	assert_bool(review_button.disabled).is_false()
+	review_button.pressed.emit()
+	assert_int(int(AppState.season_review_view_state["year"])).is_equal(2041)
+	awards.queue_free()
+	AppState.show_season_history(2040, 15)
+	var history: Control = load("res://ui/screens/history_screen.gd").new()
+	add_child(history)
+	assert_str(history._view).is_equal("year")
+	assert_int(history._sel).is_equal(1)
+	assert_bool(history._selected_year_has_review()).is_true()
+	history._on_season_review_pressed()
+	assert_int(int(AppState.season_review_view_state["year"])).is_equal(2040)
+	assert_int(AppState.selected_team_id).is_equal((GameDb.teams[0] as PSTeam).id)
+	history.queue_free()
+	await get_tree().process_frame
+	_review_test_restore(backup)
+
+
+class PlayerTableDrawProbe extends "res://ui/components/player_record_table.gd":
+	var texts: Array[String] = []
+	var live_calls: int = 0
+	var selection_calls: int = 0
+
+	func _text(text: String, _base_pos: Vector2, _base_size: int, _color: Color, _base_width: float = -1.0, _align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT, _bold: bool = false) -> void:
+		texts.append(text)
+
+	func _round(_base_rect: Rect2, _bg: Color, _border: Color, _radius: int, _border_width: int = 1) -> void:
+		pass
+
+	func _line(_from: Vector2, _to: Vector2, _color: Color, _width: float) -> void:
+		pass
+
+	func _chip(_base_rect: Rect2, text: String, _color: Color, _filled: bool = true) -> void:
+		texts.append(text)
+
+	func _player_table_live_values(row: Dictionary, career_stats: bool) -> Dictionary:
+		live_calls += 1
+		return super._player_table_live_values(row, career_stats)
+
+	func _player_table_selection_state(_player_id: int, _sel_kind: String) -> String:
+		selection_calls += 1
+		return "demote"
+
+
+func test_shared_player_table_history_draw_never_requests_current_values() -> void:
+	var probe: PlayerTableDrawProbe = PlayerTableDrawProbe.new()
+	var row: Dictionary = PSPlayerRecordTableRow.from_history({"player_id": -94100,
+		"name": "Historical", "team_name": "Frozen Team", "position": 6, "role": "fielder",
+		"age": 18, "round": 2.0, "development": true, "source_type": "high_school"},
+		{"batter_stats": {"games": 8, "plate_appearances": 20, "at_bats": 16, "hits": 4}, "war": 2.4})
+	row["player"] = GameDb.players[0]
+	probe._draw_player_record_table(Rect2(232, 180, 1648, 700), "History", [row], false,
+		"release", "history", "", -94100, "Empty", false, true, "draft_history", true, true)
+	assert_int(probe.live_calls).is_equal(0)
+	assert_int(probe.selection_calls).is_equal(0)
+	for expected: String in ["Historical", "Frozen Team", "2", "2.4", ".250", "8", Loc.t("registered_roster.development")]:
+		assert_array(probe.texts).contains(expected)
+	for current_label: String in [Loc.t("col.salary"), Loc.t("col.evaluation"), Loc.t("offseason.col.injury_short"), Loc.t("rating.power"), Loc.t("rating.velocity")]:
+		assert_array(probe.texts).not_contains(current_label)
+	assert_int(probe._row_hits.size()).is_equal(1)
+	assert_int(int(probe._row_hits[0]["meta"])).is_equal(-94100)
+	var xs: Dictionary = probe._player_table_x(Rect2(232, 180, 1648, 700), "draft_history", true, true, true)
+	assert_bool(xs.has("salary_r")).is_false()
+	assert_float(float(xs["name_x"])).is_less(float(xs["age_r"]) - 46.0)
+	assert_float(float(xs["source_x"]) + 100.0).is_less(float(xs["g_r"]) - 44.0)
+	probe.free()
+
+
+func test_shared_player_table_preserves_unplayed_rows_tab_filter_and_scroll_hits() -> void:
+	var probe: PlayerTableDrawProbe = PlayerTableDrawProbe.new()
+	var rows: Array = []
+	for index in 8:
+		rows.append(PSPlayerRecordTableRow.from_history({"player_id": -94200 - index,
+			"name": "Unplayed %d" % index, "position": 6, "role": "fielder"}))
+	var pitcher: Dictionary = PSPlayerRecordTableRow.from_history({"player_id": -94300,
+		"name": "Pitcher", "position": 1, "role": "starter"},
+		{"pitcher_stats": {"games": 3, "outs_pitched": 27, "earned_runs": 2}, "war": 1.3, "fip": 2.75})
+	rows.append(pitcher)
+	var rect: Rect2 = Rect2(232, 180, 1648, 165)
+	probe._scroll["tab"] = 999
+	probe._draw_player_record_table(rect, "History", rows, false, "review", "tab", "", 0, "Empty", false, true)
+	assert_int(int(probe._scroll["tab"])).is_equal(6)
+	assert_int(probe._row_hits.size()).is_equal(2)
+	assert_int(int(probe._row_hits[0]["meta"])).is_equal(-94206)
+	assert_int(int(probe._scroll_zones[0]["max"])).is_equal(6)
+	assert_array(probe.texts).contains("0.0")
+	assert_array(probe.texts).not_contains(".000")
+	assert_array(probe.texts).not_contains("Pitcher")
+	probe._row_hits.clear()
+	probe._scroll_zones.clear()
+	probe.texts.clear()
+	probe._draw_player_record_table(rect, "History", rows, true, "review", "tab", "", 0, "Empty", false, true)
+	assert_int(int(probe._scroll["tab"])).is_equal(0)
+	assert_int(probe._row_hits.size()).is_equal(1)
+	assert_int(int(probe._row_hits[0]["meta"])).is_equal(-94300)
+	assert_array(probe.texts).contains("9.0")
+	assert_array(probe.texts).contains("2.75")
+	assert_array(probe.texts).contains("1.3")
+	assert_int(probe.live_calls).is_equal(0)
+	probe.texts.clear()
+	probe._draw_player_record_table(rect, "History", [], true, "", "empty", "", 0, "Empty", false, true, "", true, true, true)
+	assert_array(probe.texts).contains("Empty")
+	assert_array(probe.texts).not_contains(Loc.t("col.salary"))
+	probe.texts.clear()
+	probe._draw_player_record_table(rect, "History", rows.slice(0, 8), true, "", "missing_role", "", 0, "Empty", false, true, "", true, true)
+	assert_array(probe.texts).contains("Empty")
+	assert_array(probe.texts).not_contains(Loc.t("rating.velocity"))
+	assert_array(probe.texts).not_contains(Loc.t("col.salary"))
+	probe.free()
+
+
 func test_core_scripts_load() -> void:
 	assert_object(load("res://ui/main.gd")).is_not_null()
 	assert_object(load("res://ui/components/game_dialog_style.gd")).is_not_null()
@@ -2973,6 +3452,114 @@ func test_entry_screens_build_without_active_season() -> void:
 
 	AppState.current_screen = old_screen
 	AppState.last_status_message = old_status
+
+
+func test_historical_player_rows_keep_unregistered_identity_and_empty_stats() -> void:
+	var missing_id: int = -94001
+	assert_object(GameDb.get_player(missing_id)).is_null()
+	assert_object(RecordStore.get_player_record(missing_id, 2025, 1)).is_null()
+	var identity: Dictionary = {"player_id": missing_id, "name": "Same Name", "position": 6,
+		"role": "fielder", "team_id": 23, "age": 19, "year": 2025, "season_number": 1}
+	var row: Dictionary = PSPlayerRecordTableRow.from_history(identity)
+	var record: PSPlayerSeasonRecord = row["record"] as PSPlayerSeasonRecord
+	assert_object(row["player"]).is_null()
+	assert_int(record.player_id).is_equal(missing_id)
+	assert_int(record.team_id).is_equal(23)
+	assert_int(record.age).is_equal(19)
+	assert_bool(record.is_pitcher()).is_false()
+	assert_int(record.batter_stats.games).is_equal(0)
+	assert_int(record.pitcher_stats.outs_pitched).is_equal(0)
+	var values: Dictionary = PSPlayerRecordTableRow.historical_values(row)
+	assert_str(str(values["war_text"])).is_equal("0.0")
+	assert_str(str(values["fip_text"])).is_equal("-")
+	assert_str(str(values["wrc_text"])).is_equal("-")
+	var other_identity: Dictionary = identity.duplicate(true)
+	other_identity["player_id"] = missing_id - 1
+	other_identity["role"] = "reliever"
+	var other_row: Dictionary = PSPlayerRecordTableRow.from_history(other_identity)
+	var other_record: PSPlayerSeasonRecord = other_row["record"] as PSPlayerSeasonRecord
+	assert_str(other_record.name).is_equal(record.name)
+	assert_int(other_record.player_id).is_not_equal(record.player_id)
+	assert_bool(other_record.is_pitcher()).is_true()
+	assert_object(GameDb.get_player(missing_id)).is_null()
+	assert_object(GameDb.get_player(missing_id - 1)).is_null()
+	assert_object(RecordStore.get_player_record(missing_id, 2025, 1)).is_null()
+	assert_object(RecordStore.get_player_record(missing_id - 1, 2025, 1)).is_null()
+
+
+func test_historical_player_rows_copy_inputs_and_keep_records_independent() -> void:
+	var identity: Dictionary = {"player_id": -94002, "name": "History", "position": 1,
+		"details": {"label": "original"}}
+	var totals: Dictionary = {"batter_stats": {"games": 4, "plate_appearances": 12, "hits": 3},
+		"pitcher_stats": {"games": 2, "outs_pitched": 9}, "war": 1.25}
+	var first: Dictionary = PSPlayerRecordTableRow.from_history(identity, totals)
+	var second: Dictionary = PSPlayerRecordTableRow.from_history(identity, totals)
+	var first_record: PSPlayerSeasonRecord = first["record"] as PSPlayerSeasonRecord
+	var second_record: PSPlayerSeasonRecord = second["record"] as PSPlayerSeasonRecord
+	identity["name"] = "Changed"
+	(identity["details"] as Dictionary)["label"] = "changed"
+	(totals["batter_stats"] as Dictionary)["hits"] = 99
+	(totals["pitcher_stats"] as Dictionary)["outs_pitched"] = 999
+	totals["war"] = 99.0
+	assert_str(first_record.name).is_equal("History")
+	assert_str(str(((first["entry"] as Dictionary)["details"] as Dictionary)["label"])).is_equal("original")
+	assert_bool(first_record.is_pitcher()).is_true()
+	assert_int(first_record.batter_stats.hits).is_equal(3)
+	assert_int(first_record.pitcher_stats.outs_pitched).is_equal(9)
+	assert_float(float((first["metrics"] as Dictionary)["war"])).is_equal(1.25)
+	first_record.batter_stats.hits = 50
+	first_record.pitcher_stats.outs_pitched = 150
+	assert_int(second_record.batter_stats.hits).is_equal(3)
+	assert_int(second_record.pitcher_stats.outs_pitched).is_equal(9)
+	assert_int(int((totals["batter_stats"] as Dictionary)["hits"])).is_equal(99)
+	assert_int(int((totals["pitcher_stats"] as Dictionary)["outs_pitched"])).is_equal(999)
+
+
+func test_historical_player_values_use_only_period_stats_and_injected_metrics() -> void:
+	var player: PSPlayer = GameDb.players[0] as PSPlayer
+	var old_salary: int = player.salary
+	var old_injury_days: int = player.injury_days
+	var old_abilities: Dictionary = player.z_abilities
+	var career_records: Array = RecordStore.get_player_records(player.id)
+	var career_record: PSPlayerSeasonRecord = career_records[0] as PSPlayerSeasonRecord if not career_records.is_empty() else null
+	var old_batter_stats: PSBatterStats = career_record.batter_stats if career_record != null else null
+	var old_pitcher_stats: PSPitcherStats = career_record.pitcher_stats if career_record != null else null
+	if career_record != null:
+		career_record.batter_stats = PSBatterStats.from_dict({"games": 999, "plate_appearances": 4000, "hits": 1500})
+		career_record.pitcher_stats = PSPitcherStats.from_dict({"games": 999, "outs_pitched": 9000})
+	player.salary = 987654
+	player.injury_days = 180
+	player.z_abilities = {"contact": 9.0, "power": 9.0}
+	var identity: Dictionary = {"player_id": player.id, "name": "Past Name", "position": 3, "role": "fielder"}
+	var totals: Dictionary = {"batter_stats": {"games": 7, "plate_appearances": 20, "at_bats": 16, "hits": 4},
+		"pitcher_stats": {"games": 3, "outs_pitched": 12}, "war": 2.4, "fip": 3.21, "wrc_plus": 123.0}
+	var row: Dictionary = PSPlayerRecordTableRow.from_history(identity, totals)
+	var record: PSPlayerSeasonRecord = row["record"] as PSPlayerSeasonRecord
+	var values: Dictionary = PSPlayerRecordTableRow.historical_values(row)
+	assert_object(row["player"]).is_null()
+	assert_str(record.name).is_equal("Past Name")
+	assert_int(record.salary).is_equal(0)
+	assert_int(record.injury_days).is_equal(0)
+	assert_dict(record.z_abilities_snapshot).is_empty()
+	assert_int((values["batter_stats"] as PSBatterStats).games).is_equal(7)
+	assert_int((values["batter_stats"] as PSBatterStats).plate_appearances).is_equal(20)
+	assert_int((values["pitcher_stats"] as PSPitcherStats).outs_pitched).is_equal(12)
+	assert_str(str(values["war_text"])).is_equal("2.4")
+	assert_str(str(values["fip_text"])).is_equal("3.21")
+	assert_str(str(values["wrc_text"])).is_equal("123")
+	assert_str(str(values["woba_text"])).is_equal("-")
+	assert_str(str(values["oaa_text"])).is_equal("-")
+	assert_object(values["advanced_stats"]).is_null()
+	var missing_metrics: Dictionary = PSPlayerRecordTableRow.historical_values(
+		PSPlayerRecordTableRow.from_history(identity, {"batter_stats": totals["batter_stats"], "pitcher_stats": totals["pitcher_stats"]}))
+	for key: String in ["war_text", "fip_text", "wrc_text", "woba_text", "oaa_text"]:
+		assert_str(str(missing_metrics[key])).is_equal("-")
+	player.salary = old_salary
+	player.injury_days = old_injury_days
+	player.z_abilities = old_abilities
+	if career_record != null:
+		career_record.batter_stats = old_batter_stats
+		career_record.pitcher_stats = old_pitcher_stats
 
 
 func _first_record_not_in_cs1(post: PSPostseasonResult, season: PSSeason) -> PSPlayerSeasonRecord:

@@ -6,7 +6,7 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 # SQLite の user_version へ記録する永続化スキーマ世代 (診断用の目印)。
 # セーブフォルダごとの DB は必ず空から現行 _ensure_runtime_schema() で作られるため、
 # 世代をまたぐ移行 (ALTER TABLE 等) は行わない。
-const SCHEMA_VERSION: int = 11
+const SCHEMA_VERSION: int = 12
 
 # スキーマ構築 (CREATE TABLE / INDEX) はプロセス内で一度実行できれば十分。
 # 毎 open で走らせると save が連続する場面 (オフシーズン開始時など) で
@@ -34,6 +34,8 @@ static var _record_part_fingerprints: Dictionary = {}
 static var last_record_upsert_count: int = 0
 static var last_record_table_write_count: int = 0
 static var last_record_body_group_write_count: int = 0
+static var last_season_review_write_count: int = 0
+static var last_draft_class_write_count: int = 0
 # 本体行の列グループ UPDATE 文 (_group_update_statement)。
 static var _group_update_statements: Dictionary = {}
 
@@ -152,16 +154,18 @@ static func load_player_rows() -> Array:
 
 # game_state blob と players テーブルを同一 transaction で書く (片方だけ進んだセーブを作らない)。
 # payload には選手を含めないこと。check_all=false では引退状態で保存済みの選手を照合しない。
-static func save_game_state_and_players(payload: Dictionary, players: Array, check_all: bool) -> bool:
+static func save_game_state_and_players(payload: Dictionary, players: Array, check_all: bool, draft_changes: Dictionary = {}) -> bool:
+	last_draft_class_write_count = 0
 	var db: Object = _open_runtime_db()
 	if db == null:
 		return false
-	var ok: bool = _save_game_state_and_players_inner(db, payload, players, check_all)
+	var ok: bool = _save_game_state_and_players_inner(db, payload, players, check_all, draft_changes)
 	_close(db)
 	return ok
 
 
-static func _save_game_state_and_players_inner(db: Object, payload: Dictionary, players: Array, check_all: bool) -> bool:
+static func _save_game_state_and_players_inner(db: Object, payload: Dictionary, players: Array, check_all: bool, draft_changes: Dictionary = {}) -> bool:
+	last_draft_class_write_count = 0
 	if not _execute(db, "BEGIN TRANSACTION"):
 		return false
 	if not _write_game_state_blob(db, payload):
@@ -203,10 +207,19 @@ static func _save_game_state_and_players_inner(db: Object, payload: Dictionary, 
 				_execute(db, "ROLLBACK")
 				return false
 
+	if not _write_annual_history_changes(db, "draft_classes", draft_changes):
+		_execute(db, "ROLLBACK")
+		return false
+	if get_user_version(db) < SCHEMA_VERSION:
+		if not set_user_version(db, SCHEMA_VERSION):
+			_execute(db, "ROLLBACK")
+			return false
 	if not _execute(db, "COMMIT"):
+		_execute(db, "ROLLBACK")
 		return false
 
 	last_player_write_count = writes
+	last_draft_class_write_count = (draft_changes.get("rows", []) as Array).size()
 	# COMMIT 成功後にのみキャッシュへ反映する (ROLLBACK 時に「書いたつもり」を残さない)。
 	if not cache_valid:
 		reset_player_fingerprints()
@@ -234,6 +247,8 @@ static func save_game_state_with_player_rows(payload: Dictionary) -> bool:
 	var blob: Dictionary = payload.duplicate(false)
 	var player_rows: Array = blob.get("players", []) as Array
 	blob.erase("players")
+	var draft_rows: Array = blob.get("draft_classes", []) as Array
+	blob.erase("draft_classes")
 	var ok: bool = _execute(db, "BEGIN TRANSACTION")
 	ok = ok and _write_game_state_blob(db, blob)
 	ok = ok and _execute(db, "DELETE FROM players")
@@ -243,6 +258,7 @@ static func save_game_state_with_player_rows(payload: Dictionary) -> bool:
 			break
 		var row: Dictionary = player_rows[index] as Dictionary
 		ok = _query_with_bindings(db, insert_sql, [int(row.get("id", 0)), index, JSON.stringify(row)])
+	ok = ok and _write_annual_history_changes(db, "draft_classes", {"rows": draft_rows, "replace_all": true})
 	ok = ok and _execute(db, "COMMIT")
 	if not ok:
 		_execute(db, "ROLLBACK")
@@ -284,6 +300,67 @@ static func _pragma_int(db: Object, pragma_name: String) -> int:
 
 static func load_record_store() -> Dictionary:
 	return _load_blob("record_store")
+
+
+# 年度一覧はメタデータだけを取得し、過去年度の JSON 本体を読み込まない。
+static func load_annual_history_index(table_name: String) -> Array:
+	return try_load_annual_history_index(table_name).get("rows", []) as Array
+
+
+static func try_load_annual_history_index(table_name: String) -> Dictionary:
+	if not _is_annual_history_table(table_name):
+		return {"ok": false, "rows": []}
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return {"ok": false, "rows": []}
+	var ok: bool = _execute(db, "SELECT year, season_number, format_version FROM %s ORDER BY year, season_number" % table_name)
+	var rows: Array = []
+	if ok:
+		rows = db.get("query_result") as Array
+	_close(db)
+	return {"ok": ok, "rows": rows}
+
+
+static func load_annual_history(table_name: String, year: int, season_number: int) -> Dictionary:
+	if not _is_annual_history_table(table_name):
+		return {}
+	var db: Object = _open_runtime_db()
+	if db == null:
+		return {}
+	var rows: Array = _select_with_bindings(db,
+		"SELECT payload_json FROM %s WHERE year = ? AND season_number = ? LIMIT 1" % table_name,
+		[year, season_number])
+	_close(db)
+	if rows.is_empty():
+		return {}
+	return _parse_json_dict(str((rows[0] as Dictionary)["payload_json"]))
+
+
+static func _is_annual_history_table(table_name: String) -> bool:
+	return table_name == "season_reviews" or table_name == "draft_classes"
+
+
+# 呼び出し元が開始した transaction 内だけで実行する。空辞書は変更なし、
+# replace_all は調査用の退避・復元などで履歴集合全体を置き換える指定。
+static func _write_annual_history_changes(db: Object, table_name: String, changes: Dictionary) -> bool:
+	if not _is_annual_history_table(table_name):
+		return false
+	if changes.is_empty():
+		return true
+	if not changes.get("rows") is Array or not changes.get("replace_all") is bool:
+		return false
+	if bool(changes["replace_all"]) and not _execute(db, "DELETE FROM %s" % table_name):
+		return false
+	var sql: String = "INSERT OR REPLACE INTO %s (year, season_number, format_version, payload_json) VALUES (?, ?, ?, ?)" % table_name
+	for row_value in changes["rows"]:
+		if not row_value is Dictionary:
+			return false
+		var row: Dictionary = row_value as Dictionary
+		if not row.has_all(["year", "season_number", "format_version"]):
+			return false
+		if not _query_with_bindings(db, sql, [int(row["year"]), int(row["season_number"]), int(row["format_version"]), JSON.stringify(row)]):
+			return false
+	return true
 
 
 # 実データ保護: ランタイム DB ファイルが「存在するのに開けない」(ロック等の一時故障) 状態を
@@ -353,17 +430,19 @@ const PITCHER_STATS_COLUMNS: Array = [
 
 # RecordStore.save_records() から呼ばれる保存入口。
 # 軽量 blob と正規化3テーブルを同一 transaction で更新し、片方だけ成功する状態を防ぐ。
-static func save_record_store_and_normalized(blob_payload: Dictionary) -> bool:
+static func save_record_store_and_normalized(blob_payload: Dictionary, review_changes: Dictionary = {}) -> bool:
+	last_season_review_write_count = 0
 	var db: Object = _open_runtime_db()
 	if db == null:
 		return false
 
-	var ok: bool = _save_record_store_and_normalized_inner(db, blob_payload)
+	var ok: bool = _save_record_store_and_normalized_inner(db, blob_payload, review_changes)
 	_close(db)
 	return ok
 
 
-static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Dictionary) -> bool:
+static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Dictionary, review_changes: Dictionary = {}) -> bool:
+	last_season_review_write_count = 0
 	if not _execute(db, "BEGIN TRANSACTION"):
 		return false
 
@@ -493,15 +572,20 @@ static func _save_record_store_and_normalized_inner(db: Object, blob_payload: Di
 					_execute(db, "ROLLBACK")
 					return false
 
+	if not _write_annual_history_changes(db, "season_reviews", review_changes):
+		_execute(db, "ROLLBACK")
+		return false
 	if get_user_version(db) < SCHEMA_VERSION:
 		if not set_user_version(db, SCHEMA_VERSION):
 			_execute(db, "ROLLBACK")
 			return false
 
 	if not _execute(db, "COMMIT"):
+		_execute(db, "ROLLBACK")
 		return false
 
 	last_record_upsert_count = upserted_records
+	last_season_review_write_count = (review_changes.get("rows", []) as Array).size()
 	last_record_table_write_count = table_writes
 	last_record_body_group_write_count = body_group_writes
 	# COMMIT 成功後にのみキャッシュへ反映する (ROLLBACK 時に「書いたつもり」を残さない)。
@@ -1489,6 +1573,21 @@ static func _ensure_runtime_schema(db: Object) -> bool:
 			player_id INTEGER PRIMARY KEY,
 			sort_order INTEGER NOT NULL,
 			data_json TEXT NOT NULL
+		)""",
+		# 年度単位の確定スナップショット。大きな履歴本体は日々保存する blob から分離する。
+		"""CREATE TABLE IF NOT EXISTS season_reviews (
+			year INTEGER NOT NULL,
+			season_number INTEGER NOT NULL,
+			format_version INTEGER NOT NULL,
+			payload_json TEXT NOT NULL,
+			PRIMARY KEY (year, season_number)
+		)""",
+		"""CREATE TABLE IF NOT EXISTS draft_classes (
+			year INTEGER NOT NULL,
+			season_number INTEGER NOT NULL,
+			format_version INTEGER NOT NULL,
+			payload_json TEXT NOT NULL,
+			PRIMARY KEY (year, season_number)
 		)""",
 	]
 	for statement_row in statements:

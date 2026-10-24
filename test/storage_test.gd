@@ -539,6 +539,19 @@ func test_start_offseason_archives_season_without_postseason() -> void:
 	AppState.current_awards = PSAwards.new()
 	AppState.current_awards.year = AppState.current_season.year
 	AppState.current_awards.season_number = AppState.current_season.season_number
+	var completed_year: int = AppState.current_season.year
+	var completed_number: int = AppState.current_season.season_number
+	var target_player: PSPlayer = null
+	for player: PSPlayer in GameDb.players:
+		if player.team_id == team.id and not player.is_retired():
+			target_player = player
+			break
+	assert_object(target_player).is_not_null()
+	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(target_player.id, completed_year, completed_number)
+	record.batter_stats.games = 1
+	record.batter_stats.plate_appearances = 4
+	record.batter_stats.at_bats = 4
+	record.batter_stats.hits = 1
 
 	var result: Dictionary = AppState.start_offseason()
 	assert_bool(bool(result.get("ok", false))).is_true()
@@ -552,9 +565,61 @@ func test_start_offseason_archives_season_without_postseason() -> void:
 	assert_object(matching_archive.postseason).is_null()
 	assert_object(matching_archive.awards).is_not_null()
 	assert_int(matching_archive.standings.size()).is_equal(GameDb.teams.size())
+	var frozen: Dictionary = RecordStore.get_season_review(completed_year, completed_number).to_dict()
+	assert_str(str(frozen.completion_kind)).is_equal("regular_season")
+	var facts: Array = frozen.player_facts as Array
+	assert_int(facts.size()).is_equal(1)
+	assert_int(int(facts[0].player_id)).is_equal(target_player.id)
+	assert_int(int(facts[0].total.batter_stats.hits)).is_equal(1)
+	assert_array(SQLiteStoreService.load_annual_history_index("season_reviews")).is_empty()
+	target_player.source_data["retired"] = true
+	target_player.team_id = 0
+	record.batter_stats.hits = 99
+	record.team_id = 0
+	assert_bool(AppState._archive_current_season_if_needed()).is_false()
+	assert_int(RecordStore.get_season_review_index().size()).is_equal(1)
+	assert_dict(RecordStore.get_season_review(completed_year, completed_number).to_dict()).is_equal(frozen)
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.load_annual_history_index("season_reviews").size()).is_equal(1)
+	assert_bool(AppState.start_next_season()).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(AppState.restore_from_save(SaveService.load_state())).is_true()
+	assert_int(AppState.current_season.season_number).is_equal(completed_number + 1)
+	var reloaded: Dictionary = RecordStore.get_season_review(completed_year, completed_number).to_dict()
+	assert_dict(JSON.parse_string(JSON.stringify(reloaded)) as Dictionary).is_equal(JSON.parse_string(JSON.stringify(frozen)) as Dictionary)
 
 	GameDb.replace_players_from_rows(old_player_rows)
 	_restore_app_state(old_state, test_save_id)
+
+
+func test_app_state_automatic_draft_registers_confirmed_class_once() -> void:
+	var old_state: Dictionary = _capture_app_state()
+	var old_player_rows: Array = _player_rows_snapshot()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var save_id: String = SaveContext.active_save_id()
+	RecordStore.load_from_dict({})
+	AppState.auto_save_enabled = false
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_DRAFT_MAIN
+	AppState.draft_state = DraftService.create_draft_state([], [GameDb.teams[0]], null, 0, false)
+	AppState.draft_state["year"] = 2031
+	AppState.draft_state["season_number"] = 6
+	assert_bool(bool(AppState.complete_draft_automatically().get("ok", false))).is_true()
+	assert_array(RecordStore.get_draft_class_index()).is_empty()
+	AppState.draft_state = DraftService.begin_development_draft(AppState.draft_state)
+	AppState.offseason_step = AppState.OFFSEASON_STEP_DRAFT_DEVELOPMENT
+	assert_bool(bool(AppState.complete_draft_automatically().get("ok", false))).is_true()
+	var frozen: Dictionary = RecordStore.get_draft_class(2031, 6).to_dict()
+	assert_int((frozen.picks as Array).size()).is_greater(0)
+	assert_int(RecordStore.get_draft_class_index().size()).is_equal(1)
+	assert_array(SQLiteStoreService.load_annual_history_index("draft_classes")).is_empty()
+	var player_count: int = GameDb.players.size()
+	assert_bool(bool(AppState.complete_draft_automatically().get("ok", false))).is_true()
+	assert_int(GameDb.players.size()).is_equal(player_count)
+	assert_int(RecordStore.get_draft_class_index().size()).is_equal(1)
+	assert_dict(RecordStore.get_draft_class(2031, 6).to_dict()).is_equal(frozen)
+	GameDb.replace_players_from_rows(old_player_rows)
+	_restore_app_state(old_state, save_id)
 
 
 func test_unsaved_simulation_does_not_persist_records_or_logs() -> void:
@@ -1506,8 +1571,280 @@ func test_save_selection_list_load_delete() -> void:
 	_restore_app_state(old_state, "")
 
 
-# GameDb.players の復元用スナップショット。PSPlayer.to_dict() は source_data を参照のまま返すので、
-# 深いコピーにしないとテスト中の引退判定などの書き込みがスナップショットにも残り、復元しても戻らない。
+func test_annual_sql_transactions_rollback_and_retry_without_advancing_fingerprints() -> void:
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var save_id: String = SaveContext.active_save_id()
+	var baseline: Dictionary = {"season_archives": [{"year": 2025}], "player_records": []}
+	assert_bool(SQLiteStoreService.save_record_store_and_normalized(baseline)).is_true()
+	var db: Object = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "CREATE TRIGGER reject_review BEFORE INSERT ON season_reviews BEGIN SELECT RAISE(ABORT, 'test review failure'); END")).is_true()
+	SQLiteStoreService._close(db)
+	var changed: Dictionary = {"season_archives": [{"year": 2026}], "player_records": []}
+	var review_changes: Dictionary = {"rows": [_annual_payload(2026, "review")], "replace_all": true}
+	assert_bool(SQLiteStoreService.save_record_store_and_normalized(changed, review_changes)).is_false()
+	assert_int(int(SQLiteStoreService.load_record_store().season_archives[0].year)).is_equal(2025)
+	assert_array(SQLiteStoreService.load_annual_history_index("season_reviews")).is_empty()
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "DROP TRIGGER reject_review")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(SQLiteStoreService.save_record_store_and_normalized(changed, review_changes)).is_true()
+	assert_int(SQLiteStoreService.last_season_review_write_count).is_equal(1)
+	assert_bool(SQLiteStoreService.save_record_store_and_normalized(changed)).is_true()
+	assert_int(SQLiteStoreService.last_season_review_write_count).is_equal(0)
+	var player: PSPlayer = PSPlayer.from_dict((GameDb.players[0] as PSPlayer).to_dict().duplicate(true))
+	assert_bool(SQLiteStoreService.save_game_state_and_players({"marker": 1}, [player], true)).is_true()
+	var saved_salary: int = player.salary
+	player.salary += 100
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "CREATE TRIGGER reject_draft BEFORE INSERT ON draft_classes BEGIN SELECT RAISE(ABORT, 'test draft failure'); END")).is_true()
+	SQLiteStoreService._close(db)
+	var draft_changes: Dictionary = {"rows": [_annual_payload(2026, "draft")], "replace_all": true}
+	assert_bool(SQLiteStoreService.save_game_state_and_players({"marker": 2}, [player], true, draft_changes)).is_false()
+	assert_int(int(SQLiteStoreService.load_game_state().marker)).is_equal(1)
+	assert_int(int(SQLiteStoreService.load_player_rows()[0].salary)).is_equal(saved_salary)
+	assert_array(SQLiteStoreService.load_annual_history_index("draft_classes")).is_empty()
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "DROP TRIGGER reject_draft")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(SQLiteStoreService.save_game_state_and_players({"marker": 2}, [player], true, draft_changes)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+	assert_int(SQLiteStoreService.last_draft_class_write_count).is_equal(1)
+	assert_int(int(SQLiteStoreService.load_player_rows()[0].salary)).is_equal(saved_salary + 100)
+	assert_bool(SQLiteStoreService.save_game_state_and_players({"marker": 2}, [player], true)).is_true()
+	assert_int(SQLiteStoreService.last_draft_class_write_count).is_equal(0)
+	assert_array(SQLiteStoreService.load_annual_history_index("players")).is_empty()
+	assert_dict(SQLiteStoreService.load_annual_history("players", 2026, 1)).is_empty()
+	_restore_app_state(old_state, save_id)
+
+
+func test_annual_history_failed_service_saves_keep_pending_changes_for_retry() -> void:
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var save_id: String = SaveContext.active_save_id()
+	RecordStore.load_from_dict({})
+	AppState.current_season = null
+	AppState.current_postseason = null
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(_annual_payload(2026, "review")))).is_true()
+	var db: Object = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "CREATE TRIGGER reject_review BEFORE INSERT ON season_reviews BEGIN SELECT RAISE(ABORT, 'test review failure'); END")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(RecordStore.save_records()).is_false()
+	assert_bool(RecordStore._season_reviews.is_dirty()).is_true()
+	assert_array(SQLiteStoreService.load_annual_history_index("season_reviews")).is_empty()
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "DROP TRIGGER reject_review")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_bool(RecordStore._season_reviews.is_dirty()).is_false()
+	assert_int(SQLiteStoreService.load_annual_history_index("season_reviews").size()).is_equal(1)
+	assert_bool(RecordStore.add_draft_class(PSDraftClass.from_dict(_annual_payload(2026, "draft")))).is_true()
+	var player: PSPlayer = GameDb.players[0] as PSPlayer
+	var saved_salary: int = player.salary
+	player.salary += 100
+	AppState.draft_state = {"annual_test_marker": true}
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "CREATE TRIGGER reject_draft BEFORE INSERT ON draft_classes BEGIN SELECT RAISE(ABORT, 'test draft failure'); END")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(SaveService.save_state(AppState)).is_false()
+	assert_bool(RecordStore._draft_classes.is_dirty()).is_true()
+	assert_array(SQLiteStoreService.load_annual_history_index("draft_classes")).is_empty()
+	assert_bool((SQLiteStoreService.load_game_state().draft_state as Dictionary).has("annual_test_marker")).is_false()
+	var stored_players: Array = SQLiteStoreService.load_player_rows()
+	var matched_players: int = 0
+	for row in stored_players:
+		if int(row.id) == player.id:
+			matched_players += 1
+			assert_int(int(row.salary)).is_equal(saved_salary)
+	assert_int(matched_players).is_equal(1)
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "DROP TRIGGER reject_draft")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(RecordStore._draft_classes.is_dirty()).is_false()
+	assert_bool(bool(SQLiteStoreService.load_game_state().draft_state.annual_test_marker)).is_true()
+	assert_int(SQLiteStoreService.last_player_write_count).is_equal(1)
+	assert_int(SQLiteStoreService.load_annual_history_index("draft_classes").size()).is_equal(1)
+	for row in SQLiteStoreService.load_player_rows():
+		if int(row.id) == player.id:
+			assert_int(int(row.salary)).is_equal(saved_salary + 100)
+	player.salary = saved_salary
+	_restore_app_state(old_state, save_id)
+
+
+func test_annual_history_snapshot_deep_copy_lazy_reload_and_save_switch() -> void:
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var first_id: String = SaveContext.active_save_id()
+	RecordStore.load_from_dict({})
+	var source: Dictionary = _annual_payload(2026, "first")
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(source))).is_true()
+	assert_bool(RecordStore.add_draft_class(PSDraftClass.from_dict(source))).is_true()
+	source.teams[0].name = "mutated"
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(source))).is_false()
+	assert_bool(RecordStore.add_draft_class(PSDraftClass.from_dict(source))).is_false()
+	var returned: Dictionary = RecordStore.get_season_review(2026, 1).to_dict()
+	returned.teams[0].name = "returned mutation"
+	assert_str(str(RecordStore.get_season_review(2026, 1).teams[0].name)).is_equal("first")
+	var returned_picks: Array = RecordStore.get_draft_class(2026, 1).picks
+	returned_picks[0].player_id = 999
+	assert_int(int(RecordStore.get_draft_class(2026, 1).picks[0].player_id)).is_equal(101)
+	var snapshot: Dictionary = RecordStore.to_dict()
+	RecordStore.load_from_dict({})
+	RecordStore.load_from_dict(snapshot)
+	assert_int(RecordStore.get_draft_class_index().size()).is_equal(1)
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_array(SQLiteStoreService.load_annual_history_index("draft_classes")).is_empty()
+	assert_bool(SQLiteStoreService.save_game_state_and_players({}, [], true, RecordStore.pending_draft_class_changes())).is_true()
+	RecordStore.acknowledge_draft_classes_saved()
+	assert_bool(RecordStore.has_unsaved_annual_history()).is_false()
+	RecordStore.load_records()
+	assert_int(RecordStore._season_reviews._cache.size()).is_equal(0)
+	assert_int(RecordStore._draft_classes._cache.size()).is_equal(0)
+	var index: Array = RecordStore.get_season_review_index()
+	assert_int(index.size()).is_equal(1)
+	assert_bool((index[0] as Dictionary).has("teams")).is_false()
+	index.clear()
+	assert_int(RecordStore.get_season_review_index().size()).is_equal(1)
+	assert_str(str(RecordStore.get_draft_class(2026, 1).teams[0].name)).is_equal("first")
+	RecordStore.load_from_dict({})
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_bool(SQLiteStoreService.save_game_state_and_players({}, [], true, RecordStore.pending_draft_class_changes())).is_true()
+	RecordStore.acknowledge_draft_classes_saved()
+	assert_array(SQLiteStoreService.load_annual_history_index("season_reviews")).is_empty()
+	assert_array(SQLiteStoreService.load_annual_history_index("draft_classes")).is_empty()
+	RecordStore.load_from_dict(snapshot)
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_bool(SQLiteStoreService.save_game_state_and_players({}, [], true, RecordStore.pending_draft_class_changes())).is_true()
+	RecordStore.acknowledge_draft_classes_saved()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var second_id: String = SaveContext.active_save_id()
+	RecordStore.load_records()
+	assert_array(RecordStore.get_season_review_index()).is_empty()
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(_annual_payload(2026, "second")))).is_true()
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_bool(SaveContext.activate_save_id(first_id)).is_true()
+	RecordStore.load_records()
+	assert_str(str(RecordStore.get_season_review(2026, 1).teams[0].name)).is_equal("first")
+	assert_bool(SaveService.delete_save(second_id)).is_true()
+	_restore_app_state(old_state, first_id)
+
+
+func test_annual_history_suspension_and_save_state_draft_boundary() -> void:
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var save_id: String = SaveContext.active_save_id()
+	RecordStore.load_from_dict({})
+	AppState.current_season = null
+	AppState.current_postseason = null
+	RecordStore.suspend_persistence()
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(_annual_payload(2026, "frozen")))).is_true()
+	assert_bool(RecordStore.add_draft_class(PSDraftClass.from_dict(_annual_payload(2026, "picks")))).is_true()
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_bool(SQLiteStoreService.runtime_db_file_exists()).is_false()
+	assert_bool(RecordStore.has_unsaved_annual_history()).is_true()
+	RecordStore.resume_persistence()
+	assert_bool(RecordStore.save_records()).is_true()
+	assert_int(SQLiteStoreService.load_annual_history_index("season_reviews").size()).is_equal(1)
+	assert_array(SQLiteStoreService.load_annual_history_index("draft_classes")).is_empty()
+	assert_bool(RecordStore.has_unsaved_annual_history()).is_true()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.load_annual_history_index("draft_classes").size()).is_equal(1)
+	assert_bool(RecordStore.has_unsaved_annual_history()).is_false()
+	RecordStore.load_records()
+	RecordStore.mark_all_records_dirty()
+	assert_bool(SaveService.save_state(AppState)).is_true()
+	assert_int(SQLiteStoreService.last_season_review_write_count).is_equal(0)
+	assert_int(SQLiteStoreService.last_draft_class_write_count).is_equal(0)
+	assert_int(RecordStore._season_reviews._cache.size()).is_equal(0)
+	assert_int(RecordStore._draft_classes._cache.size()).is_equal(0)
+	_restore_app_state(old_state, save_id)
+
+
+func test_annual_history_index_read_failure_blocks_replacement_and_can_retry() -> void:
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var save_id: String = SaveContext.active_save_id()
+	RecordStore.load_from_dict({})
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(_annual_payload(2026, "protected")))).is_true()
+	assert_bool(RecordStore.save_records()).is_true()
+	var db: Object = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "ALTER TABLE season_reviews RENAME TO unavailable_reviews")).is_true()
+	SQLiteStoreService._close(db)
+	assert_bool(bool(SQLiteStoreService.try_load_annual_history_index("season_reviews")["ok"])).is_false()
+	RecordStore.load_records()
+	assert_bool(RecordStore._records_loaded).is_false()
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(_annual_payload(2026, "replacement")))).is_false()
+	assert_bool(RecordStore.save_records()).is_false()
+	db = SQLiteStoreService._open_runtime_db()
+	assert_bool(SQLiteStoreService._execute(db, "ALTER TABLE unavailable_reviews RENAME TO season_reviews")).is_true()
+	SQLiteStoreService._close(db)
+	RecordStore.load_records()
+	assert_bool(RecordStore._records_loaded).is_true()
+	assert_str(str(RecordStore.get_season_review(2026, 1).teams[0].name)).is_equal("protected")
+	assert_bool(RecordStore.add_season_review(PSSeasonReview.from_dict(_annual_payload(2026, "replacement")))).is_false()
+	_restore_app_state(old_state, save_id)
+
+
+func _annual_payload(year: int, label: String) -> Dictionary:
+	return {"year": year, "season_number": 1, "format_version": 1,
+		"teams": [{"team_id": 1, "name": label}], "picks": [{"player_id": 101}]}
+
+
+func test_json_fallback_import_restores_annual_history_with_players() -> void:
+	if not SQLiteStoreService.is_available():
+		return
+	var old_state: Dictionary = _capture_app_state()
+	assert_bool(SaveContext.begin_new_save()).is_true()
+	var save_id: String = SaveContext.active_save_id()
+	var player_row: Dictionary = (GameDb.players[0] as PSPlayer).to_dict().duplicate(true)
+	var review: Dictionary = _annual_payload(2031, "fallback review")
+	var draft: Dictionary = _annual_payload(2031, "fallback draft")
+	var records_file: FileAccess = FileAccess.open(SaveContext.records_path(), FileAccess.WRITE)
+	assert_object(records_file).is_not_null()
+	records_file.store_string(JSON.stringify({"player_records": [], "team_records": [],
+		"season_archives": [], "season_reviews": [review]}))
+	records_file.close()
+	var state_file: FileAccess = FileAccess.open(SaveContext.game_state_path(), FileAccess.WRITE)
+	assert_object(state_file).is_not_null()
+	state_file.store_string(JSON.stringify({"players": [player_row], "draft_classes": [draft],
+		"fallback_marker": "imported"}))
+	state_file.close()
+	assert_bool(SQLiteStoreService.runtime_db_file_exists()).is_false()
+	var state: Dictionary = SaveService.load_state()
+	assert_str(str(state.get("fallback_marker", ""))).is_equal("imported")
+	assert_int((state.players as Array).size()).is_equal(1)
+	assert_int(int(state.players[0].id)).is_equal(int(player_row.id))
+	assert_int(SQLiteStoreService.load_player_rows().size()).is_equal(1)
+	assert_int(int(SQLiteStoreService.load_player_rows()[0].id)).is_equal(int(player_row.id))
+	assert_str(str(SQLiteStoreService.load_game_state().get("fallback_marker", ""))).is_equal("imported")
+	assert_int(SQLiteStoreService.load_annual_history_index("draft_classes").size()).is_equal(1)
+	assert_str(str(SQLiteStoreService.load_annual_history("draft_classes", 2031, 1).teams[0].name)).is_equal("fallback draft")
+	RecordStore.load_records()
+	assert_str(str(RecordStore.get_season_review(2031, 1).teams[0].name)).is_equal("fallback review")
+	assert_str(str(RecordStore.get_draft_class(2031, 1).teams[0].name)).is_equal("fallback draft")
+	assert_bool(RecordStore.save_records()).is_true()
+	RecordStore.load_records()
+	assert_int(RecordStore._season_reviews._cache.size()).is_equal(0)
+	assert_int(RecordStore._draft_classes._cache.size()).is_equal(0)
+	assert_str(str(RecordStore.get_season_review(2031, 1).teams[0].name)).is_equal("fallback review")
+	assert_str(str(RecordStore.get_draft_class(2031, 1).teams[0].name)).is_equal("fallback draft")
+	_restore_app_state(old_state, save_id)
+
+
+# source_data の書き込みが復元用スナップショットへ伝わらないよう深く複製する。
 func _player_rows_snapshot() -> Array:
 	var rows: Array = []
 	for player_value in GameDb.players:

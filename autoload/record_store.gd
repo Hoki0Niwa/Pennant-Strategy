@@ -4,6 +4,10 @@ signal records_changed
 
 const SQLiteStoreService = preload("res://services/storage/sqlite_store.gd")
 const SaveContext = preload("res://services/storage/save_context.gd")
+const AnnualHistoryStore = preload("res://services/storage/annual_history_store.gd")
+
+var _season_reviews = AnnualHistoryStore.new("season_reviews")
+var _draft_classes = AnnualHistoryStore.new("draft_classes")
 
 # PSPlayerSeasonRecord.source_data のキー。process_retirement がその選手の当季レコードに
 # 「このシーズンの終わりに引退した」印として立てる (スキーマ変更なしで永続化するため
@@ -329,6 +333,8 @@ func get_current_player_records_for_team(team_id: int, include_retired: bool = f
 
 
 func clear_records() -> void:
+	_season_reviews.reset()
+	_draft_classes.reset()
 	mark_all_records_dirty()
 	SQLiteStoreService.reset_record_fingerprints()
 	# 母集団が入れ替わるので、そこから実測した基準分布 (打順/起用/編成の判定ラインの元) は無効。
@@ -401,7 +407,73 @@ func get_season_archives() -> Array:
 	return _season_archives
 
 
-func to_dict() -> Dictionary:
+func add_season_review(review: PSSeasonReview) -> bool:
+	ensure_loaded()
+	if not _records_loaded:
+		return false
+	return _season_reviews.add(review.to_dict())
+
+
+func add_draft_class(draft_class: PSDraftClass) -> bool:
+	ensure_loaded()
+	if not _records_loaded:
+		return false
+	return _draft_classes.add(draft_class.to_dict())
+
+
+func get_season_review_index() -> Array:
+	ensure_loaded()
+	if not _records_loaded:
+		return []
+	return _season_reviews.entries()
+
+
+func get_draft_class_index() -> Array:
+	ensure_loaded()
+	if not _records_loaded:
+		return []
+	return _draft_classes.entries()
+
+
+func get_season_review(year: int, season_number: int) -> PSSeasonReview:
+	ensure_loaded()
+	if not _records_loaded:
+		return null
+	var payload: Dictionary = _season_reviews.get_snapshot(year, season_number)
+	return null if payload.is_empty() else PSSeasonReview.from_dict(payload)
+
+
+func get_draft_class(year: int, season_number: int) -> PSDraftClass:
+	ensure_loaded()
+	if not _records_loaded:
+		return null
+	var payload: Dictionary = _draft_classes.get_snapshot(year, season_number)
+	return null if payload.is_empty() else PSDraftClass.from_dict(payload)
+
+
+func pending_draft_class_changes() -> Dictionary:
+	ensure_loaded()
+	return _draft_classes.pending_changes()
+
+
+func draft_classes_snapshot() -> Array:
+	ensure_loaded()
+	return _draft_classes.snapshot()
+
+
+func acknowledge_draft_classes_saved() -> void:
+	_draft_classes.acknowledge()
+
+
+func has_unsaved_annual_history() -> bool:
+	return _season_reviews.is_dirty() or _draft_classes.is_dirty()
+
+
+func is_persistence_suspended() -> bool:
+	return _suspend_persistence
+
+
+func to_dict(include_annual_history: bool = true) -> Dictionary:
 	ensure_loaded()
 	var payload: Dictionary = {
 		"version": 2,
@@ -410,6 +482,9 @@ func to_dict() -> Dictionary:
 		"season_archives": [],
 		"season_contexts": _season_contexts.values(),
 	}
+	if include_annual_history:
+		payload["season_reviews"] = _season_reviews.snapshot()
+		payload["draft_classes"] = _draft_classes.snapshot()
 
 	for record_row in _player_records.values():
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
@@ -425,6 +500,8 @@ func to_dict() -> Dictionary:
 
 
 func load_from_dict(payload: Dictionary) -> void:
+	_season_reviews.restore(payload.get("season_reviews", []) as Array)
+	_draft_classes.restore(payload.get("draft_classes", []) as Array)
 	# メモリ側を丸ごと入れ替えるため「前回永続化した内容」のキャッシュは無効。
 	# 空キャッシュ = 次回 save は全行書き込み。母集団から実測した基準分布も同時に無効化する。
 	mark_all_records_dirty()
@@ -544,9 +621,14 @@ func save_records() -> bool:
 	# blob (team_records / season_archives) + 正規化テーブル (player_records) を
 	# 同一 transaction で更新する。player_records は正規化テーブルが真実なので blob には
 	# 含めない (sqlite_store 側で slim blob 化)。
-	if SQLiteStoreService.save_record_store_and_normalized(payload):
+	var review_changes: Dictionary = _season_reviews.pending_changes()
+	if SQLiteStoreService.save_record_store_and_normalized(payload, review_changes):
+		_season_reviews.acknowledge()
 		_clear_persist_marks()
 		return true
+	# 年度履歴と成績を別の保存先へ分けると、ロード時に確定年が食い違う。
+	if SQLiteStoreService.is_available() and not review_changes.is_empty():
+		return false
 
 	var records_path: String = SaveContext.records_path()
 	if records_path.is_empty():
@@ -558,7 +640,13 @@ func save_records() -> bool:
 		return false
 
 	# JSON fallback は全件を書く形式なので、部分ペイロードのままでは書けない。
-	file.store_string(JSON.stringify(to_dict() if partial else payload, "\t"))
+	var fallback_payload: Dictionary = to_dict(false) if partial else payload
+	fallback_payload["season_reviews"] = _season_reviews.snapshot()
+	file.store_string(JSON.stringify(fallback_payload, "\t"))
+	file.flush()
+	if file.get_error() != OK:
+		return false
+	_season_reviews.acknowledge()
 	_clear_persist_marks()
 	return true
 
@@ -568,7 +656,7 @@ func save_records() -> bool:
 # 行を消さないようにするため)。partial=false は従来どおりの全件ペイロード。
 func _persist_payload(partial: bool) -> Dictionary:
 	if not partial:
-		return to_dict()
+		return to_dict(false)
 	var payload: Dictionary = {
 		"version": 2,
 		"player_records": [],
@@ -593,6 +681,8 @@ func _persist_payload(partial: bool) -> Dictionary:
 
 
 func load_records() -> void:
+	var reviews_loaded: bool = _season_reviews.reset(true)
+	var drafts_loaded: bool = _draft_classes.reset(true)
 	# hydrate 直後はメモリと DB が一致するが、ここから最初の保存までに何が書き換わるかは
 	# 追跡できない (当季がまだ確定していない)。セッション最初の保存だけ全件を書き直す。
 	mark_all_records_dirty()
@@ -603,6 +693,11 @@ func load_records() -> void:
 	_season_archives.clear()
 	_season_contexts.clear()
 	_records_loaded = true
+	if not reviews_loaded or not drafts_loaded:
+		_records_loaded = false
+		push_error("Annual history index could not be loaded; refusing to overwrite saved records.")
+		records_changed.emit()
+		return
 
 	# 実データ保護: DB ファイルが存在するのに開けない (ロック等の一時故障) 場合、「セーブが空」と
 	# 誤認してはならない。空の RecordStore を正として進むと、ensure_season_records が当該シーズンの
@@ -652,6 +747,12 @@ func load_records() -> void:
 		return
 	var payload: Dictionary = parsed as Dictionary
 	load_from_dict(payload)
+	# 指名名簿は選手本体と同じ JSON に保存される。
+	var state_path: String = SaveContext.game_state_path()
+	if FileAccess.file_exists(state_path):
+		var state: Variant = JSON.parse_string(FileAccess.get_file_as_string(state_path))
+		if state is Dictionary:
+			_draft_classes.restore((state as Dictionary).get("draft_classes", []) as Array)
 
 
 # simulation_reporter のようなスナップショット/リストア処理中に

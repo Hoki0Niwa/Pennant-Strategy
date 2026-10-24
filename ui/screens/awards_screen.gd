@@ -304,6 +304,9 @@ func _build_buttons() -> void:
 		return
 
 	_build_nav_buttons()
+	var review_button: Button = _add_button("season_review", Loc.t("season_review.open"), Rect2(1560, 22, 162, 42),
+		func() -> void: AppState.show_season_review(season.year, season.season_number, AppState.selected_team_id), "chip")
+	review_button.disabled = RecordStore.get_season_review(season.year, season.season_number) == null
 	_add_button("offseason", Loc.t("award.to_offseason"), Rect2(1738, 22, 162, 42), _on_offseason_pressed, "primary")
 	_layout_buttons()
 

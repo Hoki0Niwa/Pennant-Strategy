@@ -126,10 +126,16 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 
 	# 球団別のポジション補強需要 (デプスチャート由来。成績レコードに依存しない)。
 	var team_position_need: Dictionary = _build_team_position_need(players, teams)
+	var draft_teams: Array = []
+	for team: PSTeam in teams:
+		if not team.farm_only:
+			draft_teams.append({"team_id": team.id, "team_name": team.name})
 
 	var state: Dictionary = {
 		"version": 1,
 		"year": season.year if season != null else 0,
+		"season_number": season.season_number if season != null else 1,
+		"draft_teams": draft_teams,
 		"user_team_id": user_team_id,
 		# segment: "main" (本指名=支配下) → "development" (育成ドラフト)。
 		"segment": "main",
@@ -439,11 +445,41 @@ static func finalize_draft(state: Dictionary, players: Array) -> Dictionary:
 		"draft_picks": picks.duplicate(true),
 		"rookies": rookies,
 		"rookies_count": rookies.size(),
+		"draft_class": _draft_class_payload(state, rookies),
 		"logs": (state.get("logs", []) as Array).duplicate(true),
 		"priority_league": str(state.get("priority_league", "")),
 	}
 	state["final_result"] = result
 	return result
+
+
+static func _draft_class_payload(state: Dictionary, rookies: Array) -> Dictionary:
+	var teams: Array = (state.get("draft_teams", []) as Array).duplicate(true)
+	var team_rows: Dictionary = {}
+	for row: Dictionary in teams:
+		row["controlled_count"] = 0
+		row["development_count"] = 0
+		team_rows[int(row["team_id"])] = row
+	var picks: Array = []
+	for rookie: Dictionary in rookies:
+		var pick: Dictionary = rookie.duplicate(true)
+		pick.erase("overall")
+		pick["round"] = int(pick["draft_round"])
+		pick["development"] = bool(pick["development_player"])
+		pick["first_eligible_year"] = int(state.get("year", 0)) + 1
+		pick["first_eligible_season_number"] = int(state.get("season_number", 1)) + 1
+		var team: Dictionary = team_rows.get(int(pick["team_id"]), {}) as Dictionary
+		pick["team_name"] = str(team.get("team_name", ""))
+		if not team.is_empty():
+			var count_key: String = "development_count" if bool(pick["development"]) else "controlled_count"
+			team[count_key] = int(team[count_key]) + 1
+		picks.append(pick)
+	return PSDraftClass.from_dict({
+		"year": int(state.get("year", 0)), "season_number": int(state.get("season_number", 1)),
+		"first_eligible_year": int(state.get("year", 0)) + 1,
+		"first_eligible_season_number": int(state.get("season_number", 1)) + 1,
+		"picks": picks, "teams": teams,
+	}).to_dict()
 
 
 # ---- 指名漏れ候補の能力基準 (FarmClubService が読む) -------------------------

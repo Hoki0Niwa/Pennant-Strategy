@@ -1267,6 +1267,9 @@ func _build_buttons() -> void:
 
 	match _view:
 		VIEW_YEAR:
+			var review_button: Button = _add_button("season_review", Loc.t("season_review.open"), Rect2(620, 98, 152, 30),
+				_on_season_review_pressed, "chip")
+			review_button.disabled = not _selected_year_has_review()
 			if _has_data and _archives.size() > 1:
 				var at_newest: bool = _sel <= 0
 				var at_oldest: bool = _sel >= _archives.size() - 1
@@ -1385,6 +1388,20 @@ func _set_title_key(key: String) -> void:
 	_build_title_history_rows()
 	_build_buttons()
 	queue_redraw()
+
+
+func _selected_year_has_review() -> bool:
+	if not _has_data or _archives.is_empty():
+		return false
+	var archive: PSSeasonArchive = _archives[_archives.size() - 1 - _sel] as PSSeasonArchive
+	return RecordStore.get_season_review(archive.year, archive.season_number) != null
+
+
+func _on_season_review_pressed() -> void:
+	if not _selected_year_has_review():
+		return
+	var archive: PSSeasonArchive = _archives[_archives.size() - 1 - _sel] as PSSeasonArchive
+	AppState.show_season_review(archive.year, archive.season_number, AppState.selected_team_id)
 
 
 func _step_year(delta: int) -> void:
@@ -1528,6 +1545,15 @@ func _on_lineup_team_selected(team_id: int) -> void:
 
 func _refresh() -> void:
 	_archives = RecordStore.get_season_archives()
+	var target: Dictionary = AppState.history_review_target
+	AppState.history_review_target = {}
+	if not target.is_empty():
+		_view = VIEW_YEAR
+		for index in range(_archives.size()):
+			var target_archive: PSSeasonArchive = _archives[index] as PSSeasonArchive
+			if target_archive.year == int(target.get("year", 0)) and target_archive.season_number == int(target.get("season_number", 0)):
+				_sel = _archives.size() - 1 - index
+				break
 	_has_data = not _archives.is_empty()
 	_rows_by_league = {}
 	_post_champion_id = 0

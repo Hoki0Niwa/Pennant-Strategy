@@ -240,6 +240,61 @@ func test_main_and_development_segments_split() -> void:
 		assert_int(int(dev_by_team.get(tid, 0))).is_between(0, DraftService.DEV_DRAFT_MAX_PICKS)
 
 
+func test_confirmed_draft_class_keeps_main_development_and_zero_pick_teams() -> void:
+	Rng.set_seed_value(20311021)
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2), _team(3, "league1", 3)]
+	var players: Array = []
+	for tid: int in [1, 2, 3]:
+		_fill_team(players, tid, 58)
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 1, false)
+	state["year"] = 2031
+	state["season_number"] = 6
+	var pool: Array = state["candidate_pool"] as Array
+	var main_candidate: Dictionary = pool[0] as Dictionary
+	var dev_candidate: Dictionary = pool[1] as Dictionary
+	main_candidate["name"] = "Same name"
+	dev_candidate["name"] = "Same name"
+	main_candidate["player_template"]["name"] = "Same name"
+	dev_candidate["player_template"]["name"] = "Same name"
+	state["picks"] = [
+		{"candidate_id": main_candidate["candidate_id"], "team_id": 1, "round": 1, "overall_pick": 1, "development": false},
+		{"candidate_id": dev_candidate["candidate_id"], "team_id": 2, "round": 1, "overall_pick": 2, "development": true},
+	]
+	var result: Dictionary = DraftService.finalize_draft(state, players)
+	var frozen: PSDraftClass = PSDraftClass.from_dict(result["draft_class"] as Dictionary)
+	assert_int(frozen.year).is_equal(2031)
+	assert_int(frozen.season_number).is_equal(6)
+	assert_int(frozen.picks.size()).is_equal(2)
+	assert_int(frozen.teams.size()).is_equal(3)
+	var main_pick: Dictionary = frozen.picks[0] as Dictionary
+	var dev_pick: Dictionary = frozen.picks[1] as Dictionary
+	assert_int(int(main_pick["player_id"])).is_not_equal(int(dev_pick["player_id"]))
+	assert_int(int(main_pick["round"])).is_equal(1)
+	assert_int(int(dev_pick["round"])).is_equal(1)
+	assert_bool(bool(main_pick["development"])).is_false()
+	assert_bool(bool(dev_pick["development"])).is_true()
+	assert_int(int(frozen.to_dict()["first_eligible_year"])).is_equal(2032)
+	assert_int(int(frozen.to_dict()["first_eligible_season_number"])).is_equal(7)
+	assert_int(int(main_pick["first_eligible_year"])).is_equal(2032)
+	assert_int(int(dev_pick["first_eligible_season_number"])).is_equal(7)
+	for team_row: Dictionary in frozen.teams:
+		if int(team_row["team_id"]) == 3:
+			assert_int(int(team_row["controlled_count"])).is_equal(0)
+			assert_int(int(team_row["development_count"])).is_equal(0)
+	var count: int = players.size()
+	var again: Dictionary = DraftService.finalize_draft(state, players)
+	assert_int(players.size()).is_equal(count)
+	assert_bool((again["draft_class"] as Dictionary) == frozen.to_dict()).is_true()
+	var rookie: PSPlayer = _find_player(players, int(main_pick["player_id"]))
+	rookie.name = "Changed"
+	rookie.team_id = 3
+	rookie.development_player = true
+	main_candidate["name"] = "Changed source"
+	assert_str(str(frozen.picks[0]["name"])).is_equal("Same name")
+	assert_int(int(frozen.picks[0]["team_id"])).is_equal(1)
+	assert_bool(bool(frozen.picks[0]["development"])).is_false()
+
+
 func test_segments_are_sequential_and_flagged() -> void:
 	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 2)]
 	var players: Array = []

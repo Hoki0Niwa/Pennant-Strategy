@@ -10,6 +10,9 @@ extends Node
 #   セーブへ戻す。**保存形式を変えた直後は旧セーブが読めない**ので (互換は持たない方針)、
 #   その場合はこれで撮る。ユーザーのセーブに一切触れない点でも安全)
 # 返事待ちのトレード提案がある状態で撮る: -- --tradeoffer
+# 共通選手表だけを2解像度で撮る: -- --newsave --player-tables
+# シーズン総括の状態別撮影: -- --newsave --season-reviews
+# ドラフト回顧の状態別撮影: -- --draft-reviews (使い捨てセーブ、APPDATA scratch 必須)
 #
 # 状態別撮影モード: -- --states
 #   通常の画面単位撮影とは別に、選手詳細/能力・成績一覧/チーム詳細のタブ・絞り込み違いや、
@@ -25,6 +28,32 @@ const SaveContext = preload("res://services/storage/save_context.gd")
 const OUTPUT_DIR: String = "res://reports/ui_shots"
 const STATES_DIR: String = "res://reports/ui_shots/states"
 const STATES_DEFAULT_SIMDAYS: int = 60
+const PLAYER_TABLES_DIR: String = "res://reports/ui_shots/player_tables"
+const SEASON_REVIEWS_DIR: String = "res://reports/ui_shots/season_reviews"
+const DRAFT_REVIEWS_DIR: String = "res://reports/ui_shots/draft_reviews"
+
+
+class PlayerTablePreview extends "res://ui/screens/offseason_screen.gd":
+	var fixture: Dictionary = {}
+
+	func _ready() -> void:
+		_init_chrome()
+		_build_nav_buttons()
+
+	func _draw() -> void:
+		_update_transform()
+		draw_rect(Rect2(Vector2.ZERO, size), BG, true)
+		_row_hits.clear()
+		_scroll_zones.clear()
+		_draw_shell(str(fixture.get("title", "Player tables")), GameDb.get_team(AppState.selected_team_id), AppState.current_season)
+		var rows: Array = fixture.get("rows", []) as Array
+		var pitcher: bool = bool(fixture.get("pitcher", false))
+		var historical: bool = bool(fixture.get("historical", false))
+		var mode: String = str(fixture.get("mode", ""))
+		var selection_kind: String = str(fixture.get("selection", ""))
+		_draw_player_record_table(BODY, str(fixture.get("title", "")), rows, pitcher,
+			selection_kind, "preview", "", 0, Loc.t("offseason.empty.players"), false,
+			false, mode, not historical, bool(fixture.get("offer_years", false)), historical)
 
 const DEFAULT_SCREENS: Array = [
 	"home",
@@ -76,7 +105,7 @@ func _ready() -> void:
 	if not GameDb.data_loaded_ok:
 		await GameDb.data_loaded
 
-	if _has_flag("--newsave"):
+	if _has_flag("--newsave") or _has_flag("--draft-reviews"):
 		if not _start_throwaway_save():
 			get_tree().quit(1)
 			return
@@ -90,6 +119,24 @@ func _ready() -> void:
 			push_error("セーブの復元に失敗しました")
 			get_tree().quit(1)
 			return
+
+	if _has_flag("--draft-reviews"):
+		await _capture_draft_reviews()
+		_delete_throwaway_save()
+		get_tree().quit(0)
+		return
+
+	if _has_flag("--season-reviews"):
+		await _capture_season_reviews()
+		_delete_throwaway_save()
+		get_tree().quit(0)
+		return
+
+	if _has_flag("--player-tables"):
+		await _capture_player_tables()
+		_delete_throwaway_save()
+		get_tree().quit(0)
+		return
 
 	var states_mode: bool = _has_flag("--states")
 	var simdays: int = _requested_simdays()
@@ -140,6 +187,355 @@ func _ready() -> void:
 
 	_delete_throwaway_save()
 	get_tree().quit(0)
+
+
+func _capture_draft_reviews() -> void:
+	AppState.auto_save_enabled = false
+	var old_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var was_suspended: bool = RecordStore.is_persistence_suspended()
+	RecordStore.suspend_persistence()
+	var old_view: Dictionary = AppState.draft_review_view_state.duplicate(true)
+	var old_screen: String = AppState.current_screen
+	var statuses: Array = []
+	for index in 6:
+		var player: PSPlayer = GameDb.players[index] as PSPlayer
+		statuses.append({"player": player, "team_id": player.team_id, "source_data": player.source_data.duplicate(true)})
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(DRAFT_REVIEWS_DIR))
+	var viewport: SubViewport = SubViewport.new()
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(viewport)
+	for dimensions: Vector2i in [Vector2i(1920, 1080), Vector2i(1280, 720)]:
+		viewport.size = dimensions
+		for scenario: String in ["normal", "just_drafted", "unplayed", "missing_roster", "zero_picks", "transferred", "overseas", "retired", "long_name", "many_rows", "other_team"]:
+			RecordStore.clear_records()
+			for status: Dictionary in statuses:
+				var player: PSPlayer = status["player"] as PSPlayer
+				player.team_id = int(status["team_id"])
+				player.source_data = (status["source_data"] as Dictionary).duplicate(true)
+			_draft_review_fixture(scenario)
+			AppState.current_screen = "draft_retrospective"
+			AppState.draft_review_view_state = {"save_id": SaveContext.active_save_id(), "year": 2040, "season_number": 15,
+				"team_id": (GameDb.teams[1] as PSTeam).id if scenario == "other_team" else AppState.selected_team_id,
+				"kind": "main", "scope": "all", "scroll": {}}
+			var screen: Control = load("res://ui/screens/draft_retrospective_screen.gd").new()
+			screen.size = Vector2(dimensions)
+			viewport.add_child(screen)
+			await get_tree().process_frame
+			await get_tree().process_frame
+			if scenario != "missing_roster" and scenario != "zero_picks" and scenario != "other_team":
+				screen.call("_select_player", (GameDb.players[0] as PSPlayer).id)
+			await RenderingServer.frame_post_draw
+			var shot_name: String = "%s_%dx%d" % [scenario, dimensions.x, dimensions.y]
+			var path: String = "%s/%s.png" % [DRAFT_REVIEWS_DIR, shot_name]
+			var err: Error = viewport.get_texture().get_image().save_png(ProjectSettings.globalize_path(path))
+			print("[draft-review] %s: %s" % [path, error_string(err)])
+			_state_manifest.append({"name": shot_name, "file": path})
+			if scenario == "many_rows":
+				screen._scroll["main"] = 5
+				screen.queue_redraw()
+				await RenderingServer.frame_post_draw
+				screen.call("_remember_view")
+				var scrolled_path: String = "%s/many_rows_scrolled_%dx%d.png" % [DRAFT_REVIEWS_DIR, dimensions.x, dimensions.y]
+				viewport.get_texture().get_image().save_png(ProjectSettings.globalize_path(scrolled_path))
+				_state_manifest.append({"name": "many_rows_scrolled", "file": scrolled_path})
+			if scenario == "normal" or scenario == "long_name" or scenario == "many_rows" or scenario == "transferred":
+				for variant: String in (["draft_team"] if scenario == "transferred" else ["development", "draft_team"]):
+					if variant == "draft_team":
+						screen.call("_set_scope", "team")
+					else:
+						screen.call("_set_kind", variant)
+					await get_tree().process_frame
+					await RenderingServer.frame_post_draw
+					var variant_name: String = "%s_%s_%dx%d" % [scenario, variant, dimensions.x, dimensions.y]
+					var variant_path: String = "%s/%s.png" % [DRAFT_REVIEWS_DIR, variant_name]
+					var variant_err: Error = viewport.get_texture().get_image().save_png(ProjectSettings.globalize_path(variant_path))
+					print("[draft-review] %s: %s" % [variant_path, error_string(variant_err)])
+					_state_manifest.append({"name": variant_name, "file": variant_path})
+			screen.queue_free()
+			await get_tree().process_frame
+	viewport.queue_free()
+	for status: Dictionary in statuses:
+		var player: PSPlayer = status["player"] as PSPlayer
+		player.team_id = int(status["team_id"])
+		player.source_data = status["source_data"] as Dictionary
+	RecordStore.load_from_dict(old_records)
+	if not was_suspended:
+		RecordStore.resume_persistence()
+	AppState.draft_review_view_state = old_view
+	AppState.current_screen = old_screen
+	await get_tree().process_frame
+	_print_state_manifest()
+
+
+func _draft_review_fixture(scenario: String) -> void:
+	var picks: Array = []
+	var teams: Array = []
+	for team: PSTeam in GameDb.teams:
+		if not team.farm_only:
+			teams.append({"team_id": team.id, "team_name": team.name, "controlled_count": 0, "development_count": 0})
+	var count: int = 48 if scenario == "many_rows" else 6
+	for index in count:
+		var player: PSPlayer = GameDb.players[index % 6] as PSPlayer
+		var team: PSTeam = GameDb.teams[1 if index == 5 else 0] as PSTeam
+		if scenario == "zero_picks":
+			team = GameDb.teams[1] as PSTeam
+		var pitcher: bool = index % 3 == 2
+		var development: bool = index % 2 == 1
+		picks.append({"player_id": player.id if index < 6 else -98000 - index, "team_id": team.id, "team_name": team.name,
+			"round": int(float(index) / 2.0) + 1, "overall_pick": index + 1, "development": development,
+			"name": "東西南北大和武蔵相模太郎".repeat(5) + str(index) if scenario == "long_name" else player.name,
+			"age": 18 + index % 6, "role": "starter" if pitcher else "fielder", "position": 1 if pitcher else 6,
+			"source_type": "high_school", "first_eligible_year": 2041, "first_eligible_season_number": 16})
+		for row: Dictionary in teams:
+			if int(row["team_id"]) == team.id:
+				var key: String = "development_count" if development else "controlled_count"
+				row[key] = int(row[key]) + 1
+	if scenario != "missing_roster":
+		RecordStore.add_draft_class(PSDraftClass.from_dict({"year": 2040, "season_number": 15,
+			"first_eligible_year": 2041, "first_eligible_season_number": 16, "teams": teams, "picks": picks}))
+	var selected: PSPlayer = GameDb.players[0] as PSPlayer
+	if scenario == "transferred":
+		selected.team_id = (GameDb.teams[1] as PSTeam).id
+	elif scenario == "overseas" or scenario == "retired":
+		selected.team_id = 0
+		selected.source_data["retired"] = true
+		selected.source_data[PSPlayer.SOURCE_KEY_OVERSEAS_YEAR] = 2042 if scenario == "overseas" else 0
+	if scenario == "just_drafted":
+		return
+	for year in [2041, 2042]:
+		var facts: Array = []
+		for pick: Dictionary in picks:
+			if scenario == "unplayed":
+				continue
+			var pitcher: bool = str(pick["role"]) == "starter"
+			var total: Dictionary = {"war": 1.25, "batter_stats": {} if pitcher else {"games": 100, "plate_appearances": 400,
+				"at_bats": 350, "hits": 100, "doubles": 20, "home_runs": 10, "walks": 45, "runs_batted_in": 50},
+				"pitcher_stats": {"games": 20, "outs_pitched": 300, "earned_runs": 32, "strikeouts": 95,
+					"walks": 30, "hits_allowed": 85, "wins": 8} if pitcher else {}}
+			var by_team: Dictionary = {str(pick["team_id"]): total.duplicate(true)}
+			if scenario == "transferred":
+				by_team[str(pick["team_id"])] = {"war": 0.25, "batter_stats": {"games": 10, "plate_appearances": 40, "at_bats": 35, "hits": 10}, "pitcher_stats": {}}
+			facts.append({"player_id": pick["player_id"], "name": pick["name"], "role": pick["role"], "position": pick["position"],
+				"age": int(pick["age"]) + year - 2040, "team_id": pick["team_id"], "total": total, "teams": by_team})
+		RecordStore.add_season_review(PSSeasonReview.from_dict({"year": year, "season_number": year - 2025,
+			"completion_kind": "regular_season", "teams": [], "player_facts": facts}))
+
+
+func _capture_season_reviews() -> void:
+	AppState.auto_save_enabled = false
+	RecordStore.suspend_persistence()
+	var old_records: Dictionary = RecordStore.to_dict().duplicate(true)
+	var old_view: Dictionary = AppState.season_review_view_state.duplicate(true)
+	var old_screen: String = AppState.current_screen
+	var old_locale: Dictionary = Loc._table.duplicate(true)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(SEASON_REVIEWS_DIR))
+	var viewport: SubViewport = SubViewport.new()
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(viewport)
+	for dimensions: Vector2i in [Vector2i(1920, 1080), Vector2i(1280, 720)]:
+		viewport.size = dimensions
+		for scenario: String in ["normal", "previous", "no_postseason", "empty", "no_awards", "negative_war", "long_text", "many_awards", "other_team", "pitcher"]:
+			RecordStore.clear_records()
+			Loc._table = old_locale.duplicate(true)
+			if scenario != "empty":
+				var review: PSSeasonReview = _season_review_fixture(scenario)
+				RecordStore.add_season_review(review)
+			if scenario == "long_text":
+				Loc._table["season_review.fact.record"] = "{team} ".repeat(90) + "{rank} / {wins} / {losses} / {draws}"
+			AppState.current_screen = "season_review"
+			AppState.season_review_view_state = {"save_id": SaveContext.active_save_id(), "team_id": AppState.selected_team_id,
+				"tab": "pitcher" if scenario == "pitcher" else "fielder", "scroll": {}}
+			if scenario == "other_team":
+				AppState.season_review_view_state["team_id"] = (GameDb.teams[1] as PSTeam).id
+			var screen: Control = load("res://ui/screens/season_review_screen.gd").new()
+			screen.size = Vector2(dimensions)
+			viewport.add_child(screen)
+			await get_tree().process_frame
+			await get_tree().process_frame
+			await RenderingServer.frame_post_draw
+			var shot_name: String = "%s_%dx%d" % [scenario, dimensions.x, dimensions.y]
+			var path: String = "%s/%s.png" % [SEASON_REVIEWS_DIR, shot_name]
+			var err: Error = viewport.get_texture().get_image().save_png(ProjectSettings.globalize_path(path))
+			print("[season-review] %s: %s" % [path, error_string(err)])
+			_state_manifest.append({"name": shot_name, "file": path})
+			screen.queue_free()
+			await get_tree().process_frame
+	viewport.queue_free()
+	Loc._table = old_locale
+	RecordStore.load_from_dict(old_records)
+	RecordStore.resume_persistence()
+	AppState.season_review_view_state = old_view
+	AppState.current_screen = old_screen
+	await get_tree().process_frame
+	_print_state_manifest()
+
+
+func _season_review_fixture(scenario: String) -> PSSeasonReview:
+	var year: int = 2041
+	var number: int = 16
+	var season: PSSeason = PSSeason.new()
+	season.year = year
+	season.season_number = number
+	var records: Array = []
+	for index in 6:
+		var team: PSTeam = GameDb.teams[index % 2] as PSTeam
+		var record: PSPlayerSeasonRecord = PSPlayerSeasonRecord.new()
+		record.player_id = (GameDb.players[index] as PSPlayer).id
+		record.name = "Very long frozen player name %d" % index if scenario == "long_text" else "Contributor %d" % index
+		record.team_id = team.id
+		record.year = year
+		record.season_number = number
+		record.role = "starter" if index >= 4 else "fielder"
+		record.position = 1 if index >= 4 else 6
+		record.age = 22 + index
+		if index >= 4:
+			record.pitcher_stats = PSPitcherStats.from_dict({"games": 25, "starts": 25, "outs_pitched": 450, "earned_runs": 35,
+				"strikeouts": 140, "walks": 40, "hits_allowed": 120, "home_runs_allowed": 10, "wins": 12, "losses": 5})
+		else:
+			record.batter_stats = PSBatterStats.from_dict({"games": 140, "plate_appearances": 550, "at_bats": 480, "hits": 145,
+				"doubles": 30, "home_runs": 22, "walks": 60, "runs_batted_in": 80, "strikeouts": 80})
+		records.append(record.to_dict())
+	RecordStore.load_from_dict({"player_records": records})
+	for team: PSTeam in GameDb.teams:
+		season.standings[team.id] = PSStats.from_dict({"games": 143, "wins": 82 if team.id == AppState.selected_team_id else 65,
+			"losses": 58 if team.id == AppState.selected_team_id else 75, "draws": 3, "runs_scored": 580, "runs_allowed": 510})
+	var archive: PSSeasonArchive = PSSeasonArchive.new()
+	archive.year = year
+	archive.season_number = number
+	archive.awards = PSAwards.new()
+	if scenario != "no_postseason":
+		archive.postseason = PSPostseasonResult.new()
+		archive.postseason.champion_team_id = AppState.selected_team_id
+	if scenario != "no_awards":
+		archive.awards.mvp_league1_player_id = (GameDb.players[0] as PSPlayer).id
+		archive.awards.rookie_league1_player_id = (GameDb.players[0] as PSPlayer).id
+		if scenario == "many_awards":
+			for category: String in PSAwards.BATTING_CATEGORIES:
+				if not archive.awards.batting_titles.has("league1"):
+					archive.awards.batting_titles["league1"] = {}
+				archive.awards.batting_titles["league1"][category] = (GameDb.players[0] as PSPlayer).id
+			archive.awards.best_nine["league1"] = []
+			for slot in PSAwards.BEST_NINE_SLOT_POSITIONS:
+				archive.awards.best_nine["league1"].append({"pid": (GameDb.players[0] as PSPlayer).id, "value": str(slot)})
+	var previous: PSSeasonReview = null
+	if scenario == "previous":
+		var previous_season: PSSeason = PSSeason.from_dict(season.to_dict())
+		previous_season.year -= 1
+		previous_season.season_number -= 1
+		previous = PSSeasonReviewService.build(previous_season, GameDb.teams)
+	var review: PSSeasonReview = PSSeasonReviewService.build(season, GameDb.teams, previous,
+		"regular_season" if scenario == "no_postseason" else "postseason", archive)
+	var payload: Dictionary = review.to_dict()
+	if scenario == "negative_war":
+		for team: Dictionary in payload["teams"]:
+			for kind: String in ["contributors_fielder", "contributors_pitcher"]:
+				for contributor: Dictionary in team[kind]:
+					contributor["war"] = -2.0
+					contributor["stats"]["war"] = -2.0
+			team["facts"] = PSSeasonReviewService._sentence_facts(team)
+	return PSSeasonReview.from_dict(JSON.parse_string(JSON.stringify(payload)) as Dictionary)
+
+
+func _capture_player_tables() -> void:
+	AppState.auto_save_enabled = false
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(PLAYER_TABLES_DIR))
+	var preview: PlayerTablePreview = PlayerTablePreview.new()
+	var viewport: SubViewport = SubViewport.new()
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(viewport)
+	viewport.add_child(preview)
+	var fixtures: Array = _player_table_fixtures(preview)
+	for dimensions: Vector2i in [Vector2i(1920, 1080), Vector2i(1280, 720)]:
+		viewport.size = dimensions
+		preview.size = Vector2(dimensions)
+		for fixture_value: Dictionary in fixtures:
+			preview.fixture = fixture_value
+			preview.selected_release_ids.clear()
+			preview.selected_demote_ids.clear()
+			var fixture_rows: Array = fixture_value.get("rows", []) as Array
+			if str(fixture_value.get("selection", "")) == "release" and fixture_rows.size() > 1:
+				preview.selected_release_ids[(fixture_rows[0]["record"] as PSPlayerSeasonRecord).player_id] = true
+				preview.selected_demote_ids[(fixture_rows[1]["record"] as PSPlayerSeasonRecord).player_id] = true
+			preview.set("_scroll", {"preview": int(fixture_value.get("offset", 0))})
+			preview.queue_redraw()
+			await get_tree().process_frame
+			await RenderingServer.frame_post_draw
+			var shot_name: String = "%s_%dx%d" % [str(fixture_value["id"]), dimensions.x, dimensions.y]
+			var out_path: String = "%s/%s.png" % [PLAYER_TABLES_DIR, shot_name]
+			var image: Image = viewport.get_texture().get_image()
+			var err: int = image.save_png(ProjectSettings.globalize_path(out_path))
+			print("[player-table] %s -> %s (%s)" % [shot_name, out_path, "ok" if err == OK else ("err %d" % err)])
+			_state_manifest.append({"name": shot_name, "file": out_path})
+	viewport.queue_free()
+	await get_tree().process_frame
+	_print_state_manifest()
+
+
+func _player_table_fixtures(preview: PlayerTablePreview) -> Array:
+	var fixtures: Array = []
+	for pitcher: bool in [false, true]:
+		var current_rows: Array = []
+		for player_value in GameDb.players:
+			var player: PSPlayer = player_value as PSPlayer
+			if player == null or player.is_retired() or player.team_id != AppState.selected_team_id or player.is_pitcher() != pitcher:
+				continue
+			var record: PSPlayerSeasonRecord = preview.call("_record_for_people_entry", {"player_id": player.id}) as PSPlayerSeasonRecord
+			if record == null:
+				continue
+			current_rows.append({"record": record, "player": player, "entry": {
+				"player_id": player.id, "team_id": player.team_id, "new_salary": record.salary,
+				"salary_delta": 500, "contract_years": 3, "fgc_years": 3, "offer_years": 3,
+				"market_salary_text": "1.20", "fgc_current_salary_text": "0.85",
+				"offer_text": Loc.t("offseason.single_year"), "offer_color": Color(0.4, 0.7, 1.0),
+			}})
+			if current_rows.size() >= 8:
+				break
+		var suffix: String = "pitcher" if pitcher else "fielder"
+		for profile: Dictionary in [
+			{"id": "contract", "title": "契約更改", "mode": "contract", "selection": ""},
+			{"id": "fa", "title": "FA 提示", "mode": "", "selection": "fa", "offer_years": true},
+			{"id": "release", "title": "戦力外", "mode": "", "selection": "release"},
+		]:
+			var fixture: Dictionary = profile.duplicate(true)
+			fixture["id"] = "current_%s_%s" % [str(profile["id"]), suffix]
+			fixture["rows"] = current_rows
+			fixture["pitcher"] = pitcher
+			fixtures.append(fixture)
+
+		var history_rows: Array = []
+		for index in range(42):
+			var identity: Dictionary = {
+				"player_id": 900000 + index + (100 if pitcher else 0), "team_id": AppState.selected_team_id,
+				"team_name": "指名球団", "source_type": "high_school" if index % 2 == 0 else "farm_club",
+				"name": "非常に長い名前の選手アルベルト・フェルナンデス" if index == 0 else "回顧 選手%02d" % index,
+				"age": 18 + index % 7, "position": 1 if pitcher else 2 + index % 8,
+				"role": "starter" if pitcher else "", "round": index + 1,
+				"development": index % 3 == 0, "year": 2027, "season_number": 2,
+			}
+			var totals: Dictionary = {}
+			if index != 1:
+				if pitcher:
+					totals = {"pitcher_stats": {"games": 45, "starts": 30, "wins": 17, "losses": 8,
+						"outs_pitched": 617, "earned_runs": 61, "hits_allowed": 174, "walks": 45, "strikeouts": 192},
+						"war": 5.7, "fip": 2.82}
+				else:
+					totals = {"batter_stats": {"games": 140, "plate_appearances": 600, "at_bats": 520,
+						"hits": 160, "doubles": 32, "triples": 4, "home_runs": 24, "runs_batted_in": 88,
+						"walks": 68, "hit_by_pitches": 6, "sacrifice_flies": 6, "stolen_bases": 15},
+						"war": 4.8, "wrc_plus": 142.0, "woba": 0.382, "oaa": 5.6}
+			history_rows.append(PSPlayerRecordTableRow.from_history(identity, totals))
+		for profile: Dictionary in [
+			{"id": "rows", "rows": history_rows.slice(0, 4), "offset": 0},
+			{"id": "many", "rows": history_rows, "offset": 0},
+			{"id": "scroll", "rows": history_rows, "offset": 17},
+			{"id": "empty", "rows": [], "offset": 0},
+		]:
+			var fixture: Dictionary = profile.duplicate()
+			fixture.merge({"id": "history_%s_%s" % [str(profile["id"]), suffix],
+				"title": "2027–2031 指名選手の期間成績", "mode": "draft_history",
+				"pitcher": pitcher, "historical": true}, true)
+			fixtures.append(fixture)
+	return fixtures
 
 
 # --tradeoffer: 自軍宛ての返事待ちトレード提案を 1 件仕込む (サイドバーのバッジ、ホームの通知ボタン、

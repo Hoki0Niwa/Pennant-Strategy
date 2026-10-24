@@ -10,6 +10,7 @@ signal postseason_skip_finished(result: Dictionary)
 
 const CAMP_SERVICE_PATH: String = "res://services/season/camp_service.gd"
 const SeasonCalendar = preload("res://services/season/season_calendar.gd")
+const SaveContext = preload("res://services/storage/save_context.gd")
 # オフシーズン進行はステップID (String) で管理する。順序は OFFSEASON_STEP_ORDER が単一ソースで、
 # ステップの挿入・並べ替えはこの配列の編集だけで完結する (番号の振り直しは存在しない)。
 # offseason_results のキーもこのIDをそのまま使う。
@@ -93,6 +94,10 @@ var selected_team_id: int = 0
 var current_season: PSSeason = null
 var last_status_message: String = ""
 var current_player_id: int = 0
+# 閲覧中の総括の選択だけを保持し、ゲーム状態の保存には含めない。
+var season_review_view_state: Dictionary = {}
+var draft_review_view_state: Dictionary = {}
+var history_review_target: Dictionary = {}
 # 月末・日数指定・日付指定・残り全試合のスキップは順位表を表示したまま進める。進捗値は
 # 画面再生成時にも復元できるよう AppState 側へ保持し、完了後は通常の順位表操作へ戻す。
 var season_skip_active: bool = false
@@ -187,6 +192,40 @@ func show_player_detail(player_id: int) -> void:
 	_record_history_snapshot("player_detail")
 	current_player_id = player_id
 	request_screen("player_detail", false)
+
+
+func show_season_review(year: int = 0, season_number: int = 0, team_id: int = 0) -> void:
+	var save_id: String = SaveContext.active_save_id()
+	if str(season_review_view_state.get("save_id", "")) != save_id:
+		season_review_view_state = {}
+	season_review_view_state["save_id"] = save_id
+	if year > 0 and season_number > 0:
+		season_review_view_state["year"] = year
+		season_review_view_state["season_number"] = season_number
+		season_review_view_state["scroll"] = {}
+		season_review_view_state["scroll_narrative"] = 0
+		season_review_view_state["scroll_awards"] = 0
+	if team_id > 0:
+		season_review_view_state["team_id"] = team_id
+	request_screen("season_review")
+
+
+func show_season_history(year: int, season_number: int) -> void:
+	history_review_target = {"year": year, "season_number": season_number}
+	request_screen("history")
+
+
+func show_draft_retrospective(year: int = 0, season_number: int = 0, team_id: int = 0) -> void:
+	var save_id: String = SaveContext.active_save_id()
+	if str(draft_review_view_state.get("save_id", "")) != save_id:
+		draft_review_view_state = {}
+	draft_review_view_state["save_id"] = save_id
+	if year > 0 and season_number > 0:
+		draft_review_view_state.merge({"year": year, "season_number": season_number,
+			"selected_player_id": 0, "scroll": {}, "scroll_details": 0}, true)
+	if team_id > 0:
+		draft_review_view_state["team_id"] = team_id
+	request_screen("draft_retrospective")
 
 
 # 現在の画面状態を戻る履歴へ積む。連続重複・フロー専用画面・履歴操作中の再記録は抑止する。
@@ -397,6 +436,9 @@ func start_new_season() -> bool:
 		push_warning("Could not create a new save folder.")
 		return false
 
+	season_review_view_state = {}
+	draft_review_view_state = {}
+	history_review_target = {}
 	current_season = SeasonService.create_new_season(GameDb.teams, selected_team_id, SeasonService.DEFAULT_START_YEAR, dh_settings_for_schedule())
 	RecordStore.clear_records()
 	# 初期世界の選手が開始前に残した成績 (長いプロ歴の選手も開幕時点で過去成績を持つ)。
@@ -622,6 +664,9 @@ func _archive_current_season_if_needed() -> bool:
 	archive.standings = _snapshot_standings(current_season)
 	archive.postseason = current_postseason
 	archive.awards = current_awards
+	var previous_review: PSSeasonReview = RecordStore.get_season_review(current_season.year - 1, current_season.season_number - 1)
+	var completion_kind: String = "postseason" if current_postseason != null else "regular_season"
+	RecordStore.add_season_review(PSSeasonReviewService.build(current_season, GameDb.teams, previous_review, completion_kind, archive))
 	RecordStore.add_season_archive(archive, auto_save_enabled)
 	return true
 
@@ -1023,6 +1068,7 @@ func _finalize_draft_if_complete() -> Dictionary:
 	if not _is_development_draft_complete():
 		return {"title": Loc.t("offseason.step.development_draft"), "draft_in_progress": true}
 	var final_result: Dictionary = DraftService.finalize_draft(draft_state, GameDb.players)
+	RecordStore.add_draft_class(PSDraftClass.from_dict(final_result["draft_class"] as Dictionary))
 	GameDb.rebuild_player_indices()
 	var result: Dictionary = final_result.duplicate(true)
 	result["all_draft_picks"] = (final_result.get("draft_picks", []) as Array).duplicate(true)
@@ -2095,6 +2141,9 @@ func _season_records_look_wiped(season: PSSeason) -> bool:
 func restore_from_save(data: Dictionary) -> bool:
 	if data.is_empty():
 		return false
+	season_review_view_state = {}
+	draft_review_view_state = {}
+	history_review_target = {}
 	season_skip_active = false
 	season_skip_cancel_pending = false
 	season_skip_done = 0

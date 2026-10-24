@@ -718,6 +718,8 @@ func test_drafting_a_farm_club_player_moves_him_instead_of_creating_a_new_one() 
 
 	var state: Dictionary = {
 		"year": 2026,
+		"season_number": 1,
+		"draft_teams": [{"team_id": 1, "team_name": "NPB"}],
 		"candidate_pool": pool,
 		"logs": [],
 		"picks": [{
@@ -734,6 +736,13 @@ func test_drafting_a_farm_club_player_moves_him_instead_of_creating_a_new_one() 
 	var rookies: Array = result.get("rookies", []) as Array
 	assert_int(rookies.size()).is_equal(1)
 	assert_int(int((rookies[0] as Dictionary).get("player_id", 0))).is_equal(player_id)
+	var draft_class: PSDraftClass = PSDraftClass.from_dict(result["draft_class"] as Dictionary)
+	assert_int(int(draft_class.picks[0]["player_id"])).is_equal(player_id)
+	assert_str(str(draft_class.picks[0]["source_type"])).is_equal(DraftService.FARM_CLUB_SOURCE_TYPE)
+	assert_int(int(draft_class.picks[0]["first_eligible_year"])).is_equal(2027)
+	assert_int(int(draft_class.picks[0]["team_id"])).is_equal(1)
+	assert_bool(bool(draft_class.picks[0]["development"])).is_true()
+	assert_bool((draft_class.picks[0] as Dictionary).has("farm_batter_stats")).is_false()
 
 	# 新規選手は増えず、専用球団のロスターがその1人ぶん減る。
 	assert_int(GameDb.players.size()).is_equal(players_before)

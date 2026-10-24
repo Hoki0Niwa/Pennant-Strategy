@@ -35,7 +35,7 @@ static func build_initial_state(season: PSSeason, teams: Array, cs_advantage_rul
 	result.season_number = season.season_number
 	result.cs_advantage_rule = PSPostseasonResult.normalize_cs_advantage_rule(cs_advantage_rule)
 
-	var by_league: Dictionary = _league_standings(season, teams)
+	var by_league: Dictionary = league_standings(season, teams)
 	var league1_ranked: Array = by_league.get("league1", []) as Array
 	var league2_ranked: Array = by_league.get("league2", []) as Array
 
@@ -599,7 +599,7 @@ static func _write_postseason_game_log(season: PSSeason, stage_key: String, game
 	PSGameLogService.write_postseason_game_log(season, stage_key, int(game_entry.get("game_num", 0)), result)
 
 
-static func _league_standings(season: PSSeason, teams: Array) -> Dictionary:
+static func league_standings(season: PSSeason, teams: Array) -> Dictionary:
 	var by_league: Dictionary = {"league1": [], "league2": []}
 	for team_row in teams:
 		var team: PSTeam = team_row as PSTeam
