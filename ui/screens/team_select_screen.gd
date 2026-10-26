@@ -151,8 +151,11 @@ func _draw_card(rect: Rect2, info: Dictionary) -> void:
 	# チームカラーの左アクセントバー
 	_round(Rect2(rect.position.x, rect.position.y + 12.0, 5.0, rect.size.y - 24.0), team.color, Color.TRANSPARENT, 3, 0)
 
+	# 上部ヘッダ帯
+	_round(Rect2(rect.position.x + 6.0, rect.position.y + 6.0, rect.size.x - 12.0, 78.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.10) if selected else PANEL_2, Color.TRANSPARENT, 8)
+
 	_team_badge(Rect2(rect.position.x + 22.0, rect.position.y + 20.0, 46.0, 46.0), team)
-	_text(team.name, Vector2(rect.position.x + 80.0, rect.position.y + 44.0), 23, TEXT, rect.size.x - 96.0)
+	_text(team.name, Vector2(rect.position.x + 80.0, rect.position.y + 44.0), 23, TEXT, rect.size.x - 96.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text(Loc.t("team_select.previous_rank", {"rank": team.previous_rank}), Vector2(rect.position.x + 80.0, rect.position.y + 70.0), 14, MUTED, rect.size.x - 96.0)
 	if selected:
 		_chip(Rect2(rect.end.x - 82.0, rect.position.y + 18.0, 64.0, 24.0), Loc.t("team_select.selected_chip"), BLUE)
@@ -176,8 +179,9 @@ func _draw_grades(rect: Rect2, info: Dictionary) -> void:
 		@warning_ignore("integer_division")
 		var y: float = rect.position.y + GRADE_TOP + GRADE_ROW_H * float(i / GRADE_COLS)
 		var grade: String = str(info.get("%s_grade" % str(row["key"]), "-"))
-		_text(Loc.t(str(row["label"])), Vector2(x, y), GRADE_LABEL_FS, MUTED, GRADE_LABEL_W)
-		_text(grade, Vector2(x + GRADE_LABEL_W, y), GRADE_FS, _strength_grade_color(grade),
+		_round(Rect2(x - 4.0, y - 20.0, col_w - 6.0, 28.0), PANEL_2, Color.TRANSPARENT, 5)
+		_text(Loc.t(str(row["label"])), Vector2(x + 2.0, y), GRADE_LABEL_FS, MUTED, GRADE_LABEL_W)
+		_text(grade, Vector2(x + GRADE_LABEL_W + 2.0, y), GRADE_FS, _strength_grade_color(grade),
 			GRADE_VALUE_W, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 

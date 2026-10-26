@@ -224,8 +224,8 @@ func _overseas_frequency_choices() -> Array:
 
 func _draw_save_panel(panel: Rect2) -> void:
 	_panel(panel, Loc.t("options.save.panel"))
-	_text(Loc.t("options.save.folder"), Vector2(panel.position.x + 18, panel.position.y + 62), FS_LABEL, MUTED)
-	_text(_save_path, Vector2(panel.position.x + 18, panel.position.y + 84), 13, MUTED, panel.size.x - 36)
+	_round(Rect2(panel.position.x + 18.0, panel.position.y + 54.0, panel.size.x - 36.0, 34.0), PANEL_2, BORDER_SOFT, 6)
+	_text(_save_path, Vector2(panel.position.x + 28.0, panel.position.y + 76.0), 13, MUTED, panel.size.x - 56.0)
 
 
 func _draw_settings_panel(panel: Rect2) -> void:
@@ -235,11 +235,12 @@ func _draw_settings_panel(panel: Rect2) -> void:
 	for i in range(rows.size()):
 		var row: Dictionary = rows[i] as Dictionary
 		var rect: Rect2 = _toggle_row_rect(panel, i)
-		_text(str(row["label"]), Vector2(rect.position.x + 4, rect.position.y + 20), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+		_round(Rect2(rect.position.x - 4.0, rect.position.y - 2.0, rect.size.x + 8.0, rect.size.y + 4.0), PANEL_2, Color.TRANSPARENT, 6)
+		_text(str(row["label"]), Vector2(rect.position.x + 6, rect.position.y + 20), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		# 説明文は長さに応じて _toggle_row_height が2行分の高さを確保しているので、折返し描画にする。
 		# 右端のチップ (ON/OFF 1 個 or 選択肢の横並び) に掛からない幅で折り返す。
 		var chips_w: float = _choice_chips_width(row["choices"] as Array) + 14.0 if row.has("choices") else 90.0
-		_multiline(str(row["desc"]), Vector2(rect.position.x + 4, rect.position.y + 40), FS_LABEL, MUTED, rect.size.x - chips_w)
+		_multiline(str(row["desc"]), Vector2(rect.position.x + 6, rect.position.y + 40), FS_LABEL, MUTED, rect.size.x - chips_w)
 		if i < rows.size() - 1:
 			_line(Vector2(rect.position.x, rect.end.y + 4), Vector2(rect.end.x, rect.end.y + 4), HAIRLINE, 1.0)
 

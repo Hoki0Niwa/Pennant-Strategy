@@ -153,12 +153,12 @@ func _layout_content(force: bool = false) -> void:
 	_place(_year_picker, Rect2(346, 98, 300, 34))
 	_place(_team_picker, Rect2(730, 98, 330, 34))
 	for picker: OptionButton in [_year_picker, _team_picker]:
-		_apply_button_style(picker, "action")
-		_style_popup(picker.get_popup())
+		_style_option_button(picker)
 	_year_picker.disabled = _year_entries.is_empty()
 	_team_picker.disabled = _draft_class == null
 	_details_scroll.visible = _draft_class != null
 	_place(_details_scroll, DETAILS_RECT.grow_individual(-18, -56, -18, -16))
+	_style_scroll_container(_details_scroll)
 	_details_text.add_theme_font_override("font", _font)
 	_details_text.add_theme_font_size_override("font_size", maxi(10, int(16.0 * _scale_f)))
 	_details_text.add_theme_color_override("font_color", TEXT)
@@ -176,10 +176,17 @@ func _draw() -> void:
 	_row_hits.clear()
 	_scroll_zones.clear()
 	_round(Rect2(0, 0, SIDEBAR_W, BASE.y), SIDEBAR_BG, Color.TRANSPARENT, 0, 0)
+	_line(Vector2(SIDEBAR_W, 0), Vector2(SIDEBAR_W, BASE.y), BORDER_SOFT, 1.0)
 	_round(Rect2(SIDEBAR_W, 0, BASE.x - SIDEBAR_W, HEADER_H), HEADER_BG, Color.TRANSPARENT, 0, 0)
+	_line(Vector2(SIDEBAR_W, HEADER_H), Vector2(BASE.x, HEADER_H), BORDER_SOFT, 1.0)
 	_draw_sidebar()
 	_text(Loc.t("draft_review.nav"), Vector2(262, 56), 28, TEXT)
-	_text(str(_view.get("team_name", "")), Vector2(530, 54), 20, TEXT, 900)
+	var team_obj: PSTeam = GameDb.get_team(_selected_team) if _selected_team > 0 else null
+	if team_obj != null:
+		_team_badge(Rect2(530, 23, 40, 40), team_obj)
+		_text(team_obj.name, Vector2(582, 54), 20, TEXT, 840)
+	else:
+		_text(str(_view.get("team_name", "")), Vector2(530, 54), 20, TEXT, 900)
 	_text(Loc.t("draft_review.year"), Vector2(262, 121), 14, MUTED)
 	_text(Loc.t("season_review.team"), Vector2(670, 121), 14, MUTED)
 	_layout_content()
@@ -202,7 +209,11 @@ func _update_details() -> void:
 	for row: Dictionary in _rows:
 		var identity: Dictionary = row["entry"]
 		if int(identity["player_id"]) == _selected_player_id:
-			_details_text.text = str(identity["name"]) + "\n" + Loc.t("draft_review.current", {"status": _current_status(_selected_player_id)})
+			var p: PSPlayer = GameDb.get_player(_selected_player_id)
+			var p_title: String = str(identity["name"])
+			if p != null and p.jersey_number > 0:
+				p_title = "#%d %s" % [p.jersey_number, p_title]
+			_details_text.text = p_title + "\n" + Loc.t("draft_review.current", {"status": _current_status(_selected_player_id)})
 			for player: Dictionary in _view["players"]:
 				if int(player["identity"]["player_id"]) != _selected_player_id:
 					continue

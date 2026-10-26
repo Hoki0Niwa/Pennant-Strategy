@@ -57,17 +57,17 @@ const POST_GROUPS: Array = [
 ]
 
 const HIST_COLUMNS: Array = [
-	{"title": "col.rank",         "key": "rank", "w": 40,  "align": "l", "fmt": "rank"},
-	{"title": "col.team",         "key": "team", "w": 180, "align": "l", "fmt": "team", "strong": true},
-	{"title": "col.games_short",  "key": "g",    "w": 58,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "col.wins",         "key": "w",    "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "col.losses",       "key": "l",    "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "col.draws",        "key": "d",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "col.win_pct",      "key": "pct",  "w": 78,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "col.games_back",   "key": "gb",   "w": 66,  "align": "r", "fmt": "gb"},
-	{"title": "col.runs_scored",  "key": "rs",   "w": 62,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "col.runs_allowed", "key": "ra",   "w": 62,  "align": "r", "fmt": "int"},
-	{"title": "col.run_diff",     "key": "diff", "w": 70,  "align": "r", "fmt": "diff"},
+	{"title": "col.rank",         "key": "rank", "w": 40,  "align": "l", "fmt": "rank", "group": "group.team"},
+	{"title": "col.team",         "key": "team", "w": 180, "align": "l", "fmt": "team", "strong": true, "group": "group.team"},
+	{"title": "col.games_short",  "key": "g",    "w": 58,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.wins",         "key": "w",    "w": 56,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.losses",       "key": "l",    "w": 56,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.draws",        "key": "d",    "w": 50,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.win_pct",      "key": "pct",  "w": 78,  "align": "r", "fmt": "rate", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.games_back",   "key": "gb",   "w": 66,  "align": "r", "fmt": "gb", "group": "group.standings_record"},
+	{"title": "col.runs_scored",  "key": "rs",   "w": 62,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.run_diff"},
+	{"title": "col.runs_allowed", "key": "ra",   "w": 62,  "align": "r", "fmt": "int", "group": "group.run_diff"},
+	{"title": "col.run_diff",     "key": "diff", "w": 70,  "align": "r", "fmt": "diff", "group": "group.run_diff"},
 ]
 
 # --- 通算記録 / タイトル履歴 / スタメン履歴 ビュー ---
@@ -150,58 +150,62 @@ const TITLE_TABLE_RECT: Rect2 = Rect2(262, 190, 1638, 868)
 # 「記録」列だけ strong で強調する。「記録」列の fmt はカテゴリ定義 (int/rate/f2) から都度差し込む。
 func _career_bat_columns(category: Dictionary) -> Array:
 	return [
-		{"title": "col.rank",       "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
-		{"title": "col.player",     "key": "player", "w": 190, "align": "l", "fmt": "str", "strong": true},
-		{"title": "col.team",       "key": "team",   "w": 140, "align": "l", "fmt": "team", "sep_before": true},
-		{"title": "history.col.span", "key": "span", "w": 110, "align": "l", "fmt": "str"},
-		{"title": "col.games",      "key": "g",      "w": 74,  "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "col.avg",        "key": "avg",    "w": 82,  "align": "r", "fmt": "rate"},
-		{"title": "col.hr",         "key": "hr",     "w": 64,  "align": "r", "fmt": "int"},
-		{"title": "stat.rbi",       "key": "rbi",    "w": 74,  "align": "r", "fmt": "int"},
-		{"title": "history.col.record", "key": "value", "w": 90, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+		{"title": "col.rank",       "key": "rank",   "w": 40,  "align": "l", "fmt": "rank", "group": "group.profile"},
+		{"title": "box.col.pos",  "key": "pos",    "w": 38,  "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player",     "key": "player", "w": 112, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.team",       "key": "team",   "w": 64,  "align": "l", "fmt": "team", "sep_before": true, "group": "group.profile"},
+		{"title": "history.col.span", "key": "span", "w": 110, "align": "l", "fmt": "str", "group": "group.profile"},
+		{"title": "col.games",      "key": "g",      "w": 74,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.fielder_stats"},
+		{"title": "col.avg",        "key": "avg",    "w": 82,  "align": "r", "fmt": "rate", "group": "group.fielder_stats"},
+		{"title": "col.hr",         "key": "hr",     "w": 64,  "align": "r", "fmt": "int", "group": "group.fielder_stats"},
+		{"title": "stat.rbi",       "key": "rbi",    "w": 74,  "align": "r", "fmt": "int", "group": "group.fielder_stats"},
+		{"title": "history.col.record", "key": "value", "w": 90, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true, "group": "group.history"},
 	]
 
 
 func _career_pit_columns(category: Dictionary) -> Array:
 	return [
-		{"title": "col.rank",        "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
-		{"title": "col.player",      "key": "player", "w": 190, "align": "l", "fmt": "str", "strong": true},
-		{"title": "col.team",        "key": "team",   "w": 140, "align": "l", "fmt": "team", "sep_before": true},
-		{"title": "history.col.span", "key": "span",  "w": 110, "align": "l", "fmt": "str"},
-		{"title": "col.appearances", "key": "g",      "w": 74,  "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "col.wins",        "key": "wins",   "w": 60,  "align": "r", "fmt": "int"},
-		{"title": "stat.era",        "key": "era",    "w": 84,  "align": "r", "fmt": "f2"},
-		{"title": "stat.strikeouts", "key": "so",     "w": 80,  "align": "r", "fmt": "int"},
-		{"title": "history.col.record", "key": "value", "w": 90, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+		{"title": "col.rank",        "key": "rank",   "w": 40,  "align": "l", "fmt": "rank", "group": "group.profile"},
+		{"title": "box.col.pos",  "key": "pos",    "w": 38,  "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player",      "key": "player", "w": 112, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.team",        "key": "team",   "w": 64,  "align": "l", "fmt": "team", "sep_before": true, "group": "group.profile"},
+		{"title": "history.col.span", "key": "span",  "w": 110, "align": "l", "fmt": "str", "group": "group.profile"},
+		{"title": "col.appearances", "key": "g",      "w": 74,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitcher_stats"},
+		{"title": "col.wins",        "key": "wins",   "w": 60,  "align": "r", "fmt": "int", "group": "group.pitcher_stats"},
+		{"title": "stat.era",        "key": "era",    "w": 84,  "align": "r", "fmt": "f2", "group": "group.pitcher_stats"},
+		{"title": "stat.strikeouts", "key": "so",     "w": 80,  "align": "r", "fmt": "int", "group": "group.pitcher_stats"},
+		{"title": "history.col.record", "key": "value", "w": 90, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true, "group": "group.history"},
 	]
 
 
 # シーズン記録は「在籍」の代わりに「年度」列 (達成年度) を持つ以外は通算と同じ文脈列構成。
 func _season_bat_columns(category: Dictionary) -> Array:
 	return [
-		{"title": "col.rank",   "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
-		{"title": "col.player", "key": "player", "w": 170, "align": "l", "fmt": "str", "strong": true},
-		{"title": "col.team",   "key": "team",   "w": 130, "align": "l", "fmt": "team", "sep_before": true},
-		{"title": "col.year",   "key": "year",   "w": 76,  "align": "l", "fmt": "str", "sep_before": true},
-		{"title": "col.games",  "key": "g",      "w": 70,  "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "col.avg",    "key": "avg",    "w": 80,  "align": "r", "fmt": "rate"},
-		{"title": "col.hr",     "key": "hr",     "w": 60,  "align": "r", "fmt": "int"},
-		{"title": "stat.rbi",   "key": "rbi",    "w": 70,  "align": "r", "fmt": "int"},
-		{"title": "history.col.record", "key": "value", "w": 88, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+		{"title": "col.rank",   "key": "rank",   "w": 40,  "align": "l", "fmt": "rank", "group": "group.profile"},
+		{"title": "box.col.pos",  "key": "pos",    "w": 38,  "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player", "key": "player", "w": 112, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.team",   "key": "team",   "w": 64,  "align": "l", "fmt": "team", "sep_before": true, "group": "group.profile"},
+		{"title": "col.year",   "key": "year",   "w": 76,  "align": "l", "fmt": "str", "sep_before": true, "group": "group.profile"},
+		{"title": "col.games",  "key": "g",      "w": 70,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.fielder_stats"},
+		{"title": "col.avg",    "key": "avg",    "w": 80,  "align": "r", "fmt": "rate", "group": "group.fielder_stats"},
+		{"title": "col.hr",     "key": "hr",     "w": 60,  "align": "r", "fmt": "int", "group": "group.fielder_stats"},
+		{"title": "stat.rbi",   "key": "rbi",    "w": 70,  "align": "r", "fmt": "int", "group": "group.fielder_stats"},
+		{"title": "history.col.record", "key": "value", "w": 88, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true, "group": "group.history"},
 	]
 
 
 func _season_pit_columns(category: Dictionary) -> Array:
 	return [
-		{"title": "col.rank",        "key": "rank",   "w": 40,  "align": "l", "fmt": "rank"},
-		{"title": "col.player",      "key": "player", "w": 170, "align": "l", "fmt": "str", "strong": true},
-		{"title": "col.team",        "key": "team",   "w": 130, "align": "l", "fmt": "team", "sep_before": true},
-		{"title": "col.year",        "key": "year",   "w": 76,  "align": "l", "fmt": "str", "sep_before": true},
-		{"title": "col.appearances", "key": "g",      "w": 70,  "align": "r", "fmt": "int", "sep_before": true},
-		{"title": "col.wins",        "key": "wins",   "w": 56,  "align": "r", "fmt": "int"},
-		{"title": "stat.era",        "key": "era",    "w": 80,  "align": "r", "fmt": "f2"},
-		{"title": "stat.strikeouts", "key": "so",     "w": 76,  "align": "r", "fmt": "int"},
-		{"title": "history.col.record", "key": "value", "w": 88, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true},
+		{"title": "col.rank",        "key": "rank",   "w": 40,  "align": "l", "fmt": "rank", "group": "group.profile"},
+		{"title": "box.col.pos",  "key": "pos",    "w": 38,  "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player",      "key": "player", "w": 112, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.team",        "key": "team",   "w": 64,  "align": "l", "fmt": "team", "sep_before": true, "group": "group.profile"},
+		{"title": "col.year",        "key": "year",   "w": 76,  "align": "l", "fmt": "str", "sep_before": true, "group": "group.profile"},
+		{"title": "col.appearances", "key": "g",      "w": 70,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitcher_stats"},
+		{"title": "col.wins",        "key": "wins",   "w": 56,  "align": "r", "fmt": "int", "group": "group.pitcher_stats"},
+		{"title": "stat.era",        "key": "era",    "w": 80,  "align": "r", "fmt": "f2", "group": "group.pitcher_stats"},
+		{"title": "stat.strikeouts", "key": "so",     "w": 76,  "align": "r", "fmt": "int", "group": "group.pitcher_stats"},
+		{"title": "history.col.record", "key": "value", "w": 88, "align": "r", "fmt": str(category.get("fmt", "int")), "strong": true, "sep_before": true, "group": "group.history"},
 	]
 
 
@@ -220,15 +224,18 @@ func _season_pit_columns(category: Dictionary) -> Array:
 # ブロック末尾(次ブロックの sep_before 罫線の直前、または表の右端)に流れるだけなので目立たない。
 # 空いた幅は 選手(可変長の氏名) と 記録 に回す。球団のような「内容に対して桁違いに広い列」を
 # 作らないことが列間の不自然な空白を避ける要点。
-const TITLE_COLUMNS: Array = [
-	{"title": "col.year",   "key": "year",     "w": 70,  "align": "l", "fmt": "str"},
-	{"title": "col.player", "key": "p1_name",  "w": 260, "align": "l", "fmt": "str", "strong": true, "sep_before": true},
-	{"title": "col.team",   "key": "p1_team",  "w": 64,  "align": "l", "fmt": "team"},
-	{"title": "history.col.record", "key": "p1_value", "w": 300, "align": "l", "fmt": "str", "sep_before": true},
-	{"title": "col.player", "key": "p2_name",  "w": 260, "align": "l", "fmt": "str", "strong": true, "sep_before": true},
-	{"title": "col.team",   "key": "p2_team",  "w": 64,  "align": "l", "fmt": "team"},
-	{"title": "history.col.record", "key": "p2_value", "w": 300, "align": "l", "fmt": "str", "sep_before": true},
-]
+func _title_columns() -> Array:
+	var l1: String = PSTeam.league_label_for("league1")
+	var l2: String = PSTeam.league_label_for("league2")
+	return [
+		{"title": "col.year",   "key": "year",     "w": 72,  "align": "l", "fmt": "str", "group": "group.history"},
+		{"title": Loc.t("history.col.winner", {"league": l1}), "key": "p1_name",  "w": 240, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": l1},
+		{"title": "col.team",   "key": "p1_team",  "w": 68,  "align": "l", "fmt": "team", "group": l1},
+		{"title": "history.col.record", "key": "p1_value", "w": 290, "align": "l", "fmt": "str", "sep_before": true, "group": l1},
+		{"title": Loc.t("history.col.winner", {"league": l2}), "key": "p2_name",  "w": 240, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": l2},
+		{"title": "col.team",   "key": "p2_team",  "w": 68,  "align": "l", "fmt": "team", "group": l2},
+		{"title": "history.col.record", "key": "p2_value", "w": 290, "align": "l", "fmt": "str", "sep_before": true, "group": l2},
+	]
 
 # --- スタメン履歴 ビュー ---
 # 守備位置別スタメン数パネルのグループ順 (捕・一・二・三・遊・左・中・右・DH・投)。
@@ -320,8 +327,8 @@ const POS_BATTER_COLUMNS: Array = [
 # starter_pitcher_id 集計のまま = スタメン履歴由来) の列。打撃列は無意味なので投手成績列に差し替える。
 # 列順は 登板〜敗 (計数) → 投球回/防御率/WHIP (率系) → 奪三振/与四球 (計数) → K/9/WAR。
 const POS_PITCHER_COLUMNS: Array = [
-	{"key": "name", "title": "col.player", "w": 320.0, "align": "l"},
-	{"key": "starts", "title": "history.col.starts_pitching", "w": 130.0, "align": "r"},
+	{"key": "name", "title": "col.player", "w": 230.0, "align": "l"},
+	{"key": "starts", "title": "history.col.starts_pitching", "w": 80.0, "align": "r"},
 	{"key": "games", "title": "col.appearances", "w": 80.0, "align": "r"},
 	{"key": "wins", "title": "col.wins", "w": 66.0, "align": "r"},
 	{"key": "losses", "title": "col.losses", "w": 66.0, "align": "r"},
@@ -474,7 +481,7 @@ func _draw_titles_view() -> void:
 		_round(Rect2(560, 380, 800, 240), PANEL, BORDER, 12)
 		_text(Loc.t("history.no_completed_season"), Vector2(560, 508), 22, TEXT, 800, HORIZONTAL_ALIGNMENT_CENTER, true)
 		return
-	_draw_data_table(TITLE_TABLE_RECT, TITLE_COLUMNS, _title_rows, {
+	_draw_data_table(TITLE_TABLE_RECT, _title_columns(), _title_rows, {
 		"title": Loc.t("history.title_history", {"category": label}), "header_top": 58.0, "row_h": 30.0, "alt_rows": true,
 		"cell_size": 14, "empty_text": Loc.t("common.no_records"),
 	})
@@ -659,8 +666,7 @@ func _draw_breakdown(card: Rect2, top_id: int, games: Array, advantage: int) -> 
 # 内訳の1試合分チップ。色で勝(緑)/敗(赤)/分(灰)を示す。
 func _draw_game_chip(x: float, center_y: float, w: float, label: String, col: Color) -> void:
 	_round(Rect2(x, center_y - 11.0, w, 22.0), Color(col.r, col.g, col.b, 0.16), Color(col.r, col.g, col.b, 0.5), 6)
-	var tcol: Color = TEXT if col == MUTED else col
-	_text(label, Vector2(x, center_y + 4.0), 11, tcol, w, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(label, Vector2(x, center_y + 4.0), 11, TEXT, w, HORIZONTAL_ALIGNMENT_CENTER, true)
 
 
 # ============================================================ 最優秀選手・新人王
@@ -1026,6 +1032,7 @@ func _draw_pos_col_header(inner_x: float, usable: float, y: float, cols: Array) 
 			_text(Loc.t(str(col.get("title", ""))), Vector2(x + 6.0, ty), 11, MUTED, w - 8.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		else:
 			_text_right(Loc.t(str(col.get("title", ""))), x + w - 6.0, ty, 11, MUTED, w - 8.0, true)
+	_line(Vector2(inner_x, y + POS_COL_HEADER_H), Vector2(inner_x + usable, y + POS_COL_HEADER_H), BORDER, 1.0)
 
 
 # 選手1行分。行全体を当たり判定にする (この画面は1行=1選手なので、games panel のような
@@ -1125,21 +1132,12 @@ func _pos_cell_text(key: String, row: Dictionary) -> String:
 			return "-"
 
 
-# 配色規約 ([[feedback_ui_color_conventions]]): WAR/wRC+/OAA は「高い=好」の±指標なので
-# 能力段階色(優秀=青)ではなく緑=好/赤=悪の _pm_color 系。率成績は既存画面同様グレーディングしない。
 func _pos_cell_color(key: String, row: Dictionary) -> Color:
 	if key == "name" or key == "starts":
 		return TEXT
 	if not bool(row.get("has_record", false)):
 		return FAINT
-	var played: bool = bool(row.get("played", false))
 	match key:
-		"war":
-			return _pm_color(float(row.get("war", 0.0)))
-		"oaa":
-			return _pm_color(float(row.get("oaa", 0.0))) if played else MUTED
-		"wrc_plus":
-			return _pm_color(float(row.get("wrc_plus", 0.0)) - 100.0) if played else MUTED
 		"woba", "rbi", "sb", "obp", "losses":
 			return MUTED
 		_:
@@ -1600,6 +1598,7 @@ func _build_career() -> void:
 		var entry: Dictionary = career.get(record.player_id, {}) as Dictionary
 		if entry.is_empty():
 			entry = {"name": record.name, "team_id": record.team_id, "first": record.year, "last": record.year,
+				"pos": record.position, "jersey": record.jersey_number,
 				"bat": PSBatterStats.new(), "pit": PSPitcherStats.new()}
 		entry["first"] = mini(int(entry["first"]), record.year)
 		if record.year >= int(entry["last"]):
@@ -1607,6 +1606,8 @@ func _build_career() -> void:
 			entry["last"] = record.year
 			entry["name"] = record.name
 			entry["team_id"] = record.team_id
+			entry["pos"] = record.position
+			entry["jersey"] = record.jersey_number
 		(entry["bat"] as PSBatterStats).add_from(record.batter_stats)
 		(entry["pit"] as PSPitcherStats).add_from(record.pitcher_stats)
 		career[record.player_id] = entry
@@ -1666,6 +1667,11 @@ func _pitcher_metric_value(stats: PSPitcherStats, key: String) -> float:
 
 
 # 文脈列 (試合/打率/本/打点、登板/勝/防御率/奪三振) のセル値。通算/シーズンどちらの行にも使う。
+# 守備位置バッジ (pos_badge) と背番号 (player_name) のセル値。
+func _player_badge_cells(pos: int, jersey: int) -> Dictionary:
+	return {"pos": PSPlayer.position_short_name(pos), "pos_color": _pos_color(pos), "jersey_number": jersey}
+
+
 func _batter_context_cells(stats: PSBatterStats) -> Dictionary:
 	return {"g": stats.games, "avg": stats.batting_average(), "hr": stats.home_runs, "rbi": stats.runs_batted_in}
 
@@ -1679,6 +1685,7 @@ func _season_bat_entry(record: PSPlayerSeasonRecord, value: float) -> Dictionary
 		"value": value, "player": record.name, "year": Loc.t("common.year_value", {"year": record.year}),
 		"team": _team_short(record.team_id), "color": _team_color(record.team_id),
 	}
+	row.merge(_player_badge_cells(record.position, record.jersey_number))
 	row.merge(_batter_context_cells(record.batter_stats))
 	return row
 
@@ -1688,6 +1695,7 @@ func _season_pit_entry(record: PSPlayerSeasonRecord, value: float) -> Dictionary
 		"value": value, "player": record.name, "year": Loc.t("common.year_value", {"year": record.year}),
 		"team": _team_short(record.team_id), "color": _team_color(record.team_id),
 	}
+	row.merge(_player_badge_cells(record.position, record.jersey_number))
 	row.merge(_pitcher_context_cells(record.pitcher_stats))
 	return row
 
@@ -1729,6 +1737,7 @@ func _career_leader_rows(career: Dictionary, stats_key: String, category: Dictio
 			"span": "%d-%d" % [int(entry["first"]), int(entry["last"])],
 			"team": _team_short(int(entry["team_id"])), "color": _team_color(int(entry["team_id"])),
 		}
+		row.merge(_player_badge_cells(int(entry.get("pos", 0)), int(entry.get("jersey", 0))))
 		row.merge(_batter_context_cells(bat_stats) if stats_key == "bat" else _pitcher_context_cells(pit_stats))
 		entries.append(row)
 	entries.sort_custom(func(a, b) -> bool:

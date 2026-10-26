@@ -69,9 +69,9 @@ func _draw() -> void:
 func _draw_bracket(post: PSPostseasonResult) -> void:
 	# home のカレンダーパネルと同じくフラット (枠線なし)。
 	_round(CAL_RECT, PANEL, Color.TRANSPARENT, 8, 0)
-	_text(Loc.t("postseason.bracket_title"), Vector2(CAL_RECT.position.x + 24, CAL_RECT.position.y + 42), 22, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("postseason.bracket_title"), Vector2(CAL_RECT.position.x + 24, CAL_RECT.position.y + 38), 22, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var stage_label: String = _current_stage_headline(post)
-	_text(stage_label, Vector2(CAL_RECT.end.x - 16 - 360, CAL_RECT.position.y + 40), 14, MUTED, 360, HORIZONTAL_ALIGNMENT_RIGHT)
+	_text(stage_label, Vector2(CAL_RECT.end.x - 16 - 360, CAL_RECT.position.y + 36), 14, MUTED, 360, HORIZONTAL_ALIGNMENT_RIGHT)
 
 	var pad: float = 24.0
 	var gap: float = 28.0
@@ -80,7 +80,20 @@ func _draw_bracket(post: PSPostseasonResult) -> void:
 	var col1_x: float = col0_x + col_w + gap
 	var col2_x: float = col1_x + col_w + gap
 
-	var region_top: float = CAL_RECT.position.y + 96.0
+	# ステージ列ヘッダ
+	var header_y: float = CAL_RECT.position.y + 60.0
+	var header_h: float = 26.0
+	var cols_x: Array = [col0_x, col1_x, col2_x]
+	var col_titles: Array = [
+		_stage_label("cs1_league1", "title"),
+		_stage_label("cs2_league1", "title"),
+		_stage_label("japan_series", "title"),
+	]
+	for c in range(3):
+		_round(Rect2(cols_x[c], header_y, col_w, header_h), PANEL_2, Color.TRANSPARENT, 4)
+		_text(str(col_titles[c]), Vector2(cols_x[c], header_y + 18.0), 12, MUTED, col_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+
+	var region_top: float = CAL_RECT.position.y + 98.0
 	var region_bottom: float = CAL_RECT.end.y - 30.0
 	var region_h: float = region_bottom - region_top
 	var card_gap: float = 24.0
@@ -184,6 +197,8 @@ func _draw_team_line(rect: Rect2, y: float, team_id: int, wins: int, win_target:
 	var team: PSTeam = GameDb.get_team(team_id)
 	if team == null:
 		return
+	if is_winner:
+		_round(Rect2(rect.position.x + 8, y - 16, rect.size.x - 16, 34), Color(AMBER.r, AMBER.g, AMBER.b, 0.08), Color.TRANSPARENT, 6)
 	var at_match_point: bool = active and wins == win_target - 1
 	_team_badge(Rect2(rect.position.x + 14, y - 14, 28, 28), team)
 	var name_col: Color = AMBER if is_winner else TEXT

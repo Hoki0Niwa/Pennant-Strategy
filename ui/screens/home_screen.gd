@@ -11,6 +11,22 @@ const CAL_RECT: Rect2 = Rect2(262, 206, 1020, 854)
 const RIGHT_X: float = 1300.0
 const RIGHT_W: float = 600.0
 
+# ミニ順位表の列 (順位表画面 LEAGUE_COLUMNS の絞り込み)。グループ名・列名は順位表画面と同じキー。
+const HOME_STANDINGS_COLUMNS: Array = [
+	{"title": "col.rank",       "key": "rank", "w": 34,  "align": "l", "fmt": "rank", "group": "group.team"},
+	{"title": "col.team",       "key": "team", "w": 96,  "align": "l", "fmt": "team", "strong": true, "group": "group.team"},
+	{"title": "col.games",      "key": "g",    "w": 42,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.wins",       "key": "w",    "w": 38,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.losses",     "key": "l",    "w": 38,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.draws",      "key": "d",    "w": 34,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.win_pct",    "key": "pct",  "w": 56,  "align": "r", "fmt": "rate", "group": "group.standings_record"},
+	{"title": "col.games_back", "key": "gb",   "w": 48,  "align": "r", "fmt": "gb", "group": "group.standings_record"},
+	{"title": "col.remaining",  "key": "rem",  "w": 40,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.streak",     "key": "strk", "w": 58,  "align": "r", "fmt": "streak_chip", "sep_before": true, "group": "home.standings.group_momentum"},
+	{"title": "col.run_diff",   "key": "diff", "w": 70,  "align": "r", "fmt": "diff", "sep_before": true, "group": "group.run_diff"},
+	{"title": "col.era_short",  "key": "era",  "w": 50,  "align": "r", "fmt": "str", "sep_before": true, "group": "home.standings.group_pitching"},
+]
+
 # カレンダー見出し ("YYYY年 M月") と月送り矢印の位置合わせ用。矢印は固定座標だと
 # 2桁月 (10-12月) で見出しに衝突するため、‹ は固定・› は見出しの実測幅から算出する。
 const CAL_TITLE_X: float = CAL_RECT.position.x + 60.0
@@ -124,12 +140,12 @@ func _draw_statbar(team: PSTeam, season: PSSeason) -> void:
 	var draws: int = stats.draws if stats != null else 0
 	var gb_value: float = float(standing.get("gb", 0.0))
 
-	# 個別カード列ではなく1本の帯 (_stat_strip)。順位/勝率のみ色で強調し、
+	# 個別カード列ではなく1本の帯 (_stat_strip)。
 	# 予算超過は年俸総額セルの note で警告する。
 	var cells: Array = [
-		{"label": Loc.t("home.stat.rank"), "value": Loc.t("common.rank_value", {"rank": str(standing.get("rank", "-"))}), "color": BLUE},
+		{"label": Loc.t("home.stat.rank"), "value": Loc.t("common.rank_value", {"rank": str(standing.get("rank", "-"))}), "color": TEXT},
 		{"label": Loc.t("home.stat.record"), "value": Loc.t("common.record_value", {"w": wins, "l": losses, "d": draws})},
-		{"label": Loc.t("col.win_pct"), "value": _rate_short(stats.win_rate() if stats != null else 0.0), "color": GREEN},
+		{"label": Loc.t("col.win_pct"), "value": _rate_short(stats.win_rate() if stats != null else 0.0)},
 		{"label": Loc.t("home.stat.games_back"), "value": ("-" if gb_value <= 0.0 else _float1(gb_value))},
 		{"label": Loc.t("home.stat.remaining"), "value": Loc.t("common.games_value", {"n": season.team_games_remaining(team.id)})},
 		{"label": Loc.t("home.stat.budget"), "value": _format_money(team.funds)},
@@ -193,11 +209,15 @@ func _draw_day_cell(rect: Rect2, date_text: String, day_number: int, col: int, t
 	# 枠線は使わず bg の明度差だけで面を作る: 通常 < 自軍試合日 < 今日 (今日はわずかに青みも足す)。
 	# 今日/DH は既存のバッジ (本日/DH チップ) が引き続き目印になる。
 	var bg: Color = PANEL_2
+	var border_col: Color = Color.TRANSPARENT
+	var border_w: int = 0
 	if is_today:
-		bg = PANEL_3.lerp(BLUE, 0.10)
+		bg = PANEL_3.lerp(BLUE, 0.12)
+		border_col = Color(BLUE.r, BLUE.g, BLUE.b, 0.6)
+		border_w = 2
 	elif has_team_game:
 		bg = PANEL_2.lerp(PANEL_3, 0.55)
-	_round(rect, bg, Color.TRANSPARENT, 7, 0)
+	_round(rect, bg, border_col, 7, border_w)
 
 	var num_color: Color = TEXT if is_today else MUTED
 	if not is_today:
@@ -518,68 +538,86 @@ func _score_block_width(away_text: String, home_text: String, font_size: int) ->
 func _draw_standings(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	var team: PSTeam = GameDb.get_team(team_id)
 	var league_key: String = team.league if team != null else "league1"
-	_panel(rect, Loc.t("home.standings_panel"))
-	_text(team.league_label() if team != null else "", Vector2(rect.end.x - 90, rect.position.y + 30), 12, MUTED)
 
-	# ミニ順位表も共通テーブルの体裁 (bold ヘッダ + 太めルール + 行ヘアライン + 自軍のアクセントバー)。
-	# 球団はチームカラーのバッジで示す (略称はバッジの中に入るので、別に略称列は置かない)。
-	var hy: float = rect.position.y + 56
-	_text(Loc.t("col.rank"), Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(Loc.t("col.team"), Vector2(rect.position.x + 42, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("col.games"), rect.position.x + 150, hy, 11, MUTED, 80.0, true)
-	_text_right(Loc.t("col.wins"), rect.position.x + 206, hy, 11, MUTED, 80.0, true)
-	_text_right(Loc.t("col.losses"), rect.position.x + 256, hy, 11, MUTED, 80.0, true)
-	_text_right(Loc.t("col.draws"), rect.position.x + 304, hy, 11, MUTED, 80.0, true)
-	_text_right(Loc.t("col.win_pct"), rect.position.x + 380, hy, 11, MUTED, 80.0, true)
-	_text_right("GB", rect.position.x + 440, hy, 11, MUTED, 80.0, true)
-	_text_right(Loc.t("col.remaining"), rect.position.x + 492, hy, 11, MUTED, 80.0, true)
-	_text_right(Loc.t("stat.era"), rect.end.x - 18, hy, 11, MUTED, 80.0, true)
-	_line(Vector2(rect.position.x + 14, hy + 8), Vector2(rect.end.x - 14, hy + 8), BORDER, 1.5)
-
+	# ミニ順位表は順位表画面と同じ共通テーブル (2段見出し + rank バッジ + gb ピル + 連勝連敗チップ +
+	# 得失点差ミニバー)。パネルが狭いので打撃/投手/ホーム・ビジターの内訳列は持たない。
 	var entries: Array = _league_entries(league_key, season)
 	var leader: PSStats = (entries[0] as Dictionary).get("stats") as PSStats if not entries.is_empty() else null
 	# 残り試合は日程 1 走査で全球団ぶんまとめて数える (行ごとに数え直さない)。
 	var remaining_by_team: Dictionary = PSPennantRace.remaining_by_team(season)
-	var y: float = rect.position.y + 80
+	var streak_by_team: Dictionary = _streak_by_team(season)
+	var rows: Array = []
 	var rank: int = 1
 	for entry_value in entries:
 		var entry: Dictionary = entry_value as Dictionary
 		var row_team: PSTeam = entry["team"] as PSTeam
 		var stats: PSStats = entry["stats"] as PSStats
-		var is_self: bool = row_team.id == team_id
-		if is_self:
-			_round(Rect2(rect.position.x + 8, y - 17, rect.size.x - 16, 24), Color(BLUE.r, BLUE.g, BLUE.b, 0.08), Color.TRANSPARENT, 0, 0)
-			_round(Rect2(rect.position.x + 8, y - 17, 3, 24), BLUE, Color.TRANSPARENT, 0, 0)
-		var color: Color = TEXT
-		_text(str(rank), Vector2(rect.position.x + 18, y), 13, color)
-		_team_badge(Rect2(rect.position.x + 42, y - 16, 26, 22), row_team)
-		_text_right(str(stats.games), rect.position.x + 150, y, 13, color)
-		_text_right(str(stats.wins), rect.position.x + 206, y, 13, color)
-		_text_right(str(stats.losses), rect.position.x + 256, y, 13, color)
-		_text_right(str(stats.draws), rect.position.x + 304, y, 13, color)
-		_text_right(_rate_short(stats.win_rate()), rect.position.x + 380, y, 13, color)
-		_text_right("-" if leader == null or rank == 1 else _float1(_game_back(leader, stats)), rect.position.x + 440, y, 13, color)
-		_text_right(str(int(remaining_by_team.get(row_team.id, 0))), rect.position.x + 492, y, 13, color)
-		_text_right(_era_str_for(row_team.id), rect.end.x - 18, y, 13, color)
-		_line(Vector2(rect.position.x + 14, y + 7), Vector2(rect.end.x - 14, y + 7), HAIRLINE, 1.0)
-		y += 25
+		rows.append({
+			"rank": rank, "team": row_team.short_name, "color": row_team.color,
+			"is_self": row_team.id == team_id, "is_leader": rank == 1,
+			"g": stats.games, "w": stats.wins, "l": stats.losses, "d": stats.draws,
+			"pct": stats.win_rate(),
+			"gb": 0.0 if leader == null or rank == 1 else _game_back(leader, stats),
+			"rem": int(remaining_by_team.get(row_team.id, 0)),
+			"strk": str(streak_by_team.get(row_team.id, "-")),
+			"diff": stats.runs_scored - stats.runs_allowed,
+			"era": _era_str_for(row_team.id),
+		})
 		rank += 1
+	_draw_data_table(rect, HOME_STANDINGS_COLUMNS, rows, {
+		"title": Loc.t("home.standings_panel"),
+		"right_label": team.league_label() if team != null else "",
+		"row_h": 20.0, "bottom_pad": 6.0, "cell_size": 12,
+		"cutoff_after_row": 2,
+	})
+
+
+# 直近の連勝/連敗 ("3連勝" 等)。引き分けは順位表画面と同じく数えない (連続を途切れさせない)。
+# 日程は日付順なので 1 走査で全球団ぶんを更新できる。
+func _streak_by_team(season: PSSeason) -> Dictionary:
+	var dir_by_team: Dictionary = {}
+	var count_by_team: Dictionary = {}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("played", false)):
+			continue
+		var result: Dictionary = game.get("result", {}) as Dictionary
+		if bool(result.get("draw", false)):
+			continue
+		var winner: int = int(result.get("winning_team_id", 0))
+		for side_key in ["home_team_id", "away_team_id"]:
+			var tid: int = int(game.get(side_key, 0))
+			var dir: int = 1 if tid == winner else -1
+			if int(dir_by_team.get(tid, 0)) == dir:
+				count_by_team[tid] = int(count_by_team.get(tid, 0)) + 1
+			else:
+				dir_by_team[tid] = dir
+				count_by_team[tid] = 1
+	var out: Dictionary = {}
+	for tid in dir_by_team.keys():
+		var n: int = int(count_by_team[tid])
+		out[tid] = Loc.t("standings.streak_win", {"n": n}) if int(dir_by_team[tid]) > 0 else Loc.t("standings.streak_loss", {"n": n})
+	return out
 
 
 func _draw_upcoming(rect: Rect2, team_id: int, season: PSSeason) -> void:
 	_panel(rect, Loc.t("home.upcoming_games"))
-	var y: float = rect.position.y + 58
+	var hy: float = rect.position.y + 48
+	_round(Rect2(rect.position.x + 14, hy - 14, rect.size.x - 28, 20), PANEL_2, Color.TRANSPARENT, 3)
+	_text(Loc.t("col.date"), Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("col.opponent"), Vector2(rect.position.x + 110, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_line(Vector2(rect.position.x + 14, hy + 6), Vector2(rect.end.x - 14, hy + 6), BORDER_SOFT, 1.0)
+
+	var y: float = rect.position.y + 72
 	var count: int = 0
 	for game_value in season.schedule:
 		var game: Dictionary = game_value as Dictionary
-		if count >= 4:
+		if count >= 3:
 			break
 		if bool(game.get("played", false)) or not _is_team_game(game, team_id):
 			continue
 		_text(SeasonCalendar.compact_label_for_game(game, season), Vector2(rect.position.x + 18, y), 13, TEXT if count == 0 else MUTED)
 		_text(_matchup_for_team(game, team_id), Vector2(rect.position.x + 110, y), 13, TEXT if count == 0 else MUTED, rect.size.x - 124)
-		# 週間予報。日付と対戦カードの間の余白に短縮形で置く (対戦カードの幅は削らない)。
-		# ドームと予報期間外は何も出さない = 空欄が「気にしなくてよい」の合図。
 		var forecast_short: String = _forecast_short_label(season, game)
 		if not forecast_short.is_empty():
 			_text(
@@ -590,28 +628,33 @@ func _draw_upcoming(rect: Rect2, team_id: int, season: PSSeason) -> void:
 				38,
 				HORIZONTAL_ALIGNMENT_RIGHT
 			)
-		y += 30
+		_line(Vector2(rect.position.x + 14, y + 7), Vector2(rect.end.x - 14, y + 7), HAIRLINE, 1.0)
+		y += 28
 		count += 1
 	if count == 0:
-		_text(Loc.t("home.no_upcoming_games"), Vector2(rect.position.x + 18, rect.position.y + 64), 13, MUTED)
+		_text(Loc.t("home.no_upcoming_games"), Vector2(rect.position.x + 18, rect.position.y + 74), 13, MUTED)
 
 
 func _draw_injuries(rect: Rect2, team_id: int) -> void:
 	var injured: Array = _injured_records(team_id)
 	_panel(rect, Loc.t("home.injuries"), AMBER if not injured.is_empty() else TEXT)
-	var hy: float = rect.position.y + 50
-	_text(Loc.t("col.player"), Vector2(rect.position.x + 18, hy), 11, FAINT)
-	_text_right(Loc.t("home.injury_out"), rect.end.x - 70, hy, 11, FAINT)
-	_text_right(Loc.t("home.injury_return"), rect.end.x - 14, hy, 11, FAINT)
+	var hy: float = rect.position.y + 48
+	_round(Rect2(rect.position.x + 14, hy - 14, rect.size.x - 28, 20), PANEL_2, Color.TRANSPARENT, 3)
+	_text(Loc.t("col.player"), Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_right(Loc.t("home.injury_out"), rect.end.x - 70, hy, 11, MUTED, 60.0, true)
+	_text_right(Loc.t("home.injury_return"), rect.end.x - 14, hy, 11, MUTED, 60.0, true)
+	_line(Vector2(rect.position.x + 14, hy + 6), Vector2(rect.end.x - 14, hy + 6), BORDER_SOFT, 1.0)
+
 	if injured.is_empty():
-		_text(Loc.t("home.no_injuries"), Vector2(rect.position.x + 18, rect.position.y + 78), 13, MUTED)
+		_text(Loc.t("home.no_injuries"), Vector2(rect.position.x + 18, rect.position.y + 74), 13, MUTED)
 		return
-	var y: float = rect.position.y + 74
-	for record_value in injured.slice(0, 4):
+	var y: float = rect.position.y + 72
+	for record_value in injured.slice(0, 3):
 		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
 		_text(record.name, Vector2(rect.position.x + 18, y), 13, TEXT, 150)
 		_text_right(Loc.t("common.days_value", {"days": record.injury_days}), rect.end.x - 70, y, 13, AMBER)
 		_text_right(_return_label(record.injury_days), rect.end.x - 14, y, 12, MUTED)
+		_line(Vector2(rect.position.x + 14, y + 7), Vector2(rect.end.x - 14, y + 7), HAIRLINE, 1.0)
 		y += 28
 
 

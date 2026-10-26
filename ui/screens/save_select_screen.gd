@@ -70,6 +70,8 @@ func _draw_save_row(meta: Dictionary, y: float) -> void:
 		_round(Rect2(rect.position.x, y + 10, 3, ROW_H - 20), BLUE, Color.TRANSPARENT, 2, 0)
 	else:
 		_round(rect, PANEL, BORDER_SOFT, 10)
+	# カード上部ヘッダ帯
+	_round(Rect2(rect.position.x + 8.0, rect.position.y + 6.0, rect.size.x - 16.0, 38.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.12) if is_active else PANEL_2, Color.TRANSPARENT, 6)
 
 	var x: float = LIST_X + 26.0
 	# 1行目: セーブ日時 (フォルダ名由来) + 使用中チップ + 版数違いの注意チップ

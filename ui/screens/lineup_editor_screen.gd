@@ -22,46 +22,44 @@ const TABLE_PANEL: Rect2 = Rect2(262, 104, 1638, 468)
 const ORDER_PANEL: Rect2 = Rect2(262, 592, 800, 464)
 const FIELD_PANEL: Rect2 = Rect2(1078, 592, 822, 464)
 
-# 一軍登録野手 列 (投手起用法の一覧を踏襲。R=右寄せ基準)。
-# 守備badge(=役割chip) / 背番号 / 選手 / 年齢 / 疲労 / 評価 / WAR / 表示能力(巧打長打走守肩) / 成績(打撃)
-const C_BADGE_X: float = 280.0
-const C_JERSEY_X: float = 340.0
-const C_NAME_X: float = 366.0
-const C_AGE_R: float = 552.0
-const C_FAT_DOT_X: float = 574.0
-const C_FAT_TX: float = 588.0
-const C_EVAL_R: float = 690.0
-const C_WAR_R: float = 760.0
-# 表示能力 (巧打/長打/走力/守備/肩力/選球)
-const C_MEET_R: float = 884.0
-const C_POW_R: float = 931.0
-const C_SPD_R: float = 978.0
-const C_DEF_R: float = 1025.0
-const C_ARM_R: float = 1072.0
-const C_EYE_R: float = 1119.0
-# 成績 (打撃)
-const C_G_R: float = 1190.0
-const C_AVG_R: float = 1268.0
-const C_HR_R: float = 1326.0
-const C_RBI_R: float = 1390.0
-const C_SB_R: float = 1450.0
-const C_OBP_R: float = 1520.0
-const C_OPS_R: float = 1590.0
-const C_WOBA_R: float = 1660.0
-const C_WRC_R: float = 1730.0
-const C_OAA_R: float = 1800.0
-# 能力ブロック(巧打..選球)と成績ブロック(試合..OAA)の境界に引く縦ヘアラインの x 座標。
-const C_BLOCK_SEP_X: float = 1152.0
+# 一軍登録野手表 (共通テーブルエンジン _draw_data_table)。見出しは 2 段 (header_top の幾何は
+# エンジンの _effective_header_top に従う)、行は固定高でスクロールは画面側 (_table_scroll) が持つ。
+const ROSTER_HEADER_TOP: float = 68.0
+const ROSTER_ROW_H: float = 27.0
+const ROSTER_BOTTOM_PAD: float = 12.0
+const ROSTER_ABILITY_COLUMNS: Array = [
+	["contact", "rating.contact"], ["power", "rating.power"], ["speed", "rating.speed"],
+	["defense", "rating.defense"], ["arm", "rating.arm"], ["discipline", "rating.discipline"],
+]
+# 成績列: [key, title, fmt, w, muted]
+const ROSTER_STAT_COLUMNS: Array = [
+	["games", "col.games", "int", 40, false], ["avg", "col.avg", "rate", 52, false],
+	["hr", "col.hr", "int", 40, false], ["rbi", "stat.rbi", "int", 40, true],
+	["sb", "stat.stolen_bases", "int", 40, true], ["obp", "stat.obp", "rate", 52, true],
+	["ops", "OPS", "rate", 52, false], ["woba", "wOBA", "rate", 52, true],
+	["wrc", "wRC+", "int", 48, true], ["oaa", "OAA", "f1s", 52, true],
+]
 
-# スタメン/打順 列
+# スタメン/打順 列 (x は base 座標。*_R は右端、*_CX は中心)。
+# 打順 | 守備 | 選手 | 打 | 総合 | 巧打 長打 走力 守備 | 打率 本 OPS WAR
+const O_LEFT: float = 272.0
 const O_NUM_CX: float = 292.0
 const O_BADGE_X: float = 320.0
-const O_NAME_X: float = 372.0
-const O_BATS_CX: float = 566.0
-const O_AVG_R: float = 678.0
-const O_HR_R: float = 744.0
-const O_RBI_R: float = 838.0
-const O_OPS_R: float = 944.0
+const O_NAME_X: float = 368.0
+const O_BATS_CX: float = 506.0
+const O_EVAL_R: float = 560.0
+const O_MEET_R: float = 604.0
+const O_POW_R: float = 652.0
+const O_SPD_R: float = 700.0
+const O_DEF_R: float = 748.0
+const O_AVG_R: float = 810.0
+const O_HR_R: float = 858.0
+const O_OPS_R: float = 926.0
+const O_WAR_R: float = 996.0
+# 打順表の見出し帯 (上段グループ 18px + 下段列名 26px) と行の開始位置 (ORDER_PANEL 上端からの距離)。
+const O_SUPER_TOP: float = 42.0
+const O_ROW_TOP: float = 92.0
+const O_ROW_H: float = 34.0
 
 # 打順パネル下部のモード切替ボタン列 (base 座標)。
 const ORDER_MODE_ROW_Y: float = 1006.0
@@ -82,7 +80,9 @@ const QUALIFIER_PA_PER_TEAM_GAME: float = 3.1
 # 1行 = 1守備位置で、上段に 定位置 + スライダー + % + 自動チップ、下段に控え1..MAX_BENCH。
 const SHARE_LIST_LEFT: float = 1502.0
 const SHARE_LIST_RIGHT: float = 1884.0
-const SHARE_LIST_TOP: float = 646.0
+const SHARE_LIST_TOP: float = 678.0
+# 出場配分リストの 2 段見出し (上段グループ 18px の上端 / 下段列名 24px の上端)。
+const SHARE_HEAD_TOP: float = 630.0
 const SHARE_ROW_H: float = 41.0
 const SHARE_BADGE_W: float = 28.0
 const SHARE_NAME_W: float = 130.0
@@ -128,6 +128,7 @@ var _hover_record: PSPlayerSeasonRecord = null
 
 # ヒット矩形 (_draw で確定)
 var _table_hits: Array = []               # {rect, record}
+var _header_hits: Array = []              # {rect, key}
 var _order_hits: Array = []               # {rect, index}
 var _field_hits: Array = []               # {rect, pos, draggable}
 var _bench_cell_hits: Array = []          # {rect, pos}
@@ -135,6 +136,11 @@ var _bench_chip_hits: Array = []          # {rect, pos, pid}
 var _slider_hits: Array = []              # {rect, pos} 出場配分スライダー
 var _share_value_hits: Array = []         # {rect, pos} % 表示 (クリックで数値入力)
 var _auto_chip_hits: Array = []           # {rect, pos} 「自動」へ戻すチップ
+
+# 一軍野手テーブルのソートとスクロール
+var _sort_key: String = "pos"
+var _sort_asc: bool = true
+var _table_scroll: int = 0
 
 # スライダー操作と数値直接入力。
 var _slider_drag_pos: int = 0             # 0 = 非ドラッグ、それ以外は操作中の守備位置
@@ -182,26 +188,38 @@ func _layout_buttons() -> void:
 # ============================================================ input
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseButton:
 		_update_transform()
 		var base_pos: Vector2 = _to_base(event.position)
-		if event.pressed:
-			_press_screen = event.position
-			# スライダーは選手カードのドラッグより先に拾う (同じ押下で両方は起きない)。
-			var slider_pos: int = _slider_at(base_pos)
-			if slider_pos > 0:
-				_slider_drag_pos = slider_pos
-				_apply_slider_value(slider_pos, base_pos.x)
-				return
-			_pending = _pick_draggable(base_pos)
-		else:
-			if _slider_drag_pos > 0:
-				_slider_drag_pos = 0
-			elif _drag_active:
-				_finish_drag(base_pos)
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_press_screen = event.position
+				# スライダーは選手カードのドラッグより先に拾う (同じ押下で両方は起きない)。
+				var slider_pos: int = _slider_at(base_pos)
+				if slider_pos > 0:
+					_slider_drag_pos = slider_pos
+					_apply_slider_value(slider_pos, base_pos.x)
+					return
+				_pending = _pick_draggable(base_pos)
 			else:
-				_handle_click(base_pos)
-			_pending = {}
+				if _slider_drag_pos > 0:
+					_slider_drag_pos = 0
+				elif _drag_active:
+					_finish_drag(base_pos)
+				else:
+					_handle_click(base_pos)
+				_pending = {}
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			if event.pressed and TABLE_PANEL.has_point(base_pos):
+				if _table_scroll > 0:
+					_table_scroll = max(0, _table_scroll - 1)
+					queue_redraw()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if event.pressed and TABLE_PANEL.has_point(base_pos):
+				var max_scroll: int = max(0, _fielders.size() - _roster_max_rows())
+				if _table_scroll < max_scroll:
+					_table_scroll = min(max_scroll, _table_scroll + 1)
+					queue_redraw()
 	elif event is InputEventMouseMotion:
 		if _slider_drag_pos > 0:
 			_update_transform()
@@ -306,6 +324,11 @@ func _drop_target_at(base_pos: Vector2) -> Dictionary:
 
 
 func _handle_click(base_pos: Vector2) -> void:
+	for hit_value in _header_hits:
+		var header_hit: Dictionary = hit_value as Dictionary
+		if (header_hit["rect"] as Rect2).has_point(base_pos):
+			_on_header_clicked(str(header_hit["key"]))
+			return
 	for hit_value in _auto_chip_hits:
 		var auto_hit: Dictionary = hit_value as Dictionary
 		if (auto_hit["rect"] as Rect2).has_point(base_pos):
@@ -318,6 +341,78 @@ func _handle_click(base_pos: Vector2) -> void:
 			return
 	# 入力欄の外をクリックしたら確定して閉じる (focus_exited でも同じ処理が走る)。
 	_commit_share_edit()
+
+
+func _on_header_clicked(key: String) -> void:
+	if _sort_key == key:
+		_sort_asc = not _sort_asc
+	else:
+		_sort_key = key
+		_sort_asc = (key in ["pos", "name", "age", "fatigue", "bats"])
+	_sort_fielders()
+	queue_redraw()
+
+
+func _sort_fielders() -> void:
+	_fielders.sort_custom(func(a: PSPlayerSeasonRecord, b: PSPlayerSeasonRecord) -> bool:
+		var va = _fielder_sort_val(a, _sort_key)
+		var vb = _fielder_sort_val(b, _sort_key)
+		if va != vb:
+			return (va < vb) if _sort_asc else (va > vb)
+		return a.player_id < b.player_id
+	)
+
+
+func _fielder_sort_val(rec: PSPlayerSeasonRecord, key: String) -> Variant:
+	match key:
+		"pos":
+			return rec.position
+		"name":
+			return rec.name
+		"bats":
+			return _bats(rec)
+		"age":
+			return rec.age
+		"fatigue":
+			return _fatigue_pct(rec)
+		"eval":
+			return PlayerValueEvaluator.overall_score(rec)
+		"war":
+			return float((_war_by_id.get(rec.player_id, {}) as Dictionary).get("war", 0.0))
+		"contact":
+			return PlayerVisibleRatings.fielder_contact(rec)
+		"power":
+			return PlayerVisibleRatings.fielder_power(rec)
+		"speed":
+			return PlayerVisibleRatings.fielder_speed(rec)
+		"defense":
+			return PlayerVisibleRatings.fielder_defense(rec)
+		"arm":
+			return PlayerVisibleRatings.fielder_arm(rec)
+		"discipline":
+			return PlayerVisibleRatings.fielder_discipline(rec)
+		"games":
+			return rec.batter_stats.games
+		"avg":
+			return rec.batter_stats.batting_average()
+		"hr":
+			return rec.batter_stats.home_runs
+		"rbi":
+			return rec.batter_stats.runs_batted_in
+		"sb":
+			return rec.batter_stats.stolen_bases
+		"obp":
+			return rec.batter_stats.on_base_percentage()
+		"ops":
+			return rec.batter_stats.ops()
+		"woba":
+			return rec.advanced_stats.woba() if (rec.advanced_stats != null and rec.advanced_stats.plate_appearances > 0) else -999.0
+		"wrc":
+			return rec.advanced_stats.wrc_plus if (rec.advanced_stats != null and rec.advanced_stats.plate_appearances > 0) else -999.0
+		"oaa":
+			return rec.advanced_stats.outs_above_average if (rec.advanced_stats != null and rec.advanced_stats.plate_appearances > 0) else -999.0
+		_:
+			return rec.position
 
 
 # ============================================================ lineup ops
@@ -532,122 +627,135 @@ func _draw() -> void:
 
 func _draw_roster_table() -> void:
 	_panel(TABLE_PANEL, Loc.t("lineup.roster_panel"))
-	_text(Loc.t("lineup.roster_hint"), Vector2(TABLE_PANEL.position.x + 196, TABLE_PANEL.position.y + 32), 12, FAINT)
+	_text(Loc.t("lineup.roster_hint"), Vector2(TABLE_PANEL.position.x + 196, TABLE_PANEL.position.y + 30), 12, FAINT)
 
-	var hy: float = TABLE_PANEL.position.y + 60
-	_text(Loc.t("rating.defense"), Vector2(C_BADGE_X, hy), 11, FAINT)
-	_text(Loc.t("col.player"), Vector2(C_JERSEY_X, hy), 11, FAINT)
-	_text_right(Loc.t("col.age"), C_AGE_R, hy, 11, FAINT)
-	_text(Loc.t("col.fatigue"), Vector2(C_FAT_DOT_X, hy), 11, FAINT)
-	_text_right(Loc.t("col.evaluation"), C_EVAL_R, hy, 11, FAINT)
-	_text_right("WAR", C_WAR_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.contact"), C_MEET_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.power"), C_POW_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.speed"), C_SPD_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.defense"), C_DEF_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.arm"), C_ARM_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.discipline"), C_EYE_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.games"), C_G_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.avg"), C_AVG_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.hr"), C_HR_R, hy, 11, FAINT)
-	_text_right(Loc.t("stat.rbi"), C_RBI_R, hy, 11, FAINT)
-	_text_right(Loc.t("stat.stolen_bases"), C_SB_R, hy, 11, FAINT)
-	_text_right(Loc.t("stat.obp"), C_OBP_R, hy, 11, FAINT)
-	_text_right("OPS", C_OPS_R, hy, 11, FAINT)
-	_text_right("wOBA", C_WOBA_R, hy, 11, FAINT)
-	_text_right("wRC+", C_WRC_R, hy, 11, FAINT)
-	_text_right("OAA", C_OAA_R, hy, 11, FAINT)
-	var header_rule_y: float = TABLE_PANEL.position.y + 70
-	_line(Vector2(C_BADGE_X, header_rule_y), Vector2(TABLE_PANEL.end.x - 18, header_rule_y), BORDER, 1.5)
+	var columns: Array = _roster_columns()
+	var max_rows: int = _roster_max_rows()
+	var max_scroll: int = max(0, _fielders.size() - max_rows)
+	_table_scroll = clampi(_table_scroll, 0, max_scroll)
 
+	# 表示窓ぶんの行だけをエンジンへ渡す (スクロール位置は画面側が持つ)。
+	var rows: Array = []
+	for idx in range(_table_scroll, min(_fielders.size(), _table_scroll + max_rows)):
+		rows.append(_roster_row(_fielders[idx] as PSPlayerSeasonRecord))
+	var row_hits: Array = []
+	var opts: Dictionary = {
+		"panel": false, "header_top": ROSTER_HEADER_TOP, "row_h": ROSTER_ROW_H,
+		"bottom_pad": ROSTER_BOTTOM_PAD, "sort_key": _sort_key, "sort_asc": _sort_asc,
+		"sel_kind": "lineup_roster", "hits": row_hits,
+		"empty_text": Loc.t("lineup.no_active_fielders"),
+	}
+	_draw_data_table(TABLE_PANEL, columns, rows, opts)
+
+	# ヘッダ/行の当たり判定はエンジンと同一の幾何から作る。
+	_header_hits = []
+	_build_table_header_hits(_header_hits, TABLE_PANEL, columns, opts)
 	_table_hits = []
-	var y: float = TABLE_PANEL.position.y + 94
-	var row_h: float = 27.0
-	var max_rows: int = int((TABLE_PANEL.end.y - 12 - y) / row_h)
-	var shown: int = 0
-	for record_value in _fielders:
-		if shown >= max_rows:
-			break
-		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
-		var row_rect: Rect2 = Rect2(C_BADGE_X - 8, y - 18, TABLE_PANEL.end.x - 18 - (C_BADGE_X - 8), row_h)
-		var in_lineup: bool = _slot_index_with_pid(record.player_id) >= 0
-		if record == _hover_record or record == _drag_record:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 5, 0)
-		if in_lineup:
-			_round(Rect2(C_BADGE_X - 8, y - 16, 3, 20), GREEN, Color.TRANSPARENT, 1, 0)
-		_draw_roster_row(record, y)
-		# 全行の下にヘアライン区切り (基底テーブルの罫線と同じ言語で行を刻む)。
-		_line(Vector2(C_BADGE_X - 8, y + 9), Vector2(TABLE_PANEL.end.x - 18, y + 9), HAIRLINE, 1.0)
+	for hit_value in row_hits:
+		var hit: Dictionary = hit_value as Dictionary
+		var record: PSPlayerSeasonRecord = _record_by_id(int(hit["meta"]))
+		if record == null:
+			continue
+		var row_rect: Rect2 = hit["rect"] as Rect2
 		_table_hits.append({"rect": row_rect, "record": record})
-		y += row_h
-		shown += 1
+		# スタメン入りしている選手は行の左端に緑のバー。
+		if _slot_index_with_pid(record.player_id) >= 0:
+			_round(Rect2(row_rect.position.x - 4.0, row_rect.position.y + 4.0, 3.0, row_rect.size.y - 8.0), GREEN, Color.TRANSPARENT, 1, 0)
 
-	if _fielders.is_empty():
-		_text(Loc.t("lineup.no_active_fielders"), Vector2(C_BADGE_X, y + 6), 13, MUTED)
-	elif shown > 0:
-		# 能力ブロック(巧打..選球)と成績ブロック(試合..OAA)の境界を縦ヘアラインで区切る。
-		var rows_bottom: float = y - 18.0
-		_line(Vector2(C_BLOCK_SEP_X, header_rule_y), Vector2(C_BLOCK_SEP_X, rows_bottom), HAIRLINE, 1.0)
+	# 行数が表示枠を超える場合はスリムなスクロールバーを描画
+	if _fielders.size() > max_rows:
+		var bar_x: float = TABLE_PANEL.end.x - 12.0
+		var bar_top: float = _roster_row_top()
+		var bar_h: float = float(max_rows) * ROSTER_ROW_H
+		_round(Rect2(bar_x, bar_top, 4.0, bar_h), PANEL_2, Color.TRANSPARENT, 2, 0)
+		var thumb_ratio: float = float(max_rows) / float(_fielders.size())
+		var thumb_h: float = maxf(18.0, bar_h * thumb_ratio)
+		var thumb_y: float = bar_top + (bar_h - thumb_h) * (float(_table_scroll) / float(max_scroll))
+		_round(Rect2(bar_x, thumb_y, 4.0, thumb_h), BORDER, Color.TRANSPARENT, 2, 0)
 
 
-func _draw_roster_row(record: PSPlayerSeasonRecord, y: float) -> void:
+# 先頭行の上端 y。エンジンは ヘッダ線 (header_top + 8) の 6px 下から行を並べる。
+func _roster_row_top() -> float:
+	return TABLE_PANEL.position.y + ROSTER_HEADER_TOP + 8.0 + 6.0
+
+
+# 固定行高で表示窓に入る行数 (エンジンの visible_count と同じ式)。
+func _roster_max_rows() -> int:
+	return max(1, int((TABLE_PANEL.end.y - _roster_row_top() - ROSTER_BOTTOM_PAD) / ROSTER_ROW_H))
+
+
+# 列定義。キーは _fielder_sort_val / _on_header_clicked のキーと同一にする。
+# プロフィールと評価は共通ヘルパ (総合のキーだけ eval に付け替える)、能力と成績は 2 段目のグループ。
+func _roster_columns() -> Array:
+	var cols: Array = _player_profile_columns(false, false, false, true)
+	for col_value in _player_eval_columns(false, false, true):
+		var eval_col: Dictionary = col_value as Dictionary
+		if str(eval_col["key"]) == "overall":
+			eval_col["key"] = "eval"
+		cols.append(eval_col)
+	for i in range(ROSTER_ABILITY_COLUMNS.size()):
+		var spec: Array = ROSTER_ABILITY_COLUMNS[i] as Array
+		var ability_col: Dictionary = {
+			"key": spec[0], "title": spec[1], "w": 46, "align": "c", "fmt": "ability_bar",
+			"group": "lineup.col.ability_block",
+		}
+		if i == 0:
+			ability_col["sep_before"] = true
+		cols.append(ability_col)
+	for i in range(ROSTER_STAT_COLUMNS.size()):
+		var stat_spec: Array = ROSTER_STAT_COLUMNS[i] as Array
+		var stat_col: Dictionary = {
+			"key": stat_spec[0], "title": stat_spec[1], "fmt": stat_spec[2], "w": stat_spec[3],
+			"align": "r", "group": "lineup.col.record_block",
+		}
+		if i == 0:
+			stat_col["sep_before"] = true
+		cols.append(stat_col)
+	return cols
+
+
+func _roster_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	var bs: PSBatterStats = record.batter_stats
 	var ad: PSAdvancedStats = record.advanced_stats
 	var played: bool = ad != null and ad.plate_appearances > 0
-	_pos_badge(Rect2(C_BADGE_X, y - 16, 40, 21), record.position)
-
-	if record.jersey_number > 0:
-		_text(str(record.jersey_number), Vector2(C_JERSEY_X, y), 12, FAINT)
-	_text(record.name, Vector2(C_NAME_X, y), 14, TEXT, C_AGE_R - 46 - C_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(str(record.age), C_AGE_R, y, 13, MUTED)
-
-	var pct: int = _fatigue_pct(record)
-	_dot(Vector2(C_FAT_DOT_X + 4, y - 4), 5, _fatigue_color(pct))
-	_text("%d%%" % pct, Vector2(C_FAT_TX, y), 13, TEXT)
-
-	var ev: int = PlayerValueEvaluator.overall_score(record)
-	_text_right(str(ev), C_EVAL_R, y, 14, _grade_color(ev))
-	_text_right(_war_str(record), C_WAR_R, y, 13, _war_color(record))
-
-	_draw_rating(PlayerVisibleRatings.fielder_contact(record), C_MEET_R, y)
-	_draw_rating(PlayerVisibleRatings.fielder_power(record), C_POW_R, y)
-	_draw_rating(PlayerVisibleRatings.fielder_speed(record), C_SPD_R, y)
-	_draw_rating(PlayerVisibleRatings.fielder_defense(record), C_DEF_R, y)
-	_draw_rating(PlayerVisibleRatings.fielder_arm(record), C_ARM_R, y)
-	_draw_rating(PlayerVisibleRatings.fielder_discipline(record), C_EYE_R, y)
-
-	_text_right(str(bs.games), C_G_R, y, 13, TEXT)
-	_text_right(_rate_short(bs.batting_average()), C_AVG_R, y, 13, TEXT)
-	_text_right(str(bs.home_runs), C_HR_R, y, 13, TEXT)
-	_text_right(str(bs.runs_batted_in), C_RBI_R, y, 13, MUTED)
-	_text_right(str(bs.stolen_bases), C_SB_R, y, 13, MUTED)
-	_text_right(_rate_short(bs.on_base_percentage()), C_OBP_R, y, 13, MUTED)
-	_text_right(_rate_short(bs.ops()), C_OPS_R, y, 13, TEXT)
-	_text_right(_rate_short(ad.woba()) if played else "-", C_WOBA_R, y, 13, MUTED)
-	_text_right(_wrc_plus_str(record) if played else "-", C_WRC_R, y, 13, MUTED)
-	_text_right(_oaa_str(ad) if played else "-", C_OAA_R, y, 13, _oaa_color(ad) if played else MUTED)
-
-
-func _draw_rating(value: int, right_x: float, y: float) -> void:
-	_text_right(str(value), right_x, y, 13, _grade_color(value))
+	var war_info: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
+	var row: Dictionary = {
+		"__meta": record.player_id,
+		"is_hover": record == _hover_record or record == _drag_record,
+		"pos": _short_pos(record.position), "pos_color": _pos_color(record.position),
+		"name": record.name, "jersey": record.jersey_number,
+		"age": record.age, "bats": _bats(record), "fatigue": _fatigue_pct(record),
+		"eval": PlayerValueEvaluator.overall_score(record),
+		"war": float(war_info.get("war", 0.0)) if played else 0.0,
+		"contact": PlayerVisibleRatings.fielder_contact(record),
+		"power": PlayerVisibleRatings.fielder_power(record),
+		"speed": PlayerVisibleRatings.fielder_speed(record),
+		"defense": PlayerVisibleRatings.fielder_defense(record),
+		"arm": PlayerVisibleRatings.fielder_arm(record),
+		"discipline": PlayerVisibleRatings.fielder_discipline(record),
+		"games": bs.games, "avg": bs.batting_average(), "hr": bs.home_runs,
+		"rbi": bs.runs_batted_in, "sb": bs.stolen_bases, "obp": bs.on_base_percentage(),
+		"ops": bs.ops(),
+		"woba": ad.woba() if played else "-",
+		"wrc": int(round(float(war_info.get("wrc_plus", 0.0)))) if played else "-",
+		"oaa": _oaa_value(ad) if played else "-",
+	}
+	# 補助指標は MUTED、欠損は FAINT (数値文字には段階色を付けない)。
+	for spec_value in ROSTER_STAT_COLUMNS:
+		var spec: Array = spec_value as Array
+		if bool(spec[4]):
+			var key: String = str(spec[0])
+			row[key + "_color"] = FAINT if row[key] is String else MUTED
+	return row
 
 
 # --- スタメン / 打順 ---
 
 func _draw_order_panel() -> void:
 	_panel(ORDER_PANEL, Loc.t("lineup.order_panel"))
-	_text(Loc.t("lineup.order_hint"), Vector2(ORDER_PANEL.position.x + 158, ORDER_PANEL.position.y + 32), 12, FAINT)
+	_text(Loc.t("lineup.order_hint"), Vector2(ORDER_PANEL.position.x + 158, ORDER_PANEL.position.y + 30), 12, FAINT)
 
-	var hy: float = ORDER_PANEL.position.y + 82
-	_text(Loc.t("lineup.col.order"), Vector2(O_NUM_CX - 16, hy), 11, FAINT)
-	_text(Loc.t("rating.defense"), Vector2(O_BADGE_X, hy), 11, FAINT)
-	_text(Loc.t("col.player"), Vector2(O_NAME_X, hy), 11, FAINT)
-	_text(Loc.t("lineup.col.bats"), Vector2(O_BATS_CX - 8, hy), 11, FAINT)
-	_text_right("AVG", O_AVG_R, hy, 11, FAINT)
-	_text_right("HR", O_HR_R, hy, 11, FAINT)
-	_text_right(Loc.t("stat.rbi"), O_RBI_R, hy, 11, FAINT)
-	_text_right("OPS", O_OPS_R, hy, 11, FAINT)
-	_line(Vector2(O_NUM_CX - 16, ORDER_PANEL.position.y + 90), Vector2(ORDER_PANEL.end.x - 16, ORDER_PANEL.position.y + 90), BORDER, 1.5)
+	_draw_order_header()
 
 	# 下部のモード切替 (DH有無 / 対戦投手の左右)。ボタン自体は _build_chrome_buttons が置く。
 	_line(
@@ -669,46 +777,126 @@ func _draw_order_panel() -> void:
 		)
 
 	_order_hits = []
-	var row_h: float = 34.0
+	var rows_bottom: float = ORDER_PANEL.position.y + O_ROW_TOP + 9.0 * O_ROW_H
 	for i in range(9):
-		var top: float = ORDER_PANEL.position.y + 98 + float(i) * row_h
-		var baseline: float = top + 21.0
-		var row_rect: Rect2 = Rect2(O_NUM_CX - 20, top, ORDER_PANEL.end.x - 16 - (O_NUM_CX - 20), row_h - 2)
+		var top: float = ORDER_PANEL.position.y + O_ROW_TOP + float(i) * O_ROW_H
+		var row_rect: Rect2 = Rect2(O_LEFT, top, ORDER_PANEL.end.x - 16.0 - O_LEFT, O_ROW_H - 2.0)
 		var is_target: bool = _drag_active and _is_order_target(i)
 		if is_target:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), BLUE, 6, 1)
-		_text("%d" % (i + 1), Vector2(O_NUM_CX - 14, baseline), 15, TEXT, 28, HORIZONTAL_ALIGNMENT_CENTER)
-		_draw_order_row(i, baseline)
-		# 行ヘアライン (打順枠が縦に並ぶだけの一覧なので視線誘導の罫線を足す)。
-		_line(Vector2(O_NUM_CX - 16, row_rect.end.y), Vector2(ORDER_PANEL.end.x - 16, row_rect.end.y), HAIRLINE, 1.0)
+			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.16), BLUE, 4, 1)
+		_draw_order_row(i, row_rect)
+		# 行ヘアライン
+		_line(Vector2(O_LEFT, row_rect.end.y), Vector2(row_rect.end.x, row_rect.end.y), HAIRLINE, 1.0)
 		_order_hits.append({"rect": row_rect, "index": i})
+	# 列グループ境界の縦ヘアライン (見出し上段の上端から最終行の下端まで)。
+	for sep_x in _order_group_seps():
+		_line(Vector2(sep_x, ORDER_PANEL.position.y + O_SUPER_TOP), Vector2(sep_x, rows_bottom), HAIRLINE, 1.0)
 
 
+# 打順表の上段グループ境界 (選手 / 評価・能力 / 今季成績 の各先頭 x)。
+func _order_group_seps() -> Array:
+	return [O_NAME_X - 6.0, O_BATS_CX + 14.0, O_DEF_R + 12.0]
 
-func _draw_order_row(i: int, baseline: float) -> void:
+
+# 2 段見出し: 上段 (SUPER_HEADER_BG, 18px, グループ名) + 下段 (PANEL_2, 26px, 列名)。
+# 共通テーブルと同じ配色・文字サイズ。当たり判定は持たない (並べ替えなし)。
+func _draw_order_header() -> void:
+	var top: float = ORDER_PANEL.position.y + O_SUPER_TOP
+	var right: float = ORDER_PANEL.end.x - 16.0
+	var seps: Array = _order_group_seps()
+	_round(Rect2(O_LEFT, top, right - O_LEFT, 18.0), SUPER_HEADER_BG, Color.TRANSPARENT, 0, 0)
+	_line(Vector2(O_LEFT, top + 18.0), Vector2(right, top + 18.0), HAIRLINE, 1.0)
+	var bounds: Array = [O_LEFT, float(seps[0]), float(seps[1]), float(seps[2]), right]
+	var groups: Array = ["lineup.group.order_pos", "group.profile", "lineup.group.eval_ability", "lineup.col.record_block"]
+	for g in range(groups.size()):
+		var gx: float = float(bounds[g])
+		_text(Loc.t(str(groups[g])), Vector2(gx, top + 13.0), 10, MUTED, float(bounds[g + 1]) - gx, HORIZONTAL_ALIGNMENT_CENTER, true)
+
+	var band_top: float = top + 18.0
+	_round(Rect2(O_LEFT, band_top, right - O_LEFT, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	var hy: float = band_top + 18.0
+	_order_head_center(Loc.t("lineup.col.order"), O_NUM_CX, 30.0, hy)
+	_order_head_center(Loc.t("rating.defense"), O_BADGE_X + 19.0, 40.0, hy)
+	_text(Loc.t("col.player"), Vector2(O_NAME_X, hy), 12, MUTED, O_BATS_CX - 14.0 - O_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_order_head_center(Loc.t("lineup.col.bats"), O_BATS_CX, 24.0, hy)
+	_order_head_center(Loc.t("col.overall"), O_EVAL_R - 18.0, 40.0, hy)
+	_order_head_center(Loc.t("rating.contact"), O_MEET_R - 14.0, 46.0, hy)
+	_order_head_center(Loc.t("rating.power"), O_POW_R - 14.0, 46.0, hy)
+	_order_head_center(Loc.t("rating.speed"), O_SPD_R - 14.0, 46.0, hy)
+	_order_head_center(Loc.t("rating.defense"), O_DEF_R - 14.0, 46.0, hy)
+	_text_right(Loc.t("col.avg"), O_AVG_R, hy, 12, MUTED, 46.0, true)
+	_text_right(Loc.t("col.hr"), O_HR_R, hy, 12, MUTED, 40.0, true)
+	_text_right("OPS", O_OPS_R, hy, 12, MUTED, 52.0, true)
+	_text_right("WAR", O_WAR_R, hy, 12, MUTED, 46.0, true)
+	_line(Vector2(O_LEFT, band_top + 26.0), Vector2(right, band_top + 26.0), BORDER, 1.5)
+
+
+func _order_head_center(label: String, center_x: float, width: float, baseline: float) -> void:
+	_text(label, Vector2(center_x - width * 0.5, baseline), 12, MUTED, width, HORIZONTAL_ALIGNMENT_CENTER, true)
+
+
+# 打順 1 行。行共通の高さ中心 (center_y) から各セルの縦位置を決める (共通テーブルの行と同じ)。
+func _draw_order_row(i: int, row_rect: Rect2) -> void:
 	var slot: Dictionary = _slots[i]
 	var pos: int = int(slot["pos"])
+	var center_y: float = row_rect.position.y + row_rect.size.y * 0.5
+	var baseline: float = center_y + 5.0
+	# 打順バッジ (1-9)
+	_round(Rect2(O_NUM_CX - 10.0, center_y - 10.0, 20.0, 20.0), PANEL_2, BORDER_SOFT, 4, 1)
+	_text("%d" % (i + 1), Vector2(O_NUM_CX - 10.0, baseline), 13, TEXT, 20.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+	var name_w: float = O_BATS_CX - 14.0 - O_NAME_X
 	if _is_fixed_pitcher(i):
-		_pos_badge(Rect2(O_BADGE_X, baseline - 16, 38, 21), 1)
-		_text(Loc.t("lineup.rotation_pitcher", {"name": _rotation_pitcher_name}), Vector2(O_NAME_X, baseline), 14, MUTED, O_BATS_CX - 60 - O_NAME_X)
+		_pos_badge(Rect2(O_BADGE_X, center_y - 11.0, 38, 22), 1)
+		_text(Loc.t("lineup.rotation_pitcher", {"name": _rotation_pitcher_name}), Vector2(O_NAME_X, baseline), 14, MUTED, name_w)
 		return
 	if pos > 0:
-		_pos_badge(Rect2(O_BADGE_X, baseline - 16, 38, 21), pos)
+		_pos_badge(Rect2(O_BADGE_X, center_y - 11.0, 38, 22), pos)
 	var pid: int = int(slot["pid"])
 	if pid <= 0:
-		_text(Loc.t("lineup.unset_paren"), Vector2(O_NAME_X, baseline), 14, FAINT, O_BATS_CX - 60 - O_NAME_X)
+		_text(Loc.t("lineup.unset_paren"), Vector2(O_NAME_X, baseline), 14, FAINT, name_w)
 		return
 	var record: PSPlayerSeasonRecord = _record_by_id(pid)
 	if record == null:
 		_text(Loc.t("lineup.unset_paren"), Vector2(O_NAME_X, baseline), 14, FAINT)
 		return
 	var bs: PSBatterStats = record.batter_stats
-	_text(record.name, Vector2(O_NAME_X, baseline), 14, TEXT, O_BATS_CX - 60 - O_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(_bats(record), Vector2(O_BATS_CX - 8, baseline), 13, MUTED, 24, HORIZONTAL_ALIGNMENT_CENTER)
-	_text_right(_rate_short(bs.batting_average()), O_AVG_R, baseline, 13, TEXT)
-	_text_right(str(bs.home_runs), O_HR_R, baseline, 13, TEXT)
-	_text_right(str(bs.runs_batted_in), O_RBI_R, baseline, 13, MUTED)
-	_text_right(_rate_short(bs.ops()), O_OPS_R, baseline, 13, TEXT)
+	# 共通テーブルの player_name と同じく、背番号を FAINT で名前の前に置く。
+	var name_x: float = O_NAME_X
+	if record.jersey_number > 0:
+		var num_text: String = "#%d " % record.jersey_number
+		var num_w: float = _measure(num_text, 13)
+		_text(num_text, Vector2(name_x, baseline), 13, FAINT, num_w + 2.0)
+		name_x += num_w
+	_text(record.name, Vector2(name_x, baseline), 14, TEXT, O_NAME_X + name_w - name_x, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(_bats(record), Vector2(O_BATS_CX - 12.0, baseline), 12, MUTED, 24, HORIZONTAL_ALIGNMENT_CENTER)
+	_order_eval_badge(PlayerValueEvaluator.overall_score(record), O_EVAL_R - 18.0, center_y)
+	var bar_y: float = row_rect.end.y - 6.0
+	_draw_rating(PlayerVisibleRatings.fielder_contact(record), O_MEET_R, baseline, bar_y)
+	_draw_rating(PlayerVisibleRatings.fielder_power(record), O_POW_R, baseline, bar_y)
+	_draw_rating(PlayerVisibleRatings.fielder_speed(record), O_SPD_R, baseline, bar_y)
+	_draw_rating(PlayerVisibleRatings.fielder_defense(record), O_DEF_R, baseline, bar_y)
+	_text_right(_rate_short(bs.batting_average()), O_AVG_R, baseline, 13, TEXT, 46.0)
+	_text_right(str(bs.home_runs), O_HR_R, baseline, 13, TEXT, 40.0)
+	_text_right(_rate_short(bs.ops()), O_OPS_R, baseline, 13, TEXT, 52.0)
+	_text_right(_war_str(record), O_WAR_R, baseline, 13, TEXT, 46.0)
+
+
+# 総合評価ピル: 背景 PANEL_2、外枠だけ段階色、数字は TEXT (共通テーブルの eval_badge と同じ)。
+func _order_eval_badge(value: int, center_x: float, center_y: float) -> void:
+	_round(Rect2(center_x - 17.0, center_y - 10.0, 34.0, 20.0), PANEL_2, _tier_color(float(value)), 4, 1)
+	_text(str(value), Vector2(center_x - 17.0, center_y + 5.0), 13, TEXT, 34.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+
+
+# 能力値: 数字は TEXT、セル下端の 3px バーだけ段階色 (共通テーブルの ability_bar と同じ)。
+func _draw_rating(value: int, right_x: float, baseline: float, bar_y: float) -> void:
+	if value <= 0:
+		_text_right("-", right_x, baseline - 1.0, 13, FAINT, 28.0)
+		return
+	var track_w: float = 28.0
+	_text_right(str(value), right_x, baseline - 1.0, 13, TEXT, track_w)
+	_round(Rect2(right_x - track_w, bar_y, track_w, 3.0), PANEL_3, Color.TRANSPARENT, 1, 0)
+	var fill_w: float = track_w * clampf(float(value) / 100.0, 0.08, 1.0)
+	_round(Rect2(right_x - track_w, bar_y, fill_w, 3.0), _tier_color(float(value)), Color.TRANSPARENT, 1, 0)
 
 
 # --- 守備位置設定 + 控え ---
@@ -736,18 +924,39 @@ func _draw_field_panel() -> void:
 
 
 func _draw_field_backdrop() -> void:
-	# 内野ダイヤと2本のファウルラインを淡く描き、守備図だと一目で分かるようにする。
+	# 内野ダイヤ・マウンド・外野アーク・ファウルラインを描き、守備図だと一目で分かるようにする。
 	var home: Vector2 = Vector2(1286, 952)
 	var b1: Vector2 = Vector2(1372, 886)
 	var b2: Vector2 = Vector2(1286, 820)
 	var b3: Vector2 = Vector2(1200, 886)
-	var grass: Color = Color(0.13, 0.22, 0.16, 0.55)
+	var mound: Vector2 = Vector2(1286, 886)
+	var grass: Color = Color(0.12, 0.22, 0.16, 0.6)
+	var arc_color: Color = Color(0.15, 0.26, 0.19, 0.4)
+
+	# 外野芝生ゾーンの扇形アーク
+	var center: Vector2 = home
+	var radius: float = 290.0
+	var prev_pt: Vector2 = Vector2.ZERO
+	for step in range(17):
+		var ang: float = deg_to_rad(-135.0 + float(step) * (90.0 / 16.0))
+		var pt: Vector2 = center + Vector2(cos(ang), sin(ang)) * radius
+		if step > 0:
+			_line(prev_pt, pt, arc_color, 2.0)
+		prev_pt = pt
+
+	# ファウルライン (ホームから両翼へ)
 	_line(home, Vector2(1112, 678), grass, 1.5)
 	_line(home, Vector2(1460, 678), grass, 1.5)
-	_line(home, b1, BORDER_SOFT, 1.0)
-	_line(b1, b2, BORDER_SOFT, 1.0)
-	_line(b2, b3, BORDER_SOFT, 1.0)
-	_line(b3, home, BORDER_SOFT, 1.0)
+
+	# 内野ダイヤモンド
+	_line(home, b1, BORDER_SOFT, 1.2)
+	_line(b1, b2, BORDER_SOFT, 1.2)
+	_line(b2, b3, BORDER_SOFT, 1.2)
+	_line(b3, home, BORDER_SOFT, 1.2)
+
+	# ピッチャーズマウンド
+	_dot(mound, 6.0, Color(0.18, 0.22, 0.26, 0.6))
+	_dot(mound, 2.5, MUTED)
 
 
 func _draw_field_card(center: Vector2, pos: int, draggable: bool) -> void:
@@ -755,28 +964,30 @@ func _draw_field_card(center: Vector2, pos: int, draggable: bool) -> void:
 	var is_target: bool = _drag_active and draggable and _is_field_target(pos)
 	var border: Color = BLUE if is_target else BORDER
 	var bg: Color = Color(BLUE.r, BLUE.g, BLUE.b, 0.16) if is_target else PANEL_2
-	_round(rect, bg, border, 7, 2 if is_target else 1)
-	_pos_badge(Rect2(rect.position.x + 5, rect.position.y + 7, 24, 20), pos)
+	_round(rect, bg, border, 6, 2 if is_target else 1)
+	_pos_badge(Rect2(rect.position.x + 4, rect.position.y + 4, 26, 18), pos)
 	var name_x: float = rect.position.x + 34
 	var name_w: float = rect.size.x - 40
-	var baseline: float = rect.position.y + rect.size.y * 0.66
 	var pid: int = 0
 	if pos == 1:
-		_text(_rotation_pitcher_name, Vector2(name_x, baseline), 12, MUTED, name_w)
+		_text(_rotation_pitcher_name, Vector2(name_x, rect.position.y + 21.0), 12, MUTED, name_w)
 	else:
 		pid = _player_at_position(pos)
 		if pid > 0:
 			var record: PSPlayerSeasonRecord = _record_by_id(pid)
-			_text(record.name if record != null else "?", Vector2(name_x, baseline), 12, TEXT, name_w)
+			var pname: String = record.name if record != null else "?"
+			_text(pname, Vector2(name_x, rect.position.y + 16.0), 12, TEXT, name_w - 12.0)
+			if record != null:
+				var def_val: int = PlayerVisibleRatings.fielder_defense(record)
+				_text(Loc.t("lineup.def_val", {"val": def_val}), Vector2(name_x, rect.position.y + 28.0), 10, MUTED)
+				var fat: int = _fatigue_pct(record)
+				_dot(Vector2(rect.end.x - 10.0, rect.position.y + 23.0), 3.5, _fatigue_color(fat))
 		else:
-			_text(Loc.t("lineup.unset"), Vector2(name_x, baseline), 12, FAINT, name_w)
+			_text(Loc.t("lineup.unset"), Vector2(name_x, rect.position.y + 21.0), 12, FAINT, name_w)
 	_field_hits.append({"rect": rect, "pos": pos, "draggable": draggable})
 
 
-# 出場配分リスト (FIELD_PANEL 右半分)。1行 = 1守備位置で 2 段:
-#   上段 = 定位置 + 出場シェアのスライダー + % + 「自動」チップ
-#   下段 = 控え1..MAX_BENCH (上から補充優先。控え1 は併用相手として残りのシェアを取る)
-# 定位置セルは守備図と同じドロップ先で、控えセルは D&D で入れ替えられる。
+# 出場配分リスト (FIELD_PANEL 右半分)。
 func _draw_share_list() -> void:
 	_bench_cell_hits = []
 	_bench_chip_hits = []
@@ -784,14 +995,29 @@ func _draw_share_list() -> void:
 	_share_value_hits = []
 	_auto_chip_hits = []
 
-	_text(Loc.t("lineup.share_title"), Vector2(SHARE_LIST_LEFT, SHARE_LIST_TOP - 26.0), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("lineup.share_title"), Vector2(SHARE_LIST_LEFT, SHARE_HEAD_TOP - 8.0), 13, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_text(
 		Loc.t("lineup.share_hint", {"games": _team_scheduled_games}),
-		Vector2(SHARE_LIST_LEFT + 62.0, SHARE_LIST_TOP - 22.0), 11, FAINT
+		Vector2(SHARE_LIST_LEFT + 62.0, SHARE_HEAD_TOP - 4.0), 11, FAINT
 	)
 
-	# 定位置セルは守備図と同じドロップ先。ドラッグ中の強調判定 (_is_field_target) が自分のセルを
-	# 見られるよう、描画ループより先に全行ぶんのヒット矩形を登録しておく。
+	# 2 段見出し: 上段 (SUPER_HEADER_BG, 18px) にグループ名、下段 (PANEL_2, 24px) に列名。
+	var head_left: float = SHARE_LIST_LEFT - 4.0
+	var head_w: float = SHARE_LIST_RIGHT - SHARE_LIST_LEFT + 8.0
+	var split_x: float = _share_slider_left() - 4.0
+	_round(Rect2(head_left, SHARE_HEAD_TOP, head_w, 18.0), SUPER_HEADER_BG, Color.TRANSPARENT, 0, 0)
+	_text(Loc.t("lineup.group.share_starter"), Vector2(head_left, SHARE_HEAD_TOP + 13.0), 10, MUTED, split_x - head_left, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("lineup.group.share_alloc"), Vector2(split_x, SHARE_HEAD_TOP + 13.0), 10, MUTED, head_left + head_w - split_x, HORIZONTAL_ALIGNMENT_CENTER, true)
+	var band_top: float = SHARE_HEAD_TOP + 18.0
+	_round(Rect2(head_left, band_top, head_w, 24.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	var hy: float = band_top + 17.0
+	_text(Loc.t("lineup.share_col.pos"), Vector2(SHARE_LIST_LEFT, hy), 12, MUTED, SHARE_BADGE_W, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("lineup.share_col.starter"), Vector2(SHARE_LIST_LEFT + SHARE_BADGE_W + 12.0, hy), 12, MUTED, SHARE_NAME_W, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("lineup.share_col.ratio"), Vector2(_share_slider_left(), hy), 12, MUTED, SHARE_SLIDER_W + SHARE_VALUE_W, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text(Loc.t("lineup.share_col.setting"), Vector2(SHARE_LIST_RIGHT - SHARE_AUTO_CHIP_W - 4.0, hy), 12, MUTED, SHARE_AUTO_CHIP_W + 4.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_line(Vector2(head_left, band_top + 24.0), Vector2(head_left + head_w, band_top + 24.0), BORDER, 1.5)
+	_line(Vector2(split_x, SHARE_HEAD_TOP), Vector2(split_x, band_top + 24.0), HAIRLINE, 1.0)
+
 	var positions: Array = _share_positions()
 	for i in range(positions.size()):
 		_field_hits.append({
@@ -894,14 +1120,14 @@ func _draw_share_row(index: int, pos: int) -> void:
 
 # シェアのスライダー。指定済みは青、自動は灰で塗る (数値側の色分けと揃える)。
 func _draw_share_slider(rect: Rect2, share: float, locked: bool) -> void:
-	_round(rect, PANEL_3, Color.TRANSPARENT, 3, 0)
+	_round(rect, PANEL_3, BORDER_SOFT, 3, 1)
 	if share <= 0.0:
 		return
 	var t: float = clampf((share - SHARE_SLIDER_MIN) / (1.0 - SHARE_SLIDER_MIN), 0.0, 1.0)
 	var fill: Color = BLUE if locked else Color(MUTED.r, MUTED.g, MUTED.b, 0.55)
 	_round(Rect2(rect.position, Vector2(maxf(rect.size.x * t, 3.0), rect.size.y)), fill, Color.TRANSPARENT, 3, 0)
 	var knob_x: float = rect.position.x + rect.size.x * t
-	_round(Rect2(knob_x - 3.0, rect.position.y - 3.0, 6.0, rect.size.y + 6.0), fill, Color.TRANSPARENT, 3, 0)
+	_round(Rect2(knob_x - 3.5, rect.position.y - 3.0, 7.0, rect.size.y + 6.0), TEXT if locked else MUTED, BLUE if locked else BORDER, 3, 1)
 
 
 func _share_starter_rect(index: int) -> Rect2:
@@ -910,6 +1136,11 @@ func _share_starter_rect(index: int) -> Rect2:
 		SHARE_LIST_TOP + float(index) * SHARE_ROW_H,
 		SHARE_NAME_W, 21.0
 	)
+
+
+# スライダー列の左端 x (定位置セルの右 8px)。
+func _share_slider_left() -> float:
+	return SHARE_LIST_LEFT + SHARE_BADGE_W + 6.0 + SHARE_NAME_W + 8.0
 
 
 func _share_slider_rect(index: int) -> Rect2:
@@ -1093,6 +1324,7 @@ func _load_fielders(season: PSSeason) -> void:
 	for record_row in _fielders:
 		var record: PSPlayerSeasonRecord = record_row as PSPlayerSeasonRecord
 		_war_by_id[record.player_id] = WarCalculator.season_war(record, ctx)
+	_sort_fielders()
 
 	var preview: Dictionary = GameSimulator.preview_lineup(season, _team_id, false)
 	if bool(preview.get("ok", false)):
@@ -1473,33 +1705,17 @@ func _war_str(record: PSPlayerSeasonRecord) -> String:
 	return "%0.1f" % float(w.get("war", 0.0))
 
 
-func _wrc_plus_str(record: PSPlayerSeasonRecord) -> String:
-	var w: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
-	return str(int(round(float(w.get("wrc_plus", 0.0)))))
-
-
 func _war_color(record: PSPlayerSeasonRecord) -> Color:
 	if record.advanced_stats == null or record.advanced_stats.plate_appearances <= 0:
 		return MUTED
-	var war: float = float((_war_by_id.get(record.player_id, {}) as Dictionary).get("war", 0.0))
-	if war >= 2.0:
-		return GREEN
-	if war < 0.0:
-		return RED
 	return TEXT
 
 
-func _oaa_str(ad: PSAdvancedStats) -> String:
-	var total: float = float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))
-	return "%+0.1f" % total
+func _oaa_value(ad: PSAdvancedStats) -> float:
+	return float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))
 
 
-func _oaa_color(ad: PSAdvancedStats) -> Color:
-	var total: float = float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))
-	if total > 0.5:
-		return GREEN
-	if total < -0.5:
-		return RED
+func _oaa_color(_ad: PSAdvancedStats) -> Color:
 	return MUTED
 
 
@@ -1559,14 +1775,8 @@ func _pos_badge(rect: Rect2, pos: int) -> void:
 	_chip(rect, _short_pos(pos), _pos_color(pos))
 
 
-func _grade_color(value: int) -> Color:
-	if value >= 75:
-		return BLUE
-	if value >= 66:
-		return GREEN
-	if value >= 52:
-		return TEXT
-	return MUTED
+func _grade_color(_value: int) -> Color:
+	return TEXT
 
 
 func _set_status(text: String, is_error: bool) -> void:

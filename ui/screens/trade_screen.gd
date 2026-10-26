@@ -45,26 +45,35 @@ const FILTER_DEFS: Array = [
 ]
 
 const PLAYER_COLUMNS: Array = [
-	{"title": "col.category",   "key": "role",   "w": 54,  "align": "c", "fmt": "pos_badge"},
-	{"title": "col.player",     "key": "name",   "w": 178, "align": "l", "fmt": "str", "strong": true},
-	{"title": "col.age",        "key": "age",    "w": 48,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "col.evaluation", "key": "value",  "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "WAR",            "key": "war",    "w": 56,  "align": "r", "fmt": "str"},
-	{"title": "col.salary",     "key": "salary", "w": 128, "align": "r", "fmt": "str", "sep_before": true},
+	{"title": "col.category",      "key": "role",   "w": 46,  "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+	{"title": "col.roster_status", "key": "roster", "w": 44,  "align": "c", "fmt": "roster_chip", "group": "group.profile"},
+	{"title": "col.player",        "key": "name",   "w": 150, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+	{"title": "col.age",           "key": "age",    "w": 38,  "align": "c", "fmt": "int", "group": "group.profile"},
+	{"title": "col.throws_bats_short", "key": "hand",   "w": 38,  "align": "c", "fmt": "str", "group": "group.profile"},
+	{"title": "col.overall",       "key": "value",  "w": 46,  "align": "c", "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+	{"title": "OPS/ERA",           "key": "stat",   "w": 54,  "align": "r", "fmt": "str", "strong": true, "group": "group.key_stats"},
+	{"title": "WAR",               "key": "war",    "w": 46,  "align": "r", "fmt": "f1s", "strong": true, "group": "group.key_stats"},
+	{"title": "col.salary",        "key": "salary", "w": 70,  "align": "r", "fmt": "str", "sep_before": true, "group": "group.contract"},
 ]
 
 const LOG_COLUMNS: Array = [
-	{"title": "col.day",          "key": "day",     "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "trade.col.team_a", "key": "team_a",  "w": 130, "align": "l", "fmt": "str", "strong": true},
-	{"title": "trade.col.gives",  "key": "a_gives", "w": 220, "align": "l", "fmt": "str"},
-	{"title": "trade.col.team_b", "key": "team_b",  "w": 130, "align": "l", "fmt": "str", "sep_before": true, "strong": true},
-	{"title": "trade.col.gives",  "key": "b_gives", "w": 220, "align": "l", "fmt": "str"},
-	{"title": "col.kind",         "key": "source",  "w": 80,  "align": "l", "fmt": "str", "sep_before": true},
+	{"title": "col.day",          "key": "day",     "w": 48,  "align": "r", "fmt": "int", "group": "trade.group.executed"},
+	{"title": "trade.col.team_a", "key": "team_a",  "w": 130, "align": "l", "fmt": "str", "strong": true, "sep_before": true, "group": "trade.group.side_a"},
+	{"title": "trade.col.gives",  "key": "a_gives", "w": 220, "align": "l", "fmt": "str", "group": "trade.group.side_a"},
+	{"title": "trade.col.team_b", "key": "team_b",  "w": 130, "align": "l", "fmt": "str", "sep_before": true, "strong": true, "group": "trade.group.side_b"},
+	{"title": "trade.col.gives",  "key": "b_gives", "w": 220, "align": "l", "fmt": "str", "group": "trade.group.side_b"},
+	{"title": "col.kind",         "key": "source",  "w": 80,  "align": "l", "fmt": "str", "sep_before": true, "group": "trade.group.kind"},
 ]
 
 var _row_hits: Array = []      # [{rect, kind, meta}]
+var _header_hits: Array = []   # [{rect, key, side}]
 var _scroll_zones: Array = []
 var _scroll: Dictionary = {}
+
+var _sort_key_mine: String = "value"
+var _sort_asc_mine: bool = false
+var _sort_key_theirs: String = "value"
+var _sort_asc_theirs: bool = false
 
 var _view_team_id: int = 0     # 相手球団
 var _give_ids: Array = []      # 自軍から出す選手 id (最大 MAX_PLAYERS_PER_SIDE)
@@ -81,6 +90,7 @@ var _team_menu_button: Button = null
 var _war_ctx: Dictionary = {}
 var _mine_all_rows: Array = []
 var _theirs_rows: Array = []
+var _active_ids_cache: Dictionary = {} # {team_id: {player_id: true}} 1軍登録の判定用
 # evaluate_user_proposal の結果キャッシュ。選択が変わるたび _refresh_proposal_eval で更新する
 # (毎フレーム呼ぶと重いので _draw では参照するだけ)。
 var _eval: Dictionary = {}
@@ -111,6 +121,7 @@ func _draw() -> void:
 	_update_transform()
 	draw_rect(Rect2(Vector2.ZERO, size), BG, true)
 	_row_hits = []
+	_header_hits = []
 	_scroll_zones = []
 
 	var season: PSSeason = AppState.current_season
@@ -177,13 +188,19 @@ func _days_left(season: PSSeason) -> int:
 # --- 自軍/相手ロスター テーブル ---
 
 func _draw_player_table(rect: Rect2, title: String, rows: Array, selected_ids: Array, sel_kind: String) -> void:
+	var s_key: String = _sort_key_mine if sel_kind == "mine" else _sort_key_theirs
+	var s_asc: bool = _sort_asc_mine if sel_kind == "mine" else _sort_asc_theirs
+	var sorted_rows: Array = rows.duplicate()
+	_sort_trade_rows(sorted_rows, s_key, s_asc)
 	var opts: Dictionary = {
-		"title": title, "header_top": 58.0, "row_h": 30.0,
+		"title": title, "row_h": 30.0,
 		"cell_size": 12, "empty_text": Loc.t("common.no_players"),
 		"scroll_key": sel_kind, "scroll": _scroll, "scroll_zones": _scroll_zones,
 		"sel_kind": sel_kind, "hits": _row_hits,
+		"sort_key": s_key,
 	}
-	_draw_data_table(rect, PLAYER_COLUMNS, rows, opts)
+	_draw_data_table(rect, PLAYER_COLUMNS, sorted_rows, opts)
+	_build_trade_header_hits(rect, PLAYER_COLUMNS, sel_kind)
 	# 複数選択のハイライトは自前で重ねる (基底 selected_id は単一)。
 	for hit_value in _row_hits:
 		var hit: Dictionary = hit_value as Dictionary
@@ -191,6 +208,49 @@ func _draw_player_table(rect: Rect2, title: String, rows: Array, selected_ids: A
 			continue
 		if selected_ids.has(int(hit.get("meta", 0))):
 			_round(hit["rect"] as Rect2, Color(BLUE.r, BLUE.g, BLUE.b, 0.14), Color(BLUE.r, BLUE.g, BLUE.b, 0.75), 6, 2)
+
+
+func _build_trade_header_hits(rect: Rect2, columns: Array, side: String) -> void:
+	var inner_pad: float = 12.0
+	var inner_x: float = rect.position.x + inner_pad
+	var usable: float = rect.size.x - inner_pad * 2.0
+	var sum_w: float = 0.0
+	for col_value in columns:
+		sum_w += _col_width(col_value as Dictionary)
+	var factor: float = usable / sum_w if sum_w > 0.0 else 1.0
+	var hy: float = rect.position.y + _effective_header_top(columns, {})
+	var band_top: float = hy - 18.0
+	var cx: float = inner_x
+	for col_value in columns:
+		var col: Dictionary = col_value as Dictionary
+		var w: float = _col_width(col) * factor
+		var key: String = str(col.get("key", ""))
+		_header_hits.append({"rect": Rect2(cx, band_top, w, 26.0), "key": key, "side": side})
+		cx += w
+
+
+func _sort_trade_rows(rows: Array, sort_key: String, sort_asc: bool) -> void:
+	rows.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var da: Dictionary = a as Dictionary
+		var db: Dictionary = b as Dictionary
+		var va = da.get(sort_key)
+		var vb = db.get(sort_key)
+		if sort_key == "war":
+			va = float(da.get("war_val", -999.0))
+			vb = float(db.get("war_val", -999.0))
+		elif sort_key == "salary":
+			va = int(da.get("salary_raw", 0))
+			vb = int(db.get("salary_raw", 0))
+		elif sort_key == "stat":
+			va = float(da.get("stat_val", -999.0))
+			vb = float(db.get("stat_val", -999.0))
+		elif sort_key == "value" or sort_key == "age":
+			va = int(da.get(sort_key, 0))
+			vb = int(db.get(sort_key, 0))
+		if va != vb:
+			return (va < vb) if sort_asc else (va > vb)
+		return int(da.get("id", 0)) < int(db.get("id", 0))
+	)
 
 
 # ロスター表の見出し右端に、その球団の編成方針を出す (即戦力重視 = ベテランを高く買う / 将来重視 = 若手を高く買う)。
@@ -246,16 +306,40 @@ func _draw_trade_slot(rect: Rect2, player_id: int, kind: String, season: PSSeaso
 	var player: PSPlayer = GameDb.get_player(player_id)
 	if player == null:
 		return
-	_round(rect, PANEL_2, Color.TRANSPARENT, 6, 0)
+	_round(rect, PANEL_2, BORDER_SOFT, 6, 1)
 	var role: Dictionary = _role_chip(player)
 	_chip(Rect2(rect.position.x + 8.0, rect.position.y + rect.size.y * 0.5 - 9.0, 40.0, 18.0), str(role["text"]), role["color"] as Color)
 	# 選手一覧パネル (自軍/相手ロースター) と同じ並び (年齢・評価・年俸を名前と横並び) に揃える。
 	var record: PSPlayerSeasonRecord = RecordStore.get_player_record(player.id, season.year, season.season_number)
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
 	_text_right(_format_money_compact(player.salary), rect.end.x - 8.0, mid_y, 12, MUTED, 76.0)
-	_text_right(str(eval), rect.end.x - 8.0 - 76.0 - 6.0, mid_y, 12, _table_rating_color(eval), 34.0)
-	_text_right(Loc.t("common.age_value", {"age": player.age}), rect.end.x - 8.0 - 76.0 - 6.0 - 34.0 - 6.0, mid_y, 12, MUTED, 40.0)
-	_text(player.name, Vector2(rect.position.x + 56.0, mid_y), 13, TEXT, rect.size.x - 56.0 - 76.0 - 34.0 - 40.0 - 30.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+
+	var eval_border: Color = RED
+	if eval >= 75:
+		eval_border = BLUE
+	elif eval >= 60:
+		eval_border = GREEN
+	elif eval >= 45:
+		eval_border = AMBER
+	var pw: float = 30.0
+	var ph: float = 19.0
+	var px: float = rect.end.x - 8.0 - 76.0 - 6.0 - pw
+	var py: float = rect.position.y + (rect.size.y - ph) * 0.5
+	_round(Rect2(px, py, pw, ph), PANEL_3, eval_border, 4, 1)
+	_text(str(eval), Vector2(px, rect.position.y + rect.size.y * 0.5 + 4.0), 12, TEXT, pw, HORIZONTAL_ALIGNMENT_CENTER, true)
+
+	_text_right(Loc.t("common.age_value", {"age": player.age}), px - 6.0, mid_y, 12, MUTED, 40.0)
+
+	var name_x: float = rect.position.x + 54.0
+	var num_str: String = ""
+	if player.jersey_number > 0:
+		num_str = "#%d " % player.jersey_number
+		var num_w: float = _font.get_string_size(num_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		_text(num_str, Vector2(name_x, mid_y), 11, FAINT, num_w + 2.0)
+		name_x += num_w
+
+	var avail_w: float = (px - 6.0 - 40.0) - name_x - 6.0
+	_text(player.name, Vector2(name_x, mid_y), 13, TEXT, avail_w, HORIZONTAL_ALIGNMENT_LEFT, true)
 	_row_hits.append({"rect": rect, "kind": kind, "meta": player.id})
 
 
@@ -267,7 +351,8 @@ func _cash_row_top() -> float:
 # 金銭行: 見出し + 受け払いの向きと額。選手を片側しか選ばなければ金銭トレード (額 0 なら無償トレード) になる。
 func _draw_cash_row(rect: Rect2, y: float) -> void:
 	var mid_y: float = y + CASH_ROW_H * 0.5 + 5.0
-	_text(Loc.t("trade.cash"), Vector2(rect.position.x + 18.0, mid_y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_round(Rect2(rect.position.x + 14.0, y, rect.size.x - 28.0, CASH_ROW_H), PANEL_2, BORDER_SOFT, 6, 1)
+	_text(Loc.t("trade.cash"), Vector2(rect.position.x + 22.0, mid_y), 12, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 	var text: String = Loc.t("trade.cash.none")
 	var color: Color = FAINT
 	if _cash > 0:
@@ -318,23 +403,31 @@ func _draw_trade_balance(rect: Rect2, y: float, w: float) -> float:
 func _draw_trade_verdict(rect: Rect2, y: float, window_open: bool) -> void:
 	var text: String
 	var color: Color
+	var bg_color: Color
 	if _give_ids.is_empty() and _receive_ids.is_empty():
 		text = Loc.t("trade.verdict.select_players")
 		color = MUTED
+		bg_color = Color(MUTED.r, MUTED.g, MUTED.b, 0.10)
 	elif not window_open:
 		text = Loc.t("trade.error.deadline_passed")
 		color = AMBER
+		bg_color = Color(AMBER.r, AMBER.g, AMBER.b, 0.12)
 	elif not bool(_eval.get("ok", false)):
 		text = str(_eval.get("message", Loc.t("trade.verdict.cannot_propose")))
 		color = AMBER
+		bg_color = Color(AMBER.r, AMBER.g, AMBER.b, 0.12)
 	elif bool(_eval.get("accepted", false)):
 		text = Loc.t("trade.verdict.likely_accept")
 		color = GREEN
+		bg_color = Color(GREEN.r, GREEN.g, GREEN.b, 0.16)
 	else:
 		text = str(_eval.get("message", Loc.t("trade.verdict.unlikely")))
 		color = RED
+		bg_color = Color(RED.r, RED.g, RED.b, 0.14)
 	_text(Loc.t("trade.verdict.title"), Vector2(rect.position.x + 18.0, y), 11, MUTED)
-	_text(text, Vector2(rect.position.x + 18.0, y + 22.0), 14, color, rect.size.x - 36.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var badge_rect: Rect2 = Rect2(rect.position.x + 18.0, y + 8.0, rect.size.x - 36.0, 32.0)
+	_round(badge_rect, bg_color, Color(color.r, color.g, color.b, 0.40), 6, 1)
+	_text(text, Vector2(badge_rect.position.x + 12.0, badge_rect.position.y + 21.0), 13, color, badge_rect.size.x - 24.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # --- 相手球団からの提案 (下段左) ---
@@ -415,7 +508,7 @@ func _draw_log_table(rect: Rect2, season: PSSeason) -> void:
 			"source": _source_label(str(entry.get("source", ""))),
 		})
 	_draw_data_table(rect, LOG_COLUMNS, rows, {
-		"title": Loc.t("trade.log_title"), "header_top": 58.0, "row_h": 28.0,
+		"title": Loc.t("trade.log_title"), "row_h": 28.0,
 		"cell_size": 12, "empty_text": Loc.t("trade.log_empty"),
 		"scroll_key": "log", "scroll": _scroll, "scroll_zones": _scroll_zones,
 	})
@@ -665,6 +758,7 @@ func _refresh_all() -> void:
 	if season == null:
 		return
 	_war_ctx = WarCalculator.build_league_context(season.year, season.season_number)
+	_active_ids_cache = {}
 	_stances = TradeService.build_team_stances(season, GameDb.players, GameDb.teams)
 	_load_mine(season)
 	_load_theirs(season)
@@ -702,29 +796,68 @@ func _player_row(player: PSPlayer, season: PSSeason) -> Dictionary:
 	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(OffseasonService.player_value_score(player))
 	var has_war: bool = false
 	var war: float = 0.0
+	var stat_text: String = "-"
+	var stat_val: float = -999.0
 	if record != null:
 		has_war = (record.is_pitcher() and record.pitcher_stats.outs_pitched > 0) \
 			or (not record.is_pitcher() and record.batter_stats.plate_appearances > 0)
 		if has_war:
 			war = float(WarCalculator.season_war(record, _war_ctx).get("war", 0.0))
+			if record.is_pitcher():
+				stat_val = -record.pitcher_stats.era() # 防御率は低いほど良いので符号反転して並べる
+				stat_text = "%0.2f" % record.pitcher_stats.era()
+			else:
+				stat_val = record.batter_stats.ops()
+				stat_text = _rate_short(stat_val)
 	var row: Dictionary = {
 		"__meta": player.id,
+		"id": player.id,
+		"uniform_number": player.jersey_number,
 		"role": role["text"], "role_color": role["color"], "role_dev": not tradeable,
+		"roster": _roster_label(player, season),
 		"name": player.name,
 		"age": player.age,
+		"hand": _hand_short(player.throwing_hand if player.is_pitcher() else player.batting_side),
 		"value": eval,
-		"war": ("%0.1f" % war) if has_war else "-",
+		"stat": stat_text,
+		"stat_val": stat_val,
+		"war": war if has_war else "-",
+		"war_val": war if has_war else -999.0,
 		"salary": _format_money(player.salary),
+		"salary_raw": player.salary,
 		"is_pitcher": player.is_pitcher(),
 		"position": player.position,
 	}
-	if tradeable:
-		row["value_color"] = _table_rating_color(eval)
-		if has_war:
-			row["war_color"] = _war_color(war)
-	else:
+	if not tradeable:
 		row["__color"] = FAINT
 	return row
+
+
+# 1軍/2軍の区分。球団ごとの1軍登録 id 集合は _refresh_all で作り直すキャッシュから引く
+# (保存済みの登録が無ければ自動編成のプレビューを使う)。
+func _roster_label(player: PSPlayer, season: PSSeason) -> String:
+	if not _active_ids_cache.has(player.team_id):
+		var map: Dictionary = {}
+		var saved: Dictionary = season.get_active_roster(player.team_id)
+		var ids: Array = saved.get("player_ids", []) as Array
+		if ids.is_empty():
+			ids = GameSimulator.preview_active_roster(season, player.team_id).get("player_ids", []) as Array
+		for id_value in ids:
+			map[int(id_value)] = true
+		_active_ids_cache[player.team_id] = map
+	var team_map: Dictionary = _active_ids_cache[player.team_id] as Dictionary
+	return Loc.t("roster.first_team") if team_map.has(player.id) else Loc.t("roster.second_team")
+
+
+func _hand_short(hand: String) -> String:
+	match hand.to_upper():
+		PSPlatoonMatchup.HAND_RIGHT:
+			return Loc.t("hand.right")
+		PSPlatoonMatchup.HAND_LEFT:
+			return Loc.t("hand.left")
+		PSPlatoonMatchup.HAND_SWITCH:
+			return Loc.t("hand.switch")
+	return "-"
 
 
 func _role_chip(player: PSPlayer) -> Dictionary:
@@ -733,16 +866,6 @@ func _role_chip(player: PSPlayer) -> Dictionary:
 			return {"text": Loc.t("role.starter"), "color": PINK}
 		return {"text": Loc.t("role.middle_short"), "color": RED}
 	return {"text": PSPlayer.position_short_name(player.position), "color": _pos_color(player.position)}
-
-
-func _war_color(war: float) -> Color:
-	if war >= 2.0:
-		return GREEN
-	if war < 0.0:
-		return RED
-	if war <= 0.0:
-		return FAINT
-	return TEXT
 
 
 func _mine_rows_filtered() -> Array:

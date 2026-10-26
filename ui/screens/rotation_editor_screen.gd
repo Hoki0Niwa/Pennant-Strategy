@@ -22,41 +22,18 @@ const TABLE_PANEL: Rect2 = Rect2(262, 104, 1638, 528)
 const ROTATION_PANEL: Rect2 = Rect2(262, 648, 800, 408)
 const RELIEF_PANEL: Rect2 = Rect2(1078, 648, 822, 408)
 
-# 一覧の列 base x (R=右寄せ基準)。
-const C_ROLE_X: float = 280.0
-const C_JERSEY_X: float = 340.0
-const C_NAME_X: float = 366.0
-const C_AGE_R: float = 558.0
-const C_FAT_DOT_X: float = 580.0
-const C_FAT_TX: float = 594.0
-const C_EVAL_R: float = 692.0
-const C_WAR_R: float = 760.0
-const C_VELO_R: float = 868.0
-const C_STUFF_R: float = 926.0
-const C_CTRL_R: float = 982.0
-const C_STAM_R: float = 1038.0
-const C_G_R: float = 1118.0
-const C_W_R: float = 1170.0
-const C_L_R: float = 1216.0
-const C_SV_R: float = 1262.0
-const C_HLD_R: float = 1308.0
-const C_IP_R: float = 1396.0
-const C_ERA_R: float = 1496.0
-const C_FIP_R: float = 1596.0
-const C_WHIP_R: float = 1700.0
-const C_K9_R: float = 1804.0
-# 能力ブロック(球速..スタ)と成績ブロック(登板..K/9)の境界に引く縦ヘアラインの x 座標。
-const C_BLOCK_SEP_X: float = 1078.0
+# 一軍投手一覧 (共通テーブル) の行高と下余白。1 画面に収まる行数は共通テーブルが決め、
+# ホイールスクロールの上限は描画時のスクロール領域 (_table_max_scroll) から読む。
+const TABLE_ROW_H: float = 27.0
+const TABLE_BOTTOM_PAD: float = 12.0
 
-# 先発ローテ列 (ROTATION_PANEL.x からの相対)。
-const R_NUM_X: float = 16.0
-const R_SLOT_X: float = 84.0
-const R_SLOT_W: float = 320.0
-const R_FAT_DOT_X: float = 432.0
-const R_FAT_TX: float = 446.0
-const R_ERA_R: float = 600.0
-const R_WAR_R: float = 690.0
-const R_EVAL_R: float = 770.0
+# 先発ローテ表 (共通テーブル) の行高。1 行 = 1 つのドロップ先 (行全体が当たり判定)。
+const ROTATION_ROW_H: float = 50.0
+const ROTATION_BOTTOM_PAD: float = 8.0
+
+# リリーフのチップ寸法。レーンのドロップ領域に 3 段まで収まる高さにしてある。
+const CHIP_H: float = 22.0
+const CHIP_GAP: float = 3.0
 
 # リリーフレーン定義 (上から: クローザー→セットアッパー→ミドル→ロング)。closer は max=1。
 # label / desc は表示文言のキー (Loc)。
@@ -75,6 +52,13 @@ var _war_by_id: Dictionary = {}               # player_id -> season_war 結果 d
 var _preview: Dictionary = {}
 var _status_text: String = ""
 var _status_is_error: bool = false
+
+# 一覧ソートとスクロール
+var _sort_key: String = "role"
+var _sort_asc: bool = true
+var _table_scroll: int = 0
+var _table_max_scroll: int = 0
+var _header_hits: Array = []
 
 # ドラッグ状態
 var _drag_active: bool = false
@@ -100,12 +84,29 @@ func _ready() -> void:
 # ============================================================ input (drag & drop)
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseButton:
 		_update_transform()
-		if event.pressed:
-			_begin_drag(_to_base(event.position))
-		elif _drag_active:
-			_finish_drag(_to_base(event.position))
+		var base_pos: Vector2 = _to_base(event.position)
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				for hit_value in _header_hits:
+					var hit: Dictionary = hit_value as Dictionary
+					if (hit["rect"] as Rect2).has_point(base_pos):
+						_on_header_clicked(str(hit["key"]))
+						return
+				_begin_drag(base_pos)
+			elif _drag_active:
+				_finish_drag(base_pos)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			if event.pressed and TABLE_PANEL.has_point(base_pos):
+				if _table_scroll > 0:
+					_table_scroll = max(0, _table_scroll - 1)
+					queue_redraw()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if event.pressed and TABLE_PANEL.has_point(base_pos):
+				if _table_scroll < _table_max_scroll:
+					_table_scroll = min(_table_max_scroll, _table_scroll + 1)
+					queue_redraw()
 	elif event is InputEventMouseMotion:
 		if _drag_active:
 			_drag_pos = event.position
@@ -116,6 +117,15 @@ func _gui_input(event: InputEvent) -> void:
 			if rec != _hover_record:
 				_hover_record = rec
 				queue_redraw()
+
+
+func _on_header_clicked(key: String) -> void:
+	if _sort_key == key:
+		_sort_asc = not _sort_asc
+	else:
+		_sort_key = key
+		_sort_asc = (key in ["role", "name", "hand", "age", "fatigue", "era", "fip", "whip"])
+	queue_redraw()
 
 
 func _to_base(pos: Vector2) -> Vector2:
@@ -228,155 +238,192 @@ func _draw() -> void:
 
 # --- 一軍投手一覧 ---
 
-func _draw_pitcher_table() -> void:
-	_panel(TABLE_PANEL, Loc.t("rotation.pitcher_list"))
-	_text(Loc.t("rotation.drag_hint"), Vector2(TABLE_PANEL.position.x + 178, TABLE_PANEL.position.y + 32), 12, FAINT)
-
-	var hy: float = TABLE_PANEL.position.y + 60
-	_text(Loc.t("col.role"), Vector2(C_ROLE_X, hy), 11, FAINT)
-	_text(Loc.t("col.player"), Vector2(C_JERSEY_X, hy), 11, FAINT)
-	_text_right(Loc.t("col.age"), C_AGE_R, hy, 11, FAINT)
-	_text(Loc.t("col.fatigue"), Vector2(C_FAT_DOT_X, hy), 11, FAINT)
-	_text_right(Loc.t("col.evaluation"), C_EVAL_R, hy, 11, FAINT)
-	_text_right("WAR", C_WAR_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.velocity"), C_VELO_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.stuff"), C_STUFF_R, hy, 11, FAINT)
-	_text_right(Loc.t("rating.control"), C_CTRL_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.stamina_short"), C_STAM_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.appearances"), C_G_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.wins"), C_W_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.losses"), C_L_R, hy, 11, FAINT)
-	_text_right("S", C_SV_R, hy, 11, FAINT)
-	_text_right("H", C_HLD_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.innings"), C_IP_R, hy, 11, FAINT)
-	_text_right(Loc.t("stat.era"), C_ERA_R, hy, 11, FAINT)
-	_text_right("FIP", C_FIP_R, hy, 11, FAINT)
-	_text_right("WHIP", C_WHIP_R, hy, 11, FAINT)
-	_text_right("K/9", C_K9_R, hy, 11, FAINT)
-	var header_rule_y: float = TABLE_PANEL.position.y + 70
-	_line(Vector2(C_ROLE_X, header_rule_y), Vector2(TABLE_PANEL.end.x - 18, header_rule_y), BORDER, 1.5)
-
-	var closer_id: int = _closer_id()
-	var rotation_set: Dictionary = _rotation_id_set()
-	var rows: Array = _sorted_table_rows(rotation_set, closer_id)
-
-	_row_hits = []
-	var y: float = TABLE_PANEL.position.y + 94
-	var row_h: float = 27.0
-	var max_rows: int = int((TABLE_PANEL.end.y - 12 - y) / row_h)
-	var shown: int = 0
-	for record_value in rows:
-		if shown >= max_rows:
-			break
-		var record: PSPlayerSeasonRecord = record_value as PSPlayerSeasonRecord
-		var row_rect: Rect2 = Rect2(C_ROLE_X - 8, y - 18, TABLE_PANEL.end.x - 18 - (C_ROLE_X - 8), row_h)
-		if record == _hover_record or record == _drag_record:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 5, 0)
-		_draw_pitcher_row(record, y, rotation_set, closer_id)
-		# 全行の下にヘアライン区切り (基底テーブルの罫線と同じ言語で行を刻む)。
-		_line(Vector2(C_ROLE_X - 8, y + 9), Vector2(TABLE_PANEL.end.x - 18, y + 9), HAIRLINE, 1.0)
-		_row_hits.append({"rect": row_rect, "record": record})
-		y += row_h
-		shown += 1
-
-	if rows.is_empty():
-		_text(Loc.t("rotation.no_active_pitchers"), Vector2(C_ROLE_X, y + 6), 13, MUTED)
-	elif shown > 0:
-		# 能力ブロック(球速..スタ)と成績ブロック(登板..K/9)の境界を縦ヘアラインで区切る。
-		_line(Vector2(C_BLOCK_SEP_X, header_rule_y), Vector2(C_BLOCK_SEP_X, y - 18.0), HAIRLINE, 1.0)
+func _pitcher_table_columns() -> Array:
+	# 共通のプロフィール列 / 評価列を、この画面のソートキー名 (hand / eval) へ付け替えて使う。
+	var cols: Array = []
+	for col_value in _player_profile_columns(true, false, false, true):
+		var col: Dictionary = (col_value as Dictionary).duplicate()
+		if str(col["key"]) == "throws":
+			col["key"] = "hand"
+		cols.append(col)
+	for col_value in _player_eval_columns(true, false, true):
+		var col: Dictionary = (col_value as Dictionary).duplicate()
+		if str(col["key"]) == "overall":
+			col["key"] = "eval"
+		cols.append(col)
+	var ability_group: String = "group.pitcher_abilities"
+	var record_group: String = "lineup.col.record_block"
+	cols.append({"title": "rating.velocity", "key": "velo", "w": 52, "align": "r", "fmt": "str", "sep_before": true, "group": ability_group})
+	cols.append({"title": "rating.stuff", "key": "stuff", "w": 42, "align": "c", "fmt": "ability_bar", "group": ability_group})
+	cols.append({"title": "rating.control", "key": "ctrl", "w": 42, "align": "c", "fmt": "ability_bar", "group": ability_group})
+	cols.append({"title": "col.stamina_short", "key": "stam", "w": 42, "align": "c", "fmt": "ability_bar", "group": ability_group})
+	cols.append({"title": "col.appearances", "key": "g", "w": 38, "align": "r", "fmt": "str", "sep_before": true, "group": record_group})
+	cols.append({"title": "col.wins", "key": "w", "w": 34, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "col.losses", "key": "l", "w": 34, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "S", "key": "sv", "w": 34, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "H", "key": "hld", "w": 34, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "col.innings", "key": "ip", "w": 48, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "stat.era", "key": "era", "w": 50, "align": "r", "fmt": "str", "strong": true, "group": record_group})
+	cols.append({"title": "FIP", "key": "fip", "w": 50, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "WHIP", "key": "whip", "w": 50, "align": "r", "fmt": "str", "group": record_group})
+	cols.append({"title": "K/9", "key": "k9", "w": 46, "align": "r", "fmt": "str", "group": record_group})
+	return cols
 
 
-func _draw_pitcher_row(record: PSPlayerSeasonRecord, y: float, rotation_set: Dictionary, closer_id: int) -> void:
+func _pitcher_table_row(record: PSPlayerSeasonRecord, rotation_set: Dictionary, closer_id: int) -> Dictionary:
 	var ps: PSPitcherStats = record.pitcher_stats
 	var role: Dictionary = _role_chip(record, rotation_set, closer_id)
-	_chip(Rect2(C_ROLE_X, y - 16, 52, 22), str(role["text"]), role["color"] as Color)
-
-	if record.jersey_number > 0:
-		_text(str(record.jersey_number), Vector2(C_JERSEY_X, y), 12, FAINT)
-	_text(record.name, Vector2(C_NAME_X, y), 14, TEXT, C_AGE_R - 46 - C_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(str(record.age), C_AGE_R, y, 13, MUTED)
-
-	var pct: int = _fatigue_pct(record)
-	_dot(Vector2(C_FAT_DOT_X + 4, y - 4), 5, _fatigue_color(pct))
-	_text("%d%%" % pct, Vector2(C_FAT_TX, y), 13, TEXT)
-
-	_text_right(str(PlayerValueEvaluator.overall_score(record)), C_EVAL_R, y, 14, _grade_color(PlayerValueEvaluator.overall_score(record)))
-	_text_right(_war_str(record), C_WAR_R, y, 13, _war_color(record))
-
-	_text_right("%dkm/h" % PlayerVisibleRatings.pitcher_velocity(record), C_VELO_R, y, 12, TEXT)
-	_draw_rating(PlayerVisibleRatings.pitcher_stuff(record), C_STUFF_R, y)
-	_draw_rating(PlayerVisibleRatings.pitcher_control(record), C_CTRL_R, y)
-	_draw_rating(PlayerVisibleRatings.pitcher_stamina(record), C_STAM_R, y)
-
-	_text_right(str(ps.games), C_G_R, y, 13, TEXT)
-	_text_right(str(ps.wins), C_W_R, y, 13, MUTED)
-	_text_right(str(ps.losses), C_L_R, y, 13, MUTED)
-	_text_right(str(ps.saves), C_SV_R, y, 13, MUTED)
-	_text_right(str(ps.holds), C_HLD_R, y, 13, MUTED)
-	_text_right(_ip_str(ps), C_IP_R, y, 13, TEXT)
-	_text_right(_era_str(record), C_ERA_R, y, 13, TEXT)
-	_text_right(_fip_str(record), C_FIP_R, y, 13, MUTED)
-	_text_right(_whip_str(ps), C_WHIP_R, y, 13, MUTED)
-	_text_right(_k9_str(ps), C_K9_R, y, 13, MUTED)
+	return {
+		"__meta": record.player_id,
+		"role": str(role["text"]),
+		"role_color": role["color"],
+		"name": record.name,
+		"jersey": record.jersey_number,
+		"age": record.age,
+		"hand": Loc.t("hand.left") if record.throwing_hand == "L" else Loc.t("hand.right"),
+		"fatigue": _fatigue_pct(record),
+		"eval": PlayerValueEvaluator.overall_score(record),
+		"war": float((_war_by_id.get(record.player_id, {}) as Dictionary).get("war", 0.0)) if ps.outs_pitched > 0 else 0.0,
+		"velo": "%dkm/h" % PlayerVisibleRatings.pitcher_velocity(record),
+		"stuff": PlayerVisibleRatings.pitcher_stuff(record),
+		"ctrl": PlayerVisibleRatings.pitcher_control(record),
+		"stam": PlayerVisibleRatings.pitcher_stamina(record),
+		"g": str(ps.games),
+		"w": str(ps.wins),
+		"l": str(ps.losses),
+		"sv": str(ps.saves),
+		"hld": str(ps.holds),
+		"ip": _ip_str(ps),
+		"era": _era_str(record),
+		"fip": _fip_str(record),
+		"whip": _whip_str(ps),
+		"k9": _k9_str(ps),
+	}
 
 
-func _draw_rating(value: int, right_x: float, y: float) -> void:
-	_text_right(str(value), right_x, y, 13, _grade_color(value))
+func _draw_pitcher_table() -> void:
+	var closer_id: int = _closer_id()
+	var rotation_set: Dictionary = _rotation_id_set()
+	var records: Array = _sorted_table_rows(rotation_set, closer_id)
+	var rows: Array = []
+	for record_value in records:
+		var row: Dictionary = _pitcher_table_row(record_value as PSPlayerSeasonRecord, rotation_set, closer_id)
+		var hover_record: PSPlayerSeasonRecord = _drag_record if _drag_record != null else _hover_record
+		if hover_record != null and hover_record.player_id == int(row["__meta"]):
+			row["is_hover"] = true
+		rows.append(row)
+
+	var columns: Array = _pitcher_table_columns()
+	var scroll: Dictionary = {"pitchers": _table_scroll}
+	var scroll_zones: Array = []
+	var hits: Array = []
+	var opts: Dictionary = {
+		"title": Loc.t("rotation.pitcher_list"),
+		"right_label": Loc.t("rotation.drag_hint"),
+		"empty_text": Loc.t("rotation.no_active_pitchers"),
+		"row_h": TABLE_ROW_H,
+		"bottom_pad": TABLE_BOTTOM_PAD,
+		"cell_size": 13,
+		"sort_key": _sort_key,
+		"sort_asc": _sort_asc,
+		"sel_kind": "pitcher",
+		"hits": hits,
+		"scroll_key": "pitchers",
+		"scroll": scroll,
+		"scroll_zones": scroll_zones,
+	}
+	_draw_data_table(TABLE_PANEL, columns, rows, opts)
+	_table_scroll = int(scroll.get("pitchers", 0))
+	_table_max_scroll = int((scroll_zones[0] as Dictionary).get("max", 0)) if not scroll_zones.is_empty() else 0
+
+	# ヘッダのソート当たり判定と行のドラッグ元判定は、表の描画と同じ幾何から作る。
+	_header_hits = []
+	_build_table_header_hits(_header_hits, TABLE_PANEL, columns, opts)
+	_row_hits = []
+	for hit_value in hits:
+		var hit: Dictionary = hit_value as Dictionary
+		var record: PSPlayerSeasonRecord = _record_by_id(int(hit["meta"]))
+		if record != null:
+			_row_hits.append({"rect": hit["rect"], "record": record})
 
 
 # --- 先発ローテ ---
 
-func _draw_rotation_panel() -> void:
-	_panel(ROTATION_PANEL, Loc.t("rotation.rotation_panel"))
-	var px: float = ROTATION_PANEL.position.x
-	var hy: float = ROTATION_PANEL.position.y + 56
-	_text(Loc.t("col.rotation_slot"), Vector2(px + R_NUM_X, hy), 11, FAINT)
-	_text(Loc.t("col.player"), Vector2(px + R_SLOT_X, hy), 11, FAINT)
-	_text(Loc.t("col.fatigue"), Vector2(px + R_FAT_DOT_X, hy), 11, FAINT)
-	_text_right(Loc.t("stat.era"), px + R_ERA_R, hy, 11, FAINT)
-	_text_right("WAR", px + R_WAR_R, hy, 11, FAINT)
-	_text_right(Loc.t("col.evaluation"), px + R_EVAL_R, hy, 11, FAINT)
-	_line(Vector2(px + R_NUM_X, ROTATION_PANEL.position.y + 66), Vector2(ROTATION_PANEL.end.x - 16, ROTATION_PANEL.position.y + 66), BORDER, 1.5)
-
-	for i in range(ROTATION_SIZE):
-		var top: float = ROTATION_PANEL.position.y + 74 + float(i) * 52.0
-		var cy: float = top + 32.0
-		var record: PSPlayerSeasonRecord = _record_by_id(int(_rotation_ids[i]))
-		_round(Rect2(px + R_NUM_X, top + 13, 50, 34), Color(PINK.r, PINK.g, PINK.b, 0.18), Color(PINK.r, PINK.g, PINK.b, 0.55), 7)
-		_text("%d" % (i + 1), Vector2(px + R_NUM_X, top + 36), 19, PINK, 50, HORIZONTAL_ALIGNMENT_CENTER)
-		_draw_slot_card(_rotation_slot_rect(i), record, {"type": "rot", "index": i})
-		if i > 0:
-			_line(Vector2(px + R_NUM_X, top), Vector2(ROTATION_PANEL.end.x - 16, top), HAIRLINE, 1.0)
-		if record == null:
-			continue
-		var pct: int = _fatigue_pct(record)
-		_dot(Vector2(px + R_FAT_DOT_X, cy - 4), 5, _fatigue_color(pct))
-		_text("%d%%" % pct, Vector2(px + R_FAT_TX, cy), 13, TEXT)
-		_text_right(_era_str(record), px + R_ERA_R, cy, 13, TEXT)
-		_text_right(_war_str(record), px + R_WAR_R, cy, 13, _war_color(record))
-		_text_right(str(PlayerValueEvaluator.overall_score(record)), px + R_EVAL_R, cy, 13, _grade_color(PlayerValueEvaluator.overall_score(record)))
+func _rotation_table_columns() -> Array:
+	var profile_group: String = "group.profile"
+	var ability_group: String = "group.pitcher_abilities"
+	var record_group: String = "lineup.col.record_block"
+	return [
+		{"title": "No.", "key": "slot", "w": 44, "align": "c", "fmt": "pos_badge", "group": "rotation.slot_col"},
+		{"title": "col.player", "key": "name", "w": 136, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": profile_group},
+		{"title": "col.throws_short", "key": "hand", "w": 28, "align": "c", "fmt": "str", "group": profile_group},
+		{"title": "col.fatigue", "key": "fatigue", "w": 50, "align": "c", "fmt": "fatigue_dot", "group": profile_group},
+		{"title": "col.overall", "key": "eval", "w": 44, "align": "c", "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+		{"title": "rating.velocity", "key": "velo", "w": 66, "align": "r", "fmt": "str", "sep_before": true, "group": ability_group},
+		{"title": "rating.stuff", "key": "stuff", "w": 42, "align": "c", "fmt": "ability_bar", "group": ability_group},
+		{"title": "rating.control", "key": "ctrl", "w": 42, "align": "c", "fmt": "ability_bar", "group": ability_group},
+		{"title": "col.stamina_short", "key": "stam", "w": 42, "align": "c", "fmt": "ability_bar", "group": ability_group},
+		{"title": "stat.era", "key": "era", "w": 50, "align": "r", "fmt": "str", "strong": true, "sep_before": true, "group": record_group},
+		{"title": "col.innings", "key": "ip", "w": 48, "align": "r", "fmt": "str", "group": record_group},
+		{"title": "WAR", "key": "war", "w": 44, "align": "r", "fmt": "f1s", "strong": true, "group": record_group},
+	]
 
 
-func _rotation_slot_rect(i: int) -> Rect2:
-	var top: float = ROTATION_PANEL.position.y + 74 + float(i) * 52.0
-	return Rect2(ROTATION_PANEL.position.x + R_SLOT_X, top + 16, R_SLOT_W, 32)
-
-
-func _draw_slot_card(rect: Rect2, record: PSPlayerSeasonRecord, target: Dictionary) -> void:
-	# 枠線はドロップ先として有効な時だけ (通常時はフラット)。
-	var is_target: bool = _drag_active and _drop_match(target)
-	var border: Color = BLUE if is_target else Color.TRANSPARENT
-	var bg: Color = Color(BLUE.r, BLUE.g, BLUE.b, 0.16) if is_target else PANEL_2
-	_round(rect, bg, border, 7, 2 if is_target else 0)
-	var ty: float = rect.position.y + rect.size.y * 0.68
+func _rotation_table_row(i: int, record: PSPlayerSeasonRecord) -> Dictionary:
+	var row: Dictionary = {"slot": str(i + 1), "slot_color": PINK}
 	if record == null:
-		_text(Loc.t("rotation.drop_here"), Vector2(rect.position.x + 12, ty), 12, FAINT)
-		return
-	var label: String = record.name
-	if record.jersey_number > 0:
-		label = "%d  %s" % [record.jersey_number, record.name]
-	_text(label, Vector2(rect.position.x + 12, ty), 14, TEXT, rect.size.x - 70, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("rotation.eval_short", {"n": PlayerValueEvaluator.overall_score(record)}), rect.end.x - 12, ty, 12, MUTED, 56)
+		return row
+	var ps: PSPitcherStats = record.pitcher_stats
+	row["name"] = record.name
+	row["jersey"] = record.jersey_number
+	row["hand"] = Loc.t("hand.left") if record.throwing_hand == "L" else Loc.t("hand.right")
+	row["fatigue"] = _fatigue_pct(record)
+	row["eval"] = PlayerValueEvaluator.overall_score(record)
+	row["velo"] = "%dkm/h" % PlayerVisibleRatings.pitcher_velocity(record)
+	row["stuff"] = PlayerVisibleRatings.pitcher_stuff(record)
+	row["ctrl"] = PlayerVisibleRatings.pitcher_control(record)
+	row["stam"] = PlayerVisibleRatings.pitcher_stamina(record)
+	row["era"] = _era_str(record)
+	row["ip"] = _ip_str(ps)
+	row["war"] = float((_war_by_id.get(record.player_id, {}) as Dictionary).get("war", 0.0)) if ps.outs_pitched > 0 else 0.0
+	return row
+
+
+func _draw_rotation_panel() -> void:
+	var columns: Array = _rotation_table_columns()
+	var rows: Array = []
+	for i in range(ROTATION_SIZE):
+		rows.append(_rotation_table_row(i, _record_by_id(int(_rotation_ids[i]))))
+	_draw_data_table(ROTATION_PANEL, columns, rows, _rotation_table_opts())
+
+	# ドロップ先の強調と空き枠の案内は、表の行と同じ矩形 (_rotation_slot_rect) に重ねる。
+	var name_x: float = _table_column_rect(ROTATION_PANEL, columns, _rotation_table_opts(), "name").position.x
+	for i in range(ROTATION_SIZE):
+		var slot_rect: Rect2 = _rotation_slot_rect(i)
+		if _drag_active and _drop_match({"type": "rot", "index": i}):
+			_round(slot_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.16), BLUE, 7, 2)
+		if int(_rotation_ids[i]) <= 0:
+			_text(Loc.t("rotation.drop_here"), Vector2(name_x + 4.0, slot_rect.position.y + slot_rect.size.y * 0.5 + 5.0), 12, FAINT)
+
+
+func _rotation_table_opts() -> Dictionary:
+	return {
+		"title": Loc.t("rotation.rotation_panel"),
+		"row_h": ROTATION_ROW_H,
+		"bottom_pad": ROTATION_BOTTOM_PAD,
+		"cell_size": 13,
+	}
+
+
+# 先発ローテの 1 行 = 1 つのドロップ先。_draw_data_table の行幾何
+# (1 行目の上端 = _table_row_top、行は ROTATION_ROW_H 刻み、左右 8px 内側) と一致させる。
+func _rotation_slot_rect(i: int) -> Rect2:
+	var row_top: float = _table_row_top(ROTATION_PANEL, _rotation_table_columns(), _rotation_table_opts())
+	return Rect2(
+		ROTATION_PANEL.position.x + 8.0,
+		row_top + float(i) * ROTATION_ROW_H,
+		ROTATION_PANEL.size.x - 16.0,
+		ROTATION_ROW_H)
 
 
 # --- リリーフ起用法 (レーン式・複数可) ---
@@ -392,8 +439,8 @@ func _draw_relief_panel() -> void:
 		if i > 0:
 			_line(Vector2(px + 16, lane_y), Vector2(RELIEF_PANEL.end.x - 16, lane_y), HAIRLINE, 1.0)
 		var color: Color = lane["color"] as Color
-		_round(Rect2(px + 16, lane_y + (lane_h - 28) * 0.5 - 12, 124, 28), Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.55), 7)
-		_text(Loc.t(str(lane["label"])), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 7), 13, color, 124, HORIZONTAL_ALIGNMENT_CENTER)
+		_round(Rect2(px + 16, lane_y + (lane_h - 28) * 0.5 - 12, 124, 28), Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.65), 6, 1)
+		_text(Loc.t(str(lane["label"])), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 7), 13, color, 124, HORIZONTAL_ALIGNMENT_CENTER, true)
 		_text(Loc.t(str(lane["desc"])), Vector2(px + 16, lane_y + (lane_h - 28) * 0.5 + 34), 11, FAINT, 150)
 		_draw_relief_lane(i, str(lane["key"]))
 
@@ -410,7 +457,7 @@ func _relief_lane_rect(i: int) -> Rect2:
 	var lane_y: float = _relief_lane_top(i)
 	var lane_h: float = _relief_lane_h()
 	var zx: float = RELIEF_PANEL.position.x + 168.0
-	var zh: float = 50.0
+	var zh: float = lane_h - 8.0
 	return Rect2(zx, lane_y + (lane_h - zh) * 0.5, RELIEF_PANEL.end.x - 16 - zx, zh)
 
 
@@ -426,26 +473,64 @@ func _draw_relief_lane(i: int, role: String) -> void:
 		_text(Loc.t("rotation.drop_here_to_add") if role != "closer" else Loc.t("rotation.drop_here"), Vector2(zone.position.x + 12, zone.position.y + zone.size.y * 0.62), 12, FAINT)
 		return
 	var cx: float = zone.position.x + 10.0
-	var cy: float = zone.position.y + 6.0
-	var chip_h: float = 28.0
+	var cy: float = zone.position.y + 4.0
 	for id_value in ids:
 		var record: PSPlayerSeasonRecord = _record_by_id(int(id_value))
 		if record == null:
 			continue
-		var label: String = record.name if record.jersey_number <= 0 else "%d %s" % [record.jersey_number, record.name]
-		var w: float = _measure(label, 12) + 26.0
+		var w: float = _chip_width(record)
 		if cx + w > zone.end.x - 8.0 and cx > zone.position.x + 10.0:
 			cx = zone.position.x + 10.0
-			cy += chip_h + 4.0
-		var chip_rect: Rect2 = Rect2(cx, cy, w, chip_h)
-		_draw_chip_player(chip_rect, label)
+			cy += CHIP_H + CHIP_GAP
+		var chip_rect: Rect2 = Rect2(cx, cy, w, CHIP_H)
+		_draw_chip_player(chip_rect, record)
 		_chip_hits.append({"rect": chip_rect, "role": role, "record": record})
 		cx += w + 6.0
 
 
-func _draw_chip_player(rect: Rect2, label: String) -> void:
-	_round(rect, PANEL_3, BORDER, 7)
-	_text(label, Vector2(rect.position.x + 10, rect.position.y + rect.size.y * 0.68), 12, TEXT, rect.size.x - 16)
+# チップ内の文字列。#背番号 (無ければ空) と 防/登板 の補足。
+func _chip_jersey_text(record: PSPlayerSeasonRecord) -> String:
+	return "#%d" % record.jersey_number if record.jersey_number > 0 else ""
+
+
+func _chip_stat_text(record: PSPlayerSeasonRecord) -> String:
+	return Loc.t("rotation.chip_stat", {"era": _era_str(record), "games": record.pitcher_stats.games})
+
+
+# チップ幅: 疲労ドット + #背番号 + 名前 + 総合ピル + 防/登板 を順に並べた長さ。
+func _chip_width(record: PSPlayerSeasonRecord) -> float:
+	var jersey: String = _chip_jersey_text(record)
+	var w: float = 8.0 + 10.0
+	if not jersey.is_empty():
+		w += _measure(jersey, 10) + 4.0
+	w += _measure(record.name, 11) + 8.0
+	w += 26.0 + 6.0
+	w += _measure(_chip_stat_text(record), 10) + 8.0
+	return w
+
+
+# リリーフ投手チップ: [疲労ドット] #背番号 名前 [総合ピル] 防/登板。
+func _draw_chip_player(rect: Rect2, record: PSPlayerSeasonRecord) -> void:
+	_round(rect, PANEL_3, BORDER_SOFT, 6, 1)
+	var base_y: float = rect.position.y + rect.size.y * 0.7
+	var tx: float = rect.position.x + 8.0
+	var pct: int = _fatigue_pct(record)
+	_dot(Vector2(tx + 2.0, rect.position.y + rect.size.y * 0.5), 3.5, _fatigue_dot_color(pct))
+	tx += 10.0
+	var jersey: String = _chip_jersey_text(record)
+	if not jersey.is_empty():
+		var jersey_w: float = _measure(jersey, 10)
+		_text(jersey, Vector2(tx, base_y), 10, FAINT, jersey_w + 2.0)
+		tx += jersey_w + 4.0
+	var name_w: float = _measure(record.name, 11)
+	_text(record.name, Vector2(tx, base_y), 11, TEXT, name_w + 2.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	tx += name_w + 8.0
+	var ev: int = PlayerValueEvaluator.overall_score(record)
+	_round(Rect2(tx, rect.position.y + 3.0, 26.0, rect.size.y - 6.0), PANEL_2, _tier_color(float(ev)), 4, 1)
+	_text(str(ev), Vector2(tx, base_y - 0.5), 10, TEXT, 26.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+	tx += 26.0 + 6.0
+	var stat_text: String = _chip_stat_text(record)
+	_text(stat_text, Vector2(tx, base_y), 10, MUTED, _measure(stat_text, 10) + 2.0)
 
 
 func _draw_drag_ghost() -> void:
@@ -658,18 +743,72 @@ func _on_save_pressed() -> void:
 
 func _sorted_table_rows(rotation_set: Dictionary, closer_id: int) -> Array:
 	var rows: Array = _active_pitchers.duplicate()
-	rows.sort_custom(func(a, b) -> bool:
-		var ra: PSPlayerSeasonRecord = a as PSPlayerSeasonRecord
-		var rb: PSPlayerSeasonRecord = b as PSPlayerSeasonRecord
-		var ga: int = _role_group(ra, rotation_set, closer_id)
-		var gb: int = _role_group(rb, rotation_set, closer_id)
-		if ga != gb:
-			return ga < gb
-		if ga == 0:
-			return _rotation_index(ra.player_id) < _rotation_index(rb.player_id)
-		return PlayerValueEvaluator.overall_score(ra) > PlayerValueEvaluator.overall_score(rb)
+	rows.sort_custom(func(a: PSPlayerSeasonRecord, b: PSPlayerSeasonRecord) -> bool:
+		if _sort_key == "role":
+			var ga: int = _role_group(a, rotation_set, closer_id)
+			var gb: int = _role_group(b, rotation_set, closer_id)
+			if ga != gb:
+				return (ga < gb) if _sort_asc else (ga > gb)
+			if ga == 0:
+				var ia: int = _rotation_index(a.player_id)
+				var ib: int = _rotation_index(b.player_id)
+				return (ia < ib) if _sort_asc else (ia > ib)
+			var eva: int = PlayerValueEvaluator.overall_score(a)
+			var evb: int = PlayerValueEvaluator.overall_score(b)
+			return (eva > evb) if _sort_asc else (eva < evb)
+		var va = _pitcher_sort_val(a)
+		var vb = _pitcher_sort_val(b)
+		if va != vb:
+			return (va < vb) if _sort_asc else (va > vb)
+		return a.player_id < b.player_id
 	)
 	return rows
+
+
+func _pitcher_sort_val(rec: PSPlayerSeasonRecord) -> Variant:
+	match _sort_key:
+		"name":
+			return rec.name
+		"hand":
+			return rec.throwing_hand
+		"age":
+			return rec.age
+		"fatigue":
+			return _fatigue_pct(rec)
+		"eval":
+			return PlayerValueEvaluator.overall_score(rec)
+		"war":
+			return float((_war_by_id.get(rec.player_id, {}) as Dictionary).get("war", 0.0))
+		"velo":
+			return PlayerVisibleRatings.pitcher_velocity(rec)
+		"stuff":
+			return PlayerVisibleRatings.pitcher_stuff(rec)
+		"ctrl":
+			return PlayerVisibleRatings.pitcher_control(rec)
+		"stam":
+			return PlayerVisibleRatings.pitcher_stamina(rec)
+		"g":
+			return rec.pitcher_stats.games
+		"w":
+			return rec.pitcher_stats.wins
+		"l":
+			return rec.pitcher_stats.losses
+		"sv":
+			return rec.pitcher_stats.saves
+		"hld":
+			return rec.pitcher_stats.holds
+		"ip":
+			return rec.pitcher_stats.outs_pitched
+		"era":
+			return rec.pitcher_stats.era() if rec.pitcher_stats.outs_pitched > 0 else 99.0
+		"fip":
+			return float((_war_by_id.get(rec.player_id, {}) as Dictionary).get("fip", 99.0))
+		"whip":
+			return rec.pitcher_stats.whip() if rec.pitcher_stats.outs_pitched > 0 else 99.0
+		"k9":
+			return rec.pitcher_stats.strikeouts_per_nine() if rec.pitcher_stats.outs_pitched > 0 else 0.0
+		_:
+			return rec.player_id
 
 
 func _role_group(record: PSPlayerSeasonRecord, rotation_set: Dictionary, closer_id: int) -> int:
@@ -717,14 +856,6 @@ func _fatigue_pct(record: PSPlayerSeasonRecord) -> int:
 	return clampi(int(round(float(record.fatigue) * 100.0 / float(GameSimulator.FATIGUE_MAX))), 0, 100)
 
 
-func _fatigue_color(pct: int) -> Color:
-	if pct < 25:
-		return GREEN
-	if pct < 50:
-		return AMBER
-	return RED
-
-
 func _era_str(record: PSPlayerSeasonRecord) -> String:
 	var ps: PSPitcherStats = record.pitcher_stats
 	return "-.--" if ps.outs_pitched <= 0 else "%0.2f" % ps.era()
@@ -745,40 +876,11 @@ func _k9_str(ps: PSPitcherStats) -> String:
 	return "-.-" if ps.outs_pitched <= 0 else "%0.1f" % ps.strikeouts_per_nine()
 
 
-func _war_str(record: PSPlayerSeasonRecord) -> String:
-	if record.pitcher_stats.outs_pitched <= 0:
-		return "0.0"
-	var w: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
-	return "%0.1f" % float(w.get("war", 0.0))
-
-
-func _war_color(record: PSPlayerSeasonRecord) -> Color:
-	if record.pitcher_stats.outs_pitched <= 0:
-		return MUTED
-	var war: float = float((_war_by_id.get(record.player_id, {}) as Dictionary).get("war", 0.0))
-	if war >= 2.0:
-		return GREEN
-	if war < 0.0:
-		return RED
-	return TEXT
-
-
 func _fip_str(record: PSPlayerSeasonRecord) -> String:
 	if record.pitcher_stats.outs_pitched <= 0:
 		return "-.--"
 	var w: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
 	return "%0.2f" % float(w.get("fip", 0.0)) if w.has("fip") else "-.--"
-
-
-# 評価色は active_roster の _eval_color と統一 (最高=青 / 次=緑 / 並=白 / 下=淡)。
-func _grade_color(value: int) -> Color:
-	if value >= 75:
-		return BLUE
-	if value >= 66:
-		return GREEN
-	if value >= 52:
-		return TEXT
-	return MUTED
 
 
 func _set_status(text: String, is_error: bool) -> void:

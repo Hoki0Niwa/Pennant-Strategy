@@ -124,12 +124,16 @@ func _populate_text() -> void:
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		row.add_child(label)
 		var button: Button = Button.new()
-		button.text = str(award["name"])
-		button.tooltip_text = str(award["name"])
+		var player_id: int = int(award["player_id"])
+		var p: PSPlayer = GameDb.get_player(player_id)
+		var p_name: String = str(award["name"])
+		if p != null and p.jersey_number > 0:
+			p_name = "#%d %s" % [p.jersey_number, p_name]
+		button.text = p_name
+		button.tooltip_text = p_name
 		button.clip_text = true
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var player_id: int = int(award["player_id"])
-		button.disabled = GameDb.get_player(player_id) == null
+		button.disabled = p == null
 		button.pressed.connect(func() -> void: _open_player(player_id))
 		row.add_child(button)
 
@@ -175,11 +179,12 @@ func _layout_content(force: bool = false) -> void:
 	_place(_year_picker, Rect2(322, 98, 242, 34))
 	_place(_team_picker, Rect2(648, 98, 320, 34))
 	for picker: OptionButton in [_year_picker, _team_picker]:
-		_apply_button_style(picker, "action")
-		_style_popup(picker.get_popup())
+		_style_option_button(picker)
 	_update_panel_visibility()
 	_place(_narrative_scroll, NARRATIVE_RECT.grow_individual(-18, -50, -18, -16))
 	_place(_award_scroll, AWARDS_RECT.grow_individual(-18, -50, -18, -16))
+	_style_scroll_container(_narrative_scroll)
+	_style_scroll_container(_award_scroll)
 	for box: VBoxContainer in [_narrative_box, _award_box]:
 		box.add_theme_constant_override("separation", maxi(4, int(12.0 * _scale_f)))
 		for child in box.get_children():
@@ -224,7 +229,13 @@ func _draw() -> void:
 	_draw_sidebar()
 	_text(Loc.t("season_review.title"), Vector2(262, 56), 28, TEXT)
 	if not _view.is_empty():
-		_text(str(_view["team"]["team_name"]), Vector2(530, 54), 20, TEXT, 900)
+		var team_id: int = int(_view["team"]["team_id"])
+		var team_obj: PSTeam = GameDb.get_team(team_id)
+		if team_obj != null:
+			_team_badge(Rect2(530, 23, 40, 40), team_obj)
+			_text(team_obj.name, Vector2(582, 54), 20, TEXT, 840)
+		else:
+			_text(str(_view["team"]["team_name"]), Vector2(530, 54), 20, TEXT, 900)
 	_text(Loc.t("season_review.year"), Vector2(262, 121), 14, MUTED)
 	_text(Loc.t("season_review.team"), Vector2(586, 121), 14, MUTED)
 	_layout_content()
@@ -235,11 +246,12 @@ func _draw() -> void:
 	var team: Dictionary = _view["team"] as Dictionary
 	var standing: Dictionary = team["standings"] as Dictionary
 	var metrics: Dictionary = _view["metrics"] as Dictionary
+	var run_diff: int = int(metrics["run_difference"])
 	_stat_strip(Rect2(262, 152, 1638, 102), [
 		{"label": Loc.t("season_review.completed_only"), "value": Loc.t("season_review.league_rank", {"league": PSTeam.league_label_for(str(team["league"])), "rank": int(team["rank"])})},
 		{"label": Loc.t("season_review.wins_losses"), "value": Loc.t("season_review.record", {"wins": int(standing["wins"]), "losses": int(standing["losses"]), "draws": int(standing["draws"])})},
 		{"label": Loc.t("season_review.win_rate"), "value": _metric(metrics.get("win_rate"), 3)},
-		{"label": Loc.t("season_review.run_difference"), "value": "%+d" % int(metrics["run_difference"]), "color": _pm_color(float(metrics["run_difference"]))},
+		{"label": Loc.t("season_review.run_difference"), "value": "%+d" % run_diff, "color": GREEN if run_diff > 0 else (RED if run_diff < 0 else TEXT)},
 		{"label": Loc.t("season_review.postseason"), "value": str(_view["postseason_text"])},
 	])
 	_panel(NARRATIVE_RECT, Loc.t("season_review.narrative"))

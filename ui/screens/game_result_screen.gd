@@ -37,42 +37,54 @@ const SUB_RECT: Rect2 = Rect2(1320, 306, 580, 402)
 # 下段: 投手成績
 const PITCH_RECT: Rect2 = Rect2(622, 720, 1278, 340)
 
-# 打席結果グリッドの固定列 (守備/選手/利/打数/安打/打点/通算率/HR)。残りをイニングへ割る。
-const BOX_FIXED: Array = [
-	{"key": "pos",  "label": "box.col.pos",  "w": 46.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "name", "label": "col.player",   "w": 94.0,  "align": HORIZONTAL_ALIGNMENT_LEFT},
-	{"key": "bats", "label": "",             "w": 26.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "ab",   "label": "box.col.ab",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "h",    "label": "box.col.h",    "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "rbi",  "label": "box.col.rbi",  "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "avg",  "label": "box.col.avg",  "w": 48.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "hr",   "label": "HR",   "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+# 月間試合リストの列 (日付 | 対戦相手 | 勝敗・スコア)。w は usable 幅 (LIST_W - 24) と同じ合計にして倍率 1.0 で描く。
+const LIST_COLUMNS: Array = [
+	{"key": "date",  "title": "col.date",              "w": 78,  "align": "l", "fmt": "str", "muted": true, "group": "game_result.group.list_date"},
+	{"key": "opp",   "title": "col.opponent",          "w": 132, "align": "l", "fmt": "str", "group": "game_result.group.list_opponent", "sep_before": true},
+	{"key": "mark",  "title": "game_result.col.result", "w": 36,  "align": "c", "fmt": "str", "group": "game_result.group.list_result", "sep_before": true},
+	{"key": "score", "title": "game_result.col.score", "w": 78,  "align": "r", "fmt": "str", "strong": true, "group": "game_result.group.list_result"},
 ]
 
-# 投手成績の列 (両チーム1表)。
-const PITCH_COLS: Array = [
-	{"key": "team",    "label": "box.col.team",     "w": 64.0,  "align": HORIZONTAL_ALIGNMENT_LEFT},
-	{"key": "mark",    "label": "",                 "w": 28.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "name",    "label": "common.pitcher",   "w": 150.0, "align": HORIZONTAL_ALIGNMENT_LEFT},
-	{"key": "throws",  "label": "",                 "w": 30.0,  "align": HORIZONTAL_ALIGNMENT_CENTER},
-	{"key": "w",       "label": "col.wins",         "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "l",       "label": "col.losses",       "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "s",       "label": "S",                "w": 36.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "g",       "label": "col.games_short",  "w": 44.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "ip",      "label": "box.col.ip",       "w": 56.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "bf",      "label": "box.col.bf",       "w": 48.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "pitches", "label": "box.col.pitches",  "w": 52.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "h",       "label": "box.col.h",        "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "k",       "label": "box.col.k",        "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "bb",      "label": "box.col.bb",       "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "hbp",     "label": "box.col.hbp",      "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "r",       "label": "col.runs_allowed", "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "er",      "label": "box.col.er",       "w": 40.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
-	{"key": "era",     "label": "stat.era",         "w": 60.0,  "align": HORIZONTAL_ALIGNMENT_RIGHT},
+# 打席結果表の固定列 (守備 | 選手・打 | 本日打撃 | 通算)。イニング列は _box_columns が末尾に足す。
+# 守備位置バッジとイニングセルは表の上に重ね描きするので、その列の行値は空にしておく。
+const BOX_PRE_COLUMNS: Array = [
+	{"key": "pos",  "title": "box.col.pos",    "w": 46, "align": "c", "fmt": "str", "group": "game_result.group.box_pos"},
+	{"key": "name", "title": "col.player",     "w": 98, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": "game_result.group.box_player"},
+	{"key": "bats", "title": "lineup.col.bats", "w": 28, "align": "c", "fmt": "str", "muted": true, "group": "game_result.group.box_player"},
+	{"key": "ab",   "title": "box.col.ab",     "w": 30, "align": "r", "fmt": "int", "sep_before": true, "group": "game_result.group.box_today"},
+	{"key": "h",    "title": "box.col.h",      "w": 30, "align": "r", "fmt": "int", "group": "game_result.group.box_today"},
+	{"key": "rbi",  "title": "box.col.rbi",    "w": 30, "align": "r", "fmt": "int", "group": "game_result.group.box_today"},
+	{"key": "avg",  "title": "box.col.avg",    "w": 48, "align": "r", "fmt": "str", "muted": true, "sep_before": true, "group": "game_result.group.box_total"},
+	{"key": "hr",   "title": "HR",             "w": 30, "align": "r", "fmt": "int", "muted": true, "group": "game_result.group.box_total"},
+]
+
+# 投手成績の列 (両チーム1表)。勝敗マークは表の上に重ね描きする。
+const PITCH_COLUMNS: Array = [
+	{"key": "team",    "title": "box.col.team",     "w": 64,  "align": "l", "fmt": "team", "group": "game_result.group.team_decision"},
+	{"key": "mark",    "title": "",                 "w": 28,  "align": "c", "fmt": "str", "group": "game_result.group.team_decision"},
+	{"key": "name",    "title": "common.pitcher",   "w": 150, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": "game_result.group.pitcher_profile"},
+	{"key": "throws",  "title": "col.throws_short", "w": 30,  "align": "c", "fmt": "str", "muted": true, "group": "game_result.group.pitcher_profile"},
+	{"key": "w",       "title": "col.wins",         "w": 40,  "align": "r", "fmt": "int", "sep_before": true, "group": "game_result.group.season_total"},
+	{"key": "l",       "title": "col.losses",       "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.season_total"},
+	{"key": "s",       "title": "S",                "w": 36,  "align": "r", "fmt": "int", "group": "game_result.group.season_total"},
+	{"key": "g",       "title": "col.games_short",  "w": 44,  "align": "r", "fmt": "int", "group": "game_result.group.season_total"},
+	{"key": "ip",      "title": "box.col.ip",       "w": 56,  "align": "r", "fmt": "str", "strong": true, "sep_before": true, "group": "game_result.group.today_pitching"},
+	{"key": "bf",      "title": "box.col.bf",       "w": 48,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "pitches", "title": "box.col.pitches",  "w": 52,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "h",       "title": "box.col.h",        "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "k",       "title": "box.col.k",        "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "bb",      "title": "box.col.bb",       "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "hbp",     "title": "box.col.hbp",      "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "r",       "title": "col.runs_allowed", "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "er",      "title": "box.col.er",       "w": 40,  "align": "r", "fmt": "int", "group": "game_result.group.today_pitching"},
+	{"key": "era",     "title": "stat.era",         "w": 60,  "align": "r", "fmt": "f2", "strong": true, "sep_before": true, "group": "stat.era"},
 ]
 
 const LIST_ROW_H: float = 40.0
-const HIT_BG: Color = Color(0.86, 0.20, 0.18, 0.92)
+const PITCH_ROW_H: float = 25.0
+const TABLE_INNER_PAD: float = 12.0
+# 表の見出し帯 (2段) の下端から 1 行目までの距離は _draw_data_table が持つ: header_top 68 + 8 + 6。
+const TABLE_ROWS_OFFSET: float = 82.0
 
 var _view_team_id: int = 0
 var _team_games: Array = []          # [{index, game, day}]
@@ -83,6 +95,7 @@ var _months: Array = []              # [{year, month, label}]
 var _sel_month: int = 0
 var _selected_index: int = -1
 var _list_scroll: int = 0
+var _pitch_scroll: int = 0
 var _team_button: Button = null
 
 # 選択試合の詳細キャッシュ (_load_detail で構築)
@@ -121,9 +134,17 @@ func _gui_input(event: InputEvent) -> void:
 				_build_buttons()
 				queue_redraw()
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_scroll_list(1)
+			var mpos: Vector2 = _to_base(event.position)
+			if PITCH_RECT.has_point(mpos):
+				_scroll_pitch(1)
+			else:
+				_scroll_list(1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_scroll_list(-1)
+			var mpos: Vector2 = _to_base(event.position)
+			if PITCH_RECT.has_point(mpos):
+				_scroll_pitch(-1)
+			else:
+				_scroll_list(-1)
 	elif event is InputEventMouseMotion:
 		_update_transform()
 		var hit: Dictionary = _list_row_at(_to_base(event.position))
@@ -157,8 +178,23 @@ func _scroll_list(delta: int) -> void:
 		queue_redraw()
 
 
+func _scroll_pitch(delta: int) -> void:
+	var rows: Array = _pitching.get("rows", []) as Array
+	var visible_rows: int = _pitch_visible_rows()
+	var max_scroll: int = max(0, rows.size() - visible_rows)
+	var next: int = clampi(_pitch_scroll + delta, 0, max_scroll)
+	if next != _pitch_scroll:
+		_pitch_scroll = next
+		queue_redraw()
+
+
 func _list_visible_rows() -> int:
-	return int(floor((_list_rect().size.y - 56.0) / LIST_ROW_H))
+	return maxi(1, int(floor((_list_rect().size.y - TABLE_ROWS_OFFSET - 8.0) / LIST_ROW_H)))
+
+
+# 投手成績表に収まる行数 (行の開始位置は _draw_data_table の 1 行目と同じ式)。
+func _pitch_visible_rows() -> int:
+	return maxi(1, int(floor((PITCH_RECT.size.y - TABLE_ROWS_OFFSET - 12.0) / PITCH_ROW_H)))
 
 
 # 月タブのレイアウト。チップは LIST_W 内で横並びし、はみ出したら次行へ折り返す。
@@ -222,45 +258,49 @@ func _draw_empty() -> void:
 # --- 左カラム: 月別タブ + 試合一覧 ---
 
 func _draw_game_list(_season: PSSeason) -> void:
-	# 月タブはボタン (_build_buttons) で描く。ここでは一覧パネルを描く。
+	# 月タブはボタン (_build_buttons) で描く。ここでは一覧パネルを共通テーブルで描く。
+	# 見えている行だけを渡し (スクロールは _list_scroll)、当たり判定は表が積む hits を _list_row_hits へ移す。
 	var rect: Rect2 = _list_rect()
-	_round(rect, PANEL, BORDER, 10)
 	var games: Array = _month_games()
-	var header_y: float = rect.position.y + 30
+	var opts: Dictionary = {
+		"inner_pad": TABLE_INNER_PAD, "row_h": LIST_ROW_H, "cell_size": 13, "bottom_pad": 8.0,
+		"empty_text": Loc.t("game_result.no_games"),
+	}
 	if _months.is_empty():
-		_text(Loc.t("game_result.no_games"), Vector2(rect.position.x + 16, header_y + 30), 14, MUTED)
+		_draw_data_table(rect, LIST_COLUMNS, [], opts)
 		return
 	var month: Dictionary = _months[_sel_month] as Dictionary
-	_text(Loc.t("game_result.month_header", {"year": int(month["year"]), "month": str(month["label"])}), Vector2(rect.position.x + 16, header_y), 15, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("common.games_value", {"n": games.size()}), rect.end.x - 16, header_y, 12, MUTED, 80)
-	_line(Vector2(rect.position.x + 14, header_y + 12), Vector2(rect.end.x - 14, header_y + 12), BORDER_SOFT, 1.0)
-
-	if games.is_empty():
-		_text(Loc.t("game_result.no_games_in_month"), Vector2(rect.position.x + 16, header_y + 44), 13, MUTED)
-		return
+	opts["title"] = Loc.t("game_result.month_header", {"year": int(month["year"]), "month": str(month["label"])})
+	opts["title_size"] = 15
+	opts["right_label"] = Loc.t("common.games_value", {"n": games.size()})
+	opts["empty_text"] = Loc.t("game_result.no_games_in_month")
 
 	var visible_count: int = _list_visible_rows()
-	var top: float = header_y + 26.0
-	var ix: float = rect.position.x + 14.0
-	var iw: float = rect.size.x - 28.0
+	var rows: Array = []
 	for i in range(visible_count):
 		var gi: int = _list_scroll + i
 		if gi >= games.size():
 			break
 		var entry: Dictionary = games[gi] as Dictionary
-		var index: int = int(entry["index"])
-		var game: Dictionary = entry["game"] as Dictionary
-		var ry: float = top + float(i) * LIST_ROW_H
-		var row_rect: Rect2 = Rect2(ix, ry, iw, LIST_ROW_H - 4.0)
-		var selected: bool = index == _selected_index
-		if selected:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.16), Color(BLUE.r, BLUE.g, BLUE.b, 0.5), 6)
-		elif index == _hover_index:
-			_round(row_rect, Color(1, 1, 1, 0.05), Color.TRANSPARENT, 6, 0)
-		_draw_list_row(row_rect, game)
-		_list_row_hits.append({"rect": row_rect, "index": index})
-		# 自前描画リストなので行区切りは手でヘアラインを引く。
-		_line(Vector2(ix, ry + LIST_ROW_H - 2.0), Vector2(ix + iw, ry + LIST_ROW_H - 2.0), HAIRLINE, 1.0)
+		rows.append(_list_row(int(entry["index"]), entry["game"] as Dictionary))
+	# __meta は index + 1 (0 は「未選択」と区別できないため)。
+	opts["sel_kind"] = "game"
+	opts["selected_id"] = _selected_index + 1
+	opts["hover_id"] = _hover_index + 1 if _hover_index >= 0 else 0
+	var hits: Array = []
+	opts["hits"] = hits
+	_draw_data_table(rect, LIST_COLUMNS, rows, opts)
+	for hit_value in hits:
+		var hit: Dictionary = hit_value as Dictionary
+		_list_row_hits.append({"rect": hit["rect"], "index": int(hit["meta"]) - 1})
+
+	# 勝敗マークは列の上に図形で重ね描きする。
+	var mark_rect: Rect2 = _table_column_rect(rect, LIST_COLUMNS, opts, "mark")
+	var row_top: float = _table_row_top(rect, LIST_COLUMNS, opts)
+	for i in range(rows.size()):
+		var game: Dictionary = (games[_list_scroll + i] as Dictionary)["game"] as Dictionary
+		_draw_result_mark(Vector2(mark_rect.position.x + mark_rect.size.x * 0.5, row_top + (float(i) + 0.5) * LIST_ROW_H),
+			6.0, _result_symbol(game), _game_color(game))
 
 	# スクロールインジケータ
 	if games.size() > visible_count:
@@ -268,29 +308,25 @@ func _draw_game_list(_season: PSSeason) -> void:
 			rect.end.x - 16, rect.end.y - 14, 11, FAINT, 120)
 
 
-func _draw_list_row(rect: Rect2, game: Dictionary) -> void:
-	var color: Color = _game_color(game)
-	var symbol: String = _result_symbol(game)
-	var cy: float = rect.position.y + rect.size.y * 0.5 + 5.0
-	# 勝敗マーク: 白星=白丸 / 黒星=黒丸+白縁 / 引分=△(試合結果色)。
-	_draw_result_mark(Vector2(rect.position.x + 17, rect.position.y + rect.size.y * 0.5), 6.0, symbol, color)
-	# 日付
-	var date_label: String = SeasonCalendar.compact_label_for_game(game, AppState.current_season)
-	_text(date_label, Vector2(rect.position.x + 30, cy), 12, MUTED, 76)
-	# 対戦
+# 月間試合リストの 1 行 (日付 / 対戦相手 / スコア)。勝敗マーク列は空にして図形を重ねる。
+func _list_row(index: int, game: Dictionary) -> Dictionary:
 	var away_id: int = int(game.get("away_team_id", 0))
 	var home_id: int = int(game.get("home_team_id", 0))
 	var is_home: bool = home_id == _view_team_id
 	var opp_id: int = away_id if is_home else home_id
-	var venue: String = "vs" if is_home else "@"
-	var matchup_label: String = "%s %s" % [venue, _team_short(opp_id)]
+	var matchup_label: String = "%s %s" % ["vs" if is_home else "@", _team_short(opp_id)]
 	if game.has("ps_label"):
 		matchup_label = "%s  %s" % [str(game.get("ps_label", "")), matchup_label]
-	_text(matchup_label, Vector2(rect.position.x + 108, cy), 13, TEXT, 128)
-	# スコア (自軍 - 相手)
+	# スコアは自軍 - 相手。
 	var us: int = int(game.get("home_score", 0)) if is_home else int(game.get("away_score", 0))
 	var them: int = int(game.get("away_score", 0)) if is_home else int(game.get("home_score", 0))
-	_text_right("%d - %d" % [us, them], rect.end.x - 10, cy, 13, TEXT, 70)
+	return {
+		"__meta": index + 1,
+		"date": SeasonCalendar.compact_label_for_game(game, AppState.current_season),
+		"opp": matchup_label,
+		"mark": "",
+		"score": "%d - %d" % [us, them],
+	}
 
 
 # --- 上段: イニングスコア ---
@@ -312,18 +348,30 @@ func _draw_line_score(rect: Rect2) -> void:
 	var r1: float = rect.position.y + 110.0
 	var r2: float = rect.position.y + 144.0
 
-	# ヘッダ (イニング番号 + R/H/E)。等幅グリッドの右に R/H/E 集計ブロックを縦区切りで分ける
-	# (本物のスコアボードらしく、グリッドと集計を視覚的に分離する)。
-	for i in range(inning_count):
-		_text(str(i + 1), Vector2(grid_x + float(i) * cell_w, hy), 12, FAINT, cell_w, HORIZONTAL_ALIGNMENT_CENTER)
+	# 2段ヘッダ: 上段 SUPER_HEADER_BG (球団 | イニング | 計)、下段 PANEL_2 (イニング番号 + R/H/E)。
+	var band_x: float = rect.position.x + 16.0
+	var band_w: float = rect.size.x - 32.0
 	var tx: float = grid_x + grid_w
+	var tier1_top: float = hy - 36.0
+	_round(Rect2(band_x, tier1_top, band_w, 18.0), SUPER_HEADER_BG, Color.TRANSPARENT, 0, 0)
+	_round(Rect2(band_x, hy - 18.0, band_w, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
+	_line(Vector2(band_x, hy - 18.0), Vector2(band_x + band_w, hy - 18.0), HAIRLINE, 1.0)
+	_text(Loc.t("col.team"), Vector2(band_x, tier1_top + 13.0), 10, MUTED, grid_x - band_x, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("game_result.group.innings"), Vector2(grid_x, tier1_top + 13.0), 10, MUTED, grid_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("box.total"), Vector2(tx, tier1_top + 13.0), 10, MUTED, totals_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_line(Vector2(grid_x, tier1_top + 2.0), Vector2(grid_x, hy - 20.0), HAIRLINE, 1.0)
+	_line(Vector2(tx, tier1_top + 2.0), Vector2(tx, hy - 20.0), HAIRLINE, 1.0)
+	for i in range(inning_count):
+		_text(str(i + 1), Vector2(grid_x + float(i) * cell_w, hy), 12, MUTED, cell_w, HORIZONTAL_ALIGNMENT_CENTER, true)
 	var tcol_w: float = totals_w / 3.0
-	_line(Vector2(tx - 8.0, hy - 20.0), Vector2(tx - 8.0, r2 + 20.0), HAIRLINE, 1.0)
+	_line(Vector2(tx, hy - 18.0), Vector2(tx, r2 + 20.0), HAIRLINE, 1.0)
+	_line(Vector2(grid_x, hy - 18.0), Vector2(grid_x, r2 + 20.0), HAIRLINE, 1.0)
 	for j in range(3):
-		_text(["R", "H", "E"][j], Vector2(tx + float(j) * tcol_w, hy), 12, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+		_text(["R", "H", "E"][j], Vector2(tx + float(j) * tcol_w, hy), 12, TEXT if j == 0 else MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER, true)
 	_line(Vector2(rect.position.x + 16, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER, 1.5)
 
 	_draw_line_row(rect, away_id, false, innings, inning_count, grid_x, cell_w, tx, tcol_w, r1)
+	_line(Vector2(rect.position.x + 16, r1 + 18.0), Vector2(rect.end.x - 16, r1 + 18.0), HAIRLINE, 1.0)
 	_draw_line_row(rect, home_id, true, innings, inning_count, grid_x, cell_w, tx, tcol_w, r2)
 
 
@@ -345,9 +393,9 @@ func _draw_line_row(rect: Rect2, team_id: int, is_home: bool, innings: Array, in
 	var runs: int = int(_cur_game.get("home_score" if is_home else "away_score", 0))
 	var hits: int = int(_line_hits.get(team_id, 0))
 	var errs: int = int(_line_errors.get(team_id, 0))
-	_text(str(runs), Vector2(tx, y), 14, TEXT, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
-	_text(str(hits), Vector2(tx + tcol_w, y), 13, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
-	_text(str(errs), Vector2(tx + tcol_w * 2.0, y), 13, MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
+	_text(str(runs), Vector2(tx, y), 15, TEXT, tcol_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(str(hits), Vector2(tx + tcol_w, y), 13, TEXT, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
+	_text(str(errs), Vector2(tx + tcol_w * 2.0, y), 13, TEXT if errs > 0 else MUTED, tcol_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func _line_score_innings(game: Dictionary, game_log: Dictionary = {}) -> Array:
@@ -413,126 +461,143 @@ func _draw_summary(rect: Rect2) -> void:
 # --- 中段: 打席結果 (ボックススコア) ---
 
 func _draw_box_score(rect: Rect2) -> void:
-	var label: String = Loc.t("game_result.box_score", {"side": Loc.t("home.side_home") if _box_home else Loc.t("home.side_visitor")})
-	_panel(rect, label)
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
 	# ビジター/ホーム切替チップは _build_buttons で配置。
 
 	var rows: Array = _box_data.get("rows", []) as Array
 	var totals: Dictionary = _box_data.get("totals", {}) as Dictionary
 	var inning_count: int = max(9, int(_box_data.get("inning_count", 9)))
 	# 列構成 (打者一巡で同一イニングに複数列)。古いデータ等で無ければイニング単列にフォールバック。
-	var columns: Array = _box_data.get("columns", []) as Array
-	if columns.is_empty():
+	var inn_columns: Array = _box_data.get("columns", []) as Array
+	if inn_columns.is_empty():
 		for inn in range(1, inning_count + 1):
-			columns.append({"inning": inn, "round": 0})
-	var col_count: int = columns.size()
+			inn_columns.append({"inning": inn, "round": 0})
+	var col_count: int = inn_columns.size()
 	var expanded: bool = col_count > inning_count  # 打者一巡で列が増えている
+	var inn_font_size: int = 11 if col_count <= 9 else (10 if col_count <= 12 else 9)
 
-	var ix: float = rect.position.x + 16.0
-	var iw: float = rect.size.x - 32.0
-	# 固定列幅合計
+	# 固定列 + イニング列。イニング列は残り幅を等分し、表の倍率が 1.0 になるようにする。
+	var columns: Array = BOX_PRE_COLUMNS.duplicate(true)
 	var fixed_w: float = 0.0
-	for c_value in BOX_FIXED:
+	for c_value in columns:
 		fixed_w += float((c_value as Dictionary)["w"])
-	var inn_w: float = (iw - fixed_w) / float(col_count)
+	var inn_w: float = (rect.size.x - TABLE_INNER_PAD * 2.0 - fixed_w) / float(col_count)
+	for ci in range(col_count):
+		columns.append({"key": "i%d" % ci, "title": "", "w": inn_w, "align": "c", "fmt": "str",
+			"group": "game_result.group.box_innings", "sep_before": ci == 0})
 
-	var hy: float = rect.position.y + 64.0
-	# ヘッダ帯 (_draw_data_table と同じ言語: PANEL_2 の帯 + bold ラベル + 下端太めルール)。
-	_round(Rect2(ix, hy - 18.0, iw, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	# 固定列ヘッダ
-	var cx: float = ix
-	for c_value in BOX_FIXED:
-		var c: Dictionary = c_value as Dictionary
-		_text(Loc.t(str(c["label"])), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
-		cx += float(c["w"])
-	var grid_x: float = cx
-	# 守備/選手/利き腕(識別ブロック) と 打数以降(成績ブロック) の境界。
-	var identity_w: float = float((BOX_FIXED[0] as Dictionary)["w"]) + float((BOX_FIXED[1] as Dictionary)["w"]) + float((BOX_FIXED[2] as Dictionary)["w"])
-	var stat_sep_x: float = ix + identity_w
+	# 行高は行数 (選手 + 計) に合わせてフィット。
+	var line_count: int = rows.size() + (1 if not totals.is_empty() else 0)
+	var area_h: float = rect.size.y - TABLE_ROWS_OFFSET - 8.0
+	# 表は int(area / row_h) 行までしか描かないので、浮動小数の丸めで最終行が落ちない程度に縮める。
+	var row_h: float = clampf(area_h / float(maxi(1, line_count)) - 0.01, 16.0, 26.0)
+	var table_rows: Array = []
+	for row_value in rows:
+		table_rows.append(_box_table_row(row_value as Dictionary))
+	if not totals.is_empty():
+		table_rows.append({
+			"is_total": true,
+			"pos": Loc.t("box.total"),
+			"name": Loc.t("box.double_plays", {"n": int(totals.get("gidp", 0))}),
+			"ab": int(totals.get("ab", 0)),
+			"h": int(totals.get("h", 0)),
+			"rbi": int(totals.get("rbi", 0)),
+			"avg": _fmt_avg(float(totals.get("avg", 0.0))),
+			"hr": int(totals.get("hr", 0)),
+		})
+	var opts: Dictionary = {
+		"title": Loc.t("game_result.box_score", {"side": Loc.t("home.side_home") if _box_home else Loc.t("home.side_visitor")}),
+		"title_size": 16, "panel": false, "inner_pad": TABLE_INNER_PAD, "row_h": row_h, "cell_size": 12, "bottom_pad": 8.0,
+	}
+	_draw_data_table(rect, columns, table_rows, opts)
 
-	# 行高は行数 (選手 + 計) に合わせてフィット
-	var line_count: int = rows.size() + 1
-	var avail: float = rect.end.y - (hy + 16.0)
-	var row_h: float = clampf(avail / float(max(1, line_count)), 18.0, 26.0)
-	var top: float = hy + 16.0
-	var grid_bottom: float = top + float(line_count) * row_h
+	# 守備位置バッジとイニング別の打席結果は、表と同じ幾何で上から重ね描きする。
+	var row_top: float = _table_row_top(rect, columns, opts)
+	var header_y: float = rect.position.y + _effective_header_top(columns, opts)
+	var pos_rect: Rect2 = _table_column_rect(rect, columns, opts, "pos")
+	var grid_rect: Rect2 = _table_column_rect(rect, columns, opts, "i0")
+	var grid_x: float = grid_rect.position.x
+	inn_w = grid_rect.size.x
+	var grid_bottom: float = row_top + row_h * float(table_rows.size())
 
 	# イニングヘッダ: 同一イニングの列をまとめ、番号をグループ中央に置く。
 	var gi: int = 0
 	while gi < col_count:
-		var inn: int = int((columns[gi] as Dictionary)["inning"])
+		var inn: int = int((inn_columns[gi] as Dictionary)["inning"])
 		var span: int = 1
-		while gi + span < col_count and int((columns[gi + span] as Dictionary)["inning"]) == inn:
+		while gi + span < col_count and int((inn_columns[gi + span] as Dictionary)["inning"]) == inn:
 			span += 1
-		_text(str(inn), Vector2(grid_x + float(gi) * inn_w, hy), 11, MUTED, inn_w * float(span), HORIZONTAL_ALIGNMENT_CENTER, true)
+		_text(str(inn), Vector2(grid_x + float(gi) * inn_w, header_y), 12, MUTED, inn_w * float(span), HORIZONTAL_ALIGNMENT_CENTER, true)
 		# 列が増えているイニングがあるときだけ、グループ境界に薄い区切り線を引いて見やすくする。
 		if expanded and gi > 0:
-			_line(Vector2(grid_x + float(gi) * inn_w, hy + 4), Vector2(grid_x + float(gi) * inn_w, grid_bottom), HAIRLINE, 1.0)
+			_line(Vector2(grid_x + float(gi) * inn_w, header_y - 18.0), Vector2(grid_x + float(gi) * inn_w, grid_bottom), HAIRLINE, 1.0)
 		gi += span
-	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 16, hy + 8), BORDER, 1.5)
-	# 列グループ境界 (識別ブロック | 成績ブロック | イニング) の縦ヘアライン。
-	_line(Vector2(stat_sep_x, hy - 18.0), Vector2(stat_sep_x, grid_bottom), HAIRLINE, 1.0)
-	_line(Vector2(grid_x, hy - 18.0), Vector2(grid_x, grid_bottom), HAIRLINE, 1.0)
 
 	for ri in range(rows.size()):
-		var row: Dictionary = rows[ri] as Dictionary
-		var ry: float = top + float(ri) * row_h
-		var ty: float = ry + row_h * 0.5 + 4.0
-		_draw_box_row(row, ix, fixed_w, inn_w, col_count, ty, ry, row_h, false)
-		_line(Vector2(ix, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
-
-	# 計 (合計) 行
-	if not totals.is_empty():
-		var ry: float = top + float(rows.size()) * row_h
-		var ty: float = ry + row_h * 0.5 + 4.0
-		var total_row: Dictionary = {
-			"pos": Loc.t("box.total"),
-			"name": Loc.t("box.double_plays", {"n": int(totals.get("gidp", 0))}),
-			"bats": "",
-			"ab": int(totals.get("ab", 0)),
-			"h": int(totals.get("h", 0)),
-			"rbi": int(totals.get("rbi", 0)),
-			"avg": float(totals.get("avg", 0.0)),
-			"hr": int(totals.get("hr", 0)),
-			"cells": [],
-		}
-		_draw_box_row(total_row, ix, fixed_w, inn_w, col_count, ty, ry, row_h, true)
+		_draw_box_overlay(rows[ri] as Dictionary, pos_rect, grid_x, inn_w, col_count, row_top + float(ri) * row_h, row_h, inn_font_size)
 
 
-func _draw_box_row(row: Dictionary, ix: float, _fixed_w: float, inn_w: float, col_count: int, ty: float, ry: float, row_h: float, is_total: bool) -> void:
-	var col: Color = MUTED.lerp(TEXT, 0.6) if is_total else TEXT
-	var cx: float = ix
-	for c_value in BOX_FIXED:
-		var c: Dictionary = c_value as Dictionary
-		var key: String = str(c["key"])
-		var w: float = float(c["w"])
-		var txt: String = ""
-		match key:
-			"avg":
-				txt = _fmt_avg(float(row.get("avg", 0.0)))
-			"bats":
-				var b: String = str(row.get("bats", ""))
-				txt = "(%s)" % b if not b.is_empty() else ""
-			"ab", "h", "rbi", "hr":
-				txt = str(int(row.get(key, 0)))
-			_:
-				txt = str(row.get(key, ""))
-		_text(txt, Vector2(cx, ty), 12, col, w, c["align"] as int, key == "name" and not is_total)
-		cx += w
-	# イニングセル (列ごと)
+# 打席結果表 1 行分の表データ。守備位置とイニングセルは重ね描きなので空にする。
+# 背番号は行に player_id があるときだけ引ける (無ければ #背番号は出さない)。
+func _box_table_row(row: Dictionary) -> Dictionary:
+	var bats: String = str(row.get("bats", ""))
+	var out: Dictionary = {
+		"pos": "",
+		"name": str(row.get("name", "")),
+		"bats": "(%s)" % bats if not bats.is_empty() else "",
+		"ab": int(row.get("ab", 0)),
+		"h": int(row.get("h", 0)),
+		"rbi": int(row.get("rbi", 0)),
+		"avg": _fmt_avg(float(row.get("avg", 0.0))),
+		"hr": int(row.get("hr", 0)),
+	}
+	var pid: int = int(row.get("player_id", 0))
+	var player: PSPlayer = GameDb.get_player(pid) if pid > 0 else null
+	if player != null and player.jersey_number > 0:
+		out["jersey"] = player.jersey_number
+	return out
+
+
+# 守備位置ラベル ("(中)" = スタメン / "中" = 途中出場 / 打・走 = 代打・代走) から、バッジの文字・色・塗りを決める。
+# スタメンは塗り、途中出場は枠のみ。色は守備位置の役割色 (_pos_color)、位置に紐づかない代打/代走は MUTED。
+func _box_pos_style(label: String) -> Dictionary:
+	var is_start: bool = label.begins_with("(")
+	var text: String = label.replace("(", "").replace(")", "")
+	var color: Color = MUTED
+	for pos in range(1, 11):
+		if BoxScoreBuilder.position_char(pos) == text:
+			color = _pos_color(pos)
+			break
+	return {"text": text, "color": color, "filled": is_start}
+
+
+func _draw_box_overlay(row: Dictionary, pos_rect: Rect2, grid_x: float, inn_w: float, col_count: int, ry: float, row_h: float, inn_font_size: int) -> void:
+	var ty: float = ry + row_h * 0.5 + 4.0
+	var pos_label: String = str(row.get("pos", ""))
+	if not pos_label.is_empty():
+		var style: Dictionary = _box_pos_style(pos_label)
+		var bw: float = minf(pos_rect.size.x - 6.0, 34.0)
+		var bh: float = minf(18.0, row_h - 3.0)
+		_chip(Rect2(pos_rect.position.x + (pos_rect.size.x - bw) * 0.5, ry + (row_h - bh) * 0.5, bw, bh),
+			str(style["text"]), style["color"] as Color, bool(style["filled"]))
+	var hr_mark: String = Loc.t("box.pa.home_run", {"dir": ""})
+	var on_base: Array = [Loc.t("box.pa.walk"), Loc.t("box.pa.intentional_walk"), Loc.t("box.pa.hit_by_pitch")]
 	var cells: Array = row.get("cells", []) as Array
-	for i in range(col_count):
-		var cell_x: float = cx + float(i) * inn_w
-		if i < cells.size():
-			var cell: Dictionary = cells[i] as Dictionary
-			var text: String = str(cell.get("text", ""))
-			if text.is_empty():
-				continue
-			if bool(cell.get("is_hit", false)):
-				_round(Rect2(cell_x + 1.0, ry + 2.0, inn_w - 2.0, row_h - 4.0), HIT_BG, Color.TRANSPARENT, 4)
-				_text(text, Vector2(cell_x, ty), 11, Color.WHITE, inn_w, HORIZONTAL_ALIGNMENT_CENTER)
-			else:
-				_text(text, Vector2(cell_x, ty), 11, col, inn_w, HORIZONTAL_ALIGNMENT_CENTER)
+	for i in range(mini(col_count, cells.size())):
+		var cell: Dictionary = cells[i] as Dictionary
+		var text: String = str(cell.get("text", ""))
+		if text.is_empty():
+			continue
+		var cell_x: float = grid_x + float(i) * inn_w
+		var pill: Rect2 = Rect2(cell_x + 1.0, ry + 2.0, inn_w - 2.0, row_h - 4.0)
+		if bool(cell.get("is_hit", false)):
+			# 安打は緑ピル、本塁打はアンバーのピル。
+			var hit_color: Color = AMBER if text.find(hr_mark) >= 0 else GREEN
+			_round(pill, Color(hit_color.r, hit_color.g, hit_color.b, 0.18), Color(hit_color.r, hit_color.g, hit_color.b, 0.55), 4)
+			_text(text, Vector2(cell_x, ty), inn_font_size, hit_color, inn_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+		else:
+			# 凡退は MUTED。四球・死球など出塁は通常文字色。
+			_text(text, Vector2(cell_x, ty), inn_font_size, TEXT if on_base.has(text) else MUTED, inn_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 # --- 中段: 交代 ---
@@ -576,78 +641,75 @@ func _draw_subs(rect: Rect2) -> void:
 # --- 下段: 投手成績 ---
 
 func _draw_pitching(rect: Rect2) -> void:
-	_panel(rect, Loc.t("game_result.pitching"))
+	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
 	var rows: Array = _pitching.get("rows", []) as Array
-	var ix: float = rect.position.x + 18.0
-	var hy: float = rect.position.y + 60.0
-
-	# ヘッダ帯 + bold ラベル (_draw_data_table と同じ言語)。
-	_round(Rect2(ix, hy - 18.0, rect.end.x - 18.0 - ix, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	var cx: float = ix
-	# 列グループ境界 (投手識別 | 勝敗 | 出場・投球回 | 被安打以下 | 防御率) の x を積みながらヘッダを描く。
-	var sep_xs: Array = []
-	for c_value in PITCH_COLS:
-		var c: Dictionary = c_value as Dictionary
-		if str(c["key"]) in ["w", "g", "h", "era"] and cx > ix:
-			sep_xs.append(cx)
-		_text(Loc.t(str(c["label"])), Vector2(cx, hy), 11, MUTED, float(c["w"]), c["align"] as int, true)
-		cx += float(c["w"])
-	_line(Vector2(ix, hy + 8), Vector2(rect.end.x - 18, hy + 8), BORDER, 1.5)
-
-	if rows.is_empty():
-		_text(Loc.t("game_result.no_pitching"), Vector2(ix, hy + 40), 13, MUTED)
+	var visible_rows: int = _pitch_visible_rows()
+	var start_idx: int = 0
+	if rows.size() > visible_rows:
+		_pitch_scroll = clampi(_pitch_scroll, 0, rows.size() - visible_rows)
+		start_idx = _pitch_scroll
+	else:
+		_pitch_scroll = 0
+	var table_rows: Array = []
+	for i in range(mini(visible_rows, rows.size() - start_idx)):
+		table_rows.append(_pitch_table_row(rows[start_idx + i] as Dictionary))
+	var opts: Dictionary = {
+		"title": Loc.t("game_result.pitching"), "title_size": 16, "panel": false, "inner_pad": 18.0,
+		"row_h": PITCH_ROW_H, "cell_size": 12, "bottom_pad": 12.0,
+		"empty_text": Loc.t("game_result.no_pitching"),
+	}
+	_draw_data_table(rect, PITCH_COLUMNS, table_rows, opts)
+	if table_rows.is_empty():
 		return
 
-	var top: float = hy + 16.0
-	var row_h: float = clampf((rect.end.y - top - 8.0) / float(rows.size()), 18.0, 28.0)
-	var row_bottom: float = top + float(rows.size()) * row_h
-	for sep_x_value in sep_xs:
-		_line(Vector2(float(sep_x_value), hy - 18.0), Vector2(float(sep_x_value), row_bottom), HAIRLINE, 1.0)
+	# 勝敗マーク (勝利投手=白丸 / 敗戦投手=黒丸+白縁) は列の上に図形で重ね、球団が替わる行の上に区切り線を引く。
+	var mark_rect: Rect2 = _table_column_rect(rect, PITCH_COLUMNS, opts, "mark")
+	var row_top: float = _table_row_top(rect, PITCH_COLUMNS, opts)
 	var prev_team: int = -999
-	for ri in range(rows.size()):
-		var row: Dictionary = rows[ri] as Dictionary
-		var ry: float = top + float(ri) * row_h
-		var ty: float = ry + row_h * 0.5 + 4.0
+	for i in range(table_rows.size()):
+		var row: Dictionary = rows[start_idx + i] as Dictionary
+		var ry: float = row_top + float(i) * PITCH_ROW_H
 		var tid: int = int(row.get("team_id", 0))
-		if tid != prev_team and ri > 0:
-			_line(Vector2(ix, ry), Vector2(rect.end.x - 18, ry), BORDER_SOFT, 1.0)
+		if tid != prev_team and start_idx + i > 0:
+			_line(Vector2(rect.position.x + 18.0, ry), Vector2(rect.end.x - 18.0, ry), BORDER_SOFT, 1.0)
 		prev_team = tid
-		var cx2: float = ix
-		for c_value in PITCH_COLS:
-			var c: Dictionary = c_value as Dictionary
-			var key: String = str(c["key"])
-			var w: float = float(c["w"])
-			var txt: String = ""
-			var col: Color = TEXT
-			match key:
-				"team":
-					txt = _team_short(tid)
-					col = MUTED
-				"mark":
-					var mark_id: String = str(row.get("mark", ""))
-					if mark_id == BoxScoreBuilder.MARK_WIN or mark_id == BoxScoreBuilder.MARK_LOSS:
-						# 勝利投手=白丸 / 敗戦投手=黒丸+白縁。テキストは描かない。
-						_draw_result_mark(Vector2(cx2 + w * 0.5, ty - 4), 5.0, "○" if mark_id == BoxScoreBuilder.MARK_WIN else "●", TEXT)
-						txt = ""
-					elif mark_id == BoxScoreBuilder.MARK_SAVE:
-						txt = Loc.t("box.mark.save")
-						col = AMBER
-					elif mark_id == BoxScoreBuilder.MARK_HOLD:
-						txt = Loc.t("box.mark.hold")
-						col = BLUE
-				"throws":
-					var th: String = str(row.get("throws", ""))
-					txt = "(%s)" % th if not th.is_empty() else ""
-					col = FAINT
-				"era":
-					txt = "%0.2f" % float(row.get("era", 0.0))
-				"ip", "name":
-					txt = str(row.get(key, ""))
-				_:
-					txt = str(int(row.get(key, 0)))
-			_text(txt, Vector2(cx2, ty), 12, col, w, c["align"] as int, key == "name")
-			cx2 += w
-		_line(Vector2(ix, ry + row_h), Vector2(rect.end.x - 18, ry + row_h), HAIRLINE, 1.0)
+		var mark_id: String = str(row.get("mark", ""))
+		if mark_id == BoxScoreBuilder.MARK_WIN or mark_id == BoxScoreBuilder.MARK_LOSS:
+			_draw_result_mark(Vector2(mark_rect.position.x + mark_rect.size.x * 0.5, ry + PITCH_ROW_H * 0.5),
+				5.0, "○" if mark_id == BoxScoreBuilder.MARK_WIN else "●", TEXT)
+
+	# スクロールバー
+	if rows.size() > visible_rows:
+		var avail: float = float(visible_rows) * PITCH_ROW_H
+		var max_scroll: int = rows.size() - visible_rows
+		_round(Rect2(rect.end.x - 12.0, row_top, 4.0, avail), PANEL_3, BORDER_SOFT, 2)
+		var thumb_h: float = maxf(20.0, avail * (float(visible_rows) / float(rows.size())))
+		var thumb_y: float = row_top + (avail - thumb_h) * (float(_pitch_scroll) / float(max_scroll))
+		_round(Rect2(rect.end.x - 12.0, thumb_y, 4.0, thumb_h), MUTED, Color.TRANSPARENT, 2)
+
+
+# 投手成績表 1 行分の表データ。勝敗マークの図形は重ね描きなので、その列は救援のセーブ/ホールド文字だけ入れる。
+func _pitch_table_row(row: Dictionary) -> Dictionary:
+	var tid: int = int(row.get("team_id", 0))
+	var team: PSTeam = GameDb.get_team(tid)
+	var out: Dictionary = row.duplicate()
+	out["team"] = _team_short(tid)
+	out["team_color"] = team.color if team != null else MUTED
+	out["mark"] = ""
+	var mark_id: String = str(row.get("mark", ""))
+	if mark_id == BoxScoreBuilder.MARK_SAVE:
+		out["mark"] = Loc.t("box.mark.save")
+		out["mark_color"] = AMBER
+	elif mark_id == BoxScoreBuilder.MARK_HOLD:
+		out["mark"] = Loc.t("box.mark.hold")
+		out["mark_color"] = BLUE
+	var throws: String = str(row.get("throws", ""))
+	out["throws"] = "(%s)" % throws if not throws.is_empty() else ""
+	var pid: int = int(row.get("pitcher_id", 0))
+	var pitcher: PSPlayer = GameDb.get_player(pid) if pid > 0 else null
+	if pitcher != null and pitcher.jersey_number > 0:
+		out["jersey"] = pitcher.jersey_number
+	return out
 
 
 # ============================================================ buttons
@@ -905,6 +967,7 @@ func _select_latest_in_month() -> void:
 
 
 func _select_game(index: int) -> void:
+	_pitch_scroll = 0
 	_selected_index = index
 	if _selected_is_ps():
 		_load_ps_detail(index)
@@ -950,6 +1013,7 @@ func _ps_game_log(season: PSSeason, stage_key: String, game_num: int, result: Di
 
 func _clear_selection() -> void:
 	_selected_index = -1
+	_pitch_scroll = 0
 	_cur_game = {}
 	_cur_log = {}
 	_box_data = {}

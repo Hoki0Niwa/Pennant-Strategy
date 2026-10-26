@@ -25,38 +25,45 @@ const CHART_LEGEND_VALUE_W: float = 34.0
 # 列幅は実データ幅基準で詰める (余白は球団名列へ寄せ、数値列が間延びしないように)。
 # sep_before で「勝敗 / 勝率・差・残 / 得失点 / 打撃 / 投手」のブロック境界に縦ヘアラインを引く。
 const LEAGUE_COLUMNS: Array = [
-	{"title": "col.rank",         "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
-	{"title": "col.team",         "key": "team", "w": 280, "align": "l", "fmt": "team", "strong": true},
-	{"title": "col.games",        "key": "g",    "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "col.wins",         "key": "w",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "col.losses",       "key": "l",    "w": 50,  "align": "r", "fmt": "int"},
-	{"title": "col.draws",        "key": "d",    "w": 46,  "align": "r", "fmt": "int"},
-	{"title": "col.win_pct",      "key": "pct",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "col.games_back",   "key": "gb",   "w": 60,  "align": "r", "fmt": "gb"},
-	{"title": "col.remaining",    "key": "rem",  "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "col.runs_scored",  "key": "rs",   "w": 56,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "col.runs_allowed", "key": "ra",   "w": 56,  "align": "r", "fmt": "int"},
-	{"title": "col.run_diff",     "key": "diff", "w": 64,  "align": "r", "fmt": "diff"},
-	{"title": "col.avg",          "key": "avg",  "w": 70,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "col.hr",           "key": "hr",   "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "col.sb",           "key": "sb",   "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "col.era_short",    "key": "era",  "w": 64,  "align": "r", "fmt": "float2", "sep_before": true},
-	{"title": "WHIP", "key": "whip", "w": 70,  "align": "r", "fmt": "float2"},
-	{"title": "K/9",  "key": "k9",   "w": 62,  "align": "r", "fmt": "float2"},
-	{"title": "S",    "key": "sv",   "w": 44,  "align": "r", "fmt": "int"},
-	{"title": "H",    "key": "hld",  "w": 44,  "align": "r", "fmt": "int"},
+	{"title": "col.rank",         "key": "rank",   "w": 34,  "align": "l", "fmt": "rank", "group": "group.team"},
+	{"title": "col.team",         "key": "team",   "w": 168, "align": "l", "fmt": "team", "strong": true, "group": "group.team"},
+	{"title": "col.games",        "key": "g",      "w": 46,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.wins",         "key": "w",      "w": 42,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.losses",       "key": "l",      "w": 42,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.draws",        "key": "d",      "w": 38,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.win_pct",      "key": "pct",    "w": 62,  "align": "r", "fmt": "rate", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.games_back",   "key": "gb",     "w": 54,  "align": "r", "fmt": "gb", "group": "group.standings_record"},
+	{"title": "col.remaining",    "key": "rem",    "w": 42,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.home_record",  "key": "home",   "w": 58,  "align": "r", "fmt": "str", "sep_before": true, "group": "group.momentum"},
+	{"title": "col.away_record",  "key": "away",   "w": 58,  "align": "r", "fmt": "str", "group": "group.momentum"},
+	{"title": "col.last10",       "key": "last10", "w": 58,  "align": "r", "fmt": "str", "group": "group.momentum"},
+	{"title": "col.streak",       "key": "strk",   "w": 58,  "align": "r", "fmt": "streak_chip", "group": "group.momentum"},
+	{"title": "col.runs_scored",  "key": "rs",     "w": 48,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.run_diff"},
+	{"title": "col.runs_allowed", "key": "ra",     "w": 48,  "align": "r", "fmt": "int", "group": "group.run_diff"},
+	{"title": "col.run_diff",     "key": "diff",   "w": 56,  "align": "r", "fmt": "diff", "group": "group.run_diff"},
+	{"title": "col.avg",          "key": "avg",    "w": 62,  "align": "r", "fmt": "rate", "sep_before": true, "group": "group.team_batting"},
+	{"title": "OPS",              "key": "ops",    "w": 62,  "align": "r", "fmt": "rate", "group": "group.team_batting"},
+	{"title": "col.hr",           "key": "hr",     "w": 44,  "align": "r", "fmt": "int", "group": "group.team_batting"},
+	{"title": "col.sb",           "key": "sb",     "w": 44,  "align": "r", "fmt": "int", "group": "group.team_batting"},
+	{"title": "col.era_short",    "key": "era",    "w": 58,  "align": "r", "fmt": "float2", "sep_before": true, "group": "group.team_pitching"},
+	{"title": "FIP",              "key": "fip",    "w": 56,  "align": "r", "fmt": "float2", "group": "group.team_pitching"},
+	{"title": "WHIP",             "key": "whip",   "w": 60,  "align": "r", "fmt": "float2", "group": "group.team_pitching"},
+	{"title": "K/9",              "key": "k9",     "w": 54,  "align": "r", "fmt": "float2", "group": "group.team_pitching"},
+	{"title": "S",                "key": "sv",     "w": 38,  "align": "r", "fmt": "int", "group": "group.team_pitching"},
+	{"title": "H",                "key": "hld",    "w": 38,  "align": "r", "fmt": "int", "group": "group.team_pitching"},
+	{"title": "OAA",              "key": "oaa",    "w": 56,  "align": "r", "fmt": "f1s", "sep_before": true, "group": "group.team_pitching"},
 ]
 
 const INTER_COLUMNS: Array = [
-	{"title": "col.rank",       "key": "rank", "w": 36,  "align": "l", "fmt": "rank"},
-	{"title": "col.team",       "key": "team", "w": 210, "align": "l", "fmt": "team", "strong": true},
-	{"title": "L",              "key": "lg",   "w": 42,  "align": "l", "fmt": "str"},
-	{"title": "col.games_short", "key": "g",   "w": 46,  "align": "r", "fmt": "int", "sep_before": true},
-	{"title": "col.wins",       "key": "w",    "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "col.losses",     "key": "l",    "w": 48,  "align": "r", "fmt": "int"},
-	{"title": "col.draws",      "key": "d",    "w": 44,  "align": "r", "fmt": "int"},
-	{"title": "col.win_pct",    "key": "pct",  "w": 66,  "align": "r", "fmt": "rate", "sep_before": true},
-	{"title": "col.games_back", "key": "gb",   "w": 56,  "align": "r", "fmt": "gb"},
+	{"title": "col.rank",        "key": "rank", "w": 36,  "align": "l", "fmt": "rank", "group": "group.team"},
+	{"title": "col.team",        "key": "team", "w": 156, "align": "l", "fmt": "team", "strong": true, "group": "group.team"},
+	{"title": "L",               "key": "lg",   "w": 42,  "align": "l", "fmt": "str", "group": "group.team"},
+	{"title": "col.games_short", "key": "g",    "w": 46,  "align": "r", "fmt": "int", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.wins",        "key": "w",    "w": 48,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.losses",      "key": "l",    "w": 48,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.draws",       "key": "d",    "w": 44,  "align": "r", "fmt": "int", "group": "group.standings_record"},
+	{"title": "col.win_pct",     "key": "pct",  "w": 66,  "align": "r", "fmt": "rate", "sep_before": true, "group": "group.standings_record"},
+	{"title": "col.games_back",  "key": "gb",   "w": 56,  "align": "r", "fmt": "gb", "group": "group.standings_record"},
 ]
 
 # 集計キャッシュ
@@ -64,6 +71,7 @@ var _status_text: String = ""
 var _entries_by_league: Dictionary = {}   # {league_key: Array of row 表示用 Dictionary}
 var _remaining_by_team: Dictionary = {}    # {team_id: 残り試合数}
 var _head_to_head: Dictionary = {}         # {team_id: {opponent_id: 残り直接対決数}}
+var _splits_by_team: Dictionary = {}       # {team_id: {home, away, last10, strk}}
 var _interleague_rows: Array = []          # 交流戦 行 Dictionary (順位つき)
 var _interleague_played: bool = false
 var _balance_by_team: Dictionary = {}      # {team_id: PackedVector2Array(season day, balance)}
@@ -144,8 +152,8 @@ func _draw() -> void:
 	if not _status_text.is_empty():
 		_text(_status_text, Vector2(INNER_L, INFO_Y), 13, MUTED)
 
-	_draw_table(TABLE_A, PSTeam.league_label_for("league1"), "", LEAGUE_COLUMNS, _entries_by_league.get("league1", []) as Array)
-	_draw_table(TABLE_B, PSTeam.league_label_for("league2"), "", LEAGUE_COLUMNS, _entries_by_league.get("league2", []) as Array)
+	_draw_table(TABLE_A, PSTeam.league_label_for("league1"), "", LEAGUE_COLUMNS, _entries_by_league.get("league1", []) as Array, 2)
+	_draw_table(TABLE_B, PSTeam.league_label_for("league2"), "", LEAGUE_COLUMNS, _entries_by_league.get("league2", []) as Array, 2)
 	_draw_balance_chart(CHART_RECT)
 	if _interleague_played:
 		_draw_table(INTER_RECT, Loc.t("standings.interleague"), "", INTER_COLUMNS, _interleague_rows)
@@ -155,8 +163,8 @@ func _draw() -> void:
 
 
 # 汎用テーブル描画 (リーグ順位表 / 交流戦で共用)。描画本体は基底の _draw_data_table が持つ。
-func _draw_table(rect: Rect2, title: String, right_label: String, columns: Array, rows: Array) -> void:
-	_draw_data_table(rect, columns, rows, {"title": title, "right_label": right_label})
+func _draw_table(rect: Rect2, title: String, right_label: String, columns: Array, rows: Array, cutoff_after_row: int = -1) -> void:
+	_draw_data_table(rect, columns, rows, {"title": title, "right_label": right_label, "cutoff_after_row": cutoff_after_row})
 
 
 # ============================================================ 貯金・借金グラフ
@@ -195,7 +203,7 @@ func _draw_balance_chart(rect: Rect2) -> void:
 		if hover_day > 0:
 			var balance: int = _balance_at_day(team.id, hover_day)
 			_text("±0" if balance == 0 else "%+d" % balance, Vector2(lx + 6.0, ly), 12,
-				_pm_color(float(balance)), CHART_LEGEND_VALUE_W - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+				TEXT if balance != 0 else MUTED, CHART_LEGEND_VALUE_W - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 		lx += CHART_LEGEND_VALUE_W + 18.0
 
 	var y0: float = plot.position.y + plot.size.y * 0.5
@@ -362,9 +370,10 @@ func _refresh() -> void:
 		"remaining": season.games_remaining(),
 	})
 
-	# 残り試合数と直接対決残数は日程 1 走査でまとめて数え、両リーグの順位表で使い回す。
+	# 残り試合数・直接対決残数・本拠/敵地/直近10/連勝敗は日程走査でまとめて集計し、両リーグの順位表で使い回す。
 	_remaining_by_team = PSPennantRace.remaining_by_team(season)
 	_head_to_head = PSPennantRace.head_to_head_remaining(season)
+	_splits_by_team = _build_team_schedule_splits(season)
 
 	for league_row in LEAGUES:
 		var key: String = str(league_row)
@@ -460,6 +469,7 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 			elif bool(magic_info.get("lit", false)):
 				gb_value = Loc.t("standings.magic", {"n": int(magic_info.get("magic", 0))})
 				gb_color = BLUE
+		var splits: Dictionary = _splits_by_team.get(team.id, {}) as Dictionary
 		rows.append({
 			"rank": rank, "team": team.name, "team_id": team.id, "color": team.color,
 			"is_self": team.id == self_id, "is_leader": rank == 1,
@@ -467,13 +477,20 @@ func _build_league_rows(league_key: String, season: PSSeason) -> Array:
 			"pct": stats.win_rate(),
 			"gb": gb_value, "gb_color": gb_color,
 			"rem": int(entry["remaining"]),
+			"home": str(splits.get("home", "0-0")),
+			"away": str(splits.get("away", "0-0")),
+			"last10": str(splits.get("last10", "0-0")),
+			"strk": str(splits.get("strk", "-")),
 			"rs": stats.runs_scored, "ra": stats.runs_allowed, "diff": stats.runs_scored - stats.runs_allowed,
 			"avg": float(metrics.get("batting_average", 0.0)),
+			"ops": float(metrics.get("ops", 0.0)),
 			"hr": int(metrics.get("home_runs", 0)), "sb": int(metrics.get("stolen_bases", 0)),
 			"era": float(metrics.get("earned_run_average", 0.0)) if has_pitch else -1.0,
+			"fip": float(metrics.get("fip", -1.0)) if has_pitch else -1.0,
 			"whip": float(metrics.get("whip", 0.0)) if has_pitch else -1.0,
 			"k9": float(metrics.get("strikeouts_per_nine", 0.0)) if has_pitch else -1.0,
 			"sv": int(metrics.get("saves", 0)), "hld": int(metrics.get("holds", 0)),
+			"oaa": float(metrics.get("oaa", 0.0)),
 		})
 		rank += 1
 	return rows
@@ -600,9 +617,72 @@ func _build_interleague_rows(season: PSSeason) -> void:
 		rank += 1
 
 
+func _build_team_schedule_splits(season: PSSeason) -> Dictionary:
+	var acc: Dictionary = {}
+	for team_id in season.standings.keys():
+		acc[int(team_id)] = {"hw": 0, "hl": 0, "aw": 0, "al": 0, "dec": []}
+	for game_value in season.schedule:
+		var game: Dictionary = game_value as Dictionary
+		if not bool(game.get("played", false)):
+			continue
+		var result: Dictionary = game.get("result", {}) as Dictionary
+		if bool(result.get("draw", false)):
+			continue
+		var winner: int = int(result.get("winning_team_id", 0))
+		var home_id: int = int(game.get("home_team_id", 0))
+		var away_id: int = int(game.get("away_team_id", 0))
+		if acc.has(home_id):
+			var hc: Dictionary = acc[home_id] as Dictionary
+			if winner == home_id:
+				hc["hw"] = int(hc["hw"]) + 1
+				(hc["dec"] as Array).append(1)
+			else:
+				hc["hl"] = int(hc["hl"]) + 1
+				(hc["dec"] as Array).append(-1)
+		if acc.has(away_id):
+			var ac: Dictionary = acc[away_id] as Dictionary
+			if winner == away_id:
+				ac["aw"] = int(ac["aw"]) + 1
+				(ac["dec"] as Array).append(1)
+			else:
+				ac["al"] = int(ac["al"]) + 1
+				(ac["dec"] as Array).append(-1)
+	var out: Dictionary = {}
+	for team_id in acc.keys():
+		var tid: int = int(team_id)
+		var c: Dictionary = acc[tid] as Dictionary
+		var dec: Array = c["dec"] as Array
+		var l10_w: int = 0
+		var l10_l: int = 0
+		var start_idx: int = max(0, dec.size() - 10)
+		for i in range(start_idx, dec.size()):
+			if int(dec[i]) > 0:
+				l10_w += 1
+			else:
+				l10_l += 1
+		var strk_text: String = "-"
+		if not dec.is_empty():
+			var last_dir: int = int(dec[dec.size() - 1])
+			var cnt: int = 0
+			for i in range(dec.size() - 1, -1, -1):
+				if int(dec[i]) == last_dir:
+					cnt += 1
+				else:
+					break
+			strk_text = Loc.t("standings.streak_win", {"n": cnt}) if last_dir > 0 else Loc.t("standings.streak_loss", {"n": cnt})
+		out[tid] = {
+			"home": "%d-%d" % [int(c["hw"]), int(c["hl"])],
+			"away": "%d-%d" % [int(c["aw"]), int(c["al"])],
+			"last10": "%d-%d" % [l10_w, l10_l],
+			"strk": strk_text,
+		}
+	return out
+
+
 func _team_metrics(team_id: int, season: PSSeason) -> Dictionary:
 	var batter_stats: PSBatterStats = PSBatterStats.new()
 	var pitcher_stats: PSPitcherStats = PSPitcherStats.new()
+	var oaa_sum: float = 0.0
 	# チーム成績は「その球団で残した成績」の合計 (途中で出た選手の在籍分を含み、途中で来た選手は加入後だけ)。
 	var records: Array = RecordStore.get_team_stat_records(team_id, season.year, season.season_number)
 	for record_row in records:
@@ -610,16 +690,25 @@ func _team_metrics(team_id: int, season: PSSeason) -> Dictionary:
 		batter_stats.add_from(record.batter_stats)
 		if record.is_pitcher():
 			pitcher_stats.add_from(record.pitcher_stats)
+		if record.advanced_stats != null:
+			oaa_sum += float(record.advanced_stats.oaa_by_zone.get("infield", 0.0)) + float(record.advanced_stats.oaa_by_zone.get("outfield", 0.0))
+	var ip: float = float(pitcher_stats.outs_pitched) / 3.0
+	var team_fip: float = -1.0
+	if ip > 0.0:
+		team_fip = (13.0 * float(pitcher_stats.home_runs_allowed) + 3.0 * float(pitcher_stats.walks + pitcher_stats.hit_batters) - 2.0 * float(pitcher_stats.strikeouts)) / ip + 3.10
 	return {
 		"batting_average": batter_stats.batting_average(),
+		"ops": batter_stats.ops(),
 		"home_runs": batter_stats.home_runs,
 		"stolen_bases": batter_stats.stolen_bases,
 		"earned_run_average": pitcher_stats.era(),
+		"fip": team_fip,
 		"whip": pitcher_stats.whip(),
 		"strikeouts_per_nine": pitcher_stats.strikeouts_per_nine(),
 		"saves": pitcher_stats.saves,
 		"holds": pitcher_stats.holds,
 		"outs_pitched": pitcher_stats.outs_pitched,
+		"oaa": oaa_sum,
 	}
 
 

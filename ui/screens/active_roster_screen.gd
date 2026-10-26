@@ -49,23 +49,27 @@ const FILTER_DEFS: Array = [
 	{"pos": 9, "label": "position_short.right_field"},
 ]
 
-const DETAIL: Rect2 = Rect2(262, 740, 700, 316)
-# 今季16項目=4列 / 直近8項目=2列。両者のセル幅が揃うよう SEASON を広く RECENT を狭く取る。
-const SEASON: Rect2 = Rect2(978, 740, 592, 316)
-const RECENT: Rect2 = Rect2(1586, 740, 314, 316)
+# 下段の選択選手サマリ。上 = プロフィール・評価・能力/適性の1行表、下 = 一軍/二軍/直近の3行比較表。
+const DETAIL_TOP: Rect2 = Rect2(262, 740, 1638, 128)
+const DETAIL_STATS: Rect2 = Rect2(262, 876, 1638, 180)
+const DETAIL_TOP_ROW_H: float = 36.0
+const DETAIL_STATS_ROW_H: float = 30.0
 const RECENT_WINDOW_DAYS: int = 14
 
 const ROW_H: float = 27.0
+const LIST_CELL_SIZE: int = 13
 
-# 一覧の列レイアウト。左から 区分/選手、右側に 年齢/WAR/評価/備考 を等間隔で並べ全幅を使う。
-# 数値列は panel 右端からのオフセットで定義 (右揃え・列内で一定間隔)。
-const C_CHIP_X: float = 12.0      # 区分チップ左
-const C_NAME_X: float = 62.0      # 選手名左
-const C_AGE_ROFF: float = 252.0   # 年齢 右端 = x + w - C_AGE_ROFF
-const C_WAR_ROFF: float = 192.0   # WAR 右端 (年齢から右端間隔 60)
-const C_EVAL_ROFF: float = 132.0  # 評価 右端 (WAR から 60)
-# 備考は左揃え。評価の数値末尾(右端)から見た目の間隔が数値間と揃うよう左端を置く。
-const C_NOTE_ROFF: float = 96.0   # 備考 左 = x + w - C_NOTE_ROFF (幅 = C_NOTE_ROFF - 12)
+# 並べ替え可能な一覧の列キー。
+const SORT_KEYS: Array = ["role", "age", "war", "eval"]
+
+# 投手の球種カラムの短縮ラベル (Loc キー)。
+const PITCH_SHORT: Dictionary = {
+	"four_seam": "pitch_short.four_seam", "two_seam": "pitch_short.two_seam", "sinker": "pitch_short.sinker",
+	"cutter": "pitch_short.cutter", "slider": "pitch_short.slider", "curve": "pitch_short.curve",
+	"fork": "pitch_short.fork", "changeup": "pitch_short.changeup",
+}
+# 野手の守備適性カラム (守備位置番号 -> 行キー)。
+const APTITUDE_POSITIONS: Array = [2, 3, 4, 5, 6, 7, 8, 9]
 
 var _team_id: int = 0
 var _all_records: Array = []          # 育成を除く記録持ち選手 (PSPlayerSeasonRecord)
@@ -75,6 +79,11 @@ var _selected_id: int = 0
 var _selected_list: String = ""        # "active" / "inactive" / "dev"
 var _status_text: String = ""
 var _status_is_error: bool = false
+
+# ソート状態 (区分 / 年齢 / WAR / 評価)
+var _sort_key: String = "role"
+var _sort_asc: bool = true
+var _header_hits: Array = []
 
 # 投手の区分 (先発/中継) を投手起用法と一致させるための分類元。
 # _rotation_set = 先発ローテ入りの投手 id (保存ローテ or preview)。クローザーは中継の一種として扱う。
@@ -159,6 +168,11 @@ func _notification(what: int) -> void:
 
 
 func _on_press(base_pos: Vector2) -> void:
+	for hit_value in _header_hits:
+		var hit_h: Dictionary = hit_value as Dictionary
+		if (hit_h["rect"] as Rect2).has_point(base_pos):
+			_on_header_clicked(str(hit_h["key"]))
+			return
 	var hit: Dictionary = _row_at(base_pos)
 	if hit.is_empty():
 		return
@@ -166,6 +180,15 @@ func _on_press(base_pos: Vector2) -> void:
 	_selected_list = str(hit["list"])
 	_pending = {"id": _selected_id, "list": _selected_list, "name": str(hit["name"]), "start": base_pos}
 	_drag_pos = _p(base_pos)
+	queue_redraw()
+
+
+func _on_header_clicked(key: String) -> void:
+	if _sort_key == key:
+		_sort_asc = not _sort_asc
+	else:
+		_sort_key = key
+		_sort_asc = (key in ["role", "age"])
 	queue_redraw()
 
 
@@ -309,16 +332,34 @@ func _draw_columns() -> void:
 		if _player_passes_filter(dev_player):
 			dev_rows.append(_dev_row(dev_player))
 
-	# 既定ソート: 区分順 (先発→中継→捕→内野→外野 = ポジション番号順)、同順位は評価降順。
-	var sort_by_position: Callable = func(a: Variant, b: Variant) -> bool:
+	_header_hits = []
+	var sort_rows: Callable = func(a: Variant, b: Variant) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
-		if int(da["order"]) != int(db["order"]):
-			return int(da["order"]) < int(db["order"])
-		return int(da["eval"]) > int(db["eval"])
-	active_rows.sort_custom(sort_by_position)
-	inactive_rows.sort_custom(sort_by_position)
-	dev_rows.sort_custom(sort_by_position)
+		match _sort_key:
+			"role":
+				if int(da["order"]) != int(db["order"]):
+					return (int(da["order"]) < int(db["order"])) if _sort_asc else (int(da["order"]) > int(db["order"]))
+				return int(da["eval"]) > int(db["eval"])
+			"age":
+				if int(da["age"]) != int(db["age"]):
+					return (int(da["age"]) < int(db["age"])) if _sort_asc else (int(da["age"]) > int(db["age"]))
+				return int(da["eval"]) > int(db["eval"])
+			"war":
+				var wa: float = float(da.get("war_sort", 0.0))
+				var wb: float = float(db.get("war_sort", 0.0))
+				if wa != wb:
+					return (wa < wb) if _sort_asc else (wa > wb)
+				return int(da["eval"]) > int(db["eval"])
+			"eval":
+				if int(da["eval"]) != int(db["eval"]):
+					return (int(da["eval"]) < int(db["eval"])) if _sort_asc else (int(da["eval"]) > int(db["eval"]))
+				return int(da["order"]) < int(db["order"])
+			_:
+				return int(da["order"]) < int(db["order"])
+	active_rows.sort_custom(sort_rows)
+	inactive_rows.sort_custom(sort_rows)
+	dev_rows.sort_custom(sort_rows)
 
 	_row_hits = []
 	_draw_column(COL1, Loc.t("roster.first_team"), "%d/%d" % [active_rows.size(), ROSTER_MAX], active_rows, "active", 0.0)
@@ -329,148 +370,273 @@ func _draw_columns() -> void:
 func _draw_column(panel: Rect2, title: String, count_text: String, rows: Array, list_key: String, reserve_bottom: float) -> void:
 	var is_target: bool = _drag_active and not _pending.is_empty() \
 		and _drop_zone_at(_to_base(_drag_pos)) == list_key and _is_valid_drop(str(_pending["list"]), list_key)
+	var cols: Array = _list_columns()
+	var hits: Array = []
+	var names_by_id: Dictionary = {}
+	for row_value in rows:
+		var list_row: Dictionary = row_value as Dictionary
+		names_by_id[int(list_row["id"])] = str(list_row["name"])
+	var opts: Dictionary = {
+		"title": title,
+		"right_label": count_text,
+		"row_h": ROW_H,
+		"cell_size": LIST_CELL_SIZE,
+		"bottom_pad": 8.0 + reserve_bottom,
+		"sort_key": _sort_key,
+		"sort_asc": _sort_asc,
+		"scroll_key": list_key,
+		"scroll": _scroll,
+		# 下端にボタンを置くカラム (育成) は件数表示がボタンに隠れるので出さない。
+		"scroll_label": reserve_bottom <= 0.0,
+		"sel_kind": "roster",
+		"selected_id": _selected_id,
+		"hover_id": _hover_id,
+		"hits": hits,
+		"empty_text": Loc.t("common.no_matching_players"),
+	}
+	_draw_data_table(panel, cols, rows, opts)
 	# 枠線はドロップ先として有効な時だけ (通常時はフラット、意味のある時だけ縁取る)。
-	_round(panel, PANEL, BLUE if is_target else Color.TRANSPARENT, 10, 2 if is_target else 0)
-	_text(title, Vector2(panel.position.x + 18, panel.position.y + 32), 16, TEXT)
-	_text_right(count_text, panel.end.x - 18, panel.position.y + 32, 14, MUTED, 120)
+	if is_target:
+		_round(panel, Color.TRANSPARENT, BLUE, 8, 2)
 
-	var x: float = panel.position.x
-	var w: float = panel.size.x
-	var hy: float = panel.position.y + 58
-	_text(Loc.t("roster.col.category_sort"), Vector2(x + C_CHIP_X, hy), FS_LABEL, FAINT)
-	_text(Loc.t("col.player"), Vector2(x + C_NAME_X, hy), FS_LABEL, FAINT)
-	_text_right(Loc.t("col.age"), x + w - C_AGE_ROFF, hy, FS_LABEL, FAINT, 40)
-	_text_right("WAR", x + w - C_WAR_ROFF, hy, FS_LABEL, FAINT, 40)
-	_text_right(Loc.t("col.evaluation"), x + w - C_EVAL_ROFF, hy, FS_LABEL, FAINT, 44)
-	_text(Loc.t("roster.col.note"), Vector2(x + w - C_NOTE_ROFF, hy), FS_LABEL, FAINT)
-	_line(Vector2(x + C_CHIP_X, panel.position.y + 68), Vector2(x + w - 16, panel.position.y + 68), HAIRLINE, 1.0)
-
-	var row0: float = panel.position.y + 88
-	var bottom: float = panel.end.y - 12 - reserve_bottom
-	var visible_count: int = int((bottom - row0) / ROW_H)
-	var max_scroll: int = max(0, rows.size() - visible_count)
-	if int(_scroll[list_key]) > max_scroll:
-		_scroll[list_key] = max_scroll
-	var start: int = int(_scroll[list_key])
-
-	var y: float = row0
-	for i in range(start, min(start + visible_count, rows.size())):
-		var row: Dictionary = rows[i] as Dictionary
-		var id: int = int(row["id"])
-		var row_rect: Rect2 = Rect2(x + 12, y - 18, w - 24, ROW_H)
-		if id == _selected_id:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.20), Color(BLUE.r, BLUE.g, BLUE.b, 0.55), 5, 1)
-		elif id == _hover_id:
-			_round(row_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.08), Color.TRANSPARENT, 5, 0)
-		_draw_row(row, x, w, y)
-		_line(Vector2(x + 12, row_rect.end.y), Vector2(x + w - 12, row_rect.end.y), HAIRLINE, 1.0)
-		_row_hits.append({"rect": row_rect, "id": id, "list": list_key, "name": str(row["name"])})
-		y += ROW_H
-
-	if rows.is_empty():
-		_text(Loc.t("common.no_matching_players"), Vector2(x + 16, row0 + 6), 13, MUTED)
-	elif max_scroll > 0:
-		_text(Loc.t("roster.scroll_hint", {"shown": min(start + visible_count, rows.size()), "total": rows.size()}),
-			Vector2(x + 16, bottom + 6), 10, FAINT)
+	# 当たり判定は表の描画と同一の幾何 (hits) をそのまま選択/ドラッグ用に写す。
+	for hit_value in hits:
+		var hit: Dictionary = hit_value as Dictionary
+		var hit_id: int = int(hit["meta"])
+		_row_hits.append({"rect": hit["rect"], "id": hit_id, "list": list_key, "name": str(names_by_id.get(hit_id, ""))})
+	var header_hits: Array = []
+	_build_table_header_hits(header_hits, panel, cols, opts)
+	for header_value in header_hits:
+		var header_hit: Dictionary = header_value as Dictionary
+		if SORT_KEYS.has(str(header_hit["key"])):
+			_header_hits.append(header_hit)
 
 
-func _draw_row(row: Dictionary, x: float, w: float, y: float) -> void:
-	_chip(Rect2(x + C_CHIP_X, y - 16, 44, 22), str(row["role"]), row["role_color"] as Color)
-	_text(str(row["name"]), Vector2(x + C_NAME_X, y), 14, TEXT, w - C_AGE_ROFF - 50 - C_NAME_X, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(str(int(row["age"])), x + w - C_AGE_ROFF, y, 13, MUTED, 40)
-	if bool(row.get("has_war", false)):
-		_text_right(str(row["war_str"]), x + w - C_WAR_ROFF, y, 13, _war_color(float(row["war"])), 40)
-	else:
-		_text_right("-", x + w - C_WAR_ROFF, y, 13, FAINT, 40)
-	_text_right(str(int(row["eval"])), x + w - C_EVAL_ROFF, y, 14, _eval_color(int(row["eval"])), 44)
-	var note: String = str(row["note"])
-	if not note.is_empty():
-		_text(note, Vector2(x + w - C_NOTE_ROFF, y), 11, AMBER if bool(row.get("note_injury", false)) else MUTED, C_NOTE_ROFF - 12)
+# 上段3カラム共通の列。プロフィール(区分/#背番号 選手名/齢/投打) | 状態・評価(疲労/備考/総合/WAR) | 主要成績(試・登/率・防)。
+func _list_columns() -> Array:
+	return [
+		{"title": "roster.col.category", "key": "role", "w": 38, "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player", "key": "name", "w": 110, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.age", "key": "age", "w": 28, "align": "c", "fmt": "int", "group": "group.profile"},
+		{"title": "roster.col.hand", "key": "hand", "w": 30, "align": "c", "fmt": "str", "group": "group.profile"},
+		{"title": "col.fatigue", "key": "fatigue", "w": 46, "align": "c", "fmt": "fatigue_dot", "sep_before": true, "group": "roster.group.condition_eval"},
+		{"title": "roster.col.note", "key": "note", "w": 60, "align": "l", "fmt": "str", "group": "roster.group.condition_eval"},
+		{"title": "col.overall", "key": "eval", "w": 40, "align": "c", "fmt": "eval_badge", "group": "roster.group.condition_eval"},
+		{"title": "WAR", "key": "war", "w": 42, "align": "r", "fmt": "f1s", "strong": true, "group": "roster.group.condition_eval"},
+		{"title": "roster.col.games_app", "key": "games", "w": 40, "align": "r", "fmt": "int", "sep_before": true, "group": "roster.group.main_stats"},
+		{"title": "roster.col.rate_era", "key": "rate", "w": 40, "align": "r", "fmt": "str", "group": "roster.group.main_stats"},
+	]
 
 
 # --- 下段パネル ---
 
 func _draw_detail_panels(_summary: Dictionary) -> void:
-	_draw_player_detail()
-	_draw_season_stats()
-	_draw_recent_stats()
-
-
-func _draw_player_detail() -> void:
-	_panel(DETAIL, Loc.t("screen.player_detail"))
 	var player: PSPlayer = GameDb.get_player(_selected_id)
 	if player == null:
-		_text(Loc.t("roster.select_player"), Vector2(DETAIL.position.x + 18, DETAIL.position.y + 70), 14, MUTED)
+		_draw_data_table(DETAIL_TOP, [], [], {"title": Loc.t("screen.player_detail"), "empty_text": Loc.t("roster.select_player")})
 		return
 	var record: PSPlayerSeasonRecord = _find_record(_selected_id)
+	# 育成など今季の記録が無い選手も、能力表示は player から作った一時 record で同じ経路に流す。
+	var view_record: PSPlayerSeasonRecord = record if record != null else PSPlayerSeasonRecord.from_player(player, 0, 0)
+	_draw_player_summary_table(player, record, view_record)
+	_draw_stat_compare_table(record)
 
-	var px: float = DETAIL.position.x + 18
-	var top: float = DETAIL.position.y + 64
-	if player.jersey_number > 0:
-		_text("#%d" % player.jersey_number, Vector2(px, top), 16, MUTED)
-	_text(player.name, Vector2(px + 56, top), 22, TEXT)
-	var role_chip: Dictionary = _classify(player.id, player.is_pitcher(), player.role, player.position, _active_ids.has(player.id))
-	_chip(Rect2(px + 56 + _measure(player.name, 22) + 16, top - 20, 48, 24), str(role_chip["text"]), role_chip["color"] as Color)
 
-	var eval: int = PlayerValueEvaluator.overall_score(record) if record != null else int(Offseason.player_value_score(player))
-	_text_right(Loc.t("col.overall"), DETAIL.end.x - 84, top - 18, 12, FAINT, 60)
-	_text_right(str(eval), DETAIL.end.x - 18, top + 4, 26, _eval_color(eval), 90)
-
-	# 能力レーティング (PlayerVisibleRatings)。投手/野手で項目が変わる。
-	var ratings: Array = (PlayerVisibleRatings.ratings_for_record(record) if record != null \
-		else PlayerVisibleRatings.ratings_for_player(player)).get("display_ratings", []) as Array
-	var ry: float = top + 56
-	# セル幅は項目数に合わせる (投手4 / 野手6) → 余白セルを作らず全幅を使う。
-	var cell_w: float = (DETAIL.size.x - 36) / float(max(ratings.size(), 1))
-	for i in range(ratings.size()):
-		var rr: Dictionary = ratings[i] as Dictionary
-		var cx: float = px + float(i) * cell_w
-		var val: int = int(rr.get("display_value", 0))
-		var suffix: String = str(rr.get("suffix", ""))
-		_text(str(rr.get("label", "")), Vector2(cx, ry), 12, FAINT)
-		# 倍率表示 (対逆) は 1-100 の能力値ではないので段階色を付けず、整形済み text をそのまま出す。
-		if rr.has("text"):
-			_text(str(rr["text"]), Vector2(cx, ry + 30), 20, TEXT)
-			continue
-		_text("%d%s" % [val, suffix], Vector2(cx, ry + 30), 20, _eval_color(val) if suffix.is_empty() else TEXT)
-
-	# プロフィール行 (捕手能力など z しか持たない内部値は UI に出さない)。
-	var by: float = ry + 78
-	_text(_bio_line(player), Vector2(px, by), 13, MUTED, DETAIL.size.x - 36)
-	_text(_contract_line(player), Vector2(px, by + 28), 13, MUTED, DETAIL.size.x - 36)
-
-	# コンディション (疲労度 / 怪我) を選手詳細に統合。
-	_line(Vector2(px, by + 48), Vector2(DETAIL.end.x - 18, by + 48), BORDER_SOFT, 1.0)
-	var cy: float = by + 76
-	var fatigue_pct: int = clampi(int(round(float(player.fatigue) * 100.0 / float(GameSimulator.FATIGUE_MAX))), 0, 100)
-	_text(Loc.t("roster.fatigue"), Vector2(px, cy - 18), 11, FAINT)
-	_text("%d%%" % fatigue_pct, Vector2(px, cy + 4), 18, _fatigue_color(fatigue_pct))
-	_text(Loc.t("roster.injury"), Vector2(px + 150, cy - 18), 11, FAINT)
+# 上段: 選択選手のプロフィール・評価ピル・能力 3px バー・守備適性/球種バーを 1 行で。
+@warning_ignore("incompatible_ternary")
+func _draw_player_summary_table(player: PSPlayer, record: PSPlayerSeasonRecord, view_record: PSPlayerSeasonRecord) -> void:
+	var pitcher: bool = player.is_pitcher()
+	var chip: Dictionary = _classify(player.id, pitcher, player.role, player.position, _active_ids.has(player.id))
+	var roster_text: String = Loc.t("common.development_chip") if player.development_player \
+		else (Loc.t("roster.first_team") if _active_ids.has(player.id) else Loc.t("roster.second_team"))
+	var fatigue_pct: int = _fatigue_pct(player.fatigue)
+	var row: Dictionary = {
+		"role": chip["text"], "role_color": chip["color"], "role_dev": player.development_player,
+		"roster": roster_text,
+		"name": player.name, "jersey": player.jersey_number,
+		"age": player.age,
+		"hand": _hand_name(player.throwing_hand) + _hand_name(player.batting_side),
+		"bio": Loc.t("player.height_weight", {"height": player.height, "weight": player.weight}),
+		"salary": _format_money(player.salary),
+		"overall": PlayerValueEvaluator.overall_score(record) if record != null else int(Offseason.player_value_score(player)),
+		"fatigue": fatigue_pct,
+		"injury": "",
+	}
 	if player.injury_days > 0:
-		_text(Loc.t("roster.injury_detail", {"days": player.injury_days, "label": PSInjuryModel.display_label(player.injury_type, player.injury_severity, player.injury_days)}),
-			Vector2(px + 150, cy + 4), 16, RED, DETAIL.size.x - 186)
+		row["injury"] = Loc.t("roster.injury_detail", {"days": player.injury_days, "label": PSInjuryModel.display_label(player.injury_type, player.injury_severity, player.injury_days)})
+		row["injury_color"] = RED
 	else:
-		_text(Loc.t("common.none"), Vector2(px + 150, cy + 4), 18, GREEN)
+		row["injury"] = Loc.t("common.none")
+		row["injury_color"] = MUTED
+
+	var cols: Array = [
+		{"title": "roster.col.category", "key": "role", "w": 44, "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.roster_status", "key": "roster", "w": 48, "align": "c", "fmt": "roster_chip", "group": "group.profile"},
+		{"title": "col.player", "key": "name", "w": 150, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.age", "key": "age", "w": 40, "align": "c", "fmt": "int", "group": "group.profile"},
+		{"title": "roster.col.hand", "key": "hand", "w": 44, "align": "c", "fmt": "str", "group": "group.profile"},
+		{"title": "roster.col.body", "key": "bio", "w": 120, "align": "l", "fmt": "str", "group": "group.profile"},
+		{"title": "col.salary", "key": "salary", "w": 90, "align": "r", "fmt": "str", "group": "group.profile"},
+		{"title": "col.overall", "key": "overall", "w": 50, "align": "c", "fmt": "eval_badge", "sep_before": true, "group": "roster.group.condition_eval"},
+		{"title": "col.fatigue", "key": "fatigue", "w": 64, "align": "c", "fmt": "fatigue_dot", "group": "roster.group.condition_eval"},
+		{"title": "roster.injury", "key": "injury", "w": 130, "align": "l", "fmt": "str", "group": "roster.group.condition_eval"},
+	]
+	var ratings: Array = PlayerVisibleRatings.ratings_for_record(view_record).get("display_ratings", []) as Array
+	var ability_group: String = "group.pitcher_abilities" if pitcher else "group.fielder_abilities"
+	var first_ability: bool = true
+	for rating_value in ratings:
+		var rating: Dictionary = rating_value as Dictionary
+		# 倍率表示 (対逆) は 1-100 の能力値ではないのでバーを持たない。整形済み text の行は表に出さない。
+		if rating.has("text"):
+			continue
+		var rating_key: String = str(rating.get("key", ""))
+		var is_velocity: bool = rating_key == "velocity"
+		if is_velocity:
+			row[rating_key] = "%d%s" % [int(rating.get("display_value", 0)), str(rating.get("suffix", ""))]
+		else:
+			row[rating_key] = int(rating.get("display_value", 0))
+		cols.append({"title": str(rating.get("label", "")), "key": rating_key, "w": 62 if is_velocity else 52, "align": "c",
+			"fmt": "str" if is_velocity else "ability_bar", "sep_before": first_ability, "group": ability_group})
+		first_ability = false
+	if pitcher:
+		var mastery_by_type: Dictionary = {}
+		for entry_value in view_record.arsenal_or_derived():
+			var entry: Dictionary = entry_value as Dictionary
+			mastery_by_type[str(entry.get("type", ""))] = float(entry.get("mastery", 0.0))
+		var first_pitch: bool = true
+		for type_key in PSPitchTypes.ALL_TYPES:
+			if not mastery_by_type.has(type_key):
+				continue
+			row["pitch_%s" % type_key] = PSAbilityScale.z_to_display(float(mastery_by_type[type_key]))
+			cols.append({"title": str(PITCH_SHORT.get(type_key, type_key)), "key": "pitch_%s" % type_key, "w": 52, "align": "c",
+				"fmt": "ability_bar", "sep_before": first_pitch, "group": ability_group})
+			first_pitch = false
+	else:
+		for pos in APTITUDE_POSITIONS:
+			var apt: int = TeamSetupBuilder.position_aptitude(view_record, pos)
+			row["apt_%d" % pos] = apt if apt > 0 else "-"
+			cols.append({"title": str(PSPlayer.POSITION_SHORT_KEYS[pos]), "key": "apt_%d" % pos, "w": 40, "align": "c",
+				"fmt": "ability_bar", "sep_before": pos == APTITUDE_POSITIONS[0], "group": "group.aptitudes"})
+
+	_draw_data_table(DETAIL_TOP, cols, [row], {
+		"title": Loc.t("screen.player_detail"),
+		"row_h": DETAIL_TOP_ROW_H,
+		"cell_size": LIST_CELL_SIZE,
+		"bottom_pad": 4.0,
+	})
 
 
-func _draw_season_stats() -> void:
-	_panel(SEASON, Loc.t("roster.season_stats"))
-	var record: PSPlayerSeasonRecord = _find_record(_selected_id)
+# 下段: 一軍成績 / 二軍成績 / 直近 RECENT_WINDOW_DAYS 日 の 3 行比較表。
+# 二軍成績は farm_* コンテナからのみ読み、一軍成績とは混ぜない。
+@warning_ignore("incompatible_ternary")
+func _draw_stat_compare_table(record: PSPlayerSeasonRecord) -> void:
+	var title: String = Loc.t("roster.season_stats")
 	if record == null:
-		_text(Loc.t("roster.no_appearances"), Vector2(SEASON.position.x + 18, SEASON.position.y + 70), 14, MUTED)
+		_draw_data_table(DETAIL_STATS, [], [], {"title": title, "empty_text": Loc.t("roster.no_appearances")})
 		return
+	var pitcher: bool = record.is_pitcher()
 	var war: Dictionary = _war_by_id.get(record.player_id, {}) as Dictionary
-	var cells: Array = _pitcher_season_cells(record, war) if record.is_pitcher() else _batter_season_cells(record, war)
-	_draw_stat_grid(SEASON, cells, 4)
+	var recent: Dictionary = _recent_window_stats(record)
+	var rows: Array
+	if pitcher:
+		var played: bool = record.pitcher_stats.outs_pitched > 0
+		rows = [
+			_pitcher_compare_row(Loc.t("roster.compare.first_team"), record.pitcher_stats, ("%0.2f" % float(war.get("fip", 0.0))) if played and war.has("fip") else "-", float(war.get("war", 0.0)) if played else "-"),
+			_pitcher_compare_row(Loc.t("roster.compare.second_team"), record.farm_pitcher_stats, "-", "-"),
+			_pitcher_compare_row(Loc.t("roster.compare.recent", {"days": RECENT_WINDOW_DAYS}), recent["pitcher"] as PSPitcherStats, "-", "-"),
+		]
+	else:
+		var ad: PSAdvancedStats = record.advanced_stats
+		var played_b: bool = ad != null and ad.plate_appearances > 0
+		var farm_ad: PSAdvancedStats = record.farm_advanced_stats
+		var farm_played: bool = farm_ad != null and farm_ad.plate_appearances > 0
+		rows = [
+			_batter_compare_row(Loc.t("roster.compare.first_team"), record.batter_stats, ad.woba() if played_b else "-", float(war.get("war", 0.0)) if played_b else "-"),
+			_batter_compare_row(Loc.t("roster.compare.second_team"), record.farm_batter_stats, farm_ad.woba() if farm_played else "-", "-"),
+			_batter_compare_row(Loc.t("roster.compare.recent", {"days": RECENT_WINDOW_DAYS}), recent["batter"] as PSBatterStats, "-", "-"),
+		]
+	_draw_data_table(DETAIL_STATS, _compare_columns(pitcher), rows, {
+		"title": title,
+		"row_h": DETAIL_STATS_ROW_H,
+		"cell_size": LIST_CELL_SIZE,
+		"bottom_pad": 4.0,
+	})
 
 
-# 直近 RECENT_WINDOW_DAYS 日のスナップショット差分。高度指標は窓別に持てないので基本+派生率のみ。
-func _draw_recent_stats() -> void:
-	_panel(RECENT, Loc.t("roster.recent_two_weeks"))
-	var record: PSPlayerSeasonRecord = _find_record(_selected_id)
-	if record == null:
-		_text(Loc.t("roster.no_appearances"), Vector2(RECENT.position.x + 18, RECENT.position.y + 70), 14, MUTED)
-		return
+func _compare_columns(pitcher: bool) -> Array:
+	var cols: Array = [
+		{"title": "roster.col.category", "key": "label", "w": 120, "align": "l", "fmt": "str", "strong": true, "group": "roster.group.compare"},
+	]
+	if pitcher:
+		cols.append_array([
+			{"title": "col.appearances", "key": "g", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_app"},
+			{"title": "col.games_started", "key": "gs", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+			{"title": "col.innings", "key": "ip", "w": 66, "align": "r", "fmt": "str", "group": "group.pitching_app"},
+			{"title": "col.wins", "key": "w", "w": 50, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_dec"},
+			{"title": "col.losses", "key": "l", "w": 50, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+			{"title": "stat.saves", "key": "sv", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+			{"title": "stat.holds", "key": "hld", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+			{"title": "stat.era", "key": "era", "w": 62, "align": "r", "fmt": "f2", "strong": true, "sep_before": true, "group": "group.pitching_rates"},
+			{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+			{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+			{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_detail"},
+			{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+			{"title": "FIP", "key": "fip", "w": 56, "align": "r", "fmt": "str", "sep_before": true, "group": "group.eval"},
+			{"title": "WAR", "key": "war", "w": 56, "align": "r", "fmt": "f1s", "strong": true, "group": "group.eval"},
+		])
+	else:
+		cols.append_array([
+			{"title": "col.games", "key": "g", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting1"},
+			{"title": "col.pa", "key": "pa", "w": 56, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+			{"title": "stat.hits", "key": "h", "w": 52, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting2"},
+			{"title": "stat.home_runs", "key": "hr", "w": 56, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+			{"title": "stat.rbi", "key": "rbi", "w": 52, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+			{"title": "stat.stolen_bases", "key": "sb", "w": 52, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+			{"title": "stat.avg", "key": "avg", "w": 62, "align": "r", "fmt": "rate", "strong": true, "sep_before": true, "group": "group.batting_rates"},
+			{"title": "stat.obp", "key": "obp", "w": 62, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+			{"title": "OPS", "key": "ops", "w": 62, "align": "r", "fmt": "rate", "strong": true, "group": "group.batting_rates"},
+			{"title": "wOBA", "key": "woba", "w": 62, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+			{"title": "col.walks", "key": "bb", "w": 52, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_discipline"},
+			{"title": "col.strikeouts_batter", "key": "so", "w": 52, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+			{"title": "WAR", "key": "war", "w": 56, "align": "r", "fmt": "f1s", "strong": true, "sep_before": true, "group": "group.eval"},
+		])
+	return cols
+
+
+@warning_ignore("incompatible_ternary")
+func _batter_compare_row(label: String, bs: PSBatterStats, woba: Variant, war_value: Variant) -> Dictionary:
+	var has_ab: bool = bs.at_bats > 0
+	return {
+		"label": label,
+		"g": bs.games, "pa": bs.plate_appearances, "h": bs.hits, "hr": bs.home_runs,
+		"rbi": bs.runs_batted_in, "sb": bs.stolen_bases,
+		"avg": bs.batting_average() if has_ab else "-",
+		"obp": bs.on_base_percentage() if bs.plate_appearances > 0 else "-",
+		"ops": bs.ops() if has_ab else "-",
+		"woba": woba,
+		"bb": bs.walks, "so": bs.strikeouts,
+		"war": war_value,
+	}
+
+
+@warning_ignore("incompatible_ternary")
+func _pitcher_compare_row(label: String, ps: PSPitcherStats, fip: Variant, war_value: Variant) -> Dictionary:
+	var thrown: bool = ps.outs_pitched > 0
+	return {
+		"label": label,
+		"g": ps.games, "gs": ps.starts, "ip": _ip_str(ps),
+		"w": ps.wins, "l": ps.losses, "sv": ps.saves, "hld": ps.holds,
+		"era": ps.era() if thrown else "-",
+		"whip": ps.whip() if thrown else "-",
+		"k9": ps.strikeouts_per_nine() if thrown else "-",
+		"so": ps.strikeouts, "bb": ps.walks,
+		"fip": fip,
+		"war": war_value,
+	}
+
+
+# 直近 RECENT_WINDOW_DAYS 日のスナップショット差分 ({batter, pitcher})。高度指標は窓別に持てないので基本成績のみ。
+func _recent_window_stats(record: PSPlayerSeasonRecord) -> Dictionary:
 	var snap: Dictionary = {}
 	var season: PSSeason = AppState.current_season
 	if season != null:
@@ -478,125 +644,10 @@ func _draw_recent_stats() -> void:
 	# ベースライン無し (序盤等) はシーズン頭からの累計を窓とみなす。
 	var base_b: PSBatterStats = PSBatterStats.from_dict(snap.get("batter", {}) as Dictionary) if not snap.is_empty() else PSBatterStats.new()
 	var base_p: PSPitcherStats = PSPitcherStats.from_dict(snap.get("pitcher", {}) as Dictionary) if not snap.is_empty() else PSPitcherStats.new()
-	var cells: Array
-	if record.is_pitcher():
-		cells = _pitcher_basic_cells(record.pitcher_stats.subtract_from(base_p))
-	else:
-		cells = _batter_basic_cells(record.batter_stats.subtract_from(base_b))
-	_draw_stat_grid(RECENT, cells, 2)
-
-
-func _batter_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Array:
-	var bs: PSBatterStats = record.batter_stats
-	var ad: PSAdvancedStats = record.advanced_stats
-	var played: bool = ad != null and ad.plate_appearances > 0
-	var oaa_total: float = 0.0
-	if ad != null:
-		oaa_total = float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))
-	return [
-		{"label": "col.games", "value": str(bs.games)},
-		{"label": "col.pa", "value": str(bs.plate_appearances)},
-		{"label": "stat.hits", "value": str(bs.hits)},
-		{"label": "stat.home_runs", "value": str(bs.home_runs)},
-		{"label": "stat.rbi", "value": str(bs.runs_batted_in)},
-		{"label": "stat.doubles", "value": str(bs.doubles)},
-		{"label": "stat.stolen_bases", "value": str(bs.stolen_bases)},
-		{"label": "col.walks", "value": str(bs.walks)},
-		{"label": "col.strikeouts_batter", "value": str(bs.strikeouts)},
-		{"label": "stat.avg", "value": _rate_short(bs.batting_average())},
-		{"label": "stat.obp", "value": _rate_short(bs.on_base_percentage())},
-		{"label": "OPS", "value": _rate_short(bs.ops())},
-		{"label": "wOBA", "value": _rate_short(ad.woba()) if played else "-"},
-		{"label": "wRC+", "value": str(int(round(float(war.get("wrc_plus", 0.0))))) if played else "-"},
-		# 色は表示値 (_signed1 = 小数1桁) に合わせて丸めてから判定する。生値で判定すると
-		# "+0.0" と出ている OAA が緑/赤になる (基底 _pm_color は 0 ちょうどしか中立にしない)。
-		{"label": "OAA", "value": _signed1(oaa_total) if played else "-", "color": _pm_color(snappedf(oaa_total, 0.1))},
-		{"label": "WAR", "value": _signed1(float(war.get("war", 0.0))) if played else "-", "color": _war_color(float(war.get("war", 0.0)))},
-	]
-
-
-# 直近窓用の基本成績 (今季成績の項目から派生率/カウントのみを抜粋。高度指標は窓別に持てない)。
-func _batter_basic_cells(bs: PSBatterStats) -> Array:
-	return [
-		{"label": "col.games", "value": str(bs.games)},
-		{"label": "col.pa", "value": str(bs.plate_appearances)},
-		{"label": "stat.hits", "value": str(bs.hits)},
-		{"label": "stat.home_runs", "value": str(bs.home_runs)},
-		{"label": "stat.rbi", "value": str(bs.runs_batted_in)},
-		{"label": "stat.avg", "value": _rate_short(bs.batting_average())},
-		{"label": "stat.obp", "value": _rate_short(bs.on_base_percentage())},
-		{"label": "OPS", "value": _rate_short(bs.ops())},
-	]
-
-
-func _pitcher_basic_cells(ps: PSPitcherStats) -> Array:
-	var thrown: bool = ps.outs_pitched > 0
-	return [
-		{"label": "col.appearances", "value": str(ps.games)},
-		{"label": "col.innings", "value": _ip_str(ps)},
-		{"label": "col.wins", "value": str(ps.wins)},
-		{"label": "col.losses", "value": str(ps.losses)},
-		{"label": "stat.saves", "value": str(ps.saves)},
-		{"label": "stat.era", "value": ("%0.2f" % ps.era()) if thrown else "-.--"},
-		{"label": "WHIP", "value": ("%0.2f" % ps.whip()) if thrown else "-.--"},
-		{"label": "K/9", "value": ("%0.2f" % ps.strikeouts_per_nine()) if thrown else "-"},
-	]
-
-
-func _pitcher_season_cells(record: PSPlayerSeasonRecord, war: Dictionary) -> Array:
-	var ps: PSPitcherStats = record.pitcher_stats
-	var thrown: bool = ps.outs_pitched > 0
-	return [
-		{"label": "col.appearances", "value": str(ps.games)},
-		{"label": "col.games_started", "value": str(ps.starts)},
-		{"label": "col.wins", "value": str(ps.wins)},
-		{"label": "col.losses", "value": str(ps.losses)},
-		{"label": "stat.saves", "value": str(ps.saves)},
-		{"label": "stat.holds", "value": str(ps.holds)},
-		{"label": "col.innings", "value": _ip_str(ps)},
-		{"label": "col.hits_allowed", "value": str(ps.hits_allowed)},
-		{"label": "stat.hr_allowed", "value": str(ps.home_runs_allowed)},
-		{"label": "col.walks_allowed", "value": str(ps.walks)},
-		{"label": "stat.strikeouts", "value": str(ps.strikeouts)},
-		{"label": "stat.era", "value": ("%0.2f" % ps.era()) if thrown else "-.--"},
-		{"label": "FIP", "value": ("%0.2f" % float(war.get("fip", 0.0))) if thrown and war.has("fip") else "-.--"},
-		{"label": "WHIP", "value": ("%0.2f" % ps.whip()) if thrown else "-.--"},
-		{"label": "K/9", "value": ("%0.2f" % ps.strikeouts_per_nine()) if thrown else "-"},
-		{"label": "WAR", "value": _signed1(float(war.get("war", 0.0))) if thrown else "-", "color": _war_color(float(war.get("war", 0.0)))},
-	]
-
-
-# パネルを埋めるラベル/値グリッド。cols 列・行数は件数から算出し、行高は余白なく全高に伸ばす。
-# 枠付きミニカードではなく枠なしセル+ヘアライン区切り (列間/行間) で刻む。
-func _draw_stat_grid(panel: Rect2, cells: Array, cols: int) -> void:
-	if cells.is_empty():
-		return
-	var px: float = panel.position.x + 18
-	var top_y: float = panel.position.y + 56
-	var avail_w: float = panel.size.x - 36
-	var avail_h: float = panel.end.y - 14 - top_y
-	var rows: int = ceili(float(cells.size()) / float(cols))
-	var cell_w: float = avail_w / float(cols)
-	var row_h: float = avail_h / float(rows)
-	for c in range(1, cols):
-		var lx: float = px + float(c) * cell_w
-		_line(Vector2(lx, top_y), Vector2(lx, top_y + float(rows) * row_h), HAIRLINE, 1.0)
-	for r in range(1, rows):
-		var ly: float = top_y + float(r) * row_h
-		_line(Vector2(px, ly), Vector2(px + avail_w, ly), HAIRLINE, 1.0)
-	for i in range(cells.size()):
-		var cell: Dictionary = cells[i] as Dictionary
-		var col: int = i % cols
-		var row: int = floori(float(i) / float(cols))
-		var cx: float = px + float(col) * cell_w
-		var cy: float = top_y + float(row) * row_h
-		var color: Color = cell.get("color", TEXT) as Color
-		_text(Loc.t(str(cell["label"])), Vector2(cx + 12, cy + row_h * 0.42), FS_LABEL, MUTED, cell_w - 22)
-		_text_right(str(cell["value"]), cx + cell_w - 12, cy + row_h * 0.80, 17, color, cell_w - 22)
-
-
-func _signed1(value: float) -> String:
-	return "%+.1f" % value
+	return {
+		"batter": record.batter_stats.subtract_from(base_b),
+		"pitcher": record.pitcher_stats.subtract_from(base_p),
+	}
 
 
 func _draw_drag_ghost() -> void:
@@ -856,19 +907,26 @@ func _commit_pending_controlled(season: PSSeason) -> void:
 func _record_row(record: PSPlayerSeasonRecord) -> Dictionary:
 	var chip: Dictionary = _classify(record.player_id, record.is_pitcher(), record.role, record.position, _active_ids.has(record.player_id))
 	var war: float = float((_war_by_id.get(record.player_id, {}) as Dictionary).get("war", 0.0))
+	var games: int = record.pitcher_stats.games if record.is_pitcher() else record.batter_stats.games
 	return {
 		"id": record.player_id,
+		"__meta": record.player_id,
 		"role": chip["text"],
 		"role_color": chip["color"],
+		"role_dev": false,
 		"order": int(chip["order"]),
 		"name": record.name,
+		"jersey": record.jersey_number,
 		"age": record.age,
-		"war": war,
-		"war_str": "%0.1f" % war,
-		"has_war": true,
-		"eval": PlayerValueEvaluator.overall_score(record),
+		"hand": _hand_name(record.throwing_hand) + _hand_name(record.batting_side),
+		"fatigue": _fatigue_pct(record.fatigue),
 		"note": _note_for(record.foreign_player, record.injury_days, record.counts_toward_foreign_slot()),
-		"note_injury": record.injury_days > 0,
+		"note_color": RED if record.injury_days > 0 else MUTED,
+		"war": war,
+		"war_sort": war,
+		"eval": PlayerValueEvaluator.overall_score(record),
+		"games": games,
+		"rate": _rate_text(record),
 	}
 
 
@@ -877,18 +935,36 @@ func _dev_row(player: PSPlayer) -> Dictionary:
 	# 育成は出場記録が無い (= WAR 算出不可) ので "-" 表示。
 	return {
 		"id": player.id,
+		"__meta": player.id,
 		"role": chip["text"],
 		"role_color": chip["color"],
+		"role_dev": true,
 		"order": int(chip["order"]),
 		"name": player.name,
+		"jersey": player.jersey_number,
 		"age": player.age,
-		"war": 0.0,
-		"war_str": "-",
-		"has_war": false,
-		"eval": int(Offseason.player_value_score(player)),
+		"hand": _hand_name(player.throwing_hand) + _hand_name(player.batting_side),
+		"fatigue": _fatigue_pct(player.fatigue),
 		"note": _note_for(player.foreign_player, player.injury_days, player.counts_toward_foreign_slot()),
-		"note_injury": player.injury_days > 0,
+		"note_color": RED if player.injury_days > 0 else MUTED,
+		"war": "-",
+		"war_sort": 0.0,
+		"eval": int(Offseason.player_value_score(player)),
+		"games": "-",
+		"rate": "-",
 	}
+
+
+# 一覧の「率/防」。野手は打率、投手は防御率。打数/投球回が無ければ "-"。
+func _rate_text(record: PSPlayerSeasonRecord) -> String:
+	if record.is_pitcher():
+		return ("%0.2f" % record.pitcher_stats.era()) if record.pitcher_stats.outs_pitched > 0 else "-"
+	return _rate_short(record.batter_stats.batting_average()) if record.batter_stats.at_bats > 0 else "-"
+
+
+# 疲労を 0〜100% へ正規化 (FATIGUE_MAX 基準)。
+func _fatigue_pct(fatigue: int) -> int:
+	return clampi(int(round(float(fatigue) * 100.0 / float(GameSimulator.FATIGUE_MAX))), 0, 100)
 
 
 func _note_for(foreign: bool, injury_days: int, foreign_slot: bool = true) -> String:
@@ -1023,21 +1099,6 @@ func _compute_stats() -> Dictionary:
 	}
 
 
-func _bio_line(player: PSPlayer) -> String:
-	var parts: Array = []
-	parts.append(Loc.t("player.age_and_years", {"age": player.age, "years": player.years}))
-	parts.append(Loc.t("player.height_weight", {"height": player.height, "weight": player.weight}))
-	parts.append(Loc.t("player.throws_bats", {"throws": _hand_name(player.throwing_hand), "bats": _hand_name(player.batting_side)}))
-	if not player.hometown.is_empty():
-		parts.append(player.hometown)
-	return "  ".join(parts)
-
-
-func _contract_line(player: PSPlayer) -> String:
-	var roster: String = Loc.t("common.development_chip") if player.development_player else PSPlayer.registered_roster_label(player.registered_roster)
-	return Loc.t("roster.contract_line", {"roster": roster, "salary": _format_money(player.salary)})
-
-
 func _is_valid_drop(src: String, dst: String) -> bool:
 	if src == "active" and dst == "inactive":
 		return true
@@ -1048,23 +1109,11 @@ func _is_valid_drop(src: String, dst: String) -> bool:
 	return false
 
 
-func _eval_color(value: int) -> Color:
-	if value >= 75:
-		return BLUE
-	if value >= 66:
-		return GREEN
-	if value >= 52:
-		return TEXT
-	return MUTED
+func _eval_color(_value: int) -> Color:
+	return TEXT
 
 
-func _war_color(war: float) -> Color:
-	if war >= 2.0:
-		return GREEN
-	if war < 0.0:
-		return RED
-	if war <= 0.0:
-		return FAINT
+func _war_color(_war: float) -> Color:
 	return TEXT
 
 

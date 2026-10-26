@@ -12,6 +12,9 @@ extends "res://ui/components/dashboard_screen.gd"
 #   - 直近の対戦結果 / 今後の対戦予定 (schedule から自軍視点で抽出)。
 #   - チーム内成績ランキング: 野手(打率/本塁打/打点/OPS/WAR) と投手(勝利/防御率/WAR/FIP/登板) を
 #     色分け (野手=BLUE / 投手=RED) し各 Top3。防御率は先発限定。
+# 打線・ローテ・直近5年・日程・ランキング・デプス表は `_draw_data_table` の共通テーブル
+# (2段見出し + pos_badge / #背番号 / eval_badge / rank)。デプス表の戦力バーと日程の勝敗マークは
+# 表の幾何 (`_table_column_rect` / `_table_row_top`) から位置を取って重ね描きする。
 # 重い集計は _refresh で1度だけ行いキャッシュし、_draw は描画専念。
 # 打順/ローテ/勝ちパターンは保存値 (get_lineup/get_rotation) を優先、無ければ preview を表示。
 
@@ -49,34 +52,17 @@ const TAB_H: float = 34.0
 const DEPTH_RECT: Rect2 = Rect2(262, 246, 1638, 670)
 const DEPTH_NOTE_RECT: Rect2 = Rect2(262, 932, 1638, 116)
 
-# デプスチャート行の x 座標 (base)。バーは残り幅から逆算せず固定で置く。
-const D_CHIP_X: float = 280.0
-const D_COUNT_R: float = 440.0     # 人数 右端
-const D_CUR_BAR_X: float = 458.0   # 現在バー左
-const D_BAR_W: float = 256.0
-const D_CUR_GRADE_X: float = 724.0
-const D_CUR_RANK_X: float = 776.0
-const D_PRO_BAR_X: float = 888.0   # 将来バー左
-const D_PRO_GRADE_X: float = 1154.0
-const D_PRO_RANK_X: float = 1206.0
-const D_GRADE_W: float = 44.0
-const D_AGE_R: float = 1340.0
-const RANK_CHIP_W: float = 72.0
+# デプス表の行高上限と、戦力バーの高さ (列セル内に重ね描きする)。
+const DEPTH_ROW_H_MAX: float = 44.0
+const DEPTH_BAR_H: float = 14.0
+const DEPTH_BAR_PAD: float = 8.0
 
-# 主力 / 最有望株の2ブロック。**同じ内部レイアウト** (名前 / 育成chip / 年齢 / 総合) を共有し、
-# 育成 chip の枠は主力側では空くだけ (幾何を揃えるため確保しておく)。
-# 幅は残り領域の**等分**で決める — 個別に x を書くと片方だけ広く見える。
-# 各ブロック内は右端に D_PLAYER_GUTTER の余白を残し、ブロック間 / 表の右端の空きを揃える。
-const D_PLAYER_AREA_L: float = 1362.0
-const D_PLAYER_AREA_R: float = 1882.0
-const D_PLAYER_BLOCK_W: float = (D_PLAYER_AREA_R - D_PLAYER_AREA_L) / 2.0
-const D_PLAYER_GUTTER: float = 14.0
-const D_HOLDER_X: float = D_PLAYER_AREA_L
-const D_PROSPECT_X: float = D_PLAYER_AREA_L + D_PLAYER_BLOCK_W
-const D_PLAYER_NAME_W: float = 108.0
-const D_PLAYER_CHIP_OFF: float = 112.0
-const D_PLAYER_AGE_ROFF: float = D_PLAYER_BLOCK_W - D_PLAYER_GUTTER - 50.0  # 年齢 右端 = ブロック左 + これ
-const D_PLAYER_VALUE_ROFF: float = D_PLAYER_BLOCK_W - D_PLAYER_GUTTER      # 総合 右端
+# 日程表 (直近の結果 / 今後の予定) の固定行高。勝敗マークの重ね描きが行位置を知る必要がある。
+const SCHEDULE_ROW_H: float = 34.0
+
+# チーム内ランキングの各部門カード (ミニ表) の幾何。
+const RANK_CARD_HEADER_TOP: float = 44.0
+const RANK_CARD_ROW_H: float = 24.0
 
 var _team_id: int = 0
 var _team_ids: Array = []                 # 選択候補 (リーグ→id)
@@ -187,9 +173,9 @@ func _draw_statbar() -> void:
 	var rs_note: Dictionary = _rank_note(int(_metric_ranks.get("rs", 0)))
 	var ra_note: Dictionary = _rank_note(int(_metric_ranks.get("ra", 0)))
 	var row1: Array = [
-		{"label": Loc.t("home.stat.rank"), "value": rank_text, "color": BLUE},
+		{"label": Loc.t("home.stat.rank"), "value": rank_text},
 		{"label": Loc.t("home.stat.record"), "value": Loc.t("common.record_value", {"w": wins, "l": losses, "d": draws})},
-		{"label": Loc.t("col.win_pct"), "value": _rate_short(_stats.win_rate() if _stats != null else 0.0), "color": GREEN},
+		{"label": Loc.t("col.win_pct"), "value": _rate_short(_stats.win_rate() if _stats != null else 0.0)},
 		{"label": Loc.t("home.stat.games_back"), "value": ("-" if _gb <= 0.0 else _float1(_gb))},
 		{"label": Loc.t("col.runs"), "value": str(rs), "note": str(rs_note["text"]), "note_color": rs_note["color"] as Color},
 		{"label": Loc.t("col.runs_allowed_full"), "value": str(ra), "note": str(ra_note["text"]), "note_color": ra_note["color"] as Color},
@@ -225,215 +211,210 @@ func _rank_note(rank: int) -> Dictionary:
 # --- 打線 (スタメン打順) ---
 
 func _draw_lineup(rect: Rect2) -> void:
-	_panel(rect, Loc.t("team_detail.lineup_panel"))
+	_draw_data_table(rect, _lineup_columns(), _lineup_table_rows(), {
+		"title": Loc.t("team_detail.lineup_panel"),
+		"empty_text": Loc.t("team_detail.no_lineup"),
+	})
 
-	# 右側の値列 (右端からの右寄せ基準): 打率 / 本 / OPS / WAR
-	var c_avg: float = rect.end.x - 176.0
-	var c_hr: float = rect.end.x - 130.0
-	var c_ops: float = rect.end.x - 72.0
-	var c_war: float = rect.end.x - 14.0
-	var name_right: float = rect.end.x - 230.0
 
-	var hy: float = rect.position.y + 58
-	var sep_x: float = name_right + 10.0
-	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("lineup.col.order"), Vector2(rect.position.x + 18, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(Loc.t("box.col.pos"), Vector2(rect.position.x + 64, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(Loc.t("col.player"), Vector2(rect.position.x + 98, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("col.avg"), c_avg, hy, 11, MUTED, 52, true)
-	_text_right(Loc.t("col.hr"), c_hr, hy, 11, MUTED, 40, true)
-	_text_right("OPS", c_ops, hy, 11, MUTED, 52, true)
-	_text_right("WAR", c_war, hy, 11, MUTED, 46, true)
-	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
+# 打順 / 守 / 選手 | 総合 | 打率 本 点 OPS WAR。
+func _lineup_columns() -> Array:
+	return [
+		{"title": "lineup.col.order", "key": "order", "w": 34, "align": "c", "fmt": "int", "group": "group.profile"},
+		{"title": "box.col.pos", "key": "pos", "w": 40, "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player", "key": "name", "w": 130, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.overall", "key": "overall", "w": 42, "align": "c", "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+		{"title": "col.avg", "key": "avg", "w": 46, "align": "r", "fmt": "rate", "sep_before": true, "group": "group.fielder_stats"},
+		{"title": "col.hr", "key": "hr", "w": 34, "align": "r", "fmt": "int", "muted": true, "group": "group.fielder_stats"},
+		{"title": "stat.rbi", "key": "rbi", "w": 36, "align": "r", "fmt": "int", "muted": true, "group": "group.fielder_stats"},
+		{"title": "stat.ops", "key": "ops", "w": 48, "align": "r", "fmt": "rate", "group": "group.fielder_stats"},
+		{"title": "stat.war", "key": "war", "w": 44, "align": "r", "fmt": "f1s", "strong": true, "group": "group.fielder_stats"},
+	]
 
-	if _lineup_rows.is_empty():
-		_text(Loc.t("team_detail.no_lineup"), Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
-		return
 
-	var top: float = rect.position.y + 74.0
-	var row_h: float = (rect.end.y - top - 10.0) / 9.0
+# 投手が打順に入る (DH なし) 枠は成績を "-" にする。
+func _lineup_table_rows() -> Array:
+	var rows: Array = []
 	for i in range(_lineup_rows.size()):
-		var row: Dictionary = _lineup_rows[i] as Dictionary
-		var ry: float = top + float(i) * row_h
-		var ty: float = ry + row_h * 0.5 + 5.0
-		var pos: int = int(row.get("pos", 0))
-		var is_pitcher: bool = pos == 1
-		_text(str(i + 1), Vector2(rect.position.x + 24, ty), 14, BLUE)
-		_chip(Rect2(rect.position.x + 56, ry + row_h * 0.5 - 11, 30, 22), str(row.get("pos_label", "")), _pos_color(pos))
-		_text(str(row.get("name", "")), Vector2(rect.position.x + 98, ty), 14, TEXT, name_right - (rect.position.x + 98), HORIZONTAL_ALIGNMENT_LEFT, true)
-		if is_pitcher:
-			_text_right("-", c_avg, ty, 13, FAINT, 52)
-			_text_right("-", c_hr, ty, 13, FAINT, 40)
-			_text_right("-", c_ops, ty, 13, FAINT, 52)
-			_text_right("-", c_war, ty, 13, FAINT, 46)
+		var src: Dictionary = _lineup_rows[i] as Dictionary
+		var pos: int = int(src.get("pos", 0))
+		var row: Dictionary = {
+			"order": i + 1,
+			"pos": str(src.get("pos_label", "")), "pos_color": _pos_color(pos),
+			"name": str(src.get("name", "")), "jersey": int(src.get("jersey", 0)),
+			"overall": src.get("overall", "-"),
+		}
+		if pos == 1:
+			for key in ["avg", "hr", "rbi", "ops", "war"]:
+				row[key] = "-"
 		else:
-			_text_right(_rate_short(float(row.get("avg", 0.0))), c_avg, ty, 13, TEXT, 52)
-			_text_right(str(int(row.get("hr", 0))), c_hr, ty, 13, MUTED, 40)
-			_text_right("%0.3f" % float(row.get("ops", 0.0)), c_ops, ty, 13, TEXT, 52)
-			_text_right("%0.1f" % float(row.get("war", 0.0)), c_war, ty, 13, MUTED, 46)
-		# 自前描画テーブルなので行区切りは手でヘアラインを引く。
-		_line(Vector2(rect.position.x + 16, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
-	# 識別ブロック(打順/守/選手)と成績ブロック(打率〜WAR)の境界。
-	_line(Vector2(sep_x, hy - 18), Vector2(sep_x, top + float(_lineup_rows.size()) * row_h), HAIRLINE, 1.0)
+			row["avg"] = float(src.get("avg", 0.0))
+			row["hr"] = int(src.get("hr", 0))
+			row["rbi"] = int(src.get("rbi", 0))
+			row["ops"] = float(src.get("ops", 0.0))
+			row["war"] = float(src.get("war", 0.0))
+		rows.append(row)
+	return rows
 
 
 # --- ローテーション・勝ちパターン ---
 
 func _draw_rotation(rect: Rect2) -> void:
-	_panel(rect, Loc.t("team_detail.rotation_panel"))
+	_draw_data_table(rect, _rotation_columns(), _rotation_table_rows(), {
+		"title": Loc.t("team_detail.rotation_panel"),
+		"empty_text": Loc.t("team_detail.no_rotation"),
+		"row_h_max": 36.0,
+	})
 
-	# 勝ちパターンはパネル下部の固定帯に置き、先発ローテはその上の領域に収める
-	# (枠からはみ出さないよう、勝ちパターンの高さから逆算する)。
-	var wp_count: int = min(3, _win_pattern.size())
-	var wp_row_h: float = 26.0
-	var wp_band: float = 30.0 + float(max(1, wp_count)) * wp_row_h   # ラベル + 行
-	var wp_label_y: float = rect.end.y - wp_band
 
-	# 値列 (右端からの右寄せ基準): 勝敗 / 防御率 / WAR
-	var c_wl: float = rect.end.x - 150.0
-	var c_era: float = rect.end.x - 72.0
-	var c_war: float = rect.end.x - 14.0
+# 役割 / 投手 | 総合 | 登板 勝敗 S/H 防御率 WAR。先発ローテと勝ちパターンを 1 枚に並べる。
+func _rotation_columns() -> Array:
+	return [
+		{"title": "col.role", "key": "role", "w": 44, "align": "c", "fmt": "pos_badge", "group": "group.profile"},
+		{"title": "col.player", "key": "name", "w": 150, "align": "l", "fmt": "player_name", "strong": true, "group": "group.profile"},
+		{"title": "col.overall", "key": "overall", "w": 44, "align": "c", "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+		{"title": "col.appearances", "key": "games", "w": 44, "align": "r", "fmt": "int", "muted": true, "sep_before": true, "group": "group.pitcher_stats"},
+		{"title": "home.stat.record", "key": "wl", "w": 72, "align": "r", "fmt": "str", "group": "group.pitcher_stats"},
+		{"title": "S/H", "key": "sh", "w": 48, "align": "r", "fmt": "int", "muted": true, "group": "group.pitcher_stats"},
+		{"title": "stat.era", "key": "era", "w": 54, "align": "r", "fmt": "str", "group": "group.pitcher_stats"},
+		{"title": "stat.war", "key": "war", "w": 46, "align": "r", "fmt": "str", "strong": true, "group": "group.pitcher_stats"},
+	]
 
-	var sub_y: float = rect.position.y + 56
-	var rot_sep_x: float = c_wl - 10.0
-	_round(Rect2(rect.position.x + 16, sub_y - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("team_detail.rotation"), Vector2(rect.position.x + 18, sub_y), 13, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("home.stat.record"), c_wl, sub_y, 11, MUTED, 78, true)
-	_text_right(Loc.t("stat.era"), c_era, sub_y, 11, MUTED, 60, true)
-	_text_right("WAR", c_war, sub_y, 11, MUTED, 46, true)
-	_line(Vector2(rect.position.x + 16, sub_y + 8), Vector2(rect.end.x - 18, sub_y + 8), BORDER, 1.5)
 
-	var rot_top: float = sub_y + 18.0
-	var rot_area: float = wp_label_y - 10.0 - rot_top
-	if _rotation_rows.is_empty():
-		_text(Loc.t("team_detail.no_rotation"), Vector2(rect.position.x + 20, rot_top + 24), 13, MUTED)
-	else:
-		var rot_h: float = min(30.0, rot_area / float(_rotation_rows.size()))
-		for i in range(_rotation_rows.size()):
-			var row: Dictionary = _rotation_rows[i] as Dictionary
-			var ry: float = rot_top + float(i) * rot_h
-			var ty: float = ry + rot_h * 0.5 + 5.0
-			_round(Rect2(rect.position.x + 18, ry + rot_h * 0.5 - 11, 26, 22), Color(PINK.r, PINK.g, PINK.b, 0.18), Color(PINK.r, PINK.g, PINK.b, 0.55), 6)
-			_text("%d" % int(row.get("num", i + 1)), Vector2(rect.position.x + 18, ty), 14, PINK, 26, HORIZONTAL_ALIGNMENT_CENTER)
-			_text(str(row.get("name", "")), Vector2(rect.position.x + 54, ty), 14, TEXT, c_wl - 78 - (rect.position.x + 54), HORIZONTAL_ALIGNMENT_LEFT, true)
-			_text_right(str(row.get("wl", "")), c_wl, ty, 13, TEXT, 78)
-			_text_right(str(row.get("era", "-.--")), c_era, ty, 13, TEXT, 60)
-			_text_right(str(row.get("war", "-")), c_war, ty, 13, MUTED, 46)
-			_line(Vector2(rect.position.x + 16, ry + rot_h), Vector2(rect.end.x - 18, ry + rot_h), HAIRLINE, 1.0)
-		_line(Vector2(rot_sep_x, sub_y - 18), Vector2(rot_sep_x, rot_top + float(_rotation_rows.size()) * rot_h), HAIRLINE, 1.0)
+# 先発ローテ (番号チップ=PINK) の下に勝ちパターン (セットアッパー / クローザー) を続ける。
+func _rotation_table_rows() -> Array:
+	var rows: Array = []
+	for src_value in _rotation_rows:
+		var src: Dictionary = src_value as Dictionary
+		rows.append(_pitcher_table_row(src, str(int(src.get("num", rows.size() + 1))), PINK))
+	for src_value in _win_pattern:
+		var src: Dictionary = src_value as Dictionary
+		rows.append(_pitcher_table_row(src, str(src.get("role", "")), src.get("color", RED) as Color))
+	return rows
 
-	# 勝ちパターン (セットアッパー / クローザー) — 下部固定帯
-	_line(Vector2(rect.position.x + 18, wp_label_y), Vector2(rect.end.x - 18, wp_label_y), BORDER, 1.5)
-	_text(Loc.t("team_detail.win_pattern"), Vector2(rect.position.x + 18, wp_label_y + 22), 13, MUTED)
-	if _win_pattern.is_empty():
-		_text(Loc.t("team_detail.no_relief"), Vector2(rect.position.x + 150, wp_label_y + 22), 13, MUTED)
-		return
-	var wy: float = wp_label_y + 30.0
-	for i in range(wp_count):
-		var entry: Dictionary = _win_pattern[i] as Dictionary
-		var color: Color = entry.get("color", RED) as Color
-		var cy: float = wy + wp_row_h * 0.5
-		_round(Rect2(rect.position.x + 18, cy - 11, 116, 22), Color(color.r, color.g, color.b, 0.18), Color(color.r, color.g, color.b, 0.55), 7)
-		_text(str(entry.get("role", "")), Vector2(rect.position.x + 18, cy + 5), 12, color, 116, HORIZONTAL_ALIGNMENT_CENTER)
-		_text(str(entry.get("name", "")), Vector2(rect.position.x + 146, cy + 5), 13, TEXT, c_wl - 78 - (rect.position.x + 146), HORIZONTAL_ALIGNMENT_LEFT, true)
-		_text_right(str(entry.get("wl", "")), c_wl, cy + 5, 13, MUTED, 78)
-		_text_right(str(entry.get("era", "-.--")), c_era, cy + 5, 13, MUTED, 60)
-		_text_right(str(entry.get("war", "-")), c_war, cy + 5, 13, MUTED, 46)
-		wy += wp_row_h
+
+func _pitcher_table_row(src: Dictionary, role_text: String, role_color: Color) -> Dictionary:
+	return {
+		"role": role_text, "role_color": role_color,
+		"name": str(src.get("name", "")), "jersey": int(src.get("jersey", 0)),
+		"overall": src.get("overall", "-"),
+		"games": src.get("games", "-"), "wl": str(src.get("wl", "")),
+		"sh": src.get("sh", "-"), "era": str(src.get("era", "-.--")), "war": str(src.get("war", "-")),
+	}
 
 
 # --- 直近5年のチーム成績 ---
 
 func _draw_history(rect: Rect2) -> void:
-	_panel(rect, Loc.t("team_detail.history_panel"))
+	_draw_data_table(rect, _history_columns(), _history_table_rows(), {
+		"title": Loc.t("team_detail.history_panel"),
+		"empty_text": Loc.t("team_detail.no_history"),
+		"row_h_max": 44.0,
+	})
 
-	var inner_x: float = rect.position.x + 18.0
-	var hy: float = rect.position.y + 58
-	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("col.year"), Vector2(inner_x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("home.stat.rank"), rect.position.x + 250, hy, 11, MUTED, 56, true)
-	_text_right(Loc.t("col.w_l_d"), rect.end.x - 96, hy, 11, MUTED, 120, true)
-	_text_right(Loc.t("col.win_pct"), rect.end.x - 18, hy, 11, MUTED, 64, true)
-	_line(Vector2(inner_x, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
 
-	if _recent5.is_empty():
-		_text(Loc.t("team_detail.no_history"), Vector2(inner_x, rect.position.y + 110), 13, MUTED)
-		return
+# 順位セル用。未確定 (0 以下) は欠損の "-" にする。
+func _rank_or_dash(rank: int) -> Variant:
+	if rank <= 0:
+		return "-"
+	return rank
 
-	var top: float = rect.position.y + 74.0
-	var row_h: float = min(52.0, (rect.end.y - top - 10.0) / float(_recent5.size()))
-	for i in range(_recent5.size()):
-		var row: Dictionary = _recent5[i] as Dictionary
-		var ry: float = top + float(i) * row_h
-		var ty: float = ry + row_h * 0.5 + 5.0
-		var rank: int = int(row.get("rank", 0))
-		var rank_color: Color = AMBER if rank == 1 else TEXT
-		_text(Loc.t("common.year_value", {"year": int(row.get("year", 0))}), Vector2(inner_x, ty), 14, TEXT, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-		# CS / 日本シリーズ進出時はその到達段階を chip で表示。
-		var ps_text: String = str(row.get("ps", ""))
+
+# 年度 順位 | 勝-敗-分 勝率 | ポストシーズン到達段階。
+func _history_columns() -> Array:
+	return [
+		{"title": "col.year", "key": "year", "w": 64, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+		{"title": "col.rank", "key": "rank", "w": 48, "align": "c", "fmt": "rank", "group": "group.history"},
+		{"title": "col.w_l_d", "key": "wld", "w": 96, "align": "r", "fmt": "str", "muted": true, "sep_before": true, "group": "group.standings_record"},
+		{"title": "col.win_pct", "key": "pct", "w": 60, "align": "r", "fmt": "rate", "group": "group.standings_record"},
+		{"title": "col.result", "key": "ps", "w": 130, "align": "l", "fmt": "str", "sep_before": true, "group": "postseason.title"},
+	]
+
+
+func _history_table_rows() -> Array:
+	var rows: Array = []
+	for src_value in _recent5:
+		var src: Dictionary = src_value as Dictionary
+		var rank: int = int(src.get("rank", 0))
+		var ps_text: String = str(src.get("ps", ""))
+		var row: Dictionary = {
+			"year": Loc.t("common.year_value", {"year": int(src.get("year", 0))}),
+			"rank": _rank_or_dash(rank),
+			"wld": "%d-%d-%d" % [int(src.get("w", 0)), int(src.get("l", 0)), int(src.get("d", 0))],
+			"pct": float(src.get("pct", 0.0)),
+			"ps": ps_text if not ps_text.is_empty() else "-",
+		}
 		if not ps_text.is_empty():
-			var ps_w: float = _measure(ps_text, 11) + 18.0
-			_chip(Rect2(inner_x + 62.0, ry + row_h * 0.5 - 10.0, ps_w, 20.0), ps_text, row.get("ps_color", MUTED) as Color)
-		_text_right(Loc.t("common.rank_value", {"rank": rank}) if rank > 0 else "-", rect.position.x + 250, ty, 14, rank_color, 56)
-		_text_right("%d-%d-%d" % [int(row.get("w", 0)), int(row.get("l", 0)), int(row.get("d", 0))], rect.end.x - 96, ty, 13, MUTED, 120)
-		_text_right(_rate_short(float(row.get("pct", 0.0))), rect.end.x - 18, ty, 13, TEXT, 64)
-		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
+			row["ps_color"] = src.get("ps_color", MUTED) as Color
+		rows.append(row)
+	return rows
 
 
 # --- 直近の対戦結果 / 今後の対戦予定 ---
 
 func _draw_schedule(rect: Rect2) -> void:
-	_panel(rect, Loc.t("team_detail.schedule_panel"))
-
+	# 左右 2 枚の表 (直近の結果 / 今後の予定)。
 	var gap: float = 16.0
-	var col_w: float = (rect.size.x - 36.0 - gap) / 2.0
-	var left_x: float = rect.position.x + 18.0
-	var right_x: float = left_x + col_w + gap
-	var head_y: float = rect.position.y + 60.0
-	_text(Loc.t("team_detail.recent_results"), Vector2(left_x, head_y), 13, MUTED)
-	_text(Loc.t("team_detail.upcoming"), Vector2(right_x, head_y), 13, MUTED)
-	_line(Vector2(left_x, head_y + 8), Vector2(left_x + col_w, head_y + 8), BORDER_SOFT, 1.0)
-	_line(Vector2(right_x, head_y + 8), Vector2(right_x + col_w, head_y + 8), BORDER_SOFT, 1.0)
+	var half_w: float = (rect.size.x - gap) / 2.0
+	var left: Rect2 = Rect2(rect.position.x, rect.position.y, half_w, rect.size.y)
+	var right: Rect2 = Rect2(rect.position.x + half_w + gap, rect.position.y, half_w, rect.size.y)
 
-	var top: float = head_y + 22.0
-	var max_rows: int = RECENT_LIMIT
-	var row_h: float = (rect.end.y - top - 10.0) / float(max_rows)
+	var result_cols: Array = _schedule_result_columns()
+	var result_opts: Dictionary = _schedule_table_opts(Loc.t("team_detail.recent_results"), Loc.t("team_detail.no_played_games"))
+	_draw_data_table(left, result_cols, _schedule_table_rows(_recent_games, true), result_opts)
+	# 勝敗マークは表のセルの上に重ね描きする (列・行の位置は表と同じ幾何から取る)。
+	var mark_col: Rect2 = _table_column_rect(left, result_cols, result_opts, "mark")
+	var row_top: float = _table_row_top(left, result_cols, result_opts)
+	for i in range(min(_recent_games.size(), RECENT_LIMIT)):
+		var game: Dictionary = _recent_games[i] as Dictionary
+		var symbol: String = str(game.get("symbol", ""))
+		_draw_result_mark(Vector2(mark_col.position.x + mark_col.size.x * 0.5, row_top + (float(i) + 0.5) * SCHEDULE_ROW_H),
+			7.0, symbol, MUTED)
 
-	# 左: 直近の結果
-	if _recent_games.is_empty():
-		_text(Loc.t("team_detail.no_played_games"), Vector2(left_x, top + 30), 13, MUTED)
-	else:
-		for i in range(min(_recent_games.size(), max_rows)):
-			_draw_result_row(Rect2(left_x, top + float(i) * row_h, col_w, row_h - 6.0), _recent_games[i] as Dictionary)
-
-	# 右: 今後の予定
-	if _upcoming_games.is_empty():
-		_text(Loc.t("team_detail.no_upcoming_games"), Vector2(right_x, top + 30), 13, MUTED)
-	else:
-		for i in range(min(_upcoming_games.size(), max_rows)):
-			_draw_upcoming_row(Rect2(right_x, top + float(i) * row_h, col_w, row_h - 6.0), _upcoming_games[i] as Dictionary)
+	_draw_data_table(right, _schedule_upcoming_columns(), _schedule_table_rows(_upcoming_games, false),
+		_schedule_table_opts(Loc.t("team_detail.upcoming"), Loc.t("team_detail.no_upcoming_games")))
 
 
-func _draw_result_row(cell: Rect2, game: Dictionary) -> void:
-	var color: Color = _game_color(game)
-	_round(cell, PANEL_2, Color.TRANSPARENT, 7, 0)
-	var opp: PSTeam = GameDb.get_team(int(game.get("opponent_id", 0)))
-	var ty: float = cell.position.y + cell.size.y * 0.5 + 5.0
-	_text(str(game.get("date_label", "")), Vector2(cell.position.x + 12, ty), 12, MUTED, 90)
-	_text("%s %s" % [str(game.get("venue", "vs")), opp.short_name if opp != null else "-"], Vector2(cell.position.x + 104, ty), 14, TEXT, cell.size.x - 220)
-	var symbol: String = str(game.get("symbol", ""))
-	_text_right(str(game.get("score", "")), cell.end.x - 40, ty, 14, color, 70)
-	_draw_result_mark(Vector2(cell.end.x - 20, cell.position.y + cell.size.y * 0.5), 7.0, symbol, color)
+func _schedule_table_opts(title: String, empty_text: String) -> Dictionary:
+	return {"title": title, "empty_text": empty_text, "row_h": SCHEDULE_ROW_H, "inner_pad": 10.0}
 
 
-func _draw_upcoming_row(cell: Rect2, game: Dictionary) -> void:
-	_round(cell, PANEL_2, Color.TRANSPARENT, 7, 0)
-	var opp: PSTeam = GameDb.get_team(int(game.get("opponent_id", 0)))
-	var ty: float = cell.position.y + cell.size.y * 0.5 + 5.0
-	_text(str(game.get("date_label", "")), Vector2(cell.position.x + 12, ty), 12, MUTED, 90)
-	_text("%s %s" % [str(game.get("venue", "vs")), opp.short_name if opp != null else "-"], Vector2(cell.position.x + 104, ty), 14, TEXT, cell.size.x - 116)
-	if bool(game.get("dh", false)):
-		_chip(Rect2(cell.end.x - 44, cell.position.y + cell.size.y * 0.5 - 10, 30, 18), "DH", BLUE_SOFT)
+func _schedule_result_columns() -> Array:
+	return [
+		{"title": "col.date", "key": "date", "w": 62, "align": "l", "fmt": "str", "muted": true, "group": "group.schedule"},
+		{"title": "col.opponent", "key": "team", "w": 110, "align": "l", "fmt": "team", "strong": true, "group": "group.schedule"},
+		{"title": "col.result", "key": "score", "w": 58, "align": "r", "fmt": "str", "group": "group.schedule"},
+		{"title": "home.stat.record", "key": "mark", "w": 40, "align": "c", "fmt": "str", "group": "group.schedule"},
+	]
+
+
+func _schedule_upcoming_columns() -> Array:
+	return [
+		{"title": "col.date", "key": "date", "w": 62, "align": "l", "fmt": "str", "muted": true, "group": "group.schedule"},
+		{"title": "col.opponent", "key": "team", "w": 130, "align": "l", "fmt": "team", "strong": true, "group": "group.schedule"},
+		{"title": "position.dh", "key": "dh", "w": 48, "align": "c", "fmt": "pos_badge", "group": "group.schedule"},
+	]
+
+
+# 相手は「vs / @ + 略称」で、行頭のドットは相手球団色。
+func _schedule_table_rows(games: Array, played: bool) -> Array:
+	var rows: Array = []
+	for i in range(min(games.size(), RECENT_LIMIT)):
+		var game: Dictionary = games[i] as Dictionary
+		var opp: PSTeam = GameDb.get_team(int(game.get("opponent_id", 0)))
+		var row: Dictionary = {
+			"date": str(game.get("date_label", "")),
+			"team": "%s %s" % [str(game.get("venue", "vs")), opp.short_name if opp != null else "-"],
+			"color": opp.color if opp != null else MUTED,
+		}
+		if played:
+			row["score"] = str(game.get("score", ""))
+			row["mark"] = ""
+		elif bool(game.get("dh", false)):
+			row["dh"] = Loc.t("position.dh")
+			row["dh_color"] = BLUE_SOFT
+		rows.append(row)
+	return rows
 
 
 # --- チーム内成績ランキング ---
@@ -446,9 +427,9 @@ func _draw_rankings(rect: Rect2) -> void:
 	var rows_n: int = 2
 	var gap: float = 10.0
 	var inner_x: float = rect.position.x + 18.0
-	var inner_y: float = rect.position.y + 52.0
+	var inner_y: float = rect.position.y + 48.0
 	var usable_w: float = rect.size.x - 36.0
-	var usable_h: float = rect.end.y - inner_y - 14.0
+	var usable_h: float = rect.end.y - inner_y - 10.0
 	var cw: float = (usable_w - gap * float(cols - 1)) / float(cols)
 	var ch: float = (usable_h - gap * float(rows_n - 1)) / float(rows_n)
 
@@ -458,35 +439,31 @@ func _draw_rankings(rect: Rect2) -> void:
 		var col: int = i % cols
 		var row: int = 0 if i < cols else 1
 		var cr: Rect2 = Rect2(inner_x + float(col) * (cw + gap), inner_y + float(row) * (ch + gap), cw, ch)
-		_draw_ranking_card(cr, _ranking_cards[i] as Dictionary)
+		_draw_ranking_table(cr, _ranking_cards[i] as Dictionary)
 
 
-func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
-	# 枠は落とし、左アクセントバー (野手=BLUE / 投手=RED) だけで区分する。
-	_round(rect, PANEL_2, Color.TRANSPARENT, 8, 0)
+# 部門ごとのミニ表 (順 | 選手 | 値)。部門名は野手=BLUE / 投手=RED のアクセントで表の上に置く。
+func _draw_ranking_table(rect: Rect2, card: Dictionary) -> void:
 	var accent: Color = card.get("accent", BLUE) as Color
-	_round(Rect2(rect.position.x, rect.position.y, 3, rect.size.y), accent, Color.TRANSPARENT, 0, 0)
-	_text(str(card.get("title", "")), Vector2(rect.position.x + 14, rect.position.y + 28), 14, accent, rect.size.x - 24)
-
+	var columns: Array = [
+		{"title": "col.rank", "key": "rank", "w": 28, "align": "c", "fmt": "rank"},
+		{"title": "col.player", "key": "name", "w": 108, "align": "l", "fmt": "player_name"},
+		{"title": "team_detail.col.value", "key": "value", "w": 54, "align": "r", "fmt": "str", "strong": true},
+	]
+	var rows: Array = []
 	var entries: Array = card.get("entries", []) as Array
-	if entries.is_empty():
-		_text(Loc.t("common.nobody"), Vector2(rect.position.x + 14, rect.position.y + 60), 12, MUTED)
-		return
-	var top: float = rect.position.y + 44.0
-	var row_h: float = min(34.0, (rect.end.y - top - 8.0) / float(max(1, entries.size())))
-	# 値は右寄せの固定ボックス、名前は残り幅いっぱい (途切れ対策で value 幅を詰める)。
-	var value_box: float = 52.0
-	var name_x: float = rect.position.x + 28.0
-	var name_w: float = rect.end.x - 10.0 - value_box - 6.0 - name_x
 	for i in range(entries.size()):
 		var entry: Dictionary = entries[i] as Dictionary
-		var ty: float = top + float(i) * row_h + row_h * 0.5 + 5.0
-		var medal: Color = AMBER if i == 0 else (MUTED if i == 1 else FAINT)
-		_text("%d" % (i + 1), Vector2(rect.position.x + 12, ty), 12, medal)
-		_text(str(entry.get("name", "")), Vector2(name_x, ty), 13, TEXT, name_w)
-		_text_right(str(entry.get("value", "")), rect.end.x - 10, ty, 13, accent, value_box)
-		if i < entries.size() - 1:
-			_line(Vector2(rect.position.x + 10.0, top + float(i + 1) * row_h), Vector2(rect.end.x - 8.0, top + float(i + 1) * row_h), HAIRLINE, 1.0)
+		rows.append({
+			"rank": i + 1, "name": str(entry.get("name", "")), "jersey": int(entry.get("jersey", 0)),
+			"value": str(entry.get("value", "")),
+		})
+	_draw_data_table(rect, columns, rows, {
+		"header_top": RANK_CARD_HEADER_TOP, "row_h": RANK_CARD_ROW_H, "bottom_pad": 6.0, "inner_pad": 8.0,
+		"empty_text": Loc.t("common.nobody"),
+	})
+	_round(Rect2(rect.position.x + 12.0, rect.position.y + 9.0, 3, 14), accent, Color.TRANSPARENT, 2, 0)
+	_text(str(card.get("title", "")), Vector2(rect.position.x + 21.0, rect.position.y + 21.0), 14, accent, rect.size.x - 30.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # --- デプスチャート (獲得判断の補助) ---
@@ -495,89 +472,119 @@ func _draw_ranking_card(rect: Rect2, card: Dictionary) -> void:
 # 生値 (評価スケール) は12球団が団子になって読めないので、主役は**同じスロットの全球団を
 # 母集団にした S〜E グレード**。バーの長さ (全球団最大値との比) と順位 chip を補助に添える。
 func _draw_depth_chart(rect: Rect2) -> void:
-	var teams_text: String = Loc.t("team_detail.depth.of_teams", {"n": int(_depth_summary.get("team_count", 12))})
-	_panel(rect, Loc.t("team_detail.depth.panel"))
-
-	var hy: float = rect.position.y + 58
-	_round(Rect2(rect.position.x + 16, hy - 18, rect.size.x - 32, 26), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("team_detail.depth.slot"), Vector2(D_CHIP_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("team_detail.depth.count"), D_COUNT_R, hy, 11, MUTED, 60, true)
-	_text(Loc.t("team_detail.depth.current_header", {"teams": teams_text}), Vector2(D_CUR_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(Loc.t("team_detail.depth.future_header", {"years": TeamDepthChart.FUTURE_HORIZON_YEARS}), Vector2(D_PRO_BAR_X, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("team_detail.depth.avg_age"), D_AGE_R, hy, 11, MUTED, 70, true)
-	_draw_depth_player_header(Loc.t("team_detail.depth.holder"), D_HOLDER_X, hy)
-	_draw_depth_player_header(Loc.t("team_detail.depth.prospect"), D_PROSPECT_X, hy)
-	_line(Vector2(rect.position.x + 16, rect.position.y + 66), Vector2(rect.end.x - 16, rect.position.y + 66), BORDER, 1.5)
-
+	var columns: Array = _depth_columns()
+	var opts: Dictionary = _depth_table_opts()
+	opts["title"] = Loc.t("team_detail.depth.panel")
+	opts["empty_text"] = Loc.t("team_detail.depth.unavailable")
+	_draw_data_table(rect, columns, _depth_table_rows(), opts)
 	if _depth_rows.is_empty():
-		_text(Loc.t("team_detail.depth.unavailable"), Vector2(rect.position.x + 20, rect.position.y + 110), 14, MUTED)
 		return
 
-	var top: float = rect.position.y + 74.0
-	var row_h: float = (rect.end.y - top - 10.0) / float(_depth_rows.size())
+	# 戦力バーは表のセルの上に重ね描きする (列・行の位置は表と同じ幾何から取る)。
+	var row_h: float = _depth_row_h(rect, columns, opts)
+	var row_top: float = _table_row_top(rect, columns, opts)
+	var cur_col: Rect2 = _table_column_rect(rect, columns, opts, "cur_bar")
+	var fut_col: Rect2 = _table_column_rect(rect, columns, opts, "fut_bar")
 	for i in range(_depth_rows.size()):
-		_draw_depth_row(_depth_rows[i] as Dictionary, rect, top + float(i) * row_h, row_h)
-	# 列グループの境界: 識別 (枠/人数) | 評価 …… 主力 | 最有望株。
-	var bottom: float = top + float(_depth_rows.size()) * row_h
-	_line(Vector2(D_CUR_BAR_X - 12.0, hy - 18), Vector2(D_CUR_BAR_X - 12.0, bottom), HAIRLINE, 1.0)
-	_line(Vector2(D_PROSPECT_X - D_PLAYER_GUTTER * 0.5, hy - 18),
-		Vector2(D_PROSPECT_X - D_PLAYER_GUTTER * 0.5, bottom), HAIRLINE, 1.0)
+		var row: Dictionary = _depth_rows[i] as Dictionary
+		var cy: float = row_top + (float(i) + 0.5) * row_h
+		_draw_depth_bar(cur_col, cy, str(row.get("current_grade", "")), float(row.get("current_ratio", 0.0)))
+		_draw_depth_bar(fut_col, cy, str(row.get("future_grade", "")), float(row.get("future_ratio", 0.0)))
 
 
-func _draw_depth_row(row: Dictionary, rect: Rect2, ry: float, row_h: float) -> void:
-	var cy: float = ry + row_h * 0.5
-	var ty: float = cy + 5.0
-	var total: int = int(row.get("team_count", 0))
-	var holder_count: int = int(row.get("holder_count", 0))
-
-	_chip(Rect2(D_CHIP_X, cy - 12, 48, 24), str(row.get("label", "")), _depth_slot_color(row))
-	_text_right(Loc.t("common.people_value", {"n": holder_count}), D_COUNT_R, ty, 13, MUTED if holder_count > 0 else RED, 60)
-
-	_draw_depth_metric(D_CUR_BAR_X, D_CUR_GRADE_X, D_CUR_RANK_X, cy,
-		str(row.get("current_grade", "")), float(row.get("current_ratio", 0.0)), int(row.get("current_rank", 0)), total)
-	_draw_depth_metric(D_PRO_BAR_X, D_PRO_GRADE_X, D_PRO_RANK_X, cy,
-		str(row.get("future_grade", "")), float(row.get("future_ratio", 0.0)), int(row.get("future_rank", 0)), total)
-
-	var avg_age: float = float(row.get("avg_age", 0.0))
-	_text_right("%0.1f" % avg_age if holder_count > 0 else "-", D_AGE_R, ty, 13, MUTED, 70)
-	_draw_depth_player(row.get("top_holder", {}) as Dictionary, D_HOLDER_X, ty, cy)
-	_draw_depth_player(row.get("top_prospect", {}) as Dictionary, D_PROSPECT_X, ty, cy)
-	_line(Vector2(rect.position.x + 16, ry + row_h), Vector2(rect.end.x - 16, ry + row_h), HAIRLINE, 1.0)
-
-
-# バー + グレード + 順位 chip の1組。色はグレード基準 (S/A=青 … D/E=赤) で統一し、
-# バーは「全球団最大値に対する比」。最大値比にしているのは、最下位を 0 にする min-max
-# 正規化だとバーが消えて「戦力ゼロ」に見えてしまうため。
-func _draw_depth_metric(bar_x: float, grade_x: float, rank_x: float, cy: float, grade: String, ratio: float, rank: int, total: int) -> void:
-	var color: Color = _strength_grade_color(grade)
-	_round(Rect2(bar_x, cy - 8, D_BAR_W, 16), PANEL_2, Color.TRANSPARENT, 4, 0)
-	if ratio > 0.0:
-		_round(Rect2(bar_x, cy - 8, maxf(4.0, D_BAR_W * ratio), 16), Color(color.r, color.g, color.b, 0.85), Color.TRANSPARENT, 4, 0)
-	_text(grade, Vector2(grade_x, cy + 8.0), 22, color, D_GRADE_W, HORIZONTAL_ALIGNMENT_CENTER, true)
-	_chip(Rect2(rank_x, cy - 11, RANK_CHIP_W, 22), Loc.t("common.rank_value", {"rank": rank}) if rank > 0 and total > 0 else "-", MUTED)
+# 表の列定義。2段見出しの上段が 枠 | 現在の戦力 | 将来性 | 主力 | 最有望株 の 5 ブロック。
+func _depth_columns() -> Array:
+	var teams_text: String = Loc.t("team_detail.depth.of_teams", {"n": int(_depth_summary.get("team_count", 12))})
+	var cur_group: String = Loc.t("team_detail.depth.current_header", {"teams": teams_text})
+	var fut_group: String = Loc.t("team_detail.depth.future_header", {"years": TeamDepthChart.FUTURE_HORIZON_YEARS})
+	var holder_group: String = "team_detail.depth.holder"
+	var prospect_group: String = "team_detail.depth.prospect"
+	return [
+		{"title": "team_detail.depth.slot", "key": "slot", "w": 52, "align": "c", "fmt": "pos_badge", "group": "team_detail.depth.slot"},
+		{"title": "team_detail.depth.count", "key": "count", "w": 52, "align": "r", "fmt": "str", "group": "team_detail.depth.slot"},
+		{"title": "team_detail.depth.avg_age", "key": "avg_age", "w": 58, "align": "r", "fmt": "str", "muted": true, "group": "team_detail.depth.slot"},
+		{"title": "team_detail.depth.col_bar", "key": "cur_bar", "w": 190, "align": "l", "fmt": "str", "sep_before": true, "group": cur_group},
+		{"title": "team_detail.depth.col_grade", "key": "cur_grade", "w": 46, "align": "c", "fmt": "str", "strong": true, "group": cur_group},
+		{"title": "col.rank", "key": "cur_rank", "w": 48, "align": "c", "fmt": "rank", "group": cur_group},
+		{"title": "team_detail.depth.col_bar", "key": "fut_bar", "w": 190, "align": "l", "fmt": "str", "sep_before": true, "group": fut_group},
+		{"title": "team_detail.depth.col_grade", "key": "fut_grade", "w": 46, "align": "c", "fmt": "str", "strong": true, "group": fut_group},
+		{"title": "col.rank", "key": "fut_rank", "w": 48, "align": "c", "fmt": "rank", "group": fut_group},
+		{"title": "col.player", "key": "holder_name", "w": 150, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": holder_group},
+		{"title": "roster.col.category", "key": "holder_dev", "w": 40, "align": "c", "fmt": "roster_chip", "group": holder_group},
+		{"title": "col.age", "key": "holder_age", "w": 40, "align": "c", "fmt": "int", "muted": true, "group": holder_group},
+		{"title": "col.overall", "key": "holder_overall", "w": 46, "align": "c", "fmt": "eval_badge", "group": holder_group},
+		{"title": "col.player", "key": "prospect_name", "w": 150, "align": "l", "fmt": "player_name", "strong": true, "sep_before": true, "group": prospect_group},
+		{"title": "roster.col.category", "key": "prospect_dev", "w": 40, "align": "c", "fmt": "roster_chip", "group": prospect_group},
+		{"title": "col.age", "key": "prospect_age", "w": 40, "align": "c", "fmt": "int", "muted": true, "group": prospect_group},
+		{"title": "col.overall", "key": "prospect_overall", "w": 46, "align": "c", "fmt": "eval_badge", "group": prospect_group},
+	]
 
 
-# 代表選手ブロックの見出し (選手名 / 年齢 / 総合)。主力・最有望株で同じ幾何を使う。
-func _draw_depth_player_header(title: String, x: float, hy: float) -> void:
-	_text(title, Vector2(x, hy), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text_right(Loc.t("col.age"), x + D_PLAYER_AGE_ROFF, hy, 11, MUTED, 40, true)
-	_text_right(Loc.t("col.overall"), x + D_PLAYER_VALUE_ROFF, hy, 11, MUTED, 40, true)
+func _depth_table_opts() -> Dictionary:
+	return {"row_h_max": DEPTH_ROW_H_MAX}
 
 
-# 代表選手セル (名前 / 育成chip / 年齢 / 総合)。該当なしは "—"。
+# `_draw_data_table` の均等ストレッチ行高と同じ式 (戦力バーの重ね描きが行位置を知る必要がある)。
+func _depth_row_h(rect: Rect2, columns: Array, opts: Dictionary) -> float:
+	var area_h: float = rect.end.y - _table_row_top(rect, columns, opts) - float(opts.get("bottom_pad", 8.0))
+	return minf(float(opts.get("row_h_max", 34.0)), area_h / float(maxi(1, _depth_rows.size())))
+
+
+func _depth_table_rows() -> Array:
+	var rows: Array = []
+	for src_value in _depth_rows:
+		var src: Dictionary = src_value as Dictionary
+		var holder_count: int = int(src.get("holder_count", 0))
+		var has_rank: bool = int(src.get("team_count", 0)) > 0
+		var row: Dictionary = {
+			"slot": str(src.get("label", "")), "slot_color": _depth_slot_color(src),
+			"count": Loc.t("common.people_value", {"n": holder_count}),
+			"avg_age": ("%0.1f" % float(src.get("avg_age", 0.0))) if holder_count > 0 else "-",
+			"cur_bar": "", "cur_grade": str(src.get("current_grade", "")),
+			"cur_grade_color": _strength_grade_color(str(src.get("current_grade", ""))),
+			"cur_rank": _rank_or_dash(int(src.get("current_rank", 0)) if has_rank else 0),
+			"fut_bar": "", "fut_grade": str(src.get("future_grade", "")),
+			"fut_grade_color": _strength_grade_color(str(src.get("future_grade", ""))),
+			"fut_rank": _rank_or_dash(int(src.get("future_rank", 0)) if has_rank else 0),
+		}
+		if holder_count <= 0:
+			row["count_color"] = RED
+		_depth_player_cells(row, "holder", src.get("top_holder", {}) as Dictionary)
+		_depth_player_cells(row, "prospect", src.get("top_prospect", {}) as Dictionary)
+		rows.append(row)
+	return rows
+
+
+# 代表選手のセル (名前 / 育成chip / 年齢 / 総合)。該当なしは名前 "—" 以外を "-"。
 # 総合はその選手の**現在の**評価値 — 将来の予測値はスロットのグレード側で見せているので、
 # ここで別尺度の数字を混ぜない (主力と最有望株を同じ意味の数字で比べられるようにする)。
-func _draw_depth_player(entry: Dictionary, x: float, ty: float, cy: float) -> void:
+# 名前は列ごとに背番号を持てないので "#背番号 名前" の文字列にして渡す。
+func _depth_player_cells(row: Dictionary, prefix: String, entry: Dictionary) -> void:
 	if entry.is_empty():
-		_text("—", Vector2(x, ty), 13, FAINT)
+		row["%s_name" % prefix] = "—"
+		row["%s_name_color" % prefix] = FAINT
+		row["%s_dev" % prefix] = ""
+		row["%s_age" % prefix] = "-"
+		row["%s_overall" % prefix] = "-"
 		return
 	var player: PSPlayer = GameDb.get_player(int(entry.get("player_id", 0)))
-	_text(player.name if player != null else "-", Vector2(x, ty), 13, TEXT, D_PLAYER_NAME_W)
-	if bool(entry.get("development", false)):
-		_chip(Rect2(x + D_PLAYER_CHIP_OFF, cy - 9, 38, 18), Loc.t("common.development_chip"), AMBER)
-	var overall: int = int(round(float(entry.get("overall", 0.0))))
-	_text_right(str(int(entry.get("age", 0))), x + D_PLAYER_AGE_ROFF, ty, 13, MUTED, 40)
-	_text_right(str(overall), x + D_PLAYER_VALUE_ROFF, ty, 13, _table_rating_color(overall), 40, true)
+	row["%s_name" % prefix] = player.name if player != null else "-"
+	row["%s_name_jersey" % prefix] = player.jersey_number if player != null else 0
+	row["%s_dev" % prefix] = Loc.t("common.development_chip") if bool(entry.get("development", false)) else ""
+	row["%s_age" % prefix] = int(entry.get("age", 0))
+	row["%s_overall" % prefix] = int(round(float(entry.get("overall", 0.0))))
+
+
+# 戦力バー。色はグレード基準 (S/A=青 … D/E=赤) で統一し、長さは「全球団最大値に対する比」。
+# 最大値比にしているのは、最下位を 0 にする min-max 正規化だとバーが消えて
+# 「戦力ゼロ」に見えてしまうため。
+func _draw_depth_bar(col: Rect2, cy: float, grade: String, ratio: float) -> void:
+	var color: Color = _strength_grade_color(grade)
+	var track: Rect2 = Rect2(col.position.x + DEPTH_BAR_PAD, cy - DEPTH_BAR_H * 0.5, col.size.x - DEPTH_BAR_PAD * 2.0, DEPTH_BAR_H)
+	_round(track, PANEL_2, BORDER_SOFT, 4, 1)
+	if ratio > 0.0:
+		_round(Rect2(track.position.x, track.position.y, maxf(4.0, track.size.x * ratio), DEPTH_BAR_H),
+			Color(color.r, color.g, color.b, 0.85), Color.TRANSPARENT, 4, 0)
 
 
 # 先発=PINK / 救援=VIOLET (ローテパネルの配色に合わせる)、野手は守備位置色。
@@ -599,7 +606,7 @@ func _draw_depth_summary() -> void:
 		{"label": Loc.t("common.controlled"),"value": Loc.t("common.people_value", {"n": int(_depth_summary.get("controlled", 0))}),
 			"note": Loc.t("team_detail.depth.development_note", {"n": int(_depth_summary.get("development", 0))}), "note_color": MUTED},
 		{"label": Loc.t("team_detail.depth.avg_age"), "value": Loc.t("team_detail.depth.age_value", {"age": "%0.1f" % float(_depth_summary.get("avg_age", 0.0))})},
-		{"label": Loc.t("team_detail.depth.young"), "value": Loc.t("common.people_value", {"n": int(_depth_summary.get("young", 0))}), "color": BLUE},
+		{"label": Loc.t("team_detail.depth.young"), "value": Loc.t("common.people_value", {"n": int(_depth_summary.get("young", 0))})},
 		{"label": Loc.t("team_detail.depth.current"), "value": current_grade, "color": _strength_grade_color(current_grade),
 			"note": Loc.t("team_detail.depth.rank_among", {"n": int(_depth_summary.get("team_count", 12)), "rank": int(_depth_summary.get("current_rank", 0))}),
 			"note_color": MUTED},
@@ -1001,7 +1008,10 @@ func _build_lineup(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -> 
 			"name": record.name if record != null else Loc.t("team_detail.empty_slot"),
 			"avg": record.batter_stats.batting_average() if record != null else 0.0,
 			"hr": record.batter_stats.home_runs if record != null else 0,
+			"rbi": record.batter_stats.runs_batted_in if record != null else 0,
 			"ops": record.batter_stats.ops() if record != null else 0.0,
+			"jersey": record.jersey_number if record != null else 0,
+			"overall": _overall_of(record),
 			"war": _war_of(record) if record != null else 0.0,
 			"pid": pid,
 		})
@@ -1021,14 +1031,9 @@ func _build_rotation(team: PSTeam, season: PSSeason, record_by_id: Dictionary) -
 		var record: PSPlayerSeasonRecord = record_by_id.get(int(id_value), null) as PSPlayerSeasonRecord
 		if record == null:
 			continue
-		_rotation_rows.append({
-			"num": num,
-			"name": record.name,
-			"wl": Loc.t("common.wins_losses", {"w": record.pitcher_stats.wins, "l": record.pitcher_stats.losses}),
-			"era": _era_str(record),
-			"war": _war_str(record),
-			"pid": record.player_id,
-		})
+		var line: Dictionary = _pitcher_line(record)
+		line["num"] = num
+		_rotation_rows.append(line)
 		num += 1
 
 
@@ -1062,20 +1067,42 @@ func _build_win_pattern(team: PSTeam, season: PSSeason, record_by_id: Dictionary
 	for pid in setup_ids.slice(0, 2):
 		var record: PSPlayerSeasonRecord = record_by_id.get(int(pid), null) as PSPlayerSeasonRecord
 		if record != null:
-			_win_pattern.append(_relief_entry(Loc.t("relief.setup"), VIOLET, record))
+			_win_pattern.append(_relief_entry(Loc.t("role.middle_short"), VIOLET, record))
 	if closer_id > 0:
 		var closer: PSPlayerSeasonRecord = record_by_id.get(closer_id, null) as PSPlayerSeasonRecord
 		if closer != null:
-			_win_pattern.append(_relief_entry(Loc.t("relief.closer"), CLOSER_RED, closer))
+			_win_pattern.append(_relief_entry(Loc.t("role.closer_short"), CLOSER_RED, closer))
 
 
 func _relief_entry(role: String, color: Color, record: PSPlayerSeasonRecord) -> Dictionary:
+	var line: Dictionary = _pitcher_line(record)
+	line["role"] = role
+	line["color"] = color
+	return line
+
+
+# ローテ / 勝ちパターン共通の投手 1 人ぶん (名前・背番号・総合・登板・勝敗・S/H・防御率・WAR)。
+func _pitcher_line(record: PSPlayerSeasonRecord) -> Dictionary:
+	var ps: PSPitcherStats = record.pitcher_stats
+	var sh: Variant = ps.saves + ps.holds
+	if int(sh) <= 0:
+		sh = "-"
 	return {
-		"role": role, "color": color, "name": record.name,
-		"wl": Loc.t("common.wins_losses", {"w": record.pitcher_stats.wins, "l": record.pitcher_stats.losses}),
+		"name": record.name, "jersey": record.jersey_number, "pid": record.player_id,
+		"overall": _overall_of(record),
+		"games": ps.games,
+		"wl": Loc.t("common.wins_losses", {"w": ps.wins, "l": ps.losses}),
+		"sh": sh,
 		"era": _era_str(record),
 		"war": _war_str(record),
 	}
+
+
+# 総合評価 (表のバッジ用)。選手がいない枠は欠損の "-"。
+func _overall_of(record: PSPlayerSeasonRecord) -> Variant:
+	if record == null:
+		return "-"
+	return PlayerValueEvaluator.overall_score(record)
 
 
 func _build_schedule(team: PSTeam, season: PSSeason) -> void:
@@ -1187,7 +1214,7 @@ func _rank_card(title: String, accent: Color, pool: Array, fmt: String, qualify:
 	var entries: Array = []
 	for i in range(min(3, qualified.size())):
 		var record: PSPlayerSeasonRecord = qualified[i] as PSPlayerSeasonRecord
-		entries.append({"name": record.name, "value": _fmt_rank_value(fmt, value_of.call(record))})
+		entries.append({"name": record.name, "jersey": record.jersey_number, "value": _fmt_rank_value(fmt, value_of.call(record))})
 	return {"title": title, "accent": accent, "entries": entries}
 
 
@@ -1199,7 +1226,7 @@ func _war_of(record: PSPlayerSeasonRecord) -> float:
 func _war_str(record: PSPlayerSeasonRecord) -> String:
 	if record.is_pitcher() and record.pitcher_stats.outs_pitched <= 0:
 		return "-"
-	return "%0.1f" % _war_of(record)
+	return _fmt_cell("f1s", _war_of(record))
 
 
 func _fip_of(record: PSPlayerSeasonRecord) -> float:
@@ -1211,11 +1238,11 @@ func _fmt_rank_value(fmt: String, value: float) -> String:
 		"rate":
 			return _rate_short(value)
 		"ops":
-			return "%0.3f" % value
+			return _rate_short(value)
 		"era", "fip":
 			return "%0.2f" % value
 		"war":
-			return "%0.1f" % value
+			return _fmt_cell("f1s", value)
 		_:
 			return str(int(value))
 
@@ -1238,14 +1265,3 @@ func _result_symbol(game: Dictionary, team_id: int) -> String:
 	if bool(result.get("draw", false)):
 		return "△"
 	return "○" if int(result.get("winning_team_id", 0)) == team_id else "●"
-
-
-func _game_color(game: Dictionary) -> Color:
-	var symbol: String = str(game.get("symbol", ""))
-	if symbol == "○":
-		return GREEN
-	if symbol == "●":
-		return RED
-	if symbol == "△":
-		return AMBER
-	return MUTED

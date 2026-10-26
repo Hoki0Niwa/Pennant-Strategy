@@ -22,6 +22,11 @@ const PITCHING_TITLE_LABELS: Dictionary = {
 	"win_rate": "award.title.win_rate",
 }
 
+const LEAGUE_KEYS: Array = ["league1", "league2"]
+
+# 受賞者表 (パネル内) の上端。2 段見出しが header_top 68 から始まるため、タイトル/アクセント線の下に収まる位置に置く。
+const TABLE_TOP: float = 20.0
+
 const CHAMP_RECT: Rect2 = Rect2(262, 112, 1068, 128)
 const AWARDS_RECT: Rect2 = Rect2(262, 254, 1068, 178)
 const BAT_RECT: Rect2 = Rect2(262, 446, 1068, 284)
@@ -167,65 +172,79 @@ func _draw_award_table(rect: Rect2, title: String, rows: Array, accent: Color, l
 	_panel(rect, title)
 	_round(Rect2(rect.position.x + 18, rect.position.y + 44, 54, 3), accent, Color.TRANSPARENT, 1, 0)
 
-	var inner_x: float = rect.position.x + 18.0
-	var usable: float = rect.size.x - 36.0
-	var label_w: float = 150.0
-	var gap: float = 14.0
-	var league_w: float = (usable - label_w - gap * 2.0) / 2.0
-	var c1_x: float = inner_x + label_w + gap
-	var c2_x: float = c1_x + league_w + gap
-
-	var hy: float = rect.position.y + 64.0
-	_round(Rect2(inner_x, hy - 18.0, usable, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(label_header, Vector2(inner_x + 2.0, hy), 11, MUTED, label_w - 4.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(PSTeam.league_label_for("league1"), Vector2(c1_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(PSTeam.league_label_for("league2"), Vector2(c2_x + 4.0, hy), 11, MUTED, league_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_line(Vector2(inner_x, rect.position.y + 72.0), Vector2(rect.end.x - 18.0, rect.position.y + 72.0), BORDER, 1.5)
-
 	if rows.is_empty():
-		_text(Loc.t("common.no_records"), Vector2(inner_x + 4.0, rect.position.y + 110.0), 13, MUTED)
+		_text(Loc.t("common.no_records"), Vector2(rect.position.x + 22.0, rect.position.y + 110.0), 13, MUTED)
 		return
 
-	var row_top: float = rect.position.y + 82.0
-	var row_h: float = (rect.end.y - row_top - 14.0) / float(rows.size())
-	for i in range(rows.size()):
-		var row: Dictionary = rows[i] as Dictionary
-		var ry: float = row_top + float(i) * row_h
-		var ty: float = ry + row_h * 0.5 + 5.0
-		_text(str(row.get("label", "")), Vector2(inner_x + 2.0, ty), 14, MUTED, label_w - 4.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-		_draw_player_cell(Rect2(c1_x, ry + 3.0, league_w, row_h - 6.0), row.get("league1", {}) as Dictionary)
-		_draw_player_cell(Rect2(c2_x, ry + 3.0, league_w, row_h - 6.0), row.get("league2", {}) as Dictionary)
-		_line(Vector2(inner_x, ry + row_h), Vector2(rect.end.x - 18.0, ry + row_h), HAIRLINE, 1.0)
+	var label_columns: Array = [
+		{"title": label_header, "key": "label", "w": 150, "align": "l", "strong": true, "group": "award.group.category"},
+	]
+	var label_rows: Array = []
+	var league_rows: Dictionary = {"league1": [], "league2": []}
+	for row_value in rows:
+		var row: Dictionary = row_value as Dictionary
+		label_rows.append({"label": str(row.get("label", ""))})
+		for key in LEAGUE_KEYS:
+			(league_rows[key] as Array).append(_league_row(row.get(key, {}) as Dictionary))
+	_draw_league_split_table(rect, label_columns, label_rows, league_rows, 150.0, [70, 250, 121])
 
 
-func _draw_player_cell(rect: Rect2, cell: Dictionary) -> void:
+# 受賞者セル → 共通表の行。受賞者なしは球団ドットを消して "該当なし" を FAINT で出す。
+func _league_row(cell: Dictionary) -> Dictionary:
 	var pid: int = int(cell.get("pid", 0))
-	var ty: float = rect.position.y + rect.size.y * 0.5 + 5.0
 	if pid <= 0:
-		_text(Loc.t("common.none_applicable"), Vector2(rect.position.x + 4.0, ty), 13, FAINT, rect.size.x - 8.0)
-		return
+		return {"team": "", "color": Color.TRANSPARENT, "name": Loc.t("common.none_applicable"), "val": "", "__color": FAINT}
+	var team: PSTeam = GameDb.get_team(int(cell.get("team_id", 0)))
+	var player: PSPlayer = GameDb.get_player(pid)
+	return {
+		"team": team.short_name if team != null else "-",
+		"color": team.color if team != null else MUTED,
+		"name": str(cell.get("name", "")),
+		"jersey": player.jersey_number if player != null else 0,
+		"val": str(cell.get("value", "")),
+		"__meta": pid,
+	}
 
-	var hover: bool = pid == _hover_pid
-	if hover:
-		_round(rect, Color(1, 1, 1, 0.055), Color.TRANSPARENT, 6, 0)
 
-	var team_id: int = int(cell.get("team_id", 0))
-	var team: PSTeam = GameDb.get_team(team_id)
-	var dot_col: Color = team.color if team != null else MUTED
-	var team_text: String = team.short_name if team != null else "-"
-	_dot(Vector2(rect.position.x + 8.0, rect.position.y + rect.size.y * 0.5), 5.0, dot_col)
-	_text(team_text, Vector2(rect.position.x + 20.0, ty), 12, MUTED, 44.0)
+# 左=ラベル列 (部門 / 守備位置)、中央=第1リーグ受賞者、右=第2リーグ受賞者の 3 表を同じ幾何で横に並べる。
+# 2 段見出しの上段にリーグ名を置き、リーグ表の行 (球団・選手・成績) だけをクリックで選手詳細へ。
+# label_cols は幅 label_w に収まる列、league_ws は [球団, 選手, 成績] の列幅。
+func _draw_league_split_table(rect: Rect2, label_cols: Array, label_rows: Array, league_rows: Dictionary, label_w: float, league_ws: Array) -> void:
+	var area: Rect2 = Rect2(rect.position.x + 18.0, rect.position.y + TABLE_TOP, rect.size.x - 36.0, rect.size.y - TABLE_TOP - 8.0)
+	var league_w: float = (area.size.x - label_w) * 0.5
+	var base_opts: Dictionary = {"panel": false, "inner_pad": 0.0, "header_top": 68.0, "bottom_pad": 8.0}
 
-	var value_text: String = str(cell.get("value", ""))
-	var value_w: float = 86.0 if not value_text.is_empty() else 0.0
-	var name_x: float = rect.position.x + 68.0
-	var name_w: float = rect.size.x - 72.0 - value_w
-	# 選手名は常時 bold (strong)。hover は背景の淡いハイライトで示す。
-	_text(str(cell.get("name", "")), Vector2(name_x, ty), 14, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, true)
-	if not value_text.is_empty():
-		_text_right(value_text, rect.end.x - 4.0, ty, 13, AMBER, value_w)
+	var label_rect: Rect2 = Rect2(area.position.x, area.position.y, label_w, area.size.y)
+	_draw_data_table(label_rect, label_cols, label_rows, base_opts.duplicate())
 
-	_player_hits.append({"rect": rect, "pid": pid})
+	for li in range(LEAGUE_KEYS.size()):
+		var key: String = str(LEAGUE_KEYS[li])
+		var group_text: String = Loc.t("award.group.league_winners", {"league": PSTeam.league_label_for(key)})
+		var columns: Array = [
+			{"title": "col.team", "key": "team", "w": league_ws[0], "fmt": "team", "group": group_text},
+			{"title": "col.player", "key": "name", "w": league_ws[1], "fmt": "player_name", "strong": true, "group": group_text},
+			{"title": "history.col.record", "key": "val", "w": league_ws[2], "align": "r", "group": group_text},
+		]
+		var opts: Dictionary = base_opts.duplicate()
+		opts["sel_kind"] = "player"
+		opts["hover_id"] = _hover_pid
+		var hits: Array = []
+		opts["hits"] = hits
+		var league_rect: Rect2 = Rect2(area.position.x + label_w + league_w * float(li), area.position.y, league_w, area.size.y)
+		_draw_data_table(league_rect, columns, league_rows.get(key, []) as Array, opts)
+		for hit_value in hits:
+			var hit: Dictionary = hit_value as Dictionary
+			_player_hits.append({"rect": hit["rect"], "pid": int(hit["meta"])})
+
+	# リーグ境界 (ラベル | 第1 | 第2) の縦ヘアライン。2 段見出しの上端から最終行の下端まで。
+	var row_top: float = _table_row_top(label_rect, label_cols, base_opts)
+	var area_h: float = label_rect.end.y - row_top - float(base_opts["bottom_pad"])
+	var row_h: float = minf(34.0, area_h / float(maxi(1, label_rows.size())))
+	var line_top: float = label_rect.position.y + 68.0 - 36.0
+	var line_bottom: float = row_top + row_h * float(label_rows.size())
+	for bi in range(2):
+		var bx: float = area.position.x + label_w + league_w * float(bi)
+		_line(Vector2(bx, line_top), Vector2(bx, line_bottom), HAIRLINE, 1.0)
 
 
 # ベストナイン / ゴールデン・グラブ賞の 2 リーグ並列グリッド。左半分=第1リーグ、右半分=第2リーグ。
@@ -235,61 +254,18 @@ func _draw_award_grid(rect: Rect2, title: String, accent: Color, slot_labels: Ar
 	_panel(rect, title)
 	_round(Rect2(rect.position.x + 18, rect.position.y + 44, 54, 3), accent, Color.TRANSPARENT, 1, 0)
 
-	var inner: Rect2 = Rect2(rect.position.x + 18, rect.position.y + 70, rect.size.x - 36, rect.size.y - 92)
-	_round(inner, PANEL_2, Color.TRANSPARENT, 8, 0)
-
-	var col_w: float = inner.size.x * 0.5
-	var league_keys: Array = ["league1", "league2"]
-
-	# 列見出し + 中央の縦区切り。
-	var hy: float = inner.position.y + 28.0
-	for li in range(2):
-		_text(PSTeam.league_label_for(str(league_keys[li])), Vector2(inner.position.x + col_w * float(li) + 16.0, hy), 12, MUTED, col_w - 24.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_line(Vector2(inner.position.x + 14, inner.position.y + 40), Vector2(inner.end.x - 14, inner.position.y + 40), BORDER, 1.5)
-	_line(Vector2(inner.position.x + col_w, inner.position.y + 14), Vector2(inner.position.x + col_w, inner.end.y - 14), BORDER_SOFT, 1.0)
-
-	var row_top: float = inner.position.y + 52.0
-	var row_h: float = (inner.end.y - row_top - 12.0) / float(slot_labels.size())
+	var label_columns: Array = [
+		{"title": "box.col.pos", "key": "pos", "w": 60, "fmt": "pos_badge", "group": "award.group.pos_category"},
+	]
+	var label_rows: Array = []
+	var league_rows: Dictionary = {"league1": [], "league2": []}
 	for i in range(slot_labels.size()):
-		var y: float = row_top + float(i) * row_h
-		var pos: int = int(slot_positions[i])
-		for li in range(2):
-			var cx: float = inner.position.x + col_w * float(li)
-			var cells: Array = columns.get(league_keys[li], []) as Array
+		label_rows.append({"pos": Loc.t(str(slot_labels[i])), "pos_color": _pos_color(int(slot_positions[i]))})
+		for key in LEAGUE_KEYS:
+			var cells: Array = columns.get(key, []) as Array
 			var cell: Dictionary = cells[i] as Dictionary if i < cells.size() else {}
-			_draw_award_cell(Rect2(cx + 8.0, y + 2.0, col_w - 16.0, row_h - 4.0), Loc.t(str(slot_labels[i])), pos, cell)
-		if i < slot_labels.size() - 1:
-			_line(Vector2(inner.position.x + 12, y + row_h), Vector2(inner.end.x - 12, y + row_h), HAIRLINE, 1.0)
-
-
-func _draw_award_cell(rect: Rect2, slot_label: String, slot_pos: int, cell: Dictionary) -> void:
-	var ty: float = rect.position.y + rect.size.y * 0.5 + 5.0
-	# スロットラベルは守備位置色 (投=PINK / 捕=BLUE / 内野=AMBER / 外野=GREEN / DH=VIOLET) で描く。
-	_text(slot_label, Vector2(rect.position.x + 2.0, ty), 13, _pos_color(slot_pos), 26.0, HORIZONTAL_ALIGNMENT_CENTER, true)
-
-	var body_x: float = rect.position.x + 32.0
-	var body_w: float = rect.end.x - body_x
-	var pid: int = int(cell.get("pid", 0))
-	if pid <= 0:
-		_text(Loc.t("common.none_applicable"), Vector2(body_x + 4.0, ty), 12, FAINT, body_w - 8.0)
-		return
-
-	if pid == _hover_pid:
-		_round(Rect2(body_x - 2.0, rect.position.y, body_w, rect.size.y), Color(1, 1, 1, 0.055), Color.TRANSPARENT, 6, 0)
-
-	var team: PSTeam = GameDb.get_team(int(cell.get("team_id", 0)))
-	var dot_col: Color = team.color if team != null else MUTED
-	_dot(Vector2(body_x + 6.0, rect.position.y + rect.size.y * 0.5), 4.5, dot_col)
-
-	var value_text: String = str(cell.get("value", ""))
-	var value_w: float = 62.0 if not value_text.is_empty() else 0.0
-	var name_x: float = body_x + 18.0
-	var name_w: float = body_w - 22.0 - value_w
-	_text(str(cell.get("name", "")), Vector2(name_x, ty), 13, TEXT, name_w, HORIZONTAL_ALIGNMENT_LEFT, true)
-	if not value_text.is_empty():
-		_text_right(value_text, rect.end.x - 2.0, ty, 12, AMBER, value_w)
-
-	_player_hits.append({"rect": Rect2(body_x - 2.0, rect.position.y, body_w, rect.size.y), "pid": pid})
+			(league_rows[key] as Array).append(_league_row(cell))
+	_draw_league_split_table(rect, label_columns, label_rows, league_rows, 60.0, [52, 107, 68])
 
 
 # ============================================================ buttons

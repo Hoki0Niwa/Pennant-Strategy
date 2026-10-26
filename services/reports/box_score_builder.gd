@@ -165,6 +165,7 @@ static func _player_row(entry: Dictionary, team_pas: Array, column_count: int, c
 			cells[cidx] = cell
 
 	return {
+		"player_id": player_id,
 		"pos": _position_label(entry),
 		"name": record.name if record != null else "#%d" % player_id,
 		"bats": _bats_label(record),

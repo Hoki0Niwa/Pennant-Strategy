@@ -145,10 +145,35 @@ static func style_spin_box(spin: SpinBox, font: Font = null, scale_factor: float
 		edit.add_theme_font_override("font", font)
 
 
-# ダイアログ内の選択ボックス。本体はモーダルの action ボタン、開いた一覧は PopupMenu と同じ見た目。
+# 選択ボックス。本体は角丸 7 の PANEL_2 枠、一覧は style_popup と同じテーマにする。
 static func style_option_button(select: OptionButton, font: Font = null, scale_factor: float = 1.0) -> void:
-	style_button(select, "action", font, scale_factor)
+	select.add_theme_stylebox_override("normal", _box(PANEL_2, BORDER, 7, 12))
+	select.add_theme_stylebox_override("hover", _box(Color(0.160, 0.200, 0.245), BORDER, 7, 12))
+	select.add_theme_stylebox_override("pressed", _box(PANEL, BLUE, 7, 12))
+	select.add_theme_stylebox_override("focus", _box(PANEL_2, BLUE, 7, 12))
+	select.add_theme_stylebox_override("disabled", _box(PANEL, BORDER_SOFT, 7, 12))
+	select.add_theme_color_override("font_color", TEXT)
+	select.add_theme_color_override("font_hover_color", TEXT)
+	select.add_theme_color_override("font_pressed_color", TEXT)
+	select.add_theme_color_override("font_focus_color", TEXT)
+	select.add_theme_color_override("font_disabled_color", FAINT)
+	select.add_theme_font_size_override("font_size", max(11, int(round(13.0 * scale_factor))))
+	if font != null:
+		select.add_theme_font_override("font", font)
 	style_popup(select.get_popup(), font, scale_factor)
+
+
+static func style_scroll_container(scroll: ScrollContainer, scale_factor: float = 1.0) -> void:
+	var v_bar: VScrollBar = scroll.get_v_scroll_bar()
+	if v_bar != null:
+		v_bar.custom_minimum_size.x = max(4.0, 6.0 * scale_factor)
+		var grabber: StyleBoxFlat = _box(BORDER, Color.TRANSPARENT, 2, 0)
+		var grabber_hl: StyleBoxFlat = _box(MUTED, Color.TRANSPARENT, 2, 0)
+		var track: StyleBoxFlat = _box(PANEL_2, Color.TRANSPARENT, 2, 0)
+		v_bar.add_theme_stylebox_override("grabber", grabber)
+		v_bar.add_theme_stylebox_override("grabber_highlight", grabber_hl)
+		v_bar.add_theme_stylebox_override("grabber_pressed", grabber_hl)
+		v_bar.add_theme_stylebox_override("scroll", track)
 
 
 static func _box(

@@ -38,10 +38,15 @@ func _draw() -> void:
 	# メニューカード (ボタンの背面パネル)
 	var card_h: float = _menu_card_height()
 	_round(Rect2(CARD_X, MENU_TOP, CARD_W, card_h), PANEL, BORDER, 14)
+	_round(Rect2(CARD_X + 24.0, MENU_TOP, CARD_W - 48.0, 3.0), BLUE, Color.TRANSPARENT, 2)
 
 	# 収録データのサマリー (カード下端)
-	_text(Loc.t("start.data_summary", {"teams": GameDb.get_team_count(), "players": GameDb.get_player_count()}),
-		Vector2(0, MENU_TOP + card_h + 38), 14, MUTED, BASE.x, HORIZONTAL_ALIGNMENT_CENTER)
+	var summary_text: String = Loc.t("start.data_summary", {"teams": GameDb.get_team_count(), "players": GameDb.get_player_count()})
+	var sum_w: float = _measure(summary_text, 13) + 32.0
+	var sum_x: float = (BASE.x - sum_w) * 0.5
+	var sum_y: float = MENU_TOP + card_h + 24.0
+	_round(Rect2(sum_x, sum_y, sum_w, 28.0), PANEL_2, BORDER_SOFT, 14)
+	_text(summary_text, Vector2(sum_x, sum_y + 19.0), 13, MUTED, sum_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 	# フッタ + ステータス
 	_text(_app_version_label(), Vector2(28, BASE.y - 28), 13, FAINT)

@@ -46,6 +46,9 @@ const PANEL_H_GAP: float = 12.0
 const PANEL_V_GAP: float = 12.0
 const GRID_COLS: int = 3
 const GRID_ROWS: int = 3
+# 部門カード: 表の左右余白と、タイトル帯までの高さ (表はこの下から始まる)。
+const CARD_PAD: float = 12.0
+const CARD_TITLE_H: float = 36.0
 
 # WAR 集計は全選手集計のため refresh 単位で 1 度だけ実施。リーグ context を共有。
 var _war_ctx_cache: Dictionary = {}
@@ -149,47 +152,43 @@ func _draw_league_column(lx: float, lw: float, label: String, cats: Array) -> vo
 
 
 func _draw_category_panel(rect: Rect2, label: String, rows: Array) -> void:
-	# パネルは基盤 _panel のフラット化 (枠なし + bold タイトル + 青ティック) に乗る。
-	_panel(rect, label)
-	_line(Vector2(rect.position.x + 12, rect.position.y + 44), Vector2(rect.end.x - 12, rect.position.y + 44), BORDER, 1.5)
+	# 部門タイトル帯 (SUPER_HEADER_BG) の下に、列見出し + 行ヘアラインのミニ表を共通エンジンで描く。
+	_round(rect, PANEL, BORDER_SOFT, 8, 1)
+	_round(Rect2(rect.position.x + CARD_PAD, rect.position.y + 8.0, rect.size.x - CARD_PAD * 2.0, CARD_TITLE_H - 8.0), SUPER_HEADER_BG, Color.TRANSPARENT, 4, 0)
+	_round(Rect2(rect.position.x + CARD_PAD + 8.0, rect.position.y + 14.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
+	_text(label, Vector2(rect.position.x + CARD_PAD + 17.0, rect.position.y + 26.0), 13, TEXT, rect.size.x - CARD_PAD * 2.0 - 26.0, HORIZONTAL_ALIGNMENT_LEFT, true)
 
-	if rows.is_empty():
-		_text(Loc.t("common.no_data"), Vector2(rect.position.x + 12, rect.position.y + 72), 12, FAINT)
-		return
-
-	var inner_x: float = rect.position.x + 12.0
-	var top: float = rect.position.y + 52.0
-	var row_h: float = (rect.end.y - top - 8.0) / float(RANKING_TOP_COUNT)
-	var value_box: float = 56.0
-	var value_right: float = rect.end.x - 10.0
-	var name_x: float = inner_x + 56.0
-	var name_w: float = value_right - value_box - 6.0 - name_x
-	var muted_text: Color = MUTED.lerp(TEXT, 0.55)
-
-	for i in range(rows.size()):
-		var r: Dictionary = rows[i] as Dictionary
+	var columns: Array = [
+		{"title": "col.rank", "key": "rank", "w": 28, "fmt": "rank"},
+		{"title": "col.team", "key": "team", "w": 56, "fmt": "team"},
+		{"title": "col.player", "key": "name", "w": 112, "fmt": "player_name", "strong": true},
+		{"title": "history.col.record", "key": "val", "w": 52, "align": "r", "strong": true},
+	]
+	var table_rows: Array = []
+	for row_value in rows:
+		var r: Dictionary = row_value as Dictionary
 		var pid: int = int(r.get("pid", 0))
-		var is_top: bool = int(r["rank"]) == 1
-		var ry: float = top + float(i) * row_h
-		var row_rect: Rect2 = Rect2(rect.position.x + 6.0, ry + 1.0, rect.size.x - 12.0, row_h - 2.0)
-		if is_top:
-			_round(row_rect, Color(AMBER.r, AMBER.g, AMBER.b, 0.13), Color(AMBER.r, AMBER.g, AMBER.b, 0.42), 6)
-		elif pid > 0 and pid == _hover_pid:
-			_round(row_rect, Color(1, 1, 1, 0.05), Color.TRANSPARENT, 6, 0)
-
-		var ty: float = ry + row_h * 0.5 + 5.0
-		var rank_color: Color = AMBER if is_top else MUTED
-		var name_color: Color = TEXT if is_top else muted_text
-		var value_color: Color = AMBER if is_top else TEXT
-		_text(str(r["rank"]), Vector2(inner_x, ty), 13, rank_color, 18, HORIZONTAL_ALIGNMENT_LEFT, is_top)
-		_text(str(r["team"]), Vector2(inner_x + 22.0, ty), 12, MUTED, 32)
-		_text(str(r["name"]), Vector2(name_x, ty), 13, name_color, name_w, HORIZONTAL_ALIGNMENT_LEFT, is_top)
-		_text_right(str(r["val"]), value_right, ty, 13, value_color, value_box, true)
-		# 自前描画リストなので行区切りは手でヘアラインを引く (トップ行の強調背景の下にも重ねて描く)。
-		_line(Vector2(rect.position.x + 6.0, ry + row_h), Vector2(rect.end.x - 6.0, ry + row_h), HAIRLINE, 1.0)
-
+		var table_row: Dictionary = r.duplicate()
+		table_row["is_leader"] = int(r["rank"]) == 1
 		if pid > 0:
-			_row_hits.append({"rect": row_rect, "pid": pid})
+			table_row["__meta"] = pid
+		table_rows.append(table_row)
+
+	var table_rect: Rect2 = Rect2(rect.position.x, rect.position.y + CARD_TITLE_H, rect.size.x, rect.size.y - CARD_TITLE_H)
+	var hits: Array = []
+	_draw_data_table(table_rect, columns, table_rows, {
+		"panel": false,
+		"header_top": 22.0,
+		"inner_pad": CARD_PAD,
+		"bottom_pad": 6.0,
+		"empty_text": Loc.t("common.no_data"),
+		"sel_kind": "player",
+		"hover_id": _hover_pid,
+		"hits": hits,
+	})
+	for hit_value in hits:
+		var hit: Dictionary = hit_value as Dictionary
+		_row_hits.append({"rect": hit["rect"], "pid": int(hit["meta"])})
 
 
 # ============================================================ buttons
@@ -307,13 +306,7 @@ func _batter_rows(records: Array, category: Dictionary, season: PSSeason, league
 		var value: float = float(entry["value"])
 		if value <= 0.0 and (key == "average" or key == "ops" or key == "woba" or key == "wrc_plus"):
 			continue
-		rows.append({
-			"rank": shown + 1,
-			"team": _team_short(record.team_id),
-			"name": record.name,
-			"val": _format_batter_value(key, value),
-			"pid": record.player_id,
-		})
+		rows.append(_ranking_row(shown + 1, record, _format_batter_value(key, value)))
 		shown += 1
 	return rows
 
@@ -356,15 +349,24 @@ func _pitcher_rows(records: Array, category: Dictionary, season: PSSeason, leagu
 		var entry: Dictionary = entry_row as Dictionary
 		var record: PSPlayerSeasonRecord = entry["record"] as PSPlayerSeasonRecord
 		var value: float = float(entry["value"])
-		rows.append({
-			"rank": shown + 1,
-			"team": _team_short(record.team_id),
-			"name": record.name,
-			"val": _format_pitcher_value(key, value, record.pitcher_stats),
-			"pid": record.player_id,
-		})
+		rows.append(_ranking_row(shown + 1, record, _format_pitcher_value(key, value, record.pitcher_stats)))
 		shown += 1
 	return rows
+
+
+# 部門カードの 1 行。color は球団色ドット、jersey は選手名の #背番号 に使う。
+func _ranking_row(rank: int, record: PSPlayerSeasonRecord, val_text: String) -> Dictionary:
+	var team: PSTeam = GameDb.get_team(record.team_id)
+	var player: PSPlayer = GameDb.get_player(record.player_id)
+	return {
+		"rank": rank,
+		"team": _team_short(record.team_id),
+		"color": team.color if team != null else MUTED,
+		"name": record.name,
+		"jersey": player.jersey_number if player != null else 0,
+		"val": val_text,
+		"pid": record.player_id,
+	}
 
 
 func _required_plate_appearances(record: PSPlayerSeasonRecord, season: PSSeason) -> int:
@@ -462,7 +464,7 @@ func _pitcher_metric_value(stats: PSPitcherStats, key: String) -> float:
 func _format_batter_value(key: String, value: float) -> String:
 	match key:
 		"average", "ops", "woba":
-			return "%0.3f" % value
+			return _rate_short(value)
 		"wrc_plus":
 			return "%0.1f" % value
 		"war":
@@ -480,7 +482,7 @@ func _format_pitcher_value(key: String, value: float, stats: PSPitcherStats) -> 
 		"woba_allowed":
 			if stats.outs_pitched == 0:
 				return "--"
-			return "%0.3f" % value
+			return _rate_short(value)
 		"war":
 			return "%+0.2f" % value
 		_:

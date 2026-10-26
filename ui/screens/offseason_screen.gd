@@ -30,60 +30,65 @@ const DRAFT_TABS: Array = [
 ]
 
 const PICK_COLUMNS: Array = [
-	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "team", "align": "left"},
-	{"title": "col.round", "key": "round", "w": 48, "fmt": "string"},
-	{"title": "col.player", "key": "name", "w": 110, "fmt": "string", "strong": true},
-	{"title": "col.pos", "key": "pos", "w": 52, "fmt": "pos_badge"},
-	{"title": "col.age", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "col.source", "key": "source", "w": 60, "fmt": "string", "sep_before": true},
-	{"title": "col.overall", "key": "overall", "w": 52, "fmt": "int"},
-	{"title": "col.contested", "key": "note", "w": 52, "fmt": "string"},
+	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "team", "align": "left", "group": "group.draft_pick"},
+	{"title": "col.round", "key": "round", "w": 48, "fmt": "string", "group": "group.draft_pick"},
+	{"title": "col.player", "key": "name", "w": 110, "fmt": "player_name", "strong": true, "group": "group.profile", "sep_before": true},
+	{"title": "col.pos", "key": "pos", "w": 52, "fmt": "pos_badge", "group": "group.profile"},
+	{"title": "col.age", "key": "age", "w": 56, "fmt": "int", "group": "group.profile"},
+	{"title": "col.overall", "key": "overall", "w": 52, "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+	{"title": "col.source", "key": "source", "w": 60, "fmt": "string", "sep_before": true, "group": "group.draft_route"},
+	{"title": "col.contested", "key": "note", "w": 52, "fmt": "string", "group": "group.draft_route"},
 ]
 
 const LOTTERY_COLUMNS: Array = [
-	{"title": "col.wave", "key": "wave", "w": 40, "fmt": "int"},
-	{"title": "col.player", "key": "name", "w": 120, "fmt": "string", "strong": true},
-	{"title": "col.contested", "key": "teams", "w": 200, "fmt": "string"},
-	{"title": "col.lottery_winner", "key": "team", "w": 84, "fmt": "team", "align": "left", "sep_before": true},
+	{"title": "col.wave", "key": "wave", "w": 40, "fmt": "int", "group": "group.lottery_target"},
+	{"title": "col.player", "key": "name", "w": 120, "fmt": "player_name", "strong": true, "group": "group.lottery_target"},
+	{"title": "col.contested", "key": "teams", "w": 200, "fmt": "string", "sep_before": true, "group": "group.lottery_result"},
+	{"title": "col.lottery_winner", "key": "team", "w": 84, "fmt": "team", "align": "left", "group": "group.lottery_result"},
 ]
 
 const ROOKIE_COLUMNS: Array = [
-	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "string"},
-	{"title": "col.player", "key": "name", "w": 120, "fmt": "string", "strong": true},
-	{"title": "col.age", "key": "age", "w": 56, "fmt": "int"},
-	{"title": "col.pos", "key": "pos", "w": 84, "fmt": "pos_badge"},
-	{"title": "col.overall", "key": "overall", "w": 56, "fmt": "int", "sep_before": true},
+	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "string", "group": "group.team"},
+	{"title": "col.player", "key": "name", "w": 120, "fmt": "player_name", "strong": true, "group": "group.profile", "sep_before": true},
+	{"title": "col.age", "key": "age", "w": 56, "fmt": "int", "group": "group.profile"},
+	{"title": "col.pos", "key": "pos", "w": 84, "fmt": "pos_badge", "group": "group.profile"},
+	{"title": "col.overall", "key": "overall", "w": 56, "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
 ]
 
+# 通常キャンプで覚えた球種の表。能力は変化量を持たないので、総合はピル・制球などは 3px バーで描く
+# (球速だけは km/h の単位付きなので growth 書式のまま)。
 const CAMP_PITCH_COLUMNS: Array = [
-	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "team", "align": "left"},
-	{"title": "col.player", "key": "name", "w": 120, "fmt": "string", "strong": true},
-	{"title": "col.age", "key": "age", "w": 60, "fmt": "int"},
-	{"title": "col.new_pitch", "key": "pitch", "w": 110, "fmt": "string", "sep_before": true},
-	{"title": "col.pitch_grade", "key": "grade", "w": 64, "fmt": "string"},
-	{"title": "col.overall", "key": "overall_cell", "w": 60, "fmt": "growth", "sep_before": true},
-	{"title": "rating.velocity", "key": "velocity", "w": 92, "fmt": "growth"},
-	{"title": "rating.stuff", "key": "stuff", "w": 50, "fmt": "growth"},
-	{"title": "rating.control", "key": "control", "w": 50, "fmt": "growth"},
-	{"title": "rating.stamina", "key": "stamina", "w": 72, "fmt": "growth"},
+	{"title": "col.team_short", "key": "team", "w": 72, "fmt": "team", "align": "left", "group": "group.profile"},
+	{"title": "col.player", "key": "name", "w": 120, "fmt": "player_name", "strong": true, "group": "group.profile"},
+	{"title": "col.age", "key": "age", "w": 60, "fmt": "int", "group": "group.profile"},
+	{"title": "col.new_pitch", "key": "pitch", "w": 110, "fmt": "string", "sep_before": true, "group": "group.new_pitch"},
+	{"title": "col.pitch_grade", "key": "grade", "w": 64, "fmt": "string", "group": "group.new_pitch"},
+	{"title": "col.overall", "key": "overall", "w": 60, "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+	{"title": "rating.velocity", "key": "velocity", "w": 92, "fmt": "growth", "sep_before": true, "group": "group.pitcher_abilities"},
+	{"title": "rating.stuff", "key": "stuff", "w": 50, "fmt": "ability_bar", "group": "group.pitcher_abilities"},
+	{"title": "rating.control", "key": "control", "w": 50, "fmt": "ability_bar", "group": "group.pitcher_abilities"},
+	{"title": "rating.stamina", "key": "stamina", "w": 72, "fmt": "ability_bar", "group": "group.pitcher_abilities"},
 ]
 
 # 基本能力(growth 書式=値+増減色分け)の列。成長 / キャンプ結果で共用。
 func _ability_columns(pitcher: bool, compact: bool = false) -> Array:
 	var cols: Array = []
 	if pitcher:
-		_append_growth_column(cols, "rating.velocity", "velocity", 74 if compact else 78, 30)
-		_append_growth_column(cols, "rating.stuff", "stuff", 44 if compact else 48, 28)
-		_append_growth_column(cols, "rating.control", "control", 44 if compact else 48, 28)
-		_append_growth_column(cols, "rating.stamina", "stamina", 56 if compact else 62, 28)
+		var pitcher_group: String = "group.pitcher_abilities"
+		_append_growth_column(cols, "rating.velocity", "velocity", 74 if compact else 78, 30, pitcher_group)
+		_append_growth_column(cols, "rating.stuff", "stuff", 44 if compact else 48, 28, pitcher_group)
+		_append_growth_column(cols, "rating.control", "control", 44 if compact else 48, 28, pitcher_group)
+		_append_growth_column(cols, "rating.stamina", "stamina", 56 if compact else 62, 28, pitcher_group)
 	else:
 		var value_w: int = 44 if compact else 48
-		_append_growth_column(cols, "rating.contact", "contact", value_w, 28)
-		_append_growth_column(cols, "rating.power", "power", value_w, 28)
-		_append_growth_column(cols, "rating.speed", "speed", value_w, 28)
-		_append_growth_column(cols, "rating.defense", "defense", value_w, 28)
-		_append_growth_column(cols, "rating.arm", "arm", value_w, 28)
-		_append_growth_column(cols, "rating.discipline", "discipline", value_w, 28)
+		var fielder_group: String = "group.fielder_abilities"
+		_append_growth_column(cols, "rating.contact", "contact", value_w, 28, fielder_group)
+		_append_growth_column(cols, "rating.power", "power", value_w, 28, fielder_group)
+		_append_growth_column(cols, "rating.speed", "speed", value_w, 28, fielder_group)
+		_append_growth_column(cols, "rating.defense", "defense", value_w, 28, fielder_group)
+		_append_growth_column(cols, "rating.arm", "arm", value_w, 28, fielder_group)
+		_append_growth_column(cols, "rating.discipline", "discipline", value_w, 28, fielder_group)
+	(cols[0] as Dictionary)["sep_before"] = true
 	return cols
 
 
@@ -92,27 +97,43 @@ func _growth_detail_columns(pitcher: bool, compact: bool = false) -> Array:
 	if pitcher:
 		for i in range(PSPitchTypes.ALL_TYPES.size()):
 			var pitch_type: String = str(PSPitchTypes.ALL_TYPES[i])
-			_append_growth_column(cols, PSPitchTypes.display_name(pitch_type), "pitch_%d" % i, 36 if compact else 38, 24)
+			_append_growth_column(cols, PSPitchTypes.display_name(pitch_type), "pitch_%d" % i, 36 if compact else 38, 24, "group.pitch_types")
 	else:
 		for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
-			_append_growth_column(cols, _position_char(pos), "apt_%d" % pos, 30 if compact else 32, 24)
+			_append_growth_column(cols, _position_char(pos), "apt_%d" % pos, 30 if compact else 32, 24, "group.aptitudes")
+	(cols[0] as Dictionary)["sep_before"] = true
 	return cols
 
 
-func _append_growth_column(cols: Array, title: String, key: String, value_w: int, delta_w: int) -> void:
-	cols.append({"title": title, "key": key, "w": value_w + delta_w, "fmt": "growth", "delta_w": delta_w})
+func _append_growth_column(cols: Array, title: String, key: String, value_w: int, delta_w: int, group: String = "") -> void:
+	# bar: 後値の下に能力バー (単位付きの球速は suffix があるのでエンジン側で描かない)。
+	var col: Dictionary = {"title": title, "key": key, "w": value_w + delta_w, "fmt": "growth", "delta_w": delta_w, "bar": true}
+	if not group.is_empty():
+		col["group"] = group
+	cols.append(col)
+
+
+# 成長 / キャンプ結果の左端プロフィール列 (共通の選手プロフィール列から、行データに持たない
+# 在籍区分・疲労・利き手を除いたもの)。投手は役割、野手は守備位置のバッジ。
+func _result_profile_columns(pitcher: bool, include_team: bool) -> Array:
+	var cols: Array = _player_profile_columns(pitcher, include_team, false, false)
+	cols.pop_back()
+	return cols
+
+
+# 総合の評価ピル + 増減 (後値は row["overall"]、増減は row["delta"])。
+func _overall_delta_columns(overall_w: int) -> Array:
+	return [
+		{"title": "col.overall", "key": "overall", "w": overall_w, "align": "c", "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
+		{"title": "col.delta_short", "key": "delta", "w": 36, "fmt": "delta", "group": "group.eval"},
+	]
 
 
 # 選手の成長 結果の列 (選手/年齢/結果 + 能力)。
 func _growth_columns(pitcher: bool) -> Array:
-	var cols: Array = [
-		{"title": "col.pos", "key": "pos", "w": 46, "fmt": "pos_badge"},
-		{"title": "col.player", "key": "name", "w": 128, "fmt": "string", "strong": true},
-		{"title": "col.age", "key": "age", "w": 76, "fmt": "int", "gap_after": 24},
-		{"title": "col.result", "key": "kind", "w": 104, "fmt": "string", "align": "right", "sep_before": true},
-	]
-	_append_growth_column(cols, "col.overall", "overall_cell", 58, 30)
-	(cols.back() as Dictionary)["sep_before"] = true
+	var cols: Array = _result_profile_columns(pitcher, false)
+	cols.append({"title": "col.result", "key": "kind", "w": 104, "fmt": "string", "align": "right", "sep_before": true, "group": "group.growth_result"})
+	cols.append_array(_overall_delta_columns(46))
 	cols.append_array(_ability_columns(pitcher))
 	cols.append_array(_growth_detail_columns(pitcher))
 	return cols
@@ -120,27 +141,24 @@ func _growth_columns(pitcher: bool) -> Array:
 
 # キャンプ結果の列 (球団/選手/練習/成否/変化 + 成長と同じ能力)。
 func _camp_result_columns(pitcher: bool) -> Array:
-	var cols: Array = [
-		{"title": "col.team", "key": "team", "w": 64, "fmt": "team", "align": "left"},
-		{"title": "col.player", "key": "name", "w": 118, "fmt": "string", "strong": true},
-		{"title": "col.age", "key": "age", "w": 66, "fmt": "int", "gap_after": 20},
-		{"title": "col.training", "key": "training", "w": 104, "fmt": "string", "sep_before": true},
-		{"title": "col.outcome", "key": "result", "w": 52, "fmt": "string"},
-		{"title": "col.before", "key": "before_state", "w": 64, "fmt": "pos_badge"},
-		{"title": "col.after", "key": "after_state", "w": 64, "fmt": "pos_badge"},
-	]
-	_append_growth_column(cols, "col.overall", "overall_cell", 54, 28)
-	(cols.back() as Dictionary)["sep_before"] = true
+	var cols: Array = _result_profile_columns(pitcher, true)
+	cols.append_array([
+		{"title": "col.training", "key": "training", "w": 104, "fmt": "string", "sep_before": true, "group": "group.camp_training"},
+		{"title": "col.outcome", "key": "result", "w": 52, "fmt": "string", "group": "group.camp_training"},
+		{"title": "col.before", "key": "before_state", "w": 64, "fmt": "pos_badge", "group": "group.camp_training"},
+		{"title": "col.after", "key": "after_state", "w": 64, "fmt": "pos_badge", "group": "group.camp_training"},
+	])
+	cols.append_array(_overall_delta_columns(42))
 	cols.append_array(_ability_columns(pitcher, true))
 	cols.append_array(_growth_detail_columns(pitcher, true))
 	return cols
 
 const DRAFT_RESULT_COLUMNS: Array = [
-	{"title": "col.round", "key": "round", "w": 36, "fmt": "string"},
-	{"title": "col.player", "key": "name", "w": 96, "fmt": "string", "strong": true},
-	{"title": "col.pos", "key": "pos", "w": 46, "fmt": "pos_badge"},
-	{"title": "col.age_short", "key": "age", "w": 42, "fmt": "int"},
-	{"title": "col.overall_short", "key": "overall", "w": 38, "fmt": "int", "sep_before": true},
+	{"title": "col.round", "key": "round", "w": 36, "fmt": "string", "group": "group.draft_pick"},
+	{"title": "col.player", "key": "name", "w": 96, "fmt": "player_name", "strong": true, "group": "group.profile", "sep_before": true},
+	{"title": "col.pos", "key": "pos", "w": 46, "fmt": "pos_badge", "group": "group.profile"},
+	{"title": "col.age_short", "key": "age", "w": 42, "fmt": "int", "group": "group.profile"},
+	{"title": "col.overall_short", "key": "overall", "w": 38, "fmt": "eval_badge", "sep_before": true, "group": "group.eval"},
 ]
 
 # ドラフト進行中の表示切替チップ (指名画面=候補ボード+指名履歴/抽選、途中経過=結果画面風の全面ビュー)。
@@ -191,13 +209,13 @@ const COMP_SORT_OPTIONS: Array = [
 const COMP_CASES_RECT: Rect2 = Rect2(262, 284, 1638, 300)
 const COMP_MOVES_RECT: Rect2 = Rect2(262, 596, 1638, 464)
 const COMP_CASE_COLUMNS: Array = [
-	{"key": "fa_name", "title": "offseason.comp.col.fa_player", "w": 150, "fmt": "string", "strong": true},
-	{"key": "rank", "title": "offseason.comp.col.rank", "w": 56, "fmt": "string", "align": "center"},
-	{"key": "to_team", "title": "offseason.comp.col.to_team", "w": 110, "fmt": "team"},
-	{"key": "from_team", "title": "offseason.comp.col.from_team", "w": 130, "fmt": "team"},
-	{"key": "decision", "title": "offseason.comp.col.decision", "w": 160, "fmt": "string"},
-	{"key": "picked", "title": "offseason.comp.col.picked", "w": 150, "fmt": "string", "strong": true},
-	{"key": "money", "title": "offseason.comp.col.money", "w": 110, "fmt": "string", "align": "right"},
+	{"key": "fa_name", "title": "offseason.comp.col.fa_player", "w": 150, "fmt": "player_name", "strong": true, "group": "group.comp_fa"},
+	{"key": "rank", "title": "offseason.comp.col.rank", "w": 56, "fmt": "string", "align": "center", "group": "group.comp_fa"},
+	{"key": "to_team", "title": "offseason.comp.col.to_team", "w": 110, "fmt": "team", "sep_before": true, "group": "group.comp_move"},
+	{"key": "from_team", "title": "offseason.comp.col.from_team", "w": 130, "fmt": "team", "group": "group.comp_move"},
+	{"key": "decision", "title": "offseason.comp.col.decision", "w": 160, "fmt": "string", "sep_before": true, "group": "group.comp_result"},
+	{"key": "picked", "title": "offseason.comp.col.picked", "w": 150, "fmt": "player_name", "strong": true, "group": "group.comp_result"},
+	{"key": "money", "title": "offseason.comp.col.money", "w": 110, "fmt": "string", "align": "right", "group": "group.comp_result"},
 ]
 # キャンプ: 上段=候補ボード(全幅) / 下段=特別練習メニュー・成功率・成功時獲得適性の3パネル。
 const CAMP_BOARD: Rect2 = Rect2(262, 324, 1638, 512)
@@ -1245,8 +1263,31 @@ func _draw_empty() -> void:
 
 # ステップ名はヘッダ見出しが持つ。ここは状況テキストだけを描く (ステップ番号は表示しない)。
 func _draw_subheader() -> void:
+	var cur_step: String = str(_view.get("step", ""))
+	var step_idx: int = AppState.OFFSEASON_STEP_ORDER.find(cur_step) if not cur_step.is_empty() else -1
+	var status_max_w: float = 1620.0
+	if step_idx >= 0:
+		var total_steps: int = AppState.OFFSEASON_STEP_ORDER.size()
+		var bar_w: float = float(total_steps) * 12.0 - 2.0
+		var bar_x: float = INNER_R - bar_w
+		var bar_y: float = 98.0
+		var badge_text: String = "STEP %d/%d" % [step_idx + 1, total_steps]
+		var badge_w: float = _measure(badge_text, 12) + 16.0
+		var badge_rect: Rect2 = Rect2(bar_x - badge_w - 12.0, 91.0, badge_w, 20.0)
+		_round(badge_rect, PANEL_2, BORDER_SOFT, 4, 1)
+		_text(badge_text, Vector2(badge_rect.position.x, 105.0), 11, TEXT, badge_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+		for i in range(total_steps):
+			var seg_rect: Rect2 = Rect2(bar_x + float(i) * 12.0, bar_y, 10.0, 6.0)
+			if i < step_idx:
+				_round(seg_rect, Color(BLUE.r, BLUE.g, BLUE.b, 0.45), Color.TRANSPARENT, 2, 0)
+			elif i == step_idx:
+				_round(seg_rect, BLUE, Color.TRANSPARENT, 2, 0)
+			else:
+				_round(seg_rect, PANEL_3, BORDER_SOFT, 2, 1)
+		status_max_w = badge_rect.position.x - 16.0 - INNER_L
+
 	if not _status_text.is_empty():
-		_text(_status_text, Vector2(INNER_L, 111), 14, _status_color, 1620)
+		_text(_status_text, Vector2(INNER_L, 106.0), 14, _status_color, status_max_w, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 
 # 各ステップの正準名 (結果データの有無に依存しない)。ヘッダ見出しに使う。
@@ -1396,7 +1437,7 @@ func _draw_draft_progress_panel() -> void:
 
 	var content_top: float = BODY.position.y + 52.0
 	if not _draft_lottery_rows.is_empty():
-		var lottery_h: float = min(64.0 + float(_draft_lottery_rows.size()) * 28.0, 220.0)
+		var lottery_h: float = min(82.0 + float(_draft_lottery_rows.size()) * 28.0, 238.0)
 		_draw_table_inner(Rect2(BODY.position.x, content_top, BODY.size.x, lottery_h), Loc.t("offseason.draft.first_round_lottery"), LOTTERY_COLUMNS, _draft_lottery_rows, "draft_progress_lottery", "", 0, true, 15, 28.0)
 		content_top += lottery_h + 14.0
 
@@ -1582,13 +1623,13 @@ func _draw_draft_grid_cells(block_x: float, end_x: float, y: float, entries: Arr
 		var entry: Dictionary = entries[i] as Dictionary
 		var cx: float = block_x + float(i) * col_w
 		if is_header:
-			_text(str(entry.get("label", "")), Vector2(cx, y), 11, FAINT, col_w, HORIZONTAL_ALIGNMENT_CENTER)
+			_text(str(entry.get("label", "")), Vector2(cx, y), 11, MUTED, col_w, HORIZONTAL_ALIGNMENT_CENTER, true)
 		else:
 			var value: int = int(entry.get("value", -1))
 			if value < 0:
 				_text("-", Vector2(cx, y), 13, FAINT, col_w, HORIZONTAL_ALIGNMENT_CENTER)
 			else:
-				_text(str(value), Vector2(cx, y), 13, _grade_color(value), col_w, HORIZONTAL_ALIGNMENT_CENTER)
+				_text(str(value), Vector2(cx, y), 13, TEXT, col_w, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func _draft_pitch_header_entries() -> Array:
@@ -1634,16 +1675,16 @@ func _draft_apt_value_entries(aptitudes: Dictionary) -> Array:
 func _draw_candidate_pitcher_header(rect: Rect2, y: float, info1_header: String, info2_header: String) -> void:
 	var xs: Dictionary = _draft_table_x(rect, true)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("col.role"), Vector2(float(xs["badge_x"]), y), 11, FAINT, 50.0, HORIZONTAL_ALIGNMENT_CENTER)
-	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, FAINT)
-	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, FAINT, 40.0)
-	_text(info1_header, Vector2(float(xs["src_x"]), y), 11, FAINT)
-	_text_cell(Loc.t("col.overall"), float(xs["eval_r"]), y, 11, FAINT, 44.0)
-	_text_cell(info2_header, float(xs["grow_r"]), y, 11, FAINT, 52.0)
-	_text_cell(Loc.t("rating.velocity"), float(xs["velo_r"]), y, 11, FAINT, 56.0)
-	_text_cell(Loc.t("rating.stuff"), float(xs["stuff_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.control"), float(xs["ctrl_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.stamina"), float(xs["stam_r"]), y, 11, FAINT, 54.0)
+	_text(Loc.t("col.role"), Vector2(float(xs["badge_x"]), y), 11, MUTED, 50.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, MUTED, 40.0, true)
+	_text(info1_header, Vector2(float(xs["src_x"]), y), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_cell(Loc.t("col.overall"), float(xs["eval_r"]), y, 11, MUTED, 44.0, true)
+	_text_cell(info2_header, float(xs["grow_r"]), y, 11, MUTED, 52.0, true)
+	_text_cell(Loc.t("rating.velocity"), float(xs["velo_r"]), y, 11, MUTED, 56.0, true)
+	_text_cell(Loc.t("rating.stuff"), float(xs["stuff_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.control"), float(xs["ctrl_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.stamina"), float(xs["stam_r"]), y, 11, MUTED, 54.0, true)
 	_draw_draft_grid_cells(float(xs["block_x"]), rect.end.x - 14.0, y, _draft_pitch_header_entries(), true)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
@@ -1651,18 +1692,18 @@ func _draw_candidate_pitcher_header(rect: Rect2, y: float, info1_header: String,
 func _draw_candidate_fielder_header(rect: Rect2, y: float, info1_header: String, info2_header: String) -> void:
 	var xs: Dictionary = _draft_table_x(rect, false)
 	_round(Rect2(rect.position.x + 12.0, y - 18.0, rect.size.x - 24.0, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("col.pos"), Vector2(float(xs["badge_x"]), y), 11, FAINT, 40.0, HORIZONTAL_ALIGNMENT_CENTER)
-	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, FAINT)
-	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, FAINT, 40.0)
-	_text(info1_header, Vector2(float(xs["src_x"]), y), 11, FAINT)
-	_text_cell(Loc.t("col.overall"), float(xs["eval_r"]), y, 11, FAINT, 44.0)
-	_text_cell(info2_header, float(xs["grow_r"]), y, 11, FAINT, 52.0)
-	_text_cell(Loc.t("rating.contact"), float(xs["meet_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.power"), float(xs["pow_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.speed"), float(xs["spd_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.defense"), float(xs["def_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.arm"), float(xs["arm_r"]), y, 11, FAINT)
-	_text_cell(Loc.t("rating.discipline"), float(xs["eye_r"]), y, 11, FAINT)
+	_text(Loc.t("col.pos"), Vector2(float(xs["badge_x"]), y), 11, MUTED, 40.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_text(Loc.t("col.player"), Vector2(float(xs["name_x"]), y), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_cell(Loc.t("col.age"), float(xs["age_r"]), y, 11, MUTED, 40.0, true)
+	_text(info1_header, Vector2(float(xs["src_x"]), y), 11, MUTED, -1.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_text_cell(Loc.t("col.overall"), float(xs["eval_r"]), y, 11, MUTED, 44.0, true)
+	_text_cell(info2_header, float(xs["grow_r"]), y, 11, MUTED, 52.0, true)
+	_text_cell(Loc.t("rating.contact"), float(xs["meet_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.power"), float(xs["pow_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.speed"), float(xs["spd_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.defense"), float(xs["def_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.arm"), float(xs["arm_r"]), y, 11, MUTED, 34.0, true)
+	_text_cell(Loc.t("rating.discipline"), float(xs["eye_r"]), y, 11, MUTED, 34.0, true)
 	_draw_draft_grid_cells(float(xs["block_x"]), rect.end.x - 14.0, y, _draft_apt_header_entries(), true)
 	_line(Vector2(rect.position.x + 12.0, y + 8.0), Vector2(rect.end.x - 12.0, y + 8.0), BORDER, 1.5)
 
@@ -1673,7 +1714,7 @@ func _draw_candidate_identity(_rect: Rect2, xs: Dictionary, row: Dictionary, y: 
 	_text_cell(str(int(row.get("age", 0))), float(xs["age_r"]), y, 13, MUTED, 40.0)
 	_text(str(row.get("info1", "")), Vector2(float(xs["src_x"]), y), 12, MUTED, 80.0)
 	var overall: int = int(row.get("overall", 0))
-	_text_cell(str(overall), float(xs["eval_r"]), y, 13, _grade_color(overall), 44.0)
+	_text_cell(str(overall), float(xs["eval_r"]), y, 13, TEXT, 44.0)
 	_text_cell(str(row.get("info2", "")), float(xs["grow_r"]), y, 12, row.get("info2_color", MUTED) as Color, 48.0)
 
 
@@ -1879,7 +1920,7 @@ func _draw_camp_apt_panel() -> void:
 	_text(Loc.t("offseason.camp.current"), Vector2(px, CAMP_APT.position.y + 92), 12, FAINT)
 	_text(str(current), Vector2(px, CAMP_APT.position.y + 128), 30, TEXT)
 	_text(Loc.t("offseason.camp.on_success"), Vector2(px + 190, CAMP_APT.position.y + 92), 12, FAINT)
-	_text(str(projected), Vector2(px + 190, CAMP_APT.position.y + 128), 30, _grade_color(projected) if gain >= 0 else RED)
+	_text(str(projected), Vector2(px + 190, CAMP_APT.position.y + 128), 30, TEXT)
 	if gain != 0:
 		_text("(%+d)" % gain, Vector2(px + 300, CAMP_APT.position.y + 124), 18, GREEN if gain > 0 else RED)
 
@@ -2040,6 +2081,7 @@ func _draw_rookies_result(rect: Rect2, result: Dictionary) -> void:
 		rows.append({
 			"team": _team_short(int(entry.get("team_id", 0))),
 			"name": str(entry.get("name", "")),
+			"jersey": _jersey_of_player(int(entry.get("player_id", 0))),
 			"age": int(entry.get("age", 0)),
 			"pos": str(badge.get("text", "")),
 			"pos_color": badge.get("color", MUTED) as Color,
@@ -2137,11 +2179,15 @@ func _draw_camp_result(rect: Rect2, result: Dictionary) -> void:
 				"team": _team_short(int(pitch.get("team_id", 0))),
 				"color": _team_color(int(pitch.get("team_id", 0))),
 				"name": str(pitch.get("name", "")),
+				"jersey": _jersey_of_player(int(pitch.get("player_id", 0))),
 				"age": int(pitch.get("age", 0)),
 				"pitch": str(pitch.get("pitch_name", "")),
 				"grade": str(pitch.get("mastery_grade", "")),
 			}
 			_fill_result_ability_cells(row, pitch)
+			_flatten_ability_cells(row, ["overall_cell", "stuff", "control", "stamina"])
+			if row.has("overall_cell"):
+				row["overall"] = row["overall_cell"]
 			pitch_rows.append(row)
 
 	var content_top: float = rect.position.y + 68.0
@@ -2166,10 +2212,12 @@ func _camp_action_rows(actions: Array) -> Array:
 		var after: int = int(action.get("after", 0))
 		var team_id: int = int(action.get("team_id", 0))
 		var change_pair: Dictionary = _camp_action_change_pair(action)
+		var badge: Dictionary = _pick_pos_badge(action)
 		var row: Dictionary = {
 			"team": _team_short(team_id),
 			"color": _team_color(team_id),
 			"name": str(action.get("name", "")),
+			"jersey": _jersey_of_player(int(action.get("player_id", 0))),
 			"age": int(action.get("age", 0)),
 			"training": str(action.get("training_label", "")),
 			"result": Loc.t("offseason.camp.success") if bool(action.get("success", false)) else (Loc.t("offseason.camp.failure_penalty") if bool(action.get("penalty", false)) else Loc.t("offseason.camp.failure")),
@@ -2179,7 +2227,9 @@ func _camp_action_rows(actions: Array) -> Array:
 			"after_state": str(change_pair.get("after", "")),
 			"after_state_color": change_pair.get("after_color", MUTED) as Color,
 		}
-		_set_growth_cell(row, "overall_cell", {"after": after, "delta": after - before, "suffix": ""})
+		_set_pos_badge_cells(row, badge, _jersey_player_is_development(int(action.get("player_id", 0))))
+		row["overall"] = after
+		row["delta"] = after - before
 		for ability_row in action.get("abilities", []) as Array:
 			var ability: Dictionary = ability_row as Dictionary
 			_set_growth_cell(row, str(ability.get("key", "")), {
@@ -2312,7 +2362,7 @@ func _draw_draft_result(rect: Rect2, result: Dictionary) -> void:
 		if str(log_entry.get("type", "")) == "lottery":
 			lottery_rows.append(_lottery_row(log_entry))
 	if not lottery_rows.is_empty():
-		var lottery_h: float = min(64.0 + float(lottery_rows.size()) * 28.0, 220.0)
+		var lottery_h: float = min(82.0 + float(lottery_rows.size()) * 28.0, 238.0)
 		_draw_table_inner(Rect2(rect.position.x, content_top, rect.size.x, lottery_h), Loc.t("offseason.draft.first_round_lottery"), LOTTERY_COLUMNS, lottery_rows, "draft_result_lottery", "", 0, true, 15, 28.0)
 		content_top += lottery_h + 14.0
 
@@ -2341,7 +2391,7 @@ func _draw_picks_team_grid(area: Rect2, picks: Array, order_mode: String = "alph
 	var max_picks: int = 1
 	for team_picks_value in picks_by_team.values():
 		max_picks = max(max_picks, (team_picks_value as Array).size())
-	var cell_row_h: float = clampf((row_h - 72.0) / float(max_picks), 18.0, 30.0)
+	var cell_row_h: float = clampf((row_h - 90.0) / float(max_picks), 18.0, 30.0)
 	for li in range(leagues.size()):
 		var league: String = str(leagues[li])
 		var ids: Array
@@ -2877,6 +2927,7 @@ func _pick_row(pick: Dictionary) -> Dictionary:
 		"team": _team_short(int(pick.get("team_id", 0))),
 		"color": _team_color(int(pick.get("team_id", 0))),
 		"name": str(pick.get("name", "")),
+		"jersey": _jersey_of_player(int(pick.get("player_id", 0))),
 		"age": int(pick.get("age", 0)),
 		"pos": str(badge.get("text", "")),
 		"pos_color": badge.get("color", MUTED) as Color,
@@ -4745,6 +4796,32 @@ func _set_growth_cell(row: Dictionary, key: String, cell: Dictionary) -> void:
 	}
 
 
+func _jersey_of_player(player_id: int) -> int:
+	var player: PSPlayer = GameDb.get_player(player_id) if player_id > 0 else null
+	return player.jersey_number if player != null else 0
+
+
+func _jersey_player_is_development(player_id: int) -> bool:
+	var player: PSPlayer = GameDb.get_player(player_id) if player_id > 0 else null
+	return player != null and player.development_player
+
+
+# 守備位置/役割バッジを pos と role の両キーに書く (投手表は role 列、野手表と混在表は pos 列が読む)。
+func _set_pos_badge_cells(row: Dictionary, badge: Dictionary, development: bool) -> void:
+	for key in ["pos", "role"]:
+		row[key] = str(badge.get("text", ""))
+		row["%s_color" % key] = badge.get("color", MUTED) as Color
+		row["%s_dev" % key] = development
+
+
+# {after, delta, suffix} の能力セルを後値の数値へ畳む (変化量を持たない表で ability_bar に渡すため)。
+func _flatten_ability_cells(row: Dictionary, keys: Array) -> void:
+	for key in keys:
+		var cell: Variant = row.get(key, null)
+		if cell is Dictionary:
+			row[key] = int((cell as Dictionary).get("after", 0))
+
+
 func _fill_result_ability_cells(row: Dictionary, entry: Dictionary) -> void:
 	var record: PSPlayerSeasonRecord = _record_for_people_entry(entry)
 	if record == null:
@@ -4827,16 +4904,15 @@ func _growth_rows(entries: Array) -> Array:
 		var badge: Dictionary = _pick_pos_badge(entry)
 		var gp: PSPlayer = GameDb.get_player(int(entry.get("player_id", 0)))
 		var row: Dictionary = {
-			"pos": str(badge.get("text", "")),
-			"pos_color": badge.get("color", MUTED) as Color,
-			"pos_dev": gp != null and gp.development_player,
 			"name": str(entry.get("name", "")),
+			"jersey": gp.jersey_number if gp != null else 0,
 			"age": int(entry.get("age", 0)),
 			"kind": str(entry.get("growth_label", entry.get("result_label", ""))),
 			"kind_color": _growth_result_color(entry),
+			"overall": after,
 			"delta": delta,
 		}
-		_set_growth_cell(row, "overall_cell", {"after": after, "delta": delta, "suffix": ""})
+		_set_pos_badge_cells(row, badge, gp != null and gp.development_player)
 		for ability_row in entry.get("abilities", []) as Array:
 			var ability: Dictionary = ability_row as Dictionary
 			_set_growth_cell(row, str(ability.get("key", "")), {
@@ -5247,14 +5323,7 @@ func _oaa_str(ad: PSAdvancedStats) -> String:
 	return "%+0.1f" % total
 
 
-func _oaa_color(ad: PSAdvancedStats) -> Color:
-	if ad == null:
-		return MUTED
-	var total: float = float(ad.oaa_by_zone.get("infield", 0.0)) + float(ad.oaa_by_zone.get("outfield", 0.0))
-	if total > 0.5:
-		return GREEN
-	if total < -0.5:
-		return RED
+func _oaa_color(_ad: PSAdvancedStats) -> Color:
 	return MUTED
 
 

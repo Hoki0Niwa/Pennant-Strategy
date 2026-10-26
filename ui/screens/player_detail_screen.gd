@@ -295,39 +295,27 @@ func _draw_arsenal_bars(rect: Rect2) -> void:
 			label, str(display), clampf(float(display) / 100.0, 0.0, 1.0), _rating_color(display, ""))
 
 
-# ラベル + 値 + バー の1行。値は能力名のすぐ右(バーの左)に左寄せで詰める。x..x+w に収める。
-# label_w はラベルにぴったりの幅にすると値が能力名のすぐ右に来る。
+# ラベル + 値 + バー の1行。値は能力名のすぐ右(バーの左)に詰める。
 func _draw_bar(x: float, cy: float, w: float, label_w: float, value_box: float, label: String, value_text: String, factor: float, color: Color) -> void:
 	var bar_x: float = x + label_w + value_box + 8.0
 	var bar_w: float = w - label_w - value_box - 8.0
 	_text(label, Vector2(x, cy + 5.0), 14, MUTED, label_w - 2.0)
-	_text(value_text, Vector2(x + label_w, cy + 5.0), 14, TEXT, value_box)
-	_round(Rect2(bar_x, cy - 5.0, bar_w, 10.0), PANEL_2, Color.TRANSPARENT, 5, 0)
+	_text(value_text, Vector2(x + label_w, cy + 5.0), 14, TEXT, value_box, HORIZONTAL_ALIGNMENT_RIGHT, true)
+	# 数値は TEXT のまま、スリムなバーだけを段階色で塗る。
+	_round(Rect2(bar_x, cy - 2.0, bar_w, 4.0), PANEL_2, Color.TRANSPARENT, 2, 0)
 	if factor > 0.0:
-		_round(Rect2(bar_x, cy - 5.0, bar_w * factor, 10.0), color, Color.TRANSPARENT, 5, 0)
+		_round(Rect2(bar_x, cy - 2.0, max(4.0, bar_w * factor), 4.0), color, Color.TRANSPARENT, 2, 0)
 
 
-# 配色規約: 優秀=青 / 次点=緑 / 平均=黄 / 低=赤 ([[feedback_ui_color_conventions]])。
+# 段階色は共通の _tier_color (優秀=青 / 次点=緑 / 平均=黄 / 低=赤)。球速は 120-165 の正規化値で読む。
 func _rating_color(value: int, suffix: String) -> Color:
 	if suffix == "km/h":
-		return BLUE
-	if value >= 75:
-		return BLUE
-	if value >= 55:
-		return GREEN
-	if value >= 40:
-		return AMBER
-	return RED
+		return _tier_color(clampf((float(value) - 120.0) / 45.0, 0.0, 1.0) * 100.0)
+	return _tier_color(float(value))
 
 
-func _eval_color(score: int) -> Color:
-	if score >= 75:
-		return BLUE
-	if score >= 60:
-		return GREEN
-	if score >= 45:
-		return AMBER
-	return RED
+func _eval_color(_score: int) -> Color:
+	return TEXT
 
 
 # --- プロフィール・契約パネル ---
@@ -354,7 +342,7 @@ func _draw_profile(rect: Rect2) -> void:
 		var ty: float = ry + row_h * 0.5 + 5.0
 		_text(Loc.t(str(pair["label"])), Vector2(label_x, ty), 13, MUTED, value_x - label_x - 8.0)
 		var color: Color = AMBER if bool(pair.get("injury", false)) else TEXT
-		_text(str(pair["value"]), Vector2(value_x, ty), 14, color, rect.end.x - 22.0 - value_x)
+		_text(str(pair["value"]), Vector2(value_x, ty), 14, color, rect.end.x - 22.0 - value_x, HORIZONTAL_ALIGNMENT_LEFT, true)
 		# 帯背景の交互塗りは使わず、ヘアラインだけで行を刻む。
 		if i < pairs.size() - 1:
 			_line(Vector2(rect.position.x + 16.0, ry + row_h), Vector2(rect.end.x - 16.0, ry + row_h), HAIRLINE, 1.0)
@@ -383,20 +371,22 @@ func _draw_eval(rect: Rect2) -> void:
 	_panel(rect, Loc.t("player_detail.panel.overall"))
 	var score: int = PlayerValueEvaluator.overall_score(_record)
 	# 総合評価を大きな数値で。
-	_text(str(score), Vector2(rect.position.x, rect.position.y + 142.0), 64, _eval_color(score), rect.size.x, HORIZONTAL_ALIGNMENT_CENTER)
-	_line(Vector2(rect.position.x + 26, rect.position.y + 172.0), Vector2(rect.end.x - 26, rect.position.y + 172.0), BORDER_SOFT, 1.0)
+	_text(str(score), Vector2(rect.position.x, rect.position.y + 138.0), 60, TEXT, rect.size.x, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_line(Vector2(rect.position.x + 24, rect.position.y + 166.0), Vector2(rect.end.x - 24, rect.position.y + 166.0), BORDER, 1.0)
 
-	# 内訳 (打撃 / 守備) も大きめの文字で。行数に応じて間隔を詰める。
+	# 内訳 (打撃 / 守備) も大きめの文字で。
 	var items: Array = _eval_items(_record)
-	var top: float = rect.position.y + 190.0
+	var top: float = rect.position.y + 180.0
 	var avail: float = rect.end.y - 18.0 - top
 	var row_h: float = avail / float(max(1, items.size()))
 	for i in range(items.size()):
 		var item: Dictionary = items[i] as Dictionary
 		var cy: float = top + float(i) * row_h + row_h * 0.5
 		var value: int = int(item["value"])
-		_text(str(item["label"]), Vector2(rect.position.x + 26, cy + 6.0), 18, MUTED, rect.size.x - 162.0)
-		_text_right(str(value), rect.end.x - 26, cy + 9.0, 30, _eval_color(value), 110)
+		_text(str(item["label"]), Vector2(rect.position.x + 24, cy + 6.0), 15, MUTED, rect.size.x - 140.0)
+		_text_right(str(value), rect.end.x - 24, cy + 8.0, 26, TEXT, 90, true)
+		if i < items.size() - 1:
+			_line(Vector2(rect.position.x + 24, cy + row_h * 0.5), Vector2(rect.end.x - 24, cy + row_h * 0.5), HAIRLINE, 1.0)
 
 
 # 守備内訳は「本職(登録ポジション)」と「最多出場ポジション」の守備評価を出す
@@ -422,7 +412,7 @@ func _eval_items(record: PSPlayerSeasonRecord) -> Array:
 
 # --- 下部タブ表 ---
 
-# 今季タブ: 成績+高度指標をカテゴリ別の段落 + 大きなカードで全部見せる (表ではない)。
+# 今季タブ: 成績+高度指標をカテゴリ別の段落 + カード帯で見せる。
 func _draw_season(rect: Rect2) -> void:
 	_round(rect, PANEL, Color.TRANSPARENT, 10, 0)
 	_ensure_season_cards()
@@ -432,12 +422,13 @@ func _draw_season(rect: Rect2) -> void:
 		return
 
 	var cols: int = 9
-	var gap: float = 8.0
-	var header_h: float = 28.0
-	var section_gap: float = 12.0
+	var gap: float = 6.0
+	var header_h: float = 30.0
+	var section_gap: float = 14.0
 	var inner_x: float = rect.position.x + 16.0
+	var usable_w: float = rect.size.x - 32.0
 	var top: float = rect.position.y + 72.0
-	var card_w: float = (rect.size.x - 32.0 - gap * float(cols - 1)) / float(cols)
+	var card_w: float = (usable_w - gap * float(cols - 1)) / float(cols)
 	var scroll_key: String = _scroll_key_for_tab("season")
 
 	# カテゴリごとの行数から内容高さを求め、固定カード高さのまま縦スクロールする。
@@ -447,7 +438,7 @@ func _draw_season(rect: Rect2) -> void:
 		total_rows += int(ceil(float((group_value as Dictionary).get("cards", []).size()) / float(cols)))
 	var viewport_h: float = rect.end.y - 16.0 - top
 	var content_h: float = header_h * float(n_sections) + section_gap * float(max(0, n_sections - 1))
-	content_h += SEASON_CARD_H * float(total_rows) + gap * float(max(0, total_rows - n_sections))
+	content_h += (SEASON_CARD_H + 4.0) * float(total_rows)
 	var max_off: int = int(ceil(maxf(0.0, content_h - viewport_h) / SEASON_SCROLL_STEP))
 	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_off)
 	_scroll[scroll_key] = offset
@@ -458,32 +449,31 @@ func _draw_season(rect: Rect2) -> void:
 	for group_value in _season_groups:
 		var group: Dictionary = group_value as Dictionary
 		if y + header_h >= top and y <= rect.end.y - 16.0:
-			# カテゴリ見出しは他画面の _panel と同じ言語 (bold + 青ティック)。
-			_round(Rect2(inner_x, y + 6.0, 3, 14.0), BLUE, Color.TRANSPARENT, 2, 0)
-			_text(str(group.get("title", "")), Vector2(inner_x + 9.0, y + 19.0), 15, TEXT, 300.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-			_line(Vector2(inner_x, y + 26.0), Vector2(rect.end.x - 16.0, y + 26.0), BORDER, 1.5)
+			_round(Rect2(inner_x, y + 4.0, 3, 16.0), BLUE, Color.TRANSPARENT, 2, 0)
+			_text(str(group.get("title", "")), Vector2(inner_x + 10.0, y + 18.0), 15, TEXT, 300.0, HORIZONTAL_ALIGNMENT_LEFT, true)
+			_line(Vector2(inner_x, y + 26.0), Vector2(rect.end.x - 16.0, y + 26.0), BORDER_SOFT, 1.0)
 		y += header_h
 		var cards: Array = group.get("cards", []) as Array
 		var grows: int = int(ceil(float(cards.size()) / float(cols)))
 		var idx: int = 0
 		for r in range(grows):
-			for c in range(cols):
-				if idx >= cards.size():
-					break
-				var card: Dictionary = cards[idx] as Dictionary
-				var cx: float = inner_x + float(c) * (card_w + gap)
-				var cy: float = y + float(r) * (SEASON_CARD_H + gap)
-				if cy + SEASON_CARD_H >= top and cy <= rect.end.y - 16.0:
-					# 枠付きミニカードではなく、枠なしのセル + ヘアライン区切り (ラベル上/値下)。
-					_text(str(card["label"]), Vector2(cx + 2.0, cy + 18.0), 11, MUTED, card_w - 4.0)
-					_text(str(card["value"]), Vector2(cx, cy + SEASON_CARD_H - 10.0), 22, TEXT, card_w, HORIZONTAL_ALIGNMENT_CENTER, true)
+			var row_card_count: int = mini(cols, cards.size() - idx)
+			var row_w: float = float(row_card_count) * card_w + float(max(0, row_card_count - 1)) * gap
+			var cy: float = y
+			if cy + SEASON_CARD_H >= top and cy <= rect.end.y - 16.0:
+				_round(Rect2(inner_x, cy, row_w, SEASON_CARD_H), PANEL_2, BORDER_SOFT, 6, 1)
+				for c in range(row_card_count):
+					var card: Dictionary = cards[idx] as Dictionary
+					var cx: float = inner_x + float(c) * (card_w + gap)
 					if c > 0:
-						_line(Vector2(cx - gap * 0.5, cy + 4.0), Vector2(cx - gap * 0.5, cy + SEASON_CARD_H - 4.0), HAIRLINE, 1.0)
-				idx += 1
-			if r < grows - 1:
-				var sep_y: float = y + float(r + 1) * (SEASON_CARD_H + gap) - gap * 0.5
-				_line(Vector2(inner_x, sep_y), Vector2(rect.end.x - 16.0, sep_y), HAIRLINE, 1.0)
-		y += float(grows) * SEASON_CARD_H + float(grows - 1) * gap + section_gap
+						_line(Vector2(cx - gap * 0.5, cy + 6.0), Vector2(cx - gap * 0.5, cy + SEASON_CARD_H - 6.0), HAIRLINE, 1.0)
+					_text(str(card["label"]), Vector2(cx + 4.0, cy + 18.0), FS_LABEL, MUTED, card_w - 8.0, HORIZONTAL_ALIGNMENT_CENTER)
+					_text(str(card["value"]), Vector2(cx + 4.0, cy + SEASON_CARD_H - 12.0), 20, TEXT, card_w - 8.0, HORIZONTAL_ALIGNMENT_CENTER, true)
+					idx += 1
+			else:
+				idx += row_card_count
+			y += SEASON_CARD_H + 6.0
+		y += section_gap
 	if max_off > 0:
 		_text_right("%d / %d" % [offset, max_off], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
 
@@ -501,85 +491,55 @@ func _draw_usage(rect: Rect2) -> void:
 	_draw_usage_table(right_rect, Loc.t("player_detail.usage.by_order"),_usage_order_columns(), _usage_order_rows, "usage_order", false)
 
 
-# 1枚分の起用表。cols は [{"key":int, "label":String, "color":Color}]。use_badges=true の列見出しは
-# _chip で色付きバッジ、false は通常の太字テキスト (打順の数字はポジション色を持たないため)。
-# タブボタンがヘッダ帯に重なるため、他の表タブ (_draw_table) と同じく上部を空けて開始する。
+# 1枚分の起用表。共有の _draw_data_table を用いて表示する。
 func _draw_usage_table(rect: Rect2, title: String, cols: Array, rows: Array, scroll_key_suffix: String, use_badges: bool) -> void:
-	_round(rect, PANEL, Color.TRANSPARENT, 8, 0)
-	var inner_pad: float = 16.0
-	var inner_x: float = rect.position.x + inner_pad
-	var usable: float = rect.size.x - inner_pad * 2.0
-	var title_y: float = rect.position.y + 74.0
-	_round(Rect2(inner_x + 2.0, title_y - 13.0, 3, 14), BLUE, Color.TRANSPARENT, 2, 0)
-	_text(title, Vector2(inner_x + 11.0, title_y), 14, TEXT, 260.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-
-	var year_w: float = 62.0
-	var total_w: float = 52.0
-	var col_w: float = (usable - year_w - total_w) / float(cols.size())
-	var header_top: float = rect.position.y + 108.0
-	var band_top: float = header_top - 18.0
-	_round(Rect2(inner_x, band_top, usable, 26.0), PANEL_2, Color.TRANSPARENT, 0, 0)
-	_text(Loc.t("col.year"), Vector2(inner_x + 4.0, header_top), 12, MUTED, year_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, true)
-	var cx: float = inner_x + year_w
+	var table_columns: Array = [
+		{"key": "year", "title": "col.year", "w": 62, "align": "l"},
+	]
 	for col_value in cols:
 		var col: Dictionary = col_value as Dictionary
-		if use_badges:
-			var badge_w: float = minf(col_w - 6.0, 32.0)
-			_chip(Rect2(cx + (col_w - badge_w) * 0.5, band_top + 3.0, badge_w, 20.0), str(col["label"]), col["color"] as Color)
-		else:
-			_text(str(col["label"]), Vector2(cx + 2.0, header_top), 12, MUTED, col_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER, true)
-		cx += col_w
-	_text_right(Loc.t("box.total"), cx + total_w - 6.0, header_top, 12, MUTED, total_w - 8.0, true)
-	var line_y: float = header_top + 8.0
-	_line(Vector2(inner_x, line_y), Vector2(rect.end.x - inner_pad, line_y), BORDER, 1.5)
+		table_columns.append({
+			"key": "c_%d" % int(col["key"]),
+			"title": str(col["label"]),
+			"w": 38,
+			"align": "c",
+			"header_chip": use_badges,
+			"chip_color": col.get("color", MUTED),
+		})
+	table_columns.append({
+		"key": "total",
+		"title": "box.total",
+		"w": 52,
+		"align": "r",
+		"sep_before": true,
+	})
 
-	if rows.is_empty():
-		_text(Loc.t("common.no_records"), Vector2(inner_x + 6.0, rect.position.y + rect.size.y * 0.55), 14, MUTED)
-		return
-
-	var row_top: float = line_y + 6.0
-	var area_h: float = rect.end.y - row_top - 8.0
-	var row_h: float = LOWER_TABLE_ROW_H
-	var visible_count: int = maxi(1, int(area_h / row_h))
-	var scroll_key: String = _scroll_key_for_tab(scroll_key_suffix)
-	var max_off: int = maxi(0, rows.size() - visible_count)
-	var offset: int = clampi(int(_scroll.get(scroll_key, 0)), 0, max_off)
-	_scroll[scroll_key] = offset
-	if max_off > 0:
-		_scroll_zones.append({"rect": rect, "key": scroll_key, "max": max_off})
-
-	var _drawn: int = 0
-	for vi in range(visible_count):
-		var ri: int = offset + vi
-		if ri >= rows.size():
-			break
-		var row: Dictionary = rows[ri] as Dictionary
-		var ry: float = row_top + float(vi) * row_h
-		var is_total_row: bool = bool(row.get("is_total", false))
-		var no_record: bool = bool(row.get("no_record", false))
-		if is_total_row:
-			_round(Rect2(rect.position.x + 10.0, ry + 1.0, rect.size.x - 20.0, row_h - 2.0), Color(BLUE.r, BLUE.g, BLUE.b, 0.10), Color.TRANSPARENT, 6, 0)
-		var base_color: Color = BLUE if is_total_row else TEXT
-		if no_record:
-			base_color = FAINT
-		var ty: float = ry + row_h * 0.5 + 5.0
-		_text(str(row.get("year", "")), Vector2(inner_x + 4.0, ty), 13, base_color, year_w - 6.0, HORIZONTAL_ALIGNMENT_LEFT, is_total_row)
-		var ccx: float = inner_x + year_w
+	var table_rows: Array = []
+	for r_val in rows:
+		var r: Dictionary = (r_val as Dictionary).duplicate()
+		var no_record: bool = bool(r.get("no_record", false))
 		for col_value in cols:
 			var col: Dictionary = col_value as Dictionary
-			var value: int = int(row.get("c_%d" % int(col["key"]), 0))
-			var cell_text: String = "-" if (no_record or value <= 0) else str(value)
-			var cell_color: Color = FAINT if (no_record or value <= 0) else base_color
-			_text(cell_text, Vector2(ccx + 2.0, ty), 13, cell_color, col_w - 4.0, HORIZONTAL_ALIGNMENT_CENTER)
-			ccx += col_w
-		var total_value: int = int(row.get("total", 0))
-		var total_text: String = "-" if (no_record or total_value <= 0) else str(total_value)
-		var total_color: Color = FAINT if (no_record or total_value <= 0) else base_color
-		_text_right(total_text, ccx + total_w - 6.0, ty, 13, total_color, total_w - 8.0, is_total_row)
-		_line(Vector2(inner_x, ry + row_h), Vector2(inner_x + usable, ry + row_h), HAIRLINE, 1.0)
-		_drawn += 1
-	if max_off > 0:
-		_text_right("%d / %d" % [mini(offset + visible_count, rows.size()), rows.size()], rect.end.x - 14.0, rect.end.y - 8.0, 10, FAINT, 120.0)
+			var k: String = "c_%d" % int(col["key"])
+			var val: int = int(r.get(k, 0))
+			r[k] = "-" if (no_record or val <= 0) else str(val)
+		var total_val: int = int(r.get("total", 0))
+		r["total"] = "-" if (no_record or total_val <= 0) else str(total_val)
+		if no_record:
+			r["__color"] = FAINT
+		table_rows.append(r)
+
+	_draw_data_table(rect, table_columns, table_rows, {
+		"title": title,
+		"title_y": 74.0,
+		"title_pad": 16.0,
+		"header_top": 108.0,
+		"row_h": LOWER_TABLE_ROW_H,
+		"scroll_key": _scroll_key_for_tab(scroll_key_suffix),
+		"scroll": _scroll,
+		"scroll_zones": _scroll_zones,
+		"empty_text": Loc.t("common.no_records"),
+	})
 
 
 func _usage_position_columns() -> Array:
@@ -641,11 +601,11 @@ func _usage_row(keys: Array, year_label: String, counts: Dictionary, total_start
 	return row
 
 
-# 描画本体は基底の _draw_data_table が持つ。タブボタンはヘッダ帯に重なるため見出しは描かず
-# header_top=84 から始める。通算行 (is_total) 強調 + 奇数行縞 (alt_rows) + 行高上限40 は opts で指定。
+# 描画本体は基底の _draw_data_table が持つ。タブボタン (rect 上端 +18〜+56) の下に 2 段見出しの
+# 上段 (header_top - 36 から) が来るよう header_top=100 から始める。通算行 (is_total) 強調 + 行高は opts で指定。
 func _draw_table(rect: Rect2) -> void:
 	_draw_data_table(rect, _columns_for_tab(), _rows_for_tab(), {
-		"header_top": 84.0, "inner_pad": 16.0, "header_size": 12,
+		"header_top": 100.0, "inner_pad": 16.0, "header_size": 12,
 		"row_h": LOWER_TABLE_ROW_H, "alt_rows": true, "empty_text": Loc.t("common.no_records"),
 		"scroll_key": _scroll_key_for_tab(_active_tab), "scroll": _scroll, "scroll_zones": _scroll_zones,
 	})
@@ -657,276 +617,276 @@ func _columns_for_tab() -> Array:
 	match _active_tab:
 		"career":
 			return [
-				{"title": "col.year", "key": "year", "w": 90, "align": "l", "fmt": "str"},
-				{"title": "col.event", "key": "label", "w": 170, "align": "l", "fmt": "str"},
-				{"title": "col.detail", "key": "detail", "w": 560, "align": "l", "fmt": "str"},
+				{"title": "col.year", "key": "year", "w": 90, "align": "l", "fmt": "str", "group": "group.history"},
+				{"title": "col.event", "key": "label", "w": 170, "align": "l", "fmt": "str", "group": "group.history"},
+				{"title": "col.detail", "key": "detail", "w": 560, "align": "l", "fmt": "str", "group": "group.history"},
 			]
 		"games":
 			if pitcher:
 				return [
-					{"title": "col.date", "key": "date", "w": 82, "align": "l", "fmt": "str"},
-					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
-					{"title": "col.opponent", "key": "opp", "w": 58, "align": "l", "fmt": "str"},
-					{"title": "col.result", "key": "result", "w": 70, "align": "l", "fmt": "str"},
-					{"title": "col.route", "key": "route", "w": 72, "align": "l", "fmt": "str"},
-					{"title": "col.decision", "key": "decision", "w": 46, "align": "c", "fmt": "str"},
-					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1"},
-					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
-					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
-					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hbp_allowed", "key": "hbp", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hits_allowed", "key": "h", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.pitch_count", "key": "pit", "w": 54, "align": "r", "fmt": "int"},
+					{"title": "col.date", "key": "date", "w": 82, "align": "l", "fmt": "str", "group": "group.schedule"},
+					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true, "group": "group.schedule"},
+					{"title": "col.opponent", "key": "opp", "w": 58, "align": "l", "fmt": "str", "group": "group.schedule"},
+					{"title": "col.result", "key": "result", "w": 70, "align": "l", "fmt": "str", "group": "group.schedule"},
+					{"title": "col.route", "key": "route", "w": 72, "align": "l", "fmt": "str", "group": "group.schedule"},
+					{"title": "col.decision", "key": "decision", "w": 46, "align": "c", "fmt": "str", "group": "group.schedule"},
+					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "sep_before": true, "group": "group.pitching_app"},
+					{"title": "col.pitch_count", "key": "pit", "w": 54, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2", "sep_before": true, "group": "group.pitching_rates"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_detail"},
+					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hbp_allowed", "key": "hbp", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hits_allowed", "key": "h", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
 				]
 			return [
-				{"title": "col.date", "key": "date", "w": 82, "align": "l", "fmt": "str"},
-				{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
-				{"title": "col.opponent", "key": "opp", "w": 58, "align": "l", "fmt": "str"},
-				{"title": "col.result", "key": "result", "w": 70, "align": "l", "fmt": "str"},
-				{"title": "col.route", "key": "route", "w": 76, "align": "l", "fmt": "str"},
-				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
-				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int"},
-				{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int"},
-				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
-				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.sacrifices", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.sac_flies", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "col.date", "key": "date", "w": 82, "align": "l", "fmt": "str", "group": "group.schedule"},
+				{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true, "group": "group.schedule"},
+				{"title": "col.opponent", "key": "opp", "w": 58, "align": "l", "fmt": "str", "group": "group.schedule"},
+				{"title": "col.result", "key": "result", "w": 70, "align": "l", "fmt": "str", "group": "group.schedule"},
+				{"title": "col.route", "key": "route", "w": 76, "align": "l", "fmt": "str", "group": "group.schedule"},
+				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting1"},
+				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting2"},
+				{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_discipline"},
+				{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.sacrifices", "key": "sac", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.sac_flies", "key": "sf", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
 			]
 		"monthly":
 			if pitcher:
 				return [
-					{"title": "col.month", "key": "month", "w": 68, "align": "l", "fmt": "str"},
-					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
-					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int"},
-					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1"},
-					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
-					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
-					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hbp_allowed", "key": "hbp", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hits_allowed", "key": "h", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "col.month", "key": "month", "w": 68, "align": "l", "fmt": "str", "group": "group.schedule"},
+					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true, "group": "group.schedule"},
+					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_app"},
+					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "group": "group.pitching_app"},
+					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_dec"},
+					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2", "sep_before": true, "group": "group.pitching_rates"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_detail"},
+					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hbp_allowed", "key": "hbp", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hits_allowed", "key": "h", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
 				]
 			return [
-				{"title": "col.month", "key": "month", "w": 68, "align": "l", "fmt": "str"},
-				{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
-				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
-				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int"},
-				{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int"},
-				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
-				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.sacrifices", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.sac_flies", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "col.month", "key": "month", "w": 68, "align": "l", "fmt": "str", "group": "group.schedule"},
+				{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true, "group": "group.schedule"},
+				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting1"},
+				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting2"},
+				{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true, "group": "group.batting_rates"},
+				{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_discipline"},
+				{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.sacrifices", "key": "sac", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.sac_flies", "key": "sf", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
 			]
 		"farm":
 			if pitcher:
 				return [
-					{"title": "col.year_short", "key": "year", "w": 52, "align": "l", "fmt": "str"},
-					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
-					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true},
-					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "sep_before": true},
-					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
-					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
-					{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2"},
-					{"title": "BB/9", "key": "bb9", "w": 60, "align": "r", "fmt": "f2"},
-					{"title": "HR/9", "key": "hr9", "w": 60, "align": "r", "fmt": "f2"},
-					{"title": "wOBAA", "key": "wobaa", "w": 64, "align": "r", "fmt": "rate", "sep_before": true},
-					{"title": "xwOBAA", "key": "xwobaa", "w": 68, "align": "r", "fmt": "rate"},
-					{"title": "RE24A", "key": "re24a", "w": 62, "align": "r", "fmt": "f1s"},
-					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true},
-					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "col.year_short", "key": "year", "w": 52, "align": "l", "fmt": "str", "group": "group.history"},
+					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_app"},
+					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "group": "group.pitching_app"},
+					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_dec"},
+					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2", "sep_before": true, "group": "group.pitching_rates"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "K/9", "key": "k9", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "BB/9", "key": "bb9", "w": 60, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "HR/9", "key": "hr9", "w": 60, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_detail"},
+					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "wOBAA", "key": "wobaa", "w": 64, "align": "r", "fmt": "rate", "sep_before": true, "group": "group.adv_value"},
+					{"title": "xwOBAA", "key": "xwobaa", "w": 68, "align": "r", "fmt": "rate", "group": "group.adv_value"},
+					{"title": "RE24A", "key": "re24a", "w": 62, "align": "r", "fmt": "f1s", "group": "group.adv_value"},
 				]
 			return [
-				{"title": "col.year_short", "key": "year", "w": 50, "align": "l", "fmt": "str"},
-				{"title": "col.team_short", "key": "team", "w": 52, "align": "l", "fmt": "str", "strong": true},
-				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
-				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
-				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
-				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true},
-				{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "wOBA", "key": "woba", "w": 60, "align": "r", "fmt": "rate", "sep_before": true},
-				{"title": "xwOBA", "key": "xwoba", "w": 64, "align": "r", "fmt": "rate"},
-				{"title": "wRC+", "key": "wrcplus", "w": 58, "align": "r", "fmt": "f1"},
-				{"title": "wRAA", "key": "wraa", "w": 60, "align": "r", "fmt": "f1s"},
-				{"title": "RE24", "key": "re24", "w": 60, "align": "r", "fmt": "f1s"},
-				{"title": "BSR", "key": "bsr", "w": 54, "align": "r", "fmt": "f1s"},
-				{"title": "OAA", "key": "oaa", "w": 54, "align": "r", "fmt": "f1s", "sep_before": true},
-				{"title": "col.oaa_if", "key": "oaa_if", "w": 60, "align": "r", "fmt": "f1s"},
-				{"title": "col.oaa_of", "key": "oaa_of", "w": 60, "align": "r", "fmt": "f1s"},
-				{"title": "RngR", "key": "rngr", "w": 54, "align": "r", "fmt": "f1s"},
-				{"title": "ErrR", "key": "errr", "w": 54, "align": "r", "fmt": "f1s"},
-				{"title": "DPR", "key": "dpr", "w": 50, "align": "r", "fmt": "f1s"},
-				{"title": "UZR", "key": "uzr", "w": 54, "align": "r", "fmt": "f1s"},
-				{"title": "DRS", "key": "drs", "w": 54, "align": "r", "fmt": "f1s"},
+				{"title": "col.year_short", "key": "year", "w": 50, "align": "l", "fmt": "str", "group": "group.history"},
+				{"title": "col.team_short", "key": "team", "w": 52, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting1"},
+				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting2"},
+				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true, "group": "group.batting_rates"},
+				{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "wOBA", "key": "woba", "w": 60, "align": "r", "fmt": "rate", "sep_before": true, "group": "group.adv_batting"},
+				{"title": "xwOBA", "key": "xwoba", "w": 64, "align": "r", "fmt": "rate", "group": "group.adv_batting"},
+				{"title": "wRC+", "key": "wrcplus", "w": 58, "align": "r", "fmt": "f1", "group": "group.adv_batting"},
+				{"title": "wRAA", "key": "wraa", "w": 60, "align": "r", "fmt": "f1s", "group": "group.adv_batting"},
+				{"title": "RE24", "key": "re24", "w": 60, "align": "r", "fmt": "f1s", "group": "group.adv_batting"},
+				{"title": "BSR", "key": "bsr", "w": 54, "align": "r", "fmt": "f1s", "sep_before": true, "group": "group.adv_baserunning"},
+				{"title": "OAA", "key": "oaa", "w": 54, "align": "r", "fmt": "f1s", "sep_before": true, "group": "group.adv_fielding"},
+				{"title": "col.oaa_if", "key": "oaa_if", "w": 60, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "col.oaa_of", "key": "oaa_of", "w": 60, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "RngR", "key": "rngr", "w": 54, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "ErrR", "key": "errr", "w": 54, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "DPR", "key": "dpr", "w": 50, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "UZR", "key": "uzr", "w": 54, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "DRS", "key": "drs", "w": 54, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
 			]
 		"advanced":
 			if pitcher:
 				return [
-					{"title": "col.year_short", "key": "year", "w": 64, "align": "l", "fmt": "str"},
-					{"title": "col.team_short", "key": "team", "w": 70, "align": "l", "fmt": "str", "strong": true},
-					{"title": "col.innings", "key": "ip", "w": 76, "align": "r", "fmt": "f1", "sep_before": true},
-					{"title": "FIP", "key": "fip", "w": 70, "align": "r", "fmt": "f2"},
-					{"title": "WAR", "key": "war", "w": 70, "align": "r", "fmt": "f1s"},
-					{"title": "K/9", "key": "k9", "w": 60, "align": "r", "fmt": "f2"},
-					{"title": "BB/9", "key": "bb9", "w": 64, "align": "r", "fmt": "f2"},
-					{"title": "HR/9", "key": "hr9", "w": 64, "align": "r", "fmt": "f2"},
-					{"title": "col.pitches_per_bf", "key": "ppbf", "w": 72, "align": "r", "fmt": "f2", "sep_before": true},
-					{"title": "col.pitches_per_inning", "key": "ppi", "w": 66, "align": "r", "fmt": "f1"},
-					{"title": "col.batters_faced", "key": "bf", "w": 78, "align": "r", "fmt": "int"},
-					{"title": "col.pitches", "key": "pit", "w": 74, "align": "r", "fmt": "int"},
-					{"title": "role.reliever", "key": "rel", "w": 60, "align": "r", "fmt": "int"},
+					{"title": "col.year_short", "key": "year", "w": 64, "align": "l", "fmt": "str", "group": "group.history"},
+					{"title": "col.team_short", "key": "team", "w": 70, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+					{"title": "col.innings", "key": "ip", "w": 76, "align": "r", "fmt": "f1", "sep_before": true, "group": "group.adv_workload"},
+					{"title": "col.batters_faced", "key": "bf", "w": 78, "align": "r", "fmt": "int", "group": "group.adv_workload"},
+					{"title": "col.pitches", "key": "pit", "w": 74, "align": "r", "fmt": "int", "group": "group.adv_workload"},
+					{"title": "col.pitches_per_bf", "key": "ppbf", "w": 72, "align": "r", "fmt": "f2", "group": "group.adv_workload"},
+					{"title": "col.pitches_per_inning", "key": "ppi", "w": 66, "align": "r", "fmt": "f1", "group": "group.adv_workload"},
+					{"title": "role.reliever", "key": "rel", "w": 60, "align": "r", "fmt": "int", "group": "group.adv_workload"},
+					{"title": "K/9", "key": "k9", "w": 60, "align": "r", "fmt": "f2", "sep_before": true, "group": "group.adv_rates"},
+					{"title": "BB/9", "key": "bb9", "w": 64, "align": "r", "fmt": "f2", "group": "group.adv_rates"},
+					{"title": "HR/9", "key": "hr9", "w": 64, "align": "r", "fmt": "f2", "group": "group.adv_rates"},
+					{"title": "FIP", "key": "fip", "w": 70, "align": "r", "fmt": "f2", "sep_before": true, "group": "group.adv_value"},
+					{"title": "WAR", "key": "war", "w": 70, "align": "r", "fmt": "f1s", "group": "group.adv_value"},
 				]
 			return [
-				{"title": "col.year_short", "key": "year", "w": 54, "align": "l", "fmt": "str"},
-				{"title": "col.team_short", "key": "team", "w": 56, "align": "l", "fmt": "str", "strong": true},
-				{"title": "col.pa", "key": "pa", "w": 50, "align": "r", "fmt": "int", "sep_before": true},
-				{"title": "col.pitches_per_pa", "key": "ppa", "w": 64, "align": "r", "fmt": "f2"},
-				{"title": "wOBA", "key": "woba", "w": 62, "align": "r", "fmt": "rate"},
-				{"title": "xwOBA", "key": "xwoba", "w": 66, "align": "r", "fmt": "rate"},
-				{"title": "wRC+", "key": "wrcplus", "w": 60, "align": "r", "fmt": "f1"},
-				{"title": "RE24", "key": "re24", "w": 64, "align": "r", "fmt": "f1s"},
-				{"title": "BSR", "key": "bsr", "w": 60, "align": "r", "fmt": "f1s"},
-				{"title": "WAR", "key": "war", "w": 62, "align": "r", "fmt": "f1s"},
-				{"title": "OAA", "key": "oaa", "w": 60, "align": "r", "fmt": "f1s", "sep_before": true},
-				{"title": "col.oaa_if", "key": "oaa_if", "w": 66, "align": "r", "fmt": "f1s"},
-				{"title": "col.oaa_of", "key": "oaa_of", "w": 66, "align": "r", "fmt": "f1s"},
-				{"title": "RngR", "key": "rngr", "w": 62, "align": "r", "fmt": "f1s"},
-				{"title": "ErrR", "key": "errr", "w": 62, "align": "r", "fmt": "f1s"},
-				{"title": "DPR", "key": "dpr", "w": 58, "align": "r", "fmt": "f1s"},
-				{"title": "UZR", "key": "uzr", "w": 60, "align": "r", "fmt": "f1s"},
-				{"title": "DRS", "key": "drs", "w": 60, "align": "r", "fmt": "f1s"},
+				{"title": "col.year_short", "key": "year", "w": 54, "align": "l", "fmt": "str", "group": "group.history"},
+				{"title": "col.team_short", "key": "team", "w": 56, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+				{"title": "col.pa", "key": "pa", "w": 50, "align": "r", "fmt": "int", "sep_before": true, "group": "group.adv_pa"},
+				{"title": "col.pitches_per_pa", "key": "ppa", "w": 64, "align": "r", "fmt": "f2", "group": "group.adv_pa"},
+				{"title": "wOBA", "key": "woba", "w": 62, "align": "r", "fmt": "rate", "sep_before": true, "group": "group.adv_batting"},
+				{"title": "xwOBA", "key": "xwoba", "w": 66, "align": "r", "fmt": "rate", "group": "group.adv_batting"},
+				{"title": "wRC+", "key": "wrcplus", "w": 60, "align": "r", "fmt": "f1", "group": "group.adv_batting"},
+				{"title": "RE24", "key": "re24", "w": 64, "align": "r", "fmt": "f1s", "group": "group.adv_batting"},
+				{"title": "BSR", "key": "bsr", "w": 60, "align": "r", "fmt": "f1s", "sep_before": true, "group": "group.adv_baserunning"},
+				{"title": "OAA", "key": "oaa", "w": 60, "align": "r", "fmt": "f1s", "sep_before": true, "group": "group.adv_fielding"},
+				{"title": "col.oaa_if", "key": "oaa_if", "w": 66, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "col.oaa_of", "key": "oaa_of", "w": 66, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "RngR", "key": "rngr", "w": 62, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "ErrR", "key": "errr", "w": 62, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "DPR", "key": "dpr", "w": 58, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "UZR", "key": "uzr", "w": 60, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "DRS", "key": "drs", "w": 60, "align": "r", "fmt": "f1s", "group": "group.adv_fielding"},
+				{"title": "WAR", "key": "war", "w": 62, "align": "r", "fmt": "f1s", "sep_before": true, "group": "group.adv_value"},
 			]
 		"abilities":
 			# 能力レーティング + 変化球(投手)/守備適性(野手) + 各種評価 + 年俸。変化球/適性カラムは動的。
 			# 年齢〜能力(変化球/守備適性)は値が短いので中央寄せ("c")。評価/年俸は右寄せ。
 			var cols: Array = [
-				{"title": "col.year_short", "key": "year", "w": 50, "align": "l", "fmt": "str"},
-				{"title": "col.age", "key": "age", "w": 44, "align": "c", "fmt": "int"},
+				{"title": "col.year_short", "key": "year", "w": 50, "align": "l", "fmt": "str", "group": "group.history"},
+				{"title": "col.age", "key": "age", "w": 44, "align": "c", "fmt": "int", "group": "group.history"},
 			]
 			if pitcher:
-				cols.append({"title": "rating.velocity", "key": "velocity", "w": 56, "align": "c", "fmt": "int", "sep_before": true})
-				cols.append({"title": "rating.stuff", "key": "stuff", "w": 52, "align": "c", "fmt": "int"})
-				cols.append({"title": "rating.control", "key": "control", "w": 52, "align": "c", "fmt": "int"})
-				cols.append({"title": "rating.stamina", "key": "stamina", "w": 60, "align": "c", "fmt": "int"})
+				cols.append({"title": "rating.velocity", "key": "velocity", "w": 56, "align": "c", "fmt": "int", "sep_before": true, "group": "group.pitcher_abilities"})
+				cols.append({"title": "rating.stuff", "key": "stuff", "w": 52, "align": "c", "fmt": "ability_bar", "group": "group.pitcher_abilities"})
+				cols.append({"title": "rating.control", "key": "control", "w": 52, "align": "c", "fmt": "ability_bar", "group": "group.pitcher_abilities"})
+				cols.append({"title": "rating.stamina", "key": "stamina", "w": 60, "align": "c", "fmt": "ability_bar", "group": "group.pitcher_abilities"})
 				var pitch_first: bool = true
 				for type_value in _arsenal_types:
-					cols.append({"title": PSPitchTypes.display_name(str(type_value)), "key": "pitch_%s" % str(type_value), "w": 66, "align": "c", "fmt": "int", "sep_before": pitch_first})
+					cols.append({"title": PSPitchTypes.display_name(str(type_value)), "key": "pitch_%s" % str(type_value), "w": 66, "align": "c", "fmt": "ability_bar", "sep_before": pitch_first, "group": "group.pitcher_abilities"})
 					pitch_first = false
-				cols.append({"title": "col.overall_eval", "key": "overall", "w": 60, "align": "r", "fmt": "int", "sep_before": true})
-				cols.append({"title": "col.def_eval_full", "key": "def_eval", "w": 58, "align": "r", "fmt": "int"})
-				cols.append({"title": "col.salary_man", "key": "salary", "w": 84, "align": "r", "fmt": "comma"})
+				cols.append({"title": "col.overall_eval", "key": "overall", "w": 60, "align": "r", "fmt": "int", "sep_before": true, "group": "group.eval"})
+				cols.append({"title": "col.def_eval_full", "key": "def_eval", "w": 58, "align": "r", "fmt": "int", "group": "group.eval"})
+				cols.append({"title": "col.salary_man", "key": "salary", "w": 84, "align": "r", "fmt": "comma", "group": "group.contract"})
 			else:
-				cols.append({"title": "rating.contact", "key": "contact", "w": 50, "align": "c", "fmt": "int", "sep_before": true})
-				cols.append({"title": "rating.power", "key": "power", "w": 50, "align": "c", "fmt": "int"})
-				cols.append({"title": "rating.speed", "key": "speed", "w": 50, "align": "c", "fmt": "int"})
-				cols.append({"title": "rating.defense", "key": "defense", "w": 50, "align": "c", "fmt": "int"})
-				cols.append({"title": "rating.arm", "key": "arm", "w": 50, "align": "c", "fmt": "int"})
-				cols.append({"title": "rating.discipline", "key": "discipline", "w": 50, "align": "c", "fmt": "int"})
+				cols.append({"title": "rating.contact", "key": "contact", "w": 50, "align": "c", "fmt": "ability_bar", "sep_before": true, "group": "group.fielder_abilities"})
+				cols.append({"title": "rating.power", "key": "power", "w": 50, "align": "c", "fmt": "ability_bar", "group": "group.fielder_abilities"})
+				cols.append({"title": "rating.speed", "key": "speed", "w": 50, "align": "c", "fmt": "ability_bar", "group": "group.fielder_abilities"})
+				cols.append({"title": "rating.defense", "key": "defense", "w": 50, "align": "c", "fmt": "ability_bar", "group": "group.fielder_abilities"})
+				cols.append({"title": "rating.arm", "key": "arm", "w": 50, "align": "c", "fmt": "ability_bar", "group": "group.fielder_abilities"})
+				cols.append({"title": "rating.discipline", "key": "discipline", "w": 50, "align": "c", "fmt": "ability_bar", "group": "group.fielder_abilities"})
 				var apt_first: bool = true
 				for pos in [2, 3, 4, 5, 6, 7, 8, 9]:
-					cols.append({"title": PSPlayer.position_short_name(pos), "key": "apt_%d" % pos, "w": 38, "align": "c", "fmt": "int", "sep_before": apt_first})
+					cols.append({"title": PSPlayer.position_short_name(pos), "key": "apt_%d" % pos, "w": 38, "align": "c", "fmt": "ability_bar", "sep_before": apt_first, "group": "group.aptitudes"})
 					apt_first = false
-				cols.append({"title": "col.overall_eval", "key": "overall", "w": 58, "align": "r", "fmt": "int", "sep_before": true})
-				cols.append({"title": "col.bat_eval_full", "key": "bat_eval", "w": 58, "align": "r", "fmt": "int"})
-				cols.append({"title": "col.def_eval_full", "key": "def_eval", "w": 58, "align": "r", "fmt": "int"})
-				cols.append({"title": "col.salary_man", "key": "salary", "w": 82, "align": "r", "fmt": "comma"})
+				cols.append({"title": "col.overall_eval", "key": "overall", "w": 58, "align": "r", "fmt": "int", "sep_before": true, "group": "group.eval"})
+				cols.append({"title": "col.bat_eval_full", "key": "bat_eval", "w": 58, "align": "r", "fmt": "int", "group": "group.eval"})
+				cols.append({"title": "col.def_eval_full", "key": "def_eval", "w": 58, "align": "r", "fmt": "int", "group": "group.eval"})
+				cols.append({"title": "col.salary_man", "key": "salary", "w": 82, "align": "r", "fmt": "comma", "group": "group.contract"})
 			return cols
 		_:  # stats (成績 = 基本成績 + 率指標を統合) / farm (同じ列を二軍成績で埋める)
 			if pitcher:
 				return [
-					{"title": "col.year_short", "key": "year", "w": 52, "align": "l", "fmt": "str"},
-					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true},
-					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true},
-					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "col.complete_games", "key": "cg", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "col.shutouts", "key": "sho", "w": 46, "align": "r", "fmt": "int"},
-					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int"},
-					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int"},
-					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "sep_before": true},
-					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2"},
-					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2"},
-					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true},
-					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hbp_allowed", "key": "hbp", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hits_allowed", "key": "h", "w": 56, "align": "r", "fmt": "int"},
-					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int"},
-					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int"},
+					{"title": "col.year_short", "key": "year", "w": 52, "align": "l", "fmt": "str", "group": "group.history"},
+					{"title": "col.team_short", "key": "team", "w": 54, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+					{"title": "col.appearances", "key": "g", "w": 46, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_app"},
+					{"title": "col.games_started", "key": "gs", "w": 46, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+					{"title": "col.complete_games", "key": "cg", "w": 46, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+					{"title": "col.shutouts", "key": "sho", "w": 46, "align": "r", "fmt": "int", "group": "group.pitching_app"},
+					{"title": "col.innings", "key": "ip", "w": 60, "align": "r", "fmt": "f1", "group": "group.pitching_app"},
+					{"title": "col.wins", "key": "w", "w": 38, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_dec"},
+					{"title": "col.losses", "key": "l", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "H", "key": "hld", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "S", "key": "sv", "w": 38, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "QS", "key": "qs", "w": 42, "align": "r", "fmt": "int", "group": "group.pitching_dec"},
+					{"title": "stat.era", "key": "era", "w": 58, "align": "r", "fmt": "f2", "sep_before": true, "strong": true, "group": "group.pitching_rates"},
+					{"title": "WHIP", "key": "whip", "w": 56, "align": "r", "fmt": "f2", "group": "group.pitching_rates"},
+					{"title": "stat.strikeouts", "key": "so", "w": 56, "align": "r", "fmt": "int", "sep_before": true, "group": "group.pitching_detail"},
+					{"title": "col.walks_allowed", "key": "bb", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hbp_allowed", "key": "hbp", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hits_allowed", "key": "h", "w": 56, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.hr_allowed", "key": "hra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.runs_allowed_full", "key": "ra", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
+					{"title": "col.earned_runs", "key": "er", "w": 48, "align": "r", "fmt": "int", "group": "group.pitching_detail"},
 				]
 			return [
-				{"title": "col.year_short", "key": "year", "w": 50, "align": "l", "fmt": "str"},
-				{"title": "col.team_short", "key": "team", "w": 52, "align": "l", "fmt": "str", "strong": true},
-				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
-				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int"},
-				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int"},
-				{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int"},
-				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int"},
-				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true},
-				{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate"},
-				{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true},
-				{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.sacrifices", "key": "sac", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.sac_flies", "key": "sf", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int"},
-				{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int"},
+				{"title": "col.year_short", "key": "year", "w": 50, "align": "l", "fmt": "str", "group": "group.history"},
+				{"title": "col.team_short", "key": "team", "w": 52, "align": "l", "fmt": "str", "strong": true, "group": "group.history"},
+				{"title": "col.games", "key": "g", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting1"},
+				{"title": "col.pa", "key": "pa", "w": 46, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "col.ab", "key": "ab", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "col.runs", "key": "r", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting1"},
+				{"title": "stat.hits", "key": "h", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_counting2"},
+				{"title": "col.doubles", "key": "d", "w": 42, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.triples", "key": "t", "w": 42, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.hr", "key": "hr", "w": 38, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.rbi", "key": "rbi", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "stat.stolen_bases", "key": "sb", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_counting2"},
+				{"title": "col.avg", "key": "avg", "w": 54, "align": "r", "fmt": "rate", "sep_before": true, "strong": true, "group": "group.batting_rates"},
+				{"title": "col.obp_short", "key": "obp", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "col.slg_short", "key": "slg", "w": 54, "align": "r", "fmt": "rate", "group": "group.batting_rates"},
+				{"title": "OPS", "key": "ops", "w": 54, "align": "r", "fmt": "rate", "strong": true, "group": "group.batting_rates"},
+				{"title": "col.walks", "key": "bb", "w": 44, "align": "r", "fmt": "int", "sep_before": true, "group": "group.batting_discipline"},
+				{"title": "col.hbp", "key": "hbp", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.strikeouts_batter", "key": "so", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.sacrifices", "key": "sac", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.sac_flies", "key": "sf", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "col.gidp", "key": "gdp", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
+				{"title": "stat.errors", "key": "err", "w": 44, "align": "r", "fmt": "int", "group": "group.batting_discipline"},
 			]
 
 
