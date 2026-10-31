@@ -118,8 +118,9 @@ const GROUP_TARGETS: Dictionary = {
 }
 
 
-static func create_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int, allow_development_segment: bool = true, full_waiver: bool = false) -> Dictionary:
+static func create_draft_state(players: Array, teams: Array, season: PSSeason, user_team_id: int, allow_development_segment: bool = true, full_waiver: bool = false, pick_transfers: Array = []) -> Dictionary:
 	var team_profiles: Dictionary = _build_team_profiles(players, teams)
+	var transfers_by_round: Dictionary = _pick_transfers_by_round(pick_transfers, season.year if season != null else 0)
 	var reverse_order: Array = _draft_reverse_order(teams, season)
 	var forward_order: Array = reverse_order.duplicate()
 	forward_order.reverse()
@@ -156,7 +157,9 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		"team_profiles": team_profiles,
 		"team_position_need": team_position_need,
 		# 本指名の球団別目標指名数 (need-driven)。_team_can_pick (本指名) の上限に使う。
-		"team_main_targets": _compute_main_draft_targets(players, team_profiles),
+		"team_main_targets": _apply_pick_transfer_targets(_compute_main_draft_targets(players, team_profiles), transfers_by_round),
+		# FA補償で譲渡された本指名の枠。{round_str: {譲渡元team_id_str: 譲渡先team_id}}。
+		"pick_transfers": transfers_by_round,
 		"team_pick_counts": _empty_team_counts(teams),
 		# 育成ドラフトの指名数と、segment ごとに「もう指名しない」球団の集合 (segment 開始でリセット)。
 		"team_dev_pick_counts": _empty_team_counts(teams),
@@ -173,6 +176,56 @@ static func create_draft_state(players: Array, teams: Array, season: PSSeason, u
 		"logs": [],
 	}
 	return advance_until_user_turn_or_complete(state)
+
+
+static func _pick_transfers_by_round(pick_transfers: Array, draft_year: int) -> Dictionary:
+	var by_round: Dictionary = {}
+	for row_value in pick_transfers:
+		var row: Dictionary = row_value as Dictionary
+		if int(row.get("draft_year", 0)) != draft_year:
+			continue
+		var round_key: String = str(int(row.get("round", 0)))
+		if not by_round.has(round_key):
+			by_round[round_key] = {}
+		(by_round[round_key] as Dictionary)[str(int(row.get("giving_team", 0)))] = int(row.get("receiving_team", 0))
+	return by_round
+
+
+# 指名枠が移る分、譲渡先の目標指名数を1増やし、譲渡元を1減らす。
+static func _apply_pick_transfer_targets(targets: Dictionary, transfers_by_round: Dictionary) -> Dictionary:
+	for round_key in transfers_by_round.keys():
+		var transfers: Dictionary = transfers_by_round[round_key] as Dictionary
+		for giving_key in transfers.keys():
+			var receiving_key: String = str(int(transfers[giving_key]))
+			if targets.has(giving_key):
+				targets[giving_key] = maxi(0, int(targets[giving_key]) - 1)
+			if targets.has(receiving_key):
+				targets[receiving_key] = mini(MAIN_DRAFT_MAX_PICKS, int(targets[receiving_key]) + 1)
+	return targets
+
+
+# そのドラフトで消費した譲渡を除いた台帳を返す (翌年以降の指名権だけが残る)。
+static func remaining_pick_transfers(pick_transfers: Array, draft_year: int) -> Array:
+	var remaining: Array = []
+	for row_value in pick_transfers:
+		if int((row_value as Dictionary).get("draft_year", 0)) > draft_year:
+			remaining.append(row_value)
+	return remaining
+
+
+# 今の指名枠が FA補償で譲渡されたものなら譲渡元の球団 id を返す (違えば 0)。
+static func current_slot_compensation_from(state: Dictionary) -> int:
+	if str(state.get("segment", "main")) != "main":
+		return 0
+	var round_no: int = int(state.get("round", 0))
+	var transfers: Dictionary = (state.get("pick_transfers", {}) as Dictionary).get(str(round_no), {}) as Dictionary
+	if transfers.is_empty():
+		return 0
+	var order: Array = _order_for_round(state, round_no)
+	var pos: int = int(state.get("round_position", 0))
+	if pos < 0 or pos >= order.size():
+		return 0
+	return int(order[pos]) if transfers.has(str(int(order[pos]))) else 0
 
 
 # 全チームのポジション別 補強需要を集計する。**実体は [[TeamDepthChart]]**。
@@ -828,6 +881,9 @@ static func _make_pick(state: Dictionary, team_id: int, candidate_id: int, round
 		# 育成ドラフト指名は development=true。本指名は false。finalize_draft で支配下/育成を決める。
 		"development": is_dev,
 	}
+	var compensation_from: int = current_slot_compensation_from(state)
+	if compensation_from > 0 and compensation_from != team_id:
+		pick["compensation_from_team"] = compensation_from
 	(state.get("picks", []) as Array).append(pick)
 
 	if is_dev:
@@ -855,11 +911,19 @@ static func _next_selecting_team(state: Dictionary) -> int:
 			state["round"] = round_no + 1
 			state["round_position"] = 0
 			continue
-		var team_id: int = int(order[pos])
+		var team_id: int = _slot_owner(state, round_no, int(order[pos]))
 		if _team_can_pick(state, team_id):
 			return team_id
 		state["round_position"] = pos + 1
 	return 0
+
+
+# 指名枠の実際の持ち主。FA補償で譲渡された枠は、元の球団の順番で譲渡先が指名する。
+static func _slot_owner(state: Dictionary, round_no: int, team_id: int) -> int:
+	if str(state.get("segment", "main")) != "main":
+		return team_id
+	var transfers: Dictionary = (state.get("pick_transfers", {}) as Dictionary).get(str(round_no), {}) as Dictionary
+	return int(transfers.get(str(team_id), team_id))
 
 
 static func _consume_current_slot(state: Dictionary) -> void:

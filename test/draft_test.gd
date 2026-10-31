@@ -687,6 +687,61 @@ func test_draft_target_ignores_development_promotions() -> void:
 	assert_int(promo_target).is_equal(base_target)
 
 
+# FA補償で譲渡された枠: 譲渡先が元の球団の順番で指名し、譲渡元はその巡目を失う。
+func test_compensation_pick_transfer_moves_slot_to_receiving_team() -> void:
+	Rng.set_seed_value(20261031)
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league1", 2), _team(3, "league2", 1), _team(4, "league2", 2)]
+	var players: Array = []
+	for team_id in [1, 2, 3, 4]:
+		_fill_team(players, team_id, 55)
+	var transfers: Array = [{"draft_year": 0, "round": 2, "giving_team": 2, "receiving_team": 3}]
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0, false, true, transfers)
+	DraftService.complete_automatically(state)
+	assert_bool(bool(state.get("complete", false))).is_true()
+	assert_int(_team_round_pick_count(state, 2, 2)).is_equal(0)
+	assert_int(_team_round_pick_count(state, 3, 2)).is_equal(2)
+	# 譲渡先の2回目は元の球団の順番に並ぶ (順番の入れ替えは起きない)。
+	var round2_teams: Array = []
+	var marked: Array = []
+	for pick_row in state.get("picks", []) as Array:
+		var pick: Dictionary = pick_row as Dictionary
+		if int(pick.get("round", 0)) != 2:
+			continue
+		round2_teams.append(int(pick.get("team_id", 0)))
+		if int(pick.get("compensation_from_team", 0)) > 0:
+			marked.append(int(pick.get("compensation_from_team", 0)))
+	var expected: Array = []
+	for team_id_value in state.get("teams_order_reverse", []) as Array:
+		expected.append(3 if int(team_id_value) == 2 else int(team_id_value))
+	assert_array(round2_teams).is_equal(expected)
+	assert_array(marked).is_equal([2])
+
+
+func test_compensation_pick_transfer_adjusts_targets_and_ignores_other_years() -> void:
+	Rng.set_seed_value(20261031)
+	var teams: Array = [_team(1, "league1", 1), _team(2, "league2", 1)]
+	var players: Array = []
+	_fill_team(players, 1, 55)
+	_fill_team(players, 2, 55)
+	var transfers: Array = [
+		{"draft_year": 0, "round": 3, "giving_team": 1, "receiving_team": 2},
+		{"draft_year": 1, "round": 2, "giving_team": 2, "receiving_team": 1},
+	]
+	Rng.set_seed_value(20261031)
+	var base: Dictionary = DraftService.create_draft_state(players, teams, null, 0, false, true)
+	var base_targets: Dictionary = base.get("team_main_targets", {}) as Dictionary
+	Rng.set_seed_value(20261031)
+	var state: Dictionary = DraftService.create_draft_state(players, teams, null, 0, false, true, transfers)
+	var targets: Dictionary = state.get("team_main_targets", {}) as Dictionary
+	assert_int(int(targets.get("1", 0))).is_equal(int(base_targets.get("1", 0)) - 1)
+	assert_int(int(targets.get("2", 0))).is_equal(int(base_targets.get("2", 0)) + 1)
+	# 他の年の譲渡はこのドラフトでは使わず、消費した年の分だけ台帳から消える。
+	assert_dict(state.get("pick_transfers", {}) as Dictionary).is_equal({"3": {"1": 2}})
+	var remaining: Array = DraftService.remaining_pick_transfers(transfers, 0)
+	assert_int(remaining.size()).is_equal(1)
+	assert_int(int((remaining[0] as Dictionary).get("draft_year", 0))).is_equal(1)
+
+
 # --- helpers -----------------------------------------------------------------
 
 func _team(id: int, league: String, prev_rank: int) -> PSTeam:

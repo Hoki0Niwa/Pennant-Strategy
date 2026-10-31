@@ -117,6 +117,9 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	}
 	# メジャー挑戦の頻度 (オプション) もセーブ単位で保持する。
 	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_HIGH
+	# FA補償の規定 (オプション) と譲渡待ちの指名権台帳も保持する。
+	AppState.fa_compensation_rule = FaMarketService.COMPENSATION_RULE_LEGACY
+	AppState.draft_pick_transfers = [{"draft_year": 2027, "round": 2, "giving_team": 2, "receiving_team": 1}]
 
 	assert_bool(SaveService.save_state(AppState)).is_true()
 	var payload: Dictionary = SaveService.load_state()
@@ -127,8 +130,13 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	team.auto_lineup = true
 	AppState.contract_years_state = {}
 	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_STANDARD
+	AppState.fa_compensation_rule = FaMarketService.COMPENSATION_RULE_NPB2027
+	AppState.draft_pick_transfers = []
 	assert_bool(AppState.restore_from_save(payload)).is_true()
 	assert_str(AppState.overseas_challenge_frequency).is_equal(OverseasService.FREQUENCY_HIGH)
+	assert_str(AppState.fa_compensation_rule).is_equal(FaMarketService.COMPENSATION_RULE_LEGACY)
+	assert_int(AppState.draft_pick_transfers.size()).is_equal(1)
+	assert_int(int((AppState.draft_pick_transfers[0] as Dictionary).get("round", 0))).is_equal(2)
 	team = GameDb.get_team(team.id)
 	assert_bool(team.auto_lineup).is_false()
 	assert_str(JSON.stringify(AppState.contract_years_state)).is_equal(JSON.stringify(payload["contract_years_state"]))
@@ -146,11 +154,17 @@ func test_save_round_trip_preserves_decision_inputs() -> void:
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_HIGH
 	assert_bool(SaveService.is_state_current(AppState)).is_true()
+	AppState.fa_compensation_rule = FaMarketService.COMPENSATION_RULE_NPB2027
+	assert_bool(SaveService.is_state_current(AppState)).is_false()
+	AppState.fa_compensation_rule = FaMarketService.COMPENSATION_RULE_LEGACY
+	assert_bool(SaveService.is_state_current(AppState)).is_true()
 	AppState.contract_years_state["year"] = 2027
 	assert_bool(SaveService.is_state_current(AppState)).is_false()
 
 	# オプションは _capture_app_state の対象外なので、後続テストへ漏らさないよう既定へ戻す。
 	AppState.overseas_challenge_frequency = OverseasService.FREQUENCY_STANDARD
+	AppState.fa_compensation_rule = FaMarketService.COMPENSATION_RULE_NPB2027
+	AppState.draft_pick_transfers = []
 	_restore_app_state(old_state, test_save_id)
 
 

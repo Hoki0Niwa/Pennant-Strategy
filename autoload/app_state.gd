@@ -48,8 +48,8 @@ const OFFSEASON_STEP_ORDER: Array[String] = [
 	# 翌季を予算超過で開始することになる。
 	OFFSEASON_STEP_CONTRACT_RENEWAL,
 	OFFSEASON_STEP_FA_MARKET,
-	# 人的補償は FA市場の直後。プロテクト提出も指名もこのステップ内で完結させ、
-	# FA市場の state machine (1人ずつの交渉) には混ぜない。
+	# FA補償は FA市場の直後。元球団の選択 (人的補償ならプロテクト提出と指名も) はこのステップ内で
+	# 完結させ、FA市場の state machine (1人ずつの交渉) には混ぜない。
 	OFFSEASON_STEP_COMPENSATION,
 	OFFSEASON_STEP_CONTRACT_YEARS,
 	OFFSEASON_STEP_FOREIGN_MARKET,
@@ -69,6 +69,7 @@ const OFFSEASON_PANEL_GENEKI_DRAFT: String = "geneki_draft"
 const OFFSEASON_PANEL_FA: String = "fa"
 const OFFSEASON_PANEL_COMPENSATION_PROTECT: String = "compensation_protect"
 const OFFSEASON_PANEL_COMPENSATION_PICK: String = "compensation_pick"
+const OFFSEASON_PANEL_COMPENSATION_CHOICE: String = "compensation_choice"
 const OFFSEASON_PANEL_FOREIGN: String = "foreign"
 const OFFSEASON_PANEL_FOREIGN_CONTRACT: String = "foreign_contract"
 const OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT: String = "foreign_contract_result"
@@ -160,6 +161,11 @@ var draft_full_waiver: bool = false
 # CS ファイナルのアドバンテージ規定 (PSPostseasonResult.CS_ADVANTAGE_RULE_*)。オプション画面から操作。
 # 既定は 2026年規定 (条件付きで2勝アドバンテージ/5勝先取)。次回のポストシーズン生成から適用する。
 var cs_advantage_rule: String = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026
+# FA補償の規定 (FaMarketService.COMPENSATION_RULE_*)。オプション画面から操作。
+# 既定は 2027年制度 (ドラフト指名権か金銭)。次の FA市場から適用する。
+var fa_compensation_rule: String = FaMarketService.COMPENSATION_RULE_NPB2027
+# FA補償で譲渡が決まった翌年以降のドラフト指名権の台帳。規定を切り替えても決まった譲渡は残る。
+var draft_pick_transfers: Array = []
 # メジャー挑戦の頻度 (OverseasService.FREQUENCY_*)。オプション画面から操作し、次のオフから適用する。
 # "off" は新規の流出だけを止める (海外にいる選手の加齢と復帰は続く)。
 var overseas_challenge_frequency: String = OverseasService.FREQUENCY_STANDARD
@@ -379,6 +385,9 @@ func get_offseason_view_state() -> Dictionary:
 					"protect":
 						active_panel = OFFSEASON_PANEL_COMPENSATION_PROTECT
 						title = Loc.t("offseason.step.compensation_protect")
+					"choose":
+						active_panel = OFFSEASON_PANEL_COMPENSATION_CHOICE
+						title = Loc.t("offseason.step.compensation_choice")
 					_:
 						active_panel = OFFSEASON_PANEL_COMPENSATION_PICK
 						title = Loc.t("offseason.step.compensation_pick")
@@ -439,6 +448,7 @@ func start_new_season() -> bool:
 	season_review_view_state = {}
 	draft_review_view_state = {}
 	history_review_target = {}
+	draft_pick_transfers = []
 	current_season = SeasonService.create_new_season(GameDb.teams, selected_team_id, SeasonService.DEFAULT_START_YEAR, dh_settings_for_schedule())
 	RecordStore.clear_records()
 	# 初期世界の選手が開始前に残した成績 (長いプロ歴の選手も開幕時点で過去成績を持つ)。
@@ -707,7 +717,7 @@ func start_offseason() -> Dictionary:
 	postseason_active = false
 	# Step 0: FA宣言を即時実行して結果を保存する (FA日数の締めと contract_status 遷移もここで
 	# 済ませる)。宣言は事実の記録だけで、ロースター離脱は FA市場ステップまで起こらない。
-	var declaration_result: Dictionary = FaMarketService.create_declaration_state(GameDb.players, GameDb.teams, current_season)
+	var declaration_result: Dictionary = FaMarketService.create_declaration_state(GameDb.players, GameDb.teams, current_season, fa_compensation_rule)
 	declaration_result["title"] = Loc.t("fa.declaration_title")
 	offseason_step = OFFSEASON_STEP_FA_DECLARATION
 	offseason_results = {OFFSEASON_STEP_FA_DECLARATION: declaration_result}
@@ -846,7 +856,8 @@ func advance_offseason() -> Dictionary:
 		OFFSEASON_STEP_DRAFT_MAIN:
 			# 戦力外 → ドラフト → 戦力外獲得 → FA → 外国人 → 成長 の順。
 			# ドラフトを先に行い、残り枠を戦力外獲得・FA・外国人へ回す。
-			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id, false, draft_full_waiver)
+			draft_state = DraftService.create_draft_state(GameDb.players, GameDb.teams, current_season, selected_team_id, false, draft_full_waiver, draft_pick_transfers)
+			draft_pick_transfers = DraftService.remaining_pick_transfers(draft_pick_transfers, current_season.year if current_season != null else 0)
 			if _is_main_draft_complete():
 				step_result = _store_main_draft_if_complete()
 			else:
@@ -876,7 +887,7 @@ func advance_offseason() -> Dictionary:
 			else:
 				step_result = {"title": Loc.t("geneki.title"), "geneki_draft_in_progress": true}
 		OFFSEASON_STEP_FA_MARKET:
-			fa_state = FaMarketService.create_fa_market_state(GameDb.players, GameDb.teams, current_season, selected_team_id)
+			fa_state = FaMarketService.create_fa_market_state(GameDb.players, GameDb.teams, current_season, selected_team_id, fa_compensation_rule)
 			if _is_fa_complete():
 				step_result = _finalize_fa_if_complete()
 			else:
@@ -1320,7 +1331,13 @@ func _finalize_fa_if_complete() -> Dictionary:
 	return result
 
 
-# ============================================================ 人的補償
+# ============================================================ FA補償
+
+func submit_compensation_draft_pick() -> Dictionary:
+	return _apply_compensation_action(func() -> Dictionary:
+		return CompensationService.submit_draft_pick(compensation_state, GameDb.players, GameDb.teams, current_season)
+	)
+
 
 func submit_compensation_protect_list(player_ids: Array) -> Dictionary:
 	return _apply_compensation_action(func() -> Dictionary:
@@ -1358,7 +1375,7 @@ func compensation_recommended_protect_ids() -> Array:
 	return CompensationService.recommended_protect_ids(compensation_state, GameDb.players)
 
 
-# 人的補償のユーザー操作は「呼ぶサービス関数」だけが違うので、前後のガードと後処理を共通化する。
+# FA補償のユーザー操作は「呼ぶサービス関数」だけが違うので、前後のガードと後処理を共通化する。
 func _apply_compensation_action(action: Callable) -> Dictionary:
 	if not offseason_active or offseason_step != OFFSEASON_STEP_COMPENSATION:
 		return {"ok": false, "message": Loc.t("flow.error.step_inactive", {"step": Loc.t("compensation.title")})}
@@ -1382,7 +1399,10 @@ func _is_compensation_complete() -> bool:
 func _finalize_compensation_if_complete() -> Dictionary:
 	if not _is_compensation_complete():
 		return {"title": Loc.t("compensation.title"), "compensation_in_progress": true}
+	var first_finalize: bool = not bool(compensation_state.get("finalized", false))
 	var result: Dictionary = CompensationService.finalize_compensation(compensation_state)
+	if first_finalize:
+		draft_pick_transfers.append_array(result.get("pick_transfers", []) as Array)
 	GameDb.rebuild_player_indices()
 	result["title"] = Loc.t("compensation.title")
 	offseason_results[OFFSEASON_STEP_COMPENSATION] = result
@@ -2209,6 +2229,8 @@ func restore_from_save(data: Dictionary) -> bool:
 	auto_trade_during_skip = bool(data.get("auto_trade_during_skip", false))
 	draft_full_waiver = bool(data.get("draft_full_waiver", false))
 	cs_advantage_rule = PSPostseasonResult.normalize_cs_advantage_rule(data.get("cs_advantage_rule", PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026))
+	fa_compensation_rule = FaMarketService.normalize_compensation_rule(data.get("fa_compensation_rule", FaMarketService.COMPENSATION_RULE_NPB2027))
+	draft_pick_transfers = (data.get("draft_pick_transfers", []) as Array).duplicate(true)
 	overseas_challenge_frequency = OverseasService.normalize_frequency(str(data.get("overseas_challenge_frequency", OverseasService.FREQUENCY_STANDARD)))
 	auto_save_enabled = bool(data.get("auto_save_enabled", DEFAULT_AUTO_SAVE_ENABLED))
 	var saved_dh_settings: Dictionary = data.get("league_dh_enabled", {}) as Dictionary

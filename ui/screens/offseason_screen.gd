@@ -205,9 +205,16 @@ const COMP_SORT_OPTIONS: Array = [
 	{"id": COMP_SORT_AGE, "label": "offseason.comp.sort.age"},
 ]
 
-# 人的補償の結果: 上段にケース一覧 (FA移籍ごとの選択)、下段に移った補償選手の選手表。
+# FA補償の結果: 上段にケース一覧 (FA移籍ごとの選択)、下段に移った補償選手の選手表。
+# 指名権の制度は選手が動かないのでケース一覧だけを全高で出す。
 const COMP_CASES_RECT: Rect2 = Rect2(262, 284, 1638, 300)
 const COMP_MOVES_RECT: Rect2 = Rect2(262, 596, 1638, 464)
+const COMP_CASES_FULL_RECT: Rect2 = Rect2(262, 284, 1638, 776)
+const COMP_CHOICE_COLUMNS: Array = [
+	{"key": "option", "title": "offseason.comp.col.option", "w": 180, "fmt": "string", "strong": true},
+	{"key": "content", "title": "offseason.comp.col.content", "w": 560, "fmt": "string"},
+	{"key": "money", "title": "offseason.comp.col.money", "w": 130, "fmt": "string", "align": "right"},
+]
 const COMP_CASE_COLUMNS: Array = [
 	{"key": "fa_name", "title": "offseason.comp.col.fa_player", "w": 150, "fmt": "player_name", "strong": true, "group": "group.comp_fa"},
 	{"key": "rank", "title": "offseason.comp.col.rank", "w": 56, "fmt": "string", "align": "center", "group": "group.comp_fa"},
@@ -315,7 +322,8 @@ var _fa_can_auto: bool = false
 # 交渉する契約年数。0 = 候補の既定値 (CPU提示年数) をそのまま使う。年齢上限は fa_offer_max_years。
 var selected_fa_offer_years: int = 0
 
-# --- 人的補償 ---
+# --- FA補償 ---
+var _comp_choice_rows: Array = []
 # プロテクトは選択グリッド (_draw_select_grid)、補償選手の指名は成績が要るので従来の選手レコード表。
 var _comp_case: Dictionary = {}
 var _comp_sections: Array = []           # 選択グリッドのセクション (投手/捕手/内野手/外野手)
@@ -435,6 +443,8 @@ func _refresh() -> void:
 				_populate_compensation_protect()
 			AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
 				_populate_compensation_pick()
+			AppState.OFFSEASON_PANEL_COMPENSATION_CHOICE:
+				_populate_compensation_choice()
 			AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 				_populate_foreign_contract()
 			AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
@@ -608,6 +618,13 @@ func _build_buttons() -> void:
 			])
 			var comp_counts: Dictionary = _player_row_pitcher_fielder_counts(_comp_pick_rows)
 			_build_player_tabs("comp_pick", _comp_pick_tab, int(comp_counts.get(PLAYER_TAB_PITCHER, 0)), int(comp_counts.get(PLAYER_TAB_FIELDER, 0)), _set_comp_pick_tab)
+		AppState.OFFSEASON_PANEL_COMPENSATION_CHOICE:
+			_action_row([
+				{"id": "cch_pick", "label": "offseason.button.comp_take_pick", "cb": _on_compensation_draft_pick_pressed, "kind": "primary", "w": 170},
+				{"id": "cch_money", "label": "offseason.button.comp_take_money", "cb": _on_compensation_money_pressed, "kind": "action", "w": 150},
+				{"id": "cch_auto", "label": "offseason.button.auto_this", "cb": _on_compensation_auto_case_pressed, "kind": "action", "w": 150},
+				{"id": "cch_ai", "label": "offseason.button.auto_rest", "cb": _on_compensation_ai_all_pressed, "kind": "action", "w": 150},
+			])
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 			var fgc_entry: Dictionary = _fgc_by_id.get(selected_fgc_player_id, {}) as Dictionary
 			var fgc_has_offer: bool = not (fgc_entry.get("user_offer", {}) as Dictionary).is_empty()
@@ -747,14 +764,15 @@ func _build_step_result_tabs() -> void:
 		_build_player_tabs("result_years", _result_people_tab, int(years_counts.get(PLAYER_TAB_PITCHER, 0)), int(years_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab)
 	elif step == AppState.OFFSEASON_STEP_COMPENSATION:
 		var comp_result: Dictionary = _view.get("result", {}) as Dictionary
-		var comp_rows: Array = _result_signing_player_rows(comp_result.get("moves", []) as Array)
-		var comp_counts: Dictionary = _player_row_pitcher_fielder_counts(comp_rows)
-		# 補償選手は年に数人なので片方のタブが空になりやすい。行のある側を初期表示にする
-		# (投手固定のままだと「移籍した補償選手はいません」と出て結果が見えない)。
-		_result_people_tab = _player_tab_with_rows(comp_rows, _result_people_tab)
-		# 補償の結果は上段がケース一覧なので、タブは下段 (補償選手の表) の見出し位置へ下げる。
-		_build_player_tabs("result_comp", _result_people_tab, int(comp_counts.get(PLAYER_TAB_PITCHER, 0)), int(comp_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab,
-			COMP_MOVES_RECT.position.y + 14.0 - (BODY.position.y + 16.0))
+		if str(comp_result.get("rule", "")) != FaMarketService.COMPENSATION_RULE_NPB2027:
+			var comp_rows: Array = _result_signing_player_rows(comp_result.get("moves", []) as Array)
+			var comp_counts: Dictionary = _player_row_pitcher_fielder_counts(comp_rows)
+			# 補償選手は年に数人なので片方のタブが空になりやすい。行のある側を初期表示にする
+			# (投手固定のままだと「移籍した補償選手はいません」と出て結果が見えない)。
+			_result_people_tab = _player_tab_with_rows(comp_rows, _result_people_tab)
+			# 補償の結果は上段がケース一覧なので、タブは下段 (補償選手の表) の見出し位置へ下げる。
+			_build_player_tabs("result_comp", _result_people_tab, int(comp_counts.get(PLAYER_TAB_PITCHER, 0)), int(comp_counts.get(PLAYER_TAB_FIELDER, 0)), _set_result_people_tab,
+				COMP_MOVES_RECT.position.y + 14.0 - (BODY.position.y + 16.0))
 	elif step == AppState.OFFSEASON_STEP_GENEKI_DRAFT:
 		var geneki_result: Dictionary = _view.get("result", {}) as Dictionary
 		var move_rows: Array = _result_signing_player_rows(geneki_result.get("moves", []) as Array)
@@ -1234,12 +1252,14 @@ func _draw() -> void:
 			_draw_geneki_panel()
 		AppState.OFFSEASON_PANEL_FA:
 			# FA一覧は戦力外獲得と同じ選手レコード表 (投手/野手タブ・候補詳細なし) + 提示年数列。
-			_draw_player_record_table(BODY, _fa_status_text, _fa_player_rows, _fa_tab == PLAYER_TAB_PITCHER,
+			_draw_player_record_table(BODY, "%s  %s" % [_fa_status_text, _fa_selected_compensation_text()], _fa_player_rows, _fa_tab == PLAYER_TAB_PITCHER,
 				"fa", "fa_market_%s" % _fa_tab, "fa", selected_fa_candidate_id, Loc.t("offseason.empty.fa_candidates"),true, false, "", true, true)
 		AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT:
 			_draw_compensation_protect_panel()
 		AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
 			_draw_compensation_pick_panel()
+		AppState.OFFSEASON_PANEL_COMPENSATION_CHOICE:
+			_draw_compensation_choice_panel()
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 			_draw_foreign_contract_panel()
 		AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT_RESULT:
@@ -2746,6 +2766,9 @@ func _populate_draft() -> void:
 		_draft_reveal_stage = ""
 	elif stage == "user_pick":
 		_draft_status_text = Loc.t("offseason.draft.status_pick", {"phase": phase_label, "round": round_no, "team": _team_short(current_team_id)})
+		var compensation_from: int = DraftService.current_slot_compensation_from(state)
+		if compensation_from > 0:
+			_draft_status_text += Loc.t("offseason.draft.status_compensation_slot", {"team": _team_short(compensation_from)})
 		_draft_submit_label = "offseason.draft.button.pick"
 		_draft_reveal_stage = ""
 	elif stage == "first_round_reveal":
@@ -2921,6 +2944,9 @@ func _pick_row(pick: Dictionary) -> Dictionary:
 	var round_no: int = int(pick.get("round", 0))
 	# 育成指名は巡目欄に "育" を冠して区別する (競合欄には出さない)。
 	var round_text: String = Loc.t("offseason.draft.development_round", {"n": round_no}) if bool(pick.get("development", false)) else str(round_no)
+	# FA補償で譲り受けた枠の指名は巡目に印を付ける。
+	if int(pick.get("compensation_from_team", 0)) > 0:
+		round_text = Loc.t("offseason.draft.compensation_round", {"n": round_no})
 	var badge: Dictionary = _pick_pos_badge(pick)
 	return {
 		"round": round_text,
@@ -3439,6 +3465,25 @@ func _populate_fa() -> void:
 	_fa_can_auto = not candidates.is_empty()
 
 
+# 選択中の候補を獲得すると何を失うか。指名権と金銭のどちらになるかは元球団が決める。
+func _fa_selected_compensation_text() -> String:
+	var candidate: Dictionary = _fa_by_id.get(selected_fa_candidate_id, {}) as Dictionary
+	if candidate.is_empty():
+		return ""
+	var money: int = int(candidate.get("compensation_money", 0))
+	var money_text: String = _format_money(money)
+	var pick_round: int = int(candidate.get("compensation_pick_round", 0))
+	if pick_round > 0:
+		return Loc.t("offseason.fa.compensation_pick", {"round": pick_round, "money": money_text})
+	if bool(candidate.get("compensation_exempt", false)):
+		return Loc.t("offseason.fa.compensation_exempt")
+	if money <= 0:
+		return Loc.t("offseason.fa.compensation_none")
+	if str(AppState.fa_state.get("compensation_rule", "")) == FaMarketService.COMPENSATION_RULE_LEGACY:
+		return Loc.t("offseason.fa.compensation_player", {"money": money_text})
+	return Loc.t("offseason.fa.compensation_money", {"money": money_text})
+
+
 func _set_fa_tab(tab_id: String) -> void:
 	if tab_id != PLAYER_TAB_PITCHER and tab_id != PLAYER_TAB_FIELDER:
 		return
@@ -3533,7 +3578,54 @@ func _on_fa_auto_all_pressed() -> void:
 	_refresh()
 
 
-# ============================================================ populate: 人的補償
+# ============================================================ populate: FA補償
+
+# 元球団の選択 (2027年制度): 指名権か金銭かの2択を表で見比べる。
+func _populate_compensation_choice() -> void:
+	var state: Dictionary = AppState.compensation_state
+	_comp_case = CompensationService.current_case(state)
+	_comp_choice_rows = []
+	if _comp_case.is_empty():
+		_comp_status_text = Loc.t("offseason.comp.no_case")
+		return
+	var former_salary: int = int(_comp_case.get("former_salary", 0))
+	var money: int = int(_comp_case.get("money_only", 0))
+	var percent: int = int(round(float(money) * 100.0 / float(former_salary))) if former_salary > 0 else 0
+	_comp_headline = Loc.t("offseason.comp.choice_headline", {
+		"player": str(_comp_case.get("name", "")), "rank": str(_comp_case.get("fa_rank", "")),
+		"team": _team_name(int(_comp_case.get("to_team", 0))),
+	})
+	_comp_status_text = Loc.t("offseason.comp.choice_note")
+	_comp_choice_rows = [
+		{
+			"option": Loc.t("offseason.comp.decision_draft_pick"),
+			"content": Loc.t("offseason.comp.choice_pick_content", {
+				"year": int(_comp_case.get("draft_year", 0)), "round": int(_comp_case.get("pick_round", 0)),
+				"team": _team_name(int(_comp_case.get("to_team", 0))),
+			}),
+			"money": _format_money(0),
+		},
+		{
+			"option": Loc.t("offseason.comp.decision_money"),
+			"content": Loc.t("offseason.comp.choice_money_content", {"salary": _format_money(former_salary), "percent": percent}),
+			"money": _format_money(money),
+		},
+	]
+
+
+func _draw_compensation_choice_panel() -> void:
+	var table_rect: Rect2 = Rect2(BODY.position.x, BODY.position.y, BODY.size.x, 190.0)
+	_draw_data_table(table_rect, COMP_CHOICE_COLUMNS, _comp_choice_rows, {"title": _comp_headline, "row_h_max": 36.0})
+	_text(_comp_status_text, Vector2(BODY.position.x + 18.0, table_rect.end.y + 26.0), 14, MUTED, BODY.size.x - 36.0)
+
+
+func _on_compensation_draft_pick_pressed() -> void:
+	var result: Dictionary = AppState.submit_compensation_draft_pick()
+	if not bool(result.get("ok", false)):
+		_set_status(str(result.get("message", Loc.t("offseason.fail.comp_draft_pick"))), RED)
+		return
+	_refresh()
+
 
 # プロテクト提出 (自軍が FA 選手を獲得した側)。60人超から28人を選ぶので、行テーブルではなく
 # 選択グリッド (_draw_select_grid) を使い全員を一画面に出す。自動保護の選手も locked セルとして
@@ -3746,21 +3838,39 @@ func _draw_compensation_pick_panel() -> void:
 
 func _draw_compensation_result(rect: Rect2, result: Dictionary) -> void:
 	var cases: Array = result.get("cases", []) as Array
+	var draft_pick_rule: bool = str(result.get("rule", "")) == FaMarketService.COMPENSATION_RULE_NPB2027
 	if cases.is_empty():
-		_text(Loc.t("offseason.comp.result_none"),
-			Vector2(rect.position.x + 18.0, rect.position.y + 34.0), 15, MUTED)
+		var none_text: String = Loc.t("offseason.comp.result_none")
+		if draft_pick_rule and int(result.get("exempt_count", 0)) > 0:
+			none_text = Loc.t("offseason.comp.result_heading_draft", {"cases": 0, "picks": 0, "money_only": 0, "exempt": int(result.get("exempt_count", 0))})
+		_text(none_text, Vector2(rect.position.x + 18.0, rect.position.y + 34.0), 15, MUTED)
 		return
 	var heading: String = Loc.t("offseason.comp.result_heading", {
 		"cases": int(result.get("case_count", 0)), "moved": int(result.get("moved_count", 0)), "money_only": int(result.get("money_only_count", 0)),
 	})
+	if draft_pick_rule:
+		heading = Loc.t("offseason.comp.result_heading_draft", {
+			"cases": int(result.get("case_count", 0)), "picks": int(result.get("draft_pick_count", 0)),
+			"money_only": int(result.get("money_only_count", 0)), "exempt": int(result.get("exempt_count", 0)),
+		})
 	# 上段にケース一覧 (どのFA移籍でどちらを選んだか)、下段に実際に移った補償選手。
 	var case_rows: Array = []
 	for case_value in cases:
 		var case: Dictionary = case_value as Dictionary
-		var is_player: bool = str(case.get("decision", "")) == "player"
-		var decision: String = Loc.t("offseason.header.compensation") if is_player else Loc.t("offseason.button.comp_money")
-		if not is_player and not str(case.get("forced_reason", "")).is_empty():
+		var decision_id: String = str(case.get("decision", ""))
+		var is_player: bool = decision_id == "player"
+		var is_draft_pick: bool = decision_id == "draft_pick"
+		var forced_reason: String = str(case.get("forced_reason", ""))
+		var decision: String = Loc.t("offseason.comp.decision_player") if is_player else Loc.t("offseason.button.comp_money")
+		if is_draft_pick:
+			decision = Loc.t("offseason.comp.decision_draft_pick")
+		elif draft_pick_rule:
+			decision = Loc.t("offseason.comp.decision_money") if forced_reason.is_empty() else Loc.t("offseason.comp.forced.%s" % forced_reason)
+		elif not is_player and not forced_reason.is_empty():
 			decision = Loc.t("offseason.comp.decision_money_forced")
+		var picked_text: String = str(case.get("picked_name", "")) if is_player else "-"
+		if is_draft_pick:
+			picked_text = Loc.t("offseason.comp.pick_right", {"year": int(case.get("draft_year", 0)), "round": int(case.get("pick_round", 0))})
 		var from_team: PSTeam = GameDb.get_team(int(case.get("from_team", 0)))
 		var to_team: PSTeam = GameDb.get_team(int(case.get("to_team", 0)))
 		case_rows.append({
@@ -3771,10 +3881,19 @@ func _draw_compensation_result(rect: Rect2, result: Dictionary) -> void:
 			"to_team": to_team.name if to_team != null else "-",
 			"to_team_color": to_team.color if to_team != null else MUTED,
 			"decision": decision,
-			"decision_color": BLUE if is_player else MUTED,
-			"picked": str(case.get("picked_name", "")) if is_player else "-",
+			"decision_color": BLUE if is_player or is_draft_pick else MUTED,
+			"picked": picked_text,
 			"money": _format_money(int(case.get("compensation_money", 0))),
 		})
+	if draft_pick_rule:
+		var pick_columns: Array = COMP_CASE_COLUMNS.duplicate(true)
+		for column_value in pick_columns:
+			var column: Dictionary = column_value as Dictionary
+			if str(column.get("key", "")) == "picked":
+				column["title"] = "offseason.comp.col.pick_right"
+				column["fmt"] = "string"
+		_draw_data_table(COMP_CASES_FULL_RECT, pick_columns, case_rows, {"title": heading, "row_h_max": 30.0})
+		return
 	_draw_data_table(COMP_CASES_RECT, COMP_CASE_COLUMNS, case_rows, {"title": heading, "row_h_max": 30.0})
 	_draw_player_record_table(COMP_MOVES_RECT, Loc.t("offseason.comp.moves_title", {"n": int(result.get("moved_count", 0))}),
 		_result_signing_player_rows(result.get("moves", []) as Array),

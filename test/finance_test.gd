@@ -147,6 +147,67 @@ func test_acquisition_scores_prefer_lower_cost_at_equal_value() -> void:
 	)
 
 
+func _pick_loss_entry(pick_round: int, money: int) -> Dictionary:
+	return {"value": 80, "war": 2.0, "salary": 10000, "offer_salary": 12000, "compensation_money": money, "compensation_pick_round": pick_round}
+
+
+func _ranked_team(id: int, rank: int) -> PSTeam:
+	var team: PSTeam = _team(id)
+	team.previous_rank = rank
+	return team
+
+
+# 元球団が指名権を選ぶと見込むとき、負担は金銭の額ではなく指名権の価値になる。
+func test_fa_ai_counts_expected_pick_loss_instead_of_money() -> void:
+	var teams: Array = []
+	var with_pick: Dictionary = _pick_loss_entry(2, 8000)
+	var money_only: Dictionary = _pick_loss_entry(0, 8000)
+	assert_int(FaMarketService._compensation_burden(with_pick, teams, 1, {})).is_equal(CompensationService.PICK_VALUE_ROUND2)
+	assert_int(FaMarketService._compensation_burden(money_only, teams, 1, {})).is_equal(8000)
+	# 差は指名権の価値と金銭の差額ぶんの評価点になる。
+	var gap: float = FaMarketService._signing_score(money_only, 5.0, [], teams, 1) - FaMarketService._signing_score(with_pick, 5.0, [], teams, 1)
+	assert_float(gap).is_equal_approx(float(CompensationService.PICK_VALUE_ROUND2 - 8000) / TeamFinance.AI_SALARY_COST_PER_SCORE, 0.001)
+	# 3巡目は2巡目より軽い。
+	assert_int(FaMarketService._compensation_burden(_pick_loss_entry(3, 8000), teams, 1, {})).is_equal(CompensationService.PICK_VALUE_ROUND3)
+	# 金銭の額が指名権の価値を超えるなら元球団は金銭を選ぶので、負担は金銭のまま。
+	var high_money: int = CompensationService.PICK_VALUE_ROUND2 + 1
+	assert_int(FaMarketService._compensation_burden(_pick_loss_entry(2, high_money), teams, 1, {})).is_equal(high_money)
+
+
+# 指名順の早い下位球団ほど指名権を失う痛手が大きい。
+func test_fa_ai_pick_loss_weighs_more_for_lower_ranked_teams() -> void:
+	var top: PSTeam = _ranked_team(1, 1)
+	var bottom: PSTeam = _ranked_team(2, 6)
+	var teams: Array = [top, bottom]
+	for i in range(4):
+		teams.append(_ranked_team(3 + i, 2 + i))
+	var entry: Dictionary = _pick_loss_entry(2, 8000)
+	var value: float = float(CompensationService.PICK_VALUE_ROUND2)
+	assert_int(FaMarketService._compensation_burden(entry, teams, 1, {})).is_equal(int(round(value * FaMarketService.PICK_LOSS_WEIGHT_TOP_TEAM)))
+	assert_int(FaMarketService._compensation_burden(entry, teams, 2, {})).is_equal(int(round(value * FaMarketService.PICK_LOSS_WEIGHT_BOTTOM_TEAM)))
+	assert_float(FaMarketService._signing_score(entry, 5.0, [], teams, 1)).is_greater(FaMarketService._signing_score(entry, 5.0, [], teams, 2))
+	# 順位が不明な球団は等倍。
+	assert_float(FaMarketService._pick_loss_weight([_team(7)], 7)).is_equal(1.0)
+
+
+# 同じ巡目は2度渡せないので、今オフ既に渡す見込みなら2人目の負担は金銭。別の巡目や別の球団には影響しない。
+func test_fa_ai_second_signing_does_not_lose_same_round_pick_again() -> void:
+	var teams: Array = []
+	var state: Dictionary = {"signings": [{"to_team": 1, "compensation_pick_round": 2, "compensation_money": 8000}]}
+	var entry: Dictionary = _pick_loss_entry(2, 9000)
+	assert_int(FaMarketService._compensation_burden(entry, teams, 1, state)).is_equal(9000)
+	assert_int(FaMarketService._compensation_burden(_pick_loss_entry(3, 3000), teams, 1, state)).is_equal(CompensationService.PICK_VALUE_ROUND3)
+	assert_int(FaMarketService._compensation_burden(entry, teams, 2, state)).is_equal(CompensationService.PICK_VALUE_ROUND2)
+	# 1人目が金銭になる見込みなら指名権はまだ手元に残る。
+	var money_state: Dictionary = {"signings": [{"to_team": 1, "compensation_pick_round": 2, "compensation_money": CompensationService.PICK_VALUE_ROUND2 + 1}]}
+	assert_int(FaMarketService._compensation_burden(entry, teams, 1, money_state)).is_equal(CompensationService.PICK_VALUE_ROUND2)
+
+
+# 指名権の負担は評価だけに効く。予算ゲートは元球団が金銭を選んでも払えるよう金銭の額で見る。
+func test_fa_budget_gate_still_uses_money_amount() -> void:
+	assert_int(FaMarketService._fa_cost(_pick_loss_entry(2, 8000))).is_equal(20000)
+
+
 func test_trade_payroll_ok_decreasing_allowed_increasing_blocked() -> void:
 	var over_team: PSTeam = _team(1, "league1", 10000)
 	var over_players: Array = [_player({"id": 1, "team_id": 1, "salary": 10500})]

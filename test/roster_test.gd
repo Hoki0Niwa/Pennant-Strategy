@@ -3734,6 +3734,214 @@ func test_past_season_pitcher_form_cache_matches_uncached_value() -> void:
 	PSPerformanceReference.reset_cache()
 
 
+# --- FA補償 2027年制度 (ドラフト指名権か金銭) ----------------------------------
+
+func test_fa_compensation_rank_bands_follow_the_rule() -> void:
+	var npb2027: String = FaMarketService.COMPENSATION_RULE_NPB2027
+	var legacy: String = FaMarketService.COMPENSATION_RULE_LEGACY
+	assert_str(FaMarketService._fa_rank_for_salary_rank(3, npb2027)).is_equal("A")
+	assert_str(FaMarketService._fa_rank_for_salary_rank(4, npb2027)).is_equal("B")
+	assert_str(FaMarketService._fa_rank_for_salary_rank(8, npb2027)).is_equal("B")
+	assert_str(FaMarketService._fa_rank_for_salary_rank(9, npb2027)).is_equal("C")
+	assert_str(FaMarketService._fa_rank_for_salary_rank(10, legacy)).is_equal("B")
+	assert_str(FaMarketService._fa_rank_for_salary_rank(11, legacy)).is_equal("C")
+
+
+func test_fa_compensation_money_range_follows_the_rule() -> void:
+	var npb2027: String = FaMarketService.COMPENSATION_RULE_NPB2027
+	var legacy: String = FaMarketService.COMPENSATION_RULE_LEGACY
+	# A は 1位130% 〜 3位80%、B は 4位100% 〜 8位60% (B8位は実規定の60%)。
+	assert_int(FaMarketService._compensation_money("A", 10000, 1, npb2027)).is_equal(13000)
+	assert_int(FaMarketService._compensation_money("A", 10000, 2, npb2027)).is_equal(10500)
+	assert_int(FaMarketService._compensation_money("A", 10000, 3, npb2027)).is_equal(8000)
+	assert_int(FaMarketService._compensation_money("B", 10000, 4, npb2027)).is_equal(10000)
+	assert_int(FaMarketService._compensation_money("B", 10000, 8, npb2027)).is_equal(6000)
+	assert_int(FaMarketService._compensation_money("C", 10000, 9, npb2027)).is_equal(0)
+	# 旧制度は順位によらず固定。
+	assert_int(FaMarketService._compensation_money("A", 10000, 1, legacy)).is_equal(8000)
+	assert_int(FaMarketService._compensation_money("B", 10000, 10, legacy)).is_equal(6000)
+
+
+# オフ中の age は今季の年齢で、翌年4月1日時点は age + 1 として判定する。
+func test_fa_compensation_age_exemption_uses_next_april_age() -> void:
+	var npb2027: String = FaMarketService.COMPENSATION_RULE_NPB2027
+	assert_bool(FaMarketService.is_compensation_exempt(33, npb2027)).is_false()
+	assert_bool(FaMarketService.is_compensation_exempt(34, npb2027)).is_true()
+	assert_bool(FaMarketService.is_compensation_exempt(40, FaMarketService.COMPENSATION_RULE_LEGACY)).is_false()
+
+
+func _draft_pick_signing(player_id: int, from_team: int, to_team: int, rank: String, salary_rank: int, money: int) -> Dictionary:
+	return {
+		"player_id": player_id,
+		"name": "FA%d" % player_id,
+		"fa_rank": rank,
+		"salary_rank": salary_rank,
+		"from_team": from_team,
+		"to_team": to_team,
+		"former_salary": 10000,
+		"compensation_money": money,
+	}
+
+
+func _season(year: int) -> PSSeason:
+	var season: PSSeason = PSSeason.new()
+	season.year = year
+	season.season_number = 1
+	return season
+
+
+func _draft_pick_fa_state(signings: Array) -> Dictionary:
+	return {"compensation_rule": FaMarketService.COMPENSATION_RULE_NPB2027, "signings": signings}
+
+
+func test_compensation_draft_pick_choice_refunds_money_and_moves_no_player() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2)]
+	var former: PSTeam = teams[0] as PSTeam
+	var signing: PSTeam = teams[1] as PSTeam
+	var former_funds: int = former.funds
+	var signing_funds: int = signing.funds
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, teams, _season(2100), _draft_pick_fa_state([_draft_pick_signing(6001, 1, 2, "A", 1, 13000)]), 1
+	)
+	# 人的補償の手順 (プロテクト提出) を通らず、元球団の選択で待つ。
+	assert_str(str(state.get("phase", ""))).is_equal("choose")
+	assert_bool(bool(CompensationService.submit_pick(state, players, teams, null, 7000).get("ok", true))).is_false()
+	assert_bool(bool(CompensationService.submit_draft_pick(state, players, teams, null).get("ok", false))).is_true()
+
+	assert_int(signing.funds).is_equal(signing_funds + 13000)
+	assert_int(former.funds).is_equal(former_funds - 13000)
+	for player_row in players:
+		assert_int((player_row as PSPlayer).team_id).is_equal(2)
+	var result: Dictionary = CompensationService.finalize_compensation(state)
+	assert_int(int(result.get("draft_pick_count", 0))).is_equal(1)
+	assert_int(int(result.get("moved_count", 0))).is_equal(0)
+	var transfers: Array = result.get("pick_transfers", []) as Array
+	assert_int(transfers.size()).is_equal(1)
+	var transfer: Dictionary = transfers[0] as Dictionary
+	assert_int(int(transfer.get("draft_year", 0))).is_equal(2101)
+	assert_int(int(transfer.get("round", 0))).is_equal(2)
+	assert_int(int(transfer.get("giving_team", 0))).is_equal(2)
+	assert_int(int(transfer.get("receiving_team", 0))).is_equal(1)
+
+
+func test_compensation_draft_pick_money_choice_keeps_amount() -> void:
+	var teams: Array = [_team(1), _team(2)]
+	var signing_funds: int = (teams[1] as PSTeam).funds
+	var state: Dictionary = CompensationService.create_compensation_state(
+		[], teams, _season(2100), _draft_pick_fa_state([_draft_pick_signing(6001, 1, 2, "B", 4, 10000)]), 1
+	)
+	assert_str(str(state.get("phase", ""))).is_equal("choose")
+	assert_bool(bool(CompensationService.submit_money_only(state, [], teams, null).get("ok", false))).is_true()
+	assert_int((teams[1] as PSTeam).funds).is_equal(signing_funds)
+	var result: Dictionary = CompensationService.finalize_compensation(state)
+	assert_int(int(result.get("money_only_count", 0))).is_equal(1)
+	assert_array(result.get("pick_transfers", []) as Array).is_empty()
+
+
+# 巡目: A=2巡目 / B4〜7位=3巡目 / B8位=金銭のみ。C と35歳免除はケースを作らない。
+func test_compensation_draft_pick_rounds_and_exclusions() -> void:
+	var teams: Array = [_team(1), _team(2), _team(3)]
+	var exempt: Dictionary = _draft_pick_signing(6004, 1, 2, "A", 1, 0)
+	exempt["compensation_exempt"] = true
+	var state: Dictionary = CompensationService.create_compensation_state(
+		[], teams, _season(2100), _draft_pick_fa_state([
+			_draft_pick_signing(6001, 3, 2, "A", 2, 1000),
+			_draft_pick_signing(6002, 3, 1, "B", 7, 1000),
+			_draft_pick_signing(6003, 2, 1, "B", 8, 6000),
+			_draft_pick_signing(6005, 3, 1, "C", 9, 0),
+			exempt,
+		]), 0
+	)
+	var cases: Array = state.get("cases", []) as Array
+	assert_int(cases.size()).is_equal(3)
+	assert_int(int((cases[0] as Dictionary).get("pick_round", 0))).is_equal(2)
+	assert_int(int((cases[1] as Dictionary).get("pick_round", 0))).is_equal(3)
+	assert_int(int((cases[2] as Dictionary).get("pick_round", 0))).is_equal(0)
+	assert_str(str((cases[2] as Dictionary).get("forced_reason", ""))).is_equal("rank_b_money_only")
+	assert_str(str((cases[2] as Dictionary).get("decision", ""))).is_equal("money")
+	assert_int(int(state.get("exempt_count", 0))).is_equal(1)
+
+
+# 同じ球団が同じ巡目を2度は渡せない。2件目は金銭に確定する。
+func test_compensation_same_round_pick_cannot_be_given_twice() -> void:
+	var teams: Array = [_team(1), _team(2), _team(3)]
+	var state: Dictionary = CompensationService.create_compensation_state(
+		[], teams, _season(2100), _draft_pick_fa_state([
+			_draft_pick_signing(6001, 1, 2, "A", 1, 1000),
+			_draft_pick_signing(6002, 3, 2, "A", 1, 1000),
+		]), 1
+	)
+	assert_bool(bool(CompensationService.submit_draft_pick(state, [], teams, null).get("ok", false))).is_true()
+	assert_bool(bool(state.get("complete", false))).is_true()
+	var second: Dictionary = (state.get("cases", []) as Array)[1] as Dictionary
+	assert_str(str(second.get("decision", ""))).is_equal("money")
+	assert_str(str(second.get("forced_reason", ""))).is_equal("pick_already_transferred")
+	assert_int((state.get("pick_transfers", []) as Array).size()).is_equal(1)
+
+
+# 補償金を返すと予算超過になる元球団は指名権を選べない。
+func test_compensation_draft_pick_blocked_when_refund_breaks_budget() -> void:
+	var former: PSTeam = _team(1)
+	former.funds = 20000
+	var players: Array = [_player({"id": 7000, "team_id": 1, "salary": 15000})]
+	var state: Dictionary = CompensationService.create_compensation_state(
+		players, [former, _team(2)], _season(2100), _draft_pick_fa_state([_draft_pick_signing(6001, 1, 2, "A", 1, 10000)]), 1
+	)
+	assert_bool(bool(state.get("complete", false))).is_true()
+	var case: Dictionary = (state.get("cases", []) as Array)[0] as Dictionary
+	assert_str(str(case.get("forced_reason", ""))).is_equal("budget_short")
+	assert_str(str(case.get("decision", ""))).is_equal("money")
+
+
+# CPU は指名権の価値と金銭の額を比べる。予算が苦しい球団は金銭を重く見る。
+func test_compensation_cpu_weighs_pick_value_against_money() -> void:
+	var former: PSTeam = _team(1)
+	former.funds = 400000
+	var teams: Array = [former, _team(2)]
+	var low: Dictionary = {"from_team": 1, "pick_round": 2, "money_only": 10000}
+	var high: Dictionary = {"from_team": 1, "pick_round": 2, "money_only": CompensationService.PICK_VALUE_ROUND2 + 1}
+	var round3: Dictionary = {"from_team": 1, "pick_round": 3, "money_only": CompensationService.PICK_VALUE_ROUND3 + 1}
+	assert_bool(CompensationService.cpu_prefers_draft_pick([], teams, low)).is_true()
+	assert_bool(CompensationService.cpu_prefers_draft_pick([], teams, high)).is_false()
+	assert_bool(CompensationService.cpu_prefers_draft_pick([], teams, round3)).is_false()
+	# 金銭を重く見る分だけ、余裕のある球団なら指名権を選ぶ額でも金銭へ倒れる。
+	var boundary: Dictionary = {"from_team": 1, "pick_round": 2, "money_only": CompensationService.PICK_VALUE_ROUND2 - 1000}
+	assert_bool(CompensationService.cpu_prefers_draft_pick([], teams, boundary)).is_true()
+	former.funds = CompensationService.PICK_VALUE_ROUND2
+	assert_bool(CompensationService.cpu_prefers_draft_pick([], teams, boundary)).is_false()
+
+
+# 確定を何度呼んでも、譲渡は翌年のドラフトへ渡す台帳に1回だけ載る。
+func test_compensation_finalize_adds_pick_transfers_to_ledger_once() -> void:
+	var saved_state: Dictionary = AppState.compensation_state
+	var saved_transfers: Array = AppState.draft_pick_transfers
+	var saved_results: Dictionary = AppState.offseason_results
+	AppState.offseason_results = {}
+	AppState.draft_pick_transfers = []
+	AppState.compensation_state = {"complete": true, "logs": [], "cases": [], "pick_transfers": [
+		{"draft_year": 2101, "round": 2, "giving_team": 2, "receiving_team": 1},
+	]}
+	AppState._finalize_compensation_if_complete()
+	AppState._finalize_compensation_if_complete()
+	var ledger_size: int = AppState.draft_pick_transfers.size()
+	AppState.compensation_state = saved_state
+	AppState.draft_pick_transfers = saved_transfers
+	AppState.offseason_results = saved_results
+	assert_int(ledger_size).is_equal(1)
+
+
+# FA市場が焼いた規定で補償の進行が分かれる。旧制度なら従来どおりプロテクトの手順に入る。
+func test_compensation_rule_comes_from_fa_state() -> void:
+	var players: Array = _compensation_roster(2, 40)
+	var teams: Array = [_team(1), _team(2)]
+	var legacy_fa: Dictionary = _compensation_fa_state(1, 2, "A", 10000, 8000)
+	legacy_fa["compensation_rule"] = FaMarketService.COMPENSATION_RULE_LEGACY
+	var state: Dictionary = CompensationService.create_compensation_state(players, teams, null, legacy_fa, 1)
+	assert_str(str(state.get("phase", ""))).is_equal("pick")
+	assert_array(CompensationService.exposed_ids(CompensationService.current_case(state))).is_not_empty()
+
+
 # --- 人的補償 (FAプロテクト28人) --------------------------------------------
 #
 # 補償は FA市場の直後の独立ステップ。ケースごとに「獲得球団がプロテクト28人を出す →

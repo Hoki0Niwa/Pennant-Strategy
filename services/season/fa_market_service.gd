@@ -32,6 +32,29 @@ const PASS_DECAY_1: float = 0.04
 const PASS_DECAY_PER_YEAR: float = 0.02
 const MIN_DECLARE_CHANCE: float = 0.02
 const MAX_DECLARE_CHANCE: float = 0.30
+
+# FA補償の規定。npb2027 (既定) はドラフト指名権か金銭、legacy は人的補償 (プロテクト28人)。
+# オプション画面で切り替え、次の FA市場から適用する。補償ステップは fa_state に焼いた規定を見るので、
+# 進行中のオフに変更しても途中で規定は変わらない。
+const COMPENSATION_RULE_NPB2027: String = "npb2027"
+const COMPENSATION_RULE_LEGACY: String = "legacy"
+# ランクは移籍元球団の日本人選手の年俸順位で決まる。A の範囲は両規定で共通。
+const FA_RANK_A_MAX_SALARY_RANK: int = 3
+const FA_RANK_B_MAX_SALARY_RANK_NPB2027: int = 8
+const FA_RANK_B_MAX_SALARY_RANK_LEGACY: int = 10
+# 翌年4月1日時点でこの年齢以上の選手は、ランクを問わず補償が不要 (npb2027 のみ)。
+const COMPENSATION_EXEMPT_AGE: int = 35
+# npb2027 の金銭補償の範囲 (旧年俸比)。実 NPB は球団間の交渉で決まる目安なので、ゲームではランク内の
+# 年俸順位で範囲を線形に割り振る (A: 1位130%〜3位80% / B: 4位100%〜8位60%)。B8位は実規定どおり60%になる。
+const NPB2027_RANK_A_RATE_MIN: float = 0.80
+const NPB2027_RANK_A_RATE_MAX: float = 1.30
+const NPB2027_RANK_B_RATE_MIN: float = 0.60
+const NPB2027_RANK_B_RATE_MAX: float = 1.00
+# AI が指名権を失う痛手を見積もるときの係数 (npb2027)。指名順は下位球団ほど早いので、前年順位が
+# 低いほど指名権が重い。リーグ1位〜最下位の間を線形に割り振る。順位が不明なら 1.0。
+const PICK_LOSS_WEIGHT_TOP_TEAM: float = 0.7
+const PICK_LOSS_WEIGHT_BOTTOM_TEAM: float = 1.3
+# legacy の金銭補償率 (旧年俸比)。
 const FA_RANK_A_COMPENSATION_RATE: float = 0.80
 const FA_RANK_B_COMPENSATION_RATE: float = 0.60
 const FA_RANK_A_OFFER_MULT: float = 1.25
@@ -69,6 +92,10 @@ const REGULAR_OVERALL_SIGMA: float = -0.1
 const REGULAR_OVERALL: int = 68
 
 
+static func normalize_compensation_rule(value: Variant) -> String:
+	return COMPENSATION_RULE_LEGACY if str(value) == COMPENSATION_RULE_LEGACY else COMPENSATION_RULE_NPB2027
+
+
 static func process_fa_market(players: Array, teams: Array, season: PSSeason, user_team_id: int = 0) -> Dictionary:
 	var state: Dictionary = create_fa_market_state(players, teams, season, user_team_id)
 	complete_fa_market_automatically(state, players, teams, season, user_team_id)
@@ -80,10 +107,10 @@ static func process_fa_market(players: Array, teams: Array, season: PSSeason, us
 # (team_id=0 / free_agent) は FA市場ステップまで起こさない — 先に離脱させると戦力外・ドラフトが
 # 見る在籍人数がずれ、OPENING_ROSTER_TARGET から逆算する編成計画が丸ごと動いてしまうため。
 # 表示専用ステップなので state は持たず、結果 dict をそのまま返す。
-static func create_declaration_state(players: Array, teams: Array, season: PSSeason) -> Dictionary:
+static func create_declaration_state(players: Array, teams: Array, season: PSSeason, compensation_rule: String = COMPENSATION_RULE_NPB2027) -> Dictionary:
 	var year: int = season.year if season != null else 0
 	var new_fa: Array = OffseasonService.accrue_fa_days_and_update_status(players, teams, season)
-	var declared: Array = _select_declarers(players, teams, season, year)
+	var declared: Array = _select_declarers(players, teams, season, year, compensation_rule)
 	var declared_ids: Dictionary = {}
 	for row in declared:
 		var declared_entry: Dictionary = row as Dictionary
@@ -144,7 +171,7 @@ static func create_declaration_state(players: Array, teams: Array, season: PSSea
 
 
 # FA宣言ステップで宣言済みの選手からFA市場のエントリを組み立てる。宣言後に引退した選手は除く。
-static func _declared_entries(players: Array, season: PSSeason, year: int) -> Array:
+static func _declared_entries(players: Array, season: PSSeason, year: int, compensation_rule: String) -> Array:
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
@@ -161,7 +188,7 @@ static func _declared_entries(players: Array, season: PSSeason, year: int) -> Ar
 			record = RecordStore.get_player_record(player.id, season.year, season.season_number)
 		var war: float = _record_war(record, league_ctx)
 		var value: int = OffseasonService.player_value_score(player)
-		var entry: Dictionary = _declaration_entry(player, record, value, war, rank_by_player_id, year, _declaration_chance(player, year))
+		var entry: Dictionary = _declaration_entry(player, record, value, war, rank_by_player_id, year, _declaration_chance(player, year), compensation_rule)
 		entry.erase("declare_score")
 		entry["available"] = true
 		entries.append(entry)
@@ -175,9 +202,9 @@ static func _declared_entries(players: Array, season: PSSeason, year: int) -> Ar
 	return entries
 
 
-static func create_fa_market_state(players: Array, _teams: Array, season: PSSeason, user_team_id: int) -> Dictionary:
+static func create_fa_market_state(players: Array, _teams: Array, season: PSSeason, user_team_id: int, compensation_rule: String = COMPENSATION_RULE_NPB2027) -> Dictionary:
 	var year: int = season.year if season != null else 0
-	var declared: Array = _declared_entries(players, season, year)
+	var declared: Array = _declared_entries(players, season, year, compensation_rule)
 	for row in declared:
 		var entry: Dictionary = row as Dictionary
 		var player: PSPlayer = _find_player_by_id(players, int(entry.get("player_id", 0)))
@@ -192,6 +219,7 @@ static func create_fa_market_state(players: Array, _teams: Array, season: PSSeas
 		"version": 3,
 		"year": year,
 		"user_team_id": user_team_id,
+		"compensation_rule": compensation_rule,
 		"complete": declared.is_empty(),
 		"finalized": false,
 		"declared": declared,
@@ -269,7 +297,7 @@ static func auto_pick_for_user(state: Dictionary, players: Array, teams: Array, 
 			continue
 		var need: Dictionary = _build_position_need(players, teams)
 		var team_need: float = float((need.get(user_team_id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
-		var score: float = _signing_score(entry, team_need, players, teams, user_team_id)
+		var score: float = _signing_score(entry, team_need, players, teams, user_team_id, state)
 		if score < MIN_AI_SIGNING_SCORE:
 			continue
 		if score > best_score:
@@ -316,7 +344,7 @@ static func complete_fa_market_automatically(state: Dictionary, players: Array, 
 			var team_need: float = float((need.get(team.id, {}) as Dictionary).get(int(entry.get("position", 0)), 0.0))
 			if team_need < MIN_NEED_TO_SIGN:
 				continue
-			var score: float = _signing_score(entry, team_need, players, teams, team.id)
+			var score: float = _signing_score(entry, team_need, players, teams, team.id, state)
 			if score < MIN_AI_SIGNING_SCORE:
 				continue
 			if score > best_score:
@@ -427,12 +455,12 @@ static func available_user_candidates(state: Dictionary, players: Array, teams: 
 	rows.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
-		return _signing_score(da, float(da.get("need", 0.0)), players, teams, user_team_id) > _signing_score(db, float(db.get("need", 0.0)), players, teams, user_team_id)
+		return _signing_score(da, float(da.get("need", 0.0)), players, teams, user_team_id, state) > _signing_score(db, float(db.get("need", 0.0)), players, teams, user_team_id, state)
 	)
 	return rows
 
 
-static func _select_declarers(players: Array, _teams: Array, season: PSSeason, year: int) -> Array:
+static func _select_declarers(players: Array, _teams: Array, season: PSSeason, year: int, compensation_rule: String = COMPENSATION_RULE_NPB2027) -> Array:
 	var league_ctx: Dictionary = {}
 	if season != null:
 		league_ctx = WarCalculator.build_league_context(season.year, season.season_number)
@@ -459,7 +487,7 @@ static func _select_declarers(players: Array, _teams: Array, season: PSSeason, y
 		var declaration_chance: float = _declaration_chance(player, year)
 		if Rng.roll_float() > declaration_chance:
 			continue
-		candidates.append(_declaration_entry(player, record, value, war, rank_by_player_id, year, declaration_chance))
+		candidates.append(_declaration_entry(player, record, value, war, rank_by_player_id, year, declaration_chance, compensation_rule))
 	candidates.sort_custom(func(a, b) -> bool:
 		var da: Dictionary = a as Dictionary
 		var db: Dictionary = b as Dictionary
@@ -489,7 +517,8 @@ static func _declaration_entry(
 	war: float,
 	rank_by_player_id: Dictionary,
 	year: int,
-	declaration_chance: float
+	declaration_chance: float,
+	compensation_rule: String
 ) -> Dictionary:
 	var games: int = 0
 	var pa: int = 0
@@ -506,10 +535,14 @@ static func _declaration_entry(
 			games = record.batter_stats.games
 			pa = record.batter_stats.plate_appearances
 	var salary_rank: int = int(rank_by_player_id.get(player.id, 99))
-	var fa_rank: String = _fa_rank_for_salary_rank(salary_rank)
+	var fa_rank: String = _fa_rank_for_salary_rank(salary_rank, compensation_rule)
 	var market_salary_base: int = _market_salary_base(player, record, war)
 	var offer_salary: int = _offer_salary(player.salary, market_salary_base, fa_rank)
-	var compensation_money: int = _compensation_money(fa_rank, player.salary)
+	var compensation_exempt: bool = is_compensation_exempt(player.age, compensation_rule)
+	var compensation_money: int = 0 if compensation_exempt else _compensation_money(fa_rank, player.salary, salary_rank, compensation_rule)
+	var compensation_pick_round: int = 0
+	if compensation_rule == COMPENSATION_RULE_NPB2027 and not compensation_exempt:
+		compensation_pick_round = CompensationService.pick_round_for(fa_rank, salary_rank)
 	var fa_eligible_year: int = _fa_eligible_year(player, year)
 	var fa_pass_count: int = _fa_pass_count(player, year)
 	var fa_nissuu: int = player.fa_service_days()
@@ -530,6 +563,8 @@ static func _declaration_entry(
 		"offer_salary": offer_salary,
 		"offer_years": offer_years,
 		"compensation_money": compensation_money,
+		"compensation_exempt": compensation_exempt,
+		"compensation_pick_round": compensation_pick_round,
 		"fa_eligible_year": fa_eligible_year,
 		"fa_pass_count": fa_pass_count,
 		"fa_nissuu": fa_nissuu,
@@ -615,22 +650,44 @@ static func _build_fa_rank_by_player_id(players: Array) -> Dictionary:
 	return rank_by_player_id
 
 
-static func _fa_rank_for_salary_rank(salary_rank: int) -> String:
-	if salary_rank >= 1 and salary_rank <= 3:
+static func _fa_rank_for_salary_rank(salary_rank: int, compensation_rule: String = COMPENSATION_RULE_NPB2027) -> String:
+	var rank_b_max: int = FA_RANK_B_MAX_SALARY_RANK_LEGACY if compensation_rule == COMPENSATION_RULE_LEGACY else FA_RANK_B_MAX_SALARY_RANK_NPB2027
+	if salary_rank >= 1 and salary_rank <= FA_RANK_A_MAX_SALARY_RANK:
 		return "A"
-	if salary_rank >= 4 and salary_rank <= 10:
+	if salary_rank > FA_RANK_A_MAX_SALARY_RANK and salary_rank <= rank_b_max:
 		return "B"
 	return "C"
 
 
-static func _compensation_money(fa_rank: String, salary: int) -> int:
+# 年齢に誕生日の概念がないので、オフ中の age + 1 を翌年4月1日時点の年齢として扱う
+# (age は次シーズンの開始時に 1 つ上がる)。
+static func is_compensation_exempt(age: int, compensation_rule: String) -> bool:
+	return compensation_rule == COMPENSATION_RULE_NPB2027 and age + 1 >= COMPENSATION_EXEMPT_AGE
+
+
+static func _compensation_money(fa_rank: String, salary: int, salary_rank: int, compensation_rule: String) -> int:
+	var rate: float = 0.0
+	if compensation_rule == COMPENSATION_RULE_LEGACY:
+		match fa_rank:
+			"A":
+				rate = FA_RANK_A_COMPENSATION_RATE
+			"B":
+				rate = FA_RANK_B_COMPENSATION_RATE
+	else:
+		rate = _npb2027_compensation_rate(fa_rank, salary_rank)
+	return int(round(float(salary) * rate))
+
+
+static func _npb2027_compensation_rate(fa_rank: String, salary_rank: int) -> float:
 	match fa_rank:
 		"A":
-			return int(round(float(salary) * FA_RANK_A_COMPENSATION_RATE))
+			var a_t: float = inverse_lerp(1.0, float(FA_RANK_A_MAX_SALARY_RANK), float(salary_rank))
+			return lerpf(NPB2027_RANK_A_RATE_MAX, NPB2027_RANK_A_RATE_MIN, a_t)
 		"B":
-			return int(round(float(salary) * FA_RANK_B_COMPENSATION_RATE))
+			var b_t: float = inverse_lerp(float(FA_RANK_A_MAX_SALARY_RANK + 1), float(FA_RANK_B_MAX_SALARY_RANK_NPB2027), float(salary_rank))
+			return lerpf(NPB2027_RANK_B_RATE_MAX, NPB2027_RANK_B_RATE_MIN, b_t)
 		_:
-			return 0
+			return 0.0
 
 
 # 年齢から複数年契約の提示可能年数上限を返す (若いほど長期を提示できる)。UI からも使う。
@@ -739,7 +796,8 @@ static func _apply_signing(state: Dictionary, players: Array, teams: Array, seas
 	entry["available"] = false
 	entry["signed"] = true
 	entry["to_team"] = to_team_id
-	# 金銭補償 (A80%/B60%) を当オフの予算調整として実際に移動する。獲得球団が負担し元球団が受け取る。
+	# 金銭補償を当オフの予算調整として実際に移動する。獲得球団が負担し元球団が受け取る。
+	# 元球団が別の補償を選んだ分は、直後の補償ステップで獲得球団へ払い戻す。
 	var comp: int = int(entry.get("compensation_money", 0))
 	var comp_from_team: int = int(entry.get("from_team", 0))
 	if comp > 0 and comp_from_team != to_team_id:
@@ -761,6 +819,9 @@ static func _apply_signing(state: Dictionary, players: Array, teams: Array, seas
 		"fa_rank": str(entry.get("fa_rank", "C")),
 		"offer_salary": player.salary,
 		"compensation_money": int(entry.get("compensation_money", 0)),
+		"compensation_exempt": bool(entry.get("compensation_exempt", false)),
+		"compensation_pick_round": int(entry.get("compensation_pick_round", 0)),
+		"salary_rank": int(entry.get("salary_rank", 99)),
 		# 補償金の算定基準になった移籍前年俸。人的補償ステップが減額後の額を出すのに使う
 		# (salary は移籍後の新年俸なので基準にできない)。
 		"former_salary": int(entry.get("salary", 0)),
@@ -850,11 +911,54 @@ static func _can_ai_afford_candidate(players: Array, teams: Array, team_id: int,
 	return TeamFinance.can_afford_ai_addition(players, team, _fa_cost(entry), reserve)
 
 
-static func _signing_score(entry: Dictionary, team_need: float, _players: Array, _teams: Array, _team_id: int) -> float:
+# 獲得評価のコストは 提示年俸 + 補償の負担 (_compensation_burden)。予算ゲートの _fa_cost とは別物で、
+# あちらは元球団がどちらを選んでも払えるよう金銭の額を最悪値として見る。
+static func _signing_score(entry: Dictionary, team_need: float, _players: Array, teams: Array, team_id: int, state: Dictionary = {}) -> float:
 	var score: float = float(entry.get("value", 0)) * (1.0 + team_need / 20.0)
 	score += float(entry.get("war", 0.0)) * 6.0
-	score -= TeamFinance.ai_acquisition_cost_penalty(_fa_cost(entry))
+	var offer: int = int(entry.get("offer_salary", entry.get("salary", 0)))
+	score -= TeamFinance.ai_acquisition_cost_penalty(offer + _compensation_burden(entry, teams, team_id, state))
 	return score
+
+
+# 獲得球団が補償で失うものの金額換算。元球団の選択は CompensationService.cpu_prefers_draft_pick と
+# 同じく指名権の価値と金銭の額の比較で予想する。指名権が選ばれれば金銭は戻ってくるので、
+# 負担は金銭の額ではなく「この球団にとっての指名権の重さ」になる。
+static func _compensation_burden(entry: Dictionary, teams: Array, team_id: int, state: Dictionary) -> int:
+	var money: int = int(entry.get("compensation_money", 0))
+	var pick_round: int = int(entry.get("compensation_pick_round", 0))
+	if pick_round <= 0 or _expects_to_give_pick(state, team_id, pick_round):
+		return money
+	var pick_value: int = CompensationService.pick_value_for_round(pick_round)
+	if money > pick_value:
+		return money
+	return int(round(float(pick_value) * _pick_loss_weight(teams, team_id)))
+
+
+# 今オフの獲得で同じ巡目を既に渡す見込みか。同じ巡目は2度渡せないので、2人目の負担は金銭になる。
+static func _expects_to_give_pick(state: Dictionary, team_id: int, pick_round: int) -> bool:
+	for row in state.get("signings", []) as Array:
+		var signing: Dictionary = row as Dictionary
+		if int(signing.get("to_team", 0)) != team_id or int(signing.get("compensation_pick_round", 0)) != pick_round:
+			continue
+		if int(signing.get("compensation_money", 0)) <= CompensationService.pick_value_for_round(pick_round):
+			return true
+	return false
+
+
+static func _pick_loss_weight(teams: Array, team_id: int) -> float:
+	var team: PSTeam = _find_team_by_id(teams, team_id)
+	if team == null or team.previous_rank <= 0:
+		return 1.0
+	var league_size: int = 0
+	for team_row in teams:
+		var other: PSTeam = team_row as PSTeam
+		if other != null and other.league == team.league and not other.farm_only:
+			league_size += 1
+	if league_size <= 1:
+		return 1.0
+	var t: float = clampf(float(team.previous_rank - 1) / float(league_size - 1), 0.0, 1.0)
+	return lerpf(PICK_LOSS_WEIGHT_TOP_TEAM, PICK_LOSS_WEIGHT_BOTTOM_TEAM, t)
 
 
 static func _contract_success_chance(entry: Dictionary, team_need: float, method: String = "cpu") -> float:

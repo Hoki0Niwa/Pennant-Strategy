@@ -93,7 +93,7 @@ func _layout_rects() -> Dictionary:
 	var right_w: float = INNER_R - right_x
 
 	var save_panel: Rect2 = Rect2(left_x, CONTENT_TOP, left_w, 150.0)
-	# 高さは行の積み上げから求める (説明が長い行は2行分の高さ)。下の開発ツール欄は残りを使う。
+	# 高さは行の積み上げから求める (説明が長い行は2行分の高さ)。
 	var settings_panel: Rect2 = Rect2(left_x, save_panel.end.y + 18.0, left_w, _settings_panel_height())
 
 	var rects: Dictionary = {
@@ -105,15 +105,16 @@ func _layout_rects() -> Dictionary:
 	}
 
 	if dev:
-		# 左カラム下段: 開発ツール。開始前=テストモードメニュー / 開始後=操作チーム変更。
-		var dev_panel: Rect2 = Rect2(left_x, settings_panel.end.y + 18.0, left_w, CONTENT_BOTTOM - (settings_panel.end.y + 18.0))
+		# 右カラム上段: 開発ツール。開始前=テストモードメニュー / 開始後=操作チーム変更。
+		# 左カラムは設定の行が増えると下へ伸びて画面に収まらないので、ここには置かない。
+		var dev_panel: Rect2 = Rect2(right_x, CONTENT_TOP, right_w, 176.0)
 		rects["devtools_panel"] = dev_panel
 		var dx0: float = dev_panel.position.x + 18.0
 		var dy0: float = dev_panel.position.y + 84.0
 		if _has_session():
 			rects["team_dropdown"] = Rect2(dx0 + 116.0, dy0, dev_panel.size.x - 36.0 - 116.0, 40.0)
 		else:
-			# 4 つを 1 行に並べる (設定パネルが行数に合わせて伸びるので、この欄の高さは余りに依存する)。
+			# 4 つを 1 行に並べる。
 			var dgap: float = 12.0
 			var dbw: float = (dev_panel.size.x - 36.0 - dgap * 3.0) / 4.0
 			var dbh: float = 46.0
@@ -123,7 +124,7 @@ func _layout_rects() -> Dictionary:
 			rects["dev_reload"] = Rect2(dx0 + (dbw + dgap) * 3.0, dy0, dbw, dbh)
 
 			# 右カラム: 初期選手再生成 + 能力分布グラフ (開始前のみ)。
-			var regen_panel: Rect2 = Rect2(right_x, CONTENT_TOP, right_w, 300.0)
+			var regen_panel: Rect2 = Rect2(right_x, dev_panel.end.y + 18.0, right_w, 300.0)
 			var cy: float = regen_panel.position.y + 150.0
 			rects["regen_panel"] = regen_panel
 			rects["regen_seasons_edit"] = Rect2(regen_panel.position.x + 108.0, cy, 70.0, 34.0)
@@ -189,6 +190,7 @@ func _toggle_rows() -> Array:
 		{"id": "dh2", "label": Loc.t("options.toggle.dh2.label"), "desc": Loc.t("options.toggle.dh.desc"), "on": AppState.is_dh_enabled_for_league("league2")},
 		{"id": "draftwaiver", "label": Loc.t("options.toggle.draftwaiver.label"), "desc": Loc.t("options.toggle.draftwaiver.desc"), "on": AppState.draft_full_waiver},
 		{"id": "csadvantage", "label": Loc.t("options.toggle.csadvantage.label"), "desc": Loc.t("options.toggle.csadvantage.desc"), "on": AppState.cs_advantage_rule == PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026},
+		{"id": "facompensation", "label": Loc.t("options.toggle.facompensation.label"), "desc": Loc.t("options.toggle.facompensation.desc"), "on": AppState.fa_compensation_rule == FaMarketService.COMPENSATION_RULE_NPB2027},
 		# 選択肢行: "choices" を持つ行は ON/OFF の代わりに選択肢チップを並べる (_on_choice)。
 		{"id": "overseas", "label": Loc.t("options.choice.overseas.label"), "desc": Loc.t("options.choice.overseas.desc"),
 			"choices": _overseas_frequency_choices(), "value": AppState.overseas_challenge_frequency},
@@ -500,6 +502,10 @@ func _on_toggle(id: String) -> void:
 			var use_2026: bool = AppState.cs_advantage_rule != PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026
 			AppState.cs_advantage_rule = PSPostseasonResult.CS_ADVANTAGE_RULE_NPB2026 if use_2026 else PSPostseasonResult.CS_ADVANTAGE_RULE_LEGACY
 			_save_and_status(Loc.t("options.status.csadvantage_saved"))
+		"facompensation":
+			var use_2027: bool = AppState.fa_compensation_rule != FaMarketService.COMPENSATION_RULE_NPB2027
+			AppState.fa_compensation_rule = FaMarketService.COMPENSATION_RULE_NPB2027 if use_2027 else FaMarketService.COMPENSATION_RULE_LEGACY
+			_save_and_status(Loc.t("options.status.facompensation_saved"))
 	# チップの ON/OFF 表示とスタイルを更新するため、ボタンを作り直す。
 	_build_buttons()
 	queue_redraw()

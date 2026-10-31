@@ -1,15 +1,21 @@
 extends RefCounted
 class_name CompensationService
 
-# FA の人的補償 (プロテクト28人)。FA市場の直後に独立ステップとして走る。
+# FA の補償。FA市場の直後に独立ステップとして走り、fa_state に焼いた規定で進行が分かれる。
+# 補償金はどちらの規定でも FA成立時 (FaMarketService._apply_signing) に「金銭のみ」の額を既に
+# 動かしてあり、元球団が別の補償を選んだケースだけ差額を獲得球団へ払い戻す。
 #
-# 進行は NPB の実手順に合わせてケース単位で回す:
+# npb2027 (既定): 元球団がケース単位で「翌年ドラフトの指名権」か「金銭」を選ぶ。
+#   A = 2巡目、B (年俸4〜7位) = 3巡目、B8位 = 金銭のみ。指名権を選ぶと金銭は0になる。
+#   翌年4月1日時点で35歳以上の選手は補償なし (ケースを作らない)。
+#   譲渡した指名枠は pick_transfers として結果へ載せ、翌年のドラフトで DraftService が消費する。
+#   同じ球団が同じ巡目を2度は渡せないので、2件目は金銭に落とす (実規定は未公表のゲーム側判断)。
+#
+# legacy: 人的補償 (プロテクト28人)。NPB の旧手順に合わせてケース単位で回す:
 #   1. 獲得球団がプロテクト28人を提出する
 #   2. 元球団が非プロテクト選手を見て「人的補償」か「金銭補償のみ」を選ぶ
 #   3. 人的補償なら非プロテクトから1人を指名し、その場で移籍させる
-#
-# 補償金は FA成立時 (FaMarketService._apply_signing) に「金銭のみ」の額 (A80%/B60%) を既に
-# 動かしてある。人的補償を選んだケースだけ、差額 (A→50% / B→40% へ減額) を獲得球団へ払い戻す。
+#   人的補償を選ぶと補償金は A80%→50% / B60%→40% へ減額する。
 #
 # **複数年契約中の選手も対象**にする (NPB実準拠)。他の経路 (FA宣言/戦力外/トレード/現役ドラフト)
 # は is_multi_year_locked_offseason でロックしているが、あれは「球団が自分の意思で選手を動かす/
@@ -17,6 +23,20 @@ class_name CompensationService
 # ここだけロックを見ない。契約 (contract_end_year 等) は source_data ごと選手について移籍先へ移る。
 
 const STATE_VERSION: int = 1
+
+# npb2027 で譲渡する指名権の巡目。
+const PICK_ROUND_RANK_A: int = 2
+const PICK_ROUND_RANK_B: int = 3
+# B のうち指名権の対象になる年俸順位の下限 (8位は金銭のみ)。
+const PICK_RANK_B_MAX_SALARY_RANK: int = 7
+
+# --- CPU の指名権/金銭の判断 (npb2027) ---
+# 指名権の価値を金額に換算し、金銭補償の額と比べる。年俸の高い選手ほど金銭へ倒れる。
+const PICK_VALUE_ROUND2: int = 25000
+const PICK_VALUE_ROUND3: int = 10000
+# 指名権を選ぶと補償金を手放すので、その後の予算の余裕がこの額を下回る球団は金銭を重く見る。
+const PICK_TIGHT_BUDGET_ROOM: int = 30000
+const PICK_TIGHT_BUDGET_MONEY_WEIGHT: float = 1.5
 
 # プロテクト枠。自動保護 (外国人/育成/当年新人/当オフFA加入) はこの枠を消費しない。
 const PROTECT_SIZE: int = 28
@@ -52,10 +72,14 @@ const PICK_AGE_FLOOR: float = 0.70
 
 static func create_compensation_state(players: Array, teams: Array, season: PSSeason, fa_state: Dictionary, user_team_id: int) -> Dictionary:
 	var year: int = season.year if season != null else 0
+	var rule: String = str(fa_state.get("compensation_rule", FaMarketService.COMPENSATION_RULE_LEGACY))
 	var state: Dictionary = {
 		"version": STATE_VERSION,
 		"year": year,
+		"rule": rule,
 		"user_team_id": user_team_id,
+		"pick_transfers": [],
+		"exempt_count": 0,
 		"phase": "done",
 		"complete": false,
 		"finalized": false,
@@ -65,16 +89,63 @@ static func create_compensation_state(players: Array, teams: Array, season: PSSe
 		"logs": [],
 	}
 	var cases: Array = []
+	var draft_pick_rule: bool = rule == FaMarketService.COMPENSATION_RULE_NPB2027
 	for signing_row in fa_state.get("signings", []) as Array:
 		var signing: Dictionary = signing_row as Dictionary
-		var case: Dictionary = _build_case(signing)
+		if bool(signing.get("compensation_exempt", false)):
+			if int(signing.get("from_team", 0)) != int(signing.get("to_team", 0)):
+				state["exempt_count"] = int(state.get("exempt_count", 0)) + 1
+			continue
+		var case: Dictionary = _build_draft_pick_case(signing, year) if draft_pick_rule else _build_case(signing)
 		if not case.is_empty():
 			cases.append(case)
 	state["cases"] = cases
 	return _advance_until_user_or_complete(state, players, teams, season, user_team_id <= 0)
 
 
-# 補償対象になる FA 移籍 1 件から case を組む。対象外 (Cランク/残留/元球団不明) なら空 dict。
+# 譲渡対象の指名権の巡目。0 は指名権なし (C / B8位)。
+static func pick_round_for(fa_rank: String, salary_rank: int) -> int:
+	if fa_rank == "A":
+		return PICK_ROUND_RANK_A
+	if fa_rank == "B" and salary_rank <= PICK_RANK_B_MAX_SALARY_RANK:
+		return PICK_ROUND_RANK_B
+	return 0
+
+
+static func pick_value_for_round(pick_round: int) -> int:
+	return PICK_VALUE_ROUND2 if pick_round == PICK_ROUND_RANK_A else PICK_VALUE_ROUND3
+
+
+# npb2027 の case。対象外 (Cランク/残留/元球団不明) なら空 dict。
+static func _build_draft_pick_case(signing: Dictionary, year: int) -> Dictionary:
+	var fa_rank: String = str(signing.get("fa_rank", "C"))
+	if fa_rank != "A" and fa_rank != "B":
+		return {}
+	var from_team: int = int(signing.get("from_team", 0))
+	var to_team: int = int(signing.get("to_team", 0))
+	if from_team <= 0 or to_team <= 0 or from_team == to_team:
+		return {}
+	var salary_rank: int = int(signing.get("salary_rank", 99))
+	var pick_round: int = pick_round_for(fa_rank, salary_rank)
+	return {
+		"player_id": int(signing.get("player_id", 0)),
+		"name": str(signing.get("name", "")),
+		"fa_rank": fa_rank,
+		"from_team": from_team,
+		"to_team": to_team,
+		"former_salary": int(signing.get("former_salary", 0)),
+		"salary_rank": salary_rank,
+		"money_only": int(signing.get("compensation_money", 0)),
+		"money_with_player": 0,
+		"pick_round": pick_round,
+		"draft_year": year + 1,
+		"decision": "",
+		"forced_reason": "",
+		"resolved": false,
+	}
+
+
+# 補償対象になる FA 移籍 1 件から人的補償 (legacy) の case を組む。対象外 (Cランク/残留/元球団不明) なら空 dict。
 static func _build_case(signing: Dictionary) -> Dictionary:
 	var fa_rank: String = str(signing.get("fa_rank", "C"))
 	if fa_rank != "A" and fa_rank != "B":
@@ -326,6 +397,104 @@ static func exposed_ids(case: Dictionary) -> Array:
 	return ids
 
 
+# ============================================================ 指名権の判断 (npb2027)
+
+# ケースが処理対象になった時点で金銭に確定する理由を判定する。
+static func _ensure_pick_forced_reason(state: Dictionary, players: Array, teams: Array, case: Dictionary) -> void:
+	if not str(case.get("forced_reason", "")).is_empty():
+		return
+	if int(case.get("pick_round", 0)) <= 0:
+		case["forced_reason"] = "rank_b_money_only"
+	elif _pick_already_transferred(state, case):
+		case["forced_reason"] = "pick_already_transferred"
+	elif not _can_return_money(players, teams, case):
+		case["forced_reason"] = "budget_short"
+
+
+static func _pick_already_transferred(state: Dictionary, case: Dictionary) -> bool:
+	for row_value in state.get("pick_transfers", []) as Array:
+		var row: Dictionary = row_value as Dictionary
+		if int(row.get("giving_team", 0)) == int(case.get("to_team", 0)) and int(row.get("round", 0)) == int(case.get("pick_round", 0)):
+			return true
+	return false
+
+
+# 指名権を選ぶと受け取り済みの補償金を返すので、それで元球団が予算超過にならないかを見る。
+static func _can_return_money(players: Array, teams: Array, case: Dictionary) -> bool:
+	var team_id: int = int(case.get("from_team", 0))
+	var team: PSTeam = _find_team(teams, team_id)
+	if team == null:
+		return true
+	return TeamFinance.budget_room(team.funds - int(case.get("money_only", 0)), TeamFinance.team_payroll(players, team_id)) >= 0
+
+
+# 元球団の CPU 判断。指名権の価値が金銭補償の額を上回れば指名権を選ぶ。
+static func cpu_prefers_draft_pick(players: Array, teams: Array, case: Dictionary) -> bool:
+	if not str(case.get("forced_reason", "")).is_empty():
+		return false
+	var pick_value: int = pick_value_for_round(int(case.get("pick_round", 0)))
+	var money: float = float(case.get("money_only", 0))
+	var team_id: int = int(case.get("from_team", 0))
+	var team: PSTeam = _find_team(teams, team_id)
+	if team != null:
+		var room: int = TeamFinance.budget_room(team.funds - int(case.get("money_only", 0)), TeamFinance.team_payroll(players, team_id))
+		if room < PICK_TIGHT_BUDGET_ROOM:
+			money *= PICK_TIGHT_BUDGET_MONEY_WEIGHT
+	return float(pick_value) >= money
+
+
+static func _resolve_draft_pick_case(state: Dictionary, teams: Array, case: Dictionary, take_pick: bool) -> void:
+	var from_team: int = int(case.get("from_team", 0))
+	var to_team: int = int(case.get("to_team", 0))
+	if take_pick:
+		case["decision"] = "draft_pick"
+		case["compensation_money"] = 0
+		_refund_money_difference(teams, case)
+		(state["pick_transfers"] as Array).append({
+			"draft_year": int(case.get("draft_year", 0)),
+			"round": int(case.get("pick_round", 0)),
+			"giving_team": to_team,
+			"receiving_team": from_team,
+			"fa_player_id": int(case.get("player_id", 0)),
+			"fa_player_name": str(case.get("name", "")),
+		})
+		_log(state, Loc.t("compensation.log.draft_pick", {
+			"player": str(case.get("name", "")), "rank": str(case.get("fa_rank", "")), "team": _team_name(teams, from_team),
+			"from_team": _team_name(teams, to_team), "year": int(case.get("draft_year", 0)), "round": int(case.get("pick_round", 0)),
+		}))
+	else:
+		case["decision"] = "money"
+		case["compensation_money"] = int(case.get("money_only", 0))
+		_log(state, Loc.t("compensation.log.money_only", {
+			"player": str(case.get("name", "")), "rank": str(case.get("fa_rank", "")), "team": _team_name(teams, from_team),
+		}))
+	case["resolved"] = true
+
+
+static func _advance_draft_pick_rule(state: Dictionary, players: Array, teams: Array, auto_user: bool) -> Dictionary:
+	var user_team_id: int = int(state.get("user_team_id", 0))
+	# ケースごとに「判断 → 次へ」の2遷移なので、これで必ず末尾へ到達する。
+	var guard: int = (state.get("cases", []) as Array).size() * 2 + 8
+	while guard > 0:
+		guard -= 1
+		var case: Dictionary = current_case(state)
+		if case.is_empty():
+			break
+		if not str(case.get("decision", "")).is_empty():
+			state["index"] = int(state.get("index", 0)) + 1
+			continue
+		_ensure_pick_forced_reason(state, players, teams, case)
+		if str(case.get("forced_reason", "")).is_empty() and int(case.get("from_team", 0)) == user_team_id and not auto_user:
+			state["phase"] = "choose"
+			state["waiting_user"] = true
+			return state
+		_resolve_draft_pick_case(state, teams, case, cpu_prefers_draft_pick(players, teams, case))
+	state["phase"] = "done"
+	state["waiting_user"] = false
+	state["complete"] = true
+	return state
+
+
 # ============================================================ 進行
 
 static func current_case(state: Dictionary) -> Dictionary:
@@ -337,6 +506,8 @@ static func current_case(state: Dictionary) -> Dictionary:
 
 
 static func _advance_until_user_or_complete(state: Dictionary, players: Array, teams: Array, season: PSSeason, auto_user: bool) -> Dictionary:
+	if str(state.get("rule", "")) == FaMarketService.COMPENSATION_RULE_NPB2027:
+		return _advance_draft_pick_rule(state, players, teams, auto_user)
 	var user_team_id: int = int(state.get("user_team_id", 0))
 	var year: int = int(state.get("year", 0))
 	var charts: Dictionary = {}
@@ -484,12 +655,26 @@ static func submit_pick(state: Dictionary, players: Array, teams: Array, season:
 
 
 static func submit_money_only(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
-	if str(state.get("phase", "")) != "pick" or not bool(state.get("waiting_user", false)):
+	var phase: String = str(state.get("phase", ""))
+	if (phase != "pick" and phase != "choose") or not bool(state.get("waiting_user", false)):
 		return {"ok": false, "message": Loc.t("compensation.error.not_pick_phase"), "state": state}
 	var case: Dictionary = current_case(state)
 	if case.is_empty():
 		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
-	_resolve_case(state, players, teams, season, case, 0)
+	if phase == "choose":
+		_resolve_draft_pick_case(state, teams, case, false)
+	else:
+		_resolve_case(state, players, teams, season, case, 0)
+	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
+
+
+static func submit_draft_pick(state: Dictionary, players: Array, teams: Array, season: PSSeason) -> Dictionary:
+	if str(state.get("phase", "")) != "choose" or not bool(state.get("waiting_user", false)):
+		return {"ok": false, "message": Loc.t("compensation.error.not_pick_phase"), "state": state}
+	var case: Dictionary = current_case(state)
+	if case.is_empty():
+		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
+	_resolve_draft_pick_case(state, teams, case, true)
 	return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
 
 
@@ -498,6 +683,9 @@ static func auto_current_case(state: Dictionary, players: Array, teams: Array, s
 	var case: Dictionary = current_case(state)
 	if case.is_empty():
 		return {"ok": false, "message": Loc.t("compensation.error.no_case"), "state": state}
+	if str(state.get("rule", "")) == FaMarketService.COMPENSATION_RULE_NPB2027:
+		_resolve_draft_pick_case(state, teams, case, cpu_prefers_draft_pick(players, teams, case))
+		return {"ok": true, "state": _advance_until_user_or_complete(state, players, teams, season, false)}
 	var charts: Dictionary = TeamDepthChart.build_league(players, teams)
 	if not bool(case.get("protect_submitted", false)):
 		case["protect_ids"] = cpu_protect_ids(players, case)
@@ -520,6 +708,7 @@ static func finalize_compensation(state: Dictionary) -> Dictionary:
 	var moves: Array = []
 	var cases_view: Array = []
 	var money_only_count: int = 0
+	var draft_pick_count: int = 0
 	var user_gained: int = 0
 	var user_lost: int = 0
 	for case_row in state.get("cases", []) as Array:
@@ -538,7 +727,12 @@ static func finalize_compensation(state: Dictionary) -> Dictionary:
 			"picked_player_id": int(case.get("picked_player_id", 0)),
 			"picked_name": str(case.get("picked_name", "")),
 			"forced_reason": str(case.get("forced_reason", "")),
+			"pick_round": int(case.get("pick_round", 0)),
+			"draft_year": int(case.get("draft_year", 0)),
 		})
+		if decision == "draft_pick":
+			draft_pick_count += 1
+			continue
 		if decision != "player":
 			money_only_count += 1
 			continue
@@ -561,11 +755,15 @@ static func finalize_compensation(state: Dictionary) -> Dictionary:
 			user_lost += 1
 	var result: Dictionary = {
 		"title": Loc.t("compensation.title"),
+		"rule": str(state.get("rule", "")),
 		"cases": cases_view,
 		"moves": moves,
+		"pick_transfers": (state.get("pick_transfers", []) as Array).duplicate(true),
 		"case_count": cases_view.size(),
 		"moved_count": moves.size(),
 		"money_only_count": money_only_count,
+		"draft_pick_count": draft_pick_count,
+		"exempt_count": int(state.get("exempt_count", 0)),
 		"user_gained": user_gained,
 		"user_lost": user_lost,
 		"logs": (state.get("logs", []) as Array).duplicate(true),

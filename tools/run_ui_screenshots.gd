@@ -13,6 +13,7 @@ extends Node
 # 共通選手表だけを2解像度で撮る: -- --newsave --player-tables
 # シーズン総括の状態別撮影: -- --newsave --season-reviews
 # ドラフト回顧の状態別撮影: -- --draft-reviews (使い捨てセーブ、APPDATA scratch 必須)
+# FA補償 (指名権か金銭) の選択と結果: -- --newsave --compensation-states
 #
 # 状態別撮影モード: -- --states
 #   通常の画面単位撮影とは別に、選手詳細/能力・成績一覧/チーム詳細のタブ・絞り込み違いや、
@@ -167,6 +168,12 @@ func _ready() -> void:
 	var main_node: Node = main_scene.instantiate()
 	add_child(main_node)
 	_main_node = main_node
+
+	if _has_flag("--compensation-states"):
+		await _capture_compensation_states()
+		_delete_throwaway_save()
+		get_tree().quit(0)
+		return
 
 	if states_mode:
 		await _run_state_capture()
@@ -656,6 +663,74 @@ func _shot(states_dir: String, shot_name: String) -> void:
 	_state_manifest.append({"name": shot_name, "file": out_path})
 
 
+# 自軍が FA 選手を失うオフは seed 任せなので、補償ステップの state を直接組んで撮る。
+func _capture_compensation_states() -> void:
+	AppState.auto_save_enabled = false
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(STATES_DIR))
+	var user_id: int = AppState.selected_team_id
+	var other_ids: Array = []
+	for team_row in GameDb.teams:
+		var team: PSTeam = team_row as PSTeam
+		if team != null and team.id != user_id and not team.farm_only:
+			other_ids.append(team.id)
+	var signings: Array = [
+		_compensation_signing(9001, user_id, int(other_ids[0]), "A", 1, 30000),
+		_compensation_signing(9002, int(other_ids[1]), int(other_ids[2]), "A", 3, 20000),
+		_compensation_signing(9003, int(other_ids[3]), int(other_ids[2]), "B", 5, 7000),
+		_compensation_signing(9004, int(other_ids[4]), int(other_ids[2]), "B", 8, 4800),
+	]
+	_declare_top_salary_players(int(other_ids[0]))
+	AppState.fa_state = FaMarketService.create_fa_market_state(GameDb.players, GameDb.teams, AppState.current_season, user_id, FaMarketService.COMPENSATION_RULE_NPB2027)
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_FA_MARKET
+	AppState.request_screen("home")
+	await _wait_frames()
+	_shot(STATES_DIR, "compensation_fa_market")
+	AppState.fa_state = {"compensation_rule": FaMarketService.COMPENSATION_RULE_NPB2027, "signings": signings}
+	AppState.compensation_state = CompensationService.create_compensation_state(
+		GameDb.players, GameDb.teams, AppState.current_season, AppState.fa_state, user_id
+	)
+	AppState.offseason_active = true
+	AppState.offseason_step = AppState.OFFSEASON_STEP_COMPENSATION
+	AppState.offseason_results[AppState.OFFSEASON_STEP_COMPENSATION] = {"title": Loc.t("compensation.title"), "compensation_in_progress": true}
+	AppState.request_screen("home")
+	await _wait_frames()
+	_shot(STATES_DIR, "compensation_choice_editor")
+	AppState.complete_compensation_automatically()
+	AppState.request_screen("home")
+	await _wait_frames()
+	_shot(STATES_DIR, "compensation_choice_result")
+	AppState.offseason_active = false
+	AppState.request_screen("options")
+	await _wait_frames()
+	_shot(STATES_DIR, "compensation_options")
+
+
+# FA市場の候補欄を埋めるため、その球団の高年俸の選手を宣言済みにする。
+func _declare_top_salary_players(team_id: int) -> void:
+	var roster: Array = []
+	for player_row in GameDb.players:
+		var player: PSPlayer = player_row as PSPlayer
+		if player != null and player.team_id == team_id and not player.foreign_player and not player.is_retired():
+			roster.append(player)
+	roster.sort_custom(func(a: Variant, b: Variant) -> bool: return (a as PSPlayer).salary > (b as PSPlayer).salary)
+	for i in range(mini(4, roster.size())):
+		(roster[i] as PSPlayer).source_data["fa_declared_year"] = AppState.current_season.year
+
+
+func _compensation_signing(player_id: int, from_team: int, to_team: int, rank: String, salary_rank: int, former_salary: int) -> Dictionary:
+	return {
+		"player_id": player_id,
+		"name": "FA選手%d" % player_id,
+		"fa_rank": rank,
+		"salary_rank": salary_rank,
+		"from_team": from_team,
+		"to_team": to_team,
+		"former_salary": former_salary,
+		"compensation_money": FaMarketService._compensation_money(rank, former_salary, salary_rank, FaMarketService.COMPENSATION_RULE_NPB2027),
+	}
+
+
 func _run_state_capture() -> void:
 	# 不変条件の再確認: --states 中も一切セーブへ書き込まない。
 	AppState.auto_save_enabled = false
@@ -939,6 +1014,8 @@ func _capture_offseason_steps(states_dir: String) -> void:
 			label = "compensation_protect"
 		elif interactive and panel == AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
 			label = "compensation_pick"
+		elif interactive and panel == AppState.OFFSEASON_PANEL_COMPENSATION_CHOICE:
+			label = "compensation_choice"
 		var suffix: String = "editor" if interactive else "result"
 		var step_number: int = AppState.OFFSEASON_STEP_ORDER.find(step)
 		_shot(states_dir, "offseason_step%02d_%s_%s" % [step_number, label, suffix])
@@ -955,7 +1032,7 @@ func _capture_offseason_steps(states_dir: String) -> void:
 				action_result = AppState.complete_geneki_draft_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_FA:
 				action_result = AppState.complete_fa_automatically()
-			elif panel == AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT or panel == AppState.OFFSEASON_PANEL_COMPENSATION_PICK:
+			elif panel == AppState.OFFSEASON_PANEL_COMPENSATION_PROTECT or panel == AppState.OFFSEASON_PANEL_COMPENSATION_PICK or panel == AppState.OFFSEASON_PANEL_COMPENSATION_CHOICE:
 				action_result = AppState.complete_compensation_automatically()
 			elif panel == AppState.OFFSEASON_PANEL_FOREIGN_CONTRACT:
 				action_result = AppState.finalize_foreign_contract_market()

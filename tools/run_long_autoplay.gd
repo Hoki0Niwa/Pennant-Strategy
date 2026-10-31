@@ -57,6 +57,9 @@ func _parse_args() -> Dictionary:
 			options["output"] = arg.get_slice("=", 1)
 		elif arg.begins_with("--csv="):
 			options["csv"] = arg.get_slice("=", 1)
+		elif arg.begins_with("--fa-rule="):
+			# FA補償の規定を測り分ける (npb2027 / legacy)。
+			AppState.fa_compensation_rule = FaMarketService.normalize_compensation_rule(arg.get_slice("=", 1))
 	return options
 
 
