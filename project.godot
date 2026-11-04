@@ -48,3 +48,4 @@ simulation/plate_simulator="plate_simulator_v2"
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+renderer/rendering_method.web="gl_compatibility"
